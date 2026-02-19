@@ -41,6 +41,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private static final int TYPE_CONS = 3;
 
+	// First type/function index for user-defined functions
+	private static final int TYPE_USER_BASE = 4;
+
+	private static final int FUNC_USER_BASE = 3;
+
 	// Memory layout for print_i32 helper
 	private static final int PRINT_BUF_OFFSET = 0; // 32 bytes for digit buffer
 
@@ -50,12 +55,83 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
-		// Build _start function body (instructions only, locals added later)
+		// Pass 1: Collect defun declarations and top-level expressions
+		List<DefunDecl> defuns = new ArrayList<>();
+		List<LispVal> topLevelExprs = new ArrayList<>();
+		for (LispVal expr : program) {
+			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym && "defun".equals(sym.name())) {
+				List<LispVal> parts = cons.toList();
+				String funcName = ((LispSymbol) parts.get(1)).name();
+				LispVal paramsVal = parts.get(2);
+				List<String> paramNames;
+				if (paramsVal instanceof LispNil) {
+					paramNames = List.of();
+				}
+				else {
+					paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
+				}
+				defuns.add(new DefunDecl(funcName, paramNames, parts.subList(3, parts.size())));
+			}
+			else {
+				topLevelExprs.add(expr);
+			}
+		}
+
+		// Build function info map
+		Map<String, WasmFunctionInfo> functions = new HashMap<>();
+		for (int i = 0; i < defuns.size(); i++) {
+			DefunDecl defun = defuns.get(i);
+			functions.put(defun.name,
+					new WasmFunctionInfo(defun.name, defun.paramNames.size(), TYPE_USER_BASE + i, FUNC_USER_BASE + i));
+		}
+
+		// Pass 2a: Compile each defun body
+		List<byte[]> userFunctionBodies = new ArrayList<>();
+		for (DefunDecl defun : defuns) {
+			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
+			WasmWriter funcWriter = new WasmWriter(funcBody);
+			Ctx funcCtx = new Ctx(funcWriter);
+			funcCtx.functions = functions;
+
+			// Parameters are the first N locals
+			for (int i = 0; i < defun.paramNames.size(); i++) {
+				funcCtx.locals.put(defun.paramNames.get(i), i);
+			}
+			funcCtx.nextLocal = defun.paramNames.size();
+
+			// Compile body
+			for (int i = 0; i < defun.bodyExprs.size(); i++) {
+				if (i > 0) {
+					funcWriter.write(Instruction.DROP);
+				}
+				compileExpr(defun.bodyExprs.get(i), funcCtx);
+			}
+			funcWriter.write(Instruction.END);
+
+			// Rebuild with correct local declarations (only extra locals beyond params)
+			ByteArrayOutputStream finalFuncBody = new ByteArrayOutputStream();
+			WasmWriter finalFuncWriter = new WasmWriter(finalFuncBody);
+			int extraLocals = funcCtx.nextLocal - defun.paramNames.size();
+			if (extraLocals > 0) {
+				finalFuncWriter.write(1); // 1 local group
+				finalFuncWriter.write(extraLocals);
+				finalFuncWriter.write(Type.REFNULL.code());
+				finalFuncWriter.writeHeapType(Type.EQ.code());
+			}
+			else {
+				finalFuncWriter.write(0); // 0 local groups
+			}
+			finalFuncWriter.write((Object) funcBody.toByteArray());
+			userFunctionBodies.add(finalFuncBody.toByteArray());
+		}
+
+		// Pass 2b: Build _start function body
 		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = new Ctx(startWriter);
+		ctx.functions = functions;
 
-		for (LispVal expr : program) {
+		for (LispVal expr : topLevelExprs) {
 			compileExpr(expr, ctx);
 			startWriter.write(Instruction.DROP);
 		}
@@ -81,7 +157,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printI32Body = buildPrintI32Body();
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		new WasmWriter(out) //
+		WasmWriter mainWriter = new WasmWriter(out);
+		mainWriter //
 			.write("\0asm") // magic
 			.writeLittleEndian4(1) // version
 			// Type section: plain func types + rec group for struct
@@ -99,19 +176,45 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					});
 				});
+				// type 4+: user-defined function types
+				for (DefunDecl defun : defuns) {
+					int paramCount = defun.paramNames.size();
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(paramCount);
+						for (int i = 0; i < paramCount; i++) {
+							w.write(Type.REFNULL.code());
+							w.writeHeapType(Type.EQ.code());
+						}
+						w.write(1); // 1 result
+						w.write(Type.REFNULL.code());
+						w.writeHeapType(Type.EQ.code());
+					});
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> imports.addImport("wasi_snapshot_preview1", "fd_write",
 					ExternalKind.FUNCTION, TYPE_FD_WRITE))
 			// Function section
-			.writeFunction(functions -> functions.addFunction(TYPE_START).addFunction(TYPE_PRINT_I32))
+			.writeFunction(fnDef -> {
+				fnDef.addFunction(TYPE_START).addFunction(TYPE_PRINT_I32);
+				for (DefunDecl defun : defuns) {
+					WasmFunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defun.name));
+					fnDef.addFunction(fi.typeIndex);
+				}
+			})
 			// Memory section
 			.writeMemory(memories -> memories.addMemory(1))
 			// Export section
 			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0)
 				.addExport("_start", ExternalKind.FUNCTION, FUNC_START))
 			// Code section
-			.writeCode(code -> code.addFunction(finalStartBody.toByteArray()).addFunction(printI32Body));
+			.writeCode(code -> {
+				code.addFunction(finalStartBody.toByteArray()).addFunction(printI32Body);
+				for (byte[] body : userFunctionBodies) {
+					code.addFunction(body);
+				}
+			});
 		return out.toByteArray();
 	}
 
@@ -168,8 +271,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				case "if" -> compileIf(cons, ctx);
 				case "let" -> compileLet(cons, ctx);
 				case "progn" -> compileProgn(cons, ctx);
-				default -> throw new UnsupportedOperationException("Cannot compile: " + sym.name());
+				case "defun" -> {
+					// defun at non-top-level is a no-op (already processed in pass 1)
+					ctx.writer.write(Instruction.REF_NULL);
+					ctx.writer.writeHeapType(Type.EQ.code());
+				}
+				default -> compileFunctionCall(sym.name(), cons, ctx);
 			}
+		}
+		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
+				&& "lambda".equals(headSym.name())) {
+			compileLambdaCall(headCons, cons, ctx);
 		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + cons.print());
@@ -196,8 +308,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		compileExpr(args.get(2), ctx);
 		castI31GetS(ctx);
 		ctx.writer.write(opcode);
-		// Result is i32 (0 or 1), wrap as i31ref
+		// Result is i32 (0 or 1). Convert to nil/non-nil for if-form compatibility:
+		// if nonzero -> i31ref(1) (truthy), if zero -> ref.null eq (nil/falsy)
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// True: push i31ref(1)
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.ELSE);
+		// False: push nil
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.END);
 	}
 
 	private void compilePrint(LispCons cons, Ctx ctx) {
@@ -269,6 +393,57 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			compileExpr(parts.get(i), ctx);
 		}
+	}
+
+	private void compileFunctionCall(String name, LispCons cons, Ctx ctx) {
+		WasmFunctionInfo fi = ctx.functions.get(name);
+		if (fi != null) {
+			List<LispVal> args = cons.toList();
+			for (int i = 1; i < args.size(); i++) {
+				compileExpr(args.get(i), ctx);
+			}
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(fi.funcIndex);
+		}
+		else {
+			throw new UnsupportedOperationException("Cannot compile: " + name);
+		}
+	}
+
+	private void compileLambdaCall(LispCons lambda, LispCons call, Ctx ctx) {
+		List<LispVal> lambdaParts = lambda.toList();
+		LispVal paramsVal = lambdaParts.get(1);
+		List<String> paramNames;
+		if (paramsVal instanceof LispNil) {
+			paramNames = List.of();
+		}
+		else {
+			paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
+		}
+		List<LispVal> bodyExprs = lambdaParts.subList(2, lambdaParts.size());
+		List<LispVal> callArgs = call.toList();
+
+		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+
+		// Evaluate arguments and store in local variables
+		for (int i = 0; i < paramNames.size(); i++) {
+			compileExpr(callArgs.get(i + 1), ctx);
+			int slot = ctx.allocLocal(paramNames.get(i));
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(slot);
+		}
+
+		// Compile body
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			if (i > 0) {
+				ctx.writer.write(Instruction.DROP);
+			}
+			compileExpr(bodyExprs.get(i), ctx);
+		}
+
+		ctx.locals = savedLocals;
+		// Note: nextLocal is NOT restored because WASM requires local count to be
+		// declared upfront
 	}
 
 	private void castI31GetS(Ctx ctx) {
@@ -463,7 +638,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		w.write(Instruction.END);
 
 		// Append newline
-		int totalLen = -1; // computed dynamically
 		// outBuf[is_negative + digit_count] = '\n'
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(outBuf);
@@ -513,11 +687,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		return body.toByteArray();
 	}
 
+	private record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
+	}
+
+	private record WasmFunctionInfo(String name, int paramCount, int typeIndex, int funcIndex) {
+	}
+
 	private static final class Ctx {
 
 		final WasmWriter writer;
 
 		Map<String, Integer> locals = new HashMap<>();
+
+		Map<String, WasmFunctionInfo> functions = Map.of();
 
 		int nextLocal = 0;
 
@@ -529,11 +711,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			int slot = this.nextLocal++;
 			this.locals.put(name, slot);
 			return slot;
-		}
-
-		int localGroupCount() {
-			// Placeholder - will be rebuilt
-			return 0;
 		}
 
 	}
