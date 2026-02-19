@@ -57,13 +57,66 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant longValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
 
-		Ctx ctx = new Ctx(cp, systemOut, printlnObj, longClass, longValueOf, longValue);
-
+		// Pass 1: Collect defun declarations and top-level expressions
+		List<DefunDecl> defuns = new ArrayList<>();
+		List<LispVal> topLevelExprs = new ArrayList<>();
 		for (LispVal expr : program) {
-			compileExpr(expr, ctx);
-			ctx.emit(Opcode.POP);
+			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym && "defun".equals(sym.name())) {
+				List<LispVal> parts = cons.toList();
+				String funcName = ((LispSymbol) parts.get(1)).name();
+				LispVal paramsVal = parts.get(2);
+				List<String> paramNames;
+				if (paramsVal instanceof LispNil) {
+					paramNames = List.of();
+				}
+				else {
+					paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
+				}
+				defuns.add(new DefunDecl(funcName, paramNames, parts.subList(3, parts.size())));
+			}
+			else {
+				topLevelExprs.add(expr);
+			}
 		}
-		ctx.emit(Opcode.RETURN);
+
+		// Register all functions in the constant pool
+		Map<String, FunctionInfo> functions = new HashMap<>();
+		for (DefunDecl defun : defuns) {
+			String descriptor = "(" + "Ljava/lang/Object;".repeat(defun.paramNames.size()) + ")Ljava/lang/Object;";
+			Utf8Constant nameUtf8 = cp.addUtf8(defun.name);
+			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
+			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
+			functions.put(defun.name, new FunctionInfo(defun.paramNames.size(), methodref, nameUtf8, descUtf8));
+		}
+
+		// Pass 2a: Compile each defun body as a static method
+		List<Ctx> funcCtxs = new ArrayList<>();
+		for (DefunDecl defun : defuns) {
+			Ctx funcCtx = new Ctx(cp, systemOut, printlnObj, longClass, longValueOf, longValue);
+			funcCtx.functions = functions;
+			funcCtx.nextLocal = defun.paramNames.size();
+			funcCtx.maxLocals = defun.paramNames.size();
+			for (int i = 0; i < defun.paramNames.size(); i++) {
+				funcCtx.locals.put(defun.paramNames.get(i), i);
+			}
+			for (int i = 0; i < defun.bodyExprs.size(); i++) {
+				if (i > 0) {
+					funcCtx.emit(Opcode.POP);
+				}
+				compileExpr(defun.bodyExprs.get(i), funcCtx);
+			}
+			funcCtx.emit(Opcode.ARETURN);
+			funcCtxs.add(funcCtx);
+		}
+
+		// Pass 2b: Compile top-level expressions as main() body
+		Ctx mainCtx = new Ctx(cp, systemOut, printlnObj, longClass, longValueOf, longValue);
+		mainCtx.functions = functions;
+		for (LispVal expr : topLevelExprs) {
+			compileExpr(expr, mainCtx);
+			mainCtx.emit(Opcode.POP);
+		}
+		mainCtx.emit(Opcode.RETURN);
 
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
@@ -79,14 +132,30 @@ public final class JvmLispCompiler implements LispCompiler {
 			})
 			.writeFields(f -> {
 			})
-			.writeMethods(methods -> methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
-					method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-						attr.writeU2(ctx.maxStack) // max_stack
-							.writeU2(ctx.maxLocals) // max_locals
-							.writeCode((Object[]) ctx.code.toArray(new Integer[0]))
-							.writeU2(0) // exception_table_length
-							.writeU2(0); // attributes_count (no StackMapTable)
-					})))) //
+			.writeMethods(methods -> {
+				// main method
+				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(mainCtx.maxStack)
+								.writeU2(mainCtx.maxLocals)
+								.writeCode((Object[]) mainCtx.code.toArray(new Integer[0]))
+								.writeU2(0) // exception_table_length
+								.writeU2(0); // attributes_count
+						})));
+				// defun methods
+				for (int i = 0; i < defuns.size(); i++) {
+					FunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defuns.get(i).name));
+					final Ctx funcCtx = funcCtxs.get(i);
+					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(funcCtx.maxStack)
+									.writeU2(funcCtx.maxLocals)
+									.writeCode((Object[]) funcCtx.code.toArray(new Integer[0]))
+									.writeU2(0) // exception_table_length
+									.writeU2(0); // attributes_count
+							})));
+				}
+			}) //
 			.writeAttributes(a -> {
 			});
 		return classOut.toByteArray();
@@ -139,12 +208,25 @@ public final class JvmLispCompiler implements LispCompiler {
 				case "*" -> compileArith(cons, ctx, Opcode.LMUL);
 				case "/" -> compileArith(cons, ctx, Opcode.LDIV);
 				case "mod" -> compileArith(cons, ctx, Opcode.LREM);
+				case "=" -> compileComparison(cons, ctx, Opcode.IFEQ);
+				case "<" -> compileComparison(cons, ctx, Opcode.IFLT);
+				case ">" -> compileComparison(cons, ctx, Opcode.IFGT);
+				case "<=" -> compileComparison(cons, ctx, Opcode.IFLE);
+				case ">=" -> compileComparison(cons, ctx, Opcode.IFGE);
 				case "print" -> compilePrint(cons, ctx);
 				case "if" -> compileIf(cons, ctx);
 				case "let" -> compileLet(cons, ctx);
 				case "progn" -> compileProgn(cons, ctx);
-				default -> throw new UnsupportedOperationException("Cannot compile: " + sym.name());
+				case "defun" -> {
+					// defun at non-top-level is a no-op (already processed in pass 1)
+					ctx.emit(Opcode.ACONST_NULL);
+				}
+				default -> compileFunctionCall(sym.name(), cons, ctx);
 			}
+		}
+		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
+				&& "lambda".equals(headSym.name())) {
+			compileLambdaCall(headCons, cons, ctx);
 		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + cons.print());
@@ -161,6 +243,30 @@ public final class JvmLispCompiler implements LispCompiler {
 			ctx.emit(opcode);
 		}
 		boxLong(ctx);
+	}
+
+	private void compileComparison(LispCons cons, Ctx ctx, int branchOpcode) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		unboxLong(ctx);
+		compileExpr(args.get(2), ctx);
+		unboxLong(ctx);
+		ctx.emit(Opcode.LCMP);
+		// IFxx jumps to true_label when condition is met
+		int ifPos = ctx.code.size();
+		ctx.emit(branchOpcode);
+		ctx.emitU2(0); // placeholder
+		// False: push nil
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0); // placeholder
+		// True: push Long(1)
+		int trueLabel = ctx.code.size();
+		patchBranch(ctx, ifPos, trueLabel);
+		compileLong(1, ctx);
+		int endLabel = ctx.code.size();
+		patchBranch(ctx, gotoEndPos, endLabel);
 	}
 
 	private void compilePrint(LispCons cons, Ctx ctx) {
@@ -239,6 +345,57 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 	}
 
+	private void compileFunctionCall(String name, LispCons cons, Ctx ctx) {
+		FunctionInfo fi = ctx.functions.get(name);
+		if (fi != null) {
+			List<LispVal> args = cons.toList();
+			for (int i = 1; i < args.size(); i++) {
+				compileExpr(args.get(i), ctx);
+			}
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(fi.methodref.index());
+		}
+		else {
+			throw new UnsupportedOperationException("Cannot compile: " + name);
+		}
+	}
+
+	private void compileLambdaCall(LispCons lambda, LispCons call, Ctx ctx) {
+		List<LispVal> lambdaParts = lambda.toList();
+		LispVal paramsVal = lambdaParts.get(1);
+		List<String> paramNames;
+		if (paramsVal instanceof LispNil) {
+			paramNames = List.of();
+		}
+		else {
+			paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
+		}
+		List<LispVal> bodyExprs = lambdaParts.subList(2, lambdaParts.size());
+		List<LispVal> callArgs = call.toList();
+
+		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+		int savedNextLocal = ctx.nextLocal;
+
+		// Evaluate arguments and store in local variables
+		for (int i = 0; i < paramNames.size(); i++) {
+			compileExpr(callArgs.get(i + 1), ctx);
+			int slot = ctx.allocLocal(paramNames.get(i));
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(slot);
+		}
+
+		// Compile body
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			if (i > 0) {
+				ctx.emit(Opcode.POP);
+			}
+			compileExpr(bodyExprs.get(i), ctx);
+		}
+
+		ctx.locals = savedLocals;
+		ctx.nextLocal = savedNextLocal;
+	}
+
 	private void unboxLong(Ctx ctx) {
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.longClass.index());
@@ -258,6 +415,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		ctx.code.set(branchPos + 2, (int) bytes[1]);
 	}
 
+	private record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
+	}
+
+	private record FunctionInfo(int paramCount, MethodrefConstant methodref, Utf8Constant nameUtf8,
+			Utf8Constant descUtf8) {
+	}
+
 	private static final class Ctx {
 
 		final ConstantPool cp;
@@ -275,6 +439,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
+
+		Map<String, FunctionInfo> functions = Map.of();
 
 		int nextLocal = 1; // slot 0 = args
 

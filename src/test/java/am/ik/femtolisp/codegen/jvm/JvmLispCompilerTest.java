@@ -91,4 +91,85 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (/ 10 3))")).isEqualTo("3");
 	}
 
+	@Test
+	void compileAndRunComparisonEqual() throws Exception {
+		assertThat(compileAndRun("(print (if (= 1 1) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunComparisonNotEqual() throws Exception {
+		assertThat(compileAndRun("(print (if (= 1 2) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunComparisonLessThan() throws Exception {
+		assertThat(compileAndRun("(print (if (< 1 2) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunComparisonGreaterThan() throws Exception {
+		assertThat(compileAndRun("(print (if (> 3 2) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunComparisonLessOrEqual() throws Exception {
+		assertThat(compileAndRun("(print (if (<= 2 2) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunComparisonGreaterOrEqual() throws Exception {
+		assertThat(compileAndRun("(print (if (>= 2 3) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunDefunSquare() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (square 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void compileAndRunDefunFactorial() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(print (fact 5))
+				""")).isEqualTo("120");
+	}
+
+	@Test
+	void compileAndRunDefunFibonacci() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))
+				(print (fib 10))
+				""")).isEqualTo("55");
+	}
+
+	@Test
+	void compileAndRunMultipleDefuns() throws Exception {
+		assertThat(compileAndRun("""
+				(defun double (x) (* x 2))
+				(defun add1 (x) (+ x 1))
+				(print (add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
+	void compileAndRunDefunNoParams() throws Exception {
+		assertThat(compileAndRun("""
+				(defun answer () 42)
+				(print (answer))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunLambdaImmediateCall() throws Exception {
+		assertThat(compileAndRun("(print ((lambda (x) (* x x)) 5))")).isEqualTo("25");
+	}
+
+	@Test
+	void compileAndRunLambdaMultipleParams() throws Exception {
+		assertThat(compileAndRun("(print ((lambda (x y) (+ x y)) 3 4))")).isEqualTo("7");
+	}
+
 }

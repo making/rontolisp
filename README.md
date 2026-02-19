@@ -150,15 +150,15 @@ The compilers support a subset of what the interpreter handles:
 | Feature | Interpreter | JVM Compiler | WASM Compiler |
 |---------|:-----------:|:------------:|:-------------:|
 | Arithmetic (`+`, `-`, `*`, `/`, `mod`) | Yes | Yes | Yes |
-| Comparison (`=`, `<`, `>`, `<=`, `>=`) | Yes | -- | Yes |
+| Comparison (`=`, `<`, `>`, `<=`, `>=`) | Yes | Yes | Yes |
 | `print` | Yes | Yes | Yes |
 | `if` | Yes | Yes | Yes |
 | `let` | Yes | Yes | Yes |
 | `progn` | Yes | Yes | Yes |
-| `defun` / `lambda` | Yes | -- | -- |
+| `defun` / `lambda` | Yes | Yes | Yes |
 | `setq` | Yes | -- | -- |
 | `quote` | Yes | -- | -- |
-| Recursion | Yes | -- | -- |
+| Recursion | Yes | Yes | Yes |
 | String values | Yes | -- | -- |
 
 ## Project Structure
