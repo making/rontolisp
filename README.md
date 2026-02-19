@@ -6,7 +6,7 @@ A minimal Common Lisp subset implemented in Java. It supports three execution mo
 - **JVM compiler** -- Compiles Lisp to `.class` bytecode runnable on any JRE
 - **WASM compiler** -- Compiles Lisp to `.wasm` binary using wasm-GC and WASI Preview 1
 
-No external runtime dependencies. The JVM and WASM bytecode generators are written from scratch without ASM or other code generation libraries.
+No external runtime dependencies for core libraries. The JVM and WASM bytecode generators are written from scratch without ASM or other code generation libraries. The CLI uses JLine for interactive REPL features (history, line editing).
 
 ## Requirements
 
@@ -16,15 +16,17 @@ No external runtime dependencies. The JVM and WASM bytecode generators are writt
 ## Build
 
 ```bash
-./mvnw clean compile
+./mvnw clean package
 ```
+
+This produces `target/femtolisp-0.1.0-SNAPSHOT-exec.jar`, an executable JAR with all dependencies included.
 
 ## Usage
 
 ### REPL
 
 ```bash
-java -cp target/classes am.ik.femtolisp.cli.FemtoLispCli
+java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar
 ```
 
 ```
@@ -41,12 +43,12 @@ fact
 > (quit)
 ```
 
-The REPL automatically handles multi-line input by tracking parenthesis balance. Type `(quit)` to exit.
+The REPL supports line editing, history navigation (up/down keys), and Ctrl-C to cancel input. Type `(quit)` or Ctrl-D to exit.
 
 ### File Interpretation
 
 ```bash
-java -cp target/classes am.ik.femtolisp.cli.FemtoLispCli program.lisp
+java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar program.lisp
 ```
 
 Example (`program.lisp`):
@@ -65,7 +67,7 @@ Example (`program.lisp`):
 ### Compile to JVM Bytecode
 
 ```bash
-java -cp target/classes am.ik.femtolisp.cli.FemtoLispCli hello.lisp -o Hello.class
+java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o Hello.class
 java Hello
 ```
 
@@ -84,7 +86,7 @@ The generated `.class` file targets Java 6 (class version 50) and depends only o
 ### Compile to WASM
 
 ```bash
-java -cp target/classes am.ik.femtolisp.cli.FemtoLispCli hello.lisp -o hello.wasm
+java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o hello.wasm
 wasmtime --wasm gc hello.wasm
 ```
 

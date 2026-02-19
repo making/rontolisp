@@ -7,6 +7,7 @@ repository.
 
 ```bash
 ./mvnw clean spring-javaformat:apply compile                    # Compile application
+./mvnw clean spring-javaformat:apply package                    # Build executable JAR (-exec classifier)
 ./mvnw spring-javaformat:apply test                             # Run all tests
 ```
 
@@ -78,7 +79,7 @@ WASM tests require wasmtime (an external runtime with specific version requireme
 
 ```bash
 echo '(print (+ 1 2))' > test.lisp
-java -cp target/classes am.ik.femtolisp.cli.FemtoLispCli test.lisp -o test.wasm
+java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar test.lisp -o test.wasm
 wasmtime --wasm gc test.wasm    # requires wasmtime 14+
 ```
 
@@ -90,7 +91,7 @@ wasmtime --wasm gc test.wasm    # requires wasmtime 14+
 
 ### Code Standards
 
-- No external dependencies except for testing libraries and jspecify
+- No external dependencies for core libraries (reader, eval, codegen, am.ik.jvm, am.ik.wasm). CLI tooling (e.g., JLine for REPL) is permitted.
 - Write javadoc and comments in English
 - Spring Java Format enforced via Maven plugin
 - Use modern Java features (Records, Pattern Matching, Sealed Types, Text Blocks, etc.)
