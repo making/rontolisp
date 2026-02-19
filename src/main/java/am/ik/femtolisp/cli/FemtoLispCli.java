@@ -6,10 +6,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
-import java.util.Objects;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.femtolisp.LispNil;
 import am.ik.femtolisp.LispVal;
@@ -63,12 +63,31 @@ public final class FemtoLispCli {
 		}
 	}
 
+	private static boolean isJLineAvailable() {
+		try {
+			Class.forName("org.jline.reader.LineReader");
+			return true;
+		}
+		catch (ClassNotFoundException _) {
+			return false;
+		}
+	}
+
 	private void repl() {
 		LispEvaluator evaluator = new LispEvaluator(this.out);
+		StringBuilder buffer = new StringBuilder();
+		if (System.console() != null && isJLineAvailable()) {
+			JLineRepl.run(evaluator, this.out, buffer);
+		}
+		else {
+			replWithBufferedReader(evaluator, buffer);
+		}
+	}
+
+	private void replWithBufferedReader(LispEvaluator evaluator, StringBuilder buffer) {
 		BufferedReader reader = new BufferedReader(new InputStreamReader(this.in));
 		this.out.print("> ");
 		this.out.flush();
-		StringBuilder buffer = new StringBuilder();
 		try {
 			String line;
 			while ((line = reader.readLine()) != null) {
@@ -77,18 +96,7 @@ public final class FemtoLispCli {
 				}
 				buffer.append(line).append('\n');
 				if (isBalanced(buffer.toString())) {
-					try {
-						List<LispVal> exprs = LispReader.readAllFromString(buffer.toString());
-						LispVal result = LispNil.INSTANCE;
-						for (LispVal expr : exprs) {
-							result = evaluator.eval(expr);
-						}
-						this.out.println(result.print());
-					}
-					catch (RuntimeException ex) {
-						this.out.println("Error: " + ex.getMessage());
-					}
-					buffer.setLength(0);
+					evalBuffer(evaluator, this.out, buffer);
 					this.out.print("> ");
 					this.out.flush();
 				}
@@ -97,6 +105,21 @@ public final class FemtoLispCli {
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
 		}
+	}
+
+	static void evalBuffer(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
+		try {
+			List<LispVal> exprs = LispReader.readAllFromString(buffer.toString());
+			LispVal result = LispNil.INSTANCE;
+			for (LispVal expr : exprs) {
+				result = evaluator.eval(expr);
+			}
+			out.println(result.print());
+		}
+		catch (RuntimeException ex) {
+			out.println("Error: " + ex.getMessage());
+		}
+		buffer.setLength(0);
 	}
 
 	private void interpret(String source) {
@@ -137,7 +160,7 @@ public final class FemtoLispCli {
 		this.out.println("  -v, --version      Show version");
 	}
 
-	private static boolean isBalanced(String input) {
+	static boolean isBalanced(String input) {
 		int depth = 0;
 		boolean inString = false;
 		for (int i = 0; i < input.length(); i++) {
