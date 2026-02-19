@@ -158,7 +158,7 @@ The compilers support a subset of what the interpreter handles:
 | `let` | Yes | Yes | Yes |
 | `progn` | Yes | Yes | Yes |
 | `defun` / `lambda` | Yes | Yes | Yes |
-| `setq` | Yes | -- | -- |
+| `setq` | Yes | Yes | Yes |
 | `quote` | Yes | -- | -- |
 | Recursion | Yes | Yes | Yes |
 | String values | Yes | -- | -- |

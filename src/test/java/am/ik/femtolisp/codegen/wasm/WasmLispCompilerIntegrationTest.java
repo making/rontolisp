@@ -137,6 +137,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setqBasic() throws Exception {
+		assertThat(compileAndRun("(print (progn (setq x 10) x))")).isEqualTo("10");
+	}
+
+	@Test
+	void setqReassign() throws Exception {
+		assertThat(compileAndRun("(print (progn (setq x 10) (setq x 20) x))")).isEqualTo("20");
+	}
+
+	@Test
+	void setqMutateLet() throws Exception {
+		assertThat(compileAndRun("(print (let ((x 1)) (setq x 2) x))")).isEqualTo("2");
+	}
+
+	@Test
+	void setqInExpression() throws Exception {
+		assertThat(compileAndRun("(print (+ (setq x 5) 3))")).isEqualTo("8");
+	}
+
+	@Test
 	void lambdaImmediateCall() throws Exception {
 		assertThat(compileAndRun("(print ((lambda (x) (* x x)) 5))")).isEqualTo("25");
 	}
