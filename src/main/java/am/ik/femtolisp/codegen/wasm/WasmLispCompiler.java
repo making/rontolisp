@@ -271,6 +271,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				case "if" -> compileIf(cons, ctx);
 				case "let" -> compileLet(cons, ctx);
 				case "progn" -> compileProgn(cons, ctx);
+				case "setq" -> compileSetq(cons, ctx);
 				case "defun" -> {
 					// defun at non-top-level is a no-op (already processed in pass 1)
 					ctx.writer.write(Instruction.REF_NULL);
@@ -393,6 +394,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			compileExpr(parts.get(i), ctx);
 		}
+	}
+
+	private void compileSetq(LispCons cons, Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		String name = ((LispSymbol) parts.get(1)).name();
+		compileExpr(parts.get(2), ctx);
+		Integer slot = ctx.locals.get(name);
+		if (slot == null) {
+			slot = ctx.allocLocal(name);
+		}
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
 	}
 
 	private void compileFunctionCall(String name, LispCons cons, Ctx ctx) {
