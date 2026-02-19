@@ -1,0 +1,94 @@
+package am.ik.femtolisp.codegen.jvm;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import am.ik.femtolisp.LispVal;
+import am.ik.femtolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class JvmLispCompilerTest {
+
+	@TempDir
+	Path tempDir;
+
+	private String compileAndRun(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	@Test
+	void compileAndRunAddition() throws Exception {
+		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunMultiplication() throws Exception {
+		assertThat(compileAndRun("(print (* 3 4))")).isEqualTo("12");
+	}
+
+	@Test
+	void compileAndRunNestedArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (+ (* 2 3) (- 10 4)))")).isEqualTo("12");
+	}
+
+	@Test
+	void compileAndRunMultipleExpressions() throws Exception {
+		assertThat(compileAndRun("(print 1) (print 2)")).isEqualTo("1\n2");
+	}
+
+	@Test
+	void compileAndRunIfTrue() throws Exception {
+		assertThat(compileAndRun("(print (if t 1 2))")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunIfFalse() throws Exception {
+		assertThat(compileAndRun("(print (if nil 1 2))")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunLet() throws Exception {
+		assertThat(compileAndRun("(print (let ((x 10)) (+ x 5)))")).isEqualTo("15");
+	}
+
+	@Test
+	void compileAndRunSubtraction() throws Exception {
+		assertThat(compileAndRun("(print (- 10 3))")).isEqualTo("7");
+	}
+
+	@Test
+	void compileAndRunDivision() throws Exception {
+		assertThat(compileAndRun("(print (/ 10 3))")).isEqualTo("3");
+	}
+
+}
