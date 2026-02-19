@@ -1,0 +1,8 @@
+[
+  {
+    "name": "org.jline.reader.LineReader",
+    "condition": {
+      "typeReachable": "am.ik.femtolisp.cli.FemtoLispCli"
+    }
+  }
+]

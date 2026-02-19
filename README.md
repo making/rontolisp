@@ -10,7 +10,8 @@ No external runtime dependencies for core libraries. The JVM and WASM bytecode g
 
 ## Requirements
 
-- Java 25+ (for building)
+- Java 25+ (for building and running the JAR)
+- [GraalVM](https://www.graalvm.org/) 25+ (optional, for native image build)
 - [wasmtime](https://wasmtime.dev/) (for running `.wasm` output, optional)
 
 ## Build
@@ -20,6 +21,35 @@ No external runtime dependencies for core libraries. The JVM and WASM bytecode g
 ```
 
 This produces `target/femtolisp-0.1.0-SNAPSHOT-exec.jar`, an executable JAR with all dependencies included.
+
+### Native Image (GraalVM)
+
+Build a native executable using GraalVM:
+
+```bash
+./mvnw -Pnative clean package
+```
+
+This produces `target/femtolisp`, a standalone native binary with instant startup.
+
+**Requirements:**
+- GraalVM 25+ (with `native-image` tool)
+
+**Usage:**
+
+```bash
+# REPL
+./target/femtolisp
+
+# File interpretation
+./target/femtolisp program.lisp
+
+# Compile to JVM bytecode
+./target/femtolisp hello.lisp -o Hello.class
+
+# Compile to WASM
+./target/femtolisp hello.lisp -o hello.wasm
+```
 
 ## Usage
 
