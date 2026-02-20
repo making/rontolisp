@@ -210,6 +210,61 @@ class ReadmeExamplesTest {
 			assertThat(eval("(null nil)")).isSameAs(LispTrue.INSTANCE);
 		}
 
+		@Test
+		void cons() {
+			assertThat(eval("(car (cons 1 2))")).isEqualTo(new LispInteger(1));
+			assertThat(eval("(cdr (cons 1 2))")).isEqualTo(new LispInteger(2));
+		}
+
+		@Test
+		void list() {
+			assertThat(eval("(car (list 1 2 3))")).isEqualTo(new LispInteger(1));
+		}
+
+		@Test
+		void funcall() {
+			assertThat(evalAll("(defun square (x) (* x x)) (funcall square 5)")).isEqualTo(new LispInteger(25));
+		}
+
+	}
+
+	// == First-class function examples (First-Class Functions section) ==
+
+	@Nested
+	class FirstClassFunctionExamples {
+
+		@Test
+		void higherOrderFunction() {
+			String output = evalAndCaptureOutput("""
+					(defun apply-twice (f x) (f (f x)))
+					(defun square (x) (* x x))
+					(print (apply-twice square 3))
+					""");
+			assertThat(output).isEqualTo("81");
+		}
+
+		@Test
+		void closureCaptureByReference() {
+			assertThat(evalAll("""
+					(defun make-counter ()
+					  (let ((n 0))
+					    (lambda ()
+					      (setq n (+ n 1))
+					      n)))
+					(setq c (make-counter))
+					(c) (c) (c)
+					""")).isEqualTo(new LispInteger(3));
+		}
+
+		@Test
+		void lambdaAsArgument() {
+			String output = evalAndCaptureOutput("""
+					(defun apply-twice (f x) (f (f x)))
+					(print (apply-twice (lambda (x) (+ x 10)) 5))
+					""");
+			assertThat(output).isEqualTo("25");
+		}
+
 	}
 
 	// == Special form examples (Language Reference > Special Forms table) ==

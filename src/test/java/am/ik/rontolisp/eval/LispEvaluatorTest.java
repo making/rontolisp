@@ -134,9 +134,67 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSetqLambdaAndCall() {
+		assertThat(evalMulti("(setq square (lambda (x) (* x x))) (square 5)")).isEqualTo(new LispInteger(25));
+	}
+
+	@Test
 	void evalNullPredicate() {
 		assertThat(eval("(null nil)")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(null 1)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalListCarCdr() {
+		assertThat(eval("(car (list 1 2 3))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(car (cdr (list 1 2 3)))")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void evalCons() {
+		assertThat(eval("(car (cons 1 2))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(cdr (cons 1 2))")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void evalHigherOrderFunction() {
+		assertThat(evalMulti("(defun apply-twice (f x) (f (f x))) (defun square (x) (* x x)) (apply-twice square 3)"))
+			.isEqualTo(new LispInteger(81));
+	}
+
+	@Test
+	void evalLambdaAsArgument() {
+		assertThat(evalMulti("(defun apply-twice (f x) (f (f x))) (apply-twice (lambda (x) (+ x 1)) 5)"))
+			.isEqualTo(new LispInteger(7));
+	}
+
+	@Test
+	void evalClosure() {
+		assertThat(evalMulti("(defun make-adder (n) (lambda (x) (+ x n))) (setq add5 (make-adder 5)) (add5 10)"))
+			.isEqualTo(new LispInteger(15));
+	}
+
+	@Test
+	void evalClosureMutation() {
+		assertThat(evalMulti(
+				"(defun make-counter () (let ((n 0)) (lambda () (setq n (+ n 1)) n))) (setq c (make-counter)) (c) (c) (c)"))
+			.isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalDynamicFunctionSelection() {
+		assertThat(evalMulti("(defun sq (x) (* x x)) (setq f (if t sq (lambda (x) x))) (f 5)"))
+			.isEqualTo(new LispInteger(25));
+	}
+
+	@Test
+	void evalFuncall() {
+		assertThat(eval("(funcall (lambda (x) (* x x)) 5)")).isEqualTo(new LispInteger(25));
+	}
+
+	@Test
+	void evalFunctionInList() {
+		assertThat(evalMulti("(defun sq (x) (* x x)) (funcall (car (list sq)) 5)")).isEqualTo(new LispInteger(25));
 	}
 
 }

@@ -31,8 +31,11 @@ Package dependency direction (no cycles allowed):
 cli → eval, codegen.*
 codegen.jvm → compiler, am.ik.jvm
 codegen.wasm → compiler, am.ik.wasm
-compiler, eval, reader → rontolisp (AST types only)
+compiler → rontolisp (AST types only)
+eval, reader → rontolisp (AST types only)
 ```
+
+The `compiler` package contains `LispCompiler` (shared interface) and `FreeVarAnalyzer` (static free/captured variable analysis shared by both JVM and WASM compilers).
 
 The `Scope` interface exists in the top-level `am.ik.rontolisp` package to break what would otherwise be a circular dependency: `LispLambda` (top-level) needs to hold a closure environment, but `Environment` lives in the `eval` sub-package. `Scope` provides the minimal lookup contract that `Environment` implements.
 
@@ -53,6 +56,25 @@ The WASM type section defines `fd_write`, `_start`, and `print_i32` as **plain f
 ### WASM: Two-Pass Function Body Construction
 
 The `_start` body is built in two passes because WASM requires local declarations before instructions, but the number of locals is unknown until all `let` expressions are compiled. Pass 1 generates instructions and tracks allocated locals in `Ctx`. Pass 2 prepends the correct local declarations to the instruction bytes.
+
+### First-Class Functions: Shared Architecture Across JVM and WASM
+
+Both compilers use the same high-level approach for first-class functions (higher-order functions, closures, dynamic dispatch):
+
+1. **FreeVarAnalyzer** (`compiler` pkg) provides shared static analysis: `findFreeVars()` identifies variables referenced but not bound in a scope; `findCapturedVars()` identifies locals that nested lambdas reference and therefore need boxing.
+2. **Capture by reference** -- Variables captured by closures are boxed in mutable cells (JVM: `Object[1]`; WASM: `cell` struct with `(mut ref null eq)` field). The closure and outer scope share the same cell, so mutations are visible to both.
+3. **Closure representation** -- A closure value is a small record containing a funcId (integer tag) and an env (captured variable cells). JVM: `Object[]` where `[0]` is `Integer` funcId and `[1..]` are cells. WASM: `closure` struct `{i32 funcId, (ref null eq) env}` where env is a cons list of cells.
+4. **Dispatch functions** -- Per-arity `_invoke_N` functions dispatch on funcId. JVM uses `LOOKUPSWITCH`; WASM uses `br_table`. Only arities actually used in indirect calls get real dispatch bodies; unused arities get `unreachable`.
+5. **Three-pass compilation** -- Pass 1 collects defuns. Pass 2a compiles defun bodies, 2b compiles top-level (_start/main), 2c iteratively compiles lambda bodies (lambdas may discover more lambdas). The order matters: top-level must compile before lambda iteration so that lambdas discovered during top-level compilation are included.
+6. **Symbol resolution priority** -- (1) local variables, (2) captured variables from closure env, (3) known function names (creates a closure struct/array reference), (4) error.
+
+### WASM: br_table Dispatch Requires Uniform Label Arity
+
+WASM's `br_table` instruction requires all target labels (including the default) to have the same number of result types. The dispatch functions use a block structure where the result block is typed `(result (ref null eq))` but all br_table targets are void blocks. Each case body calls the target function, then `br` carries the return value to the typed result block. The default block falls through to `unreachable`.
+
+### WASM: Pre-Allocated Dispatch Function Slots
+
+Dispatch functions for arities 0-7 are pre-allocated at fixed function indices (`FUNC_DISPATCH_BASE` through `FUNC_DISPATCH_BASE + 7`). This avoids a chicken-and-egg problem: during compilation, indirect call sites need to know the dispatch function index, but the dispatch body can only be built after all functions are compiled. Pre-allocation means the index is known at compile time; the body is filled in at the end.
 
 ### WASM Integration Tests Use Testcontainers; JVM Tests Do Not
 

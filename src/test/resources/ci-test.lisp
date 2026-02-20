@@ -61,3 +61,35 @@
 ; String literals
 (print "hello")
 (let ((s "world")) (print s))
+
+; list / car / cdr / cons
+(print (car (cons 1 2)))
+(print (cdr (cons 1 2)))
+(print (car (list 1 2 3)))
+(print (car (cdr (list 1 2 3))))
+
+; Higher-order functions
+(defun apply-twice (f x) (f (f x)))
+(print (apply-twice square 3))
+
+; Lambda as argument
+(print (apply-twice (lambda (x) (+ x 10)) 5))
+
+; Closure
+(defun make-adder (n) (lambda (x) (+ x n)))
+(setq add5 (make-adder 5))
+(print (add5 10))
+
+; Closure mutation (capture by reference)
+(defun make-counter () (let ((n 0)) (lambda () (setq n (+ n 1)) n)))
+(setq counter (make-counter))
+(counter)
+(counter)
+(print (counter))
+
+; Dynamic function selection
+(setq f (if t square forty-two))
+(print (f 6))
+
+; funcall
+(print (funcall square 7))

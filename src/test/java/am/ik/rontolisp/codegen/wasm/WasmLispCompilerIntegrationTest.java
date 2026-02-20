@@ -157,6 +157,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setqLambdaSquare() throws Exception {
+		assertThat(compileAndRun("""
+				(setq square (lambda (x) (* x x)))
+				(print (square 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void setqLambdaFactorial() throws Exception {
+		assertThat(compileAndRun("""
+				(setq fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1))))))
+				(print (fact 5))
+				""")).isEqualTo("120");
+	}
+
+	@Test
+	void setqLambdaNoParams() throws Exception {
+		assertThat(compileAndRun("""
+				(setq answer (lambda () 42))
+				(print (answer))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void setqLambdaMultipleFunctions() throws Exception {
+		assertThat(compileAndRun("""
+				(setq double (lambda (x) (* x 2)))
+				(setq add1 (lambda (x) (+ x 1)))
+				(print (add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
+	void mixedDefunAndSetqLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(defun double (x) (* x 2))
+				(setq add1 (lambda (x) (+ x 1)))
+				(print (add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
 	void lambdaImmediateCall() throws Exception {
 		assertThat(compileAndRun("(print ((lambda (x) (* x x)) 5))")).isEqualTo("25");
 	}
@@ -194,6 +236,96 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void quoteWithSymbol() throws Exception {
 		assertThat(compileAndRun("(print '(+ 1 2))")).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void listCarCdr() throws Exception {
+		assertThat(compileAndRun("(print (car (list 1 2 3)))")).isEqualTo("1");
+	}
+
+	@Test
+	void listCarCdr2() throws Exception {
+		assertThat(compileAndRun("(print (car (cdr (list 1 2 3))))")).isEqualTo("2");
+	}
+
+	@Test
+	void cons() throws Exception {
+		assertThat(compileAndRun("(print (car (cons 1 2)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (cdr (cons 1 2)))")).isEqualTo("2");
+	}
+
+	@Test
+	void higherOrderFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(defun apply-twice (f x) (f (f x)))
+				(print (apply-twice square 3))
+				""")).isEqualTo("81");
+	}
+
+	@Test
+	void lambdaAsArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun apply-twice (f x) (f (f x)))
+				(print (apply-twice (lambda (x) (+ x 10)) 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void closure() throws Exception {
+		assertThat(compileAndRun("""
+				(defun make-adder (n) (lambda (x) (+ x n)))
+				(setq add5 (make-adder 5))
+				(print (add5 10))
+				""")).isEqualTo("15");
+	}
+
+	@Test
+	void closureMutation() throws Exception {
+		assertThat(compileAndRun("""
+				(defun make-counter ()
+				  (let ((n 0))
+				    (lambda ()
+				      (setq n (+ n 1))
+				      n)))
+				(setq counter (make-counter))
+				(counter)
+				(counter)
+				(print (counter))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void dynamicFunctionSelection() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(defun forty-two (x) 42)
+				(setq f (if t square forty-two))
+				(print (f 6))
+				""")).isEqualTo("36");
+	}
+
+	@Test
+	void funcall() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (funcall square 7))
+				""")).isEqualTo("49");
+	}
+
+	@Test
+	void funcallLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(print (funcall (lambda (x) (* x x)) 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void functionInList() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (funcall (car (list square)) 5))
+				""")).isEqualTo("25");
 	}
 
 }

@@ -172,12 +172,48 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `>=` | `(>= 2 1)` | `t` |
 | `print` | `(print 42)` | Prints `42` with a newline |
 | `null` | `(null nil)` | `t` |
+| `cons` | `(cons 1 2)` | `(1 . 2)` |
+| `car` | `(car (cons 1 2))` | `1` |
+| `cdr` | `(cdr (cons 1 2))` | `2` |
+| `list` | `(list 1 2 3)` | `(1 2 3)` |
+| `funcall` | `(funcall f arg...)` | Apply function `f` to args |
 
 Arithmetic and comparison operators work on integers only. `+`, `-`, `*`, `/` accept two or more arguments.
 
-## Compiler Limitations
+### First-Class Functions
 
-The compilers support a subset of what the interpreter handles:
+Functions are first-class values in all three execution modes. They can be passed as arguments, returned from functions, and stored in data structures.
+
+**Higher-order functions:**
+
+```lisp
+(defun apply-twice (f x) (f (f x)))
+(defun square (x) (* x x))
+(print (apply-twice square 3))    ; => 81
+```
+
+**Closures (capture by reference):**
+
+```lisp
+(defun make-counter ()
+  (let ((n 0))
+    (lambda ()
+      (setq n (+ n 1))
+      n)))
+(setq c (make-counter))
+(c) ; => 1
+(c) ; => 2
+(c) ; => 3
+```
+
+**Lambda as argument:**
+
+```lisp
+(defun apply-twice (f x) (f (f x)))
+(print (apply-twice (lambda (x) (+ x 10)) 5))  ; => 25
+```
+
+## Feature Matrix
 
 | Feature | Interpreter | JVM Compiler | WASM Compiler |
 |---------|:-----------:|:------------:|:-------------:|
@@ -192,6 +228,11 @@ The compilers support a subset of what the interpreter handles:
 | `quote` | Yes | Yes | Yes |
 | Recursion | Yes | Yes | Yes |
 | String values | Yes | Yes | Yes |
+| `cons` / `car` / `cdr` / `list` | Yes | Yes | Yes |
+| `funcall` | Yes | Yes | Yes |
+| First-class functions | Yes | Yes | Yes |
+| Closures (capture by reference) | Yes | Yes | Yes |
+| Higher-order functions | Yes | Yes | Yes |
 
 ## Project Structure
 
@@ -199,7 +240,7 @@ The compilers support a subset of what the interpreter handles:
 am.ik.rontolisp              -- Lisp data types (sealed interface + records)
 am.ik.rontolisp.reader       -- Lexer + Parser
 am.ik.rontolisp.eval         -- Tree-walking interpreter + Environment
-am.ik.rontolisp.compiler     -- Compiler common interface
+am.ik.rontolisp.compiler     -- Shared compiler interface + FreeVarAnalyzer
 am.ik.rontolisp.codegen.jvm  -- JVM .class generation
 am.ik.rontolisp.codegen.wasm -- WASM .wasm generation (wasm-GC + WASI)
 am.ik.rontolisp.cli          -- REPL + CLI entry point
