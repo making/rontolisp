@@ -82,6 +82,24 @@
 	<build>
 		<plugins>
 			<plugin>
+				<groupId>io.github.git-commit-id</groupId>
+				<artifactId>git-commit-id-maven-plugin</artifactId>
+				<version>9.0.1</version>
+				<executions>
+					<execution>
+						<id>get-git-info</id>
+						<goals>
+							<goal>revision</goal>
+						</goals>
+						<phase>initialize</phase>
+					</execution>
+				</executions>
+				<configuration>
+					<generateGitPropertiesFile>false</generateGitPropertiesFile>
+					<failOnNoGitDirectory>false</failOnNoGitDirectory>
+				</configuration>
+			</plugin>
+			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-antrun-plugin</artifactId>
 				<version>3.1.0</version>
@@ -104,8 +122,14 @@
 									public static String getBuild() {
 									return "${maven.build.timestamp}";
 									}
+									public static String getGitCommit() {
+									return "${git.commit.id.abbrev}";
+									}
+									public static String getGitBranch() {
+									return "${git.branch}";
+									}
 									public static String getVersionAsJson() {
-									return "{\"version\": \"${project.version}\", \"build\": \"${maven.build.timestamp}\"}";
+									return "{\"version\": \"${project.version}\", \"buildTimestamp\": \"${maven.build.timestamp}\", \"gitCommit\": \"${git.commit.id.abbrev}\", \"gitBranch\": \"${git.branch}\"}";
 									}
 									}
 								</echo>

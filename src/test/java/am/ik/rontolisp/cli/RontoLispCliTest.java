@@ -80,7 +80,8 @@ class RontoLispCliTest {
 	void versionOption() {
 		String output = runCli("", "-v");
 		assertThat(output).contains("\"version\":");
-		assertThat(output).contains("\"build\":");
+		assertThat(output).contains("\"buildTimestamp\":");
+		assertThat(output).contains("\"gitCommit\":");
 	}
 
 }
