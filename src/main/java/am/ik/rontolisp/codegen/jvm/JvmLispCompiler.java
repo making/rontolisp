@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -67,6 +68,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/Integer;")));
 		MethodrefConstant integerValue = cp.addMethodref(integerClass,
 				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
+
+		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
+		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
+		MethodrefConstant doubleToString = cp.addMethodref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+
+		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
+		MethodrefConstant numberDoubleValue = cp.addMethodref(numberClass,
+				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
 
 		Utf8Constant lispToStringName = cp.addUtf8("_lispToString");
 		Utf8Constant lispToStringDescUtf = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;");
@@ -135,8 +146,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Ctx> funcCtxs = new ArrayList<>();
 		for (DefunDecl defun : defuns) {
 			Ctx funcCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
-					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, functions, lambdaDecls,
-					indirectCallArities, nextFuncId);
+					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass,
+					doubleValueOf, numberClass, numberDoubleValue, functions, lambdaDecls, indirectCallArities,
+					nextFuncId);
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -167,8 +179,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Pass 2b: Compile top-level expressions as main() body
 		Ctx mainCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
-				objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, functions, lambdaDecls,
-				indirectCallArities, nextFuncId);
+				objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass, doubleValueOf,
+				numberClass, numberDoubleValue, functions, lambdaDecls, indirectCallArities, nextFuncId);
 		for (LispVal expr : topLevelExprs) {
 			compileExpr(expr, mainCtx);
 			mainCtx.emit(Opcode.POP);
@@ -193,8 +205,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
-					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, functions, lambdaDecls,
-					indirectCallArities, nextFuncId);
+					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass,
+					doubleValueOf, numberClass, numberDoubleValue, functions, lambdaDecls, indirectCallArities,
+					nextFuncId);
 			lambdaCtx.closureEnvSlot = 0; // slot 0 = env Object[]
 			// Lambda params start at slot 1
 			for (int i = 0; i < lambda.paramNames.size(); i++) {
@@ -242,8 +255,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		// Build _lispToString and _consToString helper method bodies
-		List<Integer> ltsCode = buildLispToStringBody(longClass, stringClass, objectArrayClass, integerClass,
-				longToString, objectToString, consToStringMethod, nilStr, funcStr);
+		List<Integer> ltsCode = buildLispToStringBody(longClass, doubleClass, stringClass, objectArrayClass,
+				integerClass, longToString, doubleToString, objectToString, consToStringMethod, nilStr, funcStr);
 		List<Integer> ctsCode = buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr, sbAppendStr,
 				sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
 
@@ -330,10 +343,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			MethodrefConstant lispToString, ClassConstant longClass, MethodrefConstant longValueOf,
 			MethodrefConstant longValue, ClassConstant objectClass, ClassConstant objectArrayClass,
 			ClassConstant integerClass, MethodrefConstant integerValueOf, MethodrefConstant integerValue,
-			Map<String, FunctionInfo> functions, List<LambdaInfo> lambdaDecls, Set<Integer> indirectCallArities,
-			int[] nextFuncId) {
+			ClassConstant doubleClass, MethodrefConstant doubleValueOf, ClassConstant numberClass,
+			MethodrefConstant numberDoubleValue, Map<String, FunctionInfo> functions, List<LambdaInfo> lambdaDecls,
+			Set<Integer> indirectCallArities, int[] nextFuncId) {
 		Ctx ctx = new Ctx(cp, systemOut, printlnStr, lispToString, longClass, longValueOf, longValue, objectClass,
-				objectArrayClass, integerClass, integerValueOf, integerValue);
+				objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass, doubleValueOf, numberClass,
+				numberDoubleValue);
 		ctx.functions = functions;
 		ctx.lambdaDecls = lambdaDecls;
 		ctx.indirectCallArities = indirectCallArities;
@@ -344,6 +359,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	private void compileExpr(LispVal expr, Ctx ctx) {
 		switch (expr) {
 			case LispInteger i -> compileLong(i.value(), ctx);
+			case LispDouble d -> compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> compileLong(1, ctx);
 			case LispString s -> compileStringLiteral(s.print(), ctx);
@@ -367,6 +383,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ctx.longValueOf.index());
+	}
+
+	private void compileDouble(double value, Ctx ctx) {
+		if (value == 0.0) {
+			ctx.emit(Opcode.DCONST_0);
+		}
+		else if (value == 1.0) {
+			ctx.emit(Opcode.DCONST_1);
+		}
+		else {
+			ConstantPool.DoubleConstant dc = ctx.cp.addDouble(value);
+			ctx.emit(Opcode.LDC2_W);
+			ctx.emitU2(dc.index());
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.doubleValueOf.index());
 	}
 
 	private void compileSymbolRef(LispSymbol sym, Ctx ctx) {
@@ -422,11 +454,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case "+" -> compileArith(cons, ctx, Opcode.LADD);
-				case "-" -> compileArith(cons, ctx, Opcode.LSUB);
-				case "*" -> compileArith(cons, ctx, Opcode.LMUL);
-				case "/" -> compileArith(cons, ctx, Opcode.LDIV);
-				case "mod" -> compileArith(cons, ctx, Opcode.LREM);
+				case "+" -> compileArith(cons, ctx, Opcode.LADD, Opcode.DADD);
+				case "-" -> compileArith(cons, ctx, Opcode.LSUB, Opcode.DSUB);
+				case "*" -> compileArith(cons, ctx, Opcode.LMUL, Opcode.DMUL);
+				case "/" -> compileArith(cons, ctx, Opcode.LDIV, Opcode.DDIV);
+				case "mod" -> compileArith(cons, ctx, Opcode.LREM, Opcode.DREM);
 				case "=" -> compileComparison(cons, ctx, Opcode.IFEQ);
 				case "<" -> compileComparison(cons, ctx, Opcode.IFLT);
 				case ">" -> compileComparison(cons, ctx, Opcode.IFGT);
@@ -465,25 +497,46 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 	}
 
-	private void compileArith(LispCons cons, Ctx ctx, int opcode) {
+	private void compileArith(LispCons cons, Ctx ctx, int longOpcode, int doubleOpcode) {
 		List<LispVal> args = cons.toList();
-		compileExpr(args.get(1), ctx);
-		unboxLong(ctx);
-		for (int i = 2; i < args.size(); i++) {
-			compileExpr(args.get(i), ctx);
-			unboxLong(ctx);
-			ctx.emit(opcode);
+		if (hasDoubleLiteral(args)) {
+			compileExpr(args.get(1), ctx);
+			unboxDouble(ctx);
+			for (int i = 2; i < args.size(); i++) {
+				compileExpr(args.get(i), ctx);
+				unboxDouble(ctx);
+				ctx.emit(doubleOpcode);
+			}
+			boxDouble(ctx);
 		}
-		boxLong(ctx);
+		else {
+			compileExpr(args.get(1), ctx);
+			unboxLong(ctx);
+			for (int i = 2; i < args.size(); i++) {
+				compileExpr(args.get(i), ctx);
+				unboxLong(ctx);
+				ctx.emit(longOpcode);
+			}
+			boxLong(ctx);
+		}
 	}
 
 	private void compileComparison(LispCons cons, Ctx ctx, int branchOpcode) {
 		List<LispVal> args = cons.toList();
-		compileExpr(args.get(1), ctx);
-		unboxLong(ctx);
-		compileExpr(args.get(2), ctx);
-		unboxLong(ctx);
-		ctx.emit(Opcode.LCMP);
+		if (hasDoubleLiteral(args)) {
+			compileExpr(args.get(1), ctx);
+			unboxDouble(ctx);
+			compileExpr(args.get(2), ctx);
+			unboxDouble(ctx);
+			ctx.emit(Opcode.DCMPL);
+		}
+		else {
+			compileExpr(args.get(1), ctx);
+			unboxLong(ctx);
+			compileExpr(args.get(2), ctx);
+			unboxLong(ctx);
+			ctx.emit(Opcode.LCMP);
+		}
 		int ifPos = ctx.code.size();
 		ctx.emit(branchOpcode);
 		ctx.emitU2(0);
@@ -530,6 +583,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	private void compileQuotedVal(LispVal val, Ctx ctx) {
 		switch (val) {
 			case LispInteger i -> compileLong(i.value(), ctx);
+			case LispDouble d -> compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> compileLong(1, ctx);
 			case LispString s -> compileStringLiteral(s.print(), ctx);
@@ -915,6 +969,41 @@ public final class JvmLispCompiler implements LispCompiler {
 		ctx.emitU2(ctx.longValueOf.index());
 	}
 
+	private void unboxDouble(Ctx ctx) {
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.numberClass.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.numberDoubleValue.index());
+	}
+
+	private void boxDouble(Ctx ctx) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.doubleValueOf.index());
+	}
+
+	private static boolean hasDoubleLiteral(List<LispVal> args) {
+		for (int i = 1; i < args.size(); i++) {
+			if (containsDouble(args.get(i))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean containsDouble(LispVal val) {
+		if (val instanceof LispDouble) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			for (LispVal element : cons.toList()) {
+				if (containsDouble(element)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	private void emitIntConst(Ctx ctx, int value) {
 		if (value >= 0 && value <= 5) {
 			ctx.emit(Opcode.ICONST_0 + value);
@@ -1071,12 +1160,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Builds bytecode for _lispToString. Now also handles function values (Object[] with
-	 * Integer at [0]).
+	 * Builds bytecode for _lispToString. Handles Long, Double, String, Object[] (cons or
+	 * function), and fallback toString.
 	 */
-	private static List<Integer> buildLispToStringBody(ClassConstant longClass, ClassConstant stringClass,
-			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant longToString,
-			MethodrefConstant objectToString, MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
+	private static List<Integer> buildLispToStringBody(ClassConstant longClass, ClassConstant doubleClass,
+			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
+			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
+			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
@@ -1102,8 +1192,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		emitU2(code, longToString.index());
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof String) return (String)val;
+		// if (val instanceof Double) return ((Double)val).toString();
 		patchBranch(code, ifNotLongPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, doubleClass.index());
+		int ifNotDoublePos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, doubleClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, doubleToString.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof String) return (String)val;
+		patchBranch(code, ifNotDoublePos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, stringClass.index());
@@ -1319,6 +1424,14 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant integerValue;
 
+		final ClassConstant doubleClass;
+
+		final MethodrefConstant doubleValueOf;
+
+		final ClassConstant numberClass;
+
+		final MethodrefConstant numberDoubleValue;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -1346,7 +1459,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		Ctx(ConstantPool cp, FieldrefConstant systemOut, MethodrefConstant printlnStr, MethodrefConstant lispToString,
 				ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
 				ClassConstant objectClass, ClassConstant objectArrayClass, ClassConstant integerClass,
-				MethodrefConstant integerValueOf, MethodrefConstant integerValue) {
+				MethodrefConstant integerValueOf, MethodrefConstant integerValue, ClassConstant doubleClass,
+				MethodrefConstant doubleValueOf, ClassConstant numberClass, MethodrefConstant numberDoubleValue) {
 			this.cp = cp;
 			this.systemOut = systemOut;
 			this.printlnStr = printlnStr;
@@ -1359,6 +1473,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.integerClass = integerClass;
 			this.integerValueOf = integerValueOf;
 			this.integerValue = integerValue;
+			this.doubleClass = doubleClass;
+			this.doubleValueOf = doubleValueOf;
+			this.numberClass = numberClass;
+			this.numberDoubleValue = numberDoubleValue;
 		}
 
 		void emit(int opcode) {

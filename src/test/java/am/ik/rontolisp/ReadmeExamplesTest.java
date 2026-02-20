@@ -152,21 +152,25 @@ class ReadmeExamplesTest {
 		@Test
 		void add() {
 			assertThat(eval("(+ 1 2 3)")).isEqualTo(new LispInteger(6));
+			assertThat(eval("(+ 1.5 2.5)")).isEqualTo(new LispDouble(4.0));
 		}
 
 		@Test
 		void subtract() {
 			assertThat(eval("(- 10 3)")).isEqualTo(new LispInteger(7));
+			assertThat(eval("(- 3.5 1.5)")).isEqualTo(new LispDouble(2.0));
 		}
 
 		@Test
 		void multiply() {
 			assertThat(eval("(* 3 4)")).isEqualTo(new LispInteger(12));
+			assertThat(eval("(* 2.0 3.0)")).isEqualTo(new LispDouble(6.0));
 		}
 
 		@Test
 		void divide() {
 			assertThat(eval("(/ 10 3)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(/ 7.0 2.0)")).isEqualTo(new LispDouble(3.5));
 		}
 
 		@Test

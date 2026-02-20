@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -48,12 +49,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private static final int FUNC_PRINT_I32_NO_NL = 5;
 
-	private static final int FUNC_DISPATCH_BASE = 6;
+	private static final int FUNC_PRINT_F64 = 6;
+
+	private static final int FUNC_PRINT_F64_NO_NL = 7;
+
+	private static final int FUNC_DISPATCH_BASE = 8;
 
 	private static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 6..13 (arities 0..7)
-	private static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 14
+	// Dispatch functions occupy indices 8..15 (arities 0..7)
+	private static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 16
 
 	// Type indices
 	private static final int TYPE_FD_WRITE = 0;
@@ -72,15 +77,19 @@ public final class WasmLispCompiler implements LispCompiler {
 												// eq)
 												// env}
 
-	private static final int TYPE_WRITE_STR = 7; // (i32, i32) -> ()
+	private static final int TYPE_FLOAT = 7; // in rec group - {f64 value}
 
-	private static final int TYPE_PRINT_VAL = 8; // ((ref null eq)) -> ()
+	private static final int TYPE_WRITE_STR = 8; // (i32, i32) -> ()
+
+	private static final int TYPE_PRINT_VAL = 9; // ((ref null eq)) -> ()
+
+	private static final int TYPE_PRINT_F64 = 10; // (f64) -> ()
 
 	// Callable types: arity N = (ref null eq)^(N+1) -> (ref null eq)
 	// Used by dispatch functions and user functions (defuns/lambdas) alike
-	private static final int TYPE_CALLABLE_BASE = 9;
+	private static final int TYPE_CALLABLE_BASE = 11;
 
-	// callable_arity_N type index = TYPE_CALLABLE_BASE + N (indices 9..16)
+	// callable_arity_N type index = TYPE_CALLABLE_BASE + N (indices 11..18)
 
 	// Memory layout
 	private static final int PRINT_BUF_OFFSET = 0;
@@ -316,6 +325,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] writeStrBody = buildWriteStrBody();
 		byte[] printValBody = buildPrintValBody(stringTable);
 		byte[] printI32NoNlBody = buildPrintI32Core(false);
+		byte[] printF64Body = buildPrintF64Core(true, stringTable);
+		byte[] printF64NoNlBody = buildPrintF64Core(false, stringTable);
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
@@ -330,7 +341,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.addFunc(new Type[] {}, new Type[] {});
 				// type 2: print_i32 / _print_i32_no_nl
 				types.addFunc(new Type[] { Type.I32 }, new Type[] {});
-				// types 3-6: struct types in rec group
+				// types 3-7: struct types in rec group
 				types.addRecGroup(rec -> {
 					// type 3: cons struct
 					rec.addSubFinalStruct(fields -> {
@@ -351,10 +362,14 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					});
+					// type 7: float struct {f64 value}
+					rec.addSubFinalStruct(fields -> {
+						fields.addField(false, w -> w.write(Type.F64));
+					});
 				});
-				// type 7: _write_str
+				// type 8: _write_str
 				types.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] {});
-				// type 8: _print_val
+				// type 9: _print_val
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
@@ -362,7 +377,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.writeHeapType(Type.EQ.code());
 					w.write(0);
 				});
-				// types 9-16: callable types for arities 0-7
+				// type 10: _print_f64 / _print_f64_no_nl
+				types.addFunc(new Type[] { Type.F64 }, new Type[] {});
+				// types 11-18: callable types for arities 0-7
 				// Each: (ref null eq)^(arity+1) -> (ref null eq)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					int paramCount = arity + 1; // env + args
@@ -388,7 +405,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_PRINT_I32) // print_i32
 					.addFunction(TYPE_WRITE_STR) // _write_str
 					.addFunction(TYPE_PRINT_VAL) // _print_val
-					.addFunction(TYPE_PRINT_I32); // _print_i32_no_nl
+					.addFunction(TYPE_PRINT_I32) // _print_i32_no_nl
+					.addFunction(TYPE_PRINT_F64) // _print_f64
+					.addFunction(TYPE_PRINT_F64); // _print_f64_no_nl
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -413,7 +432,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(printI32Body)
 					.addFunction(writeStrBody)
 					.addFunction(printValBody)
-					.addFunction(printI32NoNlBody);
+					.addFunction(printI32NoNlBody)
+					.addFunction(printF64Body)
+					.addFunction(printF64NoNlBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
@@ -452,6 +473,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(1);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			case LispDouble d -> {
+				ctx.writer.write(Instruction.F64_CONST);
+				ctx.writer.writeF64(d.value());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(TYPE_FLOAT);
 			}
 			case LispString s -> compileStringLiteral(s.print(), ctx);
 			case LispSymbol sym -> compileSymbolRef(sym, ctx);
@@ -502,16 +529,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case "+" -> compileArith(cons, ctx, Instruction.I32_ADD);
-				case "-" -> compileArith(cons, ctx, Instruction.I32_SUB);
-				case "*" -> compileArith(cons, ctx, Instruction.I32_MUL);
-				case "/" -> compileArith(cons, ctx, Instruction.I32_DIV_S);
-				case "mod" -> compileArith(cons, ctx, Instruction.I32_REM_S);
-				case "=" -> compileComparison(cons, ctx, Instruction.I32_EQ);
-				case "<" -> compileComparison(cons, ctx, Instruction.I32_LT_S);
-				case ">" -> compileComparison(cons, ctx, Instruction.I32_GT_S);
-				case "<=" -> compileComparison(cons, ctx, Instruction.I32_LE_S);
-				case ">=" -> compileComparison(cons, ctx, Instruction.I32_GE_S);
+				case "+" -> compileArith(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD);
+				case "-" -> compileArith(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB);
+				case "*" -> compileArith(cons, ctx, Instruction.I32_MUL, Instruction.F64_MUL);
+				case "/" -> compileArith(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV);
+				case "mod" -> compileArith(cons, ctx, Instruction.I32_REM_S, -1);
+				case "=" -> compileComparison(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
+				case "<" -> compileComparison(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
+				case ">" -> compileComparison(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
+				case "<=" -> compileComparison(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
+				case ">=" -> compileComparison(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
 				case "print" -> compilePrint(cons, ctx);
 				case "quote" -> compileQuote(cons, ctx);
 				case "if" -> compileIf(cons, ctx);
@@ -550,25 +577,47 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 	}
 
-	private void compileArith(LispCons cons, Ctx ctx, int opcode) {
+	private void compileArith(LispCons cons, Ctx ctx, int i32Opcode, int f64Opcode) {
 		List<LispVal> args = cons.toList();
-		compileExpr(args.get(1), ctx);
-		castI31GetS(ctx);
-		for (int i = 2; i < args.size(); i++) {
-			compileExpr(args.get(i), ctx);
-			castI31GetS(ctx);
-			ctx.writer.write(opcode);
+		if (hasDoubleLiteral(args)) {
+			compileExpr(args.get(1), ctx);
+			castFloatGetF64(ctx);
+			for (int i = 2; i < args.size(); i++) {
+				compileExpr(args.get(i), ctx);
+				castFloatGetF64(ctx);
+				ctx.writer.write(f64Opcode);
+			}
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeSignedLeb128(TYPE_FLOAT);
 		}
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		else {
+			compileExpr(args.get(1), ctx);
+			castI31GetS(ctx);
+			for (int i = 2; i < args.size(); i++) {
+				compileExpr(args.get(i), ctx);
+				castI31GetS(ctx);
+				ctx.writer.write(i32Opcode);
+			}
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		}
 	}
 
-	private void compileComparison(LispCons cons, Ctx ctx, int opcode) {
+	private void compileComparison(LispCons cons, Ctx ctx, int i32Opcode, int f64Opcode) {
 		List<LispVal> args = cons.toList();
-		compileExpr(args.get(1), ctx);
-		castI31GetS(ctx);
-		compileExpr(args.get(2), ctx);
-		castI31GetS(ctx);
-		ctx.writer.write(opcode);
+		if (hasDoubleLiteral(args)) {
+			compileExpr(args.get(1), ctx);
+			castFloatGetF64(ctx);
+			compileExpr(args.get(2), ctx);
+			castFloatGetF64(ctx);
+			ctx.writer.write(f64Opcode);
+		}
+		else {
+			compileExpr(args.get(1), ctx);
+			castI31GetS(ctx);
+			compileExpr(args.get(2), ctx);
+			castI31GetS(ctx);
+			ctx.writer.write(i32Opcode);
+		}
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
@@ -619,6 +668,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128((int) i.value());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			case LispDouble d -> {
+				ctx.writer.write(Instruction.F64_CONST);
+				ctx.writer.writeF64(d.value());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(TYPE_FLOAT);
 			}
 			case LispNil ignored -> {
 				ctx.writer.write(Instruction.REF_NULL);
@@ -999,6 +1054,62 @@ public final class WasmLispCompiler implements LispCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+	}
+
+	/**
+	 * Runtime type check: convert (ref eq) on stack to f64. If i31ref (integer), converts
+	 * via f64.convert_i32_s. If float_struct, extracts f64 field.
+	 */
+	private void castFloatGetF64(Ctx ctx) {
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.F64);
+		// i31 path: cast to i31, get_s, convert to f64
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
+		ctx.writer.write(Instruction.ELSE);
+		// float_struct path: cast, extract f64 field
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(TYPE_FLOAT);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(TYPE_FLOAT);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+	}
+
+	private static boolean hasDoubleLiteral(List<LispVal> args) {
+		for (int i = 1; i < args.size(); i++) {
+			if (containsDouble(args.get(i))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean containsDouble(LispVal val) {
+		if (val instanceof LispDouble) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			for (LispVal element : cons.toList()) {
+				if (containsDouble(element)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	// --- Helper: load captured variable value from env cons list ---
@@ -1515,6 +1626,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check float struct
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(TYPE_FLOAT);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(TYPE_FLOAT);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_PRINT_F64_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
 		// Check string struct
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
@@ -1651,6 +1780,193 @@ public final class WasmLispCompiler implements LispCompiler {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the print_f64 helper function body. Prints integer part via print_i32_no_nl,
+	 * then '.' and fractional digits.
+	 */
+	private byte[] buildPrintF64Core(boolean appendNewline, StringTable st) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// Locals: 0=f64 value (param), 1=i32 is_neg, 2=i32 int_part, 3=f64 frac,
+		// 4=i32 digit, 5=i32 digit_count
+		w.write(5);
+		w.write(1);
+		w.write(Type.I32); // local 1: is_neg
+		w.write(1);
+		w.write(Type.I32); // local 2: int_part
+		w.write(1);
+		w.write(Type.F64); // local 3: frac
+		w.write(1);
+		w.write(Type.I32); // local 4: digit
+		w.write(1);
+		w.write(Type.I32); // local 5: digit_count
+
+		// Check if negative
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1); // is_neg
+
+		// If negative, negate
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.F64_NEG);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+
+		// Get integer part: int_part = i32(floor(value))
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.F64_FLOOR);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2); // int_part
+
+		// If negative, write '-'
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.minus.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.minus.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+		w.write(Instruction.END);
+
+		// Print integer part
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_PRINT_I32_NO_NL);
+
+		// Print '.'
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.period.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.period.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+
+		// Compute fractional part: frac = value - f64(int_part)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3); // frac
+
+		// digit_count = 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(5);
+
+		// Loop to extract fractional digits
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+
+		// frac = frac * 10.0
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(10.0);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3);
+
+		// digit = i32(trunc(frac))
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(4);
+
+		// Store digit char at OUT_BUF_OFFSET
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(OUT_BUF_OFFSET);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(48); // '0'
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+
+		// Write the single digit
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(OUT_BUF_OFFSET);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+
+		// frac = frac - f64(digit)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3);
+
+		// digit_count++
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(5);
+
+		// Continue if: digit_count < 1 OR (frac > epsilon AND digit_count < 6)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_LT_S);
+		// OR
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0000001);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+
+		w.write(Instruction.BR_IF, 0); // loop
+		w.write(Instruction.END); // end loop
+		w.write(Instruction.END); // end block
+
+		// Append newline if needed
+		if (appendNewline) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(st.newline.offset());
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(st.newline.length());
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(FUNC_WRITE_STR);
+		}
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	private static boolean isSetqLambda(LispVal expr) {
 		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym && "setq".equals(sym.name())) {
 			List<LispVal> parts = cons.toList();
@@ -1751,6 +2067,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry funcStr;
 
+		final StringEntry minus;
+
+		final StringEntry period;
+
 		StringTable(int baseOffset) {
 			this.nextOffset = baseOffset;
 			this.nil = addString("nil");
@@ -1760,6 +2080,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dot = addString(" . ");
 			this.newline = addString("\n");
 			this.funcStr = addString("#<function>");
+			this.minus = addString("-");
+			this.period = addString(".");
 		}
 
 		StringEntry addString(String s) {

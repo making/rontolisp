@@ -70,13 +70,21 @@ public final class LispLexer {
 		}
 	}
 
-	private Token.NumberToken readNumber() {
+	private Token readNumber() {
 		int start = this.pos;
 		if (this.input.charAt(this.pos) == '-') {
 			this.pos++;
 		}
 		while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
 			this.pos++;
+		}
+		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.' && this.pos + 1 < this.input.length()
+				&& isDigit(this.input.charAt(this.pos + 1))) {
+			this.pos++; // consume '.'
+			while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+			return new Token.DoubleToken(Double.parseDouble(this.input.substring(start, this.pos)));
 		}
 		return new Token.NumberToken(Long.parseLong(this.input.substring(start, this.pos)));
 	}

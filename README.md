@@ -126,7 +126,7 @@ wasmtime --wasm gc hello.wasm
 
 The generated `.wasm` binary uses:
 
-- **wasm-GC** -- Integers are represented as `i31ref`. All values on the stack are typed as `(ref eq)`.
+- **wasm-GC** -- Integers are represented as `i31ref`. Floating-point numbers are boxed in a `float_struct { f64 }`. All values on the stack are typed as `(ref eq)`.
 - **WASI Preview 1** -- `fd_write` for stdout output.
 
 Requires a wasm-GC capable runtime such as wasmtime 14+.
@@ -138,6 +138,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | Type | Example | Description |
 |------|---------|-------------|
 | Integer | `42`, `-5` | 64-bit signed integer (interpreter), 31-bit signed integer (WASM) |
+| Double | `3.14`, `-0.5` | 64-bit floating-point number |
 | String | `"hello"` | String literal (interpreter only) |
 | Symbol | `x`, `foo` | Identifier |
 | Nil | `nil` | False / empty list |
@@ -160,10 +161,10 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 | Function | Example | Result |
 |----------|---------|--------|
-| `+` | `(+ 1 2 3)` | `6` |
-| `-` | `(- 10 3)` | `7` |
-| `*` | `(* 3 4)` | `12` |
-| `/` | `(/ 10 3)` | `3` (integer division) |
+| `+` | `(+ 1 2 3)`, `(+ 1.5 2.5)` | `6`, `4.0` |
+| `-` | `(- 10 3)`, `(- 3.5 1.5)` | `7`, `2.0` |
+| `*` | `(* 3 4)`, `(* 2.0 3.0)` | `12`, `6.0` |
+| `/` | `(/ 10 3)`, `(/ 7.0 2.0)` | `3` (integer division), `3.5` |
 | `mod` | `(mod 10 3)` | `1` |
 | `=` | `(= 1 1)` | `t` |
 | `<` | `(< 1 2)` | `t` |
@@ -178,7 +179,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `funcall` | `(funcall f arg...)` | Apply function `f` to args |
 
-Arithmetic and comparison operators work on integers only. `+`, `-`, `*`, `/` accept two or more arguments.
+Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 
 ### First-Class Functions
 
@@ -217,7 +218,8 @@ Functions are first-class values in all three execution modes. They can be passe
 
 | Feature | Interpreter | JVM Compiler | WASM Compiler |
 |---------|:-----------:|:------------:|:-------------:|
-| Arithmetic (`+`, `-`, `*`, `/`, `mod`) | Yes | Yes | Yes |
+| Integer arithmetic (`+`, `-`, `*`, `/`, `mod`) | Yes | Yes | Yes |
+| Floating-point arithmetic | Yes | Yes | Yes |
 | Comparison (`=`, `<`, `>`, `<=`, `>=`) | Yes | Yes | Yes |
 | `print` | Yes | Yes | Yes |
 | `if` | Yes | Yes | Yes |

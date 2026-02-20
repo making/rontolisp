@@ -76,6 +76,18 @@ WASM's `br_table` instruction requires all target labels (including the default)
 
 Dispatch functions for arities 0-7 are pre-allocated at fixed function indices (`FUNC_DISPATCH_BASE` through `FUNC_DISPATCH_BASE + 7`). This avoids a chicken-and-egg problem: during compilation, indirect call sites need to know the dispatch function index, but the dispatch body can only be built after all functions are compiled. Pre-allocation means the index is known at compile time; the body is filled in at the end.
 
+### Floating-Point Numbers: Static Type Dispatch with Recursive Detection
+
+`LispDouble` (a `record` wrapping `double`) represents floating-point values across all three backends. Mixed integer/float arithmetic uses automatic promotion: if any operand is a double, the entire operation uses float arithmetic.
+
+Both compilers use **static type dispatch** at compile time: `containsDouble()` recursively walks argument AST nodes to detect any `LispDouble` literal in the expression tree. This is necessary because in nested expressions like `(+ (* 2.0 3.0) (- 10.0 4.0))`, the direct arguments to `+` are `LispCons` nodes, not `LispDouble` -- so a shallow check would miss them. When doubles are detected, the compiler emits float-path bytecode; otherwise, integer-path.
+
+**JVM**: Uses `Number.doubleValue()` for unboxing (both `Long` and `Double` extend `Number`), and `Double.valueOf()` for boxing. Double constants use `LDC2_W` with constant pool `DOUBLE` entries (tag 6, occupies two CP slots).
+
+**WASM**: Floats are boxed in a `float_struct { f64 value }` (type index `TYPE_FLOAT = 7`) because `i31ref` only supports 31-bit integers. The `castFloatGetF64()` helper performs runtime dispatch: `ref.test i31` to check if a value is an integer (then `f64.convert_i32_s`) or a float struct (then `struct.get`). Printing uses `buildPrintF64Core()` which converts f64 to decimal string in linear memory. Note: `mod` is unsupported for floats in WASM because there is no `f64.rem` instruction.
+
+**Interpreter**: `Environment` uses `hasDouble(args)` / `asDouble(val)` helpers to branch arithmetic and comparison operations.
+
 ### WASM Integration Tests Use Testcontainers; JVM Tests Do Not
 
 WASM tests require wasmtime (an external runtime with specific version requirements for wasm-GC support). Testcontainers with `ImageFromDockerfile` builds a container with the latest wasmtime, ensuring wasm-GC is available. The image is cached after first build. JVM tests use `URLClassLoader` in-process because a JVM is already running the tests and class version 50 runs on any JRE.

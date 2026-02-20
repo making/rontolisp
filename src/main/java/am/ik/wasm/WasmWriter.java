@@ -23,6 +23,10 @@ public final class WasmWriter {
 		return this.write((Object) ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(i).array());
 	}
 
+	public WasmWriter writeF64(double value) {
+		return this.write((Object) ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(value).array());
+	}
+
 	public WasmWriter writeSignedLeb128(int i) {
 		// https://en.wikipedia.org/wiki/LEB128#Encode_signed_32-bit_integer
 		int value = i;

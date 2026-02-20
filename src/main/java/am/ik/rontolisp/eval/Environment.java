@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -69,6 +70,13 @@ public final class Environment implements Scope {
 
 	private static void registerArithmetic(Environment env) {
 		env.define("+", new LispFunction("+", args -> {
+			if (hasDouble(args)) {
+				double result = 0;
+				for (LispVal arg : args) {
+					result += asDouble(arg);
+				}
+				return new LispDouble(result);
+			}
 			long result = 0;
 			for (LispVal arg : args) {
 				result += asLong(arg);
@@ -76,6 +84,16 @@ public final class Environment implements Scope {
 			return new LispInteger(result);
 		}));
 		env.define("-", new LispFunction("-", args -> {
+			if (hasDouble(args)) {
+				if (args.size() == 1) {
+					return new LispDouble(-asDouble(args.get(0)));
+				}
+				double result = asDouble(args.get(0));
+				for (int i = 1; i < args.size(); i++) {
+					result -= asDouble(args.get(i));
+				}
+				return new LispDouble(result);
+			}
 			if (args.size() == 1) {
 				return new LispInteger(-asLong(args.get(0)));
 			}
@@ -86,6 +104,13 @@ public final class Environment implements Scope {
 			return new LispInteger(result);
 		}));
 		env.define("*", new LispFunction("*", args -> {
+			if (hasDouble(args)) {
+				double result = 1;
+				for (LispVal arg : args) {
+					result *= asDouble(arg);
+				}
+				return new LispDouble(result);
+			}
 			long result = 1;
 			for (LispVal arg : args) {
 				result *= asLong(arg);
@@ -93,6 +118,13 @@ public final class Environment implements Scope {
 			return new LispInteger(result);
 		}));
 		env.define("/", new LispFunction("/", args -> {
+			if (hasDouble(args)) {
+				double result = asDouble(args.get(0));
+				for (int i = 1; i < args.size(); i++) {
+					result /= asDouble(args.get(i));
+				}
+				return new LispDouble(result);
+			}
 			long result = asLong(args.get(0));
 			for (int i = 1; i < args.size(); i++) {
 				result /= asLong(args.get(i));
@@ -101,6 +133,9 @@ public final class Environment implements Scope {
 		}));
 		env.define("mod", new LispFunction("mod", args -> {
 			requireArgCount("mod", args, 2);
+			if (hasDouble(args)) {
+				return new LispDouble(asDouble(args.get(0)) % asDouble(args.get(1)));
+			}
 			return new LispInteger(asLong(args.get(0)) % asLong(args.get(1)));
 		}));
 	}
@@ -108,22 +143,37 @@ public final class Environment implements Scope {
 	private static void registerComparison(Environment env) {
 		env.define("=", new LispFunction("=", args -> {
 			requireArgCount("=", args, 2);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) == asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) == asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define("<", new LispFunction("<", args -> {
 			requireArgCount("<", args, 2);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) < asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) < asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(">", new LispFunction(">", args -> {
 			requireArgCount(">", args, 2);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) > asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) > asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define("<=", new LispFunction("<=", args -> {
 			requireArgCount("<=", args, 2);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) <= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) <= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(">=", new LispFunction(">=", args -> {
 			requireArgCount(">=", args, 2);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) >= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) >= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
@@ -134,6 +184,9 @@ public final class Environment implements Scope {
 			LispVal val = args.get(0);
 			if (val instanceof LispInteger i) {
 				out.println(i.value());
+			}
+			else if (val instanceof LispDouble d) {
+				out.println(Double.toString(d.value()));
 			}
 			else {
 				out.println(val.print());
@@ -182,6 +235,25 @@ public final class Environment implements Scope {
 			return i.value();
 		}
 		throw new LispEvalException("Expected integer, got: " + val.print());
+	}
+
+	private static double asDouble(LispVal val) {
+		if (val instanceof LispDouble d) {
+			return d.value();
+		}
+		if (val instanceof LispInteger i) {
+			return (double) i.value();
+		}
+		throw new LispEvalException("Expected number, got: " + val.print());
+	}
+
+	private static boolean hasDouble(List<LispVal> args) {
+		for (LispVal arg : args) {
+			if (arg instanceof LispDouble) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void requireArgCount(String name, List<LispVal> args, int expected) {
