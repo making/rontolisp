@@ -90,6 +90,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				defuns.add(new DefunDecl(funcName, paramNames, parts.subList(3, parts.size())));
 			}
+			else if (isSetqLambda(expr)) {
+				defuns.add(extractSetqLambda(expr));
+			}
 			else {
 				topLevelExprs.add(expr);
 			}
@@ -330,6 +333,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				case "let" -> compileLet(cons, ctx);
 				case "progn" -> compileProgn(cons, ctx);
 				case "setq" -> compileSetq(cons, ctx);
+				case "lambda" -> throw new UnsupportedOperationException(
+						"lambda as a value is not supported; use (defun name (...) ...) or top-level (setq name (lambda (...) ...))");
 				case "defun" -> {
 					// defun at non-top-level is a no-op (already processed in pass 1)
 					ctx.writer.write(Instruction.REF_NULL);
@@ -1035,6 +1040,39 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Checks if the expression matches the pattern (setq name (lambda (params...)
+	 * body...)).
+	 */
+	private static boolean isSetqLambda(LispVal expr) {
+		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym && "setq".equals(sym.name())) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() == 3 && parts.get(1) instanceof LispSymbol && parts.get(2) instanceof LispCons valueCons
+					&& valueCons.car() instanceof LispSymbol lambdaSym && "lambda".equals(lambdaSym.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Extracts a DefunDecl from (setq name (lambda (params...) body...)).
+	 */
+	private static DefunDecl extractSetqLambda(LispVal expr) {
+		List<LispVal> parts = ((LispCons) expr).toList();
+		String funcName = ((LispSymbol) parts.get(1)).name();
+		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
+		LispVal paramsVal = lambdaParts.get(1);
+		List<String> paramNames;
+		if (paramsVal instanceof LispNil) {
+			paramNames = List.of();
+		}
+		else {
+			paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
+		}
+		return new DefunDecl(funcName, paramNames, lambdaParts.subList(2, lambdaParts.size()));
 	}
 
 	private record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {

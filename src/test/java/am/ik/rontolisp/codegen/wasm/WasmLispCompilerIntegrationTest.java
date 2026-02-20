@@ -157,6 +157,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setqLambdaSquare() throws Exception {
+		assertThat(compileAndRun("""
+				(setq square (lambda (x) (* x x)))
+				(print (square 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void setqLambdaFactorial() throws Exception {
+		assertThat(compileAndRun("""
+				(setq fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1))))))
+				(print (fact 5))
+				""")).isEqualTo("120");
+	}
+
+	@Test
+	void setqLambdaNoParams() throws Exception {
+		assertThat(compileAndRun("""
+				(setq answer (lambda () 42))
+				(print (answer))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void setqLambdaMultipleFunctions() throws Exception {
+		assertThat(compileAndRun("""
+				(setq double (lambda (x) (* x 2)))
+				(setq add1 (lambda (x) (+ x 1)))
+				(print (add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
+	void mixedDefunAndSetqLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(defun double (x) (* x 2))
+				(setq add1 (lambda (x) (+ x 1)))
+				(print (add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
 	void lambdaImmediateCall() throws Exception {
 		assertThat(compileAndRun("(print ((lambda (x) (* x x)) 5))")).isEqualTo("25");
 	}

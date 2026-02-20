@@ -134,6 +134,11 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSetqLambdaAndCall() {
+		assertThat(evalMulti("(setq square (lambda (x) (* x x))) (square 5)")).isEqualTo(new LispInteger(25));
+	}
+
+	@Test
 	void evalNullPredicate() {
 		assertThat(eval("(null nil)")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(null 1)")).isSameAs(LispNil.INSTANCE);
