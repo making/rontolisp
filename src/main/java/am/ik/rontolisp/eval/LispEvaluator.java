@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
@@ -32,6 +33,7 @@ public final class LispEvaluator {
 	public LispVal eval(LispVal expr, Environment env) {
 		return switch (expr) {
 			case LispInteger i -> i;
+			case LispDouble d -> d;
 			case LispString s -> s;
 			case LispNil n -> n;
 			case LispTrue t -> t;

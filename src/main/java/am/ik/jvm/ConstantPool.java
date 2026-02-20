@@ -69,6 +69,17 @@ public final class ConstantPool {
 		return longConstant;
 	}
 
+	public DoubleConstant addDouble(double value) {
+		long bits = Double.doubleToLongBits(value);
+		DoubleConstant doubleConstant = new DoubleConstant(this.add(ConstantType.DOUBLE, o -> {
+			o.writeU4((int) (bits >>> 32));
+			o.writeU4((int) bits);
+		}));
+		// Double constants take two constant pool entries
+		this.size++;
+		return doubleConstant;
+	}
+
 	public int size() {
 		return this.size;
 	}
@@ -172,6 +183,14 @@ public final class ConstantPool {
 	public static class LongConstant extends Constant {
 
 		public LongConstant(Constant constant) {
+			super(constant.index, constant.type(), constant.bytes());
+		}
+
+	}
+
+	public static class DoubleConstant extends Constant {
+
+		public DoubleConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 

@@ -14,6 +14,9 @@ public sealed interface Token {
 	record NumberToken(long value) implements Token {
 	}
 
+	record DoubleToken(double value) implements Token {
+	}
+
 	record SymbolToken(String name) implements Token {
 	}
 

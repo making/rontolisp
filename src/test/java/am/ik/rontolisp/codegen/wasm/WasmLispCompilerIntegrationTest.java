@@ -328,4 +328,48 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("25");
 	}
 
+	@Test
+	void doubleLiteral() throws Exception {
+		assertThat(compileAndRun("(print 3.14)")).isEqualTo("3.14");
+	}
+
+	@Test
+	void doubleAddition() throws Exception {
+		assertThat(compileAndRun("(print (+ 1.5 2.5))")).isEqualTo("4.0");
+	}
+
+	@Test
+	void doubleMixedAddition() throws Exception {
+		assertThat(compileAndRun("(print (+ 1 1.5))")).isEqualTo("2.5");
+	}
+
+	@Test
+	void doubleSubtraction() throws Exception {
+		assertThat(compileAndRun("(print (- 3.5 1.5))")).isEqualTo("2.0");
+	}
+
+	@Test
+	void doubleMultiplication() throws Exception {
+		assertThat(compileAndRun("(print (* 2.0 3.0))")).isEqualTo("6.0");
+	}
+
+	@Test
+	void doubleDivision() throws Exception {
+		assertThat(compileAndRun("(print (/ 7.0 2.0))")).isEqualTo("3.5");
+	}
+
+	@Test
+	void doubleComparison() throws Exception {
+		assertThat(compileAndRun("(print (if (= 1.0 1.0) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (< 1.0 2.0) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (> 2.0 1.0) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (<= 1.5 1.5) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (>= 2.0 3.0) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void doubleNestedArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (+ (* 2.0 3.0) (- 10.0 4.0)))")).isEqualTo("12.0");
+	}
+
 }

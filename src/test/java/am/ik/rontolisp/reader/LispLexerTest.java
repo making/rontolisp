@@ -57,4 +57,23 @@ class LispLexerTest {
 		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.RightParen());
 	}
 
+	@Test
+	void tokenizeDoubleNumber() {
+		List<Token> tokens = new LispLexer("3.14").tokenize();
+		assertThat(tokens).containsExactly(new Token.DoubleToken(3.14));
+	}
+
+	@Test
+	void tokenizeNegativeDouble() {
+		List<Token> tokens = new LispLexer("-1.5").tokenize();
+		assertThat(tokens).containsExactly(new Token.DoubleToken(-1.5));
+	}
+
+	@Test
+	void tokenizeMixedIntAndDouble() {
+		List<Token> tokens = new LispLexer("(+ 1 2.5)").tokenize();
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("+"), new Token.NumberToken(1),
+				new Token.DoubleToken(2.5), new Token.RightParen());
+	}
+
 }

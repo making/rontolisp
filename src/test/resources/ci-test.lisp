@@ -93,3 +93,21 @@
 
 ; funcall
 (print (funcall square 7))
+
+; Double literals and arithmetic
+(print 3.14)
+(print (+ 1.5 2.5))
+(print (+ 1 1.5))
+(print (- 3.5 1.5))
+(print (* 2.0 3.0))
+(print (/ 7.0 2.0))
+
+; Double comparison (verified via if)
+(print (if (= 1.0 1.0) 42 99))
+(print (if (< 1.0 2.0) 42 99))
+(print (if (> 2.0 1.0) 42 99))
+(print (if (<= 1.5 1.5) 42 99))
+(print (if (>= 2.0 3.0) 42 99))
+
+; Double nested arithmetic
+(print (+ (* 2.0 3.0) (- 10.0 4.0)))

@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
@@ -195,6 +196,58 @@ class LispEvaluatorTest {
 	@Test
 	void evalFunctionInList() {
 		assertThat(evalMulti("(defun sq (x) (* x x)) (funcall (car (list sq)) 5)")).isEqualTo(new LispInteger(25));
+	}
+
+	@Test
+	void evalDoubleLiteral() {
+		assertThat(eval("3.14")).isEqualTo(new LispDouble(3.14));
+	}
+
+	@Test
+	void evalDoubleAddition() {
+		assertThat(eval("(+ 1.5 2.5)")).isEqualTo(new LispDouble(4.0));
+	}
+
+	@Test
+	void evalDoubleMixedAddition() {
+		assertThat(eval("(+ 1 1.5)")).isEqualTo(new LispDouble(2.5));
+	}
+
+	@Test
+	void evalDoubleSubtraction() {
+		assertThat(eval("(- 3.5 1.5)")).isEqualTo(new LispDouble(2.0));
+	}
+
+	@Test
+	void evalDoubleMultiplication() {
+		assertThat(eval("(* 2.0 3.0)")).isEqualTo(new LispDouble(6.0));
+	}
+
+	@Test
+	void evalDoubleDivision() {
+		assertThat(eval("(/ 7.0 2.0)")).isEqualTo(new LispDouble(3.5));
+	}
+
+	@Test
+	void evalDoubleMod() {
+		assertThat(eval("(mod 5.5 2.0)")).isEqualTo(new LispDouble(1.5));
+	}
+
+	@Test
+	void evalDoubleComparison() {
+		assertThat(eval("(= 1.0 1.0)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(< 1.0 2.0)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(> 2.0 1.0)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(<= 1.5 1.5)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(>= 2.0 3.0)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalDoublePrint() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(print 3.14)"));
+		assertThat(baos.toString().trim()).isEqualTo("3.14");
 	}
 
 }

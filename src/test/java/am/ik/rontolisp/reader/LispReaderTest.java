@@ -3,6 +3,7 @@ package am.ik.rontolisp.reader;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -102,6 +103,18 @@ class LispReaderTest {
 	@Test
 	void readThrowsOnUnmatchedParen() {
 		assertThatThrownBy(() -> LispReader.readFromString("(+ 1")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void readDouble() {
+		LispVal result = LispReader.readFromString("3.14");
+		assertThat(result).isEqualTo(new LispDouble(3.14));
+	}
+
+	@Test
+	void readNegativeDouble() {
+		LispVal result = LispReader.readFromString("-0.5");
+		assertThat(result).isEqualTo(new LispDouble(-0.5));
 	}
 
 }
