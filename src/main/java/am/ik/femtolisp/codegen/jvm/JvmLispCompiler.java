@@ -56,11 +56,36 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant longValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
 
-		ClassConstant lispRuntimeClass = cp.addClass(cp.addUtf8("am/ik/femtolisp/codegen/jvm/LispRuntime"));
-		MethodrefConstant lispToStringMethod = cp.addMethodref(lispRuntimeClass,
-				cp.addNameAndType(cp.addUtf8("lispToString"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
 		MethodrefConstant printlnStr = cp.addMethodref(printStreamClass,
 				cp.addNameAndType(cp.addUtf8("println"), cp.addUtf8("(Ljava/lang/String;)V")));
+
+		// CP entries for generated _lispToString and _consToString helper methods
+		Utf8Constant lispToStringName = cp.addUtf8("_lispToString");
+		Utf8Constant lispToStringDescUtf = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodrefConstant lispToStringMethod = cp.addMethodref(thisClass,
+				cp.addNameAndType(lispToStringName, lispToStringDescUtf));
+		Utf8Constant consToStringName = cp.addUtf8("_consToString");
+		Utf8Constant consToStringDescUtf = cp.addUtf8("([Ljava/lang/Object;)Ljava/lang/String;");
+		MethodrefConstant consToStringMethod = cp.addMethodref(thisClass,
+				cp.addNameAndType(consToStringName, consToStringDescUtf));
+		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+		MethodrefConstant longToString = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		MethodrefConstant objectToString = cp.addMethodref(objectClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		MethodrefConstant sbInitStr = cp.addMethodref(stringBuilderClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant sbAppendStr = cp.addMethodref(stringBuilderClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbToString = cp.addMethodref(stringBuilderClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ConstantPool.StringConstant nilStr = cp.addString("nil");
+		ConstantPool.StringConstant openParenStr = cp.addString("(");
+		ConstantPool.StringConstant closeParenStr = cp.addString(")");
+		ConstantPool.StringConstant spaceStr = cp.addString(" ");
+		ConstantPool.StringConstant dotStr = cp.addString(" . ");
 
 		// Pass 1: Collect defun declarations and top-level expressions
 		List<DefunDecl> defuns = new ArrayList<>();
@@ -125,6 +150,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		mainCtx.emit(Opcode.RETURN);
 
+		// Build _lispToString and _consToString helper method bodies
+		List<Integer> ltsCode = buildLispToStringBody(longClass, stringClass, objectArrayClass, longToString,
+				objectToString, consToStringMethod, nilStr);
+		List<Integer> ctsCode = buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr, sbAppendStr,
+				sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
+
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
 		Utf8Constant codeUtf8 = cp.addUtf8("Code");
@@ -162,6 +193,24 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0); // attributes_count
 							})));
 				}
+				// _lispToString helper method
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(1) // maxStack
+								.writeU2(1) // maxLocals
+								.writeCode((Object[]) ltsCode.toArray(new Integer[0]))
+								.writeU2(0) // exception_table_length
+								.writeU2(0); // attributes_count
+						})));
+				// _consToString helper method
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(3) // maxStack
+								.writeU2(5) // maxLocals
+								.writeCode((Object[]) ctsCode.toArray(new Integer[0]))
+								.writeU2(0) // exception_table_length
+								.writeU2(0); // attributes_count
+						})));
 			}) //
 			.writeAttributes(a -> {
 			});
@@ -480,10 +529,225 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private void patchBranch(Ctx ctx, int branchPos, int targetPos) {
+		patchBranch(ctx.code, branchPos, targetPos);
+	}
+
+	private static void patchBranch(List<Integer> code, int branchPos, int targetPos) {
 		int offset = targetPos - branchPos;
 		byte[] bytes = ByteBuffer.allocate(2).putShort((short) offset).array();
-		ctx.code.set(branchPos + 1, (int) bytes[0]);
-		ctx.code.set(branchPos + 2, (int) bytes[1]);
+		code.set(branchPos + 1, (int) bytes[0]);
+		code.set(branchPos + 2, (int) bytes[1]);
+	}
+
+	private static void emitU2(List<Integer> code, int value) {
+		byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
+		code.add((int) bytes[0]);
+		code.add((int) bytes[1]);
+	}
+
+	private static void emitLdc(List<Integer> code, int cpIndex) {
+		if (cpIndex <= 255) {
+			code.add(Opcode.LDC);
+			code.add(cpIndex);
+		}
+		else {
+			code.add(Opcode.LDC_W);
+			emitU2(code, cpIndex);
+		}
+	}
+
+	/**
+	 * Builds bytecode for _lispToString(Object):String. Converts a Lisp runtime value to
+	 * its display string: null->"nil", Long->toString, String->as-is,
+	 * Object[]->_consToString.
+	 */
+	private static List<Integer> buildLispToStringBody(ClassConstant longClass, ClassConstant stringClass,
+			ClassConstant objectArrayClass, MethodrefConstant longToString, MethodrefConstant objectToString,
+			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr) {
+		List<Integer> code = new ArrayList<>();
+		// if (val == null) return "nil";
+		code.add(Opcode.ALOAD_0);
+		int ifNonnullPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		emitLdc(code, nilStr.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Long) return ((Long)val).toString();
+		patchBranch(code, ifNonnullPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, longClass.index());
+		int ifNotLongPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, longToString.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof String) return (String)val;
+		patchBranch(code, ifNotLongPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, stringClass.index());
+		int ifNotStringPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, stringClass.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Object[]) return _consToString((Object[])val);
+		patchBranch(code, ifNotStringPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, objectArrayClass.index());
+		int ifNotArrayPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, consToStringMethod.index());
+		code.add(Opcode.ARETURN);
+
+		// return val.toString();
+		patchBranch(code, ifNotArrayPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectToString.index());
+		code.add(Opcode.ARETURN);
+
+		return code;
+	}
+
+	/**
+	 * Builds bytecode for _consToString(Object[]):String. Traverses a cons list
+	 * (Object[2] cells) and produces a Lisp-style string like "(1 2 3)" or "(1 . 2)".
+	 */
+	private static List<Integer> buildConsToStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
+			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
+			MethodrefConstant lispToStringMethod, ConstantPool.StringConstant openParenStr,
+			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
+			ConstantPool.StringConstant dotStr) {
+		List<Integer> code = new ArrayList<>();
+		// StringBuilder sb = new StringBuilder("(");
+		code.add(Opcode.NEW);
+		emitU2(code, stringBuilderClass.index());
+		code.add(Opcode.DUP);
+		emitLdc(code, openParenStr.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, sbInitStr.index());
+		code.add(Opcode.ASTORE_1); // sb -> slot 1
+
+		// Object current = cons;
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ASTORE_2); // current -> slot 2
+
+		// boolean first = true;
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISTORE_3); // first -> slot 3
+
+		// LOOP:
+		int loopStart = code.size();
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, objectArrayClass.index());
+		int ifNotArrayPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0); // -> END_LOOP
+
+		// Object[] c = (Object[]) current;
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ASTORE);
+		code.add(4); // c -> slot 4
+
+		// if (!first) sb.append(" ");
+		code.add(Opcode.ILOAD_3);
+		int ifFirstPos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0); // -> SKIP_SPACE
+		code.add(Opcode.ALOAD_1);
+		emitLdc(code, spaceStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+
+		// SKIP_SPACE:
+		patchBranch(code, ifFirstPos, code.size());
+
+		// sb.append(_lispToString(c[0]));
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, lispToStringMethod.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+
+		// current = c[1];
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE_2);
+
+		// first = false;
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ISTORE_3);
+
+		// goto LOOP
+		int gotoPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, gotoPos, loopStart);
+
+		// END_LOOP:
+		patchBranch(code, ifNotArrayPos, code.size());
+
+		// if (current != null) { sb.append(" . "); sb.append(_lispToString(current)); }
+		code.add(Opcode.ALOAD_2);
+		int ifNullPos = code.size();
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0); // -> CLOSE_PAREN
+		code.add(Opcode.ALOAD_1);
+		emitLdc(code, dotStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, lispToStringMethod.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+
+		// CLOSE_PAREN:
+		patchBranch(code, ifNullPos, code.size());
+		code.add(Opcode.ALOAD_1);
+		emitLdc(code, closeParenStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+
+		// return sb.toString();
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbToString.index());
+		code.add(Opcode.ARETURN);
+
+		return code;
 	}
 
 	private record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
