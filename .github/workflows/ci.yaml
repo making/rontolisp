@@ -44,10 +44,14 @@ jobs:
       run: ./mvnw -V --no-transfer-progress -Pnative clean package -DskipTests
     - name: Verify native image
       run: |
+        set -e
         ./target/femtolisp -v
-        echo '(print (+ 1 2))' > /tmp/test.lisp
-        ./target/femtolisp /tmp/test.lisp | grep -q '^3$'
-        cd /tmp && $GITHUB_WORKSPACE/target/femtolisp test.lisp -o Test.class && java Test | grep -q '^3$'
+        # Test interpreter mode
+        ./target/femtolisp src/test/resources/ci-test.lisp > /tmp/actual-interp.txt
+        diff src/test/resources/ci-test-expected.txt /tmp/actual-interp.txt
+        # Test JVM compilation mode
+        cd /tmp && $GITHUB_WORKSPACE/target/femtolisp $GITHUB_WORKSPACE/src/test/resources/ci-test.lisp -o Test.class && java Test > /tmp/actual-jvm.txt
+        diff $GITHUB_WORKSPACE/src/test/resources/ci-test-expected.txt /tmp/actual-jvm.txt
   deploy:
     needs: test
     if: github.event_name != 'pull_request'
