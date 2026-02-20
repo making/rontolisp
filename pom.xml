@@ -46,7 +46,7 @@
 		<dependency>
 			<groupId>org.jline</groupId>
 			<artifactId>jline</artifactId>
-			<version>3.28.0</version>
+			<version>3.30.6</version>
 		</dependency>
 		<dependency>
 			<groupId>org.jspecify</groupId>
