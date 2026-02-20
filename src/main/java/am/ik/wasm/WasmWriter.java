@@ -151,4 +151,8 @@ public final class WasmWriter {
 		return this.writeSection(Section.CODE, consumer, CodeDef::new);
 	}
 
+	public WasmWriter writeDataSection(Consumer<DataDef> consumer) {
+		return this.writeSection(Section.DATA, consumer, DataDef::new);
+	}
+
 }

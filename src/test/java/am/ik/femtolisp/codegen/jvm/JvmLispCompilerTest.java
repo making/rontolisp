@@ -192,4 +192,39 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print ((lambda (x y) (+ x y)) 3 4))")).isEqualTo("7");
 	}
 
+	@Test
+	void compileAndRunPrintString() throws Exception {
+		assertThat(compileAndRun("(print \"hello\")")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunQuoteInteger() throws Exception {
+		assertThat(compileAndRun("(print '42)")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunQuoteList() throws Exception {
+		assertThat(compileAndRun("(print '(1 2 3))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void compileAndRunQuoteNestedList() throws Exception {
+		assertThat(compileAndRun("(print '(1 (2 3) 4))")).isEqualTo("(1 (2 3) 4)");
+	}
+
+	@Test
+	void compileAndRunQuoteNil() throws Exception {
+		assertThat(compileAndRun("(print (quote nil))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunStringInLet() throws Exception {
+		assertThat(compileAndRun("(let ((x \"world\")) (print x))")).isEqualTo("\"world\"");
+	}
+
+	@Test
+	void compileAndRunQuoteWithSymbol() throws Exception {
+		assertThat(compileAndRun("(print '(+ 1 2))")).isEqualTo("(+ 1 2)");
+	}
+
 }
