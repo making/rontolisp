@@ -60,6 +60,8 @@ public final class LispEvaluator {
 					return evalSetq(cons, env);
 				case "lambda":
 					return evalLambdaForm(cons, env);
+				case "funcall":
+					return evalFuncall(cons, env);
 			}
 		}
 		// Function application
@@ -139,6 +141,16 @@ public final class LispEvaluator {
 		List<LispSymbol> params = extractParams(parts.get(1));
 		List<LispVal> body = parts.subList(2, parts.size());
 		return new LispLambda(params, body, env);
+	}
+
+	private LispVal evalFuncall(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal function = eval(parts.get(1), env);
+		List<LispVal> args = new ArrayList<>();
+		for (int i = 2; i < parts.size(); i++) {
+			args.add(eval(parts.get(i), env));
+		}
+		return apply(function, args, env);
 	}
 
 	private List<LispVal> evalArgs(LispCons cons, Environment env) {

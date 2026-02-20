@@ -269,4 +269,94 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print '(+ 1 2))")).isEqualTo("(+ 1 2)");
 	}
 
+	@Test
+	void compileAndRunListCarCdr() throws Exception {
+		assertThat(compileAndRun("(print (car (list 1 2 3)))")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunListCarCdr2() throws Exception {
+		assertThat(compileAndRun("(print (car (cdr (list 1 2 3))))")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunCons() throws Exception {
+		assertThat(compileAndRun("(print (car (cons 1 2)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (cdr (cons 1 2)))")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunHigherOrderFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(defun apply-twice (f x) (f (f x)))
+				(print (apply-twice square 3))
+				""")).isEqualTo("81");
+	}
+
+	@Test
+	void compileAndRunLambdaAsArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun apply-twice (f x) (f (f x)))
+				(print (apply-twice (lambda (x) (+ x 10)) 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void compileAndRunClosure() throws Exception {
+		assertThat(compileAndRun("""
+				(defun make-adder (n) (lambda (x) (+ x n)))
+				(setq add5 (make-adder 5))
+				(print (add5 10))
+				""")).isEqualTo("15");
+	}
+
+	@Test
+	void compileAndRunClosureMutation() throws Exception {
+		assertThat(compileAndRun("""
+				(defun make-counter ()
+				  (let ((n 0))
+				    (lambda ()
+				      (setq n (+ n 1))
+				      n)))
+				(setq counter (make-counter))
+				(counter)
+				(counter)
+				(print (counter))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunDynamicFunctionSelection() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(defun forty-two (x) 42)
+				(setq f (if t square forty-two))
+				(print (f 6))
+				""")).isEqualTo("36");
+	}
+
+	@Test
+	void compileAndRunFuncall() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (funcall square 7))
+				""")).isEqualTo("49");
+	}
+
+	@Test
+	void compileAndRunFuncallLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(print (funcall (lambda (x) (* x x)) 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void compileAndRunFunctionInList() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (funcall (car (list square)) 5))
+				""")).isEqualTo("25");
+	}
+
 }

@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -62,6 +63,7 @@ public final class Environment implements Scope {
 		registerComparison(env);
 		registerIO(env, out);
 		registerPredicates(env);
+		registerListOps(env);
 		return env;
 	}
 
@@ -144,6 +146,34 @@ public final class Environment implements Scope {
 		env.define("null", new LispFunction("null", args -> {
 			requireArgCount("null", args, 1);
 			return args.get(0) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private static void registerListOps(Environment env) {
+		env.define("cons", new LispFunction("cons", args -> {
+			requireArgCount("cons", args, 2);
+			return new LispCons(args.get(0), args.get(1));
+		}));
+		env.define("car", new LispFunction("car", args -> {
+			requireArgCount("car", args, 1);
+			if (args.get(0) instanceof LispCons cons) {
+				return cons.car();
+			}
+			throw new LispEvalException("car expects a cons cell, got: " + args.get(0).print());
+		}));
+		env.define("cdr", new LispFunction("cdr", args -> {
+			requireArgCount("cdr", args, 1);
+			if (args.get(0) instanceof LispCons cons) {
+				return cons.cdr();
+			}
+			throw new LispEvalException("cdr expects a cons cell, got: " + args.get(0).print());
+		}));
+		env.define("list", new LispFunction("list", args -> {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= 0; i--) {
+				result = new LispCons(args.get(i), result);
+			}
+			return result;
 		}));
 	}
 
