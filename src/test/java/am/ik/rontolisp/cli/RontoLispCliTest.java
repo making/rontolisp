@@ -79,8 +79,8 @@ class RontoLispCliTest {
 	@Test
 	void versionOption() {
 		String output = runCli("", "-v");
-		assertThat(output).contains("rontolisp");
-		assertThat(output).contains("0.1.0");
+		assertThat(output).contains("\"version\":");
+		assertThat(output).contains("\"build\":");
 	}
 
 }

@@ -23,8 +23,6 @@ import am.ik.rontolisp.reader.LispReader;
  */
 public final class RontoLispCli {
 
-	private static final String VERSION = "0.1.0";
-
 	private final PrintStream out;
 
 	private final InputStream in;
@@ -42,7 +40,7 @@ public final class RontoLispCli {
 			return;
 		}
 		if (options.contains("-v") || options.contains("--version")) {
-			this.out.println("rontolisp " + VERSION);
+			this.out.println(Version.getVersionAsJson());
 			return;
 		}
 
