@@ -17,6 +17,7 @@
 		<maven.compiler.target>${java.version}</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<spring-boot.version>4.0.3</spring-boot.version>
+		<version-generate-skip>false</version-generate-skip>
 	</properties>
 	<licenses>
 		<license>
@@ -128,6 +129,58 @@
 									</manifestEntries>
 								</transformer>
 							</transformers>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-antrun-plugin</artifactId>
+				<version>3.1.0</version>
+				<executions>
+					<execution>
+						<id>gen-build-info</id>
+						<phase>process-resources</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<skip>${version-generate-skip}</skip>
+							<target>
+								<echo file="${project.build.directory}/generated-sources/java/am/ik/femtolisp/cli/Version.java">
+package am.ik.femtolisp.cli;
+public class Version {
+	public static final String getVersion() {
+		return "${project.version}";
+	}
+	public static final String getBuild() {
+		return "${maven.build.timestamp}";
+	}
+	public static final String getVersionAsJson() {
+		return "{\"version\": \"${project.version}\", \"build\": \"${maven.build.timestamp}\"}";
+	}
+}
+								</echo>
+							</target>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>build-helper-maven-plugin</artifactId>
+				<version>3.6.0</version>
+				<executions>
+					<execution>
+						<id>add-generated-source</id>
+						<phase>generate-sources</phase>
+						<goals>
+							<goal>add-source</goal>
+						</goals>
+						<configuration>
+							<sources>
+								<source>${project.build.directory}/generated-sources/java</source>
+							</sources>
 						</configuration>
 					</execution>
 				</executions>

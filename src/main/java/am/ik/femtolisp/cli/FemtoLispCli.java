@@ -23,8 +23,6 @@ import am.ik.femtolisp.reader.LispReader;
  */
 public final class FemtoLispCli {
 
-	private static final String VERSION = "0.1.0";
-
 	private final PrintStream out;
 
 	private final InputStream in;
@@ -42,7 +40,7 @@ public final class FemtoLispCli {
 			return;
 		}
 		if (options.contains("-v") || options.contains("--version")) {
-			this.out.println("femtolisp " + VERSION);
+			this.out.println(Version.getVersionAsJson());
 			return;
 		}
 
