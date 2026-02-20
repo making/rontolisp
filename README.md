@@ -1,4 +1,4 @@
-# femtolisp
+# rontolisp
 
 A minimal Common Lisp subset implemented in Java. It supports three execution modes:
 
@@ -20,7 +20,7 @@ No external runtime dependencies for core libraries. The JVM and WASM bytecode g
 ./mvnw clean package
 ```
 
-This produces `target/femtolisp-0.1.0-SNAPSHOT-exec.jar`, an executable JAR with all dependencies included.
+This produces `target/rontolisp-0.1.0-SNAPSHOT-exec.jar`, an executable JAR with all dependencies included.
 
 ### Native Image (GraalVM)
 
@@ -30,7 +30,7 @@ Build a native executable using GraalVM:
 ./mvnw -Pnative clean package
 ```
 
-This produces `target/femtolisp`, a standalone native binary with instant startup.
+This produces `target/rontolisp`, a standalone native binary with instant startup.
 
 **Requirements:**
 - GraalVM 25+ (with `native-image` tool)
@@ -39,16 +39,16 @@ This produces `target/femtolisp`, a standalone native binary with instant startu
 
 ```bash
 # REPL
-./target/femtolisp
+./target/rontolisp
 
 # File interpretation
-./target/femtolisp program.lisp
+./target/rontolisp program.lisp
 
 # Compile to JVM bytecode
-./target/femtolisp hello.lisp -o Hello.class
+./target/rontolisp hello.lisp -o Hello.class
 
 # Compile to WASM
-./target/femtolisp hello.lisp -o hello.wasm
+./target/rontolisp hello.lisp -o hello.wasm
 ```
 
 ## Usage
@@ -56,7 +56,7 @@ This produces `target/femtolisp`, a standalone native binary with instant startu
 ### REPL
 
 ```bash
-java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 ```
 
 ```
@@ -78,7 +78,7 @@ The REPL supports line editing, history navigation (up/down keys), and Ctrl-C to
 ### File Interpretation
 
 ```bash
-java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar program.lisp
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar program.lisp
 ```
 
 Example (`program.lisp`):
@@ -97,7 +97,7 @@ Example (`program.lisp`):
 ### Compile to JVM Bytecode
 
 ```bash
-java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o Hello.class
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o Hello.class
 java Hello
 ```
 
@@ -116,7 +116,7 @@ The generated `.class` file targets Java 6 (class version 50) and depends only o
 ### Compile to WASM
 
 ```bash
-java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o hello.wasm
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o hello.wasm
 wasmtime --wasm gc hello.wasm
 ```
 
@@ -196,13 +196,13 @@ The compilers support a subset of what the interpreter handles:
 ## Project Structure
 
 ```
-am.ik.femtolisp              -- Lisp data types (sealed interface + records)
-am.ik.femtolisp.reader       -- Lexer + Parser
-am.ik.femtolisp.eval         -- Tree-walking interpreter + Environment
-am.ik.femtolisp.compiler     -- Compiler common interface
-am.ik.femtolisp.codegen.jvm  -- JVM .class generation
-am.ik.femtolisp.codegen.wasm -- WASM .wasm generation (wasm-GC + WASI)
-am.ik.femtolisp.cli          -- REPL + CLI entry point
+am.ik.rontolisp              -- Lisp data types (sealed interface + records)
+am.ik.rontolisp.reader       -- Lexer + Parser
+am.ik.rontolisp.eval         -- Tree-walking interpreter + Environment
+am.ik.rontolisp.compiler     -- Compiler common interface
+am.ik.rontolisp.codegen.jvm  -- JVM .class generation
+am.ik.rontolisp.codegen.wasm -- WASM .wasm generation (wasm-GC + WASI)
+am.ik.rontolisp.cli          -- REPL + CLI entry point
 am.ik.jvm                    -- JVM bytecode primitives
 am.ik.wasm                   -- WASM binary primitives
 ```

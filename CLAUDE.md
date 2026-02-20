@@ -31,10 +31,10 @@ Package dependency direction (no cycles allowed):
 cli → eval, codegen.*
 codegen.jvm → compiler, am.ik.jvm
 codegen.wasm → compiler, am.ik.wasm
-compiler, eval, reader → femtolisp (AST types only)
+compiler, eval, reader → rontolisp (AST types only)
 ```
 
-The `Scope` interface exists in the top-level `am.ik.femtolisp` package to break what would otherwise be a circular dependency: `LispLambda` (top-level) needs to hold a closure environment, but `Environment` lives in the `eval` sub-package. `Scope` provides the minimal lookup contract that `Environment` implements.
+The `Scope` interface exists in the top-level `am.ik.rontolisp` package to break what would otherwise be a circular dependency: `LispLambda` (top-level) needs to hold a closure environment, but `Environment` lives in the `eval` sub-package. `Scope` provides the minimal lookup contract that `Environment` implements.
 
 ## Design Decisions
 
@@ -79,7 +79,7 @@ WASM tests require wasmtime (an external runtime with specific version requireme
 
 ```bash
 echo '(print (+ 1 2))' > test.lisp
-java -jar target/femtolisp-0.1.0-SNAPSHOT-exec.jar test.lisp -o test.wasm
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar test.lisp -o test.wasm
 wasmtime --wasm gc test.wasm    # requires wasmtime 14+
 ```
 
