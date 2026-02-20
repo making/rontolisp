@@ -189,9 +189,9 @@ The compilers support a subset of what the interpreter handles:
 | `progn` | Yes | Yes | Yes |
 | `defun` / `lambda` | Yes | Yes | Yes |
 | `setq` | Yes | Yes | Yes |
-| `quote` | Yes | -- | -- |
+| `quote` | Yes | Yes | Yes |
 | Recursion | Yes | Yes | Yes |
-| String values | Yes | -- | -- |
+| String values | Yes | Yes | Yes |
 
 ## Project Structure
 

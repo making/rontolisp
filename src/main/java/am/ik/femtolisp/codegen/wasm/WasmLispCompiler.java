@@ -1,6 +1,7 @@
 package am.ik.femtolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -9,6 +10,7 @@ import java.util.Map;
 import am.ik.femtolisp.LispCons;
 import am.ik.femtolisp.LispInteger;
 import am.ik.femtolisp.LispNil;
+import am.ik.femtolisp.LispString;
 import am.ik.femtolisp.LispSymbol;
 import am.ik.femtolisp.LispTrue;
 import am.ik.femtolisp.LispVal;
@@ -21,7 +23,7 @@ import am.ik.wasm.WasmWriter;
 /**
  * Compiles Lisp expressions to WASM binary with wasm-GC and WASI Preview 1. All Lisp
  * values are represented as (ref eq) on the stack: integers use i31ref, nil uses ref.null
- * eq.
+ * eq, strings use a string struct, and cons cells use a cons struct.
  */
 public final class WasmLispCompiler implements LispCompiler {
 
@@ -30,28 +32,44 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private static final int FUNC_START = 1; // _start
 
-	private static final int FUNC_PRINT_I32 = 2; // print_i32 helper
+	private static final int FUNC_PRINT_I32 = 2; // print_i32 helper (with newline)
 
-	// Type indices in the rec group
+	private static final int FUNC_WRITE_STR = 3; // _write_str helper
+
+	private static final int FUNC_PRINT_VAL = 4; // _print_val helper
+
+	private static final int FUNC_PRINT_I32_NO_NL = 5; // print_i32 without newline
+
+	// Type indices
 	private static final int TYPE_FD_WRITE = 0;
 
 	private static final int TYPE_START = 1;
 
-	private static final int TYPE_PRINT_I32 = 2;
+	private static final int TYPE_PRINT_I32 = 2; // (i32) -> (), also for _print_i32_no_nl
 
-	private static final int TYPE_CONS = 3;
+	private static final int TYPE_CONS = 3; // in rec group
+
+	private static final int TYPE_STRING = 4; // in rec group
+
+	private static final int TYPE_WRITE_STR = 5; // (i32, i32) -> ()
+
+	private static final int TYPE_PRINT_VAL = 6; // ((ref null eq)) -> ()
 
 	// First type/function index for user-defined functions
-	private static final int TYPE_USER_BASE = 4;
+	private static final int TYPE_USER_BASE = 7;
 
-	private static final int FUNC_USER_BASE = 3;
+	private static final int FUNC_USER_BASE = 6;
 
-	// Memory layout for print_i32 helper
+	// Memory layout
 	private static final int PRINT_BUF_OFFSET = 0; // 32 bytes for digit buffer
 
 	private static final int IOV_OFFSET = 32; // iov struct at offset 32
 
 	private static final int NWRITTEN_OFFSET = 48; // nwritten at offset 48
+
+	private static final int OUT_BUF_OFFSET = 64; // output buffer for print_i32
+
+	private static final int DATA_BASE_OFFSET = 128; // start of data section strings
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
@@ -77,6 +95,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 
+		// Create string table with fixed strings
+		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
+
 		// Build function info map
 		Map<String, WasmFunctionInfo> functions = new HashMap<>();
 		for (int i = 0; i < defuns.size(); i++) {
@@ -90,7 +111,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
 			WasmWriter funcWriter = new WasmWriter(funcBody);
-			Ctx funcCtx = new Ctx(funcWriter);
+			Ctx funcCtx = new Ctx(funcWriter, stringTable);
 			funcCtx.functions = functions;
 
 			// Parameters are the first N locals
@@ -128,7 +149,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Pass 2b: Build _start function body
 		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
 		WasmWriter startWriter = new WasmWriter(startBody);
-		Ctx ctx = new Ctx(startWriter);
+		Ctx ctx = new Ctx(startWriter, stringTable);
 		ctx.functions = functions;
 
 		for (LispVal expr : topLevelExprs) {
@@ -153,30 +174,49 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		finalStartWriter.write((Object) startBody.toByteArray());
 
-		// Build print_i32 helper function body
-		byte[] printI32Body = buildPrintI32Body();
+		// Build helper function bodies
+		byte[] printI32Body = buildPrintI32Core(true);
+		byte[] writeStrBody = buildWriteStrBody();
+		byte[] printValBody = buildPrintValBody(stringTable);
+		byte[] printI32NoNlBody = buildPrintI32Core(false);
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
 		mainWriter //
 			.write("\0asm") // magic
 			.writeLittleEndian4(1) // version
-			// Type section: plain func types + rec group for struct
+			// Type section: plain func types + rec group for structs
 			.writeTypeSection(types -> {
 				// type 0: fd_write (i32, i32, i32, i32) -> (i32) - plain func
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				// type 1: _start () -> () - plain func
 				types.addFunc(new Type[] {}, new Type[] {});
-				// type 2: print_i32 (i32) -> () - plain func
+				// type 2: print_i32 / _print_i32_no_nl (i32) -> () - plain func
 				types.addFunc(new Type[] { Type.I32 }, new Type[] {});
-				// type 3: cons struct (future use) - in rec group for recursive types
+				// types 3-4: cons struct + string struct - in rec group
 				types.addRecGroup(rec -> {
+					// type 3: cons struct {(ref null eq) car, (ref null eq) cdr}
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					});
+					// type 4: string struct {i32 offset, i32 length} (immutable)
+					rec.addSubFinalStruct(fields -> {
+						fields.addField(false, w -> w.write(Type.I32));
+						fields.addField(false, w -> w.write(Type.I32));
+					});
 				});
-				// type 4+: user-defined function types
+				// type 5: _write_str (i32, i32) -> () - plain func
+				types.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] {});
+				// type 6: _print_val ((ref null eq)) -> () - plain func
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1); // 1 param
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(0); // 0 results
+				});
+				// type 7+: user-defined function types
 				for (DefunDecl defun : defuns) {
 					int paramCount = defun.paramNames.size();
 					types.add(w -> {
@@ -197,7 +237,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					ExternalKind.FUNCTION, TYPE_FD_WRITE))
 			// Function section
 			.writeFunction(fnDef -> {
-				fnDef.addFunction(TYPE_START).addFunction(TYPE_PRINT_I32);
+				fnDef.addFunction(TYPE_START)
+					.addFunction(TYPE_PRINT_I32)
+					.addFunction(TYPE_WRITE_STR)
+					.addFunction(TYPE_PRINT_VAL)
+					.addFunction(TYPE_PRINT_I32); // _print_i32_no_nl reuses
+													// TYPE_PRINT_I32
 				for (DefunDecl defun : defuns) {
 					WasmFunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defun.name));
 					fnDef.addFunction(fi.typeIndex);
@@ -210,9 +255,20 @@ public final class WasmLispCompiler implements LispCompiler {
 				.addExport("_start", ExternalKind.FUNCTION, FUNC_START))
 			// Code section
 			.writeCode(code -> {
-				code.addFunction(finalStartBody.toByteArray()).addFunction(printI32Body);
+				code.addFunction(finalStartBody.toByteArray())
+					.addFunction(printI32Body)
+					.addFunction(writeStrBody)
+					.addFunction(printValBody)
+					.addFunction(printI32NoNlBody);
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
+				}
+			})
+			// Data section
+			.writeDataSection(data -> {
+				byte[] stringData = stringTable.toByteArray();
+				if (stringData.length > 0) {
+					data.addActiveData(0, DATA_BASE_OFFSET, stringData);
 				}
 			});
 		return out.toByteArray();
@@ -236,6 +292,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				ctx.writer.writeSignedLeb128(1);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
+			case LispString s -> compileStringLiteral(s.print(), ctx);
 			case LispSymbol sym -> compileSymbolRef(sym, ctx);
 			case LispCons cons -> compileCons(cons, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
@@ -268,6 +325,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				case "<=" -> compileComparison(cons, ctx, Instruction.I32_LE_S);
 				case ">=" -> compileComparison(cons, ctx, Instruction.I32_GE_S);
 				case "print" -> compilePrint(cons, ctx);
+				case "quote" -> compileQuote(cons, ctx);
 				case "if" -> compileIf(cons, ctx);
 				case "let" -> compileLet(cons, ctx);
 				case "progn" -> compileProgn(cons, ctx);
@@ -328,12 +386,66 @@ public final class WasmLispCompiler implements LispCompiler {
 	private void compilePrint(LispCons cons, Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		compileExpr(args.get(1), ctx);
-		castI31GetS(ctx);
+		// Call _print_val to print the value
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(FUNC_PRINT_I32);
+		ctx.writer.writeSignedLeb128(FUNC_PRINT_VAL);
+		// Write newline
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(ctx.stringTable.newline.offset());
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(ctx.stringTable.newline.length());
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(FUNC_WRITE_STR);
 		// Return nil
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	private void compileStringLiteral(String displayForm, Ctx ctx) {
+		StringTable.StringEntry entry = ctx.stringTable.addString(displayForm);
+		// Create string struct {offset, length}
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(entry.offset());
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(entry.length());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(TYPE_STRING);
+	}
+
+	private void compileQuote(LispCons cons, Ctx ctx) {
+		LispVal quoted = ((LispCons) cons.cdr()).car();
+		compileQuotedVal(quoted, ctx);
+	}
+
+	private void compileQuotedVal(LispVal val, Ctx ctx) {
+		switch (val) {
+			case LispInteger i -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128((int) i.value());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			case LispNil ignored -> {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+			}
+			case LispTrue ignored -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(1);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			case LispString s -> compileStringLiteral(s.print(), ctx);
+			case LispSymbol sym -> compileStringLiteral(sym.name(), ctx);
+			case LispCons cons -> compileQuotedCons(cons, ctx);
+			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
+		}
+	}
+
+	private void compileQuotedCons(LispCons cons, Ctx ctx) {
+		// Push car, push cdr, then struct.new TYPE_CONS
+		compileQuotedVal(cons.car(), ctx);
+		compileQuotedVal(cons.cdr(), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(TYPE_CONS);
 	}
 
 	private void compileIf(LispCons cons, Ctx ctx) {
@@ -468,10 +580,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Builds the print_i32 helper function that converts an i32 to decimal string and
-	 * writes to stdout via fd_write.
+	 * Builds the print_i32 helper function body. When appendNewline is true, a newline
+	 * character is appended after the number.
 	 */
-	private byte[] buildPrintI32Body() {
+	private byte[] buildPrintI32Core(boolean appendNewline) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -581,16 +693,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		w.write(Instruction.END); // end if (zero case else)
 
-		// === Simpler output strategy: copy reversed digits to output area ===
-		// Output buffer at offset 64
-		int outBuf = 64;
-
+		// Copy reversed digits to output area
 		// If negative, write '-' first
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(1); // is_negative
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(outBuf);
+		w.writeSignedLeb128(OUT_BUF_OFFSET);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(45); // '-'
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
@@ -613,7 +722,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// outBuf[is_negative + i] = printBuf[digit_count - 1 - i]
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(outBuf);
+		w.writeSignedLeb128(OUT_BUF_OFFSET);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(1); // is_negative (0 or 1)
 		w.write(Instruction.I32_ADD);
@@ -650,25 +759,26 @@ public final class WasmLispCompiler implements LispCompiler {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 
-		// Append newline
-		// outBuf[is_negative + digit_count] = '\n'
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(outBuf);
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(2);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(10); // '\n'
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		if (appendNewline) {
+			// Append newline: outBuf[is_negative + digit_count] = '\n'
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(OUT_BUF_OFFSET);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(2);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(10); // '\n'
+			w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		}
 
-		// Build iov: {iov_base = outBuf, iov_len = is_negative + digit_count + 1}
+		// Build iov: {iov_base = outBuf, iov_len = is_negative + digit_count [+ 1]}
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(IOV_OFFSET);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(outBuf);
+		w.writeSignedLeb128(OUT_BUF_OFFSET);
 		w.write(Instruction.I32_STORE, 0x02, 0x00); // align=2, offset=0
 
 		w.write(Instruction.I32_CONST);
@@ -678,9 +788,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(2); // digit_count
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1); // for newline
-		w.write(Instruction.I32_ADD);
+		if (appendNewline) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1); // for newline
+			w.write(Instruction.I32_ADD);
+		}
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 
 		// fd_write(1, iov_offset, 1, nwritten_offset)
@@ -700,6 +812,231 @@ public final class WasmLispCompiler implements LispCompiler {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the _write_str helper function that writes bytes from linear memory to
+	 * stdout.
+	 */
+	private byte[] buildWriteStrBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		w.write(0); // 0 local groups (only params: offset i32, len i32)
+
+		// Set iov_base = offset
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(IOV_OFFSET);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0); // offset
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+
+		// Set iov_len = len
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(IOV_OFFSET + 4);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1); // len
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+
+		// fd_write(1, iov_offset, 1, nwritten_offset)
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1); // stdout
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(IOV_OFFSET);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1); // iovs_len
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(NWRITTEN_OFFSET);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_FD_WRITE);
+		w.write(Instruction.DROP);
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _print_val helper function that prints any Lisp value without a trailing
+	 * newline. Handles null (nil), i31ref (integer), string struct, and cons struct
+	 * (list).
+	 */
+	private byte[] buildPrintValBody(StringTable st) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// param 0 = val (ref null eq)
+		// local 1 = current (ref null eq) - for cons traversal
+		// local 2 = first (i32) - for cons traversal
+		w.write(2); // 2 local groups
+		w.write(1); // 1 local of type (ref null eq)
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(1); // 1 local of type i32
+		w.write(Type.I32);
+
+		// === Check null (nil) ===
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0); // val
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40); // if void
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.nil.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.nil.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// === Check i31ref (integer) ===
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_PRINT_I32_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// === Check string struct ===
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		// Get offset
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(TYPE_STRING);
+		w.writeSignedLeb128(0); // field 0: offset
+		// Get length
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(TYPE_STRING);
+		w.writeSignedLeb128(1); // field 1: length
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// === Must be cons struct - print as list ===
+		// Print "("
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.lparen.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.lparen.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+
+		// Initialize: current = val, first = 1 (true)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0); // val
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1); // current
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2); // first = true
+
+		// block/loop for cons traversal
+		w.write(Instruction.BLOCK, 0x40); // block $break
+		w.write(Instruction.LOOP, 0x40); // loop $loop
+
+		// if current is null, break
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1); // current
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1); // break to outer block
+
+		// if current is NOT a cons cell (dotted pair)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40); // if void
+		// Print " . "
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+		// Print current value
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_PRINT_VAL);
+		w.write(Instruction.BR, 2); // break to outer block (depth: if=0, loop=1, block=2)
+		w.write(Instruction.END); // end if
+
+		// If not first, print " "
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2); // first
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.space.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.space.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+		w.write(Instruction.END);
+
+		// Print car
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1); // current
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(TYPE_CONS);
+		w.writeSignedLeb128(0); // field 0: car
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_PRINT_VAL);
+
+		// current = cdr
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(TYPE_CONS);
+		w.writeSignedLeb128(1); // field 1: cdr
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1); // current = cdr
+
+		// first = false
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+
+		w.write(Instruction.BR, 0); // continue loop
+		w.write(Instruction.END); // end loop
+		w.write(Instruction.END); // end block
+
+		// Print ")"
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.rparen.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.rparen.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(FUNC_WRITE_STR);
+
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
 	private record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
 	}
 
@@ -710,20 +1047,72 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final WasmWriter writer;
 
+		final StringTable stringTable;
+
 		Map<String, Integer> locals = new HashMap<>();
 
 		Map<String, WasmFunctionInfo> functions = Map.of();
 
 		int nextLocal = 0;
 
-		Ctx(WasmWriter writer) {
+		Ctx(WasmWriter writer, StringTable stringTable) {
 			this.writer = writer;
+			this.stringTable = stringTable;
 		}
 
 		int allocLocal(String name) {
 			int slot = this.nextLocal++;
 			this.locals.put(name, slot);
 			return slot;
+		}
+
+	}
+
+	/**
+	 * Tracks string data for the WASM data section. Fixed strings (nil, parens, etc.) are
+	 * pre-allocated; user strings are added during compilation.
+	 */
+	static final class StringTable {
+
+		private final ByteArrayOutputStream data = new ByteArrayOutputStream();
+
+		private int nextOffset;
+
+		final StringEntry nil;
+
+		final StringEntry lparen;
+
+		final StringEntry rparen;
+
+		final StringEntry space;
+
+		final StringEntry dot;
+
+		final StringEntry newline;
+
+		StringTable(int baseOffset) {
+			this.nextOffset = baseOffset;
+			this.nil = addString("nil");
+			this.lparen = addString("(");
+			this.rparen = addString(")");
+			this.space = addString(" ");
+			this.dot = addString(" . ");
+			this.newline = addString("\n");
+		}
+
+		StringEntry addString(String s) {
+			byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
+			int offset = this.nextOffset;
+			this.data.write(bytes, 0, bytes.length);
+			this.nextOffset += bytes.length;
+			return new StringEntry(offset, bytes.length);
+		}
+
+		byte[] toByteArray() {
+			return this.data.toByteArray();
+		}
+
+		record StringEntry(int offset, int length) {
 		}
 
 	}

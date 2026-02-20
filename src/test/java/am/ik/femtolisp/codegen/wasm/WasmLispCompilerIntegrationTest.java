@@ -161,4 +161,39 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print ((lambda (x) (* x x)) 5))")).isEqualTo("25");
 	}
 
+	@Test
+	void printString() throws Exception {
+		assertThat(compileAndRun("(print \"hello\")")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void quoteInteger() throws Exception {
+		assertThat(compileAndRun("(print '42)")).isEqualTo("42");
+	}
+
+	@Test
+	void quoteList() throws Exception {
+		assertThat(compileAndRun("(print '(1 2 3))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void quoteNestedList() throws Exception {
+		assertThat(compileAndRun("(print '(1 (2 3) 4))")).isEqualTo("(1 (2 3) 4)");
+	}
+
+	@Test
+	void quoteNil() throws Exception {
+		assertThat(compileAndRun("(print (quote nil))")).isEqualTo("nil");
+	}
+
+	@Test
+	void stringInLet() throws Exception {
+		assertThat(compileAndRun("(let ((x \"world\")) (print x))")).isEqualTo("\"world\"");
+	}
+
+	@Test
+	void quoteWithSymbol() throws Exception {
+		assertThat(compileAndRun("(print '(+ 1 2))")).isEqualTo("(+ 1 2)");
+	}
+
 }

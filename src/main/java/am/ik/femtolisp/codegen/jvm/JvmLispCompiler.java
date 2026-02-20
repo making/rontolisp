@@ -15,7 +15,6 @@ import am.ik.femtolisp.LispSymbol;
 import am.ik.femtolisp.LispTrue;
 import am.ik.femtolisp.LispVal;
 import am.ik.femtolisp.compiler.LispCompiler;
-import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ByteCodeWriter;
@@ -57,6 +56,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant longValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
 
+		ClassConstant lispRuntimeClass = cp.addClass(cp.addUtf8("am/ik/femtolisp/codegen/jvm/LispRuntime"));
+		MethodrefConstant lispToStringMethod = cp.addMethodref(lispRuntimeClass,
+				cp.addNameAndType(cp.addUtf8("lispToString"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
+		MethodrefConstant printlnStr = cp.addMethodref(printStreamClass,
+				cp.addNameAndType(cp.addUtf8("println"), cp.addUtf8("(Ljava/lang/String;)V")));
+
 		// Pass 1: Collect defun declarations and top-level expressions
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
@@ -92,7 +97,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Pass 2a: Compile each defun body as a static method
 		List<Ctx> funcCtxs = new ArrayList<>();
 		for (DefunDecl defun : defuns) {
-			Ctx funcCtx = new Ctx(cp, systemOut, printlnObj, longClass, longValueOf, longValue);
+			Ctx funcCtx = new Ctx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
+					objectClass);
 			funcCtx.functions = functions;
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
@@ -110,7 +116,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		// Pass 2b: Compile top-level expressions as main() body
-		Ctx mainCtx = new Ctx(cp, systemOut, printlnObj, longClass, longValueOf, longValue);
+		Ctx mainCtx = new Ctx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
+				objectClass);
 		mainCtx.functions = functions;
 		for (LispVal expr : topLevelExprs) {
 			compileExpr(expr, mainCtx);
@@ -166,6 +173,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			case LispInteger i -> compileLong(i.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> compileLong(1, ctx);
+			case LispString s -> compileStringLiteral(s.print(), ctx);
 			case LispSymbol sym -> compileSymbolRef(sym, ctx);
 			case LispCons cons -> compileCons(cons, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
@@ -214,6 +222,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				case "<=" -> compileComparison(cons, ctx, Opcode.IFLE);
 				case ">=" -> compileComparison(cons, ctx, Opcode.IFGE);
 				case "print" -> compilePrint(cons, ctx);
+				case "quote" -> compileQuote(cons, ctx);
 				case "if" -> compileIf(cons, ctx);
 				case "let" -> compileLet(cons, ctx);
 				case "progn" -> compileProgn(cons, ctx);
@@ -275,9 +284,57 @@ public final class JvmLispCompiler implements LispCompiler {
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(ctx.systemOut.index());
 		compileExpr(args.get(1), ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.lispToString.index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.printlnObj.index());
+		ctx.emitU2(ctx.printlnStr.index());
 		ctx.emit(Opcode.ACONST_NULL);
+	}
+
+	private void compileStringLiteral(String value, Ctx ctx) {
+		ConstantPool.StringConstant sc = ctx.cp.addString(value);
+		if (sc.index() <= 255) {
+			ctx.emit(Opcode.LDC);
+			ctx.emit(sc.index());
+		}
+		else {
+			ctx.emit(Opcode.LDC_W);
+			ctx.emitU2(sc.index());
+		}
+	}
+
+	private void compileQuote(LispCons cons, Ctx ctx) {
+		LispVal quoted = ((LispCons) cons.cdr()).car();
+		compileQuotedVal(quoted, ctx);
+	}
+
+	private void compileQuotedVal(LispVal val, Ctx ctx) {
+		switch (val) {
+			case LispInteger i -> compileLong(i.value(), ctx);
+			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
+			case LispTrue ignored -> compileLong(1, ctx);
+			case LispString s -> compileStringLiteral(s.print(), ctx);
+			case LispSymbol sym -> compileStringLiteral(sym.name(), ctx);
+			case LispCons cons -> compileQuotedCons(cons, ctx);
+			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
+		}
+	}
+
+	private void compileQuotedCons(LispCons cons, Ctx ctx) {
+		// Create Object[2] for cons cell: [0]=car, [1]=cdr
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		// Store car at index 0
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		compileQuotedVal(cons.car(), ctx);
+		ctx.emit(Opcode.AASTORE);
+		// Store cdr at index 1
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		compileQuotedVal(cons.cdr(), ctx);
+		ctx.emit(Opcode.AASTORE);
 	}
 
 	private void compileIf(LispCons cons, Ctx ctx) {
@@ -442,13 +499,17 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final FieldrefConstant systemOut;
 
-		final MethodrefConstant printlnObj;
+		final MethodrefConstant printlnStr;
+
+		final MethodrefConstant lispToString;
 
 		final ClassConstant longClass;
 
 		final MethodrefConstant longValueOf;
 
 		final MethodrefConstant longValue;
+
+		final ClassConstant objectClass;
 
 		final List<Integer> code = new ArrayList<>();
 
@@ -460,16 +521,19 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int maxLocals = 1;
 
-		int maxStack = 8;
+		int maxStack = 64;
 
-		Ctx(ConstantPool cp, FieldrefConstant systemOut, MethodrefConstant printlnObj, ClassConstant longClass,
-				MethodrefConstant longValueOf, MethodrefConstant longValue) {
+		Ctx(ConstantPool cp, FieldrefConstant systemOut, MethodrefConstant printlnStr, MethodrefConstant lispToString,
+				ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
+				ClassConstant objectClass) {
 			this.cp = cp;
 			this.systemOut = systemOut;
-			this.printlnObj = printlnObj;
+			this.printlnStr = printlnStr;
+			this.lispToString = lispToString;
 			this.longClass = longClass;
 			this.longValueOf = longValueOf;
 			this.longValue = longValue;
+			this.objectClass = objectClass;
 		}
 
 		void emit(int opcode) {
