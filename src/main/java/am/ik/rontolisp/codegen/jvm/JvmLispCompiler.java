@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -25,6 +26,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles Lisp expressions to JVM .class bytecode. Uses class file version 50 (Java 6)
@@ -140,13 +142,35 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 
+		// Reusable builder template with shared constants and state
+		Ctx.Builder ctxBuilder = Ctx.builder()
+			.cp(cp)
+			.systemOut(systemOut)
+			.printlnStr(printlnStr)
+			.lispToString(lispToStringMethod)
+			.longClass(longClass)
+			.longValueOf(longValueOf)
+			.longValue(longValue)
+			.objectClass(objectClass)
+			.objectArrayClass(objectArrayClass)
+			.integerClass(integerClass)
+			.integerValueOf(integerValueOf)
+			.integerValue(integerValue)
+			.doubleClass(doubleClass)
+			.doubleValueOf(doubleValueOf)
+			.numberClass(numberClass)
+			.numberDoubleValue(numberDoubleValue)
+			.stringClass(stringClass)
+			.stringCharAt(stringCharAt)
+			.functions(functions)
+			.lambdaDecls(lambdaDecls)
+			.indirectCallArities(indirectCallArities)
+			.nextFuncId(nextFuncId);
+
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
 		for (DefunDecl defun : defuns) {
-			Ctx funcCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
-					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass,
-					doubleValueOf, numberClass, numberDoubleValue, stringClass, stringCharAt, functions, lambdaDecls,
-					indirectCallArities, nextFuncId);
+			Ctx funcCtx = ctxBuilder.build();
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -176,10 +200,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		// Pass 2b: Compile top-level expressions as main() body
-		Ctx mainCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
-				objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass, doubleValueOf,
-				numberClass, numberDoubleValue, stringClass, stringCharAt, functions, lambdaDecls, indirectCallArities,
-				nextFuncId);
+		Ctx mainCtx = ctxBuilder.build();
 		for (LispVal expr : topLevelExprs) {
 			JvmExprCompiler.compileExpr(expr, mainCtx, this.className);
 			mainCtx.emit(Opcode.POP);
@@ -203,10 +224,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					descUtf8);
 			lambdaFuncInfos.add(fi);
 
-			Ctx lambdaCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
-					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass,
-					doubleValueOf, numberClass, numberDoubleValue, stringClass, stringCharAt, functions, lambdaDecls,
-					indirectCallArities, nextFuncId);
+			Ctx lambdaCtx = ctxBuilder.build();
 			lambdaCtx.closureEnvSlot = 0; // slot 0 = env Object[]
 			// Lambda params start at slot 1
 			for (int i = 0; i < lambda.paramNames.size(); i++) {
@@ -339,24 +357,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		return classOut.toByteArray();
 	}
 
-	private Ctx createCtx(ConstantPool cp, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant lispToString, ClassConstant longClass, MethodrefConstant longValueOf,
-			MethodrefConstant longValue, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant integerClass, MethodrefConstant integerValueOf, MethodrefConstant integerValue,
-			ClassConstant doubleClass, MethodrefConstant doubleValueOf, ClassConstant numberClass,
-			MethodrefConstant numberDoubleValue, ClassConstant stringClass, MethodrefConstant stringCharAt,
-			Map<String, FunctionInfo> functions, List<LambdaInfo> lambdaDecls, Set<Integer> indirectCallArities,
-			int[] nextFuncId) {
-		Ctx ctx = new Ctx(cp, systemOut, printlnStr, lispToString, longClass, longValueOf, longValue, objectClass,
-				objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass, doubleValueOf, numberClass,
-				numberDoubleValue, stringClass, stringCharAt);
-		ctx.functions = functions;
-		ctx.lambdaDecls = lambdaDecls;
-		ctx.indirectCallArities = indirectCallArities;
-		ctx.nextFuncId = nextFuncId;
-		return ctx;
-	}
-
 	static boolean hasDoubleLiteral(List<LispVal> args) {
 		for (int i = 1; i < args.size(); i++) {
 			if (containsDouble(args.get(i))) {
@@ -462,7 +462,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		Map<String, Integer> locals = new HashMap<>();
 
-		Map<String, FunctionInfo> functions = Map.of();
+		Map<String, FunctionInfo> functions;
 
 		Map<String, Integer> captures = Map.of();
 
@@ -470,11 +470,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int closureEnvSlot = -1;
 
-		List<LambdaInfo> lambdaDecls = new ArrayList<>();
+		List<LambdaInfo> lambdaDecls;
 
-		Set<Integer> indirectCallArities = new HashSet<>();
+		Set<Integer> indirectCallArities;
 
-		int[] nextFuncId = new int[1];
+		int[] nextFuncId;
 
 		int nextLocal = 1;
 
@@ -482,30 +482,195 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int maxStack = 64;
 
-		Ctx(ConstantPool cp, FieldrefConstant systemOut, MethodrefConstant printlnStr, MethodrefConstant lispToString,
-				ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
-				ClassConstant objectClass, ClassConstant objectArrayClass, ClassConstant integerClass,
-				MethodrefConstant integerValueOf, MethodrefConstant integerValue, ClassConstant doubleClass,
-				MethodrefConstant doubleValueOf, ClassConstant numberClass, MethodrefConstant numberDoubleValue,
-				ClassConstant stringClass, MethodrefConstant stringCharAt) {
-			this.cp = cp;
-			this.systemOut = systemOut;
-			this.printlnStr = printlnStr;
-			this.lispToString = lispToString;
-			this.longClass = longClass;
-			this.longValueOf = longValueOf;
-			this.longValue = longValue;
-			this.objectClass = objectClass;
-			this.objectArrayClass = objectArrayClass;
-			this.integerClass = integerClass;
-			this.integerValueOf = integerValueOf;
-			this.integerValue = integerValue;
-			this.doubleClass = doubleClass;
-			this.doubleValueOf = doubleValueOf;
-			this.numberClass = numberClass;
-			this.numberDoubleValue = numberDoubleValue;
-			this.stringClass = stringClass;
-			this.stringCharAt = stringCharAt;
+		private Ctx(Builder builder) {
+			this.cp = Objects.requireNonNull(builder.cp);
+			this.systemOut = Objects.requireNonNull(builder.systemOut);
+			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
+			this.lispToString = Objects.requireNonNull(builder.lispToString);
+			this.longClass = Objects.requireNonNull(builder.longClass);
+			this.longValueOf = Objects.requireNonNull(builder.longValueOf);
+			this.longValue = Objects.requireNonNull(builder.longValue);
+			this.objectClass = Objects.requireNonNull(builder.objectClass);
+			this.objectArrayClass = Objects.requireNonNull(builder.objectArrayClass);
+			this.integerClass = Objects.requireNonNull(builder.integerClass);
+			this.integerValueOf = Objects.requireNonNull(builder.integerValueOf);
+			this.integerValue = Objects.requireNonNull(builder.integerValue);
+			this.doubleClass = Objects.requireNonNull(builder.doubleClass);
+			this.doubleValueOf = Objects.requireNonNull(builder.doubleValueOf);
+			this.numberClass = Objects.requireNonNull(builder.numberClass);
+			this.numberDoubleValue = Objects.requireNonNull(builder.numberDoubleValue);
+			this.stringClass = Objects.requireNonNull(builder.stringClass);
+			this.stringCharAt = Objects.requireNonNull(builder.stringCharAt);
+			this.functions = builder.functions;
+			this.lambdaDecls = builder.lambdaDecls;
+			this.indirectCallArities = builder.indirectCallArities;
+			this.nextFuncId = builder.nextFuncId;
+		}
+
+		static Builder builder() {
+			return new Builder();
+		}
+
+		static final class Builder {
+
+			private @Nullable ConstantPool cp;
+
+			private @Nullable FieldrefConstant systemOut;
+
+			private @Nullable MethodrefConstant printlnStr;
+
+			private @Nullable MethodrefConstant lispToString;
+
+			private @Nullable ClassConstant longClass;
+
+			private @Nullable MethodrefConstant longValueOf;
+
+			private @Nullable MethodrefConstant longValue;
+
+			private @Nullable ClassConstant objectClass;
+
+			private @Nullable ClassConstant objectArrayClass;
+
+			private @Nullable ClassConstant integerClass;
+
+			private @Nullable MethodrefConstant integerValueOf;
+
+			private @Nullable MethodrefConstant integerValue;
+
+			private @Nullable ClassConstant doubleClass;
+
+			private @Nullable MethodrefConstant doubleValueOf;
+
+			private @Nullable ClassConstant numberClass;
+
+			private @Nullable MethodrefConstant numberDoubleValue;
+
+			private @Nullable ClassConstant stringClass;
+
+			private @Nullable MethodrefConstant stringCharAt;
+
+			private Map<String, FunctionInfo> functions = Map.of();
+
+			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
+
+			private Set<Integer> indirectCallArities = new HashSet<>();
+
+			private int[] nextFuncId = new int[1];
+
+			Builder cp(ConstantPool cp) {
+				this.cp = cp;
+				return this;
+			}
+
+			Builder systemOut(FieldrefConstant systemOut) {
+				this.systemOut = systemOut;
+				return this;
+			}
+
+			Builder printlnStr(MethodrefConstant printlnStr) {
+				this.printlnStr = printlnStr;
+				return this;
+			}
+
+			Builder lispToString(MethodrefConstant lispToString) {
+				this.lispToString = lispToString;
+				return this;
+			}
+
+			Builder longClass(ClassConstant longClass) {
+				this.longClass = longClass;
+				return this;
+			}
+
+			Builder longValueOf(MethodrefConstant longValueOf) {
+				this.longValueOf = longValueOf;
+				return this;
+			}
+
+			Builder longValue(MethodrefConstant longValue) {
+				this.longValue = longValue;
+				return this;
+			}
+
+			Builder objectClass(ClassConstant objectClass) {
+				this.objectClass = objectClass;
+				return this;
+			}
+
+			Builder objectArrayClass(ClassConstant objectArrayClass) {
+				this.objectArrayClass = objectArrayClass;
+				return this;
+			}
+
+			Builder integerClass(ClassConstant integerClass) {
+				this.integerClass = integerClass;
+				return this;
+			}
+
+			Builder integerValueOf(MethodrefConstant integerValueOf) {
+				this.integerValueOf = integerValueOf;
+				return this;
+			}
+
+			Builder integerValue(MethodrefConstant integerValue) {
+				this.integerValue = integerValue;
+				return this;
+			}
+
+			Builder doubleClass(ClassConstant doubleClass) {
+				this.doubleClass = doubleClass;
+				return this;
+			}
+
+			Builder doubleValueOf(MethodrefConstant doubleValueOf) {
+				this.doubleValueOf = doubleValueOf;
+				return this;
+			}
+
+			Builder numberClass(ClassConstant numberClass) {
+				this.numberClass = numberClass;
+				return this;
+			}
+
+			Builder numberDoubleValue(MethodrefConstant numberDoubleValue) {
+				this.numberDoubleValue = numberDoubleValue;
+				return this;
+			}
+
+			Builder stringClass(ClassConstant stringClass) {
+				this.stringClass = stringClass;
+				return this;
+			}
+
+			Builder stringCharAt(MethodrefConstant stringCharAt) {
+				this.stringCharAt = stringCharAt;
+				return this;
+			}
+
+			Builder functions(Map<String, FunctionInfo> functions) {
+				this.functions = functions;
+				return this;
+			}
+
+			Builder lambdaDecls(List<LambdaInfo> lambdaDecls) {
+				this.lambdaDecls = lambdaDecls;
+				return this;
+			}
+
+			Builder indirectCallArities(Set<Integer> indirectCallArities) {
+				this.indirectCallArities = indirectCallArities;
+				return this;
+			}
+
+			Builder nextFuncId(int[] nextFuncId) {
+				this.nextFuncId = nextFuncId;
+				return this;
+			}
+
+			Ctx build() {
+				return new Ctx(this);
+			}
+
 		}
 
 		void emit(int opcode) {
