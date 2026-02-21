@@ -57,7 +57,7 @@ public final class LispEvaluator {
 				case LispNames.LET:
 					return evalLet(cons, env);
 				case LispNames.DEFUN:
-					return evalDefun(cons, env);
+					return eval(LispMacroExpander.expandDefun(cons), env);
 				case LispNames.PROGN:
 					return evalProgn(cons, env);
 				case LispNames.SETQ:
@@ -117,16 +117,6 @@ public final class LispEvaluator {
 			result = eval(parts.get(i), letEnv);
 		}
 		return result;
-	}
-
-	private LispVal evalDefun(LispCons cons, Environment env) {
-		List<LispVal> parts = cons.toList();
-		LispSymbol name = (LispSymbol) parts.get(1);
-		List<LispSymbol> params = extractParams(parts.get(2));
-		List<LispVal> body = parts.subList(3, parts.size());
-		LispLambda lambda = new LispLambda(params, body, env);
-		this.globalEnv.define(name.name(), lambda);
-		return name;
 	}
 
 	private LispVal evalProgn(LispCons cons, Environment env) {

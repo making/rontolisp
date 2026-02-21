@@ -78,7 +78,7 @@ class ReadmeExamplesTest {
 		@Test
 		void factorialDefinitionAndCall() {
 			String output = runRepl("(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))\n(fact 10)\n(quit)\n");
-			assertThat(output).contains("fact");
+			assertThat(output).contains("#<lambda>");
 			assertThat(output).contains("3628800");
 		}
 
