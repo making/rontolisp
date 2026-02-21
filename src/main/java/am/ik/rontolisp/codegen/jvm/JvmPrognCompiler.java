@@ -1,0 +1,27 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+import am.ik.jvm.Opcode;
+
+/**
+ * Compiles the {@code progn} special form.
+ */
+final class JvmPrognCompiler {
+
+	private JvmPrognCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i < parts.size(); i++) {
+			if (i > 1) {
+				ctx.emit(Opcode.POP);
+			}
+			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
+		}
+	}
+
+}

@@ -59,14 +59,31 @@ When adding a new built-in function or special form, follow this order:
 ### Adding a New Built-in Function
 
 1. **Environment.java** (`eval` pkg): Add in `createGlobal()` using `env.define("name", new LispFunction(...))`.
-2. **JvmLispCompiler.java**: Add a case in `compileCons()` switch.
-3. **WasmLispCompiler.java**: Add a case in `compileCons()` switch. All values on the WASM stack are `(ref eq)`; use `castI31GetS()` to unbox to `i32` and `ref.i31` to re-box.
+2. **JVM compiler**: Create `Jvm<Name>Compiler.java` with a `compile()` static method, then add a case in `JvmExprCompiler.compileCons()` switch.
+3. **WASM compiler**: Create `Wasm<Name>Compiler.java` with a `compile()` static method, then add a case in `WasmExprCompiler.compileCons()` switch. All values on the WASM stack are `(ref eq)`; use `WasmEmitHelper.castI31GetS()` to unbox to `i32` and `ref.i31` to re-box.
 
 ### Adding a New Special Form
 
 1. **LispEvaluator.java**: Add a case in `evalCons()` switch. Special forms receive unevaluated arguments.
-2. **JvmLispCompiler.java**: Add a `compile<Form>()` method and wire it in `compileCons()`.
-3. **WasmLispCompiler.java**: Same pattern.
+2. **JVM compiler**: Create `Jvm<Form>Compiler.java` and wire it in `JvmExprCompiler.compileCons()`.
+3. **WASM compiler**: Create `Wasm<Form>Compiler.java` and wire it in `WasmExprCompiler.compileCons()`.
+
+### Expression Compiler Module Structure
+
+Each codegen backend (`codegen/jvm/`, `codegen/wasm/`) follows this file structure:
+
+- **`*LispCompiler.java`**: Top-level compiler (3-pass orchestration, Ctx/Builder, records)
+- **`*ExprCompiler.java`**: Entry point (`compileExpr`) + dispatch (`compileCons`) + symbol resolution (`compileSymbolRef`)
+- **`*EmitHelper.java`**: Shared bytecode emission helpers (boxing/unboxing, literals, branch patching, etc.)
+- **`*RuntimeBuilder.java`**: Runtime support code (dispatch functions, toString, print helpers)
+- **`Jvm<Name>Compiler.java` / `Wasm<Name>Compiler.java`**: One class per built-in function or special form
+
+**File splitting criteria:**
+
+- Each Lisp function/special form gets its own compiler class (e.g., `JvmCarCompiler`, `WasmIfCompiler`)
+- Functions sharing identical logic with only opcode parameters are grouped into one class (e.g., `*ArithCompiler` for `+`, `-`, `*`, `/`, `mod`; `*ComparisonCompiler` for `=`, `<`, `>`, `<=`, `>=`)
+- Tightly coupled methods that call each other privately are kept in one class (e.g., `*QuoteCompiler` has `compileQuote` + `compileQuotedVal` + `compileQuotedCons`; `*LambdaCompiler` has `compileValue` + `compileCall`)
+- All classes are package-private with static methods, following the existing utility class pattern
 
 ### Verifying WASM Output Manually
 
