@@ -65,7 +65,7 @@ java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 > (* 3 (+ 4 5))
 27
 > (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
-fact
+#<lambda>
 > (fact 10)
 3628800
 > (let ((x 10) (y 20)) (+ x y))
@@ -152,7 +152,6 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `quote` | `(quote expr)` or `'expr` | Returns the expression unevaluated |
 | `if` | `(if cond then else?)` | Conditional. `nil` is false, everything else is true |
 | `let` | `(let ((x 1) (y 2)) body...)` | Local variable bindings |
-| `defun` | `(defun name (params...) body...)` | Define a named function |
 | `lambda` | `(lambda (params...) body...)` | Anonymous function |
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value)` | Assign a value to a variable |
@@ -161,6 +160,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 | Macro | Syntax | Description |
 |-------|--------|-------------|
+| `defun` | `(defun name (params...) body...)` | Expands to `(setq name (lambda (params...) body...))` |
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
