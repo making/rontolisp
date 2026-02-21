@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -82,43 +83,43 @@ final class JvmExprCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case "+" -> JvmArithCompiler.compile(cons, ctx, Opcode.LADD, Opcode.DADD, className);
-				case "-" -> JvmArithCompiler.compile(cons, ctx, Opcode.LSUB, Opcode.DSUB, className);
-				case "*" -> JvmArithCompiler.compile(cons, ctx, Opcode.LMUL, Opcode.DMUL, className);
-				case "/" -> JvmArithCompiler.compile(cons, ctx, Opcode.LDIV, Opcode.DDIV, className);
-				case "mod" -> JvmArithCompiler.compile(cons, ctx, Opcode.LREM, Opcode.DREM, className);
-				case "=" -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFEQ, className);
-				case "<" -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLT, className);
-				case ">" -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGT, className);
-				case "<=" -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLE, className);
-				case ">=" -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGE, className);
-				case "print" -> JvmPrintCompiler.compile(cons, ctx, className);
-				case "quote" -> JvmQuoteCompiler.compile(cons, ctx, className);
-				case "if" -> JvmIfCompiler.compile(cons, ctx, className);
-				case "let" -> JvmLetCompiler.compile(cons, ctx, className);
-				case "progn" -> JvmPrognCompiler.compile(cons, ctx, className);
-				case "setq" -> JvmSetqCompiler.compile(cons, ctx, className);
-				case "lambda" -> JvmLambdaCompiler.compileValue(cons, ctx, className);
-				case "defun" -> ctx.emit(Opcode.ACONST_NULL);
-				case "list" -> JvmListCompiler.compile(cons, ctx, className);
-				case "car" -> JvmCarCompiler.compile(cons, ctx, className);
-				case "cdr" -> JvmCdrCompiler.compile(cons, ctx, className);
-				case "cons" -> JvmConsCompiler.compile(cons, ctx, className);
-				case "funcall" -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
-				case "null" -> JvmNullPredCompiler.compile(cons, ctx, className);
-				case "atom" -> JvmAtomCompiler.compile(cons, ctx, className);
-				case "numberp" -> JvmNumberpCompiler.compile(cons, ctx, className);
-				case "integerp" -> JvmIntegerpCompiler.compile(cons, ctx, className);
-				case "floatp" -> JvmFloatpCompiler.compile(cons, ctx, className);
-				case "symbolp" -> JvmSymbolpCompiler.compile(cons, ctx, className);
-				case "stringp" -> JvmStringpCompiler.compile(cons, ctx, className);
-				case "listp" -> JvmListpCompiler.compile(cons, ctx, className);
-				case "consp" -> JvmConspCompiler.compile(cons, ctx, className);
+				case LispNames.ADD -> JvmArithCompiler.compile(cons, ctx, Opcode.LADD, Opcode.DADD, className);
+				case LispNames.SUB -> JvmArithCompiler.compile(cons, ctx, Opcode.LSUB, Opcode.DSUB, className);
+				case LispNames.MUL -> JvmArithCompiler.compile(cons, ctx, Opcode.LMUL, Opcode.DMUL, className);
+				case LispNames.DIV -> JvmArithCompiler.compile(cons, ctx, Opcode.LDIV, Opcode.DDIV, className);
+				case LispNames.MOD -> JvmArithCompiler.compile(cons, ctx, Opcode.LREM, Opcode.DREM, className);
+				case LispNames.EQ -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFEQ, className);
+				case LispNames.LT -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLT, className);
+				case LispNames.GT -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGT, className);
+				case LispNames.LE -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLE, className);
+				case LispNames.GE -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGE, className);
+				case LispNames.PRINT -> JvmPrintCompiler.compile(cons, ctx, className);
+				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
+				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
+				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className);
+				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
+				case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
+				case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
+				case LispNames.DEFUN -> ctx.emit(Opcode.ACONST_NULL);
+				case LispNames.LIST -> JvmListCompiler.compile(cons, ctx, className);
+				case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
+				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
+				case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
+				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
+				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
+				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
+				case LispNames.NUMBERP -> JvmNumberpCompiler.compile(cons, ctx, className);
+				case LispNames.INTEGERP -> JvmIntegerpCompiler.compile(cons, ctx, className);
+				case LispNames.FLOATP -> JvmFloatpCompiler.compile(cons, ctx, className);
+				case LispNames.SYMBOLP -> JvmSymbolpCompiler.compile(cons, ctx, className);
+				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
+				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
+				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
 				default -> JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
 			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
-				&& "lambda".equals(headSym.name())) {
+				&& LispNames.LAMBDA.equals(headSym.name())) {
 			JvmLambdaCompiler.compileCall(headCons, cons, ctx, className);
 		}
 		else {

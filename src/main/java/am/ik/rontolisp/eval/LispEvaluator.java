@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -48,21 +49,21 @@ public final class LispEvaluator {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case "quote":
+				case LispNames.QUOTE:
 					return evalQuote(cons);
-				case "if":
+				case LispNames.IF:
 					return evalIf(cons, env);
-				case "let":
+				case LispNames.LET:
 					return evalLet(cons, env);
-				case "defun":
+				case LispNames.DEFUN:
 					return evalDefun(cons, env);
-				case "progn":
+				case LispNames.PROGN:
 					return evalProgn(cons, env);
-				case "setq":
+				case LispNames.SETQ:
 					return evalSetq(cons, env);
-				case "lambda":
+				case LispNames.LAMBDA:
 					return evalLambdaForm(cons, env);
-				case "funcall":
+				case LispNames.FUNCALL:
 					return evalFuncall(cons, env);
 			}
 		}

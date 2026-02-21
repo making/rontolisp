@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -100,7 +101,7 @@ public final class LispReader {
 
 	private LispVal readQuote() {
 		LispVal quoted = readExpr();
-		return new LispCons(new LispSymbol("quote"), new LispCons(quoted, LispNil.INSTANCE));
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(quoted, LispNil.INSTANCE));
 	}
 
 }

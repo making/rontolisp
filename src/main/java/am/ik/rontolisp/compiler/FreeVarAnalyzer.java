@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -16,9 +17,12 @@ import am.ik.rontolisp.LispVal;
  */
 public final class FreeVarAnalyzer {
 
-	private static final Set<String> SPECIAL_NAMES = Set.of("+", "-", "*", "/", "mod", "=", "<", ">", "<=", ">=",
-			"print", "quote", "if", "let", "progn", "setq", "defun", "lambda", "null", "list", "car", "cdr", "cons",
-			"funcall");
+	private static final Set<String> SPECIAL_NAMES = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
+			LispNames.MOD, LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE, LispNames.GE, LispNames.PRINT,
+			LispNames.QUOTE, LispNames.IF, LispNames.LET, LispNames.PROGN, LispNames.SETQ, LispNames.DEFUN,
+			LispNames.LAMBDA, LispNames.NULL, LispNames.LIST, LispNames.CAR, LispNames.CDR, LispNames.CONS,
+			LispNames.FUNCALL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
+			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP);
 
 	private FreeVarAnalyzer() {
 	}
@@ -70,10 +74,10 @@ public final class FreeVarAnalyzer {
 				LispVal head = cons.car();
 				if (head instanceof LispSymbol sym) {
 					switch (sym.name()) {
-						case "quote" -> {
+						case LispNames.QUOTE -> {
 							// skip quoted expressions
 						}
-						case "lambda" -> {
+						case LispNames.LAMBDA -> {
 							List<LispVal> parts = cons.toList();
 							Set<String> innerBound = new HashSet<>(boundVars);
 							innerBound.addAll(extractParamNames(parts.get(1)));
@@ -81,7 +85,7 @@ public final class FreeVarAnalyzer {
 								collectFreeVars(parts.get(i), innerBound, knownFunctions, freeVars);
 							}
 						}
-						case "let" -> {
+						case LispNames.LET -> {
 							List<LispVal> parts = cons.toList();
 							Set<String> innerBound = new HashSet<>(boundVars);
 							LispVal bindings = parts.get(1);
@@ -98,10 +102,10 @@ public final class FreeVarAnalyzer {
 								collectFreeVars(parts.get(i), innerBound, knownFunctions, freeVars);
 							}
 						}
-						case "defun" -> {
+						case LispNames.DEFUN -> {
 							// defun body is handled separately; skip
 						}
-						case "setq" -> {
+						case LispNames.SETQ -> {
 							List<LispVal> parts = cons.toList();
 							String name = ((LispSymbol) parts.get(1)).name();
 							if (!SPECIAL_NAMES.contains(name) && !boundVars.contains(name)
@@ -145,10 +149,10 @@ public final class FreeVarAnalyzer {
 				LispVal head = cons.car();
 				if (head instanceof LispSymbol sym) {
 					switch (sym.name()) {
-						case "quote" -> {
+						case LispNames.QUOTE -> {
 							// skip
 						}
-						case "lambda" -> {
+						case LispNames.LAMBDA -> {
 							// Any reference to localVars inside a lambda body means
 							// capture
 							List<LispVal> parts = cons.toList();
@@ -161,7 +165,7 @@ public final class FreeVarAnalyzer {
 								collectCapturedVars(parts.get(i), outerVars, knownFunctions, captured, true);
 							}
 						}
-						case "let" -> {
+						case LispNames.LET -> {
 							List<LispVal> parts = cons.toList();
 							LispVal bindings = parts.get(1);
 							if (bindings instanceof LispCons bindingsCons) {
@@ -176,10 +180,10 @@ public final class FreeVarAnalyzer {
 								collectCapturedVars(parts.get(i), localVars, knownFunctions, captured, insideLambda);
 							}
 						}
-						case "defun" -> {
+						case LispNames.DEFUN -> {
 							// skip
 						}
-						case "setq" -> {
+						case LispNames.SETQ -> {
 							List<LispVal> parts = cons.toList();
 							String name = ((LispSymbol) parts.get(1)).name();
 							if (insideLambda && localVars.contains(name)) {
