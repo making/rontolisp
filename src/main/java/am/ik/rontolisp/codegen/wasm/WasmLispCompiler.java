@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -21,6 +22,7 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Section;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles Lisp expressions to WASM binary with wasm-GC and WASI Preview 1. All Lisp
@@ -140,16 +142,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 
+		// Reusable builder template with shared constants and state
+		Ctx.Builder ctxBuilder = Ctx.builder()
+			.stringTable(stringTable)
+			.functions(functions)
+			.lambdaDecls(lambdaDecls)
+			.indirectCallArities(indirectCallArities)
+			.nextFuncId(nextFuncId);
+
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
 		for (DefunDecl defun : defuns) {
 			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
 			WasmWriter funcWriter = new WasmWriter(funcBody);
-			Ctx funcCtx = new Ctx(funcWriter, funcBody, stringTable);
-			funcCtx.functions = functions;
-			funcCtx.lambdaDecls = lambdaDecls;
-			funcCtx.indirectCallArities = indirectCallArities;
-			funcCtx.nextFuncId = nextFuncId;
+			Ctx funcCtx = ctxBuilder.writer(funcWriter).bodyStream(funcBody).build();
 
 			// Slot 0 = env (unused for defuns), params start at slot 1
 			funcCtx.closureEnvSlot = 0;
@@ -200,11 +206,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Pass 2b: Build _start function body
 		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
 		WasmWriter startWriter = new WasmWriter(startBody);
-		Ctx ctx = new Ctx(startWriter, startBody, stringTable);
-		ctx.functions = functions;
-		ctx.lambdaDecls = lambdaDecls;
-		ctx.indirectCallArities = indirectCallArities;
-		ctx.nextFuncId = nextFuncId;
+		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
 
 		for (LispVal expr : topLevelExprs) {
 			WasmExprCompiler.compileExpr(expr, ctx);
@@ -233,11 +235,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			LambdaInfo lambda = lambdaDecls.get(lambdaIdx);
 			ByteArrayOutputStream lambdaBody = new ByteArrayOutputStream();
 			WasmWriter lambdaWriter = new WasmWriter(lambdaBody);
-			Ctx lambdaCtx = new Ctx(lambdaWriter, lambdaBody, stringTable);
-			lambdaCtx.functions = functions;
-			lambdaCtx.lambdaDecls = lambdaDecls;
-			lambdaCtx.indirectCallArities = indirectCallArities;
-			lambdaCtx.nextFuncId = nextFuncId;
+			Ctx lambdaCtx = ctxBuilder.writer(lambdaWriter).bodyStream(lambdaBody).build();
 
 			// Slot 0 = env (closure environment)
 			lambdaCtx.closureEnvSlot = 0;
@@ -521,7 +519,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		Map<String, Integer> locals = new HashMap<>();
 
-		Map<String, WasmFunctionInfo> functions = Map.of();
+		Map<String, WasmFunctionInfo> functions;
 
 		Map<String, Integer> captures = Map.of();
 
@@ -529,18 +527,83 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		int closureEnvSlot = -1;
 
-		List<LambdaInfo> lambdaDecls = new ArrayList<>();
+		List<LambdaInfo> lambdaDecls;
 
-		Set<Integer> indirectCallArities = new HashSet<>();
+		Set<Integer> indirectCallArities;
 
-		int[] nextFuncId = new int[1];
+		int[] nextFuncId;
 
 		int nextLocal = 0;
 
-		Ctx(WasmWriter writer, ByteArrayOutputStream bodyStream, StringTable stringTable) {
-			this.writer = writer;
-			this.bodyStream = bodyStream;
-			this.stringTable = stringTable;
+		private Ctx(Builder builder) {
+			this.writer = Objects.requireNonNull(builder.writer);
+			this.bodyStream = Objects.requireNonNull(builder.bodyStream);
+			this.stringTable = Objects.requireNonNull(builder.stringTable);
+			this.functions = builder.functions;
+			this.lambdaDecls = builder.lambdaDecls;
+			this.indirectCallArities = builder.indirectCallArities;
+			this.nextFuncId = builder.nextFuncId;
+		}
+
+		static Builder builder() {
+			return new Builder();
+		}
+
+		static final class Builder {
+
+			private @Nullable WasmWriter writer;
+
+			private @Nullable ByteArrayOutputStream bodyStream;
+
+			private @Nullable StringTable stringTable;
+
+			private Map<String, WasmFunctionInfo> functions = Map.of();
+
+			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
+
+			private Set<Integer> indirectCallArities = new HashSet<>();
+
+			private int[] nextFuncId = new int[1];
+
+			Builder writer(WasmWriter writer) {
+				this.writer = writer;
+				return this;
+			}
+
+			Builder bodyStream(ByteArrayOutputStream bodyStream) {
+				this.bodyStream = bodyStream;
+				return this;
+			}
+
+			Builder stringTable(StringTable stringTable) {
+				this.stringTable = stringTable;
+				return this;
+			}
+
+			Builder functions(Map<String, WasmFunctionInfo> functions) {
+				this.functions = functions;
+				return this;
+			}
+
+			Builder lambdaDecls(List<LambdaInfo> lambdaDecls) {
+				this.lambdaDecls = lambdaDecls;
+				return this;
+			}
+
+			Builder indirectCallArities(Set<Integer> indirectCallArities) {
+				this.indirectCallArities = indirectCallArities;
+				return this;
+			}
+
+			Builder nextFuncId(int[] nextFuncId) {
+				this.nextFuncId = nextFuncId;
+				return this;
+			}
+
+			Ctx build() {
+				return new Ctx(this);
+			}
+
 		}
 
 		int allocLocal(String name) {
