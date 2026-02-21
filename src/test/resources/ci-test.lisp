@@ -138,6 +138,33 @@
 (print (cond (nil 1) (nil 2) (t 3)))
 (print (cond ((= 1 2) 10) ((= 1 1) 20) (t 30)))
 
+; Type conversion: float
+(print (float 42))
+(print (float 3.14))
+(print (float 0))
+
+; Type conversion: truncate (toward zero)
+(print (truncate 3.7))
+(print (truncate -3.7))
+(print (truncate 42))
+
+; Type conversion: floor (toward negative infinity)
+(print (floor 3.7))
+(print (floor -3.7))
+(print (floor 42))
+
+; Type conversion: ceiling (toward positive infinity)
+(print (ceiling 3.2))
+(print (ceiling -3.2))
+(print (ceiling 42))
+
+; Type conversion: round (banker's rounding)
+(print (round 3.5))
+(print (round 2.5))
+(print (round 3.7))
+(print (round -3.7))
+(print (round 42))
+
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
 (print (if (and t) 42 99))

@@ -131,6 +131,11 @@ final class WasmExprCompiler {
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
+				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(cons, ctx);
+				case LispNames.TRUNCATE -> WasmIntConvCompiler.compileTruncate(cons, ctx);
+				case LispNames.FLOOR -> WasmIntConvCompiler.compileFloor(cons, ctx);
+				case LispNames.CEILING -> WasmIntConvCompiler.compileCeiling(cons, ctx);
+				case LispNames.ROUND -> WasmIntConvCompiler.compileRound(cons, ctx);
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
