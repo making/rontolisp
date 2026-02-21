@@ -94,6 +94,27 @@
 ; funcall
 (print (funcall square 7))
 
+; Type predicates
+(print (if (null nil) 42 99))
+(print (if (null 1) 42 99))
+(print (if (atom 1) 42 99))
+(print (if (atom '(1 2)) 42 99))
+(print (if (numberp 42) 42 99))
+(print (if (numberp 3.14) 42 99))
+(print (if (integerp 42) 42 99))
+(print (if (integerp 3.14) 42 99))
+(print (if (floatp 3.14) 42 99))
+(print (if (floatp 42) 42 99))
+(print (if (symbolp 'foo) 42 99))
+(print (if (symbolp 42) 42 99))
+(print (if (stringp "hello") 42 99))
+(print (if (stringp 42) 42 99))
+(print (if (listp '(1 2)) 42 99))
+(print (if (listp nil) 42 99))
+(print (if (listp 42) 42 99))
+(print (if (consp '(1 2)) 42 99))
+(print (if (consp nil) 42 99))
+
 ; Double literals and arithmetic
 (print 3.14)
 (print (+ 1.5 2.5))
