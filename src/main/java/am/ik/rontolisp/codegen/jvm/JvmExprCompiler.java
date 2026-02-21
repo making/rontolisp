@@ -101,7 +101,8 @@ final class JvmExprCompiler {
 				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
 				case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
 				case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
-				case LispNames.DEFUN -> ctx.emit(Opcode.ACONST_NULL);
+				case LispNames.DEFUN ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx, className);
 				case LispNames.LIST -> JvmListCompiler.compile(cons, ctx, className);
 				case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
 				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);

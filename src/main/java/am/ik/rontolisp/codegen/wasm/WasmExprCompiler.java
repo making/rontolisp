@@ -116,10 +116,7 @@ final class WasmExprCompiler {
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
-				case LispNames.DEFUN -> {
-					ctx.writer.write(Instruction.REF_NULL);
-					ctx.writer.writeHeapType(Type.EQ.code());
-				}
+				case LispNames.DEFUN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx);
 				case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
 				case LispNames.CAR -> WasmCarCompiler.compile(cons, ctx);
 				case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);

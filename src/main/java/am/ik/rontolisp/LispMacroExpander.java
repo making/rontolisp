@@ -141,6 +141,26 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.NOT), expr));
 	}
 
+	/**
+	 * Expands (defun name (params...) body...) into (setq name (lambda (params...)
+	 * body...)).
+	 *
+	 * <pre>
+	 * (defun f (x y) body1 body2) -> (setq f (lambda (x y) body1 body2))
+	 * </pre>
+	 */
+	public static LispVal expandDefun(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal name = parts.get(1);
+		LispVal params = parts.get(2);
+		List<LispVal> lambdaParts = new java.util.ArrayList<>();
+		lambdaParts.add(new LispSymbol(LispNames.LAMBDA));
+		lambdaParts.add(params);
+		lambdaParts.addAll(parts.subList(3, parts.size()));
+		LispVal lambda = listToCons(lambdaParts);
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), name, lambda));
+	}
+
 	private static LispCons listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;
 		for (int i = elements.size() - 1; i >= 0; i--) {

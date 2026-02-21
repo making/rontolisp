@@ -12,6 +12,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -112,18 +113,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
 		for (LispVal expr : program) {
+			LispVal expanded = expr;
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
-				List<LispVal> parts = cons.toList();
-				String funcName = ((LispSymbol) parts.get(1)).name();
-				List<String> paramNames = extractParamNames(parts.get(2));
-				defuns.add(new DefunDecl(funcName, paramNames, parts.subList(3, parts.size())));
+				expanded = LispMacroExpander.expandDefun(cons);
 			}
-			else if (isSetqLambda(expr)) {
-				defuns.add(extractSetqLambda(expr));
+			if (isSetqLambda(expanded)) {
+				defuns.add(extractSetqLambda(expanded));
 			}
 			else {
-				topLevelExprs.add(expr);
+				topLevelExprs.add(expanded);
 			}
 		}
 

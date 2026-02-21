@@ -13,8 +13,6 @@ public final class LispNames {
 
 	public static final String LET = "let";
 
-	public static final String DEFUN = "defun";
-
 	public static final String PROGN = "progn";
 
 	public static final String SETQ = "setq";
@@ -54,7 +52,9 @@ public final class LispNames {
 
 	public static final String LIST = "list";
 
-	// Logical operators
+	// Macros
+	public static final String DEFUN = "defun";
+
 	public static final String COND = "cond";
 
 	public static final String AND = "and";

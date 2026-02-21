@@ -15,7 +15,7 @@ Three execution modes share a common frontend (reader) and AST:
 ```
 Source string
   -> LispReader (reader pkg) -> List<LispVal> (AST)
-    -> [LispMacroExpander] -> expanded AST               # macro expansion (cond/and/or -> if/let/progn)
+    -> [LispMacroExpander] -> expanded AST               # macro expansion (defun/cond/and/or -> if/let/progn/setq)
     -> LispEvaluator (eval pkg)                          # interpret
     -> JvmLispCompiler (codegen.jvm) -> byte[] (.class)  # compile to JVM
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm) # compile to WASM
