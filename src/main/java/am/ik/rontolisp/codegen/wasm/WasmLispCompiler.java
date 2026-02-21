@@ -173,7 +173,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (capturedVars.contains(paramName)) {
 					Integer slot = funcCtx.locals.get(paramName);
 					if (slot != null) {
-						WasmExprCompiler.emitBoxLocal(funcCtx, slot);
+						WasmEmitHelper.emitBoxLocal(funcCtx, slot);
 					}
 				}
 			}
@@ -262,7 +262,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (capturedVars.contains(paramName)) {
 					Integer slot = lambdaCtx.locals.get(paramName);
 					if (slot != null) {
-						WasmExprCompiler.emitBoxLocal(lambdaCtx, slot);
+						WasmEmitHelper.emitBoxLocal(lambdaCtx, slot);
 					}
 				}
 			}

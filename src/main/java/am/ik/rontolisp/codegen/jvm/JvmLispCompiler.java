@@ -185,7 +185,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (capturedVars.contains(paramName)) {
 					Integer slot = funcCtx.locals.get(paramName);
 					if (slot != null) {
-						JvmExprCompiler.emitBoxLocal(funcCtx, slot);
+						JvmEmitHelper.emitBoxLocal(funcCtx, slot);
 					}
 				}
 			}
@@ -248,7 +248,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (capturedVars.contains(paramName)) {
 					Integer slot = lambdaCtx.locals.get(paramName);
 					if (slot != null) {
-						JvmExprCompiler.emitBoxLocal(lambdaCtx, slot);
+						JvmEmitHelper.emitBoxLocal(lambdaCtx, slot);
 					}
 				}
 			}
