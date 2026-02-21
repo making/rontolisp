@@ -38,6 +38,8 @@ The `compiler` package contains `LispCompiler` (shared interface) and `FreeVarAn
 
 - **JVM Class Version 50 (Java 6)**: Avoids mandatory StackMapTable (required from version 51+). Runs on all modern JVMs.
 - **WASM function types outside rec group**: wasmtime's WASI host requires plain `(func ...)` types for imports. Only the cons struct goes inside a rec group.
+- **Type predicates: symbolp/stringp in compilers**: Quoted symbols and string literals share the same runtime representation (JVM: `String`, WASM: string struct). They are distinguished by the leading `"` character: string literals include surrounding quotes (e.g., `"\"hello\""`), quoted symbols do not (e.g., `"foo"`). The `charAt(0) == '"'` convention is used to differentiate them.
+- **Type predicates: consp in JVM compiler**: Both cons cells and function references use `Object[]` at runtime. Cons cells have `arr[0]` as a Lisp value, while function references have `arr[0]` as `Integer` (funcId). The `arr[0] instanceof Integer` check distinguishes them.
 - **Three-pass compilation** (both compilers): Pass 1 collects defuns. Pass 2a compiles defun bodies, 2b compiles top-level, 2c iteratively compiles lambda bodies. Top-level must compile before lambda iteration.
 - **WASM tests use Testcontainers**: wasmtime with wasm-GC support runs in Docker. JVM tests use in-process `URLClassLoader`.
 

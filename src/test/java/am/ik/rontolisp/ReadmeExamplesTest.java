@@ -230,6 +230,46 @@ class ReadmeExamplesTest {
 			assertThat(evalAll("(defun square (x) (* x x)) (funcall square 5)")).isEqualTo(new LispInteger(25));
 		}
 
+		@Test
+		void atom() {
+			assertThat(eval("(atom 1)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void numberp() {
+			assertThat(eval("(numberp 42)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void integerp() {
+			assertThat(eval("(integerp 42)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void floatp() {
+			assertThat(eval("(floatp 3.14)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void symbolp() {
+			assertThat(eval("(symbolp 'foo)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void stringp() {
+			assertThat(eval("(stringp \"hello\")")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void listp() {
+			assertThat(eval("(listp '(1 2))")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void consp() {
+			assertThat(eval("(consp '(1 2))")).isSameAs(LispTrue.INSTANCE);
+		}
+
 	}
 
 	// == First-class function examples (First-Class Functions section) ==

@@ -88,6 +88,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant consToStringMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(consToStringName, consToStringDescUtf));
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		MethodrefConstant stringCharAt = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
@@ -147,8 +149,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			Ctx funcCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
 					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass,
-					doubleValueOf, numberClass, numberDoubleValue, functions, lambdaDecls, indirectCallArities,
-					nextFuncId);
+					doubleValueOf, numberClass, numberDoubleValue, stringClass, stringCharAt, functions, lambdaDecls,
+					indirectCallArities, nextFuncId);
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -180,7 +182,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Pass 2b: Compile top-level expressions as main() body
 		Ctx mainCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
 				objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass, doubleValueOf,
-				numberClass, numberDoubleValue, functions, lambdaDecls, indirectCallArities, nextFuncId);
+				numberClass, numberDoubleValue, stringClass, stringCharAt, functions, lambdaDecls, indirectCallArities,
+				nextFuncId);
 		for (LispVal expr : topLevelExprs) {
 			compileExpr(expr, mainCtx);
 			mainCtx.emit(Opcode.POP);
@@ -206,8 +209,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Ctx lambdaCtx = createCtx(cp, systemOut, printlnStr, lispToStringMethod, longClass, longValueOf, longValue,
 					objectClass, objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass,
-					doubleValueOf, numberClass, numberDoubleValue, functions, lambdaDecls, indirectCallArities,
-					nextFuncId);
+					doubleValueOf, numberClass, numberDoubleValue, stringClass, stringCharAt, functions, lambdaDecls,
+					indirectCallArities, nextFuncId);
 			lambdaCtx.closureEnvSlot = 0; // slot 0 = env Object[]
 			// Lambda params start at slot 1
 			for (int i = 0; i < lambda.paramNames.size(); i++) {
@@ -344,11 +347,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			MethodrefConstant longValue, ClassConstant objectClass, ClassConstant objectArrayClass,
 			ClassConstant integerClass, MethodrefConstant integerValueOf, MethodrefConstant integerValue,
 			ClassConstant doubleClass, MethodrefConstant doubleValueOf, ClassConstant numberClass,
-			MethodrefConstant numberDoubleValue, Map<String, FunctionInfo> functions, List<LambdaInfo> lambdaDecls,
-			Set<Integer> indirectCallArities, int[] nextFuncId) {
+			MethodrefConstant numberDoubleValue, ClassConstant stringClass, MethodrefConstant stringCharAt,
+			Map<String, FunctionInfo> functions, List<LambdaInfo> lambdaDecls, Set<Integer> indirectCallArities,
+			int[] nextFuncId) {
 		Ctx ctx = new Ctx(cp, systemOut, printlnStr, lispToString, longClass, longValueOf, longValue, objectClass,
 				objectArrayClass, integerClass, integerValueOf, integerValue, doubleClass, doubleValueOf, numberClass,
-				numberDoubleValue);
+				numberDoubleValue, stringClass, stringCharAt);
 		ctx.functions = functions;
 		ctx.lambdaDecls = lambdaDecls;
 		ctx.indirectCallArities = indirectCallArities;
@@ -477,6 +481,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				case "cdr" -> compileCdrBuiltin(cons, ctx);
 				case "cons" -> compileConsBuiltin(cons, ctx);
 				case "funcall" -> compileFuncallBuiltin(cons, ctx);
+				case "null" -> compileNullPredicate(cons, ctx);
+				case "atom" -> compileAtom(cons, ctx);
+				case "numberp" -> compileNumberp(cons, ctx);
+				case "integerp" -> compileIntegerp(cons, ctx);
+				case "floatp" -> compileFloatp(cons, ctx);
+				case "symbolp" -> compileSymbolp(cons, ctx);
+				case "stringp" -> compileStringp(cons, ctx);
+				case "listp" -> compileListp(cons, ctx);
+				case "consp" -> compileConsp(cons, ctx);
 				default -> {
 					if (ctx.locals.containsKey(sym.name()) || ctx.captures.containsKey(sym.name())) {
 						compileIndirectCall(sym.name(), cons, ctx);
@@ -957,6 +970,259 @@ public final class JvmLispCompiler implements LispCompiler {
 		emitDispatchCall(arity, ctx);
 	}
 
+	/**
+	 * Converts an i32 (0=false, non-0=true) on the JVM stack into a Lisp boolean
+	 * (null=nil or Long(1)=t).
+	 */
+	private void emitBoolFromInt(Ctx ctx) {
+		int ifPos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		patchBranch(ctx, ifPos, ctx.code.size());
+		compileLong(1, ctx);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	private void compileNullPredicate(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		patchBranch(ctx, ifNullPos, ctx.code.size());
+		compileLong(1, ctx);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	private void compileIntegerp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.longClass.index());
+		emitBoolFromInt(ctx);
+	}
+
+	private void compileFloatp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.doubleClass.index());
+		emitBoolFromInt(ctx);
+	}
+
+	private void compileNumberp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.numberClass.index());
+		emitBoolFromInt(ctx);
+	}
+
+	private void compileConsp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// Check instanceof Object[]
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		int ifNotArrayPos = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		// It is an Object[]; check if arr[0] instanceof Integer (function ref)
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.integerClass.index());
+		int ifFuncRefPos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		// Not a function ref => it's a cons cell => true
+		compileLong(1, ctx);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		// false label
+		patchBranch(ctx, ifNotArrayPos, ctx.code.size());
+		patchBranch(ctx, ifFuncRefPos, ctx.code.size());
+		ctx.emit(Opcode.ACONST_NULL);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	private void compileAtom(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// Check instanceof Object[]
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		int ifNotArrayPos = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		// It is an Object[]; check if arr[0] instanceof Integer (function ref)
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.integerClass.index());
+		int ifFuncRefPos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		// Not a function ref => it's a cons cell => not atom => false
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		// true label (not array, or function ref => atom)
+		patchBranch(ctx, ifNotArrayPos, ctx.code.size());
+		patchBranch(ctx, ifFuncRefPos, ctx.code.size());
+		compileLong(1, ctx);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	private void compileListp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// Check null (nil => list => true)
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
+		// Check instanceof Object[]
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		int ifNotArrayPos = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		// It is an Object[]; check if arr[0] instanceof Integer (function ref)
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.integerClass.index());
+		int ifFuncRefPos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		// true label (null or cons cell)
+		patchBranch(ctx, ifNullPos, ctx.code.size());
+		compileLong(1, ctx);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		// false label (not array, or function ref)
+		patchBranch(ctx, ifNotArrayPos, ctx.code.size());
+		patchBranch(ctx, ifFuncRefPos, ctx.code.size());
+		ctx.emit(Opcode.ACONST_NULL);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	private void compileStringp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// Check instanceof String
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.stringClass.index());
+		int ifNotStringPos = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		// Check charAt(0) == '"' (34)
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.stringCharAt.index());
+		emitIntConst(ctx, 34);
+		int ifNotQuotePos = ctx.code.size();
+		ctx.emit(Opcode.IF_ICMPNE);
+		ctx.emitU2(0);
+		// true: it's a string literal
+		compileLong(1, ctx);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		// false
+		patchBranch(ctx, ifNotStringPos, ctx.code.size());
+		patchBranch(ctx, ifNotQuotePos, ctx.code.size());
+		ctx.emit(Opcode.ACONST_NULL);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	private void compileSymbolp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// Check instanceof String
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.stringClass.index());
+		int ifNotStringPos = ctx.code.size();
+		ctx.emit(Opcode.IFEQ);
+		ctx.emitU2(0);
+		// Check charAt(0) != '"' (34) => it's a symbol
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.stringCharAt.index());
+		emitIntConst(ctx, 34);
+		int ifQuotePos = ctx.code.size();
+		ctx.emit(Opcode.IF_ICMPEQ);
+		ctx.emitU2(0);
+		// true: it's a symbol (String but not starting with ")
+		compileLong(1, ctx);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		// false
+		patchBranch(ctx, ifNotStringPos, ctx.code.size());
+		patchBranch(ctx, ifQuotePos, ctx.code.size());
+		ctx.emit(Opcode.ACONST_NULL);
+		patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
 	private void unboxLong(Ctx ctx) {
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.longClass.index());
@@ -1432,6 +1698,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant numberDoubleValue;
 
+		final ClassConstant stringClass;
+
+		final MethodrefConstant stringCharAt;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -1460,7 +1730,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
 				ClassConstant objectClass, ClassConstant objectArrayClass, ClassConstant integerClass,
 				MethodrefConstant integerValueOf, MethodrefConstant integerValue, ClassConstant doubleClass,
-				MethodrefConstant doubleValueOf, ClassConstant numberClass, MethodrefConstant numberDoubleValue) {
+				MethodrefConstant doubleValueOf, ClassConstant numberClass, MethodrefConstant numberDoubleValue,
+				ClassConstant stringClass, MethodrefConstant stringCharAt) {
 			this.cp = cp;
 			this.systemOut = systemOut;
 			this.printlnStr = printlnStr;
@@ -1477,6 +1748,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.doubleValueOf = doubleValueOf;
 			this.numberClass = numberClass;
 			this.numberDoubleValue = numberDoubleValue;
+			this.stringClass = stringClass;
+			this.stringCharAt = stringCharAt;
 		}
 
 		void emit(int opcode) {

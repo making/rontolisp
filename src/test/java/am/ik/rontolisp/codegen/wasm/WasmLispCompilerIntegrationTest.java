@@ -329,6 +329,63 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nullPredicate() throws Exception {
+		assertThat(compileAndRun("(print (if (null nil) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (null 1) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void atom() throws Exception {
+		assertThat(compileAndRun("(print (if (atom 1) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (atom '(1 2)) 42 99))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (if (atom nil) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void numberp() throws Exception {
+		assertThat(compileAndRun("(print (if (numberp 42) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (numberp 3.14) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (numberp \"hello\") 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void integerp() throws Exception {
+		assertThat(compileAndRun("(print (if (integerp 42) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (integerp 3.14) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void floatp() throws Exception {
+		assertThat(compileAndRun("(print (if (floatp 3.14) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (floatp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void symbolp() throws Exception {
+		assertThat(compileAndRun("(print (if (symbolp 'foo) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (symbolp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void stringp() throws Exception {
+		assertThat(compileAndRun("(print (if (stringp \"hello\") 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (stringp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void listp() throws Exception {
+		assertThat(compileAndRun("(print (if (listp '(1 2)) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (listp nil) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (listp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void consp() throws Exception {
+		assertThat(compileAndRun("(print (if (consp '(1 2)) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (consp nil) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
 	void doubleLiteral() throws Exception {
 		assertThat(compileAndRun("(print 3.14)")).isEqualTo("3.14");
 	}

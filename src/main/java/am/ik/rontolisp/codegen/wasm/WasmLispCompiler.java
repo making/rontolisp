@@ -555,6 +555,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				case "cdr" -> compileCdr(cons, ctx);
 				case "cons" -> compileConsBuiltin(cons, ctx);
 				case "funcall" -> compileFuncall(cons, ctx);
+				case "null" -> compileNullPredicate(cons, ctx);
+				case "atom" -> compileAtom(cons, ctx);
+				case "numberp" -> compileNumberp(cons, ctx);
+				case "integerp" -> compileIntegerp(cons, ctx);
+				case "floatp" -> compileFloatp(cons, ctx);
+				case "symbolp" -> compileSymbolp(cons, ctx);
+				case "stringp" -> compileStringp(cons, ctx);
+				case "listp" -> compileListp(cons, ctx);
+				case "consp" -> compileConsp(cons, ctx);
 				default -> {
 					// Check if the symbol is a local/capture (indirect call) or a
 					// known function (direct call)
@@ -618,6 +627,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			castI31GetS(ctx);
 			ctx.writer.write(i32Opcode);
 		}
+		emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * Converts an i32 (0=false, non-0=true) on the WASM stack into a Lisp boolean
+	 * (ref.null eq = nil, or i31ref(1) = t).
+	 */
+	private void emitBoolFromI32(Ctx ctx) {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
@@ -1016,6 +1033,145 @@ public final class WasmLispCompiler implements LispCompiler {
 		compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(TYPE_CONS);
+	}
+
+	private void compileNullPredicate(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileIntegerp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileFloatp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_FLOAT);
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileConsp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_CONS);
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileAtom(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_CONS);
+		ctx.writer.write(Instruction.I32_EQZ);
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileNumberp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_FLOAT);
+		ctx.writer.write(Instruction.I32_OR);
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileListp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_CONS);
+		ctx.writer.write(Instruction.I32_OR);
+		emitBoolFromI32(ctx);
+	}
+
+	private void compileStringp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// It is a string struct; check if first byte is '"'
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(TYPE_STRING);
+		ctx.writer.writeSignedLeb128(0); // field 0: offset
+		ctx.writer.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(34); // '"'
+		ctx.writer.write(Instruction.I32_EQ);
+		emitBoolFromI32(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.END);
+	}
+
+	private void compileSymbolp(LispCons cons, Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		compileExpr(args.get(1), ctx);
+		int tmpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// It is a string struct; check if first byte is NOT '"'
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(TYPE_STRING);
+		ctx.writer.writeSignedLeb128(0); // field 0: offset
+		ctx.writer.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(34); // '"'
+		ctx.writer.write(Instruction.I32_NE);
+		emitBoolFromI32(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.END);
 	}
 
 	private void compileLambdaCall(LispCons lambda, LispCons call, Ctx ctx) {

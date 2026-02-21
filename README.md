@@ -173,6 +173,14 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `>=` | `(>= 2 1)` | `t` |
 | `print` | `(print 42)` | Prints `42` with a newline |
 | `null` | `(null nil)` | `t` |
+| `atom` | `(atom 1)` | `t` |
+| `numberp` | `(numberp 42)` | `t` |
+| `integerp` | `(integerp 42)` | `t` |
+| `floatp` | `(floatp 3.14)` | `t` |
+| `symbolp` | `(symbolp 'foo)` | `t` |
+| `stringp` | `(stringp "hello")` | `t` |
+| `listp` | `(listp '(1 2))` | `t` |
+| `consp` | `(consp '(1 2))` | `t` |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1` |
 | `cdr` | `(cdr (cons 1 2))` | `2` |
@@ -231,6 +239,7 @@ Functions are first-class values in all three execution modes. They can be passe
 | Recursion | Yes | Yes | Yes |
 | String values | Yes | Yes | Yes |
 | `cons` / `car` / `cdr` / `list` | Yes | Yes | Yes |
+| Type predicates (`atom`, `numberp`, `integerp`, `floatp`, `symbolp`, `stringp`, `listp`, `consp`) | Yes | Yes | Yes |
 | `funcall` | Yes | Yes | Yes |
 | First-class functions | Yes | Yes | Yes |
 | Closures (capture by reference) | Yes | Yes | Yes |

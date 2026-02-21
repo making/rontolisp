@@ -199,6 +199,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTypePredicates() {
+		// atom
+		assertThat(eval("(atom 1)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(atom '(1 2))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(atom nil)")).isSameAs(LispTrue.INSTANCE);
+		// numberp
+		assertThat(eval("(numberp 42)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(numberp 3.14)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(numberp \"hello\")")).isSameAs(LispNil.INSTANCE);
+		// integerp
+		assertThat(eval("(integerp 42)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(integerp 3.14)")).isSameAs(LispNil.INSTANCE);
+		// floatp
+		assertThat(eval("(floatp 3.14)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(floatp 42)")).isSameAs(LispNil.INSTANCE);
+		// symbolp
+		assertThat(eval("(symbolp 'foo)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(symbolp 42)")).isSameAs(LispNil.INSTANCE);
+		// stringp
+		assertThat(eval("(stringp \"hello\")")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(stringp 42)")).isSameAs(LispNil.INSTANCE);
+		// listp
+		assertThat(eval("(listp '(1 2))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(listp nil)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(listp 42)")).isSameAs(LispNil.INSTANCE);
+		// consp
+		assertThat(eval("(consp '(1 2))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(consp nil)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalDoubleLiteral() {
 		assertThat(eval("3.14")).isEqualTo(new LispDouble(3.14));
 	}

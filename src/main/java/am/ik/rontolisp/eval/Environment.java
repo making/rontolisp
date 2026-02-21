@@ -10,6 +10,8 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Scope;
@@ -199,6 +201,40 @@ public final class Environment implements Scope {
 		env.define("null", new LispFunction("null", args -> {
 			requireArgCount("null", args, 1);
 			return args.get(0) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("atom", new LispFunction("atom", args -> {
+			requireArgCount("atom", args, 1);
+			return !(args.get(0) instanceof LispCons) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("numberp", new LispFunction("numberp", args -> {
+			requireArgCount("numberp", args, 1);
+			LispVal arg = args.get(0);
+			return (arg instanceof LispInteger || arg instanceof LispDouble) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("integerp", new LispFunction("integerp", args -> {
+			requireArgCount("integerp", args, 1);
+			return args.get(0) instanceof LispInteger ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("floatp", new LispFunction("floatp", args -> {
+			requireArgCount("floatp", args, 1);
+			return args.get(0) instanceof LispDouble ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("symbolp", new LispFunction("symbolp", args -> {
+			requireArgCount("symbolp", args, 1);
+			return args.get(0) instanceof LispSymbol ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("stringp", new LispFunction("stringp", args -> {
+			requireArgCount("stringp", args, 1);
+			return args.get(0) instanceof LispString ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("listp", new LispFunction("listp", args -> {
+			requireArgCount("listp", args, 1);
+			LispVal arg = args.get(0);
+			return (arg instanceof LispCons || arg instanceof LispNil) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define("consp", new LispFunction("consp", args -> {
+			requireArgCount("consp", args, 1);
+			return args.get(0) instanceof LispCons ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
 

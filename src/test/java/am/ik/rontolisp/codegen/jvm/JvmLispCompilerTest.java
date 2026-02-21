@@ -360,6 +360,63 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunNullPredicate() throws Exception {
+		assertThat(compileAndRun("(print (if (null nil) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (null 1) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunAtom() throws Exception {
+		assertThat(compileAndRun("(print (if (atom 1) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (atom '(1 2)) 42 99))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (if (atom nil) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunNumberp() throws Exception {
+		assertThat(compileAndRun("(print (if (numberp 42) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (numberp 3.14) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (numberp \"hello\") 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunIntegerp() throws Exception {
+		assertThat(compileAndRun("(print (if (integerp 42) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (integerp 3.14) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunFloatp() throws Exception {
+		assertThat(compileAndRun("(print (if (floatp 3.14) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (floatp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunSymbolp() throws Exception {
+		assertThat(compileAndRun("(print (if (symbolp 'foo) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (symbolp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunStringp() throws Exception {
+		assertThat(compileAndRun("(print (if (stringp \"hello\") 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (stringp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunListp() throws Exception {
+		assertThat(compileAndRun("(print (if (listp '(1 2)) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (listp nil) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (listp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunConsp() throws Exception {
+		assertThat(compileAndRun("(print (if (consp '(1 2)) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (consp nil) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
 	void compileAndRunDoubleLiteral() throws Exception {
 		assertThat(compileAndRun("(print 3.14)")).isEqualTo("3.14");
 	}
