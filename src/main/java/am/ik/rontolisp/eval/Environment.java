@@ -203,6 +203,10 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.NULL, args, 1);
 			return args.get(0) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		env.define(LispNames.NOT, new LispFunction(LispNames.NOT, args -> {
+			requireArgCount(LispNames.NOT, args, 1);
+			return args.get(0) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
 		env.define(LispNames.ATOM, new LispFunction(LispNames.ATOM, args -> {
 			requireArgCount(LispNames.ATOM, args, 1);
 			return !(args.get(0) instanceof LispCons) ? LispTrue.INSTANCE : LispNil.INSTANCE;

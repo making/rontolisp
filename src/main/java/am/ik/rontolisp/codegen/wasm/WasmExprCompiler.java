@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -133,6 +134,10 @@ final class WasmExprCompiler {
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
+				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
+				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
+				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
+				case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
 				default -> WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
 			}
 		}

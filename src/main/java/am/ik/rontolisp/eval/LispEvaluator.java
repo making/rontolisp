@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -65,6 +66,12 @@ public final class LispEvaluator {
 					return evalLambdaForm(cons, env);
 				case LispNames.FUNCALL:
 					return evalFuncall(cons, env);
+				case LispNames.COND:
+					return eval(LispMacroExpander.expandCond(cons), env);
+				case LispNames.AND:
+					return eval(LispMacroExpander.expandAnd(cons), env);
+				case LispNames.OR:
+					return eval(LispMacroExpander.expandOr(cons), env);
 			}
 		}
 		// Function application
