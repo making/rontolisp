@@ -157,6 +157,14 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value)` | Assign a value to a variable |
 
+### Macros
+
+| Macro | Syntax | Description |
+|-------|--------|-------------|
+| `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
+| `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
+| `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
+
 ### Built-in Functions
 
 | Function | Example | Result |
@@ -173,6 +181,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `>=` | `(>= 2 1)` | `t` |
 | `print` | `(print 42)` | Prints `42` with a newline |
 | `null` | `(null nil)` | `t` |
+| `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |
 | `numberp` | `(numberp 42)` | `t` |
 | `integerp` | `(integerp 42)` | `t` |
@@ -239,6 +248,7 @@ Functions are first-class values in all three execution modes. They can be passe
 | Recursion | Yes | Yes | Yes |
 | String values | Yes | Yes | Yes |
 | `cons` / `car` / `cdr` / `list` | Yes | Yes | Yes |
+| Logical operators (`cond`, `and`, `or`, `not`) | Yes | Yes | Yes |
 | Type predicates (`atom`, `numberp`, `integerp`, `floatp`, `symbolp`, `stringp`, `listp`, `consp`) | Yes | Yes | Yes |
 | `funcall` | Yes | Yes | Yes |
 | First-class functions | Yes | Yes | Yes |

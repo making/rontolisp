@@ -132,3 +132,22 @@
 
 ; Double nested arithmetic
 (print (+ (* 2.0 3.0) (- 10.0 4.0)))
+
+; cond
+(print (cond (nil 1) (t 2)))
+(print (cond (nil 1) (nil 2) (t 3)))
+(print (cond ((= 1 2) 10) ((= 1 1) 20) (t 30)))
+
+; Logical operators: and, or, not
+(print (if (and) 42 99))
+(print (if (and t) 42 99))
+(print (if (and nil) 42 99))
+(print (if (and 1 2 3) 42 99))
+(print (if (and 1 nil 3) 42 99))
+(print (if (or) 42 99))
+(print (if (or nil) 42 99))
+(print (if (or t) 42 99))
+(print (if (or nil nil 3) 42 99))
+(print (if (or nil nil nil) 42 99))
+(print (if (not nil) 42 99))
+(print (if (not 1) 42 99))

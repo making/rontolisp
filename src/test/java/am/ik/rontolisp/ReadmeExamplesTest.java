@@ -215,6 +215,11 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void notPredicate() {
+			assertThat(eval("(not nil)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
 		void cons() {
 			assertThat(eval("(car (cons 1 2))")).isEqualTo(new LispInteger(1));
 			assertThat(eval("(cdr (cons 1 2))")).isEqualTo(new LispInteger(2));
@@ -307,6 +312,32 @@ class ReadmeExamplesTest {
 					(print (apply-twice (lambda (x) (+ x 10)) 5))
 					""");
 			assertThat(output).isEqualTo("25");
+		}
+
+	}
+
+	// == Macro examples (Language Reference > Macros table) ==
+
+	@Nested
+	class MacroExamples {
+
+		@Test
+		void cond() {
+			assertThat(evalAll("(cond (nil 1) (t 2))")).isEqualTo(new LispInteger(2));
+		}
+
+		@Test
+		void and() {
+			assertThat(eval("(and)")).isSameAs(LispTrue.INSTANCE);
+			assertThat(eval("(and 1 2 3)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(and 1 nil 3)")).isSameAs(LispNil.INSTANCE);
+		}
+
+		@Test
+		void or() {
+			assertThat(eval("(or)")).isSameAs(LispNil.INSTANCE);
+			assertThat(eval("(or nil nil 3)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(or nil nil nil)")).isSameAs(LispNil.INSTANCE);
 		}
 
 	}

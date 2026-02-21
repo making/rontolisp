@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -115,6 +116,10 @@ final class JvmExprCompiler {
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
 				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
+				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
+				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
+				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
+				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
 				default -> JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
 			}
 		}

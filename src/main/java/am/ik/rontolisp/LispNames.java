@@ -54,6 +54,15 @@ public final class LispNames {
 
 	public static final String LIST = "list";
 
+	// Logical operators
+	public static final String COND = "cond";
+
+	public static final String AND = "and";
+
+	public static final String OR = "or";
+
+	public static final String NOT = "not";
+
 	// Type predicates
 	public static final String NULL = "null";
 

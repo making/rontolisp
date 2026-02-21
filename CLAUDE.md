@@ -15,6 +15,7 @@ Three execution modes share a common frontend (reader) and AST:
 ```
 Source string
   -> LispReader (reader pkg) -> List<LispVal> (AST)
+    -> [LispMacroExpander] -> expanded AST               # macro expansion (cond/and/or -> if/let/progn)
     -> LispEvaluator (eval pkg)                          # interpret
     -> JvmLispCompiler (codegen.jvm) -> byte[] (.class)  # compile to JVM
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm) # compile to WASM
@@ -58,6 +59,17 @@ When adding a new built-in function or special form:
 1. **Environment.java**: Add in `createGlobal()` using `env.define("name", new LispFunction(...))`.
 2. **JVM compiler**: Create `Jvm<Name>Compiler.java`, add case in `JvmExprCompiler.compileCons()`.
 3. **WASM compiler**: Create `Wasm<Name>Compiler.java`, add case in `WasmExprCompiler.compileCons()`. Use `WasmEmitHelper.castI31GetS()` to unbox to `i32` and `ref.i31` to re-box.
+
+### Adding a New Macro
+
+Macros expand into existing primitives (`if`, `let`, `progn`) at the AST level. `LispMacroExpander` (in `am.ik.rontolisp` package) is shared by the evaluator and both compilers.
+
+1. **LispMacroExpander.java**: Add a `public static LispVal expand<Name>(LispCons cons)` method that returns the expanded AST.
+2. **LispEvaluator.java**: Add case in `evalCons()` switch: `return eval(LispMacroExpander.expand<Name>(cons), env);`
+3. **JvmExprCompiler.java**: Add case: `JvmExprCompiler.compileExpr(LispMacroExpander.expand<Name>(cons), ctx, className);`
+4. **WasmExprCompiler.java**: Add case: `WasmExprCompiler.compileExpr(LispMacroExpander.expand<Name>(cons), ctx);`
+
+No per-compiler class is needed since macros reuse existing compilation paths.
 
 ### Adding a New Special Form
 
