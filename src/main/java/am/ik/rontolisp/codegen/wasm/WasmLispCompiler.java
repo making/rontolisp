@@ -12,6 +12,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -103,7 +104,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
 		for (LispVal expr : program) {
-			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym && "defun".equals(sym.name())) {
+			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+					&& LispNames.DEFUN.equals(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				String funcName = ((LispSymbol) parts.get(1)).name();
 				LispVal paramsVal = parts.get(2);
@@ -474,10 +476,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean isSetqLambda(LispVal expr) {
-		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym && "setq".equals(sym.name())) {
+		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& LispNames.SETQ.equals(sym.name())) {
 			List<LispVal> parts = cons.toList();
 			if (parts.size() == 3 && parts.get(1) instanceof LispSymbol && parts.get(2) instanceof LispCons valueCons
-					&& valueCons.car() instanceof LispSymbol lambdaSym && "lambda".equals(lambdaSym.name())) {
+					&& valueCons.car() instanceof LispSymbol lambdaSym && LispNames.LAMBDA.equals(lambdaSym.name())) {
 				return true;
 			}
 		}

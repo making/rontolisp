@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -93,46 +94,50 @@ final class WasmExprCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case "+" -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD);
-				case "-" -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB);
-				case "*" -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_MUL, Instruction.F64_MUL);
-				case "/" -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV);
-				case "mod" -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1);
-				case "=" -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
-				case "<" -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
-				case ">" -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
-				case "<=" -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
-				case ">=" -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
-				case "print" -> WasmPrintCompiler.compile(cons, ctx);
-				case "quote" -> WasmQuoteCompiler.compile(cons, ctx);
-				case "if" -> WasmIfCompiler.compile(cons, ctx);
-				case "let" -> WasmLetCompiler.compile(cons, ctx);
-				case "progn" -> WasmPrognCompiler.compile(cons, ctx);
-				case "setq" -> WasmSetqCompiler.compile(cons, ctx);
-				case "lambda" -> WasmLambdaCompiler.compileValue(cons, ctx);
-				case "defun" -> {
+				case LispNames.ADD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD);
+				case LispNames.SUB -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB);
+				case LispNames.MUL -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_MUL, Instruction.F64_MUL);
+				case LispNames.DIV -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV);
+				case LispNames.MOD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1);
+				case LispNames.EQ -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
+				case LispNames.LT ->
+					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
+				case LispNames.GT ->
+					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
+				case LispNames.LE ->
+					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
+				case LispNames.GE ->
+					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
+				case LispNames.PRINT -> WasmPrintCompiler.compile(cons, ctx);
+				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
+				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
+				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);
+				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
+				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
+				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
+				case LispNames.DEFUN -> {
 					ctx.writer.write(Instruction.REF_NULL);
 					ctx.writer.writeHeapType(Type.EQ.code());
 				}
-				case "list" -> WasmListCompiler.compile(cons, ctx);
-				case "car" -> WasmCarCompiler.compile(cons, ctx);
-				case "cdr" -> WasmCdrCompiler.compile(cons, ctx);
-				case "cons" -> WasmConsCompiler.compile(cons, ctx);
-				case "funcall" -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
-				case "null" -> WasmNullPredCompiler.compile(cons, ctx);
-				case "atom" -> WasmAtomCompiler.compile(cons, ctx);
-				case "numberp" -> WasmNumberpCompiler.compile(cons, ctx);
-				case "integerp" -> WasmIntegerpCompiler.compile(cons, ctx);
-				case "floatp" -> WasmFloatpCompiler.compile(cons, ctx);
-				case "symbolp" -> WasmSymbolpCompiler.compile(cons, ctx);
-				case "stringp" -> WasmStringpCompiler.compile(cons, ctx);
-				case "listp" -> WasmListpCompiler.compile(cons, ctx);
-				case "consp" -> WasmConspCompiler.compile(cons, ctx);
+				case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
+				case LispNames.CAR -> WasmCarCompiler.compile(cons, ctx);
+				case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
+				case LispNames.CONS -> WasmConsCompiler.compile(cons, ctx);
+				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
+				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
+				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);
+				case LispNames.NUMBERP -> WasmNumberpCompiler.compile(cons, ctx);
+				case LispNames.INTEGERP -> WasmIntegerpCompiler.compile(cons, ctx);
+				case LispNames.FLOATP -> WasmFloatpCompiler.compile(cons, ctx);
+				case LispNames.SYMBOLP -> WasmSymbolpCompiler.compile(cons, ctx);
+				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
+				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
+				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
 				default -> WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
 			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
-				&& "lambda".equals(headSym.name())) {
+				&& LispNames.LAMBDA.equals(headSym.name())) {
 			WasmLambdaCompiler.compileCall(headCons, cons, ctx);
 		}
 		else {
