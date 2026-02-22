@@ -121,6 +121,7 @@ final class WasmExprCompiler {
 				case LispNames.CAR -> WasmCarCompiler.compile(cons, ctx);
 				case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
 				case LispNames.CONS -> WasmConsCompiler.compile(cons, ctx);
+				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);

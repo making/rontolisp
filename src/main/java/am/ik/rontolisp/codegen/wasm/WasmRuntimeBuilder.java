@@ -19,6 +19,60 @@ final class WasmRuntimeBuilder {
 	private WasmRuntimeBuilder() {
 	}
 
+	/**
+	 * Builds the _append helper function body. Takes two (ref null eq) args, returns (ref
+	 * null eq). If a is null, returns b. Otherwise, creates struct.new cons(a.car,
+	 * _append(a.cdr, b)).
+	 */
+	static byte[] buildAppendBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		w.write(0); // 0 extra locals
+
+		// if a is null, return b
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0); // a
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1); // b
+		w.write(Instruction.ELSE);
+
+		// a.car
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0); // field 0: car
+
+		// _append(a.cdr, b)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1); // field 1: cdr
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1); // b
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPEND);
+
+		// struct.new cons(car, result)
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+
+		w.write(Instruction.END); // end if
+
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st) {
 		// Collect all functions with matching arity

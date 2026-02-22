@@ -52,6 +52,8 @@ public final class LispNames {
 
 	public static final String LIST = "list";
 
+	public static final String APPEND = "append";
+
 	// Macros
 	public static final String DEFUN = "defun";
 

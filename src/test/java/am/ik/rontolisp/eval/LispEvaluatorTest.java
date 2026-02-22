@@ -230,6 +230,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalAppend() {
+		assertThat(eval("(append)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(append '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(append '(1 2) '(3 4))").print()).isEqualTo("(1 2 3 4)");
+		assertThat(eval("(append nil '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(append '(1 2) nil)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(append '(1) '(2) '(3))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(append '(1 2) 3)").print()).isEqualTo("(1 2 . 3)");
+	}
+
+	@Test
 	void evalDoubleLiteral() {
 		assertThat(eval("3.14")).isEqualTo(new LispDouble(3.14));
 	}

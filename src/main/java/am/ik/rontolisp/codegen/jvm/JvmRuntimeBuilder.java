@@ -303,6 +303,51 @@ final class JvmRuntimeBuilder {
 		return code;
 	}
 
+	/**
+	 * Builds bytecode for _append(Object a, Object b). If a is null, returns b.
+	 * Otherwise, creates new Object[]{a[0], _append(a[1], b)}.
+	 */
+	static List<Integer> buildAppendBody(ClassConstant objectArrayClass, ClassConstant objectClass,
+			MethodrefConstant appendMethod) {
+		List<Integer> code = new ArrayList<>();
+		// if (a == null) return b;
+		code.add(Opcode.ALOAD_0);
+		int ifNonnullPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ARETURN);
+		// a is non-null: cast to Object[]
+		patchBranch(code, ifNonnullPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ASTORE_2);
+		// new Object[2]
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.ANEWARRAY);
+		emitU2(code, objectClass.index());
+		// arr[0] = a[0]
+		code.add(Opcode.DUP);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.AASTORE);
+		// arr[1] = _append(a[1], b)
+		code.add(Opcode.DUP);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, appendMethod.index());
+		code.add(Opcode.AASTORE);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
 	static void emitU2(List<Integer> code, int value) {
 		byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
 		code.add((int) bytes[0]);

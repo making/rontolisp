@@ -107,6 +107,7 @@ final class JvmExprCompiler {
 				case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
 				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
 				case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
+				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
