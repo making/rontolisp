@@ -564,4 +564,66 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (cadddr '(1 2 3 4)))")).isEqualTo("4");
 	}
 
+	@Test
+	void compileAndRunRplaca() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (cons 1 2))
+				(rplaca x 10)
+				(print (car x))
+				""")).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunRplacd() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (cons 1 2))
+				(rplacd x 20)
+				(print (cdr x))
+				""")).isEqualTo("20");
+	}
+
+	@Test
+	void compileAndRunSetfCar() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3))
+				(setf (car x) 10)
+				(print (car x))
+				""")).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunSetfCdr() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (cons 1 2))
+				(setf (cdr x) 20)
+				(print (cdr x))
+				""")).isEqualTo("20");
+	}
+
+	@Test
+	void compileAndRunSetfNth() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3))
+				(setf (nth 1 x) 20)
+				(print (nth 1 x))
+				""")).isEqualTo("20");
+	}
+
+	@Test
+	void compileAndRunSetfSecond() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3))
+				(setf (second x) 20)
+				(print (second x))
+				""")).isEqualTo("20");
+	}
+
+	@Test
+	void compileAndRunSetfReturnsValue() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3))
+				(print (setf (car x) 42))
+				""")).isEqualTo("42");
+	}
+
 }

@@ -92,7 +92,16 @@ public final class LispNames {
 	/** The {@code nthcdr} built-in function. */
 	public static final String NTHCDR = "nthcdr";
 
+	/** The {@code rplaca} built-in function. */
+	public static final String RPLACA = "rplaca";
+
+	/** The {@code rplacd} built-in function. */
+	public static final String RPLACD = "rplacd";
+
 	// Macros
+
+	/** The {@code setf} macro. */
+	public static final String SETF = "setf";
 
 	/** The {@code defun} macro. */
 	public static final String DEFUN = "defun";

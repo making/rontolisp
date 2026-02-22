@@ -178,6 +178,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `second` | `(second lst)` | Expands to `(nth 1 lst)` |
 | `third` | `(third lst)` | Expands to `(nth 2 lst)` |
 | `fourth` | `(fourth lst)` | Expands to `(nth 3 lst)` |
+| `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `caXXXr` as places |
 
 ### Built-in Functions
 
@@ -210,6 +211,8 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
+| `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
+| `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
 | `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
 | `min` | `(min 3 5)`, `(min 1.5 2.5)` | `3`, `1.5` |
 | `max` | `(max 3 5)`, `(max 1.5 2.5)` | `5`, `2.5` |
@@ -258,7 +261,7 @@ Functions are first-class values in all three execution modes. They can be passe
 ## Project Structure
 
 ```
-am.ik.rontolisp              -- Lisp data types (sealed interface + records)
+am.ik.rontolisp              -- Lisp data types (sealed interface)
 am.ik.rontolisp.reader       -- Lexer + Parser
 am.ik.rontolisp.eval         -- Tree-walking interpreter + Environment
 am.ik.rontolisp.compiler     -- Shared compiler interface + FreeVarAnalyzer

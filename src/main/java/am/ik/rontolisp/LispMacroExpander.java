@@ -363,6 +363,107 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (setf place value) into the appropriate mutation form.
+	 *
+	 * <pre>
+	 * (setf x val)            -> (setq x val)
+	 * (setf (car x) val)      -> (let ((__setf val)) (rplaca x __setf) __setf)
+	 * (setf (cdr x) val)      -> (let ((__setf val)) (rplacd x __setf) __setf)
+	 * (setf (nth n x) val)    -> (let ((__setf val)) (rplaca (nthcdr n x) __setf) __setf)
+	 * (setf (first x) val)    -> same as (setf (car x) val)
+	 * (setf (second x) val)   -> (let ((__setf val)) (rplaca (nthcdr 1 x) __setf) __setf)
+	 * (setf (third x) val)    -> (let ((__setf val)) (rplaca (nthcdr 2 x) __setf) __setf)
+	 * (setf (fourth x) val)   -> (let ((__setf val)) (rplaca (nthcdr 3 x) __setf) __setf)
+	 * (setf (caXXXr x) val)   -> rplaca/rplacd on nested cdr chain
+	 * </pre>
+	 * @param cons the setf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSetf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal place = parts.get(1);
+		LispVal value = parts.get(2);
+		// (setf x val) -> (setq x val)
+		if (place instanceof LispSymbol) {
+			return listToCons(List.of(new LispSymbol(LispNames.SETQ), place, value));
+		}
+		// (setf (accessor ...) val)
+		if (place instanceof LispCons placeCons) {
+			List<LispVal> placeParts = placeCons.toList();
+			String accessor = ((LispSymbol) placeParts.get(0)).name();
+			return switch (accessor) {
+				case LispNames.CAR, LispNames.FIRST -> expandSetfWithRplaca(placeParts.get(1), value);
+				case LispNames.CDR -> expandSetfWithRplacd(placeParts.get(1), value);
+				case LispNames.NTH -> {
+					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
+					// __setf) __setf)
+					LispVal n = placeParts.get(1);
+					LispVal list = placeParts.get(2);
+					LispVal nthcdrExpr = listToCons(List.of(new LispSymbol(LispNames.NTHCDR), n, list));
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.SECOND -> {
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(1), placeParts.get(1)));
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.THIRD -> {
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(2), placeParts.get(1)));
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				case LispNames.FOURTH -> {
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(3), placeParts.get(1)));
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
+				default -> {
+					if (isCarCdrComposition(accessor)) {
+						yield expandSetfCarCdr(accessor, placeParts.get(1), value);
+					}
+					throw new UnsupportedOperationException("setf does not support place: " + accessor);
+				}
+			};
+		}
+		throw new UnsupportedOperationException("setf expects a symbol or accessor form as place");
+	}
+
+	private static final String SETF_VAR = "__setf";
+
+	private static LispVal expandSetfWithRplaca(LispVal target, LispVal value) {
+		// (let ((__setf value)) (rplaca target __setf) __setf)
+		LispVal rplacaExpr = listToCons(List.of(new LispSymbol(LispNames.RPLACA), target, new LispSymbol(SETF_VAR)));
+		LispVal body = makeProgn(List.of(rplacaExpr, new LispSymbol(SETF_VAR)));
+		return makeLet(SETF_VAR, value, body);
+	}
+
+	private static LispVal expandSetfWithRplacd(LispVal target, LispVal value) {
+		// (let ((__setf value)) (rplacd target __setf) __setf)
+		LispVal rplacdExpr = listToCons(List.of(new LispSymbol(LispNames.RPLACD), target, new LispSymbol(SETF_VAR)));
+		LispVal body = makeProgn(List.of(rplacdExpr, new LispSymbol(SETF_VAR)));
+		return makeLet(SETF_VAR, value, body);
+	}
+
+	private static LispVal expandSetfCarCdr(String accessor, LispVal arg, LispVal value) {
+		// e.g. (setf (cadr x) val) -> (setf (car (cdr x)) val)
+		// The outermost operation (first char after 'c') determines rplaca vs rplacd
+		// The remaining inner operations build the target expression
+		char outerOp = accessor.charAt(1);
+		// Build the inner chain: characters from index 2 to len-2 (right to left)
+		LispVal target = arg;
+		for (int i = accessor.length() - 2; i >= 2; i--) {
+			String op = (accessor.charAt(i) == 'a') ? LispNames.CAR : LispNames.CDR;
+			target = listToCons(List.of(new LispSymbol(op), target));
+		}
+		if (outerOp == 'a') {
+			return expandSetfWithRplaca(target, value);
+		}
+		else {
+			return expandSetfWithRplacd(target, value);
+		}
+	}
+
+	/**
 	 * Expands (defun name (params...) body...) into (setq name (lambda (params...)
 	 * body...)).
 	 *

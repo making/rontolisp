@@ -403,6 +403,61 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRplaca() {
+		assertThat(evalMulti("(setq x (cons 1 2)) (rplaca x 10) (car x)")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalRplacd() {
+		assertThat(evalMulti("(setq x (cons 1 2)) (rplacd x 20) (cdr x)")).isEqualTo(new LispInteger(20));
+	}
+
+	@Test
+	void evalRplacaReturnsCons() {
+		assertThat(evalMulti("(setq x (cons 1 2)) (car (rplaca x 10))")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalSetfSymbol() {
+		assertThat(evalMulti("(setq x 1) (setf x 2) x")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void evalSetfCar() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (car x) 10) (car x)")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalSetfCdr() {
+		assertThat(evalMulti("(setq x (cons 1 2)) (setf (cdr x) 20) (cdr x)")).isEqualTo(new LispInteger(20));
+	}
+
+	@Test
+	void evalSetfNth() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (nth 1 x) 20) (nth 1 x)")).isEqualTo(new LispInteger(20));
+	}
+
+	@Test
+	void evalSetfFirst() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (first x) 10) (first x)")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalSetfSecond() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (second x) 20) (second x)")).isEqualTo(new LispInteger(20));
+	}
+
+	@Test
+	void evalSetfCadr() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (cadr x) 20) (cadr x)")).isEqualTo(new LispInteger(20));
+	}
+
+	@Test
+	void evalSetfReturnsValue() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (setf (car x) 42)")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
 	void evalDoublePrint() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
