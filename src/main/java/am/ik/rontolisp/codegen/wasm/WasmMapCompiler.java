@@ -91,6 +91,8 @@ final class WasmMapCompiler {
 		// tail.cdr = newCons (struct.set)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(tailSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(newConsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
@@ -122,6 +124,8 @@ final class WasmMapCompiler {
 		// Result: head.cdr (cdr of sentinel)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(headSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.writeSignedLeb128(1); // cdr
