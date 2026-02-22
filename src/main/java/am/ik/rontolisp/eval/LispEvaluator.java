@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,6 +31,15 @@ public final class LispEvaluator {
 	 */
 	public LispEvaluator(PrintStream out) {
 		this.globalEnv = Environment.createGlobal(out);
+	}
+
+	/**
+	 * Create a new evaluator with the given output and input streams.
+	 * @param out the output stream for print operations
+	 * @param in the input stream for read operations
+	 */
+	public LispEvaluator(PrintStream out, InputStream in) {
+		this.globalEnv = Environment.createGlobal(out, in);
 	}
 
 	/**

@@ -1,11 +1,15 @@
 package am.ik.rontolisp.eval;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
@@ -627,6 +631,61 @@ class LispEvaluatorTest {
 	@Test
 	void evalBuiltinAsVariable() {
 		assertThat(evalMulti("(setq my-op +) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
+	}
+
+	// read-line / read tests
+
+	private LispVal evalWithStdin(String input, String stdin) {
+		ByteArrayInputStream in = new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8));
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()), in);
+		return evaluator.eval(LispReader.readFromString(input));
+	}
+
+	private LispVal evalMultiWithStdin(String input, String stdin) {
+		ByteArrayInputStream in = new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8));
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()), in);
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal expr : LispReader.readAllFromString(input)) {
+			result = evaluator.eval(expr);
+		}
+		return result;
+	}
+
+	@Test
+	void evalReadLine() {
+		assertThat(evalWithStdin("(read-line)", "hello\n")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void evalReadLineTwoLines() {
+		assertThat(evalMultiWithStdin("(read-line) (read-line)", "hello\nworld\n")).isEqualTo(new LispString("world"));
+	}
+
+	@Test
+	void evalReadLineEof() {
+		assertThat(evalWithStdin("(read-line)", "")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalReadLineIsString() {
+		assertThat(evalWithStdin("(stringp (read-line))", "hello\n")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalReadInteger() {
+		assertThat(evalWithStdin("(read)", "42\n")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalReadList() {
+		LispVal result = evalWithStdin("(read)", "(+ 1 2)\n");
+		assertThat(result).isInstanceOf(LispCons.class);
+		assertThat(result.print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void evalReadEof() {
+		assertThat(evalWithStdin("(read)", "")).isEqualTo(LispNil.INSTANCE);
 	}
 
 }

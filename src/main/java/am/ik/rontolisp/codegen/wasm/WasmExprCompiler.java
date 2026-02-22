@@ -117,6 +117,7 @@ final class WasmExprCompiler {
 				case LispNames.GE ->
 					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
 				case LispNames.PRINT -> WasmPrintCompiler.compile(cons, ctx);
+				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
 				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
 				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
 				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);

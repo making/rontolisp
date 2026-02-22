@@ -197,6 +197,7 @@ public class ByteCodeWriter {
 	 */
 	public ByteCodeWriter writeInterfaces(Consumer<CountingDef<?>> consumer) {
 		final CountingDef<?> def = new CountingDef<>();
+		consumer.accept(def);
 		return this.write(def.toByteArray());
 	}
 
@@ -207,6 +208,7 @@ public class ByteCodeWriter {
 	 */
 	public ByteCodeWriter writeFields(Consumer<CountingDef<?>> consumer) {
 		final CountingDef<?> def = new CountingDef<>();
+		consumer.accept(def);
 		return this.write(def.toByteArray());
 	}
 

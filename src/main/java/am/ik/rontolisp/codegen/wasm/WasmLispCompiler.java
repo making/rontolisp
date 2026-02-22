@@ -43,28 +43,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Function indices (imports come first)
 	static final int FUNC_FD_WRITE = 0; // imported
 
-	static final int FUNC_START = 1;
+	static final int FUNC_FD_READ = 1; // imported
 
-	static final int FUNC_PRINT_I32 = 2;
+	static final int FUNC_START = 2;
 
-	static final int FUNC_WRITE_STR = 3;
+	static final int FUNC_PRINT_I32 = 3;
 
-	static final int FUNC_PRINT_VAL = 4;
+	static final int FUNC_WRITE_STR = 4;
 
-	static final int FUNC_PRINT_I32_NO_NL = 5;
+	static final int FUNC_PRINT_VAL = 5;
 
-	static final int FUNC_PRINT_F64 = 6;
+	static final int FUNC_PRINT_I32_NO_NL = 6;
 
-	static final int FUNC_PRINT_F64_NO_NL = 7;
+	static final int FUNC_PRINT_F64 = 7;
 
-	static final int FUNC_APPEND = 8;
+	static final int FUNC_PRINT_F64_NO_NL = 8;
 
-	static final int FUNC_DISPATCH_BASE = 9;
+	static final int FUNC_APPEND = 9;
+
+	static final int FUNC_READ_LINE = 10;
+
+	static final int FUNC_DISPATCH_BASE = 11;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 9..16 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 17
+	// Dispatch functions occupy indices 11..18 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 19
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -95,6 +99,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// callable_arity_N type index = TYPE_CALLABLE_BASE + N (indices 11..18)
 
+	// Callable types: arity N = (ref null eq)^(N+1) -> (ref null eq)
+	// TYPE_READ_LINE: () -> (ref null eq)
+	static final int TYPE_READ_LINE = TYPE_CALLABLE_BASE + MAX_CALLABLE_ARITY + 1; // 19
+
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
 
@@ -103,6 +111,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int NWRITTEN_OFFSET = 48;
 
 	static final int OUT_BUF_OFFSET = 64;
+
+	static final int HEAP_PTR_ADDR = 84;
+
+	static final int READ_LINE_BUF = 8192;
 
 	private static final int DATA_BASE_OFFSET = 128;
 
@@ -218,6 +230,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
 
+		// Initialize heap pointer for read-line buffer
+		startWriter.write(Instruction.I32_CONST);
+		startWriter.writeSignedLeb128(HEAP_PTR_ADDR);
+		startWriter.write(Instruction.I32_CONST);
+		startWriter.writeSignedLeb128(READ_LINE_BUF);
+		startWriter.write(Instruction.I32_STORE, 0x02, 0x00);
+
 		for (LispVal expr : topLevelExprs) {
 			WasmExprCompiler.compileExpr(expr, ctx);
 			startWriter.write(Instruction.DROP);
@@ -330,6 +349,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
+		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
@@ -398,10 +418,19 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.writeHeapType(Type.EQ.code());
 					});
 				}
+				// type 19: _read_line () -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(0); // no params
+					w.write(1); // 1 result
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
 			})
 			// Import section
-			.writeImportSection(imports -> imports.addImport("wasi_snapshot_preview1", "fd_write",
-					ExternalKind.FUNCTION, TYPE_FD_WRITE))
+			.writeImportSection(imports -> imports
+				.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
+				.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE))
 			// Function section
 			.writeFunction(fnDef -> {
 				fnDef.addFunction(TYPE_START) // _start
@@ -411,7 +440,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_PRINT_I32) // _print_i32_no_nl
 					.addFunction(TYPE_PRINT_F64) // _print_f64
 					.addFunction(TYPE_PRINT_F64) // _print_f64_no_nl
-					.addFunction(TYPE_CALLABLE_BASE + 1); // _append
+					.addFunction(TYPE_CALLABLE_BASE + 1) // _append
+					.addFunction(TYPE_READ_LINE); // _read_line
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -439,7 +469,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(printI32NoNlBody)
 					.addFunction(printF64Body)
 					.addFunction(printF64NoNlBody)
-					.addFunction(appendBody);
+					.addFunction(appendBody)
+					.addFunction(readLineBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
