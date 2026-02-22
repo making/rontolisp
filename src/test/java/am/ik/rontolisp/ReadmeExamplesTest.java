@@ -340,6 +340,13 @@ class ReadmeExamplesTest {
 			assertThat(eval("(or nil nil nil)")).isSameAs(LispNil.INSTANCE);
 		}
 
+		@Test
+		void when() {
+			assertThat(eval("(when t 42)")).isEqualTo(new LispInteger(42));
+			assertThat(eval("(when nil 42)")).isSameAs(LispNil.INSTANCE);
+			assertThat(eval("(when t 1 2 3)")).isEqualTo(new LispInteger(3));
+		}
+
 	}
 
 	// == Special form examples (Language Reference > Special Forms table) ==

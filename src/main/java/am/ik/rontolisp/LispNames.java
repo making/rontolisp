@@ -63,6 +63,8 @@ public final class LispNames {
 
 	public static final String NOT = "not";
 
+	public static final String WHEN = "when";
+
 	// Type predicates
 	public static final String NULL = "null";
 

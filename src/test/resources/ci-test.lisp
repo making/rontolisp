@@ -115,6 +115,13 @@
 (print (if (consp '(1 2)) 42 99))
 (print (if (consp nil) 42 99))
 
+; when macro
+(print (when t 42))
+(print (when nil 42))
+(print (when t 1 2 3))
+(print (when (= 1 1) 10))
+(print (when (= 1 2) 10))
+
 ; Double literals and arithmetic
 (print 3.14)
 (print (+ 1.5 2.5))
