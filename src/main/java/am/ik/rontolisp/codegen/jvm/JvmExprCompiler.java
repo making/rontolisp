@@ -108,6 +108,9 @@ final class JvmExprCompiler {
 				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
 				case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
 				case LispNames.NTHCDR -> JvmNthcdrCompiler.compile(cons, ctx, className);
+				case LispNames.RPLACA -> JvmRplacaCompiler.compile(cons, ctx, className);
+				case LispNames.RPLACD -> JvmRplacdCompiler.compile(cons, ctx, className);
+				case LispNames.SETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons), ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);

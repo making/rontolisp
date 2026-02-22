@@ -15,7 +15,7 @@ Three execution modes share a common frontend (reader) and AST:
 ```
 Source string
   -> LispReader (reader pkg) -> List<LispVal> (AST)
-    -> [LispMacroExpander] -> expanded AST               # macro expansion (defun/cond/and/or -> if/let/progn/setq)
+    -> [LispMacroExpander] -> expanded AST               # macro expansion (defun/cond/and/or/setf -> if/let/progn/setq/rplaca/rplacd)
     -> LispEvaluator (eval pkg)                          # interpret
     -> JvmLispCompiler (codegen.jvm) -> byte[] (.class)  # compile to JVM
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm) # compile to WASM
@@ -62,7 +62,7 @@ When adding a new built-in function or special form:
 
 ### Adding a New Macro
 
-Macros expand into existing primitives (`if`, `let`, `progn`) at the AST level. `LispMacroExpander` (in `am.ik.rontolisp` package) is shared by the evaluator and both compilers.
+Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`) at the AST level. `LispMacroExpander` (in `am.ik.rontolisp` package) is shared by the evaluator and both compilers.
 
 1. **LispMacroExpander.java**: Add a `public static LispVal expand<Name>(LispCons cons)` method that returns the expanded AST.
 2. **LispEvaluator.java**: Add case in `evalCons()` switch: `return eval(LispMacroExpander.expand<Name>(cons), env);`

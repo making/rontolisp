@@ -122,6 +122,9 @@ final class WasmExprCompiler {
 				case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
 				case LispNames.CONS -> WasmConsCompiler.compile(cons, ctx);
 				case LispNames.NTHCDR -> WasmNthcdrCompiler.compile(cons, ctx);
+				case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
+				case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
+				case LispNames.SETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);

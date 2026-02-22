@@ -281,6 +281,16 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void rplaca() {
+			assertThat(evalAll("(setq x (cons 1 2)) (car (rplaca x 10))")).isEqualTo(new LispInteger(10));
+		}
+
+		@Test
+		void rplacd() {
+			assertThat(evalAll("(setq x (cons 1 2)) (cdr (rplacd x 20))")).isEqualTo(new LispInteger(20));
+		}
+
+		@Test
 		void abs() {
 			assertThat(eval("(abs -5)")).isEqualTo(new LispInteger(5));
 			assertThat(eval("(abs -3.14)")).isEqualTo(new LispDouble(3.14));
@@ -453,6 +463,16 @@ class ReadmeExamplesTest {
 		@Test
 		void fourth() {
 			assertThat(eval("(fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
+		}
+
+		@Test
+		void setfCar() {
+			assertThat(evalAll("(setq x (list 1 2 3)) (setf (car x) 10) (car x)")).isEqualTo(new LispInteger(10));
+		}
+
+		@Test
+		void setfNth() {
+			assertThat(evalAll("(setq x (list 1 2 3)) (setf (nth 1 x) 20) (nth 1 x)")).isEqualTo(new LispInteger(20));
 		}
 
 	}

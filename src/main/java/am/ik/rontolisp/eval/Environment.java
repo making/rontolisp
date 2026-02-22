@@ -324,6 +324,22 @@ public final class Environment implements Scope {
 			}
 			return list;
 		}));
+		env.define(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
+			requireArgCount(LispNames.RPLACA, args, 2);
+			if (args.get(0) instanceof LispCons cons) {
+				cons.setCar(args.get(1));
+				return cons;
+			}
+			throw new LispEvalException("rplaca expects a cons cell, got: " + args.get(0).print());
+		}));
+		env.define(LispNames.RPLACD, new LispFunction(LispNames.RPLACD, args -> {
+			requireArgCount(LispNames.RPLACD, args, 2);
+			if (args.get(0) instanceof LispCons cons) {
+				cons.setCdr(args.get(1));
+				return cons;
+			}
+			throw new LispEvalException("rplacd expects a cons cell, got: " + args.get(0).print());
+		}));
 		env.define(LispNames.APPEND, new LispFunction(LispNames.APPEND, args -> {
 			if (args.isEmpty()) {
 				return LispNil.INSTANCE;

@@ -175,6 +175,21 @@
 (print (third '(1 2 3)))
 (print (fourth '(1 2 3 4)))
 
+; rplaca / rplacd
+(setq x (cons 1 2))
+(rplaca x 10)
+(print (car x))
+(rplacd x 20)
+(print (cdr x))
+
+; setf
+(setq y (list 1 2 3))
+(setf (car y) 10)
+(print (car y))
+(setf (nth 1 y) 20)
+(print (nth 1 y))
+(print (setf (second y) 30))
+
 ; Double literals and arithmetic
 (print 3.14)
 (print (+ 1.5 2.5))
