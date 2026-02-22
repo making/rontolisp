@@ -46,6 +46,15 @@ public final class LispNames {
 	/** The {@code mod} built-in function. */
 	public static final String MOD = "mod";
 
+	/** The {@code abs} built-in function. */
+	public static final String ABS = "abs";
+
+	/** The {@code min} built-in function. */
+	public static final String MIN = "min";
+
+	/** The {@code max} built-in function. */
+	public static final String MAX = "max";
+
 	// Comparison
 
 	/** The {@code =} built-in function. */
@@ -168,15 +177,6 @@ public final class LispNames {
 
 	/** The {@code oddp} macro. */
 	public static final String ODDP = "oddp";
-
-	/** The {@code abs} built-in function. */
-	public static final String ABS = "abs";
-
-	/** The {@code min} built-in function. */
-	public static final String MIN = "min";
-
-	/** The {@code max} built-in function. */
-	public static final String MAX = "max";
 
 	/** The {@code unless} macro. */
 	public static final String UNLESS = "unless";

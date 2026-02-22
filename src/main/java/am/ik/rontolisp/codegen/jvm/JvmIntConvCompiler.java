@@ -5,7 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
-import am.ik.jvm.ConstantPool;
+import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
@@ -25,27 +25,25 @@ final class JvmIntConvCompiler {
 	}
 
 	static void compileFloor(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compile(cons, ctx, className, "floor");
+		compile(cons, ctx, className, ctx.mathFloor);
 	}
 
 	static void compileCeiling(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compile(cons, ctx, className, "ceil");
+		compile(cons, ctx, className, ctx.mathCeil);
 	}
 
 	static void compileRound(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compile(cons, ctx, className, "rint");
+		compile(cons, ctx, className, ctx.mathRint);
 	}
 
-	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, @Nullable String mathMethod) {
+	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			@Nullable MethodrefConstant mathMethod) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxDouble(ctx);
 		if (mathMethod != null) {
-			ConstantPool.ClassConstant mathClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Math"));
-			ConstantPool.MethodrefConstant method = ctx.cp.addMethodref(mathClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8(mathMethod), ctx.cp.addUtf8("(D)D")));
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(method.index());
+			ctx.emitU2(mathMethod.index());
 		}
 		ctx.emit(Opcode.D2L);
 		JvmEmitHelper.boxLong(ctx);
