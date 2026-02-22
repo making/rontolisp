@@ -117,6 +117,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandFourth(cons), env);
 				case LispNames.SETF:
 					return eval(LispMacroExpander.expandSetf(cons), env);
+				case LispNames.PUSH:
+					return eval(LispMacroExpander.expandPush(cons), env);
+				case LispNames.POP:
+					return eval(LispMacroExpander.expandPop(cons), env);
+				case LispNames.REMF:
+					return eval(LispMacroExpander.expandRemf(cons), env);
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

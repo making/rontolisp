@@ -97,6 +97,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 		MethodrefConstant stringCharAt = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		MethodrefConstant objectEquals = cp.addMethodref(objectClass,
+				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
 		MethodrefConstant mathAbsLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
@@ -203,7 +205,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.mathMaxDouble(mathMaxDouble)
 			.mathFloor(mathFloor)
 			.mathCeil(mathCeil)
-			.mathRint(mathRint);
+			.mathRint(mathRint)
+			.objectEquals(objectEquals);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -526,6 +529,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant mathRint;
 
+		final MethodrefConstant objectEquals;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -579,6 +584,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mathFloor = Objects.requireNonNull(builder.mathFloor);
 			this.mathCeil = Objects.requireNonNull(builder.mathCeil);
 			this.mathRint = Objects.requireNonNull(builder.mathRint);
+			this.objectEquals = Objects.requireNonNull(builder.objectEquals);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -646,6 +652,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant mathCeil;
 
 			private @Nullable MethodrefConstant mathRint;
+
+			private @Nullable MethodrefConstant objectEquals;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -792,6 +800,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder mathRint(MethodrefConstant mathRint) {
 				this.mathRint = mathRint;
+				return this;
+			}
+
+			Builder objectEquals(MethodrefConstant objectEquals) {
+				this.objectEquals = objectEquals;
 				return this;
 			}
 

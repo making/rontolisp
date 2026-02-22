@@ -626,4 +626,90 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("42");
 	}
 
+	@Test
+	void compileAndRunEqSameInteger() throws Exception {
+		assertThat(compileAndRun("(print (if (eq 1 1) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunEqDifferentInteger() throws Exception {
+		assertThat(compileAndRun("(print (if (eq 1 2) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunEqSymbols() throws Exception {
+		assertThat(compileAndRun("(print (if (eq 'foo 'foo) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunEqNilNil() throws Exception {
+		assertThat(compileAndRun("(print (if (eq nil nil) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunEqNilAndValue() throws Exception {
+		assertThat(compileAndRun("(print (if (eq nil 1) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunPush() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 2 3))
+				(push 1 x)
+				(print x)
+				""")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void compileAndRunPop() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3))
+				(print (pop x))
+				(print x)
+				""")).isEqualTo("1\n(2 3)");
+	}
+
+	@Test
+	void compileAndRunRemfHead() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2 'c 3))
+				(remf plist 'a)
+				(print plist)
+				""")).isEqualTo("(b 2 c 3)");
+	}
+
+	@Test
+	void compileAndRunRemfMiddle() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2 'c 3))
+				(remf plist 'b)
+				(print plist)
+				""")).isEqualTo("(a 1 c 3)");
+	}
+
+	@Test
+	void compileAndRunRemfTail() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2 'c 3))
+				(remf plist 'c)
+				(print plist)
+				""")).isEqualTo("(a 1 b 2)");
+	}
+
+	@Test
+	void compileAndRunRemfNotFound() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2))
+				(print (if (remf plist 'z) 42 99))
+				""")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunRemfEmpty() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist nil)
+				(print (if (remf plist 'a) 42 99))
+				""")).isEqualTo("99");
+	}
+
 }

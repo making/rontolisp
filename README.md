@@ -179,6 +179,9 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `third` | `(third lst)` | Expands to `(nth 2 lst)` |
 | `fourth` | `(fourth lst)` | Expands to `(nth 3 lst)` |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `caXXXr` as places |
+| `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
+| `pop` | `(pop place)` | Remove and return the first element from list at place |
+| `remf` | `(remf place indicator)` | Remove key-value pair from property list at place. Returns `t` if found, `nil` otherwise |
 
 ### Built-in Functions
 
@@ -190,6 +193,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `/` | `(/ 10 3)`, `(/ 7.0 2.0)` | `3` (integer division), `3.5` |
 | `mod` | `(mod 10 3)` | `1` |
 | `=` | `(= 1 1)` | `t` |
+| `eq` | `(eq 'foo 'foo)` | `t` (general equality; reference identity for cons cells) |
 | `<` | `(< 1 2)` | `t` |
 | `>` | `(> 2 1)` | `t` |
 | `<=` | `(<= 1 1)` | `t` |

@@ -111,6 +111,11 @@ final class JvmExprCompiler {
 				case LispNames.RPLACA -> JvmRplacaCompiler.compile(cons, ctx, className);
 				case LispNames.RPLACD -> JvmRplacdCompiler.compile(cons, ctx, className);
 				case LispNames.SETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons), ctx, className);
+				case LispNames.PUSH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx, className);
+				case LispNames.POP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx, className);
+				case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);
+				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
+				case LispNames.REMF_TAIL -> JvmRemfTailCompiler.compile(cons, ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);

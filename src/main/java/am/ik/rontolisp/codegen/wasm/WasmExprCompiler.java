@@ -125,6 +125,11 @@ final class WasmExprCompiler {
 				case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
 				case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
 				case LispNames.SETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons), ctx);
+				case LispNames.PUSH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx);
+				case LispNames.POP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx);
+				case LispNames.REMF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx);
+				case LispNames.EQ_GENERAL -> WasmEqGeneralCompiler.compile(cons, ctx);
+				case LispNames.REMF_TAIL -> WasmRemfTailCompiler.compile(cons, ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);

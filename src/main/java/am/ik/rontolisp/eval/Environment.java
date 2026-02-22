@@ -220,6 +220,21 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) >= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		env.define(LispNames.EQ_GENERAL, new LispFunction(LispNames.EQ_GENERAL, args -> {
+			requireArgCount(LispNames.EQ_GENERAL, args, 2);
+			LispVal a = args.get(0);
+			LispVal b = args.get(1);
+			if (a instanceof LispCons || b instanceof LispCons) {
+				return a == b ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (a instanceof LispNil && b instanceof LispNil) {
+				return LispTrue.INSTANCE;
+			}
+			if (a instanceof LispNil || b instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
 	}
 
 	private static void registerIO(Environment env, PrintStream out) {
@@ -339,6 +354,47 @@ public final class Environment implements Scope {
 				return cons;
 			}
 			throw new LispEvalException("rplacd expects a cons cell, got: " + args.get(0).print());
+		}));
+		env.define(LispNames.REMF_TAIL, new LispFunction(LispNames.REMF_TAIL, args -> {
+			requireArgCount(LispNames.REMF_TAIL, args, 2);
+			LispVal current = args.get(0);
+			LispVal indicator = args.get(1);
+			while (current instanceof LispCons currentCons) {
+				LispVal valueCellVal = currentCons.cdr();
+				if (!(valueCellVal instanceof LispCons valueCell)) {
+					return LispNil.INSTANCE;
+				}
+				LispVal nextKeyCellVal = valueCell.cdr();
+				if (!(nextKeyCellVal instanceof LispCons nextKeyCell)) {
+					return LispNil.INSTANCE;
+				}
+				LispVal key = nextKeyCell.car();
+				boolean match;
+				if (key instanceof LispCons || indicator instanceof LispCons) {
+					match = key == indicator;
+				}
+				else if (key instanceof LispNil && indicator instanceof LispNil) {
+					match = true;
+				}
+				else if (key instanceof LispNil || indicator instanceof LispNil) {
+					match = false;
+				}
+				else {
+					match = key.equals(indicator);
+				}
+				if (match) {
+					LispVal rest = nextKeyCell.cdr();
+					if (rest instanceof LispCons restCons) {
+						valueCell.setCdr(restCons.cdr());
+					}
+					else {
+						valueCell.setCdr(LispNil.INSTANCE);
+					}
+					return LispTrue.INSTANCE;
+				}
+				current = nextKeyCell;
+			}
+			return LispNil.INSTANCE;
 		}));
 		env.define(LispNames.APPEND, new LispFunction(LispNames.APPEND, args -> {
 			if (args.isEmpty()) {

@@ -281,6 +281,11 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void eqGeneral() {
+			assertThat(eval("(eq 'foo 'foo)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
 		void rplaca() {
 			assertThat(evalAll("(setq x (cons 1 2)) (car (rplaca x 10))")).isEqualTo(new LispInteger(10));
 		}
@@ -473,6 +478,22 @@ class ReadmeExamplesTest {
 		@Test
 		void setfNth() {
 			assertThat(evalAll("(setq x (list 1 2 3)) (setf (nth 1 x) 20) (nth 1 x)")).isEqualTo(new LispInteger(20));
+		}
+
+		@Test
+		void push() {
+			assertThat(evalAll("(setq x (list 2 3)) (push 1 x) x").print()).isEqualTo("(1 2 3)");
+		}
+
+		@Test
+		void pop() {
+			assertThat(evalAll("(setq x (list 1 2 3)) (pop x)")).isEqualTo(new LispInteger(1));
+		}
+
+		@Test
+		void remf() {
+			assertThat(evalAll("(setq plist (list 'a 1 'b 2 'c 3)) (remf plist 'b) plist").print())
+				.isEqualTo("(a 1 c 3)");
 		}
 
 	}

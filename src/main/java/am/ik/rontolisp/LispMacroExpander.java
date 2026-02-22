@@ -464,6 +464,102 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (push item place) into a let/setf/cons expression.
+	 *
+	 * <pre>
+	 * (push item place) -> (let ((__push_item item)) (setf place (cons __push_item place)))
+	 * </pre>
+	 * @param cons the push expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPush(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal item = parts.get(1);
+		LispVal place = parts.get(2);
+		// (cons __push_item place)
+		LispVal consExpr = listToCons(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(PUSH_VAR), place));
+		// (setf place (cons __push_item place))
+		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, consExpr));
+		return makeLet(PUSH_VAR, item, setfExpr);
+	}
+
+	private static final String PUSH_VAR = "__push_item";
+
+	/**
+	 * Expands (pop place) into a let/progn/setf expression.
+	 *
+	 * <pre>
+	 * (pop place) -> (let ((__pop (car place))) (progn (setf place (cdr place)) __pop))
+	 * </pre>
+	 * @param cons the pop expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPop(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal place = parts.get(1);
+		// (car place)
+		LispVal carExpr = listToCons(List.of(new LispSymbol(LispNames.CAR), place));
+		// (cdr place)
+		LispVal cdrExpr = listToCons(List.of(new LispSymbol(LispNames.CDR), place));
+		// (setf place (cdr place))
+		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, cdrExpr));
+		// (progn (setf place (cdr place)) __pop)
+		LispVal body = makeProgn(List.of(setfExpr, new LispSymbol(POP_VAR)));
+		return makeLet(POP_VAR, carExpr, body);
+	}
+
+	private static final String POP_VAR = "__pop";
+
+	/**
+	 * Expands (remf place indicator) into conditional setf/%remf-tail expression.
+	 *
+	 * <pre>
+	 * (remf place indicator) ->
+	 * (let ((__plist place))
+	 *   (if (null __plist) nil
+	 *     (let ((__indicator indicator))
+	 *       (if (eq (car __plist) __indicator)
+	 *         (progn (setf place (cdr (cdr __plist))) t)
+	 *         (%remf-tail __plist __indicator)))))
+	 * </pre>
+	 * @param cons the remf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal place = parts.get(1);
+		LispVal indicator = parts.get(2);
+		LispSymbol plistSym = new LispSymbol(REMF_PLIST_VAR);
+		LispSymbol indSym = new LispSymbol(REMF_IND_VAR);
+		// (car __plist)
+		LispVal carPlist = listToCons(List.of(new LispSymbol(LispNames.CAR), plistSym));
+		// (eq (car __plist) __indicator)
+		LispVal eqExpr = listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), carPlist, indSym));
+		// (cdr (cdr __plist))
+		LispVal cddrPlist = listToCons(
+				List.of(new LispSymbol(LispNames.CDR), listToCons(List.of(new LispSymbol(LispNames.CDR), plistSym))));
+		// (setf place (cdr (cdr __plist)))
+		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, cddrPlist));
+		// (progn (setf place (cdr (cdr __plist))) t)
+		LispVal headMatch = makeProgn(List.of(setfExpr, LispTrue.INSTANCE));
+		// (%remf-tail __plist __indicator)
+		LispVal tailCall = listToCons(List.of(new LispSymbol(LispNames.REMF_TAIL), plistSym, indSym));
+		// (if (eq (car __plist) __indicator) headMatch tailCall)
+		LispVal innerIf = makeIf(eqExpr, headMatch, tailCall);
+		// (let ((__indicator indicator)) innerIf)
+		LispVal innerLet = makeLet(REMF_IND_VAR, indicator, innerIf);
+		// (null __plist)
+		LispVal nullCheck = listToCons(List.of(new LispSymbol(LispNames.NULL), plistSym));
+		// (if (null __plist) nil innerLet)
+		LispVal outerIf = makeIf(nullCheck, LispNil.INSTANCE, innerLet);
+		return makeLet(REMF_PLIST_VAR, place, outerIf);
+	}
+
+	private static final String REMF_PLIST_VAR = "__plist";
+
+	private static final String REMF_IND_VAR = "__indicator";
+
+	/**
 	 * Expands (defun name (params...) body...) into (setq name (lambda (params...)
 	 * body...)).
 	 *

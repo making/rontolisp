@@ -139,6 +139,72 @@ final class WasmEmitHelper {
 		throw new UnsupportedOperationException("Cannot find variable for closure: " + varName);
 	}
 
+	/**
+	 * Compares two (ref null eq) values on the stack for general equality. Produces an
+	 * i32 (0=false, 1=true). Uses ref.eq for identity, falling back to string offset
+	 * comparison for TYPE_STRING values.
+	 */
+	static void emitEqComparison(WasmLispCompiler.Ctx ctx) {
+		int aSlot = ctx.allocTemp();
+		int bSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		// Try ref.eq
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.REF_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.ELSE);
+		// Check if a is string
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		// Check if b is string
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		// Both strings: compare offset fields
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.ELSE);
+		// a is string, b is not
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		// a is not string
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
 	static void compileStringLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
 		WasmLispCompiler.StringTable.StringEntry entry = ctx.stringTable.addString(displayForm);
 		ctx.writer.write(Instruction.I32_CONST);
