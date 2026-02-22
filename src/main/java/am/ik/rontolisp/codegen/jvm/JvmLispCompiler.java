@@ -39,6 +39,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final String className;
 
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 */
 	public JvmLispCompiler(String className) {
 		this.className = className;
 	}

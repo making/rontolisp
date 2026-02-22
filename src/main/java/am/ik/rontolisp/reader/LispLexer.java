@@ -12,11 +12,19 @@ public final class LispLexer {
 
 	private int pos;
 
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 */
 	public LispLexer(String input) {
 		this.input = input;
 		this.pos = 0;
 	}
 
+	/**
+	 * Tokenize the input into a list of tokens.
+	 * @return the tokens
+	 */
 	public List<Token> tokenize() {
 		List<Token> tokens = new ArrayList<>();
 		while (this.pos < this.input.length()) {

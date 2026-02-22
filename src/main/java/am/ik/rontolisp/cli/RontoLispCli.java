@@ -27,11 +27,20 @@ public final class RontoLispCli {
 
 	private final InputStream in;
 
+	/**
+	 * Create a new CLI instance.
+	 * @param in the input stream
+	 * @param out the output stream
+	 */
 	public RontoLispCli(InputStream in, PrintStream out) {
 		this.in = in;
 		this.out = out;
 	}
 
+	/**
+	 * Run the CLI with the given arguments.
+	 * @param args the command-line arguments
+	 */
 	public void run(String[] args) {
 		CliOptions options = CliOptions.build(args);
 
@@ -195,6 +204,10 @@ public final class RontoLispCli {
 		}
 	}
 
+	/**
+	 * Main entry point.
+	 * @param args the command-line arguments
+	 */
 	public static void main(String[] args) {
 		new RontoLispCli(System.in, System.out).run(args);
 	}

@@ -24,14 +24,29 @@ public final class LispEvaluator {
 
 	private final Environment globalEnv;
 
+	/**
+	 * Create a new evaluator with the given output stream.
+	 * @param out the output stream for print operations
+	 */
 	public LispEvaluator(PrintStream out) {
 		this.globalEnv = Environment.createGlobal(out);
 	}
 
+	/**
+	 * Evaluate an expression in the global environment.
+	 * @param expr the expression to evaluate
+	 * @return the result
+	 */
 	public LispVal eval(LispVal expr) {
 		return eval(expr, this.globalEnv);
 	}
 
+	/**
+	 * Evaluate an expression in the given environment.
+	 * @param expr the expression to evaluate
+	 * @param env the lexical environment
+	 * @return the result
+	 */
 	public LispVal eval(LispVal expr, Environment env) {
 		return switch (expr) {
 			case LispInteger i -> i;

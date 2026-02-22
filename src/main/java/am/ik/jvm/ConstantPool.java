@@ -6,12 +6,25 @@ import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 
+/**
+ * JVM class file constant pool builder.
+ */
 public final class ConstantPool {
 
 	private final ByteArrayOutputStream out = new ByteArrayOutputStream();
 
 	private int size = 0;
 
+	/** Creates a new empty constant pool. */
+	public ConstantPool() {
+	}
+
+	/**
+	 * Add a constant entry to the pool.
+	 * @param constantType the type of the constant
+	 * @param constantDef a consumer that writes the constant data
+	 * @return the constant entry
+	 */
 	public Constant add(ConstantType constantType, Consumer<ByteCodeWriter> constantDef) {
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		final ByteCodeWriter out = new ByteCodeWriter(stream);
@@ -26,39 +39,87 @@ public final class ConstantPool {
 		return new Constant(++this.size, constantType, stream.toByteArray());
 	}
 
+	/**
+	 * Add a UTF-8 string constant.
+	 * @param s the string value
+	 * @return the UTF-8 constant entry
+	 */
 	public Utf8Constant addUtf8(String s) {
 		return new Utf8Constant(this.add(ConstantType.UTF8, o -> o.writeUtf8Info(s)));
 	}
 
+	/**
+	 * Add a class constant.
+	 * @param classUtf8 the UTF-8 constant for the class name
+	 * @return the class constant entry
+	 */
 	public ClassConstant addClass(Utf8Constant classUtf8) {
 		return new ClassConstant(this.add(ConstantType.CLASS, o -> o.writeU2(classUtf8)));
 	}
 
+	/**
+	 * Add a name-and-type constant.
+	 * @param nameUtf8 the UTF-8 constant for the name
+	 * @param typeUtf8 the UTF-8 constant for the type descriptor
+	 * @return the name-and-type constant entry
+	 */
 	public NameAndTypeConstant addNameAndType(Utf8Constant nameUtf8, Utf8Constant typeUtf8) {
 		return new NameAndTypeConstant(
 				this.add(ConstantType.NAME_AND_TYPE, o -> o.writeU2(nameUtf8).writeU2(typeUtf8)));
 	}
 
+	/**
+	 * Add a field reference constant.
+	 * @param clazz the class constant
+	 * @param nameAndType the name-and-type constant
+	 * @return the field reference constant entry
+	 */
 	public FieldrefConstant addFieldref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
 		return new FieldrefConstant(this.add(ConstantType.FIELDREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
 	}
 
+	/**
+	 * Add a method reference constant.
+	 * @param clazz the class constant
+	 * @param nameAndType the name-and-type constant
+	 * @return the method reference constant entry
+	 */
 	public MethodrefConstant addMethodref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
 		return new MethodrefConstant(this.add(ConstantType.METHODREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
 	}
 
+	/**
+	 * Add a string constant from a UTF-8 constant.
+	 * @param utf8 the UTF-8 constant for the string value
+	 * @return the string constant entry
+	 */
 	public StringConstant addString(Utf8Constant utf8) {
 		return new StringConstant(this.add(ConstantType.STRING, o -> o.writeU2(utf8)));
 	}
 
+	/**
+	 * Add a string constant from a string value.
+	 * @param s the string value
+	 * @return the string constant entry
+	 */
 	public StringConstant addString(String s) {
 		return this.addString(this.addUtf8(s));
 	}
 
+	/**
+	 * Add an integer constant.
+	 * @param value the integer value
+	 * @return the integer constant entry
+	 */
 	public IntegerConstant addInteger(int value) {
 		return new IntegerConstant(this.add(ConstantType.INTEGER, o -> o.writeU4(value)));
 	}
 
+	/**
+	 * Add a long constant. Takes two constant pool entries.
+	 * @param value the long value
+	 * @return the long constant entry
+	 */
 	public LongConstant addLong(long value) {
 		LongConstant longConstant = new LongConstant(this.add(ConstantType.LONG, o -> {
 			o.writeU4((int) (value >>> 32));
@@ -69,6 +130,11 @@ public final class ConstantPool {
 		return longConstant;
 	}
 
+	/**
+	 * Add a double constant. Takes two constant pool entries.
+	 * @param value the double value
+	 * @return the double constant entry
+	 */
 	public DoubleConstant addDouble(double value) {
 		long bits = Double.doubleToLongBits(value);
 		DoubleConstant doubleConstant = new DoubleConstant(this.add(ConstantType.DOUBLE, o -> {
@@ -80,10 +146,18 @@ public final class ConstantPool {
 		return doubleConstant;
 	}
 
+	/**
+	 * Return the number of entries in this constant pool.
+	 * @return the entry count
+	 */
 	public int size() {
 		return this.size;
 	}
 
+	/**
+	 * Serialize this constant pool to a byte array.
+	 * @return the serialized bytes
+	 */
 	public byte[] toByteArray() {
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		final ByteCodeWriter out = new ByteCodeWriter(stream);
@@ -92,6 +166,9 @@ public final class ConstantPool {
 		return stream.toByteArray();
 	}
 
+	/**
+	 * A constant pool entry.
+	 */
 	public static class Constant {
 
 		private final int index;
@@ -100,96 +177,181 @@ public final class ConstantPool {
 
 		private final byte[] bytes;
 
+		/**
+		 * Create a new constant entry.
+		 * @param index the constant pool index
+		 * @param type the constant type
+		 * @param bytes the raw bytes
+		 */
 		public Constant(int index, ConstantType type, byte[] bytes) {
 			this.index = index;
 			this.type = type;
 			this.bytes = bytes;
 		}
 
+		/**
+		 * Return the constant pool index.
+		 * @return the index
+		 */
 		public int index() {
 			return index;
 		}
 
+		/**
+		 * Return the index as a 2-byte big-endian array.
+		 * @return the index bytes
+		 */
 		public byte[] indexAsU2() {
 			return ByteBuffer.allocate(2).putShort((short) index).array();
 		}
 
+		/**
+		 * Return the constant type.
+		 * @return the type
+		 */
 		public ConstantType type() {
 			return type;
 		}
 
+		/**
+		 * Return the raw bytes of this constant.
+		 * @return the bytes
+		 */
 		public byte[] bytes() {
 			return bytes;
 		}
 
 	}
 
+	/**
+	 * A UTF-8 constant pool entry.
+	 */
 	public static class Utf8Constant extends Constant {
 
+		/**
+		 * Create a UTF-8 constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public Utf8Constant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A class constant pool entry.
+	 */
 	public static class ClassConstant extends Constant {
 
+		/**
+		 * Create a class constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public ClassConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A name-and-type constant pool entry.
+	 */
 	public static class NameAndTypeConstant extends Constant {
 
+		/**
+		 * Create a name-and-type constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public NameAndTypeConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A field reference constant pool entry.
+	 */
 	public static class FieldrefConstant extends Constant {
 
+		/**
+		 * Create a field reference constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public FieldrefConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A method reference constant pool entry.
+	 */
 	public static class MethodrefConstant extends Constant {
 
+		/**
+		 * Create a method reference constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public MethodrefConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A string constant pool entry.
+	 */
 	public static class StringConstant extends Constant {
 
+		/**
+		 * Create a string constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public StringConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * An integer constant pool entry.
+	 */
 	public static class IntegerConstant extends Constant {
 
+		/**
+		 * Create an integer constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public IntegerConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A long constant pool entry.
+	 */
 	public static class LongConstant extends Constant {
 
+		/**
+		 * Create a long constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public LongConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}
 
 	}
 
+	/**
+	 * A double constant pool entry.
+	 */
 	public static class DoubleConstant extends Constant {
 
+		/**
+		 * Create a double constant from a base constant.
+		 * @param constant the base constant
+		 */
 		public DoubleConstant(Constant constant) {
 			super(constant.index, constant.type(), constant.bytes());
 		}

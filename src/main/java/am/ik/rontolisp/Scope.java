@@ -6,6 +6,11 @@ package am.ik.rontolisp;
  */
 public interface Scope {
 
+	/**
+	 * Look up a variable binding by name.
+	 * @param name the variable name
+	 * @return the bound value
+	 */
 	LispVal lookup(String name);
 
 }

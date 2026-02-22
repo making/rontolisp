@@ -22,6 +22,8 @@ public final class LispMacroExpander {
 	 * (cond (test body) rest...)     -> (if test body (cond rest...))
 	 * (cond (test b1 b2...) rest...) -> (if test (progn b1 b2...) (cond rest...))
 	 * </pre>
+	 * @param cons the cond expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandCond(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -65,6 +67,8 @@ public final class LispMacroExpander {
 	 * (and x)          -> x
 	 * (and x y ... z)  -> (cond ((not x) nil) ((not y) nil) ... (t z))
 	 * </pre>
+	 * @param cons the and expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandAnd(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -97,6 +101,8 @@ public final class LispMacroExpander {
 	 * (or x)           -> x
 	 * (or x y ... z)   -> (cond (x) (y) ... (z))
 	 * </pre>
+	 * @param cons the or expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandOr(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -126,6 +132,8 @@ public final class LispMacroExpander {
 	 * (when cond body)       -> (if cond body nil)
 	 * (when cond b1 b2...)   -> (if cond (progn b1 b2...) nil)
 	 * </pre>
+	 * @param cons the when expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandWhen(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -164,6 +172,8 @@ public final class LispMacroExpander {
 	/**
 	 * Checks if the given name matches the c[ad]{2,4}r pattern (e.g., caar, cadr, cddr,
 	 * caddr, cdddr, etc.).
+	 * @param name the function name to check
+	 * @return {@code true} if the name matches the pattern
 	 */
 	public static boolean isCarCdrComposition(String name) {
 		int len = name.length();
@@ -186,6 +196,8 @@ public final class LispMacroExpander {
 	 * (cadr x)  -> (car (cdr x))
 	 * (caddr x) -> (car (cdr (cdr x)))
 	 * </pre>
+	 * @param cons the car/cdr composition expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandCarCdrComposition(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -201,6 +213,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (1+ x) into (+ x 1).
+	 * @param cons the 1+ expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandOnePlus(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -209,6 +223,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (1- x) into (- x 1).
+	 * @param cons the 1- expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandOneMinus(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -217,6 +233,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (zerop x) into (= x 0).
+	 * @param cons the zerop expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandZerop(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -225,6 +243,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (plusp x) into (> x 0).
+	 * @param cons the plusp expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandPlusp(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -233,6 +253,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (minusp x) into (< x 0).
+	 * @param cons the minusp expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandMinusp(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -241,6 +263,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (evenp x) into (= (mod x 2) 0).
+	 * @param cons the evenp expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandEvenp(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -250,6 +274,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (oddp x) into (not (= (mod x 2) 0)).
+	 * @param cons the oddp expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandOddp(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -265,6 +291,8 @@ public final class LispMacroExpander {
 	 * (unless cond body)       -> (if cond nil body)
 	 * (unless cond b1 b2...)   -> (if cond nil (progn b1 b2...))
 	 * </pre>
+	 * @param cons the unless expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandUnless(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -280,6 +308,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (second x) into (cadr x) -> (car (cdr x)).
+	 * @param cons the second expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandSecond(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -289,6 +319,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (third x) into (caddr x) -> (car (cdr (cdr x))).
+	 * @param cons the third expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandThird(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -298,6 +330,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (fourth x) into (cadddr x) -> (car (cdr (cdr (cdr x)))).
+	 * @param cons the fourth expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandFourth(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
@@ -312,6 +346,8 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (defun f (x y) body1 body2) -> (setq f (lambda (x y) body1 body2))
 	 * </pre>
+	 * @param cons the defun expression
+	 * @return the expanded expression
 	 */
 	public static LispVal expandDefun(LispCons cons) {
 		List<LispVal> parts = cons.toList();

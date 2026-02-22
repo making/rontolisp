@@ -5,8 +5,16 @@ package am.ik.wasm;
  */
 public class DataDef extends CountingDef<DataDef> {
 
+	/** Creates a new empty data definition. */
+	public DataDef() {
+	}
+
 	/**
 	 * Adds an active data segment that initializes linear memory at the given offset.
+	 * @param memoryIndex the memory index (typically 0)
+	 * @param offset the byte offset in linear memory
+	 * @param data the data bytes to write
+	 * @return this instance for chaining
 	 */
 	public DataDef addActiveData(int memoryIndex, int offset, byte[] data) {
 		return this.add(w -> {

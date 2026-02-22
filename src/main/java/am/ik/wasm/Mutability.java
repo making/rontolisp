@@ -1,8 +1,14 @@
 package am.ik.wasm;
 
+/**
+ * WASM global mutability values.
+ */
 public enum Mutability implements Codable {
 
-	CONST(0), VAR(1);
+	/** Immutable global. */
+	CONST(0),
+	/** Mutable global. */
+	VAR(1);
 
 	private final int code;
 

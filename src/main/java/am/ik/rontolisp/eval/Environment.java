@@ -27,6 +27,10 @@ public final class Environment implements Scope {
 
 	@Nullable private final Environment parent;
 
+	/**
+	 * Create a new environment with the given parent scope.
+	 * @param parent the parent environment, or {@code null} for a top-level scope
+	 */
 	public Environment(@Nullable Environment parent) {
 		this.bindings = new HashMap<>();
 		this.parent = parent;
@@ -44,10 +48,20 @@ public final class Environment implements Scope {
 		throw new LispEvalException("Undefined symbol: " + name);
 	}
 
+	/**
+	 * Define a new binding in this environment.
+	 * @param name the variable name
+	 * @param value the value to bind
+	 */
 	public void define(String name, LispVal value) {
 		this.bindings.put(name, value);
 	}
 
+	/**
+	 * Set an existing binding, searching up the scope chain.
+	 * @param name the variable name
+	 * @param value the new value
+	 */
 	public void set(String name, LispVal value) {
 		if (this.bindings.containsKey(name)) {
 			this.bindings.put(name, value);
@@ -61,6 +75,11 @@ public final class Environment implements Scope {
 		this.bindings.put(name, value);
 	}
 
+	/**
+	 * Create the global environment with all built-in functions.
+	 * @param out the output stream for print operations
+	 * @return the global environment
+	 */
 	public static Environment createGlobal(PrintStream out) {
 		Environment env = new Environment(null);
 		registerArithmetic(env);

@@ -35,6 +35,10 @@ import org.jspecify.annotations.Nullable;
  */
 public final class WasmLispCompiler implements LispCompiler {
 
+	/** Creates a new WASM compiler. */
+	public WasmLispCompiler() {
+	}
+
 	// Function indices (imports come first)
 	static final int FUNC_FD_WRITE = 0; // imported
 

@@ -27,6 +27,11 @@ public final class LispReader {
 		this.pos = 0;
 	}
 
+	/**
+	 * Read a single expression from the input string.
+	 * @param input the source code string
+	 * @return the parsed expression
+	 */
 	public static LispVal readFromString(String input) {
 		List<LispVal> exprs = readAllFromString(input);
 		if (exprs.isEmpty()) {
@@ -35,6 +40,11 @@ public final class LispReader {
 		return exprs.get(0);
 	}
 
+	/**
+	 * Read all expressions from the input string.
+	 * @param input the source code string
+	 * @return the list of parsed expressions
+	 */
 	public static List<LispVal> readAllFromString(String input) {
 		List<Token> tokens = new LispLexer(input).tokenize();
 		LispReader reader = new LispReader(tokens);

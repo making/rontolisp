@@ -3,6 +3,12 @@ package am.ik.rontolisp;
 import java.util.List;
 import java.util.function.Function;
 
+/**
+ * A built-in function value.
+ *
+ * @param name the function name
+ * @param body the function implementation
+ */
 public record LispFunction(String name, Function<List<LispVal>, LispVal> body) implements LispVal {
 
 	@Override

@@ -1,8 +1,14 @@
 package am.ik.wasm;
 
+/**
+ * WASM limit types for memories and tables.
+ */
 public enum Limit implements Codable {
 
-	MIN(0), MINMAX(1);
+	/** Limit with minimum only. */
+	MIN(0),
+	/** Limit with minimum and maximum. */
+	MINMAX(1);
 
 	private final int code;
 

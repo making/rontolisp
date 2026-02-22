@@ -7,6 +7,9 @@ import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
+/**
+ * Parser and container for command-line options.
+ */
 public class CliOptions {
 
 	private static final Set<String> noValueKeys = Set.of("-h", "--help", //
@@ -16,30 +19,61 @@ public class CliOptions {
 
 	private static final String NOKEY = "__";
 
+	/**
+	 * Create a new instance wrapping the given options map.
+	 * @param options the parsed options
+	 */
 	public CliOptions(Map<String, String> options) {
 		this.options = Collections.unmodifiableMap(options);
 	}
 
+	/**
+	 * Return whether this options set is empty.
+	 * @return {@code true} if no options are present
+	 */
 	public boolean isEmpty() {
 		return this.options.isEmpty();
 	}
 
+	/**
+	 * Get the value for the given option key.
+	 * @param key the option key
+	 * @return the value, or {@code null} if not present
+	 */
 	@Nullable public String get(String key) {
 		return this.options.get(key);
 	}
 
+	/**
+	 * Check whether the given option key is present.
+	 * @param key the option key
+	 * @return {@code true} if the key is present
+	 */
 	public boolean contains(String key) {
 		return this.options.containsKey(key);
 	}
 
+	/**
+	 * Get the positional (non-keyed) argument value.
+	 * @return the positional value, or {@code null} if not present
+	 */
 	@Nullable public String getNokey() {
 		return this.get(NOKEY);
 	}
 
+	/**
+	 * Check whether a positional (non-keyed) argument is present.
+	 * @return {@code true} if a positional argument is present
+	 */
 	public boolean containsNoKey() {
 		return this.contains(NOKEY);
 	}
 
+	/**
+	 * Parse command-line arguments into a {@link CliOptions} instance.
+	 * @param args the command-line arguments
+	 * @return the parsed options
+	 */
 	public static CliOptions build(String[] args) {
 		final Map<String, String> options = new LinkedHashMap<>();
 		String key = null;
