@@ -107,6 +107,7 @@ final class JvmExprCompiler {
 				case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
 				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
 				case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
+				case LispNames.NTHCDR -> JvmNthcdrCompiler.compile(cons, ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
@@ -145,6 +146,9 @@ final class JvmExprCompiler {
 				case LispNames.ABS -> JvmAbsCompiler.compile(cons, ctx, className);
 				case LispNames.MIN -> JvmMinCompiler.compile(cons, ctx, className);
 				case LispNames.MAX -> JvmMaxCompiler.compile(cons, ctx, className);
+				case LispNames.FIRST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
+				case LispNames.NTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx, className);
 				case LispNames.SECOND ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx, className);
 				case LispNames.THIRD ->

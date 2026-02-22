@@ -494,6 +494,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void first() throws Exception {
+		assertThat(compileAndRun("(print (first '(1 2 3)))")).isEqualTo("1");
+	}
+
+	@Test
+	void nth() throws Exception {
+		assertThat(compileAndRun("(print (nth 0 '(1 2 3)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (nth 2 '(1 2 3)))")).isEqualTo("3");
+	}
+
+	@Test
+	void nthcdr() throws Exception {
+		assertThat(compileAndRun("(print (nthcdr 0 '(1 2 3)))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (nthcdr 2 '(1 2 3)))")).isEqualTo("(3)");
+	}
+
+	@Test
 	void second() throws Exception {
 		assertThat(compileAndRun("(print (second '(1 2 3)))")).isEqualTo("2");
 	}

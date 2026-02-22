@@ -163,6 +163,13 @@
 (print (unless t 42))
 (print (unless nil 1 2 3))
 
+; first, nth, nthcdr
+(print (first '(1 2 3)))
+(print (nth 0 '(1 2 3)))
+(print (nth 2 '(1 2 3)))
+(print (nthcdr 0 '(1 2 3)))
+(print (nthcdr 2 '(1 2 3)))
+
 ; second, third, fourth
 (print (second '(1 2 3)))
 (print (third '(1 2 3)))

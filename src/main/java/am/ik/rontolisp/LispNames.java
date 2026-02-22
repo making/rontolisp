@@ -89,6 +89,9 @@ public final class LispNames {
 	/** The {@code append} built-in function. */
 	public static final String APPEND = "append";
 
+	/** The {@code nthcdr} built-in function. */
+	public static final String NTHCDR = "nthcdr";
+
 	// Macros
 
 	/** The {@code defun} macro. */
@@ -181,6 +184,9 @@ public final class LispNames {
 	/** The {@code unless} macro. */
 	public static final String UNLESS = "unless";
 
+	/** The {@code first} macro. */
+	public static final String FIRST = "first";
+
 	/** The {@code second} macro. */
 	public static final String SECOND = "second";
 
@@ -189,6 +195,9 @@ public final class LispNames {
 
 	/** The {@code fourth} macro. */
 	public static final String FOURTH = "fourth";
+
+	/** The {@code nth} macro. */
+	public static final String NTH = "nth";
 
 	// I/O
 

@@ -105,6 +105,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandEvenp(cons), env);
 				case LispNames.ODDP:
 					return eval(LispMacroExpander.expandOddp(cons), env);
+				case LispNames.FIRST:
+					return eval(LispMacroExpander.expandFirst(cons), env);
+				case LispNames.NTH:
+					return eval(LispMacroExpander.expandNth(cons), env);
 				case LispNames.SECOND:
 					return eval(LispMacroExpander.expandSecond(cons), env);
 				case LispNames.THIRD:

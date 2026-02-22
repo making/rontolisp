@@ -310,6 +310,20 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+		env.define(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
+			requireArgCount(LispNames.NTHCDR, args, 2);
+			long n = asLong(args.get(0));
+			LispVal list = args.get(1);
+			for (long i = 0; i < n; i++) {
+				if (list instanceof LispCons cons) {
+					list = cons.cdr();
+				}
+				else {
+					return LispNil.INSTANCE;
+				}
+			}
+			return list;
+		}));
 		env.define(LispNames.APPEND, new LispFunction(LispNames.APPEND, args -> {
 			if (args.isEmpty()) {
 				return LispNil.INSTANCE;
