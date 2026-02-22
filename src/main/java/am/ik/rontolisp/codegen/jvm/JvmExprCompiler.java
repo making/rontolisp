@@ -126,6 +126,7 @@ final class JvmExprCompiler {
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.MAP -> JvmMapCompiler.compile(cons, ctx, className);
+				case LispNames.REDUCE -> JvmReduceCompiler.compile(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
 				case LispNames.NUMBERP -> JvmNumberpCompiler.compile(cons, ctx, className);
