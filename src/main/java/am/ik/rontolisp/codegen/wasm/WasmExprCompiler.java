@@ -47,7 +47,14 @@ final class WasmExprCompiler {
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
 			case LispString s -> WasmEmitHelper.compileStringLiteral(s.print(), ctx);
-			case LispSymbol sym -> compileSymbolRef(sym, ctx);
+			case LispSymbol sym -> {
+				if (sym.isKeyword()) {
+					WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
+				}
+				else {
+					compileSymbolRef(sym, ctx);
+				}
+			}
 			case LispCons cons -> compileCons(cons, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
@@ -141,6 +148,7 @@ final class WasmExprCompiler {
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
+				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);
 				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(cons, ctx);
 				case LispNames.TRUNCATE -> WasmIntConvCompiler.compileTruncate(cons, ctx);
 				case LispNames.FLOOR -> WasmIntConvCompiler.compileFloor(cons, ctx);

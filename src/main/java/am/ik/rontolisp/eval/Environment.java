@@ -297,6 +297,10 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.CONSP, args, 1);
 			return args.get(0) instanceof LispCons ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		env.define(LispNames.KEYWORDP, new LispFunction(LispNames.KEYWORDP, args -> {
+			requireArgCount(LispNames.KEYWORDP, args, 1);
+			return args.get(0) instanceof LispSymbol sym && sym.isKeyword() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
 	}
 
 	private static void registerListOps(Environment env) {

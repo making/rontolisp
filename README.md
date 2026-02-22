@@ -141,6 +141,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | Double | `3.14`, `-0.5` | 64-bit floating-point number |
 | String | `"hello"` | String literal (interpreter only) |
 | Symbol | `x`, `foo` | Identifier |
+| Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
 | Nil | `nil` | False / empty list |
 | T | `t` | True |
 | Cons | `(1 2 3)` | Linked list built from cons cells |
@@ -209,6 +210,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `stringp` | `(stringp "hello")` | `t` |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
+| `keywordp` | `(keywordp :foo)` | `t` |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1` |
 | `cdr` | `(cdr (cons 1 2))` | `2` |

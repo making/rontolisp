@@ -276,6 +276,11 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void keywordp() {
+			assertThat(eval("(keywordp :foo)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
 		void carCdrComposition() {
 			assertThat(eval("(cadr '(1 2 3))")).isEqualTo(new LispInteger(2));
 		}
