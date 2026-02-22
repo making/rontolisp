@@ -122,6 +122,12 @@
 (print (when (= 1 1) 10))
 (print (when (= 1 2) 10))
 
+; append
+(print (append '(1 2) '(3 4)))
+(print (append nil '(1 2)))
+(print (append '(1 2) nil))
+(print (append '(1) '(2) '(3)))
+
 ; Double literals and arithmetic
 (print 3.14)
 (print (+ 1.5 2.5))

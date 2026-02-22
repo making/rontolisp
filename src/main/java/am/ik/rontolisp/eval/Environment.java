@@ -269,6 +269,26 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+		env.define(LispNames.APPEND, new LispFunction(LispNames.APPEND, args -> {
+			if (args.isEmpty()) {
+				return LispNil.INSTANCE;
+			}
+			LispVal result = args.getLast();
+			for (int i = args.size() - 2; i >= 0; i--) {
+				result = appendTwo(args.get(i), result);
+			}
+			return result;
+		}));
+	}
+
+	private static LispVal appendTwo(LispVal list, LispVal tail) {
+		if (list instanceof LispNil) {
+			return tail;
+		}
+		if (list instanceof LispCons cons) {
+			return new LispCons(cons.car(), appendTwo(cons.cdr(), tail));
+		}
+		throw new LispEvalException("append expects a list, got: " + list.print());
 	}
 
 	private static long asLong(LispVal val) {

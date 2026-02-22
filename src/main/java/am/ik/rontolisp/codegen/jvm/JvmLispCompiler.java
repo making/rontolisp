@@ -87,6 +87,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant consToStringDescUtf = cp.addUtf8("([Ljava/lang/Object;)Ljava/lang/String;");
 		MethodrefConstant consToStringMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(consToStringName, consToStringDescUtf));
+		Utf8Constant appendName = cp.addUtf8("_append");
+		Utf8Constant appendDescUtf = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodrefConstant appendMethod = cp.addMethodref(thisClass, cp.addNameAndType(appendName, appendDescUtf));
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 		MethodrefConstant stringCharAt = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
@@ -166,7 +169,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.functions(functions)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
-			.nextFuncId(nextFuncId);
+			.nextFuncId(nextFuncId)
+			.appendMethod(appendMethod);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -278,6 +282,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				nilStr, funcStr);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
+		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass, appendMethod);
 
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
@@ -349,6 +354,14 @@ public final class JvmLispCompiler implements LispCompiler {
 							attr.writeU2(3)
 								.writeU2(5)
 								.writeCode((Object[]) ctsCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(5)
+								.writeU2(3)
+								.writeCode((Object[]) appendCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);
 						})));
@@ -460,6 +473,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant stringCharAt;
 
+		final MethodrefConstant appendMethod;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -503,6 +518,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.numberDoubleValue = Objects.requireNonNull(builder.numberDoubleValue);
 			this.stringClass = Objects.requireNonNull(builder.stringClass);
 			this.stringCharAt = Objects.requireNonNull(builder.stringCharAt);
+			this.appendMethod = Objects.requireNonNull(builder.appendMethod);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -550,6 +566,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable ClassConstant stringClass;
 
 			private @Nullable MethodrefConstant stringCharAt;
+
+			private @Nullable MethodrefConstant appendMethod;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -646,6 +664,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder stringCharAt(MethodrefConstant stringCharAt) {
 				this.stringCharAt = stringCharAt;
+				return this;
+			}
+
+			Builder appendMethod(MethodrefConstant appendMethod) {
+				this.appendMethod = appendMethod;
 				return this;
 			}
 

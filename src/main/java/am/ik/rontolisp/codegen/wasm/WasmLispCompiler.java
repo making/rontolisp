@@ -52,12 +52,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_PRINT_F64_NO_NL = 7;
 
-	static final int FUNC_DISPATCH_BASE = 8;
+	static final int FUNC_APPEND = 8;
+
+	static final int FUNC_DISPATCH_BASE = 9;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 8..15 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 16
+	// Dispatch functions occupy indices 9..16 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 17
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -313,6 +315,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
+		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
@@ -393,7 +396,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_PRINT_VAL) // _print_val
 					.addFunction(TYPE_PRINT_I32) // _print_i32_no_nl
 					.addFunction(TYPE_PRINT_F64) // _print_f64
-					.addFunction(TYPE_PRINT_F64); // _print_f64_no_nl
+					.addFunction(TYPE_PRINT_F64) // _print_f64_no_nl
+					.addFunction(TYPE_CALLABLE_BASE + 1); // _append
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -420,7 +424,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(printValBody)
 					.addFunction(printI32NoNlBody)
 					.addFunction(printF64Body)
-					.addFunction(printF64NoNlBody);
+					.addFunction(printF64NoNlBody)
+					.addFunction(appendBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
