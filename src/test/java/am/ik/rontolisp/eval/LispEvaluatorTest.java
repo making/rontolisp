@@ -465,4 +465,105 @@ class LispEvaluatorTest {
 		assertThat(baos.toString().trim()).isEqualTo("3.14");
 	}
 
+	// eq tests
+
+	@Test
+	void evalEqSameInteger() {
+		assertThat(eval("(eq 1 1)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqDifferentInteger() {
+		assertThat(eval("(eq 1 2)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqSymbols() {
+		assertThat(eval("(eq 'foo 'foo)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqSymbolsDifferent() {
+		assertThat(eval("(eq 'foo 'bar)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqNilNil() {
+		assertThat(eval("(eq nil nil)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqNilAndValue() {
+		assertThat(eval("(eq nil 1)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqConsReferenceIdentity() {
+		assertThat(evalMulti("(setq x (cons 1 2)) (eq x x)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqConsDifferentInstances() {
+		assertThat(eval("(eq (cons 1 2) (cons 1 2))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	// push tests
+
+	@Test
+	void evalPush() {
+		assertThat(evalMulti("(setq x (list 2 3)) (push 1 x) x").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalPushReturnsNewList() {
+		assertThat(evalMulti("(setq x (list 2 3)) (push 1 x)").print()).isEqualTo("(1 2 3)");
+	}
+
+	// pop tests
+
+	@Test
+	void evalPop() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (pop x)")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void evalPopUpdatesPlace() {
+		assertThat(evalMulti("(setq x (list 1 2 3)) (pop x) x").print()).isEqualTo("(2 3)");
+	}
+
+	// remf tests
+
+	@Test
+	void evalRemfHead() {
+		assertThat(evalMulti("(setq plist (list 'a 1 'b 2 'c 3)) (remf plist 'a) plist").print())
+			.isEqualTo("(b 2 c 3)");
+	}
+
+	@Test
+	void evalRemfMiddle() {
+		assertThat(evalMulti("(setq plist (list 'a 1 'b 2 'c 3)) (remf plist 'b) plist").print())
+			.isEqualTo("(a 1 c 3)");
+	}
+
+	@Test
+	void evalRemfTail() {
+		assertThat(evalMulti("(setq plist (list 'a 1 'b 2 'c 3)) (remf plist 'c) plist").print())
+			.isEqualTo("(a 1 b 2)");
+	}
+
+	@Test
+	void evalRemfNotFound() {
+		assertThat(evalMulti("(setq plist (list 'a 1 'b 2)) (remf plist 'z)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalRemfEmpty() {
+		assertThat(evalMulti("(setq plist nil) (remf plist 'a)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalRemfReturnsT() {
+		assertThat(evalMulti("(setq plist (list 'a 1 'b 2)) (remf plist 'a)")).isSameAs(LispTrue.INSTANCE);
+	}
+
 }

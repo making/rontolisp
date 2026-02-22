@@ -626,6 +626,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final ByteArrayOutputStream data = new ByteArrayOutputStream();
 
+		private final Map<String, StringEntry> cache = new HashMap<>();
+
 		private int nextOffset;
 
 		final StringEntry nil;
@@ -660,11 +662,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		StringEntry addString(String s) {
+			StringEntry existing = this.cache.get(s);
+			if (existing != null) {
+				return existing;
+			}
 			byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
 			int offset = this.nextOffset;
 			this.data.write(bytes, 0, bytes.length);
 			this.nextOffset += bytes.length;
-			return new StringEntry(offset, bytes.length);
+			StringEntry entry = new StringEntry(offset, bytes.length);
+			this.cache.put(s, entry);
+			return entry;
 		}
 
 		byte[] toByteArray() {

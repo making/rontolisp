@@ -60,6 +60,9 @@ public final class LispNames {
 	/** The {@code =} built-in function. */
 	public static final String EQ = "=";
 
+	/** The {@code eq} built-in function (general equality). */
+	public static final String EQ_GENERAL = "eq";
+
 	/** The {@code <} built-in function. */
 	public static final String LT = "<";
 
@@ -98,10 +101,22 @@ public final class LispNames {
 	/** The {@code rplacd} built-in function. */
 	public static final String RPLACD = "rplacd";
 
+	/** The {@code %remf-tail} built-in function. */
+	public static final String REMF_TAIL = "%remf-tail";
+
 	// Macros
 
 	/** The {@code setf} macro. */
 	public static final String SETF = "setf";
+
+	/** The {@code push} macro. */
+	public static final String PUSH = "push";
+
+	/** The {@code pop} macro. */
+	public static final String POP = "pop";
+
+	/** The {@code remf} macro. */
+	public static final String REMF = "remf";
 
 	/** The {@code defun} macro. */
 	public static final String DEFUN = "defun";

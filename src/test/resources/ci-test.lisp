@@ -240,6 +240,30 @@
 (print (round -3.7))
 (print (round 42))
 
+; eq (general equality)
+(print (if (eq 1 1) 42 99))
+(print (if (eq 1 2) 42 99))
+(print (if (eq 'foo 'foo) 42 99))
+(print (if (eq nil nil) 42 99))
+(print (if (eq nil 1) 42 99))
+
+; push / pop
+(setq stack (list 2 3))
+(push 1 stack)
+(print stack)
+(print (pop stack))
+(print stack)
+
+; remf
+(setq plist (list 'a 1 'b 2 'c 3))
+(remf plist 'b)
+(print plist)
+(setq plist2 (list 'x 10 'y 20))
+(remf plist2 'x)
+(print plist2)
+(setq plist3 (list 'p 1 'q 2))
+(print (if (remf plist3 'z) 42 99))
+
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
 (print (if (and t) 42 99))

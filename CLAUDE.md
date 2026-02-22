@@ -40,6 +40,7 @@ eval, reader -> rontolisp (AST types only)
 - **symbolp/stringp**: Quoted symbols and string literals share runtime representation. Distinguished by leading `"` character (`charAt(0) == '"'`).
 - **consp in JVM**: Both cons cells and function references use `Object[]`. Distinguished by `arr[0] instanceof Integer`.
 - **Three-pass compilation**: Pass 1 collects defuns. Pass 2a compiles defun bodies, 2b compiles top-level, 2c iteratively compiles lambda bodies. Top-level must compile before lambda iteration.
+- **`%` prefix convention**: Internal helper functions that are not part of the public Lisp API use a `%` prefix (e.g., `%remf-tail`). These are implementation details used by macros and should not be called directly by users. They are registered in `Environment.java` and have dedicated compiler classes (`Jvm<Name>Compiler`, `Wasm<Name>Compiler`), but are not documented in the README.
 
 ## Development Workflows
 

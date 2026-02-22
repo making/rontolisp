@@ -595,4 +595,90 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("42");
 	}
 
+	@Test
+	void eqSameInteger() throws Exception {
+		assertThat(compileAndRun("(print (if (eq 1 1) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void eqDifferentInteger() throws Exception {
+		assertThat(compileAndRun("(print (if (eq 1 2) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void eqSymbols() throws Exception {
+		assertThat(compileAndRun("(print (if (eq 'foo 'foo) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void eqNilNil() throws Exception {
+		assertThat(compileAndRun("(print (if (eq nil nil) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void eqNilAndValue() throws Exception {
+		assertThat(compileAndRun("(print (if (eq nil 1) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void push() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 2 3))
+				(push 1 x)
+				(print x)
+				""")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void pop() throws Exception {
+		assertThat(compileAndRun("""
+				(setq x (list 1 2 3))
+				(print (pop x))
+				(print x)
+				""")).isEqualTo("1\n(2 3)");
+	}
+
+	@Test
+	void remfHead() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2 'c 3))
+				(remf plist 'a)
+				(print plist)
+				""")).isEqualTo("(b 2 c 3)");
+	}
+
+	@Test
+	void remfMiddle() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2 'c 3))
+				(remf plist 'b)
+				(print plist)
+				""")).isEqualTo("(a 1 c 3)");
+	}
+
+	@Test
+	void remfTail() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2 'c 3))
+				(remf plist 'c)
+				(print plist)
+				""")).isEqualTo("(a 1 b 2)");
+	}
+
+	@Test
+	void remfNotFound() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist (list 'a 1 'b 2))
+				(print (if (remf plist 'z) 42 99))
+				""")).isEqualTo("99");
+	}
+
+	@Test
+	void remfEmpty() throws Exception {
+		assertThat(compileAndRun("""
+				(setq plist nil)
+				(print (if (remf plist 'a) 42 99))
+				""")).isEqualTo("99");
+	}
+
 }
