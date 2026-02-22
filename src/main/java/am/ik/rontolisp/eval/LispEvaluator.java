@@ -83,6 +83,8 @@ public final class LispEvaluator {
 					return evalFuncall(cons, env);
 				case LispNames.MAP:
 					return evalMap(cons, env);
+				case LispNames.REDUCE:
+					return evalReduce(cons, env);
 				case LispNames.COND:
 					return eval(LispMacroExpander.expandCond(cons), env);
 				case LispNames.AND:
@@ -227,6 +229,34 @@ public final class LispEvaluator {
 			result = new LispCons(results.get(i), result);
 		}
 		return result;
+	}
+
+	private LispVal evalReduce(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal function;
+		LispVal accumulator;
+		LispVal list;
+		if (parts.size() == 3) {
+			// 2-arg: (reduce fn list)
+			function = eval(parts.get(1), env);
+			list = eval(parts.get(2), env);
+			if (!(list instanceof LispCons first)) {
+				throw new LispEvalException("reduce requires a non-empty list when no initial value is provided");
+			}
+			accumulator = first.car();
+			list = first.cdr();
+		}
+		else {
+			// 3-arg: (reduce fn initial-value list)
+			function = eval(parts.get(1), env);
+			accumulator = eval(parts.get(2), env);
+			list = eval(parts.get(3), env);
+		}
+		while (list instanceof LispCons cell) {
+			accumulator = apply(function, List.of(accumulator, cell.car()), env);
+			list = cell.cdr();
+		}
+		return accumulator;
 	}
 
 	private List<LispVal> evalArgs(LispCons cons, Environment env) {

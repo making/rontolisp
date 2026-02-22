@@ -278,6 +278,13 @@
 (print (map square '(1 2 3)))
 (print (map (lambda (x) x) nil))
 
+; reduce
+(print (reduce + 0 '(1 2 3 4 5)))
+(print (reduce * 1 '(1 2 3 4 5)))
+(print (reduce + '(1 2 3 4 5)))
+(print (reduce (lambda (acc x) (+ acc (* x x))) 0 '(1 2 3)))
+(print (reduce + 0 nil))
+
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
 (print (if (and t) 42 99))

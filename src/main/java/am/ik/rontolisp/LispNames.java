@@ -109,6 +109,9 @@ public final class LispNames {
 	/** The {@code map} built-in function. */
 	public static final String MAP = "map";
 
+	/** The {@code reduce} built-in function. */
+	public static final String REDUCE = "reduce";
+
 	// Macros
 
 	/** The {@code setf} macro. */

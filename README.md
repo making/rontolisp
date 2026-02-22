@@ -228,6 +228,8 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `ceiling` | `(ceiling 3.2)`, `(ceiling -3.2)` | `4`, `-3` (toward positive infinity) |
 | `round` | `(round 3.5)`, `(round 2.5)` | `4`, `2` (banker's rounding) |
 | `funcall` | `(funcall f arg...)` | Apply function `f` to args |
+| `map` | `(map f list)` | Apply `f` to each element, return new list |
+| `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 
