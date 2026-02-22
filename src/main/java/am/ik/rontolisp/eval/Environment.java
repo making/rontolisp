@@ -1,6 +1,11 @@
 package am.ik.rontolisp.eval;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +21,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Scope;
+import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -81,10 +87,20 @@ public final class Environment implements Scope {
 	 * @return the global environment
 	 */
 	public static Environment createGlobal(PrintStream out) {
+		return createGlobal(out, InputStream.nullInputStream());
+	}
+
+	/**
+	 * Create the global environment with all built-in functions.
+	 * @param out the output stream for print operations
+	 * @param in the input stream for read operations
+	 * @return the global environment
+	 */
+	public static Environment createGlobal(PrintStream out, InputStream in) {
 		Environment env = new Environment(null);
 		registerArithmetic(env);
 		registerComparison(env);
-		registerIO(env, out);
+		registerIO(env, out, in);
 		registerPredicates(env);
 		registerListOps(env);
 		registerTypeConversion(env);
@@ -251,7 +267,8 @@ public final class Environment implements Scope {
 		}));
 	}
 
-	private static void registerIO(Environment env, PrintStream out) {
+	private static void registerIO(Environment env, PrintStream out, InputStream in) {
+		BufferedReader stdinReader = new BufferedReader(new InputStreamReader(in));
 		env.define(LispNames.PRINT, new LispFunction(LispNames.PRINT, args -> {
 			requireArgCount(LispNames.PRINT, args, 1);
 			LispVal val = args.get(0);
@@ -265,6 +282,33 @@ public final class Environment implements Scope {
 				out.println(val.print());
 			}
 			return val;
+		}));
+		env.define(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
+			requireArgCount(LispNames.READ_LINE, args, 0);
+			try {
+				String line = stdinReader.readLine();
+				return line == null ? LispNil.INSTANCE : new LispString(line);
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		}));
+		env.define(LispNames.READ, new LispFunction(LispNames.READ, args -> {
+			requireArgCount(LispNames.READ, args, 0);
+			try {
+				String line = stdinReader.readLine();
+				if (line == null) {
+					return LispNil.INSTANCE;
+				}
+				line = line.trim();
+				if (line.isEmpty()) {
+					return LispNil.INSTANCE;
+				}
+				return LispReader.readFromString(line);
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
 		}));
 	}
 

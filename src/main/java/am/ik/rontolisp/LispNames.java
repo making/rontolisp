@@ -239,6 +239,12 @@ public final class LispNames {
 	/** The {@code print} built-in function. */
 	public static final String PRINT = "print";
 
+	/** The {@code read-line} built-in function. */
+	public static final String READ_LINE = "read-line";
+
+	/** The {@code read} built-in function (interpreter only). */
+	public static final String READ = "read";
+
 	private LispNames() {
 	}
 

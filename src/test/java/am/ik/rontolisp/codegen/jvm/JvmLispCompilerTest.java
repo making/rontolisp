@@ -1,10 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -771,6 +774,51 @@ class JvmLispCompilerTest {
 				(setq my-op +)
 				(print (funcall my-op 10 20))
 				""")).isEqualTo("30");
+	}
+
+	// read-line tests
+
+	private String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			InputStream oldIn = System.in;
+			System.setOut(new PrintStream(baos));
+			System.setIn(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+				System.setIn(oldIn);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	@Test
+	void compileAndRunReadLine() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read-line))", "hello\n")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunReadLineEof() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (null (read-line)))", "")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunReadLineStringp() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello\n")).isEqualTo("1");
 	}
 
 }

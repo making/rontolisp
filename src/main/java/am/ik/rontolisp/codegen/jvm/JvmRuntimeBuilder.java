@@ -348,6 +348,65 @@ final class JvmRuntimeBuilder {
 		return code;
 	}
 
+	/**
+	 * Builds bytecode for _readLine helper. Lazily initializes static _stdinReader field,
+	 * reads a line, and wraps it with '"' prefix/suffix for the internal string format.
+	 * Returns null for EOF.
+	 */
+	static List<Integer> buildReadLineBody(ClassConstant bufferedReaderClass, ClassConstant inputStreamReaderClass,
+			MethodrefConstant brInit, MethodrefConstant brReadLine, MethodrefConstant isrInit,
+			ConstantPool.FieldrefConstant systemIn, ConstantPool.FieldrefConstant stdinReaderField,
+			ConstantPool.StringConstant quoteStr, MethodrefConstant stringConcat) {
+		List<Integer> code = new ArrayList<>();
+		// if (_stdinReader == null)
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, stdinReaderField.index());
+		int ifNonnullPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		// _stdinReader = new BufferedReader(new InputStreamReader(System.in))
+		code.add(Opcode.NEW);
+		emitU2(code, bufferedReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.NEW);
+		emitU2(code, inputStreamReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, systemIn.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, isrInit.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, brInit.index());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, stdinReaderField.index());
+		// end if
+		patchBranch(code, ifNonnullPos, code.size());
+		// String line = _stdinReader.readLine();
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, stdinReaderField.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, brReadLine.index());
+		code.add(Opcode.ASTORE_0);
+		// if (line == null) return null;
+		code.add(Opcode.ALOAD_0);
+		int ifNotNullPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		// return "\"" + line + "\""
+		patchBranch(code, ifNotNullPos, code.size());
+		emitLdc(code, quoteStr.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringConcat.index());
+		emitLdc(code, quoteStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringConcat.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
 	static void emitU2(List<Integer> code, int value) {
 		byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
 		code.add((int) bytes[0]);

@@ -81,7 +81,7 @@ public final class RontoLispCli {
 	}
 
 	private void repl() {
-		LispEvaluator evaluator = new LispEvaluator(this.out);
+		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
 			JLineRepl.run(evaluator, this.out, buffer);
@@ -130,7 +130,7 @@ public final class RontoLispCli {
 	}
 
 	private void interpret(String source) {
-		LispEvaluator evaluator = new LispEvaluator(this.out);
+		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		List<LispVal> exprs = LispReader.readAllFromString(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);

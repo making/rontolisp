@@ -742,4 +742,36 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("30");
 	}
 
+	// read-line tests
+
+	private static String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"echo '" + stdin + "' | wasmtime --wasm gc /tmp/test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void readLine() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read-line))", "hello")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void readLineEof() throws Exception {
+		List<LispVal> program = LispReader.readAllFromString("(print (null (read-line)))");
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "echo -n '' | wasmtime --wasm gc /tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("1");
+	}
+
+	@Test
+	void readLineStringp() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello")).isEqualTo("1");
+	}
+
 }

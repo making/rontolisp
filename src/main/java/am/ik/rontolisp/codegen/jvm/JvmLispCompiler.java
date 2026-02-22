@@ -120,6 +120,28 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant mathRint = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("rint"), cp.addUtf8("(D)D")));
 
+		// read-line helper
+		ClassConstant bufferedReaderClass = cp.addClass(cp.addUtf8("java/io/BufferedReader"));
+		ClassConstant inputStreamReaderClass = cp.addClass(cp.addUtf8("java/io/InputStreamReader"));
+		MethodrefConstant brInit = cp.addMethodref(bufferedReaderClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/Reader;)V")));
+		MethodrefConstant brReadLine = cp.addMethodref(bufferedReaderClass,
+				cp.addNameAndType(cp.addUtf8("readLine"), cp.addUtf8("()Ljava/lang/String;")));
+		MethodrefConstant isrInit = cp.addMethodref(inputStreamReaderClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
+		FieldrefConstant systemIn = cp.addFieldref(systemClass,
+				cp.addNameAndType(cp.addUtf8("in"), cp.addUtf8("Ljava/io/InputStream;")));
+		MethodrefConstant stringConcat = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		Utf8Constant stdinReaderFieldName = cp.addUtf8("_stdinReader");
+		Utf8Constant stdinReaderFieldDesc = cp.addUtf8("Ljava/io/BufferedReader;");
+		FieldrefConstant stdinReaderField = cp.addFieldref(thisClass,
+				cp.addNameAndType(stdinReaderFieldName, stdinReaderFieldDesc));
+		Utf8Constant readLineHelperName = cp.addUtf8("_readLine");
+		Utf8Constant readLineHelperDesc = cp.addUtf8("()Ljava/lang/Object;");
+		MethodrefConstant readLineHelperMethod = cp.addMethodref(thisClass,
+				cp.addNameAndType(readLineHelperName, readLineHelperDesc));
+
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
@@ -216,7 +238,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.mathFloor(mathFloor)
 			.mathCeil(mathCeil)
 			.mathRint(mathRint)
-			.objectEquals(objectEquals);
+			.objectEquals(objectEquals)
+			.readLineHelper(readLineHelperMethod);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -329,6 +352,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
 		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass, appendMethod);
+		ConstantPool.StringConstant quoteStr = cp.addString("\"");
+		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
+				brInit, brReadLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
 
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
@@ -342,8 +368,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass) //
 			.writeInterfaces(i -> {
 			})
-			.writeFields(f -> {
-			})
+			.writeFields(f -> f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+				.writeU2(stdinReaderFieldName)
+				.writeU2(stdinReaderFieldDesc)
+				.writeU2(0)))
 			.writeMethods(methods -> {
 				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -408,6 +436,14 @@ public final class JvmLispCompiler implements LispCompiler {
 							attr.writeU2(5)
 								.writeU2(3)
 								.writeCode((Object[]) appendCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(5)
+								.writeU2(1)
+								.writeCode((Object[]) readLineCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);
 						})));
@@ -557,6 +593,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant objectEquals;
 
+		final MethodrefConstant readLineHelper;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -611,6 +649,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mathCeil = Objects.requireNonNull(builder.mathCeil);
 			this.mathRint = Objects.requireNonNull(builder.mathRint);
 			this.objectEquals = Objects.requireNonNull(builder.objectEquals);
+			this.readLineHelper = Objects.requireNonNull(builder.readLineHelper);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -680,6 +719,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant mathRint;
 
 			private @Nullable MethodrefConstant objectEquals;
+
+			private @Nullable MethodrefConstant readLineHelper;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -831,6 +872,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder objectEquals(MethodrefConstant objectEquals) {
 				this.objectEquals = objectEquals;
+				return this;
+			}
+
+			Builder readLineHelper(MethodrefConstant readLineHelper) {
+				this.readLineHelper = readLineHelper;
 				return this;
 			}
 

@@ -127,8 +127,12 @@ public final class BuiltinFunctionWrappers {
 					List.of(callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
 							new LispInteger(0)))),
 			// oddp: (not (= (mod a 2) 0))
-			new WrapperDef(LispNames.ODDP, List.of("a"), List.of(callV(LispNames.NOT, callV(LispNames.EQ,
-					callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)), new LispInteger(0))))));
+			new WrapperDef(LispNames.ODDP, List.of("a"),
+					List.of(callV(LispNames.NOT,
+							callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
+									new LispInteger(0))))),
+			// read-line: 0-arity
+			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))));
 
 	private static LispVal listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;
