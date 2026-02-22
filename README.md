@@ -173,9 +173,11 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `minusp` | `(minusp x)` | Expands to `(< x 0)` |
 | `evenp` | `(evenp x)` | Expands to `(= (mod x 2) 0)` |
 | `oddp` | `(oddp x)` | Expands to `(not (= (mod x 2) 0))` |
-| `second` | `(second lst)` | Expands to `(cadr lst)` |
-| `third` | `(third lst)` | Expands to `(caddr lst)` |
-| `fourth` | `(fourth lst)` | Expands to `(cadddr lst)` |
+| `first` | `(first lst)` | Expands to `(car lst)` |
+| `nth` | `(nth n lst)` | Expands to `(car (nthcdr n lst))`. 0-based indexing |
+| `second` | `(second lst)` | Expands to `(nth 1 lst)` |
+| `third` | `(third lst)` | Expands to `(nth 2 lst)` |
+| `fourth` | `(fourth lst)` | Expands to `(nth 3 lst)` |
 
 ### Built-in Functions
 
@@ -207,6 +209,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `cdr` | `(cdr (cons 1 2))` | `2` |
 | `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
+| `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
 | `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
 | `min` | `(min 3 5)`, `(min 1.5 2.5)` | `3`, `1.5` |
 | `max` | `(max 3 5)`, `(max 1.5 2.5)` | `5`, `2.5` |

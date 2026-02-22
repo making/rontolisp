@@ -307,36 +307,59 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (second x) into (cadr x) -> (car (cdr x)).
+	 * Expands (first x) into (car x).
+	 * @param cons the first expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFirst(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.CAR), arg));
+	}
+
+	/**
+	 * Expands (nth n list) into (car (nthcdr n list)).
+	 * @param cons the nth expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNth(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal n = parts.get(1);
+		LispVal list = parts.get(2);
+		LispVal nthcdrExpr = listToCons(List.of(new LispSymbol(LispNames.NTHCDR), n, list));
+		return listToCons(List.of(new LispSymbol(LispNames.CAR), nthcdrExpr));
+	}
+
+	/**
+	 * Expands (second x) into (nth 1 x) -> (car (nthcdr 1 x)).
 	 * @param cons the second expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSecond(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
-		LispCons cadrCons = listToCons(List.of(new LispSymbol("cadr"), arg));
-		return expandCarCdrComposition(cadrCons);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(1), arg));
+		return expandNth(nthCons);
 	}
 
 	/**
-	 * Expands (third x) into (caddr x) -> (car (cdr (cdr x))).
+	 * Expands (third x) into (nth 2 x) -> (car (nthcdr 2 x)).
 	 * @param cons the third expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandThird(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
-		LispCons caddrCons = listToCons(List.of(new LispSymbol("caddr"), arg));
-		return expandCarCdrComposition(caddrCons);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(2), arg));
+		return expandNth(nthCons);
 	}
 
 	/**
-	 * Expands (fourth x) into (cadddr x) -> (car (cdr (cdr (cdr x)))).
+	 * Expands (fourth x) into (nth 3 x) -> (car (nthcdr 3 x)).
 	 * @param cons the fourth expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFourth(LispCons cons) {
 		LispVal arg = cons.toList().get(1);
-		LispCons cadddrCons = listToCons(List.of(new LispSymbol("cadddr"), arg));
-		return expandCarCdrComposition(cadddrCons);
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(3), arg));
+		return expandNth(nthCons);
 	}
 
 	/**

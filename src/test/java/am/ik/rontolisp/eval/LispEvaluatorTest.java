@@ -368,6 +368,26 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFirst() {
+		assertThat(eval("(first '(1 2 3))")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void evalNth() {
+		assertThat(eval("(nth 0 '(1 2 3))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(nth 1 '(1 2 3))")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(nth 2 '(1 2 3))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalNthcdr() {
+		assertThat(eval("(nthcdr 0 '(1 2 3))")).isEqualTo(eval("'(1 2 3)"));
+		assertThat(eval("(nthcdr 1 '(1 2 3))")).isEqualTo(eval("'(2 3)"));
+		assertThat(eval("(nthcdr 2 '(1 2 3))")).isEqualTo(eval("'(3)"));
+		assertThat(eval("(nthcdr 3 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalSecond() {
 		assertThat(eval("(second '(1 2 3))")).isEqualTo(new LispInteger(2));
 	}
