@@ -194,6 +194,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1` |
 | `cdr` | `(cdr (cons 1 2))` | `2` |
+| `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `funcall` | `(funcall f arg...)` | Apply function `f` to args |
 

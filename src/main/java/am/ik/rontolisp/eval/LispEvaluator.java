@@ -75,6 +75,9 @@ public final class LispEvaluator {
 				case LispNames.WHEN:
 					return eval(LispMacroExpander.expandWhen(cons), env);
 			}
+			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
+			}
 		}
 		// Function application
 		LispVal function = eval(head, env);

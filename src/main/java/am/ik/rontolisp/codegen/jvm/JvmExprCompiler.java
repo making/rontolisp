@@ -123,7 +123,14 @@ final class JvmExprCompiler {
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
 				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
-				default -> JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+				default -> {
+					if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
+					}
+					else {
+						JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+					}
+				}
 			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym

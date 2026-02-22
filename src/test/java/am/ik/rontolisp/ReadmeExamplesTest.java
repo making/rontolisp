@@ -275,6 +275,11 @@ class ReadmeExamplesTest {
 			assertThat(eval("(consp '(1 2))")).isSameAs(LispTrue.INSTANCE);
 		}
 
+		@Test
+		void carCdrComposition() {
+			assertThat(eval("(cadr '(1 2 3))")).isEqualTo(new LispInteger(2));
+		}
+
 	}
 
 	// == First-class function examples (First-Class Functions section) ==
