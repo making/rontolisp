@@ -272,6 +272,12 @@
 (print (if (keywordp 'foo) 42 99))
 (print (if (symbolp :foo) 42 99))
 
+; map
+(print (map (lambda (x) (* x x)) '(1 2 3)))
+(print (map (lambda (x) (+ x 10)) '(1 2 3)))
+(print (map square '(1 2 3)))
+(print (map (lambda (x) x) nil))
+
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
 (print (if (and t) 42 99))

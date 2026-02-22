@@ -104,6 +104,11 @@ public final class LispNames {
 	/** The {@code %remf-tail} built-in function. */
 	public static final String REMF_TAIL = "%remf-tail";
 
+	// Higher-order functions
+
+	/** The {@code map} built-in function. */
+	public static final String MAP = "map";
+
 	// Macros
 
 	/** The {@code setf} macro. */
