@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
@@ -122,6 +123,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			else {
 				topLevelExprs.add(expanded);
 			}
+		}
+
+		// Inject built-in function wrappers (user defuns take priority)
+		Set<String> userDefinedNames = new HashSet<>();
+		for (DefunDecl defun : defuns) {
+			userDefinedNames.add(defun.name);
+		}
+		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames)) {
+			defuns.add(extractSetqLambda(wrapper));
 		}
 
 		// Create string table

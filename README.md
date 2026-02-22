@@ -266,6 +266,20 @@ Functions are first-class values in all three execution modes. They can be passe
 (print (apply-twice (lambda (x) (+ x 10)) 5))  ; => 25
 ```
 
+**Built-in operators as first-class values:**
+
+Built-in operators like `+`, `car`, `1+` can be passed directly to higher-order functions:
+
+```lisp
+(print (reduce + 0 '(1 2 3 4 5)))              ; => 15
+(print (reduce * 1 '(1 2 3 4 5)))              ; => 120
+(print (map car '((1 2) (3 4) (5 6))))          ; => (1 3 5)
+(print (map 1+ '(1 2 3)))                       ; => (2 3 4)
+(print (funcall + 3 4))                          ; => 7
+(setq my-op +)
+(print (funcall my-op 10 20))                    ; => 30
+```
+
 ## Project Structure
 
 ```

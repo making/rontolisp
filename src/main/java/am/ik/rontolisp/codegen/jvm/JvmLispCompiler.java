@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LispCompiler;
 
@@ -155,13 +156,22 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 
+		// Inject built-in function wrappers (user defuns take priority)
+		Set<String> userDefinedNames = new HashSet<>();
+		for (DefunDecl defun : defuns) {
+			userDefinedNames.add(defun.name);
+		}
+		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames)) {
+			defuns.add(extractSetqLambda(wrapper));
+		}
+
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
 		Map<String, FunctionInfo> functions = new HashMap<>();
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
 			String descriptor = "(" + "Ljava/lang/Object;".repeat(defun.paramNames.size()) + ")Ljava/lang/Object;";
-			Utf8Constant nameUtf8 = cp.addUtf8(defun.name);
+			Utf8Constant nameUtf8 = cp.addUtf8(mangleMethodName(defun.name));
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
 			functions.put(defun.name,
@@ -455,6 +465,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
 		List<String> paramNames = extractParamNames(lambdaParts.get(1));
 		return new DefunDecl(funcName, paramNames, lambdaParts.subList(2, lambdaParts.size()));
+	}
+
+	/**
+	 * Mangles a Lisp function name into a valid JVM method name. The JVM spec forbids
+	 * {@code /}, {@code <}, {@code >}, {@code .}, {@code ;}, {@code [} in unqualified
+	 * names.
+	 */
+	static String mangleMethodName(String name) {
+		return switch (name) {
+			case "/" -> "$div";
+			case "<" -> "$lt";
+			case ">" -> "$gt";
+			case "<=" -> "$le";
+			case ">=" -> "$ge";
+			default -> name;
+		};
 	}
 
 	record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {

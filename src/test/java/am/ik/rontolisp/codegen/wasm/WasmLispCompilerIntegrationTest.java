@@ -704,4 +704,42 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (if (symbolp :foo) 42 99))")).isEqualTo("42");
 	}
 
+	@Test
+	void reduceWithBuiltinPlus() throws Exception {
+		assertThat(compileAndRun("(print (reduce + 0 '(1 2 3 4 5)))")).isEqualTo("15");
+	}
+
+	@Test
+	void reduceWithBuiltinMul() throws Exception {
+		assertThat(compileAndRun("(print (reduce * 1 '(1 2 3 4 5)))")).isEqualTo("120");
+	}
+
+	@Test
+	void mapWithBuiltinCar() throws Exception {
+		assertThat(compileAndRun("(print (map car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
+	}
+
+	@Test
+	void mapWithBuiltinCdr() throws Exception {
+		assertThat(compileAndRun("(print (map cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
+	}
+
+	@Test
+	void mapWithBuiltin1Plus() throws Exception {
+		assertThat(compileAndRun("(print (map 1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+	}
+
+	@Test
+	void funcallWithBuiltinPlus() throws Exception {
+		assertThat(compileAndRun("(print (funcall + 3 4))")).isEqualTo("7");
+	}
+
+	@Test
+	void builtinAsVariable() throws Exception {
+		assertThat(compileAndRun("""
+				(setq my-op +)
+				(print (funcall my-op 10 20))
+				""")).isEqualTo("30");
+	}
+
 }

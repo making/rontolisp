@@ -735,4 +735,42 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (if (symbolp :foo) 42 99))")).isEqualTo("42");
 	}
 
+	@Test
+	void compileAndRunReduceWithBuiltinPlus() throws Exception {
+		assertThat(compileAndRun("(print (reduce + 0 '(1 2 3 4 5)))")).isEqualTo("15");
+	}
+
+	@Test
+	void compileAndRunReduceWithBuiltinMul() throws Exception {
+		assertThat(compileAndRun("(print (reduce * 1 '(1 2 3 4 5)))")).isEqualTo("120");
+	}
+
+	@Test
+	void compileAndRunMapWithBuiltinCar() throws Exception {
+		assertThat(compileAndRun("(print (map car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
+	}
+
+	@Test
+	void compileAndRunMapWithBuiltinCdr() throws Exception {
+		assertThat(compileAndRun("(print (map cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
+	}
+
+	@Test
+	void compileAndRunMapWithBuiltin1Plus() throws Exception {
+		assertThat(compileAndRun("(print (map 1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+	}
+
+	@Test
+	void compileAndRunFuncallWithBuiltinPlus() throws Exception {
+		assertThat(compileAndRun("(print (funcall + 3 4))")).isEqualTo("7");
+	}
+
+	@Test
+	void compileAndRunBuiltinAsVariable() throws Exception {
+		assertThat(compileAndRun("""
+				(setq my-op +)
+				(print (funcall my-op 10 20))
+				""")).isEqualTo("30");
+	}
+
 }
