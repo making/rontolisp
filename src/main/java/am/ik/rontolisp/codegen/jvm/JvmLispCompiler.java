@@ -110,6 +110,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(JJ)J")));
 		MethodrefConstant mathMaxDouble = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(DD)D")));
+		MethodrefConstant mathFloor = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("floor"), cp.addUtf8("(D)D")));
+		MethodrefConstant mathCeil = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("ceil"), cp.addUtf8("(D)D")));
+		MethodrefConstant mathRint = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("rint"), cp.addUtf8("(D)D")));
 
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
@@ -194,7 +200,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			.mathMinLong(mathMinLong)
 			.mathMinDouble(mathMinDouble)
 			.mathMaxLong(mathMaxLong)
-			.mathMaxDouble(mathMaxDouble);
+			.mathMaxDouble(mathMaxDouble)
+			.mathFloor(mathFloor)
+			.mathCeil(mathCeil)
+			.mathRint(mathRint);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -511,6 +520,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant mathMaxDouble;
 
+		final MethodrefConstant mathFloor;
+
+		final MethodrefConstant mathCeil;
+
+		final MethodrefConstant mathRint;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -561,6 +576,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mathMinDouble = Objects.requireNonNull(builder.mathMinDouble);
 			this.mathMaxLong = Objects.requireNonNull(builder.mathMaxLong);
 			this.mathMaxDouble = Objects.requireNonNull(builder.mathMaxDouble);
+			this.mathFloor = Objects.requireNonNull(builder.mathFloor);
+			this.mathCeil = Objects.requireNonNull(builder.mathCeil);
+			this.mathRint = Objects.requireNonNull(builder.mathRint);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -622,6 +640,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant mathMaxLong;
 
 			private @Nullable MethodrefConstant mathMaxDouble;
+
+			private @Nullable MethodrefConstant mathFloor;
+
+			private @Nullable MethodrefConstant mathCeil;
+
+			private @Nullable MethodrefConstant mathRint;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -753,6 +777,21 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder mathMaxDouble(MethodrefConstant mathMaxDouble) {
 				this.mathMaxDouble = mathMaxDouble;
+				return this;
+			}
+
+			Builder mathFloor(MethodrefConstant mathFloor) {
+				this.mathFloor = mathFloor;
+				return this;
+			}
+
+			Builder mathCeil(MethodrefConstant mathCeil) {
+				this.mathCeil = mathCeil;
+				return this;
+			}
+
+			Builder mathRint(MethodrefConstant mathRint) {
+				this.mathRint = mathRint;
 				return this;
 			}
 
