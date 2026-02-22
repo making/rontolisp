@@ -68,6 +68,12 @@
 (print (car (list 1 2 3)))
 (print (car (cdr (list 1 2 3))))
 
+; car/cdr composition functions
+(print (cadr '(1 2 3)))
+(print (caddr '(1 2 3)))
+(print (caar '((1 2) 3)))
+(print (cadddr '(1 2 3 4)))
+
 ; Higher-order functions
 (defun apply-twice (f x) (f (f x)))
 (print (apply-twice square 3))

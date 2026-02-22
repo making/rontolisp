@@ -285,6 +285,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalCarCdrComposition() {
+		// 2-level compositions
+		assertThat(eval("(cadr '(1 2 3))")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(cdar '((1 2) 3))").print()).isEqualTo("(2)");
+		assertThat(eval("(caar '((1 2) 3))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(cddr '(1 2 3))").print()).isEqualTo("(3)");
+		// 3-level compositions
+		assertThat(eval("(caddr '(1 2 3))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(caadr '(1 (2 3) 4))")).isEqualTo(new LispInteger(2));
+		// 4-level compositions
+		assertThat(eval("(cadddr '(1 2 3 4))")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(caddar '((1 2 3) 4))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
 	void evalDoublePrint() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));

@@ -460,4 +460,12 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (+ (* 2.0 3.0) (- 10.0 4.0)))")).isEqualTo("12.0");
 	}
 
+	@Test
+	void compileAndRunCarCdrComposition() throws Exception {
+		assertThat(compileAndRun("(print (cadr '(1 2 3)))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (caddr '(1 2 3)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (caar '((1 2) 3)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (cadddr '(1 2 3 4)))")).isEqualTo("4");
+	}
+
 }

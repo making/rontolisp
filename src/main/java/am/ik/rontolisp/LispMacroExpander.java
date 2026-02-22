@@ -162,6 +162,44 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Checks if the given name matches the c[ad]{2,4}r pattern (e.g., caar, cadr, cddr,
+	 * caddr, cdddr, etc.).
+	 */
+	public static boolean isCarCdrComposition(String name) {
+		int len = name.length();
+		if (len < 4 || len > 6 || name.charAt(0) != 'c' || name.charAt(len - 1) != 'r') {
+			return false;
+		}
+		for (int i = 1; i < len - 1; i++) {
+			char ch = name.charAt(i);
+			if (ch != 'a' && ch != 'd') {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Expands car/cdr composition functions into nested car/cdr calls.
+	 *
+	 * <pre>
+	 * (cadr x)  -> (car (cdr x))
+	 * (caddr x) -> (car (cdr (cdr x)))
+	 * </pre>
+	 */
+	public static LispVal expandCarCdrComposition(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		String name = ((LispSymbol) parts.get(0)).name();
+		LispVal arg = parts.get(1);
+		// Process middle characters right to left
+		for (int i = name.length() - 2; i >= 1; i--) {
+			String op = (name.charAt(i) == 'a') ? LispNames.CAR : LispNames.CDR;
+			arg = listToCons(List.of(new LispSymbol(op), arg));
+		}
+		return arg;
+	}
+
+	/**
 	 * Expands (defun name (params...) body...) into (setq name (lambda (params...)
 	 * body...)).
 	 *
