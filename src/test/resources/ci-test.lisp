@@ -264,6 +264,14 @@
 (setq plist3 (list 'p 1 'q 2))
 (print (if (remf plist3 'z) 42 99))
 
+; Keyword symbols
+(print :foo)
+(print (if (eq :foo :foo) 42 99))
+(print (if (eq :foo :bar) 42 99))
+(print (if (keywordp :foo) 42 99))
+(print (if (keywordp 'foo) 42 99))
+(print (if (symbolp :foo) 42 99))
+
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
 (print (if (and t) 42 99))

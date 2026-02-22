@@ -56,7 +56,7 @@ public final class LispEvaluator {
 			case LispTrue t -> t;
 			case LispFunction f -> f;
 			case LispLambda l -> l;
-			case LispSymbol sym -> env.lookup(sym.name());
+			case LispSymbol sym -> sym.isKeyword() ? sym : env.lookup(sym.name());
 			case LispCons cons -> evalCons(cons, env);
 		};
 	}

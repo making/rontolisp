@@ -29,7 +29,14 @@ final class JvmExprCompiler {
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileLong(1, ctx);
 			case LispString s -> JvmEmitHelper.compileStringLiteral(s.print(), ctx);
-			case LispSymbol sym -> compileSymbolRef(sym, ctx);
+			case LispSymbol sym -> {
+				if (sym.isKeyword()) {
+					JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
+				}
+				else {
+					compileSymbolRef(sym, ctx);
+				}
+			}
 			case LispCons cons -> compileCons(cons, ctx, className);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
@@ -127,6 +134,7 @@ final class JvmExprCompiler {
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
 				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
+				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);
 				case LispNames.FLOAT -> JvmFloatConvCompiler.compile(cons, ctx, className);
 				case LispNames.TRUNCATE -> JvmIntConvCompiler.compileTruncate(cons, ctx, className);
 				case LispNames.FLOOR -> JvmIntConvCompiler.compileFloor(cons, ctx, className);

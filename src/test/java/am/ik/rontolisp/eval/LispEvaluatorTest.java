@@ -6,6 +6,7 @@ import java.io.PrintStream;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
@@ -227,6 +228,10 @@ class LispEvaluatorTest {
 		// consp
 		assertThat(eval("(consp '(1 2))")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(consp nil)")).isSameAs(LispNil.INSTANCE);
+		// keywordp
+		assertThat(eval("(keywordp :foo)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(keywordp 'foo)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(keywordp 42)")).isSameAs(LispNil.INSTANCE);
 	}
 
 	@Test
@@ -564,6 +569,29 @@ class LispEvaluatorTest {
 	@Test
 	void evalRemfReturnsT() {
 		assertThat(evalMulti("(setq plist (list 'a 1 'b 2)) (remf plist 'a)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	// keyword tests
+
+	@Test
+	void evalKeywordSelfEvaluating() {
+		assertThat(eval(":foo")).isEqualTo(new LispSymbol(":foo"));
+	}
+
+	@Test
+	void evalKeywordEq() {
+		assertThat(eval("(eq :foo :foo)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(eq :foo :bar)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalKeywordSymbolp() {
+		assertThat(eval("(symbolp :foo)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalKeywordInList() {
+		assertThat(eval("(car (list :foo :bar))")).isEqualTo(new LispSymbol(":foo"));
 	}
 
 }

@@ -22,7 +22,7 @@ public final class FreeVarAnalyzer {
 			LispNames.QUOTE, LispNames.IF, LispNames.LET, LispNames.PROGN, LispNames.SETQ, LispNames.DEFUN,
 			LispNames.LAMBDA, LispNames.NULL, LispNames.LIST, LispNames.CAR, LispNames.CDR, LispNames.CONS,
 			LispNames.FUNCALL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
-			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP);
+			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP);
 
 	private FreeVarAnalyzer() {
 	}
@@ -66,7 +66,8 @@ public final class FreeVarAnalyzer {
 		switch (expr) {
 			case LispSymbol sym -> {
 				String name = sym.name();
-				if (!SPECIAL_NAMES.contains(name) && !boundVars.contains(name) && !knownFunctions.contains(name)) {
+				if (!sym.isKeyword() && !SPECIAL_NAMES.contains(name) && !boundVars.contains(name)
+						&& !knownFunctions.contains(name)) {
 					freeVars.add(name);
 				}
 			}

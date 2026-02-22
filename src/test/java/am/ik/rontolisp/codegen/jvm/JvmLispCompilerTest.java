@@ -712,4 +712,27 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("99");
 	}
 
+	@Test
+	void compileAndRunKeywordPrint() throws Exception {
+		assertThat(compileAndRun("(print :foo)")).isEqualTo(":foo");
+	}
+
+	@Test
+	void compileAndRunKeywordEq() throws Exception {
+		assertThat(compileAndRun("(print (if (eq :foo :foo) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (eq :foo :bar) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunKeywordp() throws Exception {
+		assertThat(compileAndRun("(print (if (keywordp :foo) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (keywordp 'foo) 42 99))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (if (keywordp 42) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunKeywordSymbolp() throws Exception {
+		assertThat(compileAndRun("(print (if (symbolp :foo) 42 99))")).isEqualTo("42");
+	}
+
 }

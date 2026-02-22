@@ -165,6 +165,9 @@ public final class LispNames {
 	/** The {@code consp} built-in function. */
 	public static final String CONSP = "consp";
 
+	/** The {@code keywordp} built-in function. */
+	public static final String KEYWORDP = "keywordp";
+
 	// Type conversion
 
 	/** The {@code float} built-in function. */
