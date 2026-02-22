@@ -279,11 +279,11 @@
 (print (map (lambda (x) x) nil))
 
 ; reduce
-(print (reduce + 0 '(1 2 3 4 5)))
-(print (reduce * 1 '(1 2 3 4 5)))
-(print (reduce + '(1 2 3 4 5)))
+(print (reduce (lambda (a b) (+ a b)) 0 '(1 2 3 4 5)))
+(print (reduce (lambda (a b) (* a b)) 1 '(1 2 3 4 5)))
+(print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5)))
 (print (reduce (lambda (acc x) (+ acc (* x x))) 0 '(1 2 3)))
-(print (reduce + 0 nil))
+(print (reduce (lambda (a b) (+ a b)) 0 nil))
 
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
