@@ -230,6 +230,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalAppend() {
+		assertThat(eval("(append)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(append '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(append '(1 2) '(3 4))").print()).isEqualTo("(1 2 3 4)");
+		assertThat(eval("(append nil '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(append '(1 2) nil)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(append '(1) '(2) '(3))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(append '(1 2) 3)").print()).isEqualTo("(1 2 . 3)");
+	}
+
+	@Test
 	void evalDoubleLiteral() {
 		assertThat(eval("3.14")).isEqualTo(new LispDouble(3.14));
 	}
@@ -271,6 +282,104 @@ class LispEvaluatorTest {
 		assertThat(eval("(> 2.0 1.0)")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(<= 1.5 1.5)")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(>= 2.0 3.0)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalCarCdrComposition() {
+		// 2-level compositions
+		assertThat(eval("(cadr '(1 2 3))")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(cdar '((1 2) 3))").print()).isEqualTo("(2)");
+		assertThat(eval("(caar '((1 2) 3))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(cddr '(1 2 3))").print()).isEqualTo("(3)");
+		// 3-level compositions
+		assertThat(eval("(caddr '(1 2 3))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(caadr '(1 (2 3) 4))")).isEqualTo(new LispInteger(2));
+		// 4-level compositions
+		assertThat(eval("(cadddr '(1 2 3 4))")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(caddar '((1 2 3) 4))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalOnePlus() {
+		assertThat(eval("(1+ 5)")).isEqualTo(new LispInteger(6));
+	}
+
+	@Test
+	void evalOneMinus() {
+		assertThat(eval("(1- 5)")).isEqualTo(new LispInteger(4));
+	}
+
+	@Test
+	void evalZerop() {
+		assertThat(eval("(zerop 0)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(zerop 1)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalPlusp() {
+		assertThat(eval("(plusp 1)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(plusp 0)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(plusp -1)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalMinusp() {
+		assertThat(eval("(minusp -1)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(minusp 0)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(minusp 1)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEvenp() {
+		assertThat(eval("(evenp 4)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(evenp 3)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalOddp() {
+		assertThat(eval("(oddp 3)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(oddp 4)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalAbs() {
+		assertThat(eval("(abs 5)")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(abs -5)")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(abs 0)")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalMin() {
+		assertThat(eval("(min 3 5)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(min 5 3)")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalMax() {
+		assertThat(eval("(max 3 5)")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(max 5 3)")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalUnless() {
+		assertThat(eval("(unless nil 42)")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(unless t 42)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(unless nil 1 2 3)")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalSecond() {
+		assertThat(eval("(second '(1 2 3))")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void evalThird() {
+		assertThat(eval("(third '(1 2 3))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalFourth() {
+		assertThat(eval("(fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
 	}
 
 	@Test

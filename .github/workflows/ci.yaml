@@ -33,13 +33,7 @@ jobs:
     needs: test
     strategy:
       matrix:
-        include:
-        - os: ubuntu-latest
-          artifact-name: rontolisp-linux-amd64
-        - os: ubuntu-24.04-arm
-          artifact-name: rontolisp-linux-arm64
-        - os: macos-latest
-          artifact-name: rontolisp-darwin-arm64
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v6

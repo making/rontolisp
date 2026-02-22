@@ -164,6 +164,18 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
+| `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
+| `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
+| `1+` | `(1+ x)` | Expands to `(+ x 1)` |
+| `1-` | `(1- x)` | Expands to `(- x 1)` |
+| `zerop` | `(zerop x)` | Expands to `(= x 0)` |
+| `plusp` | `(plusp x)` | Expands to `(> x 0)` |
+| `minusp` | `(minusp x)` | Expands to `(< x 0)` |
+| `evenp` | `(evenp x)` | Expands to `(= (mod x 2) 0)` |
+| `oddp` | `(oddp x)` | Expands to `(not (= (mod x 2) 0))` |
+| `second` | `(second lst)` | Expands to `(cadr lst)` |
+| `third` | `(third lst)` | Expands to `(caddr lst)` |
+| `fourth` | `(fourth lst)` | Expands to `(cadddr lst)` |
 
 ### Built-in Functions
 
@@ -193,7 +205,11 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1` |
 | `cdr` | `(cdr (cons 1 2))` | `2` |
+| `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
+| `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
+| `min` | `(min 3 5)`, `(min 1.5 2.5)` | `3`, `1.5` |
+| `max` | `(max 3 5)`, `(max 1.5 2.5)` | `5`, `2.5` |
 | `funcall` | `(funcall f arg...)` | Apply function `f` to args |
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
@@ -230,30 +246,6 @@ Functions are first-class values in all three execution modes. They can be passe
 (defun apply-twice (f x) (f (f x)))
 (print (apply-twice (lambda (x) (+ x 10)) 5))  ; => 25
 ```
-
-## Feature Matrix
-
-| Feature | Interpreter | JVM Compiler | WASM Compiler |
-|---------|:-----------:|:------------:|:-------------:|
-| Integer arithmetic (`+`, `-`, `*`, `/`, `mod`) | Yes | Yes | Yes |
-| Floating-point arithmetic | Yes | Yes | Yes |
-| Comparison (`=`, `<`, `>`, `<=`, `>=`) | Yes | Yes | Yes |
-| `print` | Yes | Yes | Yes |
-| `if` | Yes | Yes | Yes |
-| `let` | Yes | Yes | Yes |
-| `progn` | Yes | Yes | Yes |
-| `defun` / `lambda` | Yes | Yes | Yes |
-| `setq` | Yes | Yes | Yes |
-| `quote` | Yes | Yes | Yes |
-| Recursion | Yes | Yes | Yes |
-| String values | Yes | Yes | Yes |
-| `cons` / `car` / `cdr` / `list` | Yes | Yes | Yes |
-| Logical operators (`cond`, `and`, `or`, `not`) | Yes | Yes | Yes |
-| Type predicates (`atom`, `numberp`, `integerp`, `floatp`, `symbolp`, `stringp`, `listp`, `consp`) | Yes | Yes | Yes |
-| `funcall` | Yes | Yes | Yes |
-| First-class functions | Yes | Yes | Yes |
-| Closures (capture by reference) | Yes | Yes | Yes |
-| Higher-order functions | Yes | Yes | Yes |
 
 ## Project Structure
 

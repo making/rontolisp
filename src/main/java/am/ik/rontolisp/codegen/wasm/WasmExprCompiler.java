@@ -121,6 +121,7 @@ final class WasmExprCompiler {
 				case LispNames.CAR -> WasmCarCompiler.compile(cons, ctx);
 				case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
 				case LispNames.CONS -> WasmConsCompiler.compile(cons, ctx);
+				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);
@@ -139,8 +140,30 @@ final class WasmExprCompiler {
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
+				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);
+				case LispNames.UNLESS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx);
+				case LispNames.ONE_PLUS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx);
+				case LispNames.ONE_MINUS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOneMinus(cons), ctx);
+				case LispNames.ZEROP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandZerop(cons), ctx);
+				case LispNames.PLUSP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPlusp(cons), ctx);
+				case LispNames.MINUSP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMinusp(cons), ctx);
+				case LispNames.EVENP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx);
+				case LispNames.ODDP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx);
+				case LispNames.ABS -> WasmAbsCompiler.compile(cons, ctx);
+				case LispNames.MIN -> WasmMinCompiler.compile(cons, ctx);
+				case LispNames.MAX -> WasmMaxCompiler.compile(cons, ctx);
+				case LispNames.SECOND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx);
+				case LispNames.THIRD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx);
+				case LispNames.FOURTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx);
 				case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
-				default -> WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+				default -> {
+					if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx);
+					}
+					else {
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+					}
+				}
 			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym

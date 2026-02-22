@@ -68,6 +68,12 @@
 (print (car (list 1 2 3)))
 (print (car (cdr (list 1 2 3))))
 
+; car/cdr composition functions
+(print (cadr '(1 2 3)))
+(print (caddr '(1 2 3)))
+(print (caar '((1 2) 3)))
+(print (cadddr '(1 2 3 4)))
+
 ; Higher-order functions
 (defun apply-twice (f x) (f (f x)))
 (print (apply-twice square 3))
@@ -114,6 +120,53 @@
 (print (if (listp 42) 42 99))
 (print (if (consp '(1 2)) 42 99))
 (print (if (consp nil) 42 99))
+
+; when macro
+(print (when t 42))
+(print (when nil 42))
+(print (when t 1 2 3))
+(print (when (= 1 1) 10))
+(print (when (= 1 2) 10))
+
+; append
+(print (append '(1 2) '(3 4)))
+(print (append nil '(1 2)))
+(print (append '(1 2) nil))
+(print (append '(1) '(2) '(3)))
+
+; Convenience macros: 1+, 1-
+(print (1+ 5))
+(print (1- 5))
+
+; Numeric predicates: zerop, plusp, minusp
+(print (if (zerop 0) 42 99))
+(print (if (zerop 1) 42 99))
+(print (if (plusp 1) 42 99))
+(print (if (plusp 0) 42 99))
+(print (if (minusp -1) 42 99))
+(print (if (minusp 0) 42 99))
+
+; evenp, oddp
+(print (if (evenp 4) 42 99))
+(print (if (evenp 3) 42 99))
+(print (if (oddp 3) 42 99))
+(print (if (oddp 4) 42 99))
+
+; abs, min, max
+(print (abs 5))
+(print (abs -5))
+(print (min 3 5))
+(print (max 3 5))
+
+; unless
+(print (unless nil 42))
+(print (unless t 42))
+(print (unless nil 1 2 3))
+
+; second, third, fourth
+(print (second '(1 2 3)))
+(print (third '(1 2 3)))
+(print (fourth '(1 2 3 4)))
 
 ; Double literals and arithmetic
 (print 3.14)

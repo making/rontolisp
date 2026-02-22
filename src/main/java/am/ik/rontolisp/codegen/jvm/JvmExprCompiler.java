@@ -107,6 +107,7 @@ final class JvmExprCompiler {
 				case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
 				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
 				case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
+				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
@@ -125,8 +126,40 @@ final class JvmExprCompiler {
 				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
+				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
+				case LispNames.UNLESS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx, className);
+				case LispNames.ONE_PLUS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx, className);
+				case LispNames.ONE_MINUS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandOneMinus(cons), ctx, className);
+				case LispNames.ZEROP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandZerop(cons), ctx, className);
+				case LispNames.PLUSP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPlusp(cons), ctx, className);
+				case LispNames.MINUSP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMinusp(cons), ctx, className);
+				case LispNames.EVENP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx, className);
+				case LispNames.ODDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx, className);
+				case LispNames.ABS -> JvmAbsCompiler.compile(cons, ctx, className);
+				case LispNames.MIN -> JvmMinCompiler.compile(cons, ctx, className);
+				case LispNames.MAX -> JvmMaxCompiler.compile(cons, ctx, className);
+				case LispNames.SECOND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx, className);
+				case LispNames.THIRD ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx, className);
+				case LispNames.FOURTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx, className);
 				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
-				default -> JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+				default -> {
+					if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
+					}
+					else {
+						JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+					}
+				}
 			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
