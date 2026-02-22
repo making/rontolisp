@@ -100,4 +100,5 @@ wasmtime --wasm gc test.wasm    # requires wasmtime 14+
 
 - Format: `./mvnw spring-javaformat:apply`
 - Test: `./mvnw test`
+- Javadoc: `./mvnw javadoc:jar` - confirm 0 warnings/errors
 - Notify: `osascript -e 'display notification "<Message Body>" with title "<Message Title>"'`
