@@ -85,7 +85,7 @@ final class JvmFunctionCallCompiler {
 		emitDispatchCall(arity, ctx, className);
 	}
 
-	private static void emitDispatchCall(int arity, JvmLispCompiler.Ctx ctx, String className) {
+	static void emitDispatchCall(int arity, JvmLispCompiler.Ctx ctx, String className) {
 		String dispatchName = "_invoke_" + arity;
 		String dispatchDesc = "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
 		Utf8Constant nameUtf8 = ctx.cp.addUtf8(dispatchName);

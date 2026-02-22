@@ -81,6 +81,8 @@ public final class LispEvaluator {
 					return evalLambdaForm(cons, env);
 				case LispNames.FUNCALL:
 					return evalFuncall(cons, env);
+				case LispNames.MAP:
+					return evalMap(cons, env);
 				case LispNames.COND:
 					return eval(LispMacroExpander.expandCond(cons), env);
 				case LispNames.AND:
@@ -205,6 +207,26 @@ public final class LispEvaluator {
 			args.add(eval(parts.get(i), env));
 		}
 		return apply(function, args, env);
+	}
+
+	private LispVal evalMap(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal function = eval(parts.get(1), env);
+		LispVal list = eval(parts.get(2), env);
+		List<LispVal> results = new ArrayList<>();
+		while (list instanceof LispCons cell) {
+			LispVal mapped = apply(function, List.of(cell.car()), env);
+			results.add(mapped);
+			list = cell.cdr();
+		}
+		if (results.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = results.size() - 1; i >= 0; i--) {
+			result = new LispCons(results.get(i), result);
+		}
+		return result;
 	}
 
 	private List<LispVal> evalArgs(LispCons cons, Environment env) {
