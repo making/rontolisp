@@ -182,6 +182,20 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.max(asLong(args.get(0)), asLong(args.get(1))));
 		}));
+		env.define(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
+			requireArgCount(LispNames.ONE_PLUS, args, 1);
+			if (hasDouble(args)) {
+				return new LispDouble(asDouble(args.get(0)) + 1);
+			}
+			return new LispInteger(asLong(args.get(0)) + 1);
+		}));
+		env.define(LispNames.ONE_MINUS, new LispFunction(LispNames.ONE_MINUS, args -> {
+			requireArgCount(LispNames.ONE_MINUS, args, 1);
+			if (hasDouble(args)) {
+				return new LispDouble(asDouble(args.get(0)) - 1);
+			}
+			return new LispInteger(asLong(args.get(0)) - 1);
+		}));
 	}
 
 	private static void registerComparison(Environment env) {

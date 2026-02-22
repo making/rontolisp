@@ -620,6 +620,11 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMapWithBuiltin1Plus() {
+		assertThat(eval("(map 1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+	}
+
+	@Test
 	void evalBuiltinAsVariable() {
 		assertThat(evalMulti("(setq my-op +) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
 	}
