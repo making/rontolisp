@@ -74,6 +74,34 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandOr(cons), env);
 				case LispNames.WHEN:
 					return eval(LispMacroExpander.expandWhen(cons), env);
+				case LispNames.UNLESS:
+					return eval(LispMacroExpander.expandUnless(cons), env);
+				case LispNames.ONE_PLUS:
+					return eval(LispMacroExpander.expandOnePlus(cons), env);
+				case LispNames.ONE_MINUS:
+					return eval(LispMacroExpander.expandOneMinus(cons), env);
+				case LispNames.ZEROP:
+					return eval(LispMacroExpander.expandZerop(cons), env);
+				case LispNames.PLUSP:
+					return eval(LispMacroExpander.expandPlusp(cons), env);
+				case LispNames.MINUSP:
+					return eval(LispMacroExpander.expandMinusp(cons), env);
+				case LispNames.EVENP:
+					return eval(LispMacroExpander.expandEvenp(cons), env);
+				case LispNames.ODDP:
+					return eval(LispMacroExpander.expandOddp(cons), env);
+				case LispNames.ABS:
+					return eval(LispMacroExpander.expandAbs(cons), env);
+				case LispNames.MIN:
+					return eval(LispMacroExpander.expandMin(cons), env);
+				case LispNames.MAX:
+					return eval(LispMacroExpander.expandMax(cons), env);
+				case LispNames.SECOND:
+					return eval(LispMacroExpander.expandSecond(cons), env);
+				case LispNames.THIRD:
+					return eval(LispMacroExpander.expandThird(cons), env);
+				case LispNames.FOURTH:
+					return eval(LispMacroExpander.expandFourth(cons), env);
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

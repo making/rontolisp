@@ -134,6 +134,40 @@
 (print (append '(1 2) nil))
 (print (append '(1) '(2) '(3)))
 
+; Convenience macros: 1+, 1-
+(print (1+ 5))
+(print (1- 5))
+
+; Numeric predicates: zerop, plusp, minusp
+(print (if (zerop 0) 42 99))
+(print (if (zerop 1) 42 99))
+(print (if (plusp 1) 42 99))
+(print (if (plusp 0) 42 99))
+(print (if (minusp -1) 42 99))
+(print (if (minusp 0) 42 99))
+
+; evenp, oddp
+(print (if (evenp 4) 42 99))
+(print (if (evenp 3) 42 99))
+(print (if (oddp 3) 42 99))
+(print (if (oddp 4) 42 99))
+
+; abs, min, max
+(print (abs 5))
+(print (abs -5))
+(print (min 3 5))
+(print (max 3 5))
+
+; unless
+(print (unless nil 42))
+(print (unless t 42))
+(print (unless nil 1 2 3))
+
+; second, third, fourth
+(print (second '(1 2 3)))
+(print (third '(1 2 3)))
+(print (fourth '(1 2 3 4)))
+
 ; Double literals and arithmetic
 (print 3.14)
 (print (+ 1.5 2.5))

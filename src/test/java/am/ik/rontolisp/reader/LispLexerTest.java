@@ -70,6 +70,20 @@ class LispLexerTest {
 	}
 
 	@Test
+	void tokenizeOnePlus() {
+		List<Token> tokens = new LispLexer("(1+ x)").tokenize();
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("1+"),
+				new Token.SymbolToken("x"), new Token.RightParen());
+	}
+
+	@Test
+	void tokenizeOneMinus() {
+		List<Token> tokens = new LispLexer("(1- x)").tokenize();
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("1-"),
+				new Token.SymbolToken("x"), new Token.RightParen());
+	}
+
+	@Test
 	void tokenizeMixedIntAndDouble() {
 		List<Token> tokens = new LispLexer("(+ 1 2.5)").tokenize();
 		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("+"), new Token.NumberToken(1),

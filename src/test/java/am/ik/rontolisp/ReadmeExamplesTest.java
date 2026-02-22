@@ -352,6 +352,77 @@ class ReadmeExamplesTest {
 			assertThat(eval("(when t 1 2 3)")).isEqualTo(new LispInteger(3));
 		}
 
+		@Test
+		void unless() {
+			assertThat(eval("(unless nil 42)")).isEqualTo(new LispInteger(42));
+			assertThat(eval("(unless t 42)")).isSameAs(LispNil.INSTANCE);
+		}
+
+		@Test
+		void onePlus() {
+			assertThat(eval("(1+ 5)")).isEqualTo(new LispInteger(6));
+		}
+
+		@Test
+		void oneMinus() {
+			assertThat(eval("(1- 5)")).isEqualTo(new LispInteger(4));
+		}
+
+		@Test
+		void zerop() {
+			assertThat(eval("(zerop 0)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void plusp() {
+			assertThat(eval("(plusp 1)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void minusp() {
+			assertThat(eval("(minusp -1)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void evenp() {
+			assertThat(eval("(evenp 4)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void oddp() {
+			assertThat(eval("(oddp 3)")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void abs() {
+			assertThat(eval("(abs -5)")).isEqualTo(new LispInteger(5));
+		}
+
+		@Test
+		void min() {
+			assertThat(eval("(min 3 5)")).isEqualTo(new LispInteger(3));
+		}
+
+		@Test
+		void max() {
+			assertThat(eval("(max 3 5)")).isEqualTo(new LispInteger(5));
+		}
+
+		@Test
+		void second() {
+			assertThat(eval("(second '(1 2 3))")).isEqualTo(new LispInteger(2));
+		}
+
+		@Test
+		void third() {
+			assertThat(eval("(third '(1 2 3))")).isEqualTo(new LispInteger(3));
+		}
+
+		@Test
+		void fourth() {
+			assertThat(eval("(fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
+		}
+
 	}
 
 	// == Special form examples (Language Reference > Special Forms table) ==

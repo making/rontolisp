@@ -430,6 +430,85 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void onePlus() throws Exception {
+		assertThat(compileAndRun("(print (1+ 5))")).isEqualTo("6");
+	}
+
+	@Test
+	void oneMinus() throws Exception {
+		assertThat(compileAndRun("(print (1- 5))")).isEqualTo("4");
+	}
+
+	@Test
+	void zerop() throws Exception {
+		assertThat(compileAndRun("(print (if (zerop 0) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (zerop 1) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void plusp() throws Exception {
+		assertThat(compileAndRun("(print (if (plusp 1) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (plusp 0) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void minusp() throws Exception {
+		assertThat(compileAndRun("(print (if (minusp -1) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (minusp 0) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void evenp() throws Exception {
+		assertThat(compileAndRun("(print (if (evenp 4) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (evenp 3) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void oddp() throws Exception {
+		assertThat(compileAndRun("(print (if (oddp 3) 42 99))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (if (oddp 4) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void abs() throws Exception {
+		assertThat(compileAndRun("(print (abs 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (abs -5))")).isEqualTo("5");
+	}
+
+	@Test
+	void min() throws Exception {
+		assertThat(compileAndRun("(print (min 3 5))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (min 5 3))")).isEqualTo("3");
+	}
+
+	@Test
+	void max() throws Exception {
+		assertThat(compileAndRun("(print (max 3 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (max 5 3))")).isEqualTo("5");
+	}
+
+	@Test
+	void unless() throws Exception {
+		assertThat(compileAndRun("(print (unless nil 42))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (unless t 42))")).isEqualTo("nil");
+	}
+
+	@Test
+	void second() throws Exception {
+		assertThat(compileAndRun("(print (second '(1 2 3)))")).isEqualTo("2");
+	}
+
+	@Test
+	void third() throws Exception {
+		assertThat(compileAndRun("(print (third '(1 2 3)))")).isEqualTo("3");
+	}
+
+	@Test
+	void fourth() throws Exception {
+		assertThat(compileAndRun("(print (fourth '(1 2 3 4)))")).isEqualTo("4");
+	}
+
+	@Test
 	void carCdrComposition() throws Exception {
 		assertThat(compileAndRun("(print (cadr '(1 2 3)))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (caddr '(1 2 3)))")).isEqualTo("3");

@@ -84,7 +84,24 @@ public final class LispLexer {
 			while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
+			// If non-dot symbol character follows digits, treat entire token as symbol
+			if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
+					&& this.input.charAt(this.pos) != '.') {
+				while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+					this.pos++;
+				}
+				return new Token.SymbolToken(this.input.substring(start, this.pos));
+			}
 			return new Token.DoubleToken(Double.parseDouble(this.input.substring(start, this.pos)));
+		}
+		// If non-dot symbol character follows digits, treat entire token as symbol
+		// (e.g., "1+" -> Symbol("1+"), "1-" -> Symbol("1-"))
+		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
+				&& this.input.charAt(this.pos) != '.') {
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+			return new Token.SymbolToken(this.input.substring(start, this.pos));
 		}
 		return new Token.NumberToken(Long.parseLong(this.input.substring(start, this.pos)));
 	}

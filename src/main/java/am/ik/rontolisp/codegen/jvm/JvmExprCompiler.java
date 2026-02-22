@@ -122,6 +122,30 @@ final class JvmExprCompiler {
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
+				case LispNames.UNLESS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx, className);
+				case LispNames.ONE_PLUS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx, className);
+				case LispNames.ONE_MINUS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandOneMinus(cons), ctx, className);
+				case LispNames.ZEROP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandZerop(cons), ctx, className);
+				case LispNames.PLUSP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPlusp(cons), ctx, className);
+				case LispNames.MINUSP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMinusp(cons), ctx, className);
+				case LispNames.EVENP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx, className);
+				case LispNames.ODDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx, className);
+				case LispNames.ABS -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAbs(cons), ctx, className);
+				case LispNames.MIN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMin(cons), ctx, className);
+				case LispNames.MAX -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMax(cons), ctx, className);
+				case LispNames.SECOND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx, className);
+				case LispNames.THIRD ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx, className);
+				case LispNames.FOURTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx, className);
 				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
 				default -> {
 					if (LispMacroExpander.isCarCdrComposition(sym.name())) {

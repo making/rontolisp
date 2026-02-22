@@ -150,6 +150,14 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
 	}
 
+	private static LispVal makeLet2(String var1, LispVal val1, String var2, LispVal val2, LispVal body) {
+		// (let ((var1 val1) (var2 val2)) body)
+		LispVal binding1 = listToCons(List.of(new LispSymbol(var1), val1));
+		LispVal binding2 = listToCons(List.of(new LispSymbol(var2), val2));
+		LispVal bindings = listToCons(List.of(binding1, binding2));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
 	private static LispVal makeProgn(List<LispVal> exprs) {
 		List<LispVal> all = new java.util.ArrayList<>();
 		all.add(new LispSymbol(LispNames.PROGN));
@@ -197,6 +205,145 @@ public final class LispMacroExpander {
 			arg = listToCons(List.of(new LispSymbol(op), arg));
 		}
 		return arg;
+	}
+
+	/**
+	 * Expands (1+ x) into (+ x 1).
+	 */
+	public static LispVal expandOnePlus(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.ADD), arg, new LispInteger(1)));
+	}
+
+	/**
+	 * Expands (1- x) into (- x 1).
+	 */
+	public static LispVal expandOneMinus(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.SUB), arg, new LispInteger(1)));
+	}
+
+	/**
+	 * Expands (zerop x) into (= x 0).
+	 */
+	public static LispVal expandZerop(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.EQ), arg, new LispInteger(0)));
+	}
+
+	/**
+	 * Expands (plusp x) into (> x 0).
+	 */
+	public static LispVal expandPlusp(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.GT), arg, new LispInteger(0)));
+	}
+
+	/**
+	 * Expands (minusp x) into (< x 0).
+	 */
+	public static LispVal expandMinusp(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.LT), arg, new LispInteger(0)));
+	}
+
+	/**
+	 * Expands (evenp x) into (= (mod x 2) 0).
+	 */
+	public static LispVal expandEvenp(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispVal modExpr = listToCons(List.of(new LispSymbol(LispNames.MOD), arg, new LispInteger(2)));
+		return listToCons(List.of(new LispSymbol(LispNames.EQ), modExpr, new LispInteger(0)));
+	}
+
+	/**
+	 * Expands (oddp x) into (not (= (mod x 2) 0)).
+	 */
+	public static LispVal expandOddp(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispVal modExpr = listToCons(List.of(new LispSymbol(LispNames.MOD), arg, new LispInteger(2)));
+		LispVal eqExpr = listToCons(List.of(new LispSymbol(LispNames.EQ), modExpr, new LispInteger(0)));
+		return makeNot(eqExpr);
+	}
+
+	/**
+	 * Expands (abs x) into (let ((__abs x)) (if (< __abs 0) (- 0 __abs) __abs)).
+	 */
+	public static LispVal expandAbs(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		String var = "__abs";
+		LispSymbol varSym = new LispSymbol(var);
+		LispVal testExpr = listToCons(List.of(new LispSymbol(LispNames.LT), varSym, new LispInteger(0)));
+		LispVal negExpr = listToCons(List.of(new LispSymbol(LispNames.SUB), new LispInteger(0), varSym));
+		LispVal ifExpr = makeIf(testExpr, negExpr, varSym);
+		return makeLet(var, arg, ifExpr);
+	}
+
+	/**
+	 * Expands (min a b) into (let ((__a a) (__b b)) (if (< __a __b) __a __b)).
+	 */
+	public static LispVal expandMin(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return makeLet2("__a", parts.get(1), "__b", parts.get(2),
+				makeIf(listToCons(List.of(new LispSymbol(LispNames.LT), new LispSymbol("__a"), new LispSymbol("__b"))),
+						new LispSymbol("__a"), new LispSymbol("__b")));
+	}
+
+	/**
+	 * Expands (max a b) into (let ((__a a) (__b b)) (if (> __a __b) __a __b)).
+	 */
+	public static LispVal expandMax(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return makeLet2("__a", parts.get(1), "__b", parts.get(2),
+				makeIf(listToCons(List.of(new LispSymbol(LispNames.GT), new LispSymbol("__a"), new LispSymbol("__b"))),
+						new LispSymbol("__a"), new LispSymbol("__b")));
+	}
+
+	/**
+	 * Expands (unless condition body...) into an if expression.
+	 *
+	 * <pre>
+	 * (unless cond body)       -> (if cond nil body)
+	 * (unless cond b1 b2...)   -> (if cond nil (progn b1 b2...))
+	 * </pre>
+	 */
+	public static LispVal expandUnless(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal condition = parts.get(1);
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (body.size() == 1) {
+			return makeIf(condition, LispNil.INSTANCE, body.get(0));
+		}
+		else {
+			return makeIf(condition, LispNil.INSTANCE, makeProgn(body));
+		}
+	}
+
+	/**
+	 * Expands (second x) into (cadr x) -> (car (cdr x)).
+	 */
+	public static LispVal expandSecond(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons cadrCons = listToCons(List.of(new LispSymbol("cadr"), arg));
+		return expandCarCdrComposition(cadrCons);
+	}
+
+	/**
+	 * Expands (third x) into (caddr x) -> (car (cdr (cdr x))).
+	 */
+	public static LispVal expandThird(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons caddrCons = listToCons(List.of(new LispSymbol("caddr"), arg));
+		return expandCarCdrComposition(caddrCons);
+	}
+
+	/**
+	 * Expands (fourth x) into (cadddr x) -> (car (cdr (cdr (cdr x)))).
+	 */
+	public static LispVal expandFourth(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		LispCons cadddrCons = listToCons(List.of(new LispSymbol("cadddr"), arg));
+		return expandCarCdrComposition(cadddrCons);
 	}
 
 	/**
