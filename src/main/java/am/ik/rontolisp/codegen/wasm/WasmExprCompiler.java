@@ -144,9 +144,9 @@ final class WasmExprCompiler {
 				case LispNames.MINUSP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMinusp(cons), ctx);
 				case LispNames.EVENP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx);
 				case LispNames.ODDP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx);
-				case LispNames.ABS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAbs(cons), ctx);
-				case LispNames.MIN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMin(cons), ctx);
-				case LispNames.MAX -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMax(cons), ctx);
+				case LispNames.ABS -> WasmAbsCompiler.compile(cons, ctx);
+				case LispNames.MIN -> WasmMinCompiler.compile(cons, ctx);
+				case LispNames.MAX -> WasmMaxCompiler.compile(cons, ctx);
 				case LispNames.SECOND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx);
 				case LispNames.THIRD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx);
 				case LispNames.FOURTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx);

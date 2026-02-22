@@ -93,6 +93,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 		MethodrefConstant stringCharAt = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
+		MethodrefConstant mathAbsLong = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
+		MethodrefConstant mathAbsDouble = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
+		MethodrefConstant mathMinLong = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("min"), cp.addUtf8("(JJ)J")));
+		MethodrefConstant mathMinDouble = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("min"), cp.addUtf8("(DD)D")));
+		MethodrefConstant mathMaxLong = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(JJ)J")));
+		MethodrefConstant mathMaxDouble = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(DD)D")));
+
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
@@ -170,7 +184,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.nextFuncId(nextFuncId)
-			.appendMethod(appendMethod);
+			.appendMethod(appendMethod)
+			.mathAbsLong(mathAbsLong)
+			.mathAbsDouble(mathAbsDouble)
+			.mathMinLong(mathMinLong)
+			.mathMinDouble(mathMinDouble)
+			.mathMaxLong(mathMaxLong)
+			.mathMaxDouble(mathMaxDouble);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -475,6 +495,18 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant appendMethod;
 
+		final MethodrefConstant mathAbsLong;
+
+		final MethodrefConstant mathAbsDouble;
+
+		final MethodrefConstant mathMinLong;
+
+		final MethodrefConstant mathMinDouble;
+
+		final MethodrefConstant mathMaxLong;
+
+		final MethodrefConstant mathMaxDouble;
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -519,6 +551,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.stringClass = Objects.requireNonNull(builder.stringClass);
 			this.stringCharAt = Objects.requireNonNull(builder.stringCharAt);
 			this.appendMethod = Objects.requireNonNull(builder.appendMethod);
+			this.mathAbsLong = Objects.requireNonNull(builder.mathAbsLong);
+			this.mathAbsDouble = Objects.requireNonNull(builder.mathAbsDouble);
+			this.mathMinLong = Objects.requireNonNull(builder.mathMinLong);
+			this.mathMinDouble = Objects.requireNonNull(builder.mathMinDouble);
+			this.mathMaxLong = Objects.requireNonNull(builder.mathMaxLong);
+			this.mathMaxDouble = Objects.requireNonNull(builder.mathMaxDouble);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -568,6 +606,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant stringCharAt;
 
 			private @Nullable MethodrefConstant appendMethod;
+
+			private @Nullable MethodrefConstant mathAbsLong;
+
+			private @Nullable MethodrefConstant mathAbsDouble;
+
+			private @Nullable MethodrefConstant mathMinLong;
+
+			private @Nullable MethodrefConstant mathMinDouble;
+
+			private @Nullable MethodrefConstant mathMaxLong;
+
+			private @Nullable MethodrefConstant mathMaxDouble;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -669,6 +719,36 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder appendMethod(MethodrefConstant appendMethod) {
 				this.appendMethod = appendMethod;
+				return this;
+			}
+
+			Builder mathAbsLong(MethodrefConstant mathAbsLong) {
+				this.mathAbsLong = mathAbsLong;
+				return this;
+			}
+
+			Builder mathAbsDouble(MethodrefConstant mathAbsDouble) {
+				this.mathAbsDouble = mathAbsDouble;
+				return this;
+			}
+
+			Builder mathMinLong(MethodrefConstant mathMinLong) {
+				this.mathMinLong = mathMinLong;
+				return this;
+			}
+
+			Builder mathMinDouble(MethodrefConstant mathMinDouble) {
+				this.mathMinDouble = mathMinDouble;
+				return this;
+			}
+
+			Builder mathMaxLong(MethodrefConstant mathMaxLong) {
+				this.mathMaxLong = mathMaxLong;
+				return this;
+			}
+
+			Builder mathMaxDouble(MethodrefConstant mathMaxDouble) {
+				this.mathMaxDouble = mathMaxDouble;
 				return this;
 			}
 

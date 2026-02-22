@@ -150,14 +150,6 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
 	}
 
-	private static LispVal makeLet2(String var1, LispVal val1, String var2, LispVal val2, LispVal body) {
-		// (let ((var1 val1) (var2 val2)) body)
-		LispVal binding1 = listToCons(List.of(new LispSymbol(var1), val1));
-		LispVal binding2 = listToCons(List.of(new LispSymbol(var2), val2));
-		LispVal bindings = listToCons(List.of(binding1, binding2));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
-	}
-
 	private static LispVal makeProgn(List<LispVal> exprs) {
 		List<LispVal> all = new java.util.ArrayList<>();
 		all.add(new LispSymbol(LispNames.PROGN));
@@ -264,39 +256,6 @@ public final class LispMacroExpander {
 		LispVal modExpr = listToCons(List.of(new LispSymbol(LispNames.MOD), arg, new LispInteger(2)));
 		LispVal eqExpr = listToCons(List.of(new LispSymbol(LispNames.EQ), modExpr, new LispInteger(0)));
 		return makeNot(eqExpr);
-	}
-
-	/**
-	 * Expands (abs x) into (let ((__abs x)) (if (< __abs 0) (- 0 __abs) __abs)).
-	 */
-	public static LispVal expandAbs(LispCons cons) {
-		LispVal arg = cons.toList().get(1);
-		String var = "__abs";
-		LispSymbol varSym = new LispSymbol(var);
-		LispVal testExpr = listToCons(List.of(new LispSymbol(LispNames.LT), varSym, new LispInteger(0)));
-		LispVal negExpr = listToCons(List.of(new LispSymbol(LispNames.SUB), new LispInteger(0), varSym));
-		LispVal ifExpr = makeIf(testExpr, negExpr, varSym);
-		return makeLet(var, arg, ifExpr);
-	}
-
-	/**
-	 * Expands (min a b) into (let ((__a a) (__b b)) (if (< __a __b) __a __b)).
-	 */
-	public static LispVal expandMin(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		return makeLet2("__a", parts.get(1), "__b", parts.get(2),
-				makeIf(listToCons(List.of(new LispSymbol(LispNames.LT), new LispSymbol("__a"), new LispSymbol("__b"))),
-						new LispSymbol("__a"), new LispSymbol("__b")));
-	}
-
-	/**
-	 * Expands (max a b) into (let ((__a a) (__b b)) (if (> __a __b) __a __b)).
-	 */
-	public static LispVal expandMax(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		return makeLet2("__a", parts.get(1), "__b", parts.get(2),
-				makeIf(listToCons(List.of(new LispSymbol(LispNames.GT), new LispSymbol("__a"), new LispSymbol("__b"))),
-						new LispSymbol("__a"), new LispSymbol("__b")));
 	}
 
 	/**

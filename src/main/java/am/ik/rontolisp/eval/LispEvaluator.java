@@ -90,12 +90,6 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandEvenp(cons), env);
 				case LispNames.ODDP:
 					return eval(LispMacroExpander.expandOddp(cons), env);
-				case LispNames.ABS:
-					return eval(LispMacroExpander.expandAbs(cons), env);
-				case LispNames.MIN:
-					return eval(LispMacroExpander.expandMin(cons), env);
-				case LispNames.MAX:
-					return eval(LispMacroExpander.expandMax(cons), env);
 				case LispNames.SECOND:
 					return eval(LispMacroExpander.expandSecond(cons), env);
 				case LispNames.THIRD:

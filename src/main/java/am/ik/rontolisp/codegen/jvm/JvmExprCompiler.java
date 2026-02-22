@@ -137,9 +137,9 @@ final class JvmExprCompiler {
 				case LispNames.EVENP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx, className);
 				case LispNames.ODDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx, className);
-				case LispNames.ABS -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAbs(cons), ctx, className);
-				case LispNames.MIN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMin(cons), ctx, className);
-				case LispNames.MAX -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMax(cons), ctx, className);
+				case LispNames.ABS -> JvmAbsCompiler.compile(cons, ctx, className);
+				case LispNames.MIN -> JvmMinCompiler.compile(cons, ctx, className);
+				case LispNames.MAX -> JvmMaxCompiler.compile(cons, ctx, className);
 				case LispNames.SECOND ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx, className);
 				case LispNames.THIRD ->

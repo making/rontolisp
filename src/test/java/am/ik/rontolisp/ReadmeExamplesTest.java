@@ -280,6 +280,24 @@ class ReadmeExamplesTest {
 			assertThat(eval("(cadr '(1 2 3))")).isEqualTo(new LispInteger(2));
 		}
 
+		@Test
+		void abs() {
+			assertThat(eval("(abs -5)")).isEqualTo(new LispInteger(5));
+			assertThat(eval("(abs -3.14)")).isEqualTo(new LispDouble(3.14));
+		}
+
+		@Test
+		void min() {
+			assertThat(eval("(min 3 5)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(min 1.5 2.5)")).isEqualTo(new LispDouble(1.5));
+		}
+
+		@Test
+		void max() {
+			assertThat(eval("(max 3 5)")).isEqualTo(new LispInteger(5));
+			assertThat(eval("(max 1.5 2.5)")).isEqualTo(new LispDouble(2.5));
+		}
+
 	}
 
 	// == First-class function examples (First-Class Functions section) ==
@@ -391,21 +409,6 @@ class ReadmeExamplesTest {
 		@Test
 		void oddp() {
 			assertThat(eval("(oddp 3)")).isSameAs(LispTrue.INSTANCE);
-		}
-
-		@Test
-		void abs() {
-			assertThat(eval("(abs -5)")).isEqualTo(new LispInteger(5));
-		}
-
-		@Test
-		void min() {
-			assertThat(eval("(min 3 5)")).isEqualTo(new LispInteger(3));
-		}
-
-		@Test
-		void max() {
-			assertThat(eval("(max 3 5)")).isEqualTo(new LispInteger(5));
 		}
 
 		@Test
