@@ -75,7 +75,10 @@ Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`
 
 No per-compiler class is needed since macros reuse existing compilation paths.
 
-5. **BuiltinFunctionWrappers.java** (optional): If the macro should be usable as a first-class value, add a wrapper entry using the expanded body form (e.g., `(+ a 1)` for `1+`).
+5. **First-class value support** (required if the macro should be passable to `map`/`reduce`/`funcall`):
+   - **Environment.java**: Register as `LispFunction` so the interpreter can resolve it in value position.
+   - **BuiltinFunctionWrappers.java**: Add a wrapper entry using the expanded body form (e.g., `(+ a 1)` for `1+`) so the compilers can resolve it in value position.
+   - Both registrations are needed: `Environment` for the interpreter, `BuiltinFunctionWrappers` for JVM/WASM compilers. Omitting `Environment` causes `Undefined symbol` errors in interpreter/native-image mode.
 
 ### Adding a New Special Form
 
