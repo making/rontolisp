@@ -386,6 +386,19 @@ class ReadmeExamplesTest {
 			assertThat(output).isEqualTo("25");
 		}
 
+		@Test
+		void builtinOperatorsAsFirstClassValues() {
+			String output = evalAndCaptureOutput("""
+					(print (reduce + 0 '(1 2 3 4 5)))
+					(print (reduce * 1 '(1 2 3 4 5)))
+					(print (map car '((1 2) (3 4) (5 6))))
+					(print (funcall + 3 4))
+					(setq my-op +)
+					(print (funcall my-op 10 20))
+					""");
+			assertThat(output).isEqualTo("15\n120\n(1 3 5)\n7\n30");
+		}
+
 	}
 
 	// == Macro examples (Language Reference > Macros table) ==

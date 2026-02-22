@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
@@ -124,6 +125,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 
+		// Inject built-in function wrappers (user defuns take priority)
+		Set<String> userDefinedNames = new HashSet<>();
+		for (DefunDecl defun : defuns) {
+			userDefinedNames.add(defun.name);
+		}
+		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames)) {
+			defuns.add(extractSetqLambda(wrapper));
+		}
+
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
 
@@ -192,7 +202,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			int extraLocals = funcCtx.nextLocal - (defun.paramNames.size() + 1);
 			if (extraLocals > 0) {
 				finalFuncWriter.write(1);
-				finalFuncWriter.write(extraLocals);
+				finalFuncWriter.writeUnsignedLeb128(extraLocals);
 				finalFuncWriter.write(Type.REFNULL.code());
 				finalFuncWriter.writeHeapType(Type.EQ.code());
 			}
@@ -219,7 +229,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int numLocals = ctx.nextLocal;
 		if (numLocals > 0) {
 			finalStartWriter.write(1);
-			finalStartWriter.write(numLocals);
+			finalStartWriter.writeUnsignedLeb128(numLocals);
 			finalStartWriter.write(Type.REFNULL.code());
 			finalStartWriter.writeHeapType(Type.EQ.code());
 		}
@@ -280,7 +290,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			int extraLocals = lambdaCtx.nextLocal - (lambda.paramNames.size() + 1);
 			if (extraLocals > 0) {
 				finalLambdaWriter.write(1);
-				finalLambdaWriter.write(extraLocals);
+				finalLambdaWriter.writeUnsignedLeb128(extraLocals);
 				finalLambdaWriter.write(Type.REFNULL.code());
 				finalLambdaWriter.writeHeapType(Type.EQ.code());
 			}

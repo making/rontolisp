@@ -41,6 +41,8 @@ eval, reader -> rontolisp (AST types only)
 - **consp in JVM**: Both cons cells and function references use `Object[]`. Distinguished by `arr[0] instanceof Integer`.
 - **Three-pass compilation**: Pass 1 collects defuns. Pass 2a compiles defun bodies, 2b compiles top-level, 2c iteratively compiles lambda bodies. Top-level must compile before lambda iteration.
 - **`%` prefix convention**: Internal helper functions that are not part of the public Lisp API use a `%` prefix (e.g., `%remf-tail`). These are implementation details used by macros and should not be called directly by users. They are registered in `Environment.java` and have dedicated compiler classes (`Jvm<Name>Compiler`, `Wasm<Name>Compiler`), but are not documented in the README.
+- **Built-in function wrappers**: `BuiltinFunctionWrappers` (compiler pkg) generates synthetic `(setq name (lambda ...))` defuns for built-in operators. These are injected in Pass 1 of both compilers so that built-in operators like `+`, `car` can be used as first-class function values (passed to `map`, `reduce`, `funcall`). The wrapper body uses the operator in call position, where `compileCons` inlines it. User defuns with the same name take priority.
+- **JVM method name mangling**: The JVM spec forbids `/`, `<`, `>` in method names. `JvmLispCompiler.mangleMethodName()` maps these to `$div`, `$lt`, `$gt`, `$le`, `$ge`.
 
 ## Development Workflows
 
@@ -60,6 +62,7 @@ When adding a new built-in function or special form:
 1. **Environment.java**: Add in `createGlobal()` using `env.define("name", new LispFunction(...))`.
 2. **JVM compiler**: Create `Jvm<Name>Compiler.java`, add case in `JvmExprCompiler.compileCons()`.
 3. **WASM compiler**: Create `Wasm<Name>Compiler.java`, add case in `WasmExprCompiler.compileCons()`. Use `WasmEmitHelper.castI31GetS()` to unbox to `i32` and `ref.i31` to re-box.
+4. **BuiltinFunctionWrappers.java**: Add a wrapper entry in `WRAPPER_DEFS` with the appropriate arity and body AST so the function can be used as a first-class value.
 
 ### Adding a New Macro
 
@@ -71,6 +74,11 @@ Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`
 4. **WasmExprCompiler.java**: Add case: `WasmExprCompiler.compileExpr(LispMacroExpander.expand<Name>(cons), ctx);`
 
 No per-compiler class is needed since macros reuse existing compilation paths.
+
+5. **First-class value support** (required if the macro should be passable to `map`/`reduce`/`funcall`):
+   - **Environment.java**: Register as `LispFunction` so the interpreter can resolve it in value position.
+   - **BuiltinFunctionWrappers.java**: Add a wrapper entry using the expanded body form (e.g., `(+ a 1)` for `1+`) so the compilers can resolve it in value position.
+   - Both registrations are needed: `Environment` for the interpreter, `BuiltinFunctionWrappers` for JVM/WASM compilers. Omitting `Environment` causes `Undefined symbol` errors in interpreter/native-image mode.
 
 ### Adding a New Special Form
 

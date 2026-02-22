@@ -182,6 +182,20 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.max(asLong(args.get(0)), asLong(args.get(1))));
 		}));
+		env.define(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
+			requireArgCount(LispNames.ONE_PLUS, args, 1);
+			if (hasDouble(args)) {
+				return new LispDouble(asDouble(args.get(0)) + 1);
+			}
+			return new LispInteger(asLong(args.get(0)) + 1);
+		}));
+		env.define(LispNames.ONE_MINUS, new LispFunction(LispNames.ONE_MINUS, args -> {
+			requireArgCount(LispNames.ONE_MINUS, args, 1);
+			if (hasDouble(args)) {
+				return new LispDouble(asDouble(args.get(0)) - 1);
+			}
+			return new LispInteger(asLong(args.get(0)) - 1);
+		}));
 	}
 
 	private static void registerComparison(Environment env) {
@@ -300,6 +314,35 @@ public final class Environment implements Scope {
 		env.define(LispNames.KEYWORDP, new LispFunction(LispNames.KEYWORDP, args -> {
 			requireArgCount(LispNames.KEYWORDP, args, 1);
 			return args.get(0) instanceof LispSymbol sym && sym.isKeyword() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define(LispNames.ZEROP, new LispFunction(LispNames.ZEROP, args -> {
+			requireArgCount(LispNames.ZEROP, args, 1);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) == 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			return asLong(args.get(0)) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define(LispNames.PLUSP, new LispFunction(LispNames.PLUSP, args -> {
+			requireArgCount(LispNames.PLUSP, args, 1);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) > 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			return asLong(args.get(0)) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define(LispNames.MINUSP, new LispFunction(LispNames.MINUSP, args -> {
+			requireArgCount(LispNames.MINUSP, args, 1);
+			if (hasDouble(args)) {
+				return asDouble(args.get(0)) < 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			return asLong(args.get(0)) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define(LispNames.EVENP, new LispFunction(LispNames.EVENP, args -> {
+			requireArgCount(LispNames.EVENP, args, 1);
+			return asLong(args.get(0)) % 2 == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.define(LispNames.ODDP, new LispFunction(LispNames.ODDP, args -> {
+			requireArgCount(LispNames.ODDP, args, 1);
+			return asLong(args.get(0)) % 2 != 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
 

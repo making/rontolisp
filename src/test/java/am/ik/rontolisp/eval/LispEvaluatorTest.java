@@ -594,4 +594,39 @@ class LispEvaluatorTest {
 		assertThat(eval("(car (list :foo :bar))")).isEqualTo(new LispSymbol(":foo"));
 	}
 
+	@Test
+	void evalReduceWithBuiltinPlus() {
+		assertThat(eval("(reduce + 0 '(1 2 3 4 5))")).isEqualTo(new LispInteger(15));
+	}
+
+	@Test
+	void evalReduceWithBuiltinMul() {
+		assertThat(eval("(reduce * 1 '(1 2 3 4 5))")).isEqualTo(new LispInteger(120));
+	}
+
+	@Test
+	void evalMapWithBuiltinCar() {
+		assertThat(eval("(map car '((1 2) (3 4) (5 6)))").print()).isEqualTo("(1 3 5)");
+	}
+
+	@Test
+	void evalMapWithBuiltinCdr() {
+		assertThat(eval("(map cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
+	}
+
+	@Test
+	void evalFuncallWithBuiltinPlus() {
+		assertThat(eval("(funcall + 3 4)")).isEqualTo(new LispInteger(7));
+	}
+
+	@Test
+	void evalMapWithBuiltin1Plus() {
+		assertThat(eval("(map 1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+	}
+
+	@Test
+	void evalBuiltinAsVariable() {
+		assertThat(evalMulti("(setq my-op +) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
+	}
+
 }

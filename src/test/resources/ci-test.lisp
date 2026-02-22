@@ -285,6 +285,16 @@
 (print (reduce (lambda (acc x) (+ acc (* x x))) 0 '(1 2 3)))
 (print (reduce (lambda (a b) (+ a b)) 0 nil))
 
+; Built-in operators as first-class values
+(print (reduce + 0 '(1 2 3 4 5)))
+(print (reduce * 1 '(1 2 3 4 5)))
+(print (map car '((1 2) (3 4) (5 6))))
+(print (map cdr '((1 2) (3 4) (5 6))))
+(print (map 1+ '(1 2 3)))
+(print (funcall + 3 4))
+(setq my-op +)
+(print (funcall my-op 10 20))
+
 ; Logical operators: and, or, not
 (print (if (and) 42 99))
 (print (if (and t) 42 99))
