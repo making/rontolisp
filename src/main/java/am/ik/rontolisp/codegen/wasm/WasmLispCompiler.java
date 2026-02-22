@@ -202,7 +202,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			int extraLocals = funcCtx.nextLocal - (defun.paramNames.size() + 1);
 			if (extraLocals > 0) {
 				finalFuncWriter.write(1);
-				finalFuncWriter.write(extraLocals);
+				finalFuncWriter.writeUnsignedLeb128(extraLocals);
 				finalFuncWriter.write(Type.REFNULL.code());
 				finalFuncWriter.writeHeapType(Type.EQ.code());
 			}
@@ -229,7 +229,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int numLocals = ctx.nextLocal;
 		if (numLocals > 0) {
 			finalStartWriter.write(1);
-			finalStartWriter.write(numLocals);
+			finalStartWriter.writeUnsignedLeb128(numLocals);
 			finalStartWriter.write(Type.REFNULL.code());
 			finalStartWriter.writeHeapType(Type.EQ.code());
 		}
@@ -290,7 +290,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			int extraLocals = lambdaCtx.nextLocal - (lambda.paramNames.size() + 1);
 			if (extraLocals > 0) {
 				finalLambdaWriter.write(1);
-				finalLambdaWriter.write(extraLocals);
+				finalLambdaWriter.writeUnsignedLeb128(extraLocals);
 				finalLambdaWriter.write(Type.REFNULL.code());
 				finalLambdaWriter.writeHeapType(Type.EQ.code());
 			}
