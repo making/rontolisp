@@ -165,6 +165,17 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
+| `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
+| `1+` | `(1+ x)` | Expands to `(+ x 1)` |
+| `1-` | `(1- x)` | Expands to `(- x 1)` |
+| `zerop` | `(zerop x)` | Expands to `(= x 0)` |
+| `plusp` | `(plusp x)` | Expands to `(> x 0)` |
+| `minusp` | `(minusp x)` | Expands to `(< x 0)` |
+| `evenp` | `(evenp x)` | Expands to `(= (mod x 2) 0)` |
+| `oddp` | `(oddp x)` | Expands to `(not (= (mod x 2) 0))` |
+| `second` | `(second lst)` | Expands to `(cadr lst)` |
+| `third` | `(third lst)` | Expands to `(caddr lst)` |
+| `fourth` | `(fourth lst)` | Expands to `(cadddr lst)` |
 
 ### Built-in Functions
 
@@ -196,6 +207,9 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `cdr` | `(cdr (cons 1 2))` | `2` |
 | `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
+| `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
+| `min` | `(min 3 5)`, `(min 1.5 2.5)` | `3`, `1.5` |
+| `max` | `(max 3 5)`, `(max 1.5 2.5)` | `5`, `2.5` |
 | `funcall` | `(funcall f arg...)` | Apply function `f` to args |
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.

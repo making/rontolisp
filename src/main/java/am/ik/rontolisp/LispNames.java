@@ -86,6 +86,35 @@ public final class LispNames {
 
 	public static final String CONSP = "consp";
 
+	// Convenience macros
+	public static final String ONE_PLUS = "1+";
+
+	public static final String ONE_MINUS = "1-";
+
+	public static final String ZEROP = "zerop";
+
+	public static final String PLUSP = "plusp";
+
+	public static final String MINUSP = "minusp";
+
+	public static final String EVENP = "evenp";
+
+	public static final String ODDP = "oddp";
+
+	public static final String ABS = "abs";
+
+	public static final String MIN = "min";
+
+	public static final String MAX = "max";
+
+	public static final String UNLESS = "unless";
+
+	public static final String SECOND = "second";
+
+	public static final String THIRD = "third";
+
+	public static final String FOURTH = "fourth";
+
 	// I/O
 	public static final String PRINT = "print";
 
