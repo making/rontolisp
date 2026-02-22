@@ -242,7 +242,7 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (plusp x) into (> x 0).
+	 * Expands (plusp x) into {@code (> x 0)}.
 	 * @param cons the plusp expression
 	 * @return the expanded expression
 	 */
@@ -252,7 +252,7 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (minusp x) into (< x 0).
+	 * Expands (minusp x) into {@code (< x 0)}.
 	 * @param cons the minusp expression
 	 * @return the expanded expression
 	 */
