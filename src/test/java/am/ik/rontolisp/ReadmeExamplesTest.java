@@ -298,6 +298,35 @@ class ReadmeExamplesTest {
 			assertThat(eval("(max 1.5 2.5)")).isEqualTo(new LispDouble(2.5));
 		}
 
+		@Test
+		void floatConversion() {
+			assertThat(eval("(float 42)")).isEqualTo(new LispDouble(42.0));
+		}
+
+		@Test
+		void truncate() {
+			assertThat(eval("(truncate 3.7)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(truncate -3.7)")).isEqualTo(new LispInteger(-3));
+		}
+
+		@Test
+		void floor() {
+			assertThat(eval("(floor 3.7)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(floor -3.7)")).isEqualTo(new LispInteger(-4));
+		}
+
+		@Test
+		void ceiling() {
+			assertThat(eval("(ceiling 3.2)")).isEqualTo(new LispInteger(4));
+			assertThat(eval("(ceiling -3.2)")).isEqualTo(new LispInteger(-3));
+		}
+
+		@Test
+		void round() {
+			assertThat(eval("(round 3.5)")).isEqualTo(new LispInteger(4));
+			assertThat(eval("(round 2.5)")).isEqualTo(new LispInteger(2));
+		}
+
 	}
 
 	// == First-class function examples (First-Class Functions section) ==

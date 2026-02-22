@@ -118,6 +118,11 @@ final class JvmExprCompiler {
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
 				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
+				case LispNames.FLOAT -> JvmFloatConvCompiler.compile(cons, ctx, className);
+				case LispNames.TRUNCATE -> JvmIntConvCompiler.compileTruncate(cons, ctx, className);
+				case LispNames.FLOOR -> JvmIntConvCompiler.compileFloor(cons, ctx, className);
+				case LispNames.CEILING -> JvmIntConvCompiler.compileCeiling(cons, ctx, className);
+				case LispNames.ROUND -> JvmIntConvCompiler.compileRound(cons, ctx, className);
 				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);

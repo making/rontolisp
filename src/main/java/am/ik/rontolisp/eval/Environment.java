@@ -68,6 +68,7 @@ public final class Environment implements Scope {
 		registerIO(env, out);
 		registerPredicates(env);
 		registerListOps(env);
+		registerTypeConversion(env);
 		return env;
 	}
 
@@ -310,6 +311,64 @@ public final class Environment implements Scope {
 			return new LispCons(cons.car(), appendTwo(cons.cdr(), tail));
 		}
 		throw new LispEvalException("append expects a list, got: " + list.print());
+	}
+
+	private static void registerTypeConversion(Environment env) {
+		env.define(LispNames.FLOAT, new LispFunction(LispNames.FLOAT, args -> {
+			requireArgCount(LispNames.FLOAT, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispDouble) {
+				return arg;
+			}
+			if (arg instanceof LispInteger i) {
+				return new LispDouble((double) i.value());
+			}
+			throw new LispEvalException("float expects a number, got: " + arg.print());
+		}));
+		env.define(LispNames.TRUNCATE, new LispFunction(LispNames.TRUNCATE, args -> {
+			requireArgCount(LispNames.TRUNCATE, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispInteger) {
+				return arg;
+			}
+			if (arg instanceof LispDouble d) {
+				return new LispInteger((long) d.value());
+			}
+			throw new LispEvalException("truncate expects a number, got: " + arg.print());
+		}));
+		env.define(LispNames.FLOOR, new LispFunction(LispNames.FLOOR, args -> {
+			requireArgCount(LispNames.FLOOR, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispInteger) {
+				return arg;
+			}
+			if (arg instanceof LispDouble d) {
+				return new LispInteger((long) Math.floor(d.value()));
+			}
+			throw new LispEvalException("floor expects a number, got: " + arg.print());
+		}));
+		env.define(LispNames.CEILING, new LispFunction(LispNames.CEILING, args -> {
+			requireArgCount(LispNames.CEILING, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispInteger) {
+				return arg;
+			}
+			if (arg instanceof LispDouble d) {
+				return new LispInteger((long) Math.ceil(d.value()));
+			}
+			throw new LispEvalException("ceiling expects a number, got: " + arg.print());
+		}));
+		env.define(LispNames.ROUND, new LispFunction(LispNames.ROUND, args -> {
+			requireArgCount(LispNames.ROUND, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispInteger) {
+				return arg;
+			}
+			if (arg instanceof LispDouble d) {
+				return new LispInteger((long) Math.rint(d.value()));
+			}
+			throw new LispEvalException("round expects a number, got: " + arg.print());
+		}));
 	}
 
 	private static long asLong(LispVal val) {

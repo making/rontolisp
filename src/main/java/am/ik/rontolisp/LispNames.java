@@ -86,6 +86,17 @@ public final class LispNames {
 
 	public static final String CONSP = "consp";
 
+	// Type conversion
+	public static final String FLOAT = "float";
+
+	public static final String TRUNCATE = "truncate";
+
+	public static final String FLOOR = "floor";
+
+	public static final String CEILING = "ceiling";
+
+	public static final String ROUND = "round";
+
 	// Convenience macros
 	public static final String ONE_PLUS = "1+";
 
