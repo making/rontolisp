@@ -164,6 +164,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
+| `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
 
 ### Built-in Functions
 
@@ -230,30 +231,6 @@ Functions are first-class values in all three execution modes. They can be passe
 (defun apply-twice (f x) (f (f x)))
 (print (apply-twice (lambda (x) (+ x 10)) 5))  ; => 25
 ```
-
-## Feature Matrix
-
-| Feature | Interpreter | JVM Compiler | WASM Compiler |
-|---------|:-----------:|:------------:|:-------------:|
-| Integer arithmetic (`+`, `-`, `*`, `/`, `mod`) | Yes | Yes | Yes |
-| Floating-point arithmetic | Yes | Yes | Yes |
-| Comparison (`=`, `<`, `>`, `<=`, `>=`) | Yes | Yes | Yes |
-| `print` | Yes | Yes | Yes |
-| `if` | Yes | Yes | Yes |
-| `let` | Yes | Yes | Yes |
-| `progn` | Yes | Yes | Yes |
-| `defun` / `lambda` | Yes | Yes | Yes |
-| `setq` | Yes | Yes | Yes |
-| `quote` | Yes | Yes | Yes |
-| Recursion | Yes | Yes | Yes |
-| String values | Yes | Yes | Yes |
-| `cons` / `car` / `cdr` / `list` | Yes | Yes | Yes |
-| Logical operators (`cond`, `and`, `or`, `not`) | Yes | Yes | Yes |
-| Type predicates (`atom`, `numberp`, `integerp`, `floatp`, `symbolp`, `stringp`, `listp`, `consp`) | Yes | Yes | Yes |
-| `funcall` | Yes | Yes | Yes |
-| First-class functions | Yes | Yes | Yes |
-| Closures (capture by reference) | Yes | Yes | Yes |
-| Higher-order functions | Yes | Yes | Yes |
 
 ## Project Structure
 

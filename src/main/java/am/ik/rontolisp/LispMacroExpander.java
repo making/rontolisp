@@ -119,6 +119,26 @@ public final class LispMacroExpander {
 		return expandCond(condExpr);
 	}
 
+	/**
+	 * Expands (when condition body...) into an if expression.
+	 *
+	 * <pre>
+	 * (when cond body)       -> (if cond body nil)
+	 * (when cond b1 b2...)   -> (if cond (progn b1 b2...) nil)
+	 * </pre>
+	 */
+	public static LispVal expandWhen(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal condition = parts.get(1);
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (body.size() == 1) {
+			return makeIf(condition, body.get(0), LispNil.INSTANCE);
+		}
+		else {
+			return makeIf(condition, makeProgn(body), LispNil.INSTANCE);
+		}
+	}
+
 	private static LispVal makeIf(LispVal cond, LispVal then, LispVal else_) {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), cond, then, else_));
 	}

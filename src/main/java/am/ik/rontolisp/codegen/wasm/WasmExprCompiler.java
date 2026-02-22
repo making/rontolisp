@@ -134,6 +134,7 @@ final class WasmExprCompiler {
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
+				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);
 				case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
 				default -> WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
 			}

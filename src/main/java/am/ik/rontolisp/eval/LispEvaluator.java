@@ -72,6 +72,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandAnd(cons), env);
 				case LispNames.OR:
 					return eval(LispMacroExpander.expandOr(cons), env);
+				case LispNames.WHEN:
+					return eval(LispMacroExpander.expandWhen(cons), env);
 			}
 		}
 		// Function application
