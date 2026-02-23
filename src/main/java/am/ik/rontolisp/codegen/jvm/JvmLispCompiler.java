@@ -67,6 +67,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		MethodrefConstant printlnStr = cp.addMethodref(printStreamClass,
 				cp.addNameAndType(cp.addUtf8("println"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant printStr = cp.addMethodref(printStreamClass,
+				cp.addNameAndType(cp.addUtf8("print"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant printlnVoid = cp.addMethodref(printStreamClass,
+				cp.addNameAndType(cp.addUtf8("println"), cp.addUtf8("()V")));
 
 		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
 		MethodrefConstant integerValueOf = cp.addMethodref(integerClass,
@@ -92,12 +96,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant consToStringDescUtf = cp.addUtf8("([Ljava/lang/Object;)Ljava/lang/String;");
 		MethodrefConstant consToStringMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(consToStringName, consToStringDescUtf));
+		Utf8Constant lispToDisplayStringName = cp.addUtf8("_lispToDisplayString");
+		MethodrefConstant lispToDisplayStringMethod = cp.addMethodref(thisClass,
+				cp.addNameAndType(lispToDisplayStringName, lispToStringDescUtf));
+		Utf8Constant consToDisplayStringName = cp.addUtf8("_consToDisplayString");
+		MethodrefConstant consToDisplayStringMethod = cp.addMethodref(thisClass,
+				cp.addNameAndType(consToDisplayStringName, consToStringDescUtf));
 		Utf8Constant appendName = cp.addUtf8("_append");
 		Utf8Constant appendDescUtf = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 		MethodrefConstant appendMethod = cp.addMethodref(thisClass, cp.addNameAndType(appendName, appendDescUtf));
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 		MethodrefConstant stringCharAt = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		MethodrefConstant stringLength = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+		MethodrefConstant stringSubstring = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
 		MethodrefConstant objectEquals = cp.addMethodref(objectClass,
 				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
@@ -210,6 +224,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			.systemOut(systemOut)
 			.printlnStr(printlnStr)
 			.lispToString(lispToStringMethod)
+			.printStr(printStr)
+			.printlnVoid(printlnVoid)
+			.lispToDisplayString(lispToDisplayStringMethod)
 			.longClass(longClass)
 			.longValueOf(longValueOf)
 			.longValue(longValue)
@@ -351,6 +368,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				nilStr, funcStr);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
+		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
+				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
+				nilStr, funcStr, stringCharAt, stringLength, stringSubstring);
+		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
+				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
+				dotStr);
 		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass, appendMethod);
 		ConstantPool.StringConstant quoteStr = cp.addString("\"");
 		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
@@ -444,6 +467,22 @@ public final class JvmLispCompiler implements LispCompiler {
 							attr.writeU2(5)
 								.writeU2(1)
 								.writeCode((Object[]) readLineCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
+						lispToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(4)
+								.writeU2(2)
+								.writeCode((Object[]) ltdsCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
+						consToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(3)
+								.writeU2(5)
+								.writeCode((Object[]) ctdsCode.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);
 						})));
@@ -543,6 +582,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant lispToString;
 
+		final MethodrefConstant printStr;
+
+		final MethodrefConstant printlnVoid;
+
+		final MethodrefConstant lispToDisplayString;
+
 		final ClassConstant longClass;
 
 		final MethodrefConstant longValueOf;
@@ -624,6 +669,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
 			this.lispToString = Objects.requireNonNull(builder.lispToString);
+			this.printStr = Objects.requireNonNull(builder.printStr);
+			this.printlnVoid = Objects.requireNonNull(builder.printlnVoid);
+			this.lispToDisplayString = Objects.requireNonNull(builder.lispToDisplayString);
 			this.longClass = Objects.requireNonNull(builder.longClass);
 			this.longValueOf = Objects.requireNonNull(builder.longValueOf);
 			this.longValue = Objects.requireNonNull(builder.longValue);
@@ -669,6 +717,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant printlnStr;
 
 			private @Nullable MethodrefConstant lispToString;
+
+			private @Nullable MethodrefConstant printStr;
+
+			private @Nullable MethodrefConstant printlnVoid;
+
+			private @Nullable MethodrefConstant lispToDisplayString;
 
 			private @Nullable ClassConstant longClass;
 
@@ -747,6 +801,21 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder lispToString(MethodrefConstant lispToString) {
 				this.lispToString = lispToString;
+				return this;
+			}
+
+			Builder printStr(MethodrefConstant printStr) {
+				this.printStr = printStr;
+				return this;
+			}
+
+			Builder printlnVoid(MethodrefConstant printlnVoid) {
+				this.printlnVoid = printlnVoid;
+				return this;
+			}
+
+			Builder lispToDisplayString(MethodrefConstant lispToDisplayString) {
+				this.lispToDisplayString = lispToDisplayString;
 				return this;
 			}
 

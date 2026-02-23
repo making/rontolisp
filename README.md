@@ -200,6 +200,9 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `<=` | `(<= 1 1)` | `t` |
 | `>=` | `(>= 2 1)` | `t` |
 | `print` | `(print 42)` | Prints `42` with a newline |
+| `prin1` | `(prin1 42)` | Like `print` but without newline |
+| `princ` | `(princ "hello")` | Prints without quotes and without newline |
+| `terpri` | `(terpri)` | Prints a newline only |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (interpreter only). `nil` on EOF |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (interpreter only). Returns the result |

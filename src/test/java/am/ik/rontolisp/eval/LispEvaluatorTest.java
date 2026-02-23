@@ -140,6 +140,55 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPrin1() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(prin1 42)"));
+		assertThat(baos.toString()).isEqualTo("42");
+	}
+
+	@Test
+	void evalPrin1String() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(prin1 \"hello\")"));
+		assertThat(baos.toString()).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void evalPrinc() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(princ 42)"));
+		assertThat(baos.toString()).isEqualTo("42");
+	}
+
+	@Test
+	void evalPrincString() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(princ \"hello\")"));
+		assertThat(baos.toString()).isEqualTo("hello");
+	}
+
+	@Test
+	void evalPrincList() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(princ '(1 \"hello\" 3))"));
+		assertThat(baos.toString()).isEqualTo("(1 hello 3)");
+	}
+
+	@Test
+	void evalTerpri() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(terpri)"));
+		assertThat(baos.toString()).isEqualTo(System.lineSeparator());
+		assertThat(result).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalSetqLambdaAndCall() {
 		assertThat(evalMulti("(setq square (lambda (x) (* x x))) (square 5)")).isEqualTo(new LispInteger(25));
 	}

@@ -91,6 +91,26 @@ public final class LispCons implements LispVal {
 	}
 
 	@Override
+	public String display() {
+		StringBuilder sb = new StringBuilder("(");
+		LispVal current = this;
+		boolean first = true;
+		while (current instanceof LispCons cons) {
+			if (!first) {
+				sb.append(' ');
+			}
+			sb.append(cons.car().display());
+			current = cons.cdr();
+			first = false;
+		}
+		if (!(current instanceof LispNil)) {
+			sb.append(" . ").append(current.display());
+		}
+		sb.append(')');
+		return sb.toString();
+	}
+
+	@Override
 	public boolean equals(Object o) {
 		if (this == o) {
 			return true;

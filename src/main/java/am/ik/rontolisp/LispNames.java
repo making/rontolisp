@@ -239,6 +239,15 @@ public final class LispNames {
 	/** The {@code print} built-in function. */
 	public static final String PRINT = "print";
 
+	/** The {@code prin1} built-in function. */
+	public static final String PRIN1 = "prin1";
+
+	/** The {@code princ} built-in function. */
+	public static final String PRINC = "princ";
+
+	/** The {@code terpri} built-in function. */
+	public static final String TERPRI = "terpri";
+
 	/** The {@code read-line} built-in function. */
 	public static final String READ_LINE = "read-line";
 

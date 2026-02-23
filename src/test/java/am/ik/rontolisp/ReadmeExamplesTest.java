@@ -210,6 +210,24 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void prin1() {
+			String output = evalAndCaptureOutput("(prin1 42)");
+			assertThat(output).isEqualTo("42");
+		}
+
+		@Test
+		void princ() {
+			String output = evalAndCaptureOutput("(princ \"hello\")");
+			assertThat(output).isEqualTo("hello");
+		}
+
+		@Test
+		void terpri() {
+			String output = evalAndCaptureOutput("(terpri)");
+			assertThat(output).isEmpty();
+		}
+
+		@Test
 		void nullPredicate() {
 			assertThat(eval("(null nil)")).isSameAs(LispTrue.INSTANCE);
 		}

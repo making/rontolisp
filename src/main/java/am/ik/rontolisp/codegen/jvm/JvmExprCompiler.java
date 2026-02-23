@@ -102,6 +102,9 @@ final class JvmExprCompiler {
 				case LispNames.LE -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLE, className);
 				case LispNames.GE -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGE, className);
 				case LispNames.PRINT -> JvmPrintCompiler.compile(cons, ctx, className);
+				case LispNames.PRIN1 -> JvmPrin1Compiler.compile(cons, ctx, className);
+				case LispNames.PRINC -> JvmPrincCompiler.compile(cons, ctx, className);
+				case LispNames.TERPRI -> JvmTerpriCompiler.compile(cons, ctx, className);
 				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);
 				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);

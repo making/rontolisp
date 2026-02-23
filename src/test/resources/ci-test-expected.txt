@@ -178,3 +178,9 @@ nil
 99
 42
 99
+42
+"hello"
+42
+hello
+(1 hello 3)
+12
