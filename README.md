@@ -202,6 +202,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `print` | `(print 42)` | Prints `42` with a newline |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (interpreter only). `nil` on EOF |
+| `eval` | `(eval '(+ 1 2))` | Evaluate an expression (interpreter only). Returns the result |
 | `null` | `(null nil)` | `t` |
 | `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |
@@ -233,7 +234,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `map` | `(map f list)` | Apply `f` to each element, return new list |
 | `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 
-`read` is interpreter-only because it requires the Lisp reader (parser) at runtime; the JVM compiler produces standalone `.class` files without the parser, and reimplementing the reader in WASM bytecode is impractical. Use `read-line` to read raw strings in compiled code.
+`read` and `eval` are interpreter-only. `read` requires the Lisp reader (parser) at runtime, and `eval` requires the tree-walking evaluator; the JVM compiler produces standalone `.class` files without the parser or evaluator, and reimplementing them in WASM bytecode is impractical. Use `read-line` to read raw strings in compiled code.
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 

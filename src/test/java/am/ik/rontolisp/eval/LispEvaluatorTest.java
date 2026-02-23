@@ -633,6 +633,28 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(setq my-op +) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
 	}
 
+	// eval tests
+
+	@Test
+	void evalEvalSelfEvaluating() {
+		assertThat(eval("(eval 42)")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalEvalQuotedExpression() {
+		assertThat(eval("(eval '(+ 1 2))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalEvalDynamicExpression() {
+		assertThat(eval("(eval (list '+ 1 2))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalEvalViaVariable() {
+		assertThat(evalMulti("(let ((x '(+ 1 2))) (eval x))")).isEqualTo(new LispInteger(3));
+	}
+
 	// read-line / read tests
 
 	private LispVal evalWithStdin(String input, String stdin) {
