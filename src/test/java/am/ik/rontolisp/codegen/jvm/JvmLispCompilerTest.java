@@ -243,6 +243,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPrin1() throws Exception {
+		assertThat(compileAndRun("(prin1 42) (terpri) (prin1 \"hello\")")).isEqualTo("42\n\"hello\"");
+	}
+
+	@Test
+	void compileAndRunPrinc() throws Exception {
+		assertThat(compileAndRun("(princ 42) (terpri) (princ \"hello\")")).isEqualTo("42\nhello");
+	}
+
+	@Test
+	void compileAndRunPrincList() throws Exception {
+		assertThat(compileAndRun("(princ '(1 \"hello\" 3))")).isEqualTo("(1 hello 3)");
+	}
+
+	@Test
+	void compileAndRunTerpri() throws Exception {
+		assertThat(compileAndRun("(prin1 1) (princ 2) (terpri)")).isEqualTo("12");
+	}
+
+	@Test
 	void compileAndRunQuoteInteger() throws Exception {
 		assertThat(compileAndRun("(print '42)")).isEqualTo("42");
 	}

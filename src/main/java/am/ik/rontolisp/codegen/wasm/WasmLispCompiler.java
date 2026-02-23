@@ -63,7 +63,9 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_READ_LINE = 10;
 
-	static final int FUNC_DISPATCH_BASE = 11;
+	static final int FUNC_PRINC_VAL = 11;
+
+	static final int FUNC_DISPATCH_BASE = 12;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
@@ -350,6 +352,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
+		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable);
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
@@ -441,7 +444,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_PRINT_F64) // _print_f64
 					.addFunction(TYPE_PRINT_F64) // _print_f64_no_nl
 					.addFunction(TYPE_CALLABLE_BASE + 1) // _append
-					.addFunction(TYPE_READ_LINE); // _read_line
+					.addFunction(TYPE_READ_LINE) // _read_line
+					.addFunction(TYPE_PRINT_VAL); // _princ_val
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -470,7 +474,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(printF64Body)
 					.addFunction(printF64NoNlBody)
 					.addFunction(appendBody)
-					.addFunction(readLineBody);
+					.addFunction(readLineBody)
+					.addFunction(princValBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);

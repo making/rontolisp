@@ -826,6 +826,243 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Builds the princ_val helper function body. Same as print_val but strips quotes from
+	 * strings and uses FUNC_PRINC_VAL for recursive cons printing.
+	 */
+	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
+		// (length)
+		w.write(3);
+		w.write(1);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(1);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.I32);
+
+		// Check null (nil)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.nil.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.nil.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Check i31ref (integer)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Check float struct
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_F64_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Check string struct - strip quotes if leading '"'
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		// Get offset -> local 2
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+		// Get length -> local 3
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3);
+		// Check if first byte is '"' (0x22)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x22);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// Strip quotes: offset+1, length-2
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.ELSE);
+		// No quote: use offset and length as-is
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Check closure struct -> print "#<function>"
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.funcStr.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.funcStr.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Must be cons struct - print as list
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.lparen.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.lparen.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.dot.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINC_VAL);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.space.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.space.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINC_VAL);
+
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1);
+
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.rparen.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.rparen.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds the print_f64 helper function body. Prints integer part via print_i32_no_nl,
 	 * then '.' and fractional digits.
 	 */

@@ -304,6 +304,150 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
+	 * Builds bytecode for _lispToDisplayString. Same as _lispToString but strips quotes
+	 * from strings (charAt(0)=='"' -> substring(1, length-1)).
+	 */
+	static List<Integer> buildLispToDisplayStringBody(ClassConstant longClass, ClassConstant doubleClass,
+			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
+			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
+			MethodrefConstant consToDisplayStringMethod, ConstantPool.StringConstant nilStr,
+			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
+			MethodrefConstant stringSubstring) {
+		List<Integer> code = new ArrayList<>();
+		// if (val == null) return "nil";
+		code.add(Opcode.ALOAD_0);
+		int ifNonnullPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		emitLdc(code, nilStr.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Long) return ((Long)val).toString();
+		patchBranch(code, ifNonnullPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, longClass.index());
+		int ifNotLongPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, longToString.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Double) return ((Double)val).toString();
+		patchBranch(code, ifNotLongPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, doubleClass.index());
+		int ifNotDoublePos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, doubleClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, doubleToString.index());
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof String) -> strip quotes if leading '"'
+		patchBranch(code, ifNotDoublePos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, stringClass.index());
+		int ifNotStringPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, stringClass.index());
+		code.add(Opcode.ASTORE_1); // store string in slot 1
+		// check charAt(0) == '"'
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringCharAt.index());
+		emitIntConstStatic(code, 34); // '"' = 34
+		int ifNotQuotePos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		// It's a quoted string: return substring(1, length-1)
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringSubstring.index());
+		code.add(Opcode.ARETURN);
+		// Not a quoted string, return as-is
+		patchBranch(code, ifNotQuotePos, code.size());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ARETURN);
+
+		// if (val instanceof Object[])
+		patchBranch(code, ifNotStringPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, objectArrayClass.index());
+		int ifNotArrayPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(Opcode.ASTORE_1);
+		// Check if arr.length > 0 && arr[0] instanceof Integer -> function value
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ARRAYLENGTH);
+		int ifEmptyPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, integerClass.index());
+		int ifNotFuncPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		emitLdc(code, funcStr.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifEmptyPos, code.size());
+		patchBranch(code, ifNotFuncPos, code.size());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, consToDisplayStringMethod.index());
+		code.add(Opcode.ARETURN);
+
+		// return val.toString();
+		patchBranch(code, ifNotArrayPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectToString.index());
+		code.add(Opcode.ARETURN);
+
+		return code;
+	}
+
+	/**
+	 * Builds bytecode for _consToDisplayString. Same as _consToString but calls
+	 * _lispToDisplayString recursively.
+	 */
+	static List<Integer> buildConsToDisplayStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
+			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
+			MethodrefConstant lispToDisplayStringMethod, ConstantPool.StringConstant openParenStr,
+			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
+			ConstantPool.StringConstant dotStr) {
+		return buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
+				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
+	}
+
+	/**
 	 * Builds bytecode for _append(Object a, Object b). If a is null, returns b.
 	 * Otherwise, creates new Object[]{a[0], _append(a[1], b)}.
 	 */

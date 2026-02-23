@@ -107,7 +107,8 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
 			unary(LispNames.ROUND),
 			// Math/IO/list (arity 1)
-			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.LIST),
+			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.PRIN1), unary(LispNames.PRINC),
+			unary(LispNames.LIST),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
 					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),
@@ -131,6 +132,8 @@ public final class BuiltinFunctionWrappers {
 					List.of(callV(LispNames.NOT,
 							callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
 									new LispInteger(0))))),
+			// terpri: 0-arity
+			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
 			// read-line: 0-arity
 			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))));
 

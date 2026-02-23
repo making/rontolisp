@@ -12,4 +12,12 @@ public sealed interface LispVal
 	 */
 	String print();
 
+	/**
+	 * Return the display representation of this value (without string quotes).
+	 * @return the display string
+	 */
+	default String display() {
+		return print();
+	}
+
 }

@@ -283,6 +283,39 @@ public final class Environment implements Scope {
 			}
 			return val;
 		}));
+		env.define(LispNames.PRIN1, new LispFunction(LispNames.PRIN1, args -> {
+			requireArgCount(LispNames.PRIN1, args, 1);
+			LispVal val = args.get(0);
+			if (val instanceof LispInteger i) {
+				out.print(i.value());
+			}
+			else if (val instanceof LispDouble d) {
+				out.print(Double.toString(d.value()));
+			}
+			else {
+				out.print(val.print());
+			}
+			return val;
+		}));
+		env.define(LispNames.PRINC, new LispFunction(LispNames.PRINC, args -> {
+			requireArgCount(LispNames.PRINC, args, 1);
+			LispVal val = args.get(0);
+			if (val instanceof LispInteger i) {
+				out.print(i.value());
+			}
+			else if (val instanceof LispDouble d) {
+				out.print(Double.toString(d.value()));
+			}
+			else {
+				out.print(val.display());
+			}
+			return val;
+		}));
+		env.define(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
+			requireArgCount(LispNames.TERPRI, args, 0);
+			out.println();
+			return LispNil.INSTANCE;
+		}));
 		env.define(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
 			requireArgCount(LispNames.READ_LINE, args, 0);
 			try {

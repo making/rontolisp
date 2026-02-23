@@ -12,4 +12,9 @@ public record LispString(String value) implements LispVal {
 		return "\"" + this.value + "\"";
 	}
 
+	@Override
+	public String display() {
+		return this.value;
+	}
+
 }
