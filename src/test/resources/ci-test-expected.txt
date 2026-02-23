@@ -61,12 +61,6 @@ nil
 42
 99
 42
-"hello"
-42
-hello
-(1 hello 3)
-12
-42
 nil
 3
 10
@@ -184,3 +178,9 @@ nil
 99
 42
 99
+42
+"hello"
+42
+hello
+(1 hello 3)
+12
