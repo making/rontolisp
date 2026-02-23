@@ -245,6 +245,9 @@ public final class LispNames {
 	/** The {@code read} built-in function (interpreter only). */
 	public static final String READ = "read";
 
+	/** The {@code eval} built-in function (interpreter only). */
+	public static final String EVAL = "eval";
+
 	private LispNames() {
 	}
 

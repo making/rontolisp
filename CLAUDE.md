@@ -44,6 +44,7 @@ eval, reader -> rontolisp (AST types only)
 - **Built-in function wrappers**: `BuiltinFunctionWrappers` (compiler pkg) generates synthetic `(setq name (lambda ...))` defuns for built-in operators. These are injected in Pass 1 of both compilers so that built-in operators like `+`, `car` can be used as first-class function values (passed to `map`, `reduce`, `funcall`). The wrapper body uses the operator in call position, where `compileCons` inlines it. User defuns with the same name take priority.
 - **JVM method name mangling**: The JVM spec forbids `/`, `<`, `>` in method names. `JvmLispCompiler.mangleMethodName()` maps these to `$div`, `$lt`, `$gt`, `$le`, `$ge`.
 - **`read` is interpreter-only**: `read` calls `LispReader.readFromString()` to parse stdin input into Lisp values. JVM compiler generates standalone `.class` files without the parser, and reimplementing the reader in WASM bytecode is impractical. `read-line` (returns raw string) is supported in all three modes.
+- **`eval` is interpreter-only**: `eval` requires the tree-walking evaluator (`LispEvaluator`) at runtime. It is registered as a `LispFunction` in `LispEvaluator`'s constructor (not in `Environment.createGlobal()`) to avoid circular dependency. Evaluates the argument in the global environment.
 
 ## Development Workflows
 

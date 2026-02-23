@@ -31,6 +31,7 @@ public final class LispEvaluator {
 	 */
 	public LispEvaluator(PrintStream out) {
 		this.globalEnv = Environment.createGlobal(out);
+		registerEval();
 	}
 
 	/**
@@ -40,6 +41,16 @@ public final class LispEvaluator {
 	 */
 	public LispEvaluator(PrintStream out, InputStream in) {
 		this.globalEnv = Environment.createGlobal(out, in);
+		registerEval();
+	}
+
+	private void registerEval() {
+		this.globalEnv.define(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
+			}
+			return eval(args.get(0));
+		}));
 	}
 
 	/**
