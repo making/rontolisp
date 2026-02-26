@@ -97,7 +97,7 @@ jobs:
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         path: artifacts
     - name: Delete existing snapshot release
