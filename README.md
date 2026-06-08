@@ -205,7 +205,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `terpri` | `(terpri)` | Prints a newline only |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (interpreter only). `nil` on EOF |
-| `eval` | `(eval '(+ 1 2))` | Evaluate an expression (interpreter and WASM; not JVM). Returns the result |
+| `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
 | `null` | `(null nil)` | `t` |
 | `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |
@@ -239,19 +239,19 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 `read` is interpreter-only. It requires the Lisp reader (parser) at runtime, which is not reimplemented in the JVM or WASM backends. Use `read-line` to read raw strings in compiled code.
 
-`eval` works in the interpreter and the WASM compiler, but not in the JVM compiler. In the interpreter it is the full tree-walking evaluator. In the WASM compiler it is a tree-walking interpreter with a lexical environment (`_eval`/`_apply`) emitted into the module that runs the form at runtime. The JVM compiler produces standalone `.class` files without an evaluator, so `eval` is unavailable there.
+`eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
-The WASM `eval` implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
+The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
 
-#### WASM `eval` limitations
+#### Compiled `eval` limitations
 
-The WASM `eval` differs from the interpreter only in these cases:
+The compiled `eval` (WASM and JVM) differs from the interpreter only in these cases:
 
 - **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
 - **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
-- **Edge cases that trap.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` traps at runtime, and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
+- **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
 
-These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the module, and built-in functions are shared with the compiled code.
+These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 

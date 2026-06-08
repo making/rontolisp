@@ -218,6 +218,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 
+		// When the program uses eval, the runtime _apply dispatches by argument count, so
+		// every arity up to the maximum callable must have a dispatch method.
+		boolean usesEval = programUsesEval(program);
+		if (usesEval) {
+			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
+				indirectCallArities.add(arity);
+			}
+		}
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
@@ -362,6 +371,71 @@ public final class JvmLispCompiler implements LispCompiler {
 			dispatchMethods.add(dm);
 		}
 
+		// Build the eval runtime methods and the global-environment field (only when
+		// used)
+		Utf8Constant evalName = cp.addUtf8("_eval");
+		Utf8Constant evalDesc = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Constant applyName = cp.addUtf8("_apply");
+		Utf8Constant storeName = cp.addUtf8("_store");
+		Utf8Constant storeDesc = cp
+			.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Constant envLookupName = cp.addUtf8("_envLookup");
+		Utf8Constant envLookupDesc = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Constant lookupName = cp.addUtf8("_lookup");
+		Utf8Constant lookupDesc = cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;");
+		Utf8Constant genvName = cp.addUtf8("_genv");
+		Utf8Constant genvDesc = cp.addUtf8("Ljava/lang/Object;");
+		FieldrefConstant genvField = cp.addFieldref(thisClass, cp.addNameAndType(genvName, genvDesc));
+		List<Integer> evalCode = List.of();
+		List<Integer> applyCode = List.of();
+		List<Integer> storeCode = List.of();
+		List<Integer> envLookupCode = List.of();
+		List<Integer> lookupCode = List.of();
+		if (usesEval) {
+			MethodrefConstant evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc));
+			MethodrefConstant applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc));
+			MethodrefConstant storeRef = cp.addMethodref(thisClass, cp.addNameAndType(storeName, storeDesc));
+			MethodrefConstant envLookupRef = cp.addMethodref(thisClass,
+					cp.addNameAndType(envLookupName, envLookupDesc));
+			MethodrefConstant lookupRef = cp.addMethodref(thisClass, cp.addNameAndType(lookupName, lookupDesc));
+			MethodrefConstant[] invoke = new MethodrefConstant[JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY + 1];
+			for (int n = 0; n <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; n++) {
+				Utf8Constant invName = cp.addUtf8("_invoke_" + n);
+				Utf8Constant invDesc = cp.addUtf8("(" + "Ljava/lang/Object;".repeat(n + 1) + ")Ljava/lang/Object;");
+				invoke[n] = cp.addMethodref(thisClass, cp.addNameAndType(invName, invDesc));
+			}
+			MethodrefConstant stringLengthRef = cp.addMethodref(stringClass,
+					cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+			JvmEvalRuntimeBuilder.EvalConstants ec = JvmEvalRuntimeBuilder.EvalConstants.builder()
+				.cp(cp)
+				.objectClass(objectClass)
+				.objectArrayClass(objectArrayClass)
+				.integerClass(integerClass)
+				.longClass(longClass)
+				.doubleClass(doubleClass)
+				.stringClass(stringClass)
+				.integerValueOf(integerValueOf)
+				.integerValue(integerValue)
+				.longValue(longValue)
+				.stringCharAt(stringCharAt)
+				.stringLength(stringLengthRef)
+				.objectEquals(objectEquals)
+				.evalRef(evalRef)
+				.applyRef(applyRef)
+				.storeRef(storeRef)
+				.envLookupRef(envLookupRef)
+				.lookupRef(lookupRef)
+				.genvField(genvField)
+				.invoke(invoke)
+				.functions(functions)
+				.build();
+			evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
+			applyCode = JvmEvalRuntimeBuilder.buildApply(ec);
+			storeCode = JvmEvalRuntimeBuilder.buildStore(ec);
+			envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
+			lookupCode = JvmEvalRuntimeBuilder.buildLookup(ec);
+		}
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
@@ -383,6 +457,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
 		Utf8Constant codeUtf8 = cp.addUtf8("Code");
 
+		// Effectively-final aliases for capture in the writer lambda
+		final List<Integer> evalBody = evalCode;
+		final List<Integer> applyBody = applyCode;
+		final List<Integer> storeBody = storeCode;
+		final List<Integer> envLookupBody = envLookupCode;
+		final List<Integer> lookupBody = lookupCode;
+
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
 		new ByteCodeWriter(classOut) //
 			.write(0xCA, 0xFE, 0xBA, 0xBE) //
@@ -391,10 +472,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass) //
 			.writeInterfaces(i -> {
 			})
-			.writeFields(f -> f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-				.writeU2(stdinReaderFieldName)
-				.writeU2(stdinReaderFieldDesc)
-				.writeU2(0)))
+			.writeFields(f -> {
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					.writeU2(stdinReaderFieldName)
+					.writeU2(stdinReaderFieldDesc)
+					.writeU2(0));
+				if (usesEval) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(genvName)
+						.writeU2(genvDesc)
+						.writeU2(0));
+				}
+			})
 			.writeMethods(methods -> {
 				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -486,10 +575,66 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				if (usesEval) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lookupName, lookupDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(8)
+										.writeU2(2)
+										.writeCode((Object[]) lookupBody.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(8)
+										.writeU2(5)
+										.writeCode((Object[]) envLookupBody.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, evalName, evalDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(32)
+										.writeU2(22)
+										.writeCode((Object[]) evalBody.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(32)
+										.writeU2(20)
+										.writeCode((Object[]) applyBody.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(32)
+										.writeU2(14)
+										.writeCode((Object[]) storeBody.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+				}
 			}) //
 			.writeAttributes(a -> {
 			});
 		return classOut.toByteArray();
+	}
+
+	private static boolean programUsesEval(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (usesEval(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesEval(LispVal val) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
+			return true;
+		}
+		return usesEval(cons.car()) || usesEval(cons.cdr());
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args) {

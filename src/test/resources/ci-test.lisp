@@ -322,3 +322,13 @@
 (prin1 1)
 (princ 2)
 (terpri)
+
+; eval (interpreter, JVM, and WASM share the same runtime interpreter)
+(print (eval '(+ 1 2)))
+(print (eval '(* 6 7)))
+(print (eval '(list 1 2 3)))
+(print (eval '(let ((x 5)) (* x x))))
+(print (eval '(if (= 1 1) 42 99)))
+(print (eval '(cadr (list 10 20 30))))
+(print (eval '(funcall (lambda (x) (+ x 1)) 41)))
+(print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))

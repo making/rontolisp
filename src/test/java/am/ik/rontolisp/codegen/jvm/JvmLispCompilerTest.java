@@ -841,4 +841,138 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello\n")).isEqualTo("1");
 	}
 
+	// === eval ===
+
+	@Test
+	void evalSelfEvaluatingInteger() throws Exception {
+		assertThat(compileAndRun("(print (eval 42))")).isEqualTo("42");
+	}
+
+	@Test
+	void evalQuotedArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (eval '(+ 1 2)))")).isEqualTo("3");
+	}
+
+	@Test
+	void evalVariadicArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (eval '(+ 1 2 3 4)))")).isEqualTo("10");
+	}
+
+	@Test
+	void evalQuotedList() throws Exception {
+		assertThat(compileAndRun("(print (eval '(list 1 2 3)))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalIf() throws Exception {
+		assertThat(compileAndRun("(print (eval '(if (= 1 1) 10 20)))")).isEqualTo("10");
+	}
+
+	@Test
+	void evalLetBindsVariable() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 10)) (+ x 5))))")).isEqualTo("15");
+	}
+
+	@Test
+	void evalLambdaCapturesLexicalEnv() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((n 3)) (funcall (lambda (x) (+ x n)) 4))))")).isEqualTo("7");
+	}
+
+	@Test
+	void evalCond() throws Exception {
+		assertThat(compileAndRun("(print (eval '(cond ((= 1 2) 10) ((= 1 1) 20) (t 30))))")).isEqualTo("20");
+	}
+
+	@Test
+	void evalAnd() throws Exception {
+		assertThat(compileAndRun("(print (eval '(and 1 2 3)))")).isEqualTo("3");
+	}
+
+	@Test
+	void evalOr() throws Exception {
+		assertThat(compileAndRun("(print (eval '(or nil 5 nil)))")).isEqualTo("5");
+	}
+
+	@Test
+	void evalWhenUnless() throws Exception {
+		assertThat(compileAndRun("(print (eval '(when (= 1 1) 99)))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (eval '(unless (= 1 2) 88)))")).isEqualTo("88");
+	}
+
+	@Test
+	void evalSetqInLet() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 1)) (setq x 42) x)))")).isEqualTo("42");
+	}
+
+	@Test
+	void evalSetqGlobalPersistsAcrossEvalCalls() throws Exception {
+		assertThat(compileAndRun("(eval '(setq counter 10)) (print (eval 'counter))")).isEqualTo("10");
+	}
+
+	@Test
+	void evalRuntimeFunctionDefinition() throws Exception {
+		assertThat(compileAndRun("(eval '(setq sq (lambda (x) (* x x)))) (print (eval '(funcall sq 6)))"))
+			.isEqualTo("36");
+	}
+
+	@Test
+	void evalNestedEval() throws Exception {
+		assertThat(compileAndRun("(print (eval '(eval '(+ 2 3))))")).isEqualTo("5");
+	}
+
+	@Test
+	void evalFuncall() throws Exception {
+		assertThat(compileAndRun("(print (eval '(funcall (lambda (x y) (+ x y)) 3 4)))")).isEqualTo("7");
+	}
+
+	@Test
+	void evalMapWithLambda() throws Exception {
+		assertThat(compileAndRun("(print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))")).isEqualTo("(1 4 9)");
+	}
+
+	@Test
+	void evalReduce() throws Exception {
+		assertThat(compileAndRun("(print (eval '(reduce (lambda (a b) (+ a b)) (list 1 2 3 4))))")).isEqualTo("10");
+	}
+
+	@Test
+	void evalCarCdrComposition() throws Exception {
+		assertThat(compileAndRun("(print (eval '(cadr (list 1 2 3))))")).isEqualTo("2");
+	}
+
+	@Test
+	void evalNumberedAccessors() throws Exception {
+		assertThat(compileAndRun("(print (eval '(third (list 10 20 30 40))))")).isEqualTo("30");
+	}
+
+	@Test
+	void evalNth() throws Exception {
+		assertThat(compileAndRun("(print (eval '(nth 2 (list 10 20 30 40))))")).isEqualTo("30");
+	}
+
+	@Test
+	void evalUserDefinedFunction() throws Exception {
+		assertThat(compileAndRun("(defun double (x) (* x 2)) (print (eval '(double 21)))")).isEqualTo("42");
+	}
+
+	@Test
+	void evalBuiltinAsValue() throws Exception {
+		assertThat(compileAndRun("(print (eval '(funcall + 10 20)))")).isEqualTo("30");
+	}
+
+	@Test
+	void evalSetfCarCdr() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x (list 1 2 3))) (setf (car x) 99) x)))")).isEqualTo("(99 2 3)");
+	}
+
+	@Test
+	void evalPush() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x (list 2 3))) (push 1 x) x)))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalPop() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x (list 1 2 3))) (pop x))))")).isEqualTo("1");
+	}
+
 }
