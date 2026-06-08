@@ -23,7 +23,10 @@ final class JLineRepl {
 	}
 
 	static void run(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
-		try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
+		// Disable grapheme cluster (mode 2027) detection. JLine probes for it by
+		// sending a DECRQM query (CSI ? 2027 $ p); terminals that do not understand
+		// the query echo the trailing "p" as visible garbage before the first prompt.
+		try (Terminal terminal = TerminalBuilder.builder().system(true).graphemeCluster(false).build()) {
 			LineReader lineReader = LineReaderBuilder.builder()
 				.terminal(terminal)
 				.variable(LineReader.HISTORY_FILE, Path.of(System.getProperty("user.home"), ".rontolisp_history"))
