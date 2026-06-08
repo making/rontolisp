@@ -205,7 +205,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `terpri` | `(terpri)` | Prints a newline only |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (interpreter only). `nil` on EOF |
-| `eval` | `(eval '(+ 1 2))` | Evaluate an expression (interpreter only). Returns the result |
+| `eval` | `(eval '(+ 1 2))` | Evaluate an expression (interpreter and WASM; not JVM). Returns the result |
 | `null` | `(null nil)` | `t` |
 | `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |
@@ -237,7 +237,29 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | `map` | `(map f list)` | Apply `f` to each element, return new list |
 | `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 
-`read` and `eval` are interpreter-only. `read` requires the Lisp reader (parser) at runtime, and `eval` requires the tree-walking evaluator; the JVM compiler produces standalone `.class` files without the parser or evaluator, and reimplementing them in WASM bytecode is impractical. Use `read-line` to read raw strings in compiled code.
+`read` is interpreter-only. It requires the Lisp reader (parser) at runtime, which is not reimplemented in the JVM or WASM backends. Use `read-line` to read raw strings in compiled code.
+
+`eval` works in the interpreter and the WASM compiler, but not in the JVM compiler. In the interpreter it is the full tree-walking evaluator. In the WASM compiler it is a small interpreter (`_eval`) emitted into the module that runs the form at runtime. The JVM compiler produces standalone `.class` files without an evaluator, so `eval` is unavailable there.
+
+The WASM `eval` supports:
+
+- self-evaluating atoms: integers, floats, strings, `nil`, `t`, and keywords;
+- the special forms `quote`, `if`, `progn`;
+- variadic `+`, `-`, `*`, `/` and `list`;
+- application of any function known by name -- user-defined functions (`defun`) and built-in operators, including those registered as first-class wrappers such as `car`, `cons`, `1+`, `zerop` (see [First-Class Functions](#first-class-functions)).
+
+#### WASM `eval` limitations
+
+The WASM `eval` is intentionally small. Compared with the interpreter, it does **not** support:
+
+- **Variable lookup.** A bare symbol evaluates to itself, so `(eval 'x)` returns the symbol `x`, not the value bound to `x`.
+- **`let`, `lambda`, and inline-lambda calls.** `(eval '(let ((a 1)) a))` and `(eval '(lambda (x) x))` return `nil`; a form whose operator is not a symbol, such as `(eval '((lambda (x) x) 5))`, also returns `nil`.
+- **Special forms and macros other than `quote`/`if`/`progn`.** `setq`, `cond`, `and`, `or`, `when`, `unless`, `funcall`, `map`, `reduce`, `setf`, `push`, `pop`, and the `car`/`cdr` compositions (`cadr`, ...) are not recognized and return `nil`. (Macros that are also registered as first-class wrappers, e.g. `1+`, `zerop`, `evenp`, still work.)
+- **Nested `eval`.** `eval` is not itself callable from within an eval'd form, so `(eval '(eval '(+ 1 2)))` returns `nil`.
+- **Non-wrapper arities.** Built-ins are applied with their first-class wrapper arity. `+ - * / list` are handled variadically, but other operators use their fixed unary/binary arity, so extra arguments are ignored (e.g. `(eval '(= 1 1 2))` evaluates `(= 1 1)`). User functions with more than 7 parameters return `nil`.
+- **Edge cases that trap.** Calling a function with fewer arguments than its arity, or a zero-argument `(+)`/`(-)`/`(*)`/`(/)`, traps at runtime. Unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
+
+These limitations come from the design: the runtime `eval` has no lexical environment, and it resolves operators by name against a compile-time registry of the functions that were actually compiled into the module.
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 

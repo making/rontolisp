@@ -65,12 +65,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_PRINC_VAL = 11;
 
-	static final int FUNC_DISPATCH_BASE = 12;
+	static final int FUNC_LOOKUP = 12;
+
+	static final int FUNC_EVAL = 13;
+
+	static final int FUNC_DISPATCH_BASE = 14;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 11..18 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 19
+	// Dispatch functions occupy indices 14..21 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 22
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -105,6 +109,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_READ_LINE: () -> (ref null eq)
 	static final int TYPE_READ_LINE = TYPE_CALLABLE_BASE + MAX_CALLABLE_ARITY + 1; // 19
 
+	// type index for _lookup: (i32) -> (i32)
+	static final int TYPE_LOOKUP = TYPE_READ_LINE + 1; // 20
+
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
 
@@ -122,6 +129,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
+		// Detect whether the program uses (eval ...). When it does, a runtime
+		// interpreter (_eval) and a function-name registry are emitted, and dispatch
+		// functions are generated for every registered arity so _eval can apply them.
+		boolean usesEval = programUsesEval(program);
 		// Pass 1: Collect defun declarations and top-level expressions
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
@@ -165,6 +176,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Shared state for lambda discovery
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
+
+		// When eval is used, _eval applies any registered function via the dispatch
+		// functions, so ensure a real dispatch body exists for every registered arity.
+		if (usesEval) {
+			for (WasmFunctionInfo fi : functions.values()) {
+				if (fi.paramCount() <= MAX_CALLABLE_ARITY) {
+					indirectCallArities.add(fi.paramCount());
+				}
+			}
+		}
 
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
@@ -354,6 +375,39 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable);
 
+		// Build the eval runtime (interpreter + function-name registry). The registry
+		// maps a symbol-name string offset to (funcId, arity). Because the string table
+		// deduplicates, a quoted symbol such as 'car compiles to the same offset as the
+		// registry entry for "car", so lookup is a plain i32 offset comparison.
+		final byte[] lookupBody;
+		final byte[] evalBody;
+		if (usesEval) {
+			int offQuote = stringTable.addString(LispNames.QUOTE).offset();
+			int offIf = stringTable.addString(LispNames.IF).offset();
+			int offProgn = stringTable.addString(LispNames.PROGN).offset();
+			int offList = stringTable.addString(LispNames.LIST).offset();
+			int offAdd = stringTable.addString(LispNames.ADD).offset();
+			int offSub = stringTable.addString(LispNames.SUB).offset();
+			int offMul = stringTable.addString(LispNames.MUL).offset();
+			int offDiv = stringTable.addString(LispNames.DIV).offset();
+			ByteArrayOutputStream registry = new ByteArrayOutputStream();
+			for (int i = 0; i < defuns.size(); i++) {
+				DefunDecl defun = defuns.get(i);
+				int nameOffset = stringTable.addString(defun.name).offset();
+				writeLittleEndian32(registry, nameOffset);
+				writeLittleEndian32(registry, i); // funcId == defun index
+				writeLittleEndian32(registry, defun.paramNames.size()); // arity
+			}
+			int registryBase = stringTable.appendBlob(registry.toByteArray());
+			lookupBody = WasmRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
+			evalBody = WasmRuntimeBuilder.buildEvalBody(offQuote, offIf, offProgn, offList, offAdd, offSub, offMul,
+					offDiv);
+		}
+		else {
+			lookupBody = WasmRuntimeBuilder.buildLookupStub();
+			evalBody = WasmRuntimeBuilder.buildEvalStub();
+		}
+
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
 		mainWriter //
@@ -429,6 +483,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.REFNULL.code());
 					w.writeHeapType(Type.EQ.code());
 				});
+				// type 20: _lookup (i32) -> (i32)
+				types.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 });
 			})
 			// Import section
 			.writeImportSection(imports -> imports
@@ -446,6 +502,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_CALLABLE_BASE + 1) // _append
 					.addFunction(TYPE_READ_LINE) // _read_line
 					.addFunction(TYPE_PRINT_VAL); // _princ_val
+				fnDef.addFunction(TYPE_LOOKUP); // _lookup
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _eval
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -475,7 +533,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(printF64NoNlBody)
 					.addFunction(appendBody)
 					.addFunction(readLineBody)
-					.addFunction(princValBody);
+					.addFunction(princValBody)
+					.addFunction(lookupBody)
+					.addFunction(evalBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
@@ -520,6 +580,32 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	private static boolean programUsesEval(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (usesEval(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesEval(LispVal val) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
+			return true;
+		}
+		return usesEval(cons.car()) || usesEval(cons.cdr());
+	}
+
+	private static void writeLittleEndian32(ByteArrayOutputStream target, int value) {
+		target.write(value & 0xFF);
+		target.write((value >>> 8) & 0xFF);
+		target.write((value >>> 16) & 0xFF);
+		target.write((value >>> 24) & 0xFF);
 	}
 
 	private static boolean isSetqLambda(LispVal expr) {
@@ -719,6 +805,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			StringEntry entry = new StringEntry(offset, bytes.length);
 			this.cache.put(s, entry);
 			return entry;
+		}
+
+		/**
+		 * Appends a raw byte blob to the data segment (4-byte aligned) and returns its
+		 * absolute memory offset. Used to place the eval function-name registry after the
+		 * string data within the single active data segment.
+		 * @param blob the bytes to append
+		 * @return the absolute offset where the blob was placed
+		 */
+		int appendBlob(byte[] blob) {
+			while (this.nextOffset % 4 != 0) {
+				this.data.write(0);
+				this.nextOffset++;
+			}
+			int offset = this.nextOffset;
+			this.data.write(blob, 0, blob.length);
+			this.nextOffset += blob.length;
+			return offset;
 		}
 
 		byte[] toByteArray() {

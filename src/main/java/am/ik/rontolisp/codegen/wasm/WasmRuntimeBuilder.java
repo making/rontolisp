@@ -1249,4 +1249,521 @@ final class WasmRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	// === eval runtime ===
+
+	/** Emits {@code (car (ref.cast cons (local.get slot)))} onto the stack. */
+	private static void emitCarOf(WasmWriter w, int slot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+	}
+
+	/** Emits {@code (cdr (ref.cast cons (local.get slot)))} onto the stack. */
+	private static void emitCdrOf(WasmWriter w, int slot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+	}
+
+	private static void emitNull(WasmWriter w) {
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+	}
+
+	/**
+	 * Builds the {@code _lookup} stub used when the program does not call {@code eval}.
+	 * Always returns -1.
+	 */
+	static byte[] buildLookupStub() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the {@code _eval} stub used when the program does not call {@code eval}. It
+	 * is never invoked, so it simply returns its argument unchanged.
+	 */
+	static byte[] buildEvalStub() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the {@code _lookup} function body: {@code (i32 nameOffset) -> i32}. Linearly
+	 * scans the registry (records of 12 bytes: nameOffset, funcId, arity) for a record
+	 * whose name offset equals the argument, returning the record's base address, or -1
+	 * if not found.
+	 * @param registryBase absolute memory address of the first registry record
+	 * @param registryCount number of registry records
+	 * @return the encoded function body
+	 */
+	static byte[] buildLookupBody(int registryBase, int registryCount) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// locals: slot1 = i (i32), slot2 = addr (i32); param0 = nameOffset
+		w.write(1);
+		w.write(2);
+		w.write(Type.I32);
+
+		final int OFF = 0, I = 1, ADDR = 2;
+
+		// i = 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(I);
+
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+
+		// if i >= count: break
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(registryCount);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+
+		// addr = registryBase + i * 12
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(registryBase);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(12);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeSignedLeb128(ADDR);
+		// load name offset at addr+0, compare with param
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ADDR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// i++
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(I);
+
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+
+		// not found
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the {@code _eval} function body, a small tree-walking interpreter that runs
+	 * at runtime in WASM: {@code ((ref null eq) form) -> (ref null eq)}.
+	 *
+	 * <p>
+	 * Supported: self-evaluating atoms (integers, floats, strings, nil); the special
+	 * forms {@code quote}, {@code if}, {@code progn}; and application of any registered
+	 * function (built-in operators and user defuns) found in the registry, dispatched
+	 * through the arity dispatch functions. Free-variable lookup and
+	 * {@code let}/{@code lambda} are not supported.
+	 * @param offQuote string-table offset of "quote"
+	 * @param offIf string-table offset of "if"
+	 * @param offProgn string-table offset of "progn"
+	 * @return the encoded function body
+	 */
+	static byte[] buildEvalBody(int offQuote, int offIf, int offProgn, int offList, int offAdd, int offSub, int offMul,
+			int offDiv) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// locals: 10 (ref null eq) [slots 1..10] then 4 (i32) [slots 11..14]
+		w.write(2);
+		w.write(10);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(4);
+		w.write(Type.I32);
+
+		final int VAL = 0, REST = 1, CLOSURE = 2, TMP = 3, ARG0 = 4;
+		final int OFF = 11, ADDR = 12, FUNCID = 13, ARITY = 14;
+
+		// 1. nil is self-evaluating
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(VAL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// 2. non-cons atoms are self-evaluating
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(VAL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(VAL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// 3. operator symbol offset -> OFF
+		emitCarOf(w, VAL);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		// If the operator is not a symbol (e.g. an inline-lambda call), eval does not
+		// support it; return nil rather than trapping on the cast below.
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(OFF);
+
+		// rest = (cdr form)
+		emitCdrOf(w, VAL);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+
+		// ---- quote: return (car rest) unevaluated ----
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offQuote);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitCarOf(w, REST);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// ---- if ----
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offIf);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// evaluate condition
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		// false branch: rest = (cdr (cdr rest)) = else clause list
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		// true branch: rest = (cdr rest), evaluate its car (the then clause)
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // inner if (cond)
+		w.write(Instruction.END); // outer if (== offIf)
+
+		// ---- progn ----
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offProgn);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if progn
+
+		// ---- list: build a fresh list from all evaluated arguments (variadic) ----
+		// HEAD = ARG0 slot, TAIL = ARG0+1 slot, scratch new cell reuses CLOSURE slot.
+		final int HEAD = ARG0, TAIL = ARG0 + 1;
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offList);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(HEAD);
+		emitNull(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TAIL);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		// v = eval(car(rest))
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		// newcell = cons(v, null) -> CLOSURE slot (scratch)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		emitNull(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+		// if head is null: head = tail = newcell; else tail.cdr = newcell; tail = newcell
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAD);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(HEAD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TAIL);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TAIL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TAIL);
+		w.write(Instruction.END); // if head null
+		// rest = cdr(rest)
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAD);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if list
+
+		// ---- function application ----
+		// addr = _lookup(off)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(ADDR);
+		// if addr < 0: unknown operator -> nil
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ADDR);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// funcId = load(addr+4); arity = load(addr+8)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(FUNCID);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x08);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(ARITY);
+		// closure = struct.new closure(funcId, null)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(FUNCID);
+		emitNull(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+
+		// ---- variadic +,-,*,/ : left-fold the arguments via the binary wrapper ----
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offAdd);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offSub);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offMul);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(OFF);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(offDiv);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		// acc = eval(car(rest)); rest = cdr(rest)
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		// acc = dispatch2(closure, acc, eval(car(rest)))
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CLOSURE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		emitCarOf(w, REST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		emitCdrOf(w, REST);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REST);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(TMP);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // if arithmetic
+
+		// arity-indexed application: for n in 0..MAX, if arity == n evaluate n args and
+		// call the matching dispatch function
+		for (int n = 0; n <= WasmLispCompiler.MAX_CALLABLE_ARITY; n++) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(ARITY);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(n);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			for (int k = 0; k < n; k++) {
+				emitCarOf(w, REST);
+				w.write(Instruction.CALL);
+				w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+				w.write(Instruction.SET_LOCAL);
+				w.writeSignedLeb128(ARG0 + k);
+				emitCdrOf(w, REST);
+				w.write(Instruction.SET_LOCAL);
+				w.writeSignedLeb128(REST);
+			}
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(CLOSURE);
+			for (int k = 0; k < n; k++) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeSignedLeb128(ARG0 + k);
+			}
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + n);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
+
+		// fallthrough (arity out of range) -> nil
+		emitNull(w);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
 }

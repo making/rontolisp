@@ -794,4 +794,67 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello")).isEqualTo("1");
 	}
 
+	// eval tests
+
+	@Test
+	void evalSelfEvaluating() throws Exception {
+		assertThat(compileAndRun("(print (eval 42))")).isEqualTo("42");
+	}
+
+	@Test
+	void evalQuotedForm() throws Exception {
+		assertThat(compileAndRun("(print (eval '(+ 1 2)))")).isEqualTo("3");
+	}
+
+	@Test
+	void evalListBuiltForm() throws Exception {
+		assertThat(compileAndRun("(print (eval (list '+ 1 2)))")).isEqualTo("3");
+	}
+
+	@Test
+	void evalFormFromVariable() throws Exception {
+		assertThat(compileAndRun("(let ((x '(+ 1 2))) (print (eval x)))")).isEqualTo("3");
+	}
+
+	@Test
+	void evalNestedCalls() throws Exception {
+		assertThat(compileAndRun("(print (eval '(+ 1 (car (cdr (list 9 5))))))")).isEqualTo("6");
+	}
+
+	@Test
+	void evalVariadicArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (eval '(+ 1 2 3 4 5)))")).isEqualTo("15");
+		assertThat(compileAndRun("(print (eval '(- 10 3 2)))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (eval '(* 2 3 4)))")).isEqualTo("24");
+	}
+
+	@Test
+	void evalVariadicList() throws Exception {
+		assertThat(compileAndRun("(print (eval '(list 1 2 3)))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalIfSpecialForm() throws Exception {
+		assertThat(compileAndRun("(print (eval '(if (= 1 1) 10 20)))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (eval '(if (= 1 2) 10 20)))")).isEqualTo("20");
+	}
+
+	@Test
+	void evalPrognSpecialForm() throws Exception {
+		assertThat(compileAndRun("(print (eval '(progn 1 2 (+ 5 6))))")).isEqualTo("11");
+	}
+
+	@Test
+	void evalQuoteSpecialForm() throws Exception {
+		assertThat(compileAndRun("(print (eval ''hello))")).isEqualTo("hello");
+	}
+
+	@Test
+	void evalUserDefinedFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (eval '(square 7)))
+				""")).isEqualTo("49");
+	}
+
 }

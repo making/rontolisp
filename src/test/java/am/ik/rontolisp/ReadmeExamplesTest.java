@@ -365,6 +365,11 @@ class ReadmeExamplesTest {
 			assertThat(eval("(round 2.5)")).isEqualTo(new LispInteger(2));
 		}
 
+		@Test
+		void evalExpression() {
+			assertThat(eval("(eval '(+ 1 2))")).isEqualTo(new LispInteger(3));
+		}
+
 	}
 
 	// == First-class function examples (First-Class Functions section) ==
