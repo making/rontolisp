@@ -83,9 +83,10 @@ public final class LispLexer {
 		if (this.input.charAt(this.pos) == '-') {
 			this.pos++;
 		}
-		while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
-			this.pos++;
-		}
+		// Integer digits, allowing ',' as a grouping separator when it sits
+		// between two digits (e.g., "1,000" -> 1000). A comma not followed by a
+		// digit is not consumed, so token boundaries are otherwise unchanged.
+		consumeDigitsWithGrouping();
 		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.' && this.pos + 1 < this.input.length()
 				&& isDigit(this.input.charAt(this.pos + 1))) {
 			this.pos++; // consume '.'
@@ -100,7 +101,7 @@ public final class LispLexer {
 				}
 				return new Token.SymbolToken(this.input.substring(start, this.pos));
 			}
-			return new Token.DoubleToken(Double.parseDouble(this.input.substring(start, this.pos)));
+			return new Token.DoubleToken(Double.parseDouble(stripGrouping(this.input.substring(start, this.pos))));
 		}
 		// If non-dot symbol character follows digits, treat entire token as symbol
 		// (e.g., "1+" -> Symbol("1+"), "1-" -> Symbol("1-"))
@@ -111,7 +112,26 @@ public final class LispLexer {
 			}
 			return new Token.SymbolToken(this.input.substring(start, this.pos));
 		}
-		return new Token.NumberToken(Long.parseLong(this.input.substring(start, this.pos)));
+		return new Token.NumberToken(Long.parseLong(stripGrouping(this.input.substring(start, this.pos))));
+	}
+
+	private void consumeDigitsWithGrouping() {
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (isDigit(c)) {
+				this.pos++;
+			}
+			else if (c == ',' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				this.pos++; // consume grouping separator between digits
+			}
+			else {
+				break;
+			}
+		}
+	}
+
+	private static String stripGrouping(String number) {
+		return number.indexOf(',') < 0 ? number : number.replace(",", "");
 	}
 
 	private Token.SymbolToken readSymbol() {
