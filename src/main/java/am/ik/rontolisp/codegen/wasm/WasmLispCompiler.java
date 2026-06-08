@@ -67,14 +67,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_LOOKUP = 12;
 
-	static final int FUNC_EVAL = 13;
+	static final int FUNC_ENV_LOOKUP = 13;
 
-	static final int FUNC_DISPATCH_BASE = 14;
+	static final int FUNC_EVAL = 14;
+
+	static final int FUNC_APPLY = 15;
+
+	static final int FUNC_STORE = 16;
+
+	static final int FUNC_DISPATCH_BASE = 17;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 14..21 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 22
+	// Dispatch functions occupy indices 17..24 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 25
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -111,6 +117,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// type index for _lookup: (i32) -> (i32)
 	static final int TYPE_LOOKUP = TYPE_READ_LINE + 1; // 20
+
+	// type index for _env_lookup: (i32, (ref null eq)) -> (ref null eq)
+	static final int TYPE_ENV_LOOKUP = TYPE_LOOKUP + 1; // 21
+
+	// Global (wasm global section) index holding the runtime eval top-level environment
+	// (an association list of cons(name, value) bindings; ref.null eq when empty).
+	static final int GLOBAL_ENV = 0;
 
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
@@ -380,16 +393,42 @@ public final class WasmLispCompiler implements LispCompiler {
 		// deduplicates, a quoted symbol such as 'car compiles to the same offset as the
 		// registry entry for "car", so lookup is a plain i32 offset comparison.
 		final byte[] lookupBody;
+		final byte[] envLookupBody;
 		final byte[] evalBody;
+		final byte[] applyBody;
+		final byte[] storeBody;
 		if (usesEval) {
-			int offQuote = stringTable.addString(LispNames.QUOTE).offset();
-			int offIf = stringTable.addString(LispNames.IF).offset();
-			int offProgn = stringTable.addString(LispNames.PROGN).offset();
-			int offList = stringTable.addString(LispNames.LIST).offset();
-			int offAdd = stringTable.addString(LispNames.ADD).offset();
-			int offSub = stringTable.addString(LispNames.SUB).offset();
-			int offMul = stringTable.addString(LispNames.MUL).offset();
-			int offDiv = stringTable.addString(LispNames.DIV).offset();
+			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = WasmEvalRuntimeBuilder.SpecialFormOffsets.builder()
+				.add(stringTable, LispNames.QUOTE)
+				.add(stringTable, LispNames.IF)
+				.add(stringTable, LispNames.PROGN)
+				.add(stringTable, LispNames.LET)
+				.add(stringTable, LispNames.LAMBDA)
+				.add(stringTable, LispNames.COND)
+				.add(stringTable, LispNames.AND)
+				.add(stringTable, LispNames.OR)
+				.add(stringTable, LispNames.WHEN)
+				.add(stringTable, LispNames.UNLESS)
+				.add(stringTable, LispNames.SETQ)
+				.add(stringTable, LispNames.EVAL)
+				.add(stringTable, LispNames.FUNCALL)
+				.add(stringTable, LispNames.MAP)
+				.add(stringTable, LispNames.REDUCE)
+				.add(stringTable, LispNames.LIST)
+				.add(stringTable, LispNames.ADD)
+				.add(stringTable, LispNames.SUB)
+				.add(stringTable, LispNames.MUL)
+				.add(stringTable, LispNames.DIV)
+				.add(stringTable, "t")
+				.add(stringTable, LispNames.FIRST)
+				.add(stringTable, LispNames.SECOND)
+				.add(stringTable, LispNames.THIRD)
+				.add(stringTable, LispNames.FOURTH)
+				.add(stringTable, LispNames.NTH)
+				.add(stringTable, LispNames.SETF)
+				.add(stringTable, LispNames.PUSH)
+				.add(stringTable, LispNames.POP)
+				.build();
 			ByteArrayOutputStream registry = new ByteArrayOutputStream();
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
@@ -399,13 +438,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				writeLittleEndian32(registry, defun.paramNames.size()); // arity
 			}
 			int registryBase = stringTable.appendBlob(registry.toByteArray());
-			lookupBody = WasmRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
-			evalBody = WasmRuntimeBuilder.buildEvalBody(offQuote, offIf, offProgn, offList, offAdd, offSub, offMul,
-					offDiv);
+			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
+			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
+			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets);
+			applyBody = WasmEvalRuntimeBuilder.buildApplyBody();
+			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets);
 		}
 		else {
-			lookupBody = WasmRuntimeBuilder.buildLookupStub();
-			evalBody = WasmRuntimeBuilder.buildEvalStub();
+			lookupBody = WasmEvalRuntimeBuilder.buildLookupStub();
+			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupStub();
+			evalBody = WasmEvalRuntimeBuilder.buildEvalStub();
+			applyBody = WasmEvalRuntimeBuilder.buildApplyStub();
+			storeBody = WasmEvalRuntimeBuilder.buildStoreStub();
 		}
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -485,6 +529,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 20: _lookup (i32) -> (i32)
 				types.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 });
+				// type 21: _env_lookup (i32, (ref null eq)) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.I32);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
 			})
 			// Import section
 			.writeImportSection(imports -> imports
@@ -503,7 +558,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_READ_LINE) // _read_line
 					.addFunction(TYPE_PRINT_VAL); // _princ_val
 				fnDef.addFunction(TYPE_LOOKUP); // _lookup
-				fnDef.addFunction(TYPE_CALLABLE_BASE); // _eval
+				fnDef.addFunction(TYPE_ENV_LOOKUP); // _env_lookup
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _eval (form, env) -> value
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _apply (fn, args) -> value
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _store (place, value, env)
+															// -> value
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -519,6 +578,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Memory section
 			.writeMemory(memories -> memories.addMemory(1))
+			// Global section: the eval top-level environment, (mut (ref null eq)) = null
+			.writeGlobal(globals -> globals.add(g -> {
+				g.write(Type.REFNULL.code());
+				g.writeHeapType(Type.EQ.code());
+				g.write(am.ik.wasm.Mutability.VAR.code());
+				g.write(Instruction.REF_NULL);
+				g.writeHeapType(Type.EQ.code());
+				g.write(Instruction.END);
+			}))
 			// Export section
 			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0)
 				.addExport("_start", ExternalKind.FUNCTION, FUNC_START))
@@ -535,7 +603,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(readLineBody)
 					.addFunction(princValBody)
 					.addFunction(lookupBody)
-					.addFunction(evalBody);
+					.addFunction(envLookupBody)
+					.addFunction(evalBody)
+					.addFunction(applyBody)
+					.addFunction(storeBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);

@@ -857,4 +857,171 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("49");
 	}
 
+	@Test
+	void evalLetBindsVariable() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 5)) x)))")).isEqualTo("5");
+	}
+
+	@Test
+	void evalLetMultipleBindings() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 5) (y 10)) (+ x y))))")).isEqualTo("15");
+	}
+
+	@Test
+	void evalLetInitsUseOuterEnv() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 3)) (let ((y (+ x 1))) (+ x y)))))")).isEqualTo("7");
+	}
+
+	@Test
+	void evalNestedLetShadowing() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 1)) (let ((x 2)) x))))")).isEqualTo("2");
+	}
+
+	@Test
+	void evalInlineLambdaApplication() throws Exception {
+		assertThat(compileAndRun("(print (eval '((lambda (x) (+ x 1)) 5)))")).isEqualTo("6");
+	}
+
+	@Test
+	void evalLambdaCapturesLexicalEnv() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((n 10)) ((lambda (x) (+ x n)) 5))))")).isEqualTo("15");
+	}
+
+	@Test
+	void evalLambdaBoundInLet() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((f (lambda (x) (* x x)))) (f 6))))")).isEqualTo("36");
+	}
+
+	@Test
+	void evalLambdaMultipleParams() throws Exception {
+		assertThat(compileAndRun("(print (eval '((lambda (a b) (- a b)) 10 3)))")).isEqualTo("7");
+	}
+
+	@Test
+	void evalUnboundSymbolSelfEvaluates() throws Exception {
+		assertThat(compileAndRun("(print (eval ':foo))")).isEqualTo(":foo");
+	}
+
+	@Test
+	void evalCond() throws Exception {
+		assertThat(compileAndRun("(print (eval '(cond ((= 1 2) 10) ((= 1 1) 20) (t 30))))")).isEqualTo("20");
+		assertThat(compileAndRun("(print (eval '(cond (nil 1))))")).isEqualTo("nil");
+	}
+
+	@Test
+	void evalAnd() throws Exception {
+		assertThat(compileAndRun("(print (eval '(and 1 2 3)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (eval '(and 1 nil 3)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (eval '(and)))")).isEqualTo("t");
+	}
+
+	@Test
+	void evalOr() throws Exception {
+		assertThat(compileAndRun("(print (eval '(or nil nil 5)))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (eval '(or nil nil)))")).isEqualTo("nil");
+	}
+
+	@Test
+	void evalWhenUnless() throws Exception {
+		assertThat(compileAndRun("(print (eval '(when (= 1 1) 7 8 9)))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (eval '(when nil 1)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (eval '(unless nil 42)))")).isEqualTo("42");
+	}
+
+	@Test
+	void evalSetqInLet() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 1)) (setq x 99) x)))")).isEqualTo("99");
+	}
+
+	@Test
+	void evalSetqGlobalPersistsWithinEval() throws Exception {
+		assertThat(compileAndRun("(print (eval '(progn (setq x 5) (* x x))))")).isEqualTo("25");
+	}
+
+	@Test
+	void evalSetqGlobalPersistsAcrossEvalCalls() throws Exception {
+		assertThat(compileAndRun("(eval '(setq g 42)) (print (eval 'g))")).isEqualTo("42");
+	}
+
+	@Test
+	void evalSetqRuntimeFunctionDefinition() throws Exception {
+		assertThat(compileAndRun("(print (eval '(progn (setq f (lambda (n) (* n 3))) (f 7))))")).isEqualTo("21");
+	}
+
+	@Test
+	void evalNestedEval() throws Exception {
+		assertThat(compileAndRun("(print (eval '(eval (list '+ 2 3))))")).isEqualTo("5");
+	}
+
+	@Test
+	void evalFuncall() throws Exception {
+		assertThat(compileAndRun("(print (eval '(funcall (lambda (x y) (+ x y)) 3 4)))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (eval '(funcall + 10 20)))")).isEqualTo("30");
+	}
+
+	@Test
+	void evalMapWithLambda() throws Exception {
+		assertThat(compileAndRun("(print (eval '(map (lambda (x) (* x x)) (list 1 2 3 4))))")).isEqualTo("(1 4 9 16)");
+	}
+
+	@Test
+	void evalReduce() throws Exception {
+		assertThat(compileAndRun("(print (eval '(reduce (lambda (a b) (+ a b)) (list 1 2 3 4))))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (eval '(reduce + 100 (list 1 2 3))))")).isEqualTo("106");
+	}
+
+	@Test
+	void evalCarCdrComposition() throws Exception {
+		assertThat(compileAndRun("(print (eval '(cadr (list 1 2 3))))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (eval '(caddr (list 1 2 3))))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (eval '(cddr (list 1 2 3 4))))")).isEqualTo("(3 4)");
+	}
+
+	@Test
+	void evalNumberedAccessors() throws Exception {
+		assertThat(compileAndRun("(print (eval '(first (list 10 20 30))))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (eval '(second (list 10 20 30))))")).isEqualTo("20");
+		assertThat(compileAndRun("(print (eval '(third (list 10 20 30))))")).isEqualTo("30");
+		assertThat(compileAndRun("(print (eval '(fourth (list 10 20 30 40))))")).isEqualTo("40");
+	}
+
+	@Test
+	void evalNth() throws Exception {
+		assertThat(compileAndRun("(print (eval '(nth 0 (list 10 20 30))))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (eval '(nth 2 (list 10 20 30))))")).isEqualTo("30");
+		assertThat(compileAndRun("(print (eval '(nth 5 (list 10 20 30))))")).isEqualTo("nil");
+	}
+
+	@Test
+	void evalSetfSymbol() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((x 1)) (setf x 9) x)))")).isEqualTo("9");
+	}
+
+	@Test
+	void evalSetfCarCdr() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((c (cons 1 2))) (setf (car c) 99) c)))")).isEqualTo("(99 . 2)");
+		assertThat(compileAndRun("(print (eval '(let ((c (cons 1 2))) (setf (cdr c) 99) c)))")).isEqualTo("(1 . 99)");
+	}
+
+	@Test
+	void evalSetfAccessors() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((l (list 1 2 3))) (setf (cadr l) 99) l)))"))
+			.isEqualTo("(1 99 3)");
+		assertThat(compileAndRun("(print (eval '(let ((l (list 1 2 3))) (setf (nth 2 l) 99) l)))"))
+			.isEqualTo("(1 2 99)");
+		assertThat(compileAndRun("(print (eval '(let ((l (list 1 2 3))) (setf (second l) 88) l)))"))
+			.isEqualTo("(1 88 3)");
+	}
+
+	@Test
+	void evalPush() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((s nil)) (push 1 s) (push 2 s) s)))")).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void evalPop() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s))))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s) s)))")).isEqualTo("(2 3)");
+	}
+
 }

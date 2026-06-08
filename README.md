@@ -239,27 +239,19 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 `read` is interpreter-only. It requires the Lisp reader (parser) at runtime, which is not reimplemented in the JVM or WASM backends. Use `read-line` to read raw strings in compiled code.
 
-`eval` works in the interpreter and the WASM compiler, but not in the JVM compiler. In the interpreter it is the full tree-walking evaluator. In the WASM compiler it is a small interpreter (`_eval`) emitted into the module that runs the form at runtime. The JVM compiler produces standalone `.class` files without an evaluator, so `eval` is unavailable there.
+`eval` works in the interpreter and the WASM compiler, but not in the JVM compiler. In the interpreter it is the full tree-walking evaluator. In the WASM compiler it is a tree-walking interpreter with a lexical environment (`_eval`/`_apply`) emitted into the module that runs the form at runtime. The JVM compiler produces standalone `.class` files without an evaluator, so `eval` is unavailable there.
 
-The WASM `eval` supports:
-
-- self-evaluating atoms: integers, floats, strings, `nil`, `t`, and keywords;
-- the special forms `quote`, `if`, `progn`;
-- variadic `+`, `-`, `*`, `/` and `list`;
-- application of any function known by name -- user-defined functions (`defun`) and built-in operators, including those registered as first-class wrappers such as `car`, `cons`, `1+`, `zerop` (see [First-Class Functions](#first-class-functions)).
+The WASM `eval` implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
 
 #### WASM `eval` limitations
 
-The WASM `eval` is intentionally small. Compared with the interpreter, it does **not** support:
+The WASM `eval` differs from the interpreter only in these cases:
 
-- **Variable lookup.** A bare symbol evaluates to itself, so `(eval 'x)` returns the symbol `x`, not the value bound to `x`.
-- **`let`, `lambda`, and inline-lambda calls.** `(eval '(let ((a 1)) a))` and `(eval '(lambda (x) x))` return `nil`; a form whose operator is not a symbol, such as `(eval '((lambda (x) x) 5))`, also returns `nil`.
-- **Special forms and macros other than `quote`/`if`/`progn`.** `setq`, `cond`, `and`, `or`, `when`, `unless`, `funcall`, `map`, `reduce`, `setf`, `push`, `pop`, and the `car`/`cdr` compositions (`cadr`, ...) are not recognized and return `nil`. (Macros that are also registered as first-class wrappers, e.g. `1+`, `zerop`, `evenp`, still work.)
-- **Nested `eval`.** `eval` is not itself callable from within an eval'd form, so `(eval '(eval '(+ 1 2)))` returns `nil`.
-- **Non-wrapper arities.** Built-ins are applied with their first-class wrapper arity. `+ - * / list` are handled variadically, but other operators use their fixed unary/binary arity, so extra arguments are ignored (e.g. `(eval '(= 1 1 2))` evaluates `(= 1 1)`). User functions with more than 7 parameters return `nil`.
-- **Edge cases that trap.** Calling a function with fewer arguments than its arity, or a zero-argument `(+)`/`(-)`/`(*)`/`(/)`, traps at runtime. Unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
+- **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
+- **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
+- **Edge cases that trap.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` traps at runtime, and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
 
-These limitations come from the design: the runtime `eval` has no lexical environment, and it resolves operators by name against a compile-time registry of the functions that were actually compiled into the module.
+These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the module, and built-in functions are shared with the compiled code.
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 
