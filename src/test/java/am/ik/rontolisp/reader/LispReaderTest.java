@@ -117,4 +117,22 @@ class LispReaderTest {
 		assertThat(result).isEqualTo(new LispDouble(-0.5));
 	}
 
+	@Test
+	void readGroupedInteger() {
+		LispVal result = LispReader.readFromString("1,000");
+		assertThat(result).isEqualTo(new LispInteger(1000));
+	}
+
+	@Test
+	void readMultiGroupedInteger() {
+		LispVal result = LispReader.readFromString("1,234,567");
+		assertThat(result).isEqualTo(new LispInteger(1234567));
+	}
+
+	@Test
+	void readGroupedDouble() {
+		LispVal result = LispReader.readFromString("3,000.50");
+		assertThat(result).isEqualTo(new LispDouble(3000.5));
+	}
+
 }

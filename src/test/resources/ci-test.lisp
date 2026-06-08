@@ -332,3 +332,9 @@
 (print (eval '(cadr (list 10 20 30))))
 (print (eval '(funcall (lambda (x) (+ x 1)) 41)))
 (print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))
+
+; numeric literals with comma grouping separators (e.g. 1,000 -> 1000)
+(print (+ 1,000 100))
+(print 1,234,567)
+(print (* 2,000 3))
+(print (+ 3,000.50 0.50))

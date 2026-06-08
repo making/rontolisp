@@ -90,4 +90,43 @@ class LispLexerTest {
 				new Token.DoubleToken(2.5), new Token.RightParen());
 	}
 
+	@Test
+	void tokenizeGroupedInteger() {
+		List<Token> tokens = new LispLexer("1,000").tokenize();
+		assertThat(tokens).containsExactly(new Token.NumberToken(1000));
+	}
+
+	@Test
+	void tokenizeMultiGroupedInteger() {
+		List<Token> tokens = new LispLexer("1,234,567").tokenize();
+		assertThat(tokens).containsExactly(new Token.NumberToken(1234567));
+	}
+
+	@Test
+	void tokenizeGroupedNegativeInteger() {
+		List<Token> tokens = new LispLexer("-1,000").tokenize();
+		assertThat(tokens).containsExactly(new Token.NumberToken(-1000));
+	}
+
+	@Test
+	void tokenizeGroupedDouble() {
+		List<Token> tokens = new LispLexer("3,000.50").tokenize();
+		assertThat(tokens).containsExactly(new Token.DoubleToken(3000.5));
+	}
+
+	@Test
+	void tokenizeGroupedIntegerInExpression() {
+		List<Token> tokens = new LispLexer("(+ 1,000 100)").tokenize();
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("+"),
+				new Token.NumberToken(1000), new Token.NumberToken(100), new Token.RightParen());
+	}
+
+	@Test
+	void tokenizeCommaNotBetweenDigitsIsNotGrouping() {
+		// A comma not followed by a digit is not a grouping separator; like "1+",
+		// the trailing symbol char makes the whole token a symbol.
+		List<Token> tokens = new LispLexer("1,").tokenize();
+		assertThat(tokens).containsExactly(new Token.SymbolToken("1,"));
+	}
+
 }

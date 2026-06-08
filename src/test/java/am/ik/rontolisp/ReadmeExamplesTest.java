@@ -144,6 +144,24 @@ class ReadmeExamplesTest {
 
 	}
 
+	// == Data type examples (Language Reference > Data Types section) ==
+
+	@Nested
+	class DataTypeExamples {
+
+		@Test
+		void groupedInteger() {
+			assertThat(eval("1,000")).isEqualTo(new LispInteger(1000));
+			assertThat(eval("(+ 1,000 100)")).isEqualTo(new LispInteger(1100));
+		}
+
+		@Test
+		void groupedDouble() {
+			assertThat(eval("3,000.50")).isEqualTo(new LispDouble(3000.5));
+		}
+
+	}
+
 	// == Built-in function examples (Language Reference > Built-in Functions table) ==
 
 	@Nested

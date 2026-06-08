@@ -137,14 +137,21 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 | Type | Example | Description |
 |------|---------|-------------|
-| Integer | `42`, `-5` | 64-bit signed integer (interpreter), 31-bit signed integer (WASM) |
-| Double | `3.14`, `-0.5` | 64-bit floating-point number |
+| Integer | `42`, `-5`, `1,000` | 64-bit signed integer (interpreter), 31-bit signed integer (WASM) |
+| Double | `3.14`, `-0.5`, `3,000.50` | 64-bit floating-point number |
 | String | `"hello"` | String literal (interpreter only) |
 | Symbol | `x`, `foo` | Identifier |
 | Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
 | Nil | `nil` | False / empty list |
 | T | `t` | True |
 | Cons | `(1 2 3)` | Linked list built from cons cells |
+
+Numeric literals may use `,` as a grouping separator between digits in the
+integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to
+`1100`. The comma is only treated as a separator when it sits between two
+digits; it is stripped before parsing and applies to all three backends. This
+differs from Common Lisp, where `,` is the unquote character (not supported
+here).
 
 ### Special Forms
 
