@@ -92,8 +92,13 @@ One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
 
 ## Notes / limitations
 
-- `read` and file I/O are unavailable in the WASM sandbox; the REPL covers the
+- `read` (stdin) is unavailable in the WASM sandbox; the REPL covers the
   interpreter's evaluation features. See the project README "Compiled `eval`
   limitations" for the compiled backends.
+- `load` works against uploaded files: pick (or drag-and-drop) `.lisp` files
+  with the **load files** control, then `(load "name.lisp")` resolves them from
+  an in-memory map. The browser has no real filesystem, so the playground
+  installs an in-memory `SourceLoader` (`globalThis.rontoPutFile(name, content)`
+  feeds it) instead of `Files.readString`.
 - Generated artifacts (`web/dist/`, and `target/rontoplayground.*`) are
   git-ignored.

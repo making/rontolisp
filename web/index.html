@@ -251,6 +251,11 @@
 				<button class="jvm" id="btn-jvm" disabled>Compile &rarr; .class</button>
 				<button class="wasm" id="btn-wasm" disabled>Compile &rarr; .wasm</button>
 			</div>
+			<div class="toolbar">
+				<label for="file-upload">load files</label>
+				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm" disabled>
+				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code>(load "name.lisp")</code></span>
+			</div>
 			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
 		</section>
 
@@ -319,6 +324,24 @@
 			log.scrollTop = log.scrollHeight;
 		}
 
+		function refreshFileList(listStr) {
+			const names = (listStr || "").split("\n").filter(Boolean);
+			$("file-list").textContent = names.length ? ("loaded: " + names.join(", ")) : "none uploaded";
+		}
+
+		function uploadFiles(files) {
+			for (const file of files) {
+				const reader = new FileReader();
+				reader.onload = () => {
+					const listStr = globalThis.rontoPutFile(file.name, String(reader.result));
+					refreshFileList(listStr);
+					appendEntry(null, `uploaded ${file.name} (${file.size} bytes) \u2014 use (load "${file.name}")`, false);
+				};
+				reader.onerror = () => appendEntry(null, "ERROR reading " + file.name, true);
+				reader.readAsText(file);
+			}
+		}
+
 		function runRepl(src) {
 			const res = globalThis.rontoEval(src);
 			const isErr = typeof res === "string" && res.startsWith("ERROR:");
@@ -353,7 +376,20 @@
 			$("btn-jvm").disabled = false;
 			$("btn-wasm").disabled = false;
 			$("btn-run-source").disabled = false;
+			$("file-upload").disabled = false;
 			appendEntry(null, "rontolisp interpreter running in WebAssembly. Type an expression below.", false);
+
+			$("file-upload").addEventListener("change", (ev) => { uploadFiles(ev.target.files); ev.target.value = ""; });
+			const dropTarget = $("source");
+			["dragover", "dragenter"].forEach((t) => dropTarget.addEventListener(t, (e) => {
+				if (e.dataTransfer && e.dataTransfer.types.includes("Files")) e.preventDefault();
+			}));
+			dropTarget.addEventListener("drop", (e) => {
+				if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+					e.preventDefault();
+					uploadFiles(e.dataTransfer.files);
+				}
+			});
 
 			$("repl-input").addEventListener("keydown", (ev) => {
 				if (ev.key === "Enter") {

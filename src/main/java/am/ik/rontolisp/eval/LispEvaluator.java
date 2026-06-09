@@ -3,8 +3,6 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,6 +28,8 @@ public final class LispEvaluator {
 
 	private final Environment globalEnv;
 
+	private SourceLoader sourceLoader = SourceLoader.fileSystem();
+
 	/**
 	 * Create a new evaluator with the given output stream.
 	 * @param out the output stream for print operations
@@ -49,6 +49,16 @@ public final class LispEvaluator {
 		registerEval();
 	}
 
+	/**
+	 * Sets the loader used to resolve {@code (load "path")} source text. Defaults to the
+	 * local filesystem; environments without a filesystem (e.g. the browser playground)
+	 * can install an in-memory loader.
+	 * @param loader the source loader
+	 */
+	public void setSourceLoader(SourceLoader loader) {
+		this.sourceLoader = java.util.Objects.requireNonNull(loader);
+	}
+
 	private void registerEval() {
 		this.globalEnv.define(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
@@ -65,7 +75,7 @@ public final class LispEvaluator {
 			}
 			String source;
 			try {
-				source = Files.readString(Path.of(path.value()));
+				source = this.sourceLoader.load(path.value());
 			}
 			catch (IOException ex) {
 				throw new LispEvalException(

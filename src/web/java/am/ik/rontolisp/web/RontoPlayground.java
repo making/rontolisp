@@ -1,9 +1,12 @@
 package am.ik.rontolisp.web;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.PrintStream;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -46,7 +49,30 @@ public final class RontoPlayground {
 
 	private static final LispEvaluator evaluator = new LispEvaluator(replOut);
 
+	/**
+	 * In-memory files uploaded from the browser, keyed by file name. There is no filesystem
+	 * in the WASM sandbox, so {@code (load "name.lisp")} resolves against this map.
+	 */
+	private static final Map<String, String> uploadedFiles = new LinkedHashMap<>();
+
+	static {
+		evaluator.setSourceLoader(path -> {
+			String content = uploadedFiles.get(path);
+			if (content == null) {
+				throw new FileNotFoundException(
+						path + " (upload it first; available: " + String.join(", ", uploadedFiles.keySet()) + ")");
+			}
+			return content;
+		});
+	}
+
 	private RontoPlayground() {
+	}
+
+	/** Register (or replace) an uploaded file so that {@code load} can resolve it. */
+	static String putFile(String name, String content) {
+		uploadedFiles.put(name, content);
+		return String.join("\n", uploadedFiles.keySet());
 	}
 
 	/** Interpret {@code source} in the persistent REPL environment. */
@@ -100,10 +126,14 @@ public final class RontoPlayground {
 	@JS(args = { "fn" }, value = "globalThis.rontoCompileWasm = fn;")
 	private static native void exportCompileWasm(Function<JSString, JSString> fn);
 
+	@JS(args = { "fn" }, value = "globalThis.rontoPutFile = fn;")
+	private static native void exportPutFile(BiFunction<JSString, JSString, JSString> fn);
+
 	public static void main(String[] args) {
 		exportEval(source -> JSString.of(evalLine(source.asString())));
 		exportCompileJvm((source, className) -> JSString.of(compileJvm(source.asString(), className.asString())));
 		exportCompileWasm(source -> JSString.of(compileWasm(source.asString())));
+		exportPutFile((name, content) -> JSString.of(putFile(name.asString(), content.asString())));
 	}
 
 }
