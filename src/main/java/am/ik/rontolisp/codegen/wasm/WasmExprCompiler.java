@@ -95,6 +95,10 @@ final class WasmExprCompiler {
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 			return;
 		}
+		if (ctx.dynamic) {
+			WasmDynamicCallCompiler.compileVarRef(name, ctx);
+			return;
+		}
 		throw new UnsupportedOperationException("Cannot compile symbol: " + name);
 	}
 

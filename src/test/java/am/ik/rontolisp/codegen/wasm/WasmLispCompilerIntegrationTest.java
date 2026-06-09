@@ -881,6 +881,42 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunLoad(code, lib)).isEqualTo("10");
 	}
 
+	// dynamic mode (late binding) tests
+
+	private static String compileAndRunLoadDynamic(String lispCode, String libContent) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler(true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(libContent.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				"/tmp/lib.lisp");
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "cd /tmp && wasmtime --wasm gc --dir . test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void dynamicCallToLoadDefinedFunction() throws Exception {
+		// (cube 3) is unknown at compile time; dynamic mode resolves it at runtime.
+		String lib = "(defun cube (x) (* x x x))\n";
+		String code = "(load \"lib.lisp\") (print (cube 3))";
+		assertThat(compileAndRunLoadDynamic(code, lib)).isEqualTo("27");
+	}
+
+	@Test
+	void dynamicCallFromCompiledFunctionSeesLocals() throws Exception {
+		// caller is compiled; its local n must reach the runtime-resolved cube/square.
+		String lib = "(defun cube (x) (* x x x))\n(defun square (x) (* x x))\n";
+		String code = "(load \"lib.lisp\") (defun caller (n) (+ (cube n) (square n))) (print (caller 5))";
+		assertThat(compileAndRunLoadDynamic(code, lib)).isEqualTo("150");
+	}
+
+	@Test
+	void dynamicReferenceToLoadDefinedVariable() throws Exception {
+		String lib = "(setq base 7)\n";
+		String code = "(load \"lib.lisp\") (print base)";
+		assertThat(compileAndRunLoadDynamic(code, lib)).isEqualTo("7");
+	}
+
 	// eval tests
 
 	@Test

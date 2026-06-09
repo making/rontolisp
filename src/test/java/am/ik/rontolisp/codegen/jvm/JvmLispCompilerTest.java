@@ -941,6 +941,59 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(code)).isEqualTo("10");
 	}
 
+	// === dynamic mode (late binding) ===
+
+	private String compileAndRunDynamic(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test", true);
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	@Test
+	void dynamicCallToLoadDefinedFunction() throws Exception {
+		Path lib = tempDir.resolve("fn.lisp");
+		Files.writeString(lib, "(defun cube (x) (* x x x))\n");
+		// (cube 3) is unknown at compile time; --dynamic resolves it at runtime.
+		String code = "(load \"" + lib + "\") (print (cube 3))";
+		assertThat(compileAndRunDynamic(code)).isEqualTo("27");
+	}
+
+	@Test
+	void dynamicCallFromCompiledFunctionSeesLocals() throws Exception {
+		Path lib = tempDir.resolve("fn2.lisp");
+		Files.writeString(lib, "(defun cube (x) (* x x x))\n(defun square (x) (* x x))\n");
+		// caller is compiled; its local n must reach the runtime-resolved cube/square.
+		String code = "(load \"" + lib + "\") (defun caller (n) (+ (cube n) (square n))) (print (caller 5))";
+		assertThat(compileAndRunDynamic(code)).isEqualTo("150");
+	}
+
+	@Test
+	void dynamicReferenceToLoadDefinedVariable() throws Exception {
+		Path lib = tempDir.resolve("var.lisp");
+		Files.writeString(lib, "(setq base 7)\n");
+		String code = "(load \"" + lib + "\") (print base)";
+		assertThat(compileAndRunDynamic(code)).isEqualTo("7");
+	}
+
 	// === eval ===
 
 	@Test

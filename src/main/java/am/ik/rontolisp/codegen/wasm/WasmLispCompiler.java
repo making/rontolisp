@@ -36,8 +36,23 @@ import org.jspecify.annotations.Nullable;
  */
 public final class WasmLispCompiler implements LispCompiler {
 
+	private final boolean dynamic;
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
+		this(false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are not rejected at compile time but resolved at runtime against the embedded
+	 * {@code eval} global environment (late binding), so a program that defines functions
+	 * via {@code load} can compile without changes. This forces the {@code eval} runtime
+	 * to be emitted.
+	 */
+	public WasmLispCompiler(boolean dynamic) {
+		this.dynamic = dynamic;
 	}
 
 	// Function indices (imports come first)
@@ -184,7 +199,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
 		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
-		boolean usesEval = programUsesEval(program) || usesLoad;
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic;
 		// Pass 1: Collect defun declarations and top-level expressions
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
@@ -245,7 +260,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.functions(functions)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
-			.nextFuncId(nextFuncId);
+			.nextFuncId(nextFuncId)
+			.dynamic(this.dynamic);
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
@@ -867,6 +883,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		int nextLocal = 0;
 
+		boolean dynamic = false;
+
 		private Ctx(Builder builder) {
 			this.writer = Objects.requireNonNull(builder.writer);
 			this.bodyStream = Objects.requireNonNull(builder.bodyStream);
@@ -875,6 +893,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.nextFuncId = builder.nextFuncId;
+			this.dynamic = builder.dynamic;
 		}
 
 		static Builder builder() {
@@ -896,6 +915,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
+
+			private boolean dynamic = false;
 
 			Builder writer(WasmWriter writer) {
 				this.writer = writer;
@@ -929,6 +950,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder nextFuncId(int[] nextFuncId) {
 				this.nextFuncId = nextFuncId;
+				return this;
+			}
+
+			Builder dynamic(boolean dynamic) {
+				this.dynamic = dynamic;
 				return this;
 			}
 

@@ -63,7 +63,7 @@ public final class RontoLispCli {
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
-			compileToFile(source, outputFile);
+			compileToFile(source, outputFile, options.contains("--dynamic"));
 		}
 		else {
 			interpret(source);
@@ -137,15 +137,15 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void compileToFile(String source, String outputFile) {
+	private void compileToFile(String source, String outputFile, boolean dynamic) {
 		List<LispVal> program = LispReader.readAllFromString(source);
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
-			bytes = new WasmLispCompiler().compile(program);
+			bytes = new WasmLispCompiler(dynamic).compile(program);
 		}
 		else {
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className).compile(program);
+			bytes = new JvmLispCompiler(className, dynamic).compile(program);
 		}
 		try {
 			Files.write(Path.of(outputFile), bytes);
@@ -165,6 +165,8 @@ public final class RontoLispCli {
 		this.out.println("Options:");
 		this.out.println("  -h, --help         Show this help message");
 		this.out.println("  -v, --version      Show version");
+		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
+		this.out.println("                     Lets sources that define functions via load compile as-is");
 	}
 
 	static boolean isBalanced(String input) {

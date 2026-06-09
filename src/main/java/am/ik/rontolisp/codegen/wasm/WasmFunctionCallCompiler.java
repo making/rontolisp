@@ -62,6 +62,9 @@ final class WasmFunctionCallCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(fi.funcIndex());
 		}
+		else if (ctx.dynamic) {
+			WasmDynamicCallCompiler.compileCall(name, cons, ctx);
+		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}

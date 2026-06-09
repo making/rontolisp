@@ -264,6 +264,20 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 
 `load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime --wasm gc --dir . prog.wasm`).
 
+#### `--dynamic` (late binding)
+
+By default the JVM and WASM compilers resolve every call and variable reference statically and reject anything they cannot find at compile time (`Cannot compile: cube`). That catches typos, but it also means a source that calls a function defined later by `load` must wrap the call in `eval` (`(eval '(cube 3))`) to compile.
+
+The `--dynamic` flag relaxes this: a call or reference that cannot be resolved statically is deferred to the runtime `eval` environment (late binding) instead of failing. This lets a program you tested in the interpreter compile unchanged -- typically to run it faster -- without rewriting `(cube 3)` into `(eval '(cube 3))`.
+
+```bash
+echo '(load "lib.lisp") (print (cube 3))' > prog.lisp
+rontolisp prog.lisp -o Prog.class --dynamic   # compiles; (cube 3) resolves at runtime
+rontolisp prog.lisp -o prog.wasm  --dynamic
+```
+
+A call `(f a b)` compiles to `_apply(_eval('f, null), (list a b))`: the operator is resolved against the global environment at runtime while the arguments are compiled normally, so locals of the enclosing compiled function stay visible (e.g. `(defun caller (n) (cube n))` works). A bare reference `x` compiles to `_eval('x, null)`. Because the fallback uses the embedded `eval` runtime, `--dynamic` always emits it (as if the program used `eval`), and an unknown symbol that is never defined at runtime errors when it is reached rather than at compile time. Functions resolved this way run on the runtime `eval` interpreter, so they are subject to the [Compiled `eval` limitations](#compiled-eval-limitations) above.
+
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
 The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `while`, `dotimes`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.

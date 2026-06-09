@@ -69,6 +69,9 @@ final class JvmFunctionCallCompiler {
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(fi.methodref().index());
 		}
+		else if (ctx.dynamic) {
+			JvmDynamicCallCompiler.compileCall(name, cons, ctx, className);
+		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}

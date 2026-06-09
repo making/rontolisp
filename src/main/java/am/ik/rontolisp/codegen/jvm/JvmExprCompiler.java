@@ -84,6 +84,9 @@ final class JvmExprCompiler {
 			ctx.emitU2(ctx.integerValueOf.index());
 			ctx.emit(Opcode.AASTORE);
 		}
+		else if (ctx.dynamic) {
+			JvmDynamicCallCompiler.compileVarRef(name, ctx);
+		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile symbol reference: " + name);
 		}

@@ -40,12 +40,28 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final String className;
 
+	private final boolean dynamic;
+
 	/**
 	 * Create a new JVM compiler targeting the given class name.
 	 * @param className the fully qualified class name for the generated class
 	 */
 	public JvmLispCompiler(String className) {
+		this(className, false);
+	}
+
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are not rejected at compile time but resolved at runtime against the embedded
+	 * {@code eval} global environment (late binding), so a program that defines functions
+	 * via {@code load} can compile without changes. This forces the {@code eval} runtime
+	 * to be emitted.
+	 */
+	public JvmLispCompiler(String className, boolean dynamic) {
 		this.className = className;
+		this.dynamic = dynamic;
 	}
 
 	@Override
@@ -225,7 +241,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
 		// every arity up to the maximum callable must have a dispatch method.
-		boolean usesEval = programUsesEval(program) || usesLoad;
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic;
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);
@@ -274,7 +290,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			.mathCeil(mathCeil)
 			.mathRint(mathRint)
 			.objectEquals(objectEquals)
-			.readLineHelper(readLineHelperMethod);
+			.readLineHelper(readLineHelperMethod)
+			.dynamic(this.dynamic)
+			.className(this.className);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -887,7 +905,13 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int maxStack = 64;
 
+		boolean dynamic = false;
+
+		String className = "";
+
 		private Ctx(Builder builder) {
+			this.dynamic = builder.dynamic;
+			this.className = builder.className;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
@@ -1007,6 +1031,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
+
+			private boolean dynamic = false;
+
+			private String className = "";
 
 			private Map<String, MethodrefConstant> numOps = Map.of();
 
@@ -1192,6 +1220,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder nextFuncId(int[] nextFuncId) {
 				this.nextFuncId = nextFuncId;
+				return this;
+			}
+
+			Builder dynamic(boolean dynamic) {
+				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder className(String className) {
+				this.className = className;
 				return this;
 			}
 
