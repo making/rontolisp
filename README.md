@@ -1,7 +1,5 @@
 # rontolisp
 
-**Try it in your browser: [https://making.github.io/rontolisp/](https://making.github.io/rontolisp/)** -- a playground where rontolisp itself runs as WebAssembly. Evaluate expressions in the REPL, and compile your source to downloadable `.class` and `.wasm` files, entirely client-side. See [`web/README.md`](web/README.md) for how it is built and deployed.
-
 A minimal Common Lisp subset implemented in Java. It supports three execution modes:
 
 - **Interpreter** -- Tree-walking evaluation with REPL support
@@ -9,6 +7,9 @@ A minimal Common Lisp subset implemented in Java. It supports three execution mo
 - **WASM compiler** -- Compiles Lisp to `.wasm` binary using wasm-GC and WASI Preview 1
 
 No external runtime dependencies for core libraries. The JVM and WASM bytecode generators are written from scratch without ASM or other code generation libraries. The CLI uses JLine for interactive REPL features (history, line editing).
+
+**Try it in your browser: [https://making.github.io/rontolisp/](https://making.github.io/rontolisp/)** -- a playground where rontolisp itself runs as WebAssembly. Evaluate expressions in the REPL, and compile your source to downloadable `.class` and `.wasm` files, entirely client-side. See [`web/README.md`](web/README.md) for how it is built and deployed.
+
 
 ## Requirements
 
