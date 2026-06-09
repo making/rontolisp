@@ -1,7 +1,10 @@
 package am.ik.rontolisp.eval;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,6 +21,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
 
 /**
  * Tree-walking interpreter for Lisp expressions.
@@ -51,6 +55,28 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
 			}
 			return eval(args.get(0));
+		}));
+		this.globalEnv.define(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.LOAD + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.LOAD + " expects a string argument");
+			}
+			String source;
+			try {
+				source = Files.readString(Path.of(path.value()));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						LispNames.LOAD + ": cannot read file " + path.value() + ": " + ex.getMessage());
+			}
+			// Evaluate every top-level form in the global environment so that
+			// definitions become reusable after load returns.
+			for (LispVal form : LispReader.readAllFromString(source)) {
+				eval(form, this.globalEnv);
+			}
+			return LispTrue.INSTANCE;
 		}));
 	}
 

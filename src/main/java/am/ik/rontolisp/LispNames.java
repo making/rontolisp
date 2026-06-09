@@ -263,6 +263,9 @@ public final class LispNames {
 	/** The {@code eval} built-in function (interpreter only). */
 	public static final String EVAL = "eval";
 
+	/** The {@code load} built-in function (interpreter only). */
+	public static final String LOAD = "load";
+
 	private LispNames() {
 	}
 

@@ -5,6 +5,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
@@ -17,8 +19,10 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LispEvaluatorTest {
 
@@ -880,6 +884,27 @@ class LispEvaluatorTest {
 	@Test
 	void bigIntegerFloatConversion() {
 		assertThat(eval("(float (* 1000000000000 1000000000000))")).isEqualTo(new LispDouble(1.0e24));
+	}
+
+	@Test
+	void loadEvaluatesFileAndReusesDefinitions(@TempDir Path tempDir) throws Exception {
+		Path file = tempDir.resolve("bar.lisp");
+		Files.writeString(file, "(defun square (x) (* x x))\n(setq base 10)\n");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal loadResult = evaluator
+			.eval(LispReader.readFromString("(load \"" + file.toString().replace("\\", "\\\\") + "\")"));
+		assertThat(loadResult).isEqualTo(LispTrue.INSTANCE);
+		// Definitions from the loaded file are reusable afterwards.
+		assertThat(evaluator.eval(LispReader.readFromString("(square base)"))).isEqualTo(new LispInteger(100));
+	}
+
+	@Test
+	void loadMissingFileThrows(@TempDir Path tempDir) {
+		Path missing = tempDir.resolve("nope.lisp");
+		assertThatThrownBy(() -> eval("(load \"" + missing.toString().replace("\\", "\\\\") + "\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot read file");
 	}
 
 }

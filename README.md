@@ -228,6 +228,7 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (interpreter only). `nil` on EOF |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
+| `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (interpreter only). Returns `t` |
 | `null` | `(null nil)` | `t` |
 | `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |
@@ -260,6 +261,8 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 
 `read` is interpreter-only. It requires the Lisp reader (parser) at runtime, which is not reimplemented in the JVM or WASM backends. Use `read-line` to read raw strings in compiled code.
+
+`load` is interpreter-only for the same reason: it reads a file and parses it with the Lisp reader at runtime. Each top-level form is evaluated in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code.
 
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
