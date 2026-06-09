@@ -1549,6 +1549,38 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
+		// ---- defun: (defun name (params) body...) treated as
+		// (setq name (lambda (params) body...)) so loaded files can define functions ----
+		n = special(a, OP, LispNames.DEFUN);
+		car(a, REST);
+		a.astore(ACC); // name symbol
+		// lambdaForm = cons("lambda", cdr(REST))
+		a.iconst(2);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		ldcStr(a, LispNames.LAMBDA);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		cdr(a, REST);
+		a.aastore();
+		a.astore(TMP); // lambdaForm
+		// value = _eval(lambdaForm, ENV)
+		a.aload(TMP);
+		a.aload(ENV);
+		a.invokestatic(this.k.evalRef());
+		a.astore(NEWCELL); // closure value
+		// _store(name, value, ENV) -> defines/updates the global binding
+		a.aload(ACC);
+		a.aload(NEWCELL);
+		a.aload(ENV);
+		a.invokestatic(this.k.storeRef());
+		a.pop();
+		a.aload(ACC);
+		a.areturn();
+		a.bind(n);
+
 		// ---- cond ----
 		n = special(a, OP, LispNames.COND);
 		a.aload(REST);

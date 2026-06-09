@@ -45,42 +45,56 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FD_READ = 1; // imported
 
-	static final int FUNC_START = 2;
+	static final int FUNC_PATH_OPEN = 2; // imported (for load)
 
-	static final int FUNC_PRINT_I32 = 3;
+	static final int FUNC_START = 3;
 
-	static final int FUNC_WRITE_STR = 4;
+	static final int FUNC_PRINT_I32 = 4;
 
-	static final int FUNC_PRINT_VAL = 5;
+	static final int FUNC_WRITE_STR = 5;
 
-	static final int FUNC_PRINT_I32_NO_NL = 6;
+	static final int FUNC_PRINT_VAL = 6;
 
-	static final int FUNC_PRINT_F64 = 7;
+	static final int FUNC_PRINT_I32_NO_NL = 7;
 
-	static final int FUNC_PRINT_F64_NO_NL = 8;
+	static final int FUNC_PRINT_F64 = 8;
 
-	static final int FUNC_APPEND = 9;
+	static final int FUNC_PRINT_F64_NO_NL = 9;
 
-	static final int FUNC_READ_LINE = 10;
+	static final int FUNC_APPEND = 10;
 
-	static final int FUNC_PRINC_VAL = 11;
+	static final int FUNC_READ_LINE = 11;
 
-	static final int FUNC_LOOKUP = 12;
+	static final int FUNC_PRINC_VAL = 12;
 
-	static final int FUNC_ENV_LOOKUP = 13;
+	static final int FUNC_LOOKUP = 13;
 
-	static final int FUNC_EVAL = 14;
+	static final int FUNC_ENV_LOOKUP = 14;
 
-	static final int FUNC_APPLY = 15;
+	static final int FUNC_EVAL = 15;
 
-	static final int FUNC_STORE = 16;
+	static final int FUNC_APPLY = 16;
 
-	static final int FUNC_DISPATCH_BASE = 17;
+	static final int FUNC_STORE = 17;
+
+	// Reader runtime (for read/load); always present (stubs when unused) to keep indices
+	// stable.
+	static final int FUNC_INTERN = 18;
+
+	static final int FUNC_READ_EXPR = 19;
+
+	static final int FUNC_READ_LIST = 20;
+
+	static final int FUNC_READ = 21;
+
+	static final int FUNC_LOAD = 22;
+
+	static final int FUNC_DISPATCH_BASE = 23;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 17..24 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 25
+	// Dispatch functions occupy indices 23..30 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 31
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -121,6 +135,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// type index for _env_lookup: (i32, (ref null eq)) -> (ref null eq)
 	static final int TYPE_ENV_LOOKUP = TYPE_LOOKUP + 1; // 21
 
+	// type index for _intern: (i32, i32) -> (i32)
+	static final int TYPE_INTERN = TYPE_ENV_LOOKUP + 1; // 22
+
+	// type index for path_open: (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
+	static final int TYPE_PATH_OPEN = TYPE_ENV_LOOKUP + 2; // 23
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
@@ -136,7 +156,22 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int HEAP_PTR_ADDR = 84;
 
-	static final int READ_LINE_BUF = 8192;
+	// Reader cursor/end (absolute byte offsets) used by the read/load runtime.
+	static final int READ_CURSOR_ADDR = 88;
+
+	static final int READ_END_ADDR = 92;
+
+	// Scratch for path_open's output file descriptor (for load).
+	static final int READ_FD_ADDR = 96;
+
+	// Runtime intern table: a count cell plus a region of (offset,length) entries used by
+	// _intern to give symbols parsed at runtime but absent from the compile-time table
+	// (e.g. lambda parameters in loaded files) a stable offset across occurrences.
+	static final int RT_INTERN_COUNT_ADDR = 100;
+
+	static final int RT_INTERN_BASE = 8192;
+
+	static final int READ_LINE_BUF = 16384;
 
 	private static final int DATA_BASE_OFFSET = 128;
 
@@ -145,7 +180,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Detect whether the program uses (eval ...). When it does, a runtime
 		// interpreter (_eval) and a function-name registry are emitted, and dispatch
 		// functions are generated for every registered arity so _eval can apply them.
-		boolean usesEval = programUsesEval(program);
+		// The reader runtime is emitted for read/load; load also evaluates each form, so
+		// it pulls in the eval runtime as well.
+		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
+		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
+		boolean usesEval = programUsesEval(program) || usesLoad;
 		// Pass 1: Collect defun declarations and top-level expressions
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
@@ -404,6 +443,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.PROGN)
 				.add(stringTable, LispNames.LET)
 				.add(stringTable, LispNames.LAMBDA)
+				.add(stringTable, LispNames.DEFUN)
 				.add(stringTable, LispNames.COND)
 				.add(stringTable, LispNames.AND)
 				.add(stringTable, LispNames.OR)
@@ -452,6 +492,37 @@ public final class WasmLispCompiler implements LispCompiler {
 			evalBody = WasmEvalRuntimeBuilder.buildEvalStub();
 			applyBody = WasmEvalRuntimeBuilder.buildApplyStub();
 			storeBody = WasmEvalRuntimeBuilder.buildStoreStub();
+		}
+
+		// Build the reader runtime (read/load). Symbols parsed at runtime are interned
+		// against a compile-time table of (offset,length) so they match the offsets the
+		// eval runtime compares against.
+		final byte[] internBody;
+		final byte[] readExprBody;
+		final byte[] readListBody;
+		final byte[] readBody;
+		final byte[] loadBody;
+		if (usesRead) {
+			// Intern nil/t/quote before snapshotting so the runtime resolves them to the
+			// same offsets the eval runtime uses.
+			int nilOffset = stringTable.addString("nil").offset();
+			int tOffset = stringTable.addString("t").offset();
+			int quoteOffset = stringTable.addString(LispNames.QUOTE).offset();
+			java.util.Collection<StringTable.StringEntry> internEntries = stringTable.entries();
+			int internCount = internEntries.size();
+			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
+			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount);
+			readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset);
+			readListBody = WasmReadRuntimeBuilder.buildReadListBody();
+			readBody = WasmReadRuntimeBuilder.buildReadBody();
+			loadBody = WasmReadRuntimeBuilder.buildLoadBody();
+		}
+		else {
+			internBody = WasmReadRuntimeBuilder.buildInternStub();
+			readExprBody = WasmReadRuntimeBuilder.buildReadExprStub();
+			readListBody = WasmReadRuntimeBuilder.buildReadListStub();
+			readBody = WasmReadRuntimeBuilder.buildReadStub();
+			loadBody = WasmReadRuntimeBuilder.buildLoadStub();
 		}
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -542,11 +613,17 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.REFNULL.code());
 					w.writeHeapType(Type.EQ.code());
 				});
+				// type 22: _intern (i32, i32) -> (i32)
+				types.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				// type 23: path_open (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
+				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I64, Type.I64,
+						Type.I32, Type.I32 }, new Type[] { Type.I32 });
 			})
 			// Import section
 			.writeImportSection(imports -> imports
 				.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
-				.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE))
+				.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
+				.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN))
 			// Function section
 			.writeFunction(fnDef -> {
 				fnDef.addFunction(TYPE_START) // _start
@@ -565,6 +642,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _apply (fn, args) -> value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _store (place, value, env)
 															// -> value
+				fnDef.addFunction(TYPE_INTERN); // _intern (off, len) -> canonicalOff
+				fnDef.addFunction(TYPE_READ_LINE); // _read_expr () -> value
+				fnDef.addFunction(TYPE_READ_LINE); // _read_list () -> value
+				fnDef.addFunction(TYPE_READ_LINE); // _read () -> value
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _load (path) -> value
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -608,7 +690,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(envLookupBody)
 					.addFunction(evalBody)
 					.addFunction(applyBody)
-					.addFunction(storeBody);
+					.addFunction(storeBody)
+					.addFunction(internBody)
+					.addFunction(readExprBody)
+					.addFunction(readListBody)
+					.addFunction(readBody)
+					.addFunction(loadBody);
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
@@ -672,6 +759,42 @@ public final class WasmLispCompiler implements LispCompiler {
 			return true;
 		}
 		return usesEval(cons.car()) || usesEval(cons.cdr());
+	}
+
+	private static boolean programUsesSymbol(List<LispVal> program, String name) {
+		for (LispVal expr : program) {
+			if (usesSymbol(expr, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesSymbol(LispVal val, String name) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
+			return true;
+		}
+		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
+	}
+
+	/**
+	 * Builds the compile-time intern table: one {@code (offset i32, length i32)} pair per
+	 * interned string. The runtime {@code _intern} scans it to map a freshly-parsed
+	 * symbol's bytes to the canonical string-table offset that the eval runtime compares
+	 * against.
+	 * @param entries the interned string entries
+	 * @return the little-endian blob
+	 */
+	private static byte[] buildInternBlob(java.util.Collection<StringTable.StringEntry> entries) {
+		ByteArrayOutputStream blob = new ByteArrayOutputStream();
+		for (StringTable.StringEntry e : entries) {
+			writeLittleEndian32(blob, e.offset());
+			writeLittleEndian32(blob, e.length());
+		}
+		return blob.toByteArray();
 	}
 
 	private static void writeLittleEndian32(ByteArrayOutputStream target, int value) {
@@ -900,6 +1023,17 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		byte[] toByteArray() {
 			return this.data.toByteArray();
+		}
+
+		/**
+		 * Returns a snapshot of all interned string entries. Used to build the
+		 * compile-time intern table scanned by the runtime {@code _intern} so that
+		 * symbols parsed by {@code read} resolve to the canonical offset the eval runtime
+		 * compares against.
+		 * @return the interned entries
+		 */
+		java.util.Collection<StringEntry> entries() {
+			return new java.util.ArrayList<>(this.cache.values());
 		}
 
 		record StringEntry(int offset, int length) {

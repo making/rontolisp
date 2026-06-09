@@ -811,6 +811,76 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello")).isEqualTo("1");
 	}
 
+	// read tests
+
+	@Test
+	void readInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "42")).isEqualTo("42");
+	}
+
+	@Test
+	void readNegativeInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "-7")).isEqualTo("-7");
+	}
+
+	@Test
+	void readSymbol() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "foo")).isEqualTo("foo");
+	}
+
+	@Test
+	void readString() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "\"hello\"")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void readList() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "(+ 1 2)")).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void readCarOfList() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)")).isEqualTo("a");
+	}
+
+	@Test
+	void readNil() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (null (read)))", "nil")).isEqualTo("1");
+	}
+
+	@Test
+	void readThenEval() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(+ 1 2 3)")).isEqualTo("6");
+	}
+
+	// load tests
+
+	private static String compileAndRunLoad(String lispCode, String libContent) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(libContent.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				"/tmp/lib.lisp");
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "cd /tmp && wasmtime --wasm gc --dir . test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void loadDefunAndUseViaEval() throws Exception {
+		// Definitions from the loaded file live in the eval runtime's global env.
+		String lib = "(defun square (x) (* x x))\n(setq base 5)\n";
+		String code = "(load \"lib.lisp\") (print (eval '(square base)))";
+		assertThat(compileAndRunLoad(code, lib)).isEqualTo("25");
+	}
+
+	@Test
+	void loadMultipleForms() throws Exception {
+		String lib = "(defun inc (x) (+ x 1))\n(defun dbl (x) (* x 2))\n";
+		String code = "(load \"lib.lisp\") (print (eval '(dbl (inc 4))))";
+		assertThat(compileAndRunLoad(code, lib)).isEqualTo("10");
+	}
+
 	// eval tests
 
 	@Test

@@ -858,6 +858,89 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello\n")).isEqualTo("1");
 	}
 
+	// === read ===
+
+	@Test
+	void compileAndRunReadInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "42\n")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunReadNegativeInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "-7\n")).isEqualTo("-7");
+	}
+
+	@Test
+	void compileAndRunReadBigInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "100000000000000000000\n"))
+			.isEqualTo("100000000000000000000");
+	}
+
+	@Test
+	void compileAndRunReadFloat() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "3.14\n")).isEqualTo("3.14");
+	}
+
+	@Test
+	void compileAndRunReadSymbol() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "foo\n")).isEqualTo("foo");
+	}
+
+	@Test
+	void compileAndRunReadString() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "\"hello\"\n")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunReadList() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "(+ 1 2)\n")).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void compileAndRunReadCarList() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)\n")).isEqualTo("a");
+	}
+
+	@Test
+	void compileAndRunReadQuote() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "'x\n")).isEqualTo("(quote x)");
+	}
+
+	@Test
+	void compileAndRunReadNil() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (null (read)))", "nil\n")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunReadThenEval() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(+ 1 2 3)\n")).isEqualTo("6");
+	}
+
+	@Test
+	void compileAndRunReadEof() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (null (read)))", "")).isEqualTo("1");
+	}
+
+	// === load ===
+
+	@Test
+	void compileAndRunLoadDefun() throws Exception {
+		Path lib = tempDir.resolve("lib.lisp");
+		Files.writeString(lib, "(defun square (x) (* x x))\n(setq base 10)\n");
+		// Definitions from the loaded file live in the eval runtime's global env, so they
+		// are used through eval.
+		String code = "(load \"" + lib + "\") (print (eval '(square base)))";
+		assertThat(compileAndRun(code)).isEqualTo("100");
+	}
+
+	@Test
+	void compileAndRunLoadMultipleForms() throws Exception {
+		Path lib = tempDir.resolve("lib2.lisp");
+		Files.writeString(lib, "(defun inc (x) (+ x 1))\n(defun dbl (x) (* x 2))\n");
+		String code = "(load \"" + lib + "\") (print (eval '(dbl (inc 4))))";
+		assertThat(compileAndRun(code)).isEqualTo("10");
+	}
+
 	// === eval ===
 
 	@Test

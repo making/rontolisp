@@ -218,9 +218,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 
+		// The reader runtime is emitted for read/load; load also evaluates each form, so
+		// it pulls in the eval runtime as well.
+		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
+		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
+
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
 		// every arity up to the maximum callable must have a dispatch method.
-		boolean usesEval = programUsesEval(program);
+		boolean usesEval = programUsesEval(program) || usesLoad;
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);
@@ -441,6 +446,20 @@ public final class JvmLispCompiler implements LispCompiler {
 			lookupCode = JvmEvalRuntimeBuilder.buildLookup(ec);
 		}
 
+		// Build the runtime reader methods (read/load), only when used
+		Utf8Constant readSrcName = cp.addUtf8("_readSrc");
+		Utf8Constant readSrcDesc = cp.addUtf8("Ljava/lang/String;");
+		Utf8Constant readPosName = cp.addUtf8("_readPos");
+		Utf8Constant readPosDesc = cp.addUtf8("I");
+		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
+		if (usesRead) {
+			readMethods = JvmReadRuntimeBuilder
+				.create(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf, doubleValueOf,
+						stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelperMethod, usesLoad)
+				.methods();
+		}
+		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
@@ -486,6 +505,16 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
 						.writeU2(genvDesc)
+						.writeU2(0));
+				}
+				if (usesRead) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(readSrcName)
+						.writeU2(readSrcDesc)
+						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(readPosName)
+						.writeU2(readPosDesc)
 						.writeU2(0));
 				}
 			})
@@ -564,6 +593,16 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(rm.maxStack())
+									.writeU2(rm.maxLocals())
+									.writeCode((Object[]) rm.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -643,6 +682,25 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	private static boolean programUsesSymbol(List<LispVal> program, String name) {
+		for (LispVal expr : program) {
+			if (usesSymbol(expr, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesSymbol(LispVal val, String name) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
+			return true;
+		}
+		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
 	}
 
 	private static boolean usesEval(LispVal val) {

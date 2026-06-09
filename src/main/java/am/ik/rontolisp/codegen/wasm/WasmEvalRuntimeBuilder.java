@@ -590,6 +590,35 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// ---- defun: (defun name (params) body...) treated as
+		// (setq name (lambda (params) body...)) so loaded files can define functions ----
+		openSpecial(w, OFF, off.of(LispNames.DEFUN));
+		emitCarOf(w, REST); // name symbol
+		setLocal(w, ACC);
+		// lambdaForm = cons("lambda", cdr(REST))
+		i32(w, off.of(LispNames.LAMBDA));
+		i32(w, 6); // "lambda".length()
+		structNew(w, WasmLispCompiler.TYPE_STRING);
+		emitCdrOf(w, REST);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		setLocal(w, TMP);
+		// value = eval(lambdaForm, ENV)
+		getLocal(w, TMP);
+		getLocal(w, ENV);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		setLocal(w, NEWCELL);
+		// _store(name, value, ENV) -> defines/updates the global binding
+		getLocal(w, ACC);
+		getLocal(w, NEWCELL);
+		getLocal(w, ENV);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		w.write(Instruction.DROP);
+		getLocal(w, ACC);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
 		// ---- cond ----
 		openSpecial(w, OFF, off.of(LispNames.COND));
 		getLocal(w, REST);

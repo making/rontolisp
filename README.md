@@ -226,9 +226,9 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `princ` | `(princ "hello")` | Prints without quotes and without newline |
 | `terpri` | `(terpri)` | Prints a newline only |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
-| `read` | `(read)` | Read one S-expression from stdin (interpreter only). `nil` on EOF |
+| `read` | `(read)` | Read one S-expression from stdin (all three backends). `nil` on EOF |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
-| `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (interpreter only). Returns `t` |
+| `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
 | `null` | `(null nil)` | `t` |
 | `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |
@@ -260,9 +260,9 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `map` | `(map f list)` | Apply `f` to each element, return new list |
 | `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 
-`read` is interpreter-only. It requires the Lisp reader (parser) at runtime, which is not reimplemented in the JVM or WASM backends. Use `read-line` to read raw strings in compiled code.
+`read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
 
-`load` is interpreter-only for the same reason: it reads a file and parses it with the Lisp reader at runtime. Each top-level form is evaluated in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code.
+`load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime --wasm gc --dir . prog.wasm`).
 
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
@@ -278,6 +278,16 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
+
+#### Compiled `read`/`load` limitations
+
+The JVM `read`/`load` reuse the JDK at runtime (`Long.parseLong`, `BigInteger`, `Double.parseDouble`, `java.nio.file`), so they parse the same value kinds as the interpreter: integers, big integers, floats, strings, symbols, `nil`/`t`, lists and `'quote`.
+
+The WASM reader has a hand-written parser and is narrower:
+
+- **Integers are 31-bit.** Numeric tokens are parsed to `i31` and wrap on overflow; there is no big-integer or floating-point parsing (a token containing `.` is read as a symbol).
+- **Symbol interning is runtime-backed.** Symbols that appear in the compiled program resolve to the same offset the compiled `eval` uses; symbols seen only at runtime (e.g. a lambda parameter inside a loaded file) are interned in a runtime table so repeated occurrences stay consistent.
+- **`load` requires a preopened directory.** It opens the file via WASI `path_open` relative to the first preopened directory (fd 3), so run with `--dir`.
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 

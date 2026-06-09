@@ -121,6 +121,8 @@ final class WasmExprCompiler {
 				case LispNames.PRINC -> WasmPrincCompiler.compile(cons, ctx);
 				case LispNames.TERPRI -> WasmTerpriCompiler.compile(cons, ctx);
 				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
+				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
+				case LispNames.LOAD -> WasmLoadCompiler.compile(cons, ctx);
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);
 				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
 				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
