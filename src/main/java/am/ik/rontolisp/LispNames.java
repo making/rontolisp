@@ -29,6 +29,9 @@ public final class LispNames {
 	/** The {@code funcall} special form. */
 	public static final String FUNCALL = "funcall";
 
+	/** The {@code while} special form. */
+	public static final String WHILE = "while";
+
 	// Arithmetic
 
 	/** The {@code +} built-in function. */
@@ -143,6 +146,9 @@ public final class LispNames {
 
 	/** The {@code when} macro. */
 	public static final String WHEN = "when";
+
+	/** The {@code dotimes} macro. */
+	public static final String DOTIMES = "dotimes";
 
 	// Type predicates
 

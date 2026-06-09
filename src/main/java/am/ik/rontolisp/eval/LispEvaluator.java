@@ -102,6 +102,8 @@ public final class LispEvaluator {
 					return evalLambdaForm(cons, env);
 				case LispNames.FUNCALL:
 					return evalFuncall(cons, env);
+				case LispNames.WHILE:
+					return evalWhile(cons, env);
 				case LispNames.MAP:
 					return evalMap(cons, env);
 				case LispNames.REDUCE:
@@ -114,6 +116,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandOr(cons), env);
 				case LispNames.WHEN:
 					return eval(LispMacroExpander.expandWhen(cons), env);
+				case LispNames.DOTIMES:
+					return eval(LispMacroExpander.expandDotimes(cons), env);
 				case LispNames.UNLESS:
 					return eval(LispMacroExpander.expandUnless(cons), env);
 				case LispNames.ONE_PLUS:
@@ -213,6 +217,17 @@ public final class LispEvaluator {
 		LispVal value = eval(parts.get(2), env);
 		env.set(name.name(), value);
 		return value;
+	}
+
+	private LispVal evalWhile(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal test = parts.get(1);
+		while (isTruthy(eval(test, env))) {
+			for (int i = 2; i < parts.size(); i++) {
+				eval(parts.get(i), env);
+			}
+		}
+		return LispNil.INSTANCE;
 	}
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {

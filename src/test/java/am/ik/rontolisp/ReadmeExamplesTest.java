@@ -480,6 +480,14 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void dotimes() {
+			assertThat(evalAll("(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)")).isEqualTo(new LispInteger(10));
+			assertThat(eval("(dotimes (i 3))")).isSameAs(LispNil.INSTANCE);
+			assertThat(evalAll("(let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2))))"))
+				.isEqualTo(new LispInteger(16));
+		}
+
+		@Test
 		void onePlus() {
 			assertThat(eval("(1+ 5)")).isEqualTo(new LispInteger(6));
 		}
@@ -603,6 +611,12 @@ class ReadmeExamplesTest {
 		@Test
 		void setqForm() {
 			assertThat(eval("(progn (setq x 10) x)")).isEqualTo(new LispInteger(10));
+		}
+
+		@Test
+		void whileForm() {
+			assertThat(evalAll("(let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s)"))
+				.isEqualTo(new LispInteger(10));
 		}
 
 	}

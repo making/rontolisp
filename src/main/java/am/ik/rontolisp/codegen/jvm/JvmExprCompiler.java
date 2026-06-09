@@ -108,6 +108,7 @@ final class JvmExprCompiler {
 				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);
 				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
+				case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
 				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className);
 				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
 				case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
@@ -151,6 +152,8 @@ final class JvmExprCompiler {
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
+				case LispNames.DOTIMES ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
 				case LispNames.UNLESS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx, className);
 				case LispNames.ONE_PLUS ->

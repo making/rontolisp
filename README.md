@@ -163,6 +163,7 @@ here).
 | `lambda` | `(lambda (params...) body...)` | Anonymous function |
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value)` | Assign a value to a variable |
+| `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
 
 ### Macros
 
@@ -174,6 +175,7 @@ here).
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
 | `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
+| `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
 | `1+` | `(1+ x)` | Expands to `(+ x 1)` |
 | `1-` | `(1- x)` | Expands to `(- x 1)` |
 | `zerop` | `(zerop x)` | Expands to `(= x 0)` |
@@ -255,6 +257,7 @@ The compiled `eval` (WASM and JVM) implements a lexical environment plus a persi
 The compiled `eval` (WASM and JVM) differs from the interpreter only in these cases:
 
 - **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
+- **`while` and `dotimes` are not available inside compiled `eval`.** They compile directly in all three backends, but the runtime `eval` interpreter emitted into the JVM/WASM output does not recognize them (e.g. `(eval '(dotimes (i 3) ...))` fails). They work normally outside `eval` and in the interpreter's `eval`.
 - **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
 

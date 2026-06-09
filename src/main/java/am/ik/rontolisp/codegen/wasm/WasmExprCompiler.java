@@ -124,6 +124,7 @@ final class WasmExprCompiler {
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);
 				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
 				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
+				case LispNames.WHILE -> WasmWhileCompiler.compile(cons, ctx);
 				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
@@ -165,6 +166,7 @@ final class WasmExprCompiler {
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
 				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);
+				case LispNames.DOTIMES -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx);
 				case LispNames.UNLESS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx);
 				case LispNames.ONE_PLUS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx);
 				case LispNames.ONE_MINUS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOneMinus(cons), ctx);

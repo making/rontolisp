@@ -163,6 +163,12 @@
 (print (unless t 42))
 (print (unless nil 1 2 3))
 
+; while and dotimes
+(print (let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s))
+(print (dotimes (i 3)))
+(print (let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2)))))
+(print (let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s))
+
 ; first, nth, nthcdr
 (print (first '(1 2 3)))
 (print (nth 0 '(1 2 3)))

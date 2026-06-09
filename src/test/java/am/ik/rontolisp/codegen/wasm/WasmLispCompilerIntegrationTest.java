@@ -71,6 +71,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void whileLoop() throws Exception {
+		assertThat(compileAndRun("(print (let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s))"))
+			.isEqualTo("10");
+		assertThat(compileAndRun("(print (let ((n 0)) (while nil (setq n 99)) n))")).isEqualTo("0");
+	}
+
+	@Test
+	void dotimes() throws Exception {
+		assertThat(compileAndRun("(print (let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (dotimes (i 3)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2)))))")).isEqualTo("16");
+		assertThat(compileAndRun("(print (let ((s 7)) (dotimes (i 0) (setq s 0)) s))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (let ((s 0)) (dotimes (i 3) (dotimes (j 2) (setq s (+ s 1)))) s))"))
+			.isEqualTo("6");
+	}
+
+	@Test
 	void ifTrue() throws Exception {
 		assertThat(compileAndRun("(print (if t 1 2))")).isEqualTo("1");
 	}

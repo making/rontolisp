@@ -147,6 +147,62 @@ public final class LispMacroExpander {
 		}
 	}
 
+	/**
+	 * Expands (dotimes (var count-form [result-form]) body...) into a let/while loop.
+	 *
+	 * <pre>
+	 * (dotimes (i n result) body...) ->
+	 * (let ((i 0) (__dotimes_limit n))
+	 *   (while (&lt; i __dotimes_limit)
+	 *     body...
+	 *     (setq i (+ i 1)))
+	 *   result)
+	 * </pre>
+	 *
+	 * The count form is evaluated once and bound to a temporary so that side effects in
+	 * the count expression are not repeated on every iteration. The loop variable is
+	 * bound to the integers 0, 1, ..., count-1 in turn; after the loop it holds the count
+	 * value when the optional result form is evaluated. Without a result form the
+	 * expansion yields nil.
+	 * @param cons the dotimes expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDotimes(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispCons spec = (LispCons) parts.get(1);
+		List<LispVal> specParts = spec.toList();
+		LispVal var = specParts.get(0);
+		LispVal countForm = specParts.get(1);
+		LispVal resultForm = (specParts.size() > 2) ? specParts.get(2) : LispNil.INSTANCE;
+		List<LispVal> body = parts.subList(2, parts.size());
+		LispSymbol limitSym = new LispSymbol(DOTIMES_LIMIT_VAR);
+		// Bindings: ((var 0) (__dotimes_limit count-form))
+		LispVal binding1 = listToCons(List.of(var, new LispInteger(0)));
+		LispVal binding2 = listToCons(List.of(limitSym, countForm));
+		LispVal bindings = listToCons(List.of(binding1, binding2));
+		// (< var __dotimes_limit)
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), var, limitSym));
+		// (setq var (+ var 1))
+		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.ADD), var, new LispInteger(1)));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), var, increment));
+		// (while test body... step)
+		List<LispVal> whileParts = new java.util.ArrayList<>();
+		whileParts.add(new LispSymbol(LispNames.WHILE));
+		whileParts.add(test);
+		whileParts.addAll(body);
+		whileParts.add(step);
+		LispVal whileExpr = listToCons(whileParts);
+		// (let (bindings) while-expr result-form)
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(bindings);
+		letParts.add(whileExpr);
+		letParts.add(resultForm);
+		return listToCons(letParts);
+	}
+
+	private static final String DOTIMES_LIMIT_VAR = "__dotimes_limit";
+
 	private static LispVal makeIf(LispVal cond, LispVal then, LispVal else_) {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), cond, then, else_));
 	}

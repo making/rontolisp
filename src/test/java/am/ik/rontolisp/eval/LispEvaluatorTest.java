@@ -426,6 +426,32 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalWhile() {
+		assertThat(eval("(let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s)"))
+			.isEqualTo(new LispInteger(10));
+		// while returns nil
+		assertThat(eval("(let ((n 0)) (while (< n 3) (setq n (+ n 1))))")).isSameAs(LispNil.INSTANCE);
+		// test false on entry: body never runs
+		assertThat(eval("(let ((n 0)) (while nil (setq n 99)) n)")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalDotimes() {
+		assertThat(eval("(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)")).isEqualTo(new LispInteger(10));
+		// dotimes without a result form returns nil
+		assertThat(eval("(dotimes (i 3))")).isSameAs(LispNil.INSTANCE);
+		// optional result form, evaluated after the loop
+		assertThat(eval("(let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2))))")).isEqualTo(new LispInteger(16));
+		// zero iterations
+		assertThat(eval("(let ((s 7)) (dotimes (i 0) (setq s 0)) s)")).isEqualTo(new LispInteger(7));
+		// the count form is evaluated once
+		assertThat(eval("(let ((s 0)) (dotimes (i (+ 1 2)) (setq s (+ s 1))) s)")).isEqualTo(new LispInteger(3));
+		// nested dotimes
+		assertThat(eval("(let ((s 0)) (dotimes (i 3) (dotimes (j 2) (setq s (+ s 1)))) s)"))
+			.isEqualTo(new LispInteger(6));
+	}
+
+	@Test
 	void evalFirst() {
 		assertThat(eval("(first '(1 2 3))")).isEqualTo(new LispInteger(1));
 	}
