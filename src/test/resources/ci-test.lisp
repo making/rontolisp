@@ -338,6 +338,8 @@
 (print (eval '(cadr (list 10 20 30))))
 (print (eval '(funcall (lambda (x) (+ x 1)) 41)))
 (print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))
+(print (eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)))
+(print (eval '(let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s)))
 
 ; numeric literals with comma grouping separators (e.g. 1,000 -> 1000)
 (print (+ 1,000 100))

@@ -416,6 +416,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.stringClass(stringClass)
 				.integerValueOf(integerValueOf)
 				.integerValue(integerValue)
+				.longValueOf(longValueOf)
 				.longValue(longValue)
 				.stringCharAt(stringCharAt)
 				.stringLength(stringLengthRef)

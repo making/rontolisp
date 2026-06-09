@@ -66,6 +66,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final MethodrefConstant integerValue;
 
+		private final MethodrefConstant longValueOf;
+
 		private final MethodrefConstant longValue;
 
 		private final MethodrefConstant stringCharAt;
@@ -100,6 +102,7 @@ final class JvmEvalRuntimeBuilder {
 			this.stringClass = Objects.requireNonNull(b.stringClass);
 			this.integerValueOf = Objects.requireNonNull(b.integerValueOf);
 			this.integerValue = Objects.requireNonNull(b.integerValue);
+			this.longValueOf = Objects.requireNonNull(b.longValueOf);
 			this.longValue = Objects.requireNonNull(b.longValue);
 			this.stringCharAt = Objects.requireNonNull(b.stringCharAt);
 			this.stringLength = Objects.requireNonNull(b.stringLength);
@@ -148,6 +151,10 @@ final class JvmEvalRuntimeBuilder {
 
 		MethodrefConstant integerValue() {
 			return this.integerValue;
+		}
+
+		MethodrefConstant longValueOf() {
+			return this.longValueOf;
 		}
 
 		MethodrefConstant longValue() {
@@ -222,6 +229,8 @@ final class JvmEvalRuntimeBuilder {
 
 			private @Nullable MethodrefConstant integerValue;
 
+			private @Nullable MethodrefConstant longValueOf;
+
 			private @Nullable MethodrefConstant longValue;
 
 			private @Nullable MethodrefConstant stringCharAt;
@@ -288,6 +297,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder integerValue(MethodrefConstant m) {
 				this.integerValue = m;
+				return this;
+			}
+
+			Builder longValueOf(MethodrefConstant m) {
+				this.longValueOf = m;
 				return this;
 			}
 
@@ -1658,6 +1672,114 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(REST);
 		prognInto(a, REST, ENV, TMP);
 		a.aload(TMP);
+		a.areturn();
+		a.bind(n);
+
+		// ---- while: (while test body...) -> evaluate body while test is non-nil ----
+		n = special(a, OP, LispNames.WHILE);
+		car(a, REST);
+		a.astore(FN); // test form
+		cdr(a, REST);
+		a.astore(BODY); // body list
+		int whileLoop = a.label();
+		int whileEnd = a.label();
+		a.bind(whileLoop);
+		a.aload(FN);
+		a.aload(ENV);
+		a.invokestatic(this.k.evalRef());
+		a.branch(Opcode.IFNULL, whileEnd);
+		a.aload(BODY);
+		a.astore(REST);
+		prognInto(a, REST, ENV, TMP);
+		a.branch(Opcode.GOTO, whileLoop);
+		a.bind(whileEnd);
+		a.aconstNull();
+		a.areturn();
+		a.bind(n);
+
+		// ---- dotimes: (dotimes (var count result?) body...) ----
+		n = special(a, OP, LispNames.DOTIMES);
+		car(a, REST);
+		a.astore(TMP); // (var count result?)
+		car(a, TMP);
+		a.astore(BINDCUR); // loop variable symbol
+		cdr(a, TMP);
+		a.astore(ACC); // (count result?)
+		evalCar(a, ACC, ENV); // evaluate the count form once
+		a.checkcast(this.k.longClass());
+		a.invokevirtual(this.k.longValue());
+		a.op(Opcode.L2I);
+		a.istore(ARITY); // count limit
+		cdr(a, ACC);
+		a.astore(ACC); // (result?) or nil
+		int dtHasResult = a.label();
+		int dtResultDone = a.label();
+		a.aload(ACC);
+		a.branch(Opcode.IFNONNULL, dtHasResult);
+		a.aconstNull();
+		a.astore(FN);
+		a.branch(Opcode.GOTO, dtResultDone);
+		a.bind(dtHasResult);
+		car(a, ACC);
+		a.astore(FN); // result form
+		a.bind(dtResultDone);
+		cdr(a, REST);
+		a.astore(BODY); // body list
+		// bindCell = cons(var, Long(0)); newEnv = cons(bindCell, env)
+		a.iconst(2);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		a.aload(BINDCUR);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.iconst(0);
+		a.op(Opcode.I2L);
+		a.invokestatic(this.k.longValueOf());
+		a.aastore();
+		a.astore(NEWCELL); // mutable binding cell
+		consFromSlots(a, NEWCELL, ENV);
+		a.astore(ELEM); // extended environment
+		a.iconst(0);
+		a.istore(IDX); // loop counter
+		int dtLoop = a.label();
+		int dtEnd = a.label();
+		a.bind(dtLoop);
+		a.iload(IDX);
+		a.iload(ARITY);
+		a.branch(Opcode.IF_ICMPGE, dtEnd);
+		// bindCell[1] = Long(i)
+		a.aload(NEWCELL);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(1);
+		a.iload(IDX);
+		a.op(Opcode.I2L);
+		a.invokestatic(this.k.longValueOf());
+		a.aastore();
+		a.aload(BODY);
+		a.astore(REST);
+		prognInto(a, REST, ELEM, TMP);
+		a.iinc(IDX, 1);
+		a.branch(Opcode.GOTO, dtLoop);
+		a.bind(dtEnd);
+		// var = count for the result form
+		a.aload(NEWCELL);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(1);
+		a.iload(ARITY);
+		a.op(Opcode.I2L);
+		a.invokestatic(this.k.longValueOf());
+		a.aastore();
+		int dtResult = a.label();
+		a.aload(FN);
+		a.branch(Opcode.IFNONNULL, dtResult);
+		a.aconstNull();
+		a.areturn();
+		a.bind(dtResult);
+		a.aload(FN);
+		a.aload(ELEM);
+		a.invokestatic(this.k.evalRef());
 		a.areturn();
 		a.bind(n);
 

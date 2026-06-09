@@ -250,14 +250,13 @@ here).
 
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
-The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
+The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `while`, `dotimes`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
 
 #### Compiled `eval` limitations
 
 The compiled `eval` (WASM and JVM) differs from the interpreter only in these cases:
 
 - **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
-- **`while` and `dotimes` are not available inside compiled `eval`.** They compile directly in all three backends, but the runtime `eval` interpreter emitted into the JVM/WASM output does not recognize them (e.g. `(eval '(dotimes (i 3) ...))` fails). They work normally outside `eval` and in the interpreter's `eval`.
 - **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
 

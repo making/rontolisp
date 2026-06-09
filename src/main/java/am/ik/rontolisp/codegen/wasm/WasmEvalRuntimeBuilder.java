@@ -137,6 +137,17 @@ final class WasmEvalRuntimeBuilder {
 		w.writeHeapType(Type.EQ.code());
 	}
 
+	/** Boxes the i32 on the stack into an i31ref (the integer value representation). */
+	private static void i31New(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	/** Unboxes the i31ref on the stack into a signed i32. */
+	private static void i31GetS(WasmWriter w) {
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+	}
+
 	/** Emits {@code (car (ref.cast cons (local.get slot)))} onto the stack. */
 	private static void emitCarOf(WasmWriter w, int slot) {
 		getLocal(w, slot);
@@ -379,11 +390,11 @@ final class WasmEvalRuntimeBuilder {
 	 * variable references resolved against the lexical environment (falling back to the
 	 * function registry, then to the symbol itself); the special forms {@code quote},
 	 * {@code if}, {@code progn}, {@code let}, {@code lambda}, {@code cond}, {@code and},
-	 * {@code or}, {@code when}, {@code unless}, {@code setq}, {@code eval} (nested),
-	 * {@code funcall}, {@code map}, {@code reduce} and {@code list}; variadic
-	 * {@code + - * /}; {@code car}/{@code cdr} compositions such as {@code cadr}; and
-	 * application of any registered function (built-in wrappers and user defuns) as well
-	 * as interpreted closures produced by {@code lambda}.
+	 * {@code or}, {@code when}, {@code unless}, {@code while}, {@code dotimes},
+	 * {@code setq}, {@code eval} (nested), {@code funcall}, {@code map}, {@code reduce}
+	 * and {@code list}; variadic {@code + - * /}; {@code car}/{@code cdr} compositions
+	 * such as {@code cadr}; and application of any registered function (built-in wrappers
+	 * and user defuns) as well as interpreted closures produced by {@code lambda}.
 	 * @param off the string-table offsets of the special-form symbols
 	 * @return the encoded function body
 	 */
@@ -716,6 +727,109 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, REST);
 		emitPrognLoop(w, REST, ENV, TMP);
 		getLocal(w, TMP);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// ---- while: (while test body...) -> evaluate body while test is non-nil ----
+		openSpecial(w, OFF, off.of(LispNames.WHILE));
+		emitCarOf(w, REST);
+		setLocal(w, FN); // FN = test form
+		emitCdrOf(w, REST);
+		setLocal(w, BODY); // BODY = body list
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, FN);
+		getLocal(w, ENV);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1); // test nil -> exit
+		getLocal(w, BODY);
+		setLocal(w, REST);
+		emitPrognLoop(w, REST, ENV, TMP);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// ---- dotimes: (dotimes (var count result?) body...) ----
+		openSpecial(w, OFF, off.of(LispNames.DOTIMES));
+		emitCarOf(w, REST);
+		setLocal(w, TMP); // TMP = (var count result?)
+		emitCarOf(w, TMP);
+		setLocal(w, BINDCUR); // BINDCUR = loop variable symbol
+		emitCdrOf(w, TMP);
+		setLocal(w, ACC); // ACC = (count result?)
+		emitEvalCar(w, ACC, ENV); // evaluate the count form once
+		i31GetS(w);
+		setLocal(w, ARITY); // ARITY = count limit (i32)
+		emitCdrOf(w, ACC);
+		setLocal(w, ACC); // ACC = (result?) or nil
+		getLocal(w, ACC);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		emitNull(w);
+		w.write(Instruction.ELSE);
+		emitCarOf(w, ACC);
+		w.write(Instruction.END);
+		setLocal(w, FN); // FN = result form (or nil when absent)
+		emitCdrOf(w, REST);
+		setLocal(w, BODY); // BODY = body list
+		// bindCell = cons(var, i31(0)); newEnv = cons(bindCell, env)
+		getLocal(w, BINDCUR);
+		i32(w, 0);
+		i31New(w);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		setLocal(w, NEWCELL); // NEWCELL = mutable binding cell
+		getLocal(w, NEWCELL);
+		getLocal(w, ENV);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		setLocal(w, ELEM); // ELEM = extended environment
+		i32(w, 0);
+		setLocal(w, IDX); // IDX = loop counter
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, IDX);
+		getLocal(w, ARITY);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1); // i >= count -> exit
+		getLocal(w, NEWCELL);
+		refCast(w, WasmLispCompiler.TYPE_CONS);
+		getLocal(w, IDX);
+		i31New(w);
+		structSet(w, WasmLispCompiler.TYPE_CONS, 1); // bind var = i
+		getLocal(w, BODY);
+		setLocal(w, REST);
+		emitPrognLoop(w, REST, ELEM, TMP);
+		getLocal(w, IDX);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, IDX);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// var = count for the result form
+		getLocal(w, NEWCELL);
+		refCast(w, WasmLispCompiler.TYPE_CONS);
+		getLocal(w, ARITY);
+		i31New(w);
+		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
+		getLocal(w, FN);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		emitNull(w);
+		w.write(Instruction.ELSE);
+		getLocal(w, FN);
+		getLocal(w, ELEM);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 

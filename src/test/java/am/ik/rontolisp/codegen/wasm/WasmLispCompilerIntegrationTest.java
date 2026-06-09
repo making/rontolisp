@@ -946,6 +946,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void evalWhile() throws Exception {
+		assertThat(compileAndRun(
+				"(print (eval '(let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s)))"))
+			.isEqualTo("10");
+	}
+
+	@Test
+	void evalDotimes() throws Exception {
+		assertThat(compileAndRun("(print (eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (eval '(dotimes (i 3))))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (eval '(let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2))))))"))
+			.isEqualTo("16");
+		// the loop variable holds the count value when the result form is evaluated
+		assertThat(compileAndRun("(print (eval '(dotimes (i 3 i))))")).isEqualTo("3");
+	}
+
+	@Test
 	void evalSetqInLet() throws Exception {
 		assertThat(compileAndRun("(print (eval '(let ((x 1)) (setq x 99) x)))")).isEqualTo("99");
 	}

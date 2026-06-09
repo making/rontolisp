@@ -730,6 +730,13 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(let ((x '(+ 1 2))) (eval x))")).isEqualTo(new LispInteger(3));
 	}
 
+	@Test
+	void evalEvalWhileAndDotimes() {
+		assertThat(eval("(eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s))")).isEqualTo(new LispInteger(10));
+		assertThat(eval("(eval '(let ((n 0) (s 0)) (while (< n 5) (setq s (+ s n)) (setq n (+ n 1))) s))"))
+			.isEqualTo(new LispInteger(10));
+	}
+
 	// read-line / read tests
 
 	private LispVal evalWithStdin(String input, String stdin) {

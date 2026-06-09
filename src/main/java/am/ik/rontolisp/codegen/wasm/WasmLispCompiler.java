@@ -409,6 +409,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.OR)
 				.add(stringTable, LispNames.WHEN)
 				.add(stringTable, LispNames.UNLESS)
+				.add(stringTable, LispNames.WHILE)
+				.add(stringTable, LispNames.DOTIMES)
 				.add(stringTable, LispNames.SETQ)
 				.add(stringTable, LispNames.EVAL)
 				.add(stringTable, LispNames.FUNCALL)
