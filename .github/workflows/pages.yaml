@@ -1,0 +1,66 @@
+name: Deploy playground to GitHub Pages
+
+# Builds the browser playground (web/dist) with the GraalVM Web Image backend
+# and publishes it to GitHub Pages.
+#
+# Repo setup (one time): Settings -> Pages -> Build and deployment ->
+# Source: "GitHub Actions".
+
+on:
+  push:
+    branches:
+    - develop
+    paths:
+    - web/**
+    - src/**
+    - pom.xml
+    - .github/workflows/pages.yaml
+  workflow_dispatch:
+
+# Allow the deploy job to publish to Pages via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one concurrent Pages deployment; newer pushes supersede in-progress runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    - name: Install Binaryen (provides wasm-as for Web Image)
+      run: |
+        set -e
+        BINARYEN_VERSION=130
+        curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" | tar xz
+        echo "$PWD/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+    - name: Verify wasm-as
+      run: wasm-as --version
+    - name: Build playground (rontolisp -> WebAssembly)
+      run: ./mvnw -V --no-transfer-progress -Pweb -DskipTests package
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

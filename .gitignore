@@ -34,3 +34,7 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Web Image playground (generated artifacts) ###
+web/dist/
+web/playground-screenshot.png

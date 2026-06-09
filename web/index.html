@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rontolisp playground</title>
+<style>
+	:root {
+		--bg: #1a1b26;
+		--panel: #1f2335;
+		--panel-2: #24283b;
+		--border: #2f334d;
+		--fg: #c0caf5;
+		--muted: #565f89;
+		--accent: #7aa2f7;
+		--accent-2: #9ece6a;
+		--accent-3: #e0af68;
+		--err: #f7768e;
+		--mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--fg);
+		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		height: 100vh;
+		display: flex;
+		flex-direction: column;
+	}
+
+	header {
+		padding: 12px 20px;
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		align-items: baseline;
+		gap: 14px;
+	}
+
+	header h1 {
+		font-size: 18px;
+		margin: 0;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+	}
+
+	header h1 .paren { color: var(--accent); }
+
+	header .sub { color: var(--muted); font-size: 13px; }
+
+	#status {
+		margin-left: auto;
+		font-size: 12px;
+		font-family: var(--mono);
+		padding: 4px 10px;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		color: var(--accent-3);
+	}
+
+	#status.ready { color: var(--accent-2); }
+	#status.error { color: var(--err); }
+
+	main {
+		flex: 1;
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1px;
+		background: var(--border);
+		min-height: 0;
+	}
+
+	.pane {
+		background: var(--panel);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	.pane-head {
+		padding: 8px 14px;
+		font-size: 12px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--muted);
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.pane-head .spacer { flex: 1; }
+
+	textarea#source {
+		flex: 1;
+		border: none;
+		outline: none;
+		resize: none;
+		background: var(--panel);
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 14px;
+		line-height: 1.6;
+		padding: 14px;
+		tab-size: 2;
+	}
+
+	#repl-log {
+		flex: 1;
+		overflow-y: auto;
+		font-family: var(--mono);
+		font-size: 13px;
+		line-height: 1.55;
+		padding: 12px 14px;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.entry { margin-bottom: 8px; }
+	.entry .in { color: var(--accent); }
+	.entry .in::before { content: "› "; color: var(--muted); }
+	.entry .out { color: var(--fg); }
+	.entry .out.err { color: var(--err); }
+
+	.repl-input-row {
+		display: flex;
+		border-top: 1px solid var(--border);
+		background: var(--panel-2);
+	}
+
+	.repl-input-row .prompt {
+		padding: 10px 8px 10px 14px;
+		color: var(--accent);
+		font-family: var(--mono);
+		font-size: 14px;
+	}
+
+	#repl-input {
+		flex: 1;
+		border: none;
+		outline: none;
+		background: transparent;
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 14px;
+		padding: 10px 14px 10px 0;
+	}
+
+	.toolbar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+		padding: 10px 14px;
+		border-top: 1px solid var(--border);
+		background: var(--panel-2);
+	}
+
+	button {
+		background: var(--panel);
+		color: var(--fg);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		padding: 7px 13px;
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: border-color 0.12s, background 0.12s;
+	}
+
+	button:hover:not(:disabled) { border-color: var(--accent); }
+	button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+	button.primary { background: var(--accent); color: #1a1b26; border-color: var(--accent); }
+	button.jvm { border-color: var(--accent-3); color: var(--accent-3); }
+	button.wasm { border-color: var(--accent-2); color: var(--accent-2); }
+
+	input[type="text"] {
+		background: var(--panel);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 13px;
+		padding: 7px 10px;
+		width: 110px;
+		outline: none;
+	}
+	input[type="text"]:focus { border-color: var(--accent); }
+
+	label { font-size: 13px; color: var(--muted); }
+
+	select {
+		background: var(--panel);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--fg);
+		font-size: 12px;
+		padding: 4px 8px;
+		outline: none;
+	}
+
+	#compile-status {
+		font-family: var(--mono);
+		font-size: 12px;
+		color: var(--muted);
+		padding: 0 14px 10px;
+		background: var(--panel-2);
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	#compile-status.ok { color: var(--accent-2); }
+	#compile-status.err { color: var(--err); }
+
+	.tabs { display: flex; gap: 4px; }
+	.tab {
+		padding: 4px 10px;
+		font-size: 12px;
+		border-radius: 6px 6px 0 0;
+		cursor: pointer;
+		color: var(--muted);
+	}
+	.tab.active { color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-bottom: none; }
+	.tabview { display: none; flex: 1; flex-direction: column; min-height: 0; }
+	.tabview.active { display: flex; }
+</style>
+</head>
+<body>
+	<header>
+		<h1><span class="paren">(</span>rontolisp<span class="paren">)</span></h1>
+		<span class="sub">playground &mdash; interpret in WASM, compile to JVM / WASM</span>
+		<span id="status">loading runtime&hellip;</span>
+	</header>
+
+	<main>
+		<section class="pane">
+			<div class="pane-head">
+				<span>source</span>
+				<span class="spacer"></span>
+				<label for="samples">sample</label>
+				<select id="samples">
+					<option value="">&mdash;</option>
+				</select>
+			</div>
+			<textarea id="source" spellcheck="false"></textarea>
+			<div class="toolbar">
+				<label for="classname">class</label>
+				<input type="text" id="classname" value="Main">
+				<button class="jvm" id="btn-jvm" disabled>Compile &rarr; .class</button>
+				<button class="wasm" id="btn-wasm" disabled>Compile &rarr; .wasm</button>
+			</div>
+			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
+		</section>
+
+		<section class="pane">
+			<div class="pane-head">
+				<div class="tabs">
+					<div class="tab active" data-tab="repl">REPL</div>
+				</div>
+				<span class="spacer"></span>
+				<button id="btn-run-source" disabled>Run source &rarr; REPL</button>
+				<button id="btn-clear">Clear</button>
+			</div>
+			<div class="tabview active" data-view="repl">
+				<div id="repl-log"></div>
+				<div class="repl-input-row">
+					<span class="prompt">&rsaquo;</span>
+					<input type="text" id="repl-input" placeholder="(+ 1 2 3)" spellcheck="false" disabled>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<script src="rontoplayground.js"></script>
+	<script>
+		const SAMPLES = {
+			"hello": '(print "hello, rontolisp")',
+			"factorial": '(defun fact (n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(print (fact 10))',
+			"fibonacci": '(defun fib (n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(print (fib 20))',
+			"higher-order": '(print (map (lambda (x) (* x x)) (list 1 2 3 4 5)))\n(print (reduce + (list 1 2 3 4 5 6 7 8 9 10)))',
+			"eval": "(print (eval (list '+ 10 20 30)))",
+			"loop": '(dotimes (i 5) (print (* i i)))',
+		};
+
+		const $ = (id) => document.getElementById(id);
+		const statusEl = $("status");
+		const log = $("repl-log");
+
+		// --- sample dropdown ---
+		const samplesSel = $("samples");
+		for (const name of Object.keys(SAMPLES)) {
+			const opt = document.createElement("option");
+			opt.value = name; opt.textContent = name;
+			samplesSel.appendChild(opt);
+		}
+		$("source").value = SAMPLES["fibonacci"];
+		samplesSel.addEventListener("change", () => {
+			if (samplesSel.value) $("source").value = SAMPLES[samplesSel.value];
+		});
+
+		// --- REPL log helpers ---
+		function appendEntry(input, output, isErr) {
+			const e = document.createElement("div");
+			e.className = "entry";
+			if (input != null) {
+				const i = document.createElement("div");
+				i.className = "in"; i.textContent = input;
+				e.appendChild(i);
+			}
+			if (output != null && output !== "") {
+				const o = document.createElement("div");
+				o.className = "out" + (isErr ? " err" : "");
+				o.textContent = output;
+				e.appendChild(o);
+			}
+			log.appendChild(e);
+			log.scrollTop = log.scrollHeight;
+		}
+
+		function runRepl(src) {
+			const res = globalThis.rontoEval(src);
+			const isErr = typeof res === "string" && res.startsWith("ERROR:");
+			appendEntry(src, isErr ? res.slice(6).trim() : res, isErr);
+		}
+
+		// --- download helper ---
+		function downloadBase64(b64, filename, mime) {
+			const bin = atob(b64);
+			const bytes = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			const blob = new Blob([bytes], { type: mime });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url; a.download = filename;
+			document.body.appendChild(a); a.click(); a.remove();
+			URL.revokeObjectURL(url);
+			return bytes.length;
+		}
+
+		function setCompileStatus(msg, kind) {
+			const el = $("compile-status");
+			el.textContent = msg;
+			el.className = kind || "";
+		}
+
+		// --- wire up after the GraalVM runtime is ready ---
+		GraalVM.run([]).then(() => {
+			statusEl.textContent = "runtime ready";
+			statusEl.className = "ready";
+			$("repl-input").disabled = false;
+			$("btn-jvm").disabled = false;
+			$("btn-wasm").disabled = false;
+			$("btn-run-source").disabled = false;
+			appendEntry(null, "rontolisp interpreter running in WebAssembly. Type an expression below.", false);
+
+			$("repl-input").addEventListener("keydown", (ev) => {
+				if (ev.key === "Enter") {
+					const v = ev.target.value.trim();
+					if (v) { runRepl(v); ev.target.value = ""; }
+				}
+			});
+
+			$("btn-run-source").addEventListener("click", () => {
+				const src = $("source").value.trim();
+				if (src) runRepl(src);
+			});
+
+			$("btn-jvm").addEventListener("click", () => {
+				const src = $("source").value;
+				const name = $("classname").value.trim() || "Main";
+				const res = globalThis.rontoCompileJvm(src, name);
+				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
+				const n = downloadBase64(res, name + ".class", "application/java-vm");
+				setCompileStatus(`Compiled ${name}.class (${n} bytes). Run: java ${name}`, "ok");
+			});
+
+			$("btn-wasm").addEventListener("click", () => {
+				const src = $("source").value;
+				const res = globalThis.rontoCompileWasm(src);
+				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
+				const n = downloadBase64(res, "output.wasm", "application/wasm");
+				setCompileStatus(`Compiled output.wasm (${n} bytes). Run: wasmtime --wasm gc output.wasm`, "ok");
+			});
+		}).catch((e) => {
+			statusEl.textContent = "runtime failed";
+			statusEl.className = "error";
+			appendEntry(null, "Failed to start the WebAssembly runtime. A recent browser with WebAssembly GC and exception handling is required.\n\n" + e, true);
+		});
+
+		$("btn-clear").addEventListener("click", () => { log.innerHTML = ""; });
+	</script>
+</body>
+</html>

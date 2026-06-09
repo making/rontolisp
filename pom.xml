@@ -268,6 +268,119 @@
 				</plugins>
 			</build>
 		</profile>
+		<!--
+			Build the browser playground: compile src/web/java (RontoPlayground)
+			to a WebAssembly module with the GraalVM Native Image Web Image backend.
+			Usage: ./mvnw -Pweb -DskipTests package
+			Requires a GraalVM with the svm-wasm tool and Binaryen (wasm-as) 119+.
+		-->
+		<profile>
+			<id>web</id>
+			<properties>
+				<!-- src/web/java uses the GraalVM-only org.graalvm.webimage.api module,
+					 which the ct.sym used by the release flag hides. Use source/target. -->
+				<maven.compiler.release/>
+			</properties>
+			<build>
+				<plugins>
+					<!-- Add src/web/java to the compile sources only for this profile. -->
+					<plugin>
+						<groupId>org.codehaus.mojo</groupId>
+						<artifactId>build-helper-maven-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>add-web-source</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>add-source</goal>
+								</goals>
+								<configuration>
+									<sources>
+										<source>${project.basedir}/src/web/java</source>
+									</sources>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+					<!-- @JS needs parameter names recorded in bytecode. -->
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-compiler-plugin</artifactId>
+						<configuration>
+							<parameters>true</parameters>
+						</configuration>
+					</plugin>
+					<!-- Compile rontolisp itself to wasm. The svm-wasm tool must be the
+						 first native-image argument, so it is passed via buildArgs. -->
+					<plugin>
+						<groupId>org.graalvm.buildtools</groupId>
+						<artifactId>native-maven-plugin</artifactId>
+						<version>1.0.0</version>
+						<extensions>true</extensions>
+						<executions>
+							<execution>
+								<id>build-web-playground</id>
+								<goals>
+									<goal>compile-no-fork</goal>
+								</goals>
+								<phase>package</phase>
+							</execution>
+						</executions>
+						<configuration>
+							<mainClass>am.ik.rontolisp.web.RontoPlayground</mainClass>
+							<imageName>rontoplayground</imageName>
+							<!-- RontoPlayground does not use jline; skip the reachability
+								 metadata repository so jline is not force-included. -->
+							<metadataRepository>
+								<enabled>false</enabled>
+							</metadataRepository>
+							<buildArgs>
+								<buildArg>--tool:svm-wasm</buildArg>
+								<!-- jline is on the classpath only so JLineRepl compiles; it is
+									 unused here. Ignore its embedded META-INF/native-image config,
+									 which would otherwise force-include jline (~5x larger image). -->
+								<buildArg>--exclude-config</buildArg>
+								<buildArg>.*jline.*\.jar</buildArg>
+								<buildArg>META-INF/native-image/.*</buildArg>
+								<buildArg>-H:-AutoRunVM</buildArg>
+							</buildArgs>
+						</configuration>
+					</plugin>
+					<!-- Stage the generated wasm/js next to index.html for serving. -->
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-antrun-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>stage-web-dist</id>
+								<phase>package</phase>
+								<goals>
+									<goal>run</goal>
+								</goals>
+								<configuration>
+									<target>
+										<property name="web.dist" location="${project.basedir}/web/dist"/>
+										<delete dir="${web.dist}"/>
+										<mkdir dir="${web.dist}"/>
+										<copy todir="${web.dist}">
+											<fileset dir="${project.build.directory}">
+												<include name="rontoplayground.js"/>
+												<include name="rontoplayground.js.wasm"/>
+											</fileset>
+											<fileset dir="${project.basedir}/web">
+												<include name="index.html"/>
+											</fileset>
+										</copy>
+										<echo message="Web playground staged in ${web.dist}"/>
+										<echo message="Serve it: cd web/dist &amp;&amp; jwebserver -p 8000"/>
+									</target>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
 	</profiles>
 
 	<dependencyManagement>
