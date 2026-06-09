@@ -24,10 +24,8 @@ final class JvmAbsCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
-			JvmEmitHelper.unboxLong(ctx);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathAbsLong.index());
-			JvmEmitHelper.boxLong(ctx);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.ABS).index());
 		}
 	}
 

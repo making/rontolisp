@@ -6,10 +6,12 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
@@ -116,11 +118,19 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			long result = 0;
-			for (LispVal arg : args) {
-				result += asLong(arg);
+			if (hasBigInteger(args)) {
+				return addBig(args);
 			}
-			return new LispInteger(result);
+			try {
+				long result = 0;
+				for (LispVal arg : args) {
+					result = Math.addExact(result, asLong(arg));
+				}
+				return new LispInteger(result);
+			}
+			catch (ArithmeticException overflow) {
+				return addBig(args);
+			}
 		}));
 		env.define(LispNames.SUB, new LispFunction(LispNames.SUB, args -> {
 			if (hasDouble(args)) {
@@ -133,14 +143,22 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			if (args.size() == 1) {
-				return new LispInteger(-asLong(args.get(0)));
+			if (hasBigInteger(args)) {
+				return subBig(args);
 			}
-			long result = asLong(args.get(0));
-			for (int i = 1; i < args.size(); i++) {
-				result -= asLong(args.get(i));
+			try {
+				if (args.size() == 1) {
+					return new LispInteger(Math.negateExact(asLong(args.get(0))));
+				}
+				long result = asLong(args.get(0));
+				for (int i = 1; i < args.size(); i++) {
+					result = Math.subtractExact(result, asLong(args.get(i)));
+				}
+				return new LispInteger(result);
 			}
-			return new LispInteger(result);
+			catch (ArithmeticException overflow) {
+				return subBig(args);
+			}
 		}));
 		env.define(LispNames.MUL, new LispFunction(LispNames.MUL, args -> {
 			if (hasDouble(args)) {
@@ -150,11 +168,19 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			long result = 1;
-			for (LispVal arg : args) {
-				result *= asLong(arg);
+			if (hasBigInteger(args)) {
+				return mulBig(args);
 			}
-			return new LispInteger(result);
+			try {
+				long result = 1;
+				for (LispVal arg : args) {
+					result = Math.multiplyExact(result, asLong(arg));
+				}
+				return new LispInteger(result);
+			}
+			catch (ArithmeticException overflow) {
+				return mulBig(args);
+			}
 		}));
 		env.define(LispNames.DIV, new LispFunction(LispNames.DIV, args -> {
 			if (hasDouble(args)) {
@@ -164,9 +190,17 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
+			if (hasBigInteger(args)) {
+				return divBig(args);
+			}
 			long result = asLong(args.get(0));
 			for (int i = 1; i < args.size(); i++) {
-				result /= asLong(args.get(i));
+				long divisor = asLong(args.get(i));
+				// Only Long.MIN_VALUE / -1 overflows long division; promote that case.
+				if (result == Long.MIN_VALUE && divisor == -1) {
+					return divBig(args);
+				}
+				result /= divisor;
 			}
 			return new LispInteger(result);
 		}));
@@ -175,6 +209,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) % asDouble(args.get(1)));
 			}
+			if (hasBigInteger(args)) {
+				return normalizeBig(asBigInteger(args.get(0)).remainder(asBigInteger(args.get(1))));
+			}
 			return new LispInteger(asLong(args.get(0)) % asLong(args.get(1)));
 		}));
 		env.define(LispNames.ABS, new LispFunction(LispNames.ABS, args -> {
@@ -182,12 +219,22 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.abs(asDouble(args.get(0))));
 			}
-			return new LispInteger(Math.abs(asLong(args.get(0))));
+			if (args.get(0) instanceof LispBigInteger b) {
+				return normalizeBig(b.value().abs());
+			}
+			long value = asLong(args.get(0));
+			if (value == Long.MIN_VALUE) {
+				return new LispBigInteger(BigInteger.valueOf(value).negate());
+			}
+			return new LispInteger(Math.abs(value));
 		}));
 		env.define(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireArgCount(LispNames.MIN, args, 2);
 			if (hasDouble(args)) {
 				return new LispDouble(Math.min(asDouble(args.get(0)), asDouble(args.get(1))));
+			}
+			if (hasBigInteger(args)) {
+				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) <= 0 ? args.get(0) : args.get(1);
 			}
 			return new LispInteger(Math.min(asLong(args.get(0)), asLong(args.get(1))));
 		}));
@@ -196,6 +243,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.max(asDouble(args.get(0)), asDouble(args.get(1))));
 			}
+			if (hasBigInteger(args)) {
+				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) >= 0 ? args.get(0) : args.get(1);
+			}
 			return new LispInteger(Math.max(asLong(args.get(0)), asLong(args.get(1))));
 		}));
 		env.define(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
@@ -203,14 +253,30 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) + 1);
 			}
-			return new LispInteger(asLong(args.get(0)) + 1);
+			if (args.get(0) instanceof LispBigInteger b) {
+				return normalizeBig(b.value().add(BigInteger.ONE));
+			}
+			try {
+				return new LispInteger(Math.addExact(asLong(args.get(0)), 1));
+			}
+			catch (ArithmeticException overflow) {
+				return normalizeBig(asBigInteger(args.get(0)).add(BigInteger.ONE));
+			}
 		}));
 		env.define(LispNames.ONE_MINUS, new LispFunction(LispNames.ONE_MINUS, args -> {
 			requireArgCount(LispNames.ONE_MINUS, args, 1);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) - 1);
 			}
-			return new LispInteger(asLong(args.get(0)) - 1);
+			if (args.get(0) instanceof LispBigInteger b) {
+				return normalizeBig(b.value().subtract(BigInteger.ONE));
+			}
+			try {
+				return new LispInteger(Math.subtractExact(asLong(args.get(0)), 1));
+			}
+			catch (ArithmeticException overflow) {
+				return normalizeBig(asBigInteger(args.get(0)).subtract(BigInteger.ONE));
+			}
 		}));
 	}
 
@@ -220,12 +286,18 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) == asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (hasBigInteger(args)) {
+				return compareBig(args) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) == asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.LT, new LispFunction(LispNames.LT, args -> {
 			requireArgCount(LispNames.LT, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (hasBigInteger(args)) {
+				return compareBig(args) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			return asLong(args.get(0)) < asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
@@ -234,6 +306,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (hasBigInteger(args)) {
+				return compareBig(args) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) > asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.LE, new LispFunction(LispNames.LE, args -> {
@@ -241,12 +316,18 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) <= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (hasBigInteger(args)) {
+				return compareBig(args) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) <= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.GE, new LispFunction(LispNames.GE, args -> {
 			requireArgCount(LispNames.GE, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) >= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (hasBigInteger(args)) {
+				return compareBig(args) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			return asLong(args.get(0)) >= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
@@ -361,11 +442,13 @@ public final class Environment implements Scope {
 		env.define(LispNames.NUMBERP, new LispFunction(LispNames.NUMBERP, args -> {
 			requireArgCount(LispNames.NUMBERP, args, 1);
 			LispVal arg = args.get(0);
-			return (arg instanceof LispInteger || arg instanceof LispDouble) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispDouble)
+					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.INTEGERP, new LispFunction(LispNames.INTEGERP, args -> {
 			requireArgCount(LispNames.INTEGERP, args, 1);
-			return args.get(0) instanceof LispInteger ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			LispVal arg = args.get(0);
+			return (arg instanceof LispInteger || arg instanceof LispBigInteger) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.FLOATP, new LispFunction(LispNames.FLOATP, args -> {
 			requireArgCount(LispNames.FLOATP, args, 1);
@@ -397,12 +480,20 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) == 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			// A normalized LispBigInteger is always outside the long range, hence
+			// non-zero.
+			if (args.get(0) instanceof LispBigInteger) {
+				return LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.PLUSP, new LispFunction(LispNames.PLUSP, args -> {
 			requireArgCount(LispNames.PLUSP, args, 1);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (args.get(0) instanceof LispBigInteger b) {
+				return b.value().signum() > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			return asLong(args.get(0)) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
@@ -411,14 +502,23 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (args.get(0) instanceof LispBigInteger b) {
+				return b.value().signum() < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.EVENP, new LispFunction(LispNames.EVENP, args -> {
 			requireArgCount(LispNames.EVENP, args, 1);
+			if (args.get(0) instanceof LispBigInteger b) {
+				return b.value().testBit(0) ? LispNil.INSTANCE : LispTrue.INSTANCE;
+			}
 			return asLong(args.get(0)) % 2 == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.define(LispNames.ODDP, new LispFunction(LispNames.ODDP, args -> {
 			requireArgCount(LispNames.ODDP, args, 1);
+			if (args.get(0) instanceof LispBigInteger b) {
+				return b.value().testBit(0) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asLong(args.get(0)) % 2 != 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
@@ -552,12 +652,15 @@ public final class Environment implements Scope {
 			if (arg instanceof LispInteger i) {
 				return new LispDouble((double) i.value());
 			}
+			if (arg instanceof LispBigInteger b) {
+				return new LispDouble(b.value().doubleValue());
+			}
 			throw new LispEvalException("float expects a number, got: " + arg.print());
 		}));
 		env.define(LispNames.TRUNCATE, new LispFunction(LispNames.TRUNCATE, args -> {
 			requireArgCount(LispNames.TRUNCATE, args, 1);
 			LispVal arg = args.get(0);
-			if (arg instanceof LispInteger) {
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
@@ -568,7 +671,7 @@ public final class Environment implements Scope {
 		env.define(LispNames.FLOOR, new LispFunction(LispNames.FLOOR, args -> {
 			requireArgCount(LispNames.FLOOR, args, 1);
 			LispVal arg = args.get(0);
-			if (arg instanceof LispInteger) {
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
@@ -579,7 +682,7 @@ public final class Environment implements Scope {
 		env.define(LispNames.CEILING, new LispFunction(LispNames.CEILING, args -> {
 			requireArgCount(LispNames.CEILING, args, 1);
 			LispVal arg = args.get(0);
-			if (arg instanceof LispInteger) {
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
@@ -590,7 +693,7 @@ public final class Environment implements Scope {
 		env.define(LispNames.ROUND, new LispFunction(LispNames.ROUND, args -> {
 			requireArgCount(LispNames.ROUND, args, 1);
 			LispVal arg = args.get(0);
-			if (arg instanceof LispInteger) {
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
 				return arg;
 			}
 			if (arg instanceof LispDouble d) {
@@ -614,7 +717,78 @@ public final class Environment implements Scope {
 		if (val instanceof LispInteger i) {
 			return (double) i.value();
 		}
+		if (val instanceof LispBigInteger b) {
+			return b.value().doubleValue();
+		}
 		throw new LispEvalException("Expected number, got: " + val.print());
+	}
+
+	private static BigInteger asBigInteger(LispVal val) {
+		if (val instanceof LispInteger i) {
+			return BigInteger.valueOf(i.value());
+		}
+		if (val instanceof LispBigInteger b) {
+			return b.value();
+		}
+		throw new LispEvalException("Expected integer, got: " + val.print());
+	}
+
+	/**
+	 * Normalizes a {@link BigInteger} result, demoting it back to a {@link LispInteger}
+	 * when it fits in a {@code long} so that fixnum-range values keep a single
+	 * representation.
+	 */
+	private static LispVal normalizeBig(BigInteger value) {
+		// bitLength() < 64 holds exactly for the signed long range [-2^63, 2^63-1].
+		return value.bitLength() < 64 ? new LispInteger(value.longValue()) : new LispBigInteger(value);
+	}
+
+	private static LispVal addBig(List<LispVal> args) {
+		BigInteger result = BigInteger.ZERO;
+		for (LispVal arg : args) {
+			result = result.add(asBigInteger(arg));
+		}
+		return normalizeBig(result);
+	}
+
+	private static LispVal subBig(List<LispVal> args) {
+		if (args.size() == 1) {
+			return normalizeBig(asBigInteger(args.get(0)).negate());
+		}
+		BigInteger result = asBigInteger(args.get(0));
+		for (int i = 1; i < args.size(); i++) {
+			result = result.subtract(asBigInteger(args.get(i)));
+		}
+		return normalizeBig(result);
+	}
+
+	private static LispVal mulBig(List<LispVal> args) {
+		BigInteger result = BigInteger.ONE;
+		for (LispVal arg : args) {
+			result = result.multiply(asBigInteger(arg));
+		}
+		return normalizeBig(result);
+	}
+
+	private static LispVal divBig(List<LispVal> args) {
+		BigInteger result = asBigInteger(args.get(0));
+		for (int i = 1; i < args.size(); i++) {
+			result = result.divide(asBigInteger(args.get(i)));
+		}
+		return normalizeBig(result);
+	}
+
+	private static int compareBig(List<LispVal> args) {
+		return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1)));
+	}
+
+	private static boolean hasBigInteger(List<LispVal> args) {
+		for (LispVal arg : args) {
+			if (arg instanceof LispBigInteger) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean hasDouble(List<LispVal> args) {

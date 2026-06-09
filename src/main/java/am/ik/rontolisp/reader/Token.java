@@ -26,6 +26,15 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Arbitrary-precision integer token, produced when an integer literal does not fit in
+	 * a {@code long}.
+	 *
+	 * @param value the big integer value
+	 */
+	record BigIntegerToken(java.math.BigInteger value) implements Token {
+	}
+
+	/**
 	 * Floating-point number token.
 	 *
 	 * @param value the double value

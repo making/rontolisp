@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -25,6 +26,7 @@ final class JvmExprCompiler {
 	static void compileExpr(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
 		switch (expr) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
+			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileLong(1, ctx);
@@ -91,11 +93,16 @@ final class JvmExprCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
-				case LispNames.ADD -> JvmArithCompiler.compile(cons, ctx, Opcode.LADD, Opcode.DADD, className);
-				case LispNames.SUB -> JvmArithCompiler.compile(cons, ctx, Opcode.LSUB, Opcode.DSUB, className);
-				case LispNames.MUL -> JvmArithCompiler.compile(cons, ctx, Opcode.LMUL, Opcode.DMUL, className);
-				case LispNames.DIV -> JvmArithCompiler.compile(cons, ctx, Opcode.LDIV, Opcode.DDIV, className);
-				case LispNames.MOD -> JvmArithCompiler.compile(cons, ctx, Opcode.LREM, Opcode.DREM, className);
+				case LispNames.ADD ->
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);
+				case LispNames.SUB ->
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.SUB, Opcode.DSUB, className);
+				case LispNames.MUL ->
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MUL, Opcode.DMUL, className);
+				case LispNames.DIV ->
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.DIV, Opcode.DDIV, className);
+				case LispNames.MOD ->
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MOD, Opcode.DREM, className);
 				case LispNames.EQ -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFEQ, className);
 				case LispNames.LT -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLT, className);
 				case LispNames.GT -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGT, className);

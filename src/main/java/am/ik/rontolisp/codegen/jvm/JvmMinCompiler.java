@@ -27,12 +27,9 @@ final class JvmMinCompiler {
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmEmitHelper.unboxLong(ctx);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmEmitHelper.unboxLong(ctx);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathMinLong.index());
-			JvmEmitHelper.boxLong(ctx);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.MIN).index());
 		}
 	}
 

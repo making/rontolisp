@@ -25,11 +25,11 @@ final class JvmComparisonCompiler {
 			ctx.emit(Opcode.DCMPL);
 		}
 		else {
+			// _cmp handles both Long and BigInteger operands, returning -1/0/1 like LCMP.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmEmitHelper.unboxLong(ctx);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmEmitHelper.unboxLong(ctx);
-			ctx.emit(Opcode.LCMP);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.CMP).index());
 		}
 		int ifPos = ctx.code.size();
 		ctx.emit(branchOpcode);

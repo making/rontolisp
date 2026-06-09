@@ -3,6 +3,7 @@ package am.ik.rontolisp.reader;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -63,6 +64,7 @@ public final class LispReader {
 		this.pos++;
 		return switch (token) {
 			case Token.NumberToken n -> new LispInteger(n.value());
+			case Token.BigIntegerToken b -> new LispBigInteger(b.value());
 			case Token.DoubleToken d -> new LispDouble(d.value());
 			case Token.StringToken s -> new LispString(s.value());
 			case Token.SymbolToken sym -> readSymbol(sym);

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -26,6 +27,7 @@ final class JvmQuoteCompiler {
 	private static void compileQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
 		switch (val) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
+			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileLong(1, ctx);

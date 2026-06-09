@@ -1009,4 +1009,107 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (eval '(let ((x (list 1 2 3))) (pop x))))")).isEqualTo("1");
 	}
 
+	@Test
+	void bigIntegerFactorialPromotesOnOverflow() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (fact 32))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("263130836933693530167218012160000000");
+	}
+
+	@Test
+	void bigIntegerAdditionOverflow() throws Exception {
+		assertThat(compileAndRun("(print (+ 9223372036854775807 1))")).isEqualTo("9223372036854775808");
+	}
+
+	@Test
+	void bigIntegerMultiplicationOverflow() throws Exception {
+		assertThat(compileAndRun("(print (* 1000000000000 1000000000000))")).isEqualTo("1000000000000000000000000");
+	}
+
+	@Test
+	void bigIntegerSubtractionUnderflow() throws Exception {
+		assertThat(compileAndRun("(print (- -9223372036854775807 1000))")).isEqualTo("-9223372036854776807");
+	}
+
+	@Test
+	void bigIntegerResultDemotedWhenFitsInLong() throws Exception {
+		// (fact 32) / (fact 31) = 32 fits in a long again.
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (/ (fact 32) (fact 31)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("32");
+	}
+
+	@Test
+	void bigIntegerLiteral() throws Exception {
+		assertThat(compileAndRun("(print 123456789012345678901234567890)")).isEqualTo("123456789012345678901234567890");
+	}
+
+	@Test
+	void bigIntegerLiteralArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (+ 123456789012345678901234567890 1))"))
+			.isEqualTo("123456789012345678901234567891");
+	}
+
+	@Test
+	void bigIntegerComparison() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (> (fact 30) (fact 25)))
+				(print (< (fact 30) (fact 25)))
+				""";
+		// In compiled output a true boolean is represented as the integer 1.
+		assertThat(compileAndRun(code)).isEqualTo("1\nnil");
+	}
+
+	@Test
+	void bigIntegerIntegerp() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (integerp (fact 25)))
+				""";
+		// In compiled output a true boolean is represented as the integer 1.
+		assertThat(compileAndRun(code)).isEqualTo("1");
+	}
+
+	@Test
+	void bigIntegerEvenp() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (evenp (fact 25)))
+				""";
+		// In compiled output a true boolean is represented as the integer 1.
+		assertThat(compileAndRun(code)).isEqualTo("1");
+	}
+
+	@Test
+	void bigIntegerMod() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (mod (fact 25) 1000000007))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("440732388");
+	}
+
+	@Test
+	void bigIntegerAbsAndNegation() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (abs (- (fact 25))))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("15511210043330985984000000");
+	}
+
+	@Test
+	void bigIntegerMax() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (max (fact 25) (fact 30)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("265252859812191058636308480000000");
+	}
+
 }

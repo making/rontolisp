@@ -112,7 +112,14 @@ public final class LispLexer {
 			}
 			return new Token.SymbolToken(this.input.substring(start, this.pos));
 		}
-		return new Token.NumberToken(Long.parseLong(stripGrouping(this.input.substring(start, this.pos))));
+		String digits = stripGrouping(this.input.substring(start, this.pos));
+		try {
+			return new Token.NumberToken(Long.parseLong(digits));
+		}
+		catch (NumberFormatException overflow) {
+			// Literal does not fit in a long: promote to an arbitrary-precision integer.
+			return new Token.BigIntegerToken(new java.math.BigInteger(digits));
+		}
 	}
 
 	private void consumeDigitsWithGrouping() {

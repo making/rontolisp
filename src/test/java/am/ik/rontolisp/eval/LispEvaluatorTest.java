@@ -3,8 +3,10 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -790,6 +792,94 @@ class LispEvaluatorTest {
 	@Test
 	void evalReadEof() {
 		assertThat(evalWithStdin("(read)", "")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void bigIntegerFactorialPromotesOnOverflow() {
+		LispVal result = evalMulti("""
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(fact 32)
+				""");
+		assertThat(result).isEqualTo(new LispBigInteger(new BigInteger("263130836933693530167218012160000000")));
+	}
+
+	@Test
+	void bigIntegerAdditionOverflow() {
+		assertThat(eval("(+ 9223372036854775807 1)"))
+			.isEqualTo(new LispBigInteger(new BigInteger("9223372036854775808")));
+	}
+
+	@Test
+	void bigIntegerMultiplicationOverflow() {
+		assertThat(eval("(* 1000000000000 1000000000000)"))
+			.isEqualTo(new LispBigInteger(new BigInteger("1000000000000000000000000")));
+	}
+
+	@Test
+	void bigIntegerResultDemotedWhenFitsInLong() {
+		// A BigInteger result that fits back in a long is normalized to LispInteger.
+		assertThat(eval("(- (* 1000000000000 1000000000000) (* 1000000000000 1000000000000))"))
+			.isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void bigIntegerLiteralIsParsed() {
+		assertThat(eval("123456789012345678901234567890"))
+			.isEqualTo(new LispBigInteger(new BigInteger("123456789012345678901234567890")));
+	}
+
+	@Test
+	void bigIntegerComparison() {
+		assertThat(eval("(> (* 5000000000 5000000000) 9223372036854775807)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(= (* 5000000000 5000000000) 25000000000000000000)")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void bigIntegerIntegerpAndNumberp() {
+		assertThat(eval("(integerp (* 5000000000 5000000000))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(numberp (* 5000000000 5000000000))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void bigIntegerEvenpOddp() {
+		assertThat(eval("(evenp (* 5000000000 5000000000))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(oddp (+ 1 (* 5000000000 5000000000)))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void bigIntegerMod() {
+		LispVal result = evalMulti("""
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(mod (fact 25) 1000000007)
+				""");
+		assertThat(result).isEqualTo(new LispInteger(440732388));
+	}
+
+	@Test
+	void bigIntegerDivisionDemotes() {
+		LispVal result = evalMulti("""
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(/ (fact 32) (fact 31))
+				""");
+		assertThat(result).isEqualTo(new LispInteger(32));
+	}
+
+	@Test
+	void bigIntegerAbs() {
+		assertThat(eval("(abs (- (* 5000000000 5000000000)))"))
+			.isEqualTo(new LispBigInteger(new BigInteger("25000000000000000000")));
+	}
+
+	@Test
+	void bigIntegerMaxAndMin() {
+		assertThat(eval("(max (* 5000000000 5000000000) 1)"))
+			.isEqualTo(new LispBigInteger(new BigInteger("25000000000000000000")));
+		assertThat(eval("(min (* 5000000000 5000000000) 1)")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void bigIntegerFloatConversion() {
+		assertThat(eval("(float (* 1000000000000 1000000000000))")).isEqualTo(new LispDouble(1.0e24));
 	}
 
 }

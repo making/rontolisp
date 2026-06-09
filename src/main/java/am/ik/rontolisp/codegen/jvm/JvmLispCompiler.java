@@ -227,9 +227,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 
+		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
+		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass);
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
+			.numOps(numericRuntime.ops())
 			.systemOut(systemOut)
 			.printlnStr(printlnStr)
 			.lispToString(lispToStringMethod)
@@ -560,6 +564,19 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(nm.maxStack())
+									.writeU2(nm.maxLocals())
+									.writeCode((Object[]) nm.code().toArray(new Integer[0]))
+									.writeU2(nm.exceptionTable().size());
+								for (int[] entry : nm.exceptionTable()) {
+									attr.writeU2(entry[0]).writeU2(entry[1]).writeU2(entry[2]).writeU2(entry[3]);
+								}
+								attr.writeU2(0);
+							})));
+				}
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
 						lispToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 							attr.writeU2(4)
@@ -786,6 +803,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant readLineHelper;
 
+		Map<String, MethodrefConstant> numOps = Map.of();
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -848,6 +867,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.nextFuncId = builder.nextFuncId;
+			this.numOps = builder.numOps;
 		}
 
 		static Builder builder() {
@@ -929,6 +949,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
+
+			private Map<String, MethodrefConstant> numOps = Map.of();
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
@@ -1115,10 +1137,19 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder numOps(Map<String, MethodrefConstant> numOps) {
+				this.numOps = numOps;
+				return this;
+			}
+
 			Ctx build() {
 				return new Ctx(this);
 			}
 
+		}
+
+		MethodrefConstant numOp(String key) {
+			return Objects.requireNonNull(this.numOps.get(key), () -> "Unknown numeric helper: " + key);
 		}
 
 		void emit(int opcode) {

@@ -43,6 +43,26 @@ final class JvmEmitHelper {
 		ctx.emitU2(ctx.doubleValueOf.index());
 	}
 
+	static void compileBigInteger(java.math.BigInteger value, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant bigClass = ctx.cp.addClass(ctx.cp.addUtf8("java/math/BigInteger"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(bigClass,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ConstantPool.StringConstant sc = ctx.cp.addString(value.toString());
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(bigClass.index());
+		ctx.emit(Opcode.DUP);
+		if (sc.index() <= 255) {
+			ctx.emit(Opcode.LDC);
+			ctx.emit(sc.index());
+		}
+		else {
+			ctx.emit(Opcode.LDC_W);
+			ctx.emitU2(sc.index());
+		}
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(ctor.index());
+	}
+
 	static void compileStringLiteral(String value, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.StringConstant sc = ctx.cp.addString(value);
 		if (sc.index() <= 255) {

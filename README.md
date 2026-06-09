@@ -140,7 +140,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 | Type | Example | Description |
 |------|---------|-------------|
-| Integer | `42`, `-5`, `1,000` | 64-bit signed integer (interpreter), 31-bit signed integer (WASM) |
+| Integer | `42`, `-5`, `1,000` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM), 31-bit signed integer (WASM) |
 | Double | `3.14`, `-0.5`, `3,000.50` | 64-bit floating-point number |
 | String | `"hello"` | String literal (interpreter only) |
 | Symbol | `x`, `foo` | Identifier |
@@ -155,6 +155,16 @@ integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to
 digits; it is stripped before parsing and applies to all three backends. This
 differs from Common Lisp, where `,` is the unquote character (not supported
 here).
+
+In the **interpreter and the JVM compiler**, integer arithmetic never silently
+wraps: when a `long` operation (`+`, `-`, `*`, `/`, `1+`, `1-`, `abs`, ...)
+would overflow, the result is automatically promoted to an arbitrary-precision
+big integer, and integer literals larger than a `long` are read as big integers.
+A big-integer result that fits back in a `long` is demoted again, so values keep
+a single canonical representation. For example, with
+`(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))`, `(fact 32)` returns the
+exact `263130836933693530167218012160000000`. The **WASM compiler** does not
+support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 
 ### Special Forms
 
@@ -262,6 +272,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
 - **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
+- **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
 
