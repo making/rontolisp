@@ -13,6 +13,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Integration tests that compile Lisp to WASM and run it with wasmtime inside a
@@ -1162,6 +1163,60 @@ class WasmLispCompilerIntegrationTest {
 	void evalPop() throws Exception {
 		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s))))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s) s)))")).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void sqrt() throws Exception {
+		assertThat(compileAndRun("(print (sqrt 16))")).isEqualTo("4.0");
+		assertThat(compileAndRun("(print (sqrt 25))")).isEqualTo("5.0");
+		assertThat(compileAndRun("(print (sqrt 6.25))")).isEqualTo("2.5");
+	}
+
+	@Test
+	void isqrt() throws Exception {
+		assertThat(compileAndRun("(print (isqrt 17))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (isqrt 16))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (isqrt 0))")).isEqualTo("0");
+	}
+
+	@Test
+	void expt() throws Exception {
+		assertThat(compileAndRun("(print (expt 2 10))")).isEqualTo("1024");
+		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (expt 5 3))")).isEqualTo("125");
+	}
+
+	@Test
+	void gcdLcm() throws Exception {
+		assertThat(compileAndRun("(print (gcd 12 18))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (gcd 0 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (gcd -12 18))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (lcm 4 6))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (lcm 0 6))")).isEqualTo("0");
+	}
+
+	@Test
+	void signum() throws Exception {
+		assertThat(compileAndRun("(print (signum -5))")).isEqualTo("-1");
+		assertThat(compileAndRun("(print (signum 0))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (signum 7))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (signum 3.5))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (signum -2.0))")).isEqualTo("-1.0");
+	}
+
+	@Test
+	void mathAsFirstClass() throws Exception {
+		assertThat(compileAndRun("(print (map sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print (reduce gcd (list 24 36 48)))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (eval (list (quote expt) 2 8)))")).isEqualTo("256");
+		assertThat(compileAndRun("(print (eval (list (quote sqrt) 25)))")).isEqualTo("5.0");
+	}
+
+	@Test
+	void transcendentalFunctionsAreUnsupported() {
+		// sin/cos/tan/exp/log/etc. have no native WASM instruction and are rejected.
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (sin 0))")))
+			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
 }

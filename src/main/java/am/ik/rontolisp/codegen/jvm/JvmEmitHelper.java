@@ -75,6 +75,32 @@ final class JvmEmitHelper {
 		}
 	}
 
+	/** The {@code java/math/BigInteger} class constant. */
+	static ConstantPool.ClassConstant bigIntegerClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.addClass(ctx.cp.addUtf8("java/math/BigInteger"));
+	}
+
+	/** A {@code java.math.BigInteger} instance-method reference. */
+	static ConstantPool.MethodrefConstant bigIntegerMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
+		return ctx.cp.addMethodref(bigIntegerClass(ctx),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	}
+
+	/**
+	 * Coerces the {@code Object} on the stack (Long or BigInteger) to a
+	 * {@code BigInteger}.
+	 */
+	static void toBigInteger(JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.BIG_OP).index());
+	}
+
+	/** Normalizes the {@code BigInteger} on the stack to a {@code Long} when it fits. */
+	static void normalizeBigInteger(JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.NORM_OP).index());
+	}
+
 	static void unboxLong(JvmLispCompiler.Ctx ctx) {
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.longClass.index());

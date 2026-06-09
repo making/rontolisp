@@ -346,3 +346,15 @@
 (print 1,234,567)
 (print (* 2,000 3))
 (print (+ 3,000.50 0.50))
+
+; math functions supported on every backend (transcendental functions such as
+; sin/cos/exp/log are interpreter/JVM-only and are not exercised here)
+(print (sqrt 16))
+(print (sqrt 6.25))
+(print (isqrt 17))
+(print (expt 2 10))
+(print (gcd 48 36))
+(print (lcm 4 6))
+(print (signum -7))
+(print (signum 3.5))
+(print (map sqrt (list 1 4 9)))

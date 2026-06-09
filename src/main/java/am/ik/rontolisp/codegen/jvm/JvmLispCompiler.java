@@ -150,6 +150,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant mathRint = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("rint"), cp.addUtf8("(D)D")));
 
+		// Math helper references for sqrt/exp/log/trig/expt/signum compilers.
+		Map<String, MethodrefConstant> mathOps = JvmMathFnCompiler.buildOps(cp, mathClass);
+
 		// read-line helper
 		ClassConstant bufferedReaderClass = cp.addClass(cp.addUtf8("java/io/BufferedReader"));
 		ClassConstant inputStreamReaderClass = cp.addClass(cp.addUtf8("java/io/InputStreamReader"));
@@ -255,6 +258,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
 			.numOps(numericRuntime.ops())
+			.mathOps(mathOps)
 			.systemOut(systemOut)
 			.printlnStr(printlnStr)
 			.lispToString(lispToStringMethod)
@@ -881,6 +885,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		Map<String, MethodrefConstant> numOps = Map.of();
 
+		Map<String, MethodrefConstant> mathOps = Map.of();
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -950,6 +956,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.indirectCallArities = builder.indirectCallArities;
 			this.nextFuncId = builder.nextFuncId;
 			this.numOps = builder.numOps;
+			this.mathOps = builder.mathOps;
 		}
 
 		static Builder builder() {
@@ -1037,6 +1044,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Map<String, MethodrefConstant> numOps = Map.of();
+
+			private Map<String, MethodrefConstant> mathOps = Map.of();
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
@@ -1238,6 +1247,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder mathOps(Map<String, MethodrefConstant> mathOps) {
+				this.mathOps = mathOps;
+				return this;
+			}
+
 			Ctx build() {
 				return new Ctx(this);
 			}
@@ -1246,6 +1260,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		MethodrefConstant numOp(String key) {
 			return Objects.requireNonNull(this.numOps.get(key), () -> "Unknown numeric helper: " + key);
+		}
+
+		MethodrefConstant mathOp(String key) {
+			return Objects.requireNonNull(this.mathOps.get(key), () -> "Unknown math helper: " + key);
 		}
 
 		void emit(int opcode) {

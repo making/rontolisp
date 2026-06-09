@@ -256,6 +256,17 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `floor` | `(floor 3.7)`, `(floor -3.7)` | `3`, `-4` (toward negative infinity) |
 | `ceiling` | `(ceiling 3.2)`, `(ceiling -3.2)` | `4`, `-3` (toward positive infinity) |
 | `round` | `(round 3.5)`, `(round 2.5)` | `4`, `2` (banker's rounding) |
+| `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
+| `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
+| `expt` | `(expt 2 10)`, `(expt 2.0 0.5)` | `1024`, `1.4142135623730951` |
+| `exp` | `(exp 1)` | `2.7182818284590455` (interpreter/JVM only) |
+| `log` | `(log 2.718281828459045)` | `1.0` (natural log; interpreter/JVM only) |
+| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |
+| `asin` `acos` `atan` | `(atan 0)` | `0.0` (interpreter/JVM only) |
+| `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0` (interpreter/JVM only) |
+| `gcd` | `(gcd 12 18)` | `6` (greatest common divisor) |
+| `lcm` | `(lcm 4 6)` | `12` (least common multiple; `0` if either argument is `0`) |
+| `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0` (sign, preserving integer/float type) |
 | `funcall` | `(funcall f arg...)` | Apply function `f` to args |
 | `map` | `(map f list)` | Apply `f` to each element, return new list |
 | `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
@@ -304,6 +315,15 @@ The WASM reader has a hand-written parser and is narrower:
 - **`load` requires a preopened directory.** It opens the file via WASI `path_open` relative to the first preopened directory (fd 3), so run with `--dir`.
 
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
+
+#### Math function backend support
+
+The math built-ins differ in how widely they are supported, because the WASM backend only has native instructions for a few operations:
+
+- **`sqrt`, `isqrt`, `gcd`, `lcm`, `signum`, `expt`** are supported on all three backends (interpreter, JVM, WASM) and through the compiled `eval`. `sqrt` uses the native `f64.sqrt` instruction.
+- **Transcendental functions** (`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are therefore **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
+- **`expt`** keeps an exact integer result for an integer base raised to a non-negative integer exponent (with big-integer promotion in the interpreter and JVM); a float base/exponent uses `Math.pow` and returns a float. The integer path requires a non-negative exponent. The WASM `expt` is integer-only and, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
+- **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
 
 ### First-Class Functions
 

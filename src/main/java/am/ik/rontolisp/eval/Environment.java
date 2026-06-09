@@ -10,6 +10,7 @@ import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.DoubleUnaryOperator;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
@@ -101,6 +102,7 @@ public final class Environment implements Scope {
 	public static Environment createGlobal(PrintStream out, InputStream in) {
 		Environment env = new Environment(null);
 		registerArithmetic(env);
+		registerMath(env);
 		registerComparison(env);
 		registerIO(env, out, in);
 		registerPredicates(env);
@@ -277,6 +279,76 @@ public final class Environment implements Scope {
 			catch (ArithmeticException overflow) {
 				return normalizeBig(asBigInteger(args.get(0)).subtract(BigInteger.ONE));
 			}
+		}));
+	}
+
+	private static void registerMath(Environment env) {
+		// Unary floating-point functions: always return a double (Math.<name>).
+		defineUnaryDouble(env, LispNames.SQRT, Math::sqrt);
+		defineUnaryDouble(env, LispNames.EXP, Math::exp);
+		defineUnaryDouble(env, LispNames.LOG, Math::log);
+		defineUnaryDouble(env, LispNames.SIN, Math::sin);
+		defineUnaryDouble(env, LispNames.COS, Math::cos);
+		defineUnaryDouble(env, LispNames.TAN, Math::tan);
+		defineUnaryDouble(env, LispNames.ASIN, Math::asin);
+		defineUnaryDouble(env, LispNames.ACOS, Math::acos);
+		defineUnaryDouble(env, LispNames.ATAN, Math::atan);
+		defineUnaryDouble(env, LispNames.SINH, Math::sinh);
+		defineUnaryDouble(env, LispNames.COSH, Math::cosh);
+		defineUnaryDouble(env, LispNames.TANH, Math::tanh);
+		// isqrt: exact integer square root (floor of the real square root).
+		env.define(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {
+			requireArgCount(LispNames.ISQRT, args, 1);
+			BigInteger n = asBigInteger(args.get(0));
+			if (n.signum() < 0) {
+				throw new LispEvalException("isqrt expects a non-negative integer, got: " + args.get(0).print());
+			}
+			return normalizeBig(n.sqrt());
+		}));
+		// expt: integer^non-negative-integer stays exact; otherwise Math.pow (double).
+		env.define(LispNames.EXPT, new LispFunction(LispNames.EXPT, args -> {
+			requireArgCount(LispNames.EXPT, args, 2);
+			if (!hasDouble(args)) {
+				long power = asLong(args.get(1));
+				if (power >= 0 && power <= Integer.MAX_VALUE) {
+					return normalizeBig(asBigInteger(args.get(0)).pow((int) power));
+				}
+			}
+			return new LispDouble(Math.pow(asDouble(args.get(0)), asDouble(args.get(1))));
+		}));
+		// gcd: greatest common divisor of two integers (always non-negative).
+		env.define(LispNames.GCD, new LispFunction(LispNames.GCD, args -> {
+			requireArgCount(LispNames.GCD, args, 2);
+			return normalizeBig(asBigInteger(args.get(0)).gcd(asBigInteger(args.get(1))));
+		}));
+		// lcm: least common multiple of two integers (0 if either is 0).
+		env.define(LispNames.LCM, new LispFunction(LispNames.LCM, args -> {
+			requireArgCount(LispNames.LCM, args, 2);
+			BigInteger a = asBigInteger(args.get(0));
+			BigInteger b = asBigInteger(args.get(1));
+			if (a.signum() == 0 || b.signum() == 0) {
+				return new LispInteger(0);
+			}
+			return normalizeBig(a.divide(a.gcd(b)).multiply(b).abs());
+		}));
+		// signum: sign as -1/0/1, preserving the float/integer type of the argument.
+		env.define(LispNames.SIGNUM, new LispFunction(LispNames.SIGNUM, args -> {
+			requireArgCount(LispNames.SIGNUM, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispDouble d) {
+				return new LispDouble(Math.signum(d.value()));
+			}
+			if (arg instanceof LispBigInteger b) {
+				return new LispInteger(b.value().signum());
+			}
+			return new LispInteger(Long.signum(asLong(arg)));
+		}));
+	}
+
+	private static void defineUnaryDouble(Environment env, String name, DoubleUnaryOperator fn) {
+		env.define(name, new LispFunction(name, args -> {
+			requireArgCount(name, args, 1);
+			return new LispDouble(fn.applyAsDouble(asDouble(args.get(0))));
 		}));
 	}
 

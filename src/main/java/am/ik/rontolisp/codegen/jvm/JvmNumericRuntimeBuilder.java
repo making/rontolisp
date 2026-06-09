@@ -51,6 +51,12 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String MAX = "_max";
 
+	/** Coerces an {@code Object} (Long or BigInteger) to a {@code BigInteger}. */
+	static final String BIG_OP = "_big";
+
+	/** Normalizes a {@code BigInteger} back to a {@code Long} when it fits. */
+	static final String NORM_OP = "_norm";
+
 	private static final String OBJ = "Ljava/lang/Object;";
 
 	private static final String BIG = "Ljava/math/BigInteger;";
@@ -203,6 +209,8 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(ABS, rAbs);
 		ops.put(MIN, rMin);
 		ops.put(MAX, rMax);
+		ops.put(BIG_OP, rBig);
+		ops.put(NORM_OP, rNorm);
 		return new NumericRuntime(methods, ops);
 	}
 

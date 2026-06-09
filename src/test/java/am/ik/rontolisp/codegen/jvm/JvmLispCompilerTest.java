@@ -542,6 +542,61 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSqrt() throws Exception {
+		assertThat(compileAndRun("(print (sqrt 16))")).isEqualTo("4.0");
+		assertThat(compileAndRun("(print (sqrt 2))")).isEqualTo("1.4142135623730951");
+		assertThat(compileAndRun("(print (sqrt 2.0))")).isEqualTo("1.4142135623730951");
+	}
+
+	@Test
+	void compileAndRunIsqrt() throws Exception {
+		assertThat(compileAndRun("(print (isqrt 17))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (isqrt 16))")).isEqualTo("4");
+	}
+
+	@Test
+	void compileAndRunExpt() throws Exception {
+		assertThat(compileAndRun("(print (expt 2 10))")).isEqualTo("1024");
+		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (expt 2.0 0.5))")).isEqualTo("1.4142135623730951");
+		assertThat(compileAndRun("(print (expt 2 70))")).isEqualTo("1180591620717411303424");
+	}
+
+	@Test
+	void compileAndRunGcdLcm() throws Exception {
+		assertThat(compileAndRun("(print (gcd 12 18))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (gcd 0 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (lcm 4 6))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (lcm 0 6))")).isEqualTo("0");
+	}
+
+	@Test
+	void compileAndRunSignum() throws Exception {
+		assertThat(compileAndRun("(print (signum -5))")).isEqualTo("-1");
+		assertThat(compileAndRun("(print (signum 0))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (signum 7))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (signum 3.5))")).isEqualTo("1.0");
+	}
+
+	@Test
+	void compileAndRunTranscendental() throws Exception {
+		assertThat(compileAndRun("(print (sin 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (cos 0))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (exp 0))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (log 1))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (atan 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (tanh 0))")).isEqualTo("0.0");
+	}
+
+	@Test
+	void compileAndRunMathAsFirstClass() throws Exception {
+		assertThat(compileAndRun("(print (map sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print (reduce gcd (list 24 36 48)))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (eval (list (quote expt) 2 8)))")).isEqualTo("256");
+		assertThat(compileAndRun("(print (eval (list (quote sin) 0)))")).isEqualTo("0.0");
+	}
+
+	@Test
 	void compileAndRunUnless() throws Exception {
 		assertThat(compileAndRun("(print (unless nil 42))")).isEqualTo("42");
 		assertThat(compileAndRun("(print (unless t 42))")).isEqualTo("nil");

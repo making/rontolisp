@@ -58,6 +58,57 @@ public final class LispNames {
 	/** The {@code max} built-in function. */
 	public static final String MAX = "max";
 
+	/** The {@code sqrt} built-in function. */
+	public static final String SQRT = "sqrt";
+
+	/** The {@code isqrt} built-in function. */
+	public static final String ISQRT = "isqrt";
+
+	/** The {@code expt} built-in function. */
+	public static final String EXPT = "expt";
+
+	/** The {@code exp} built-in function. */
+	public static final String EXP = "exp";
+
+	/** The {@code log} built-in function. */
+	public static final String LOG = "log";
+
+	/** The {@code sin} built-in function. */
+	public static final String SIN = "sin";
+
+	/** The {@code cos} built-in function. */
+	public static final String COS = "cos";
+
+	/** The {@code tan} built-in function. */
+	public static final String TAN = "tan";
+
+	/** The {@code asin} built-in function. */
+	public static final String ASIN = "asin";
+
+	/** The {@code acos} built-in function. */
+	public static final String ACOS = "acos";
+
+	/** The {@code atan} built-in function. */
+	public static final String ATAN = "atan";
+
+	/** The {@code sinh} built-in function. */
+	public static final String SINH = "sinh";
+
+	/** The {@code cosh} built-in function. */
+	public static final String COSH = "cosh";
+
+	/** The {@code tanh} built-in function. */
+	public static final String TANH = "tanh";
+
+	/** The {@code gcd} built-in function. */
+	public static final String GCD = "gcd";
+
+	/** The {@code lcm} built-in function. */
+	public static final String LCM = "lcm";
+
+	/** The {@code signum} built-in function. */
+	public static final String SIGNUM = "signum";
+
 	// Comparison
 
 	/** The {@code =} built-in function. */

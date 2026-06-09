@@ -222,7 +222,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			userDefinedNames.add(defun.name);
 		}
-		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames)) {
+		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames,
+				BuiltinFunctionWrappers.WASM_UNSUPPORTED)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
 

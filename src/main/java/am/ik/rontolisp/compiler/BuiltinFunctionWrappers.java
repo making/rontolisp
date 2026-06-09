@@ -28,15 +28,36 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * Built-in operators that the WASM backend cannot compile (transcendental functions
+	 * have no native WASM instruction). The WASM compiler passes these to
+	 * {@link #generate(Set, Set)} so that no wrapper defun referencing them is injected.
+	 */
+	public static final Set<String> WASM_UNSUPPORTED = Set.of(LispNames.EXP, LispNames.LOG, LispNames.SIN,
+			LispNames.COS, LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH,
+			LispNames.COSH, LispNames.TANH);
+
+	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
 	 * user.
 	 * @param userDefinedNames names already defined by user defuns
 	 * @return list of {@code (setq name (lambda ...))} expressions
 	 */
 	public static List<LispVal> generate(Set<String> userDefinedNames) {
+		return generate(userDefinedNames, Set.of());
+	}
+
+	/**
+	 * Generates wrapper defuns for built-in operators that are not already defined by the
+	 * user and are not in the excluded set.
+	 * @param userDefinedNames names already defined by user defuns
+	 * @param excludedNames operator names to skip (e.g. functions a backend cannot
+	 * compile)
+	 * @return list of {@code (setq name (lambda ...))} expressions
+	 */
+	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames) {
 		List<LispVal> wrappers = new ArrayList<>();
 		for (WrapperDef def : WRAPPER_DEFS) {
-			if (!userDefinedNames.contains(def.name)) {
+			if (!userDefinedNames.contains(def.name) && !excludedNames.contains(def.name)) {
 				wrappers.add(def.toSetqLambda());
 			}
 		}
@@ -109,6 +130,13 @@ public final class BuiltinFunctionWrappers {
 			// Math/IO/list (arity 1)
 			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.PRIN1), unary(LispNames.PRINC),
 			unary(LispNames.LIST),
+			// Math functions (arity 1)
+			unary(LispNames.SQRT), unary(LispNames.ISQRT), unary(LispNames.SIGNUM), unary(LispNames.EXP),
+			unary(LispNames.LOG), unary(LispNames.SIN), unary(LispNames.COS), unary(LispNames.TAN),
+			unary(LispNames.ASIN), unary(LispNames.ACOS), unary(LispNames.ATAN), unary(LispNames.SINH),
+			unary(LispNames.COSH), unary(LispNames.TANH),
+			// Math functions (arity 2)
+			binary(LispNames.EXPT), binary(LispNames.GCD), binary(LispNames.LCM),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
 					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),

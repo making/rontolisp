@@ -384,6 +384,57 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void sqrt() {
+			assertThat(eval("(sqrt 16)")).isEqualTo(new LispDouble(4.0));
+			assertThat(eval("(sqrt 2)")).isEqualTo(new LispDouble(1.4142135623730951));
+		}
+
+		@Test
+		void isqrt() {
+			assertThat(eval("(isqrt 17)")).isEqualTo(new LispInteger(4));
+		}
+
+		@Test
+		void expt() {
+			assertThat(eval("(expt 2 10)")).isEqualTo(new LispInteger(1024));
+			assertThat(eval("(expt 2.0 0.5)")).isEqualTo(new LispDouble(1.4142135623730951));
+		}
+
+		@Test
+		void exp() {
+			assertThat(eval("(exp 1)")).isEqualTo(new LispDouble(2.7182818284590455));
+		}
+
+		@Test
+		void log() {
+			assertThat(eval("(log 2.718281828459045)")).isEqualTo(new LispDouble(1.0));
+		}
+
+		@Test
+		void trigonometric() {
+			assertThat(eval("(sin 0)")).isEqualTo(new LispDouble(0.0));
+			assertThat(eval("(cos 0)")).isEqualTo(new LispDouble(1.0));
+			assertThat(eval("(atan 0)")).isEqualTo(new LispDouble(0.0));
+			assertThat(eval("(tanh 0)")).isEqualTo(new LispDouble(0.0));
+		}
+
+		@Test
+		void gcd() {
+			assertThat(eval("(gcd 12 18)")).isEqualTo(new LispInteger(6));
+		}
+
+		@Test
+		void lcm() {
+			assertThat(eval("(lcm 4 6)")).isEqualTo(new LispInteger(12));
+		}
+
+		@Test
+		void signum() {
+			assertThat(eval("(signum -5)")).isEqualTo(new LispInteger(-1));
+			assertThat(eval("(signum 3.5)")).isEqualTo(new LispDouble(1.0));
+		}
+
+		@Test
 		void evalExpression() {
 			assertThat(eval("(eval '(+ 1 2))")).isEqualTo(new LispInteger(3));
 		}

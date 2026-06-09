@@ -425,6 +425,61 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSqrt() {
+		assertThat(eval("(sqrt 16)")).isEqualTo(new LispDouble(4.0));
+		assertThat(eval("(sqrt 2)")).isEqualTo(new LispDouble(Math.sqrt(2)));
+		assertThat(eval("(sqrt 2.0)")).isEqualTo(new LispDouble(Math.sqrt(2)));
+	}
+
+	@Test
+	void evalIsqrt() {
+		assertThat(eval("(isqrt 16)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(isqrt 17)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(isqrt 0)")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalExpt() {
+		assertThat(eval("(expt 2 10)")).isEqualTo(new LispInteger(1024));
+		assertThat(eval("(expt 3 0)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(expt 2.0 0.5)")).isEqualTo(new LispDouble(Math.sqrt(2)));
+		// Integer base with large exponent promotes to BigInteger.
+		assertThat(eval("(expt 2 70)")).isEqualTo(new LispBigInteger(java.math.BigInteger.valueOf(2).pow(70)));
+	}
+
+	@Test
+	void evalGcdLcm() {
+		assertThat(eval("(gcd 12 18)")).isEqualTo(new LispInteger(6));
+		assertThat(eval("(gcd 0 5)")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(lcm 4 6)")).isEqualTo(new LispInteger(12));
+		assertThat(eval("(lcm 0 6)")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalSignum() {
+		assertThat(eval("(signum -5)")).isEqualTo(new LispInteger(-1));
+		assertThat(eval("(signum 0)")).isEqualTo(new LispInteger(0));
+		assertThat(eval("(signum 7)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(signum 3.5)")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("(signum -2.0)")).isEqualTo(new LispDouble(-1.0));
+	}
+
+	@Test
+	void evalTranscendental() {
+		assertThat(eval("(sin 0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(cos 0)")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("(tan 0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(exp 0)")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("(log 1)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(atan 0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(asin 0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(acos 1)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(sinh 0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(cosh 0)")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("(tanh 0)")).isEqualTo(new LispDouble(0.0));
+	}
+
+	@Test
 	void evalUnless() {
 		assertThat(eval("(unless nil 42)")).isEqualTo(new LispInteger(42));
 		assertThat(eval("(unless t 42)")).isSameAs(LispNil.INSTANCE);

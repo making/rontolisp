@@ -184,6 +184,15 @@ final class JvmExprCompiler {
 				case LispNames.ABS -> JvmAbsCompiler.compile(cons, ctx, className);
 				case LispNames.MIN -> JvmMinCompiler.compile(cons, ctx, className);
 				case LispNames.MAX -> JvmMaxCompiler.compile(cons, ctx, className);
+				case LispNames.SQRT, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS, LispNames.TAN,
+						LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
+						LispNames.TANH ->
+					JvmMathFnCompiler.compile(cons, ctx, className, sym.name());
+				case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
+				case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);
+				case LispNames.GCD -> JvmGcdCompiler.compile(cons, ctx, className);
+				case LispNames.LCM -> JvmLcmCompiler.compile(cons, ctx, className);
+				case LispNames.SIGNUM -> JvmSignumCompiler.compile(cons, ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 				case LispNames.NTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx, className);

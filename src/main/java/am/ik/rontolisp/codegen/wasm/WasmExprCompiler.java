@@ -184,6 +184,12 @@ final class WasmExprCompiler {
 				case LispNames.ABS -> WasmAbsCompiler.compile(cons, ctx);
 				case LispNames.MIN -> WasmMinCompiler.compile(cons, ctx);
 				case LispNames.MAX -> WasmMaxCompiler.compile(cons, ctx);
+				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
+				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);
+				case LispNames.SIGNUM -> WasmSignumCompiler.compile(cons, ctx);
+				case LispNames.GCD -> WasmGcdCompiler.compile(cons, ctx);
+				case LispNames.LCM -> WasmLcmCompiler.compile(cons, ctx);
+				case LispNames.EXPT -> WasmExptCompiler.compile(cons, ctx);
 				case LispNames.FIRST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx);
 				case LispNames.NTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx);
 				case LispNames.SECOND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx);
