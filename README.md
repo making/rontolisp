@@ -1,5 +1,7 @@
 # rontolisp
 
+**Try it in your browser: [https://making.github.io/rontolisp/](https://making.github.io/rontolisp/)** -- a playground where rontolisp itself runs as WebAssembly. Evaluate expressions in the REPL, and compile your source to downloadable `.class` and `.wasm` files, entirely client-side. See [`web/README.md`](web/README.md) for how it is built and deployed.
+
 A minimal Common Lisp subset implemented in Java. It supports three execution modes:
 
 - **Interpreter** -- Tree-walking evaluation with REPL support
