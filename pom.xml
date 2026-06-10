@@ -262,6 +262,12 @@
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+								<!-- JLine 4.1+ FFM terminal provider closes a shared Arena
+									 (Arena.ofShared) from its signal handler. Native Image
+									 disables shared-arena support by default, so enable it
+									 explicitly or the REPL crashes on the first readLine. -->
+								<buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+								<buildArg>-H:+SharedArenaSupport</buildArg>
 							</buildArgs>
 						</configuration>
 					</plugin>
