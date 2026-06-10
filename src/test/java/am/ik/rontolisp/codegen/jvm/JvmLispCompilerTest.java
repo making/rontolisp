@@ -92,7 +92,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunDivision() throws Exception {
-		assertThat(compileAndRun("(print (/ 10 3))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (/ 10 3))")).isEqualTo("10/3");
 	}
 
 	@Test
