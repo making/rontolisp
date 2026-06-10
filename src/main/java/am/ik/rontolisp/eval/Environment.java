@@ -153,6 +153,7 @@ public final class Environment implements Scope {
 		registerIO(env, out, in);
 		registerPredicates(env);
 		registerListOps(env);
+		registerSequenceOps(env);
 		registerTypeConversion(env);
 		registerPackages(env);
 		return env;
@@ -479,6 +480,74 @@ public final class Environment implements Scope {
 				return LispNil.INSTANCE;
 			}
 			return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private static boolean isEq(LispVal a, LispVal b) {
+		if (a instanceof LispCons || b instanceof LispCons) {
+			return a == b;
+		}
+		if (a instanceof LispNil && b instanceof LispNil) {
+			return true;
+		}
+		if (a instanceof LispNil || b instanceof LispNil) {
+			return false;
+		}
+		return a.equals(b);
+	}
+
+	private static void registerSequenceOps(Environment env) {
+		env.defineFunction(LispNames.LENGTH, new LispFunction(LispNames.LENGTH, args -> {
+			requireArgCount(LispNames.LENGTH, args, 1);
+			long count = 0;
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				count++;
+				cur = cell.cdr();
+			}
+			return new LispInteger(count);
+		}));
+		env.defineFunction(LispNames.REVERSE, new LispFunction(LispNames.REVERSE, args -> {
+			requireArgCount(LispNames.REVERSE, args, 1);
+			LispVal result = LispNil.INSTANCE;
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				result = new LispCons(cell.car(), result);
+				cur = cell.cdr();
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.MEMBER, new LispFunction(LispNames.MEMBER, args -> {
+			requireArgCount(LispNames.MEMBER, args, 2);
+			LispVal item = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (isEq(item, cell.car())) {
+					return cell;
+				}
+				cur = cell.cdr();
+			}
+			return LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.ASSOC, new LispFunction(LispNames.ASSOC, args -> {
+			requireArgCount(LispNames.ASSOC, args, 2);
+			LispVal key = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (cell.car() instanceof LispCons pair && isEq(key, pair.car())) {
+					return pair;
+				}
+				cur = cell.cdr();
+			}
+			return LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.LAST, new LispFunction(LispNames.LAST, args -> {
+			requireArgCount(LispNames.LAST, args, 1);
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons) {
+				cur = cell.cdr();
+			}
+			return cur instanceof LispCons ? cur : LispNil.INSTANCE;
 		}));
 	}
 

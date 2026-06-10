@@ -214,6 +214,10 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
 | `pop` | `(pop place)` | Remove and return the first element from list at place |
 | `remf` | `(remf place indicator)` | Remove key-value pair from property list at place. Returns `t` if found, `nil` otherwise |
+| `let*` | `(let* ((x 1) (y x)) body...)` | Sequential bindings: each init form sees the previous bindings. Expands to nested `let` |
+| `dolist` | `(dolist (var list result?) body...)` | Evaluate body with `var` bound to each element. Returns `result` (or nil) with `var` bound to nil |
+| `incf` | `(incf place delta?)` | Expands to `(setf place (+ place delta))`. `delta` defaults to 1. Returns the new value |
+| `decf` | `(decf place delta?)` | Expands to `(setf place (- place delta))`. `delta` defaults to 1. Returns the new value |
 
 ### Built-in Functions
 
@@ -255,6 +259,11 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
+| `length` | `(length '(1 2 3))` | `3` (`0` for nil) |
+| `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
+| `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eq` to the item, or nil) |
+| `assoc` | `(assoc 'b '((a 1) (b 2)))` | `(b 2)` (first pair whose car is `eq` to the key, or nil) |
+| `last` | `(last '(1 2 3))` | `(3)` (last cons cell, nil for an empty list) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
 | `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
@@ -312,6 +321,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
+- **`let*`, `dolist`, `incf` and `decf` are not supported.** These macros are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) work, since they resolve through the compiled function registry.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
 

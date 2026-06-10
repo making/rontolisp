@@ -119,6 +119,9 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.NTHCDR), binary(LispNames.APPEND),
 			// List access (arity 1)
 			unary(LispNames.CAR), unary(LispNames.CDR),
+			// Sequence operations (compiled via macro expansion in call position)
+			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), binary(LispNames.MEMBER),
+			binary(LispNames.ASSOC),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)

@@ -155,6 +155,21 @@ public final class LispNames {
 	/** The {@code nthcdr} built-in function. */
 	public static final String NTHCDR = "nthcdr";
 
+	/** The {@code length} built-in function. */
+	public static final String LENGTH = "length";
+
+	/** The {@code reverse} built-in function. */
+	public static final String REVERSE = "reverse";
+
+	/** The {@code member} built-in function. */
+	public static final String MEMBER = "member";
+
+	/** The {@code assoc} built-in function. */
+	public static final String ASSOC = "assoc";
+
+	/** The {@code last} built-in function. */
+	public static final String LAST = "last";
+
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
 
@@ -185,6 +200,18 @@ public final class LispNames {
 
 	/** The {@code remf} macro. */
 	public static final String REMF = "remf";
+
+	/** The {@code let*} macro. */
+	public static final String LET_STAR = "let*";
+
+	/** The {@code dolist} macro. */
+	public static final String DOLIST = "dolist";
+
+	/** The {@code incf} macro. */
+	public static final String INCF = "incf";
+
+	/** The {@code decf} macro. */
+	public static final String DECF = "decf";
 
 	/** The {@code defun} macro. */
 	public static final String DEFUN = "defun";

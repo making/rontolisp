@@ -845,6 +845,68 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLetStar() throws Exception {
+		assertThat(compileAndRun("(print (let* ((x 2) (y (* x 3))) (+ x y)))")).isEqualTo("8");
+	}
+
+	@Test
+	void compileAndRunDolist() throws Exception {
+		assertThat(compileAndRun("(setq s 0) (dolist (e '(1 2 3 4)) (setq s (+ s e))) (print s)")).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunDolistResultForm() throws Exception {
+		assertThat(compileAndRun("(print (dolist (e '(1 2) 99)))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunIncfDecf() throws Exception {
+		assertThat(compileAndRun("(setq n 10) (incf n) (incf n 5) (decf n 6) (print n)")).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunIncfPlace() throws Exception {
+		assertThat(compileAndRun("(setq l (list 1 2 3)) (incf (cadr l)) (print l)")).isEqualTo("(1 3 3)");
+	}
+
+	@Test
+	void compileAndRunLength() throws Exception {
+		assertThat(compileAndRun("(print (length '(1 2 3 4 5))) (print (length nil))")).isEqualTo("5\n0");
+	}
+
+	@Test
+	void compileAndRunReverse() throws Exception {
+		assertThat(compileAndRun("(print (reverse '(1 2 3))) (print (reverse nil))")).isEqualTo("(3 2 1)\nnil");
+	}
+
+	@Test
+	void compileAndRunMember() throws Exception {
+		assertThat(compileAndRun("(print (member 3 '(1 2 3 4))) (print (member 9 '(1 2 3)))")).isEqualTo("(3 4)\nnil");
+	}
+
+	@Test
+	void compileAndRunAssoc() throws Exception {
+		assertThat(compileAndRun("(print (assoc 'b '((a 1) (b 2) (c 3)))) (print (assoc 'z '((a 1))))"))
+			.isEqualTo("(b 2)\nnil");
+	}
+
+	@Test
+	void compileAndRunLast() throws Exception {
+		assertThat(compileAndRun("(print (last '(1 2 3))) (print (last nil))")).isEqualTo("(3)\nnil");
+	}
+
+	@Test
+	void compileAndRunSequenceFunctionsAsFirstClass() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'length '(7 8 9))) (print (map #'reverse '((1 2) (3 4))))"))
+			.isEqualTo("3\n((2 1) (4 3))");
+	}
+
+	@Test
+	void compileAndRunSequenceFunctionInsideEval() throws Exception {
+		assertThat(compileAndRun("(print (eval '(reverse '(1 2 3))))")).isEqualTo("(3 2 1)");
+	}
+
+	@Test
 	void compileAndRunMapWithBuiltinCar() throws Exception {
 		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
 	}

@@ -132,6 +132,21 @@ final class JvmExprCompiler {
 				case LispNames.PUSH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx, className);
 				case LispNames.POP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx, className);
 				case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);
+				case LispNames.LET_STAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx, className);
+				case LispNames.DOLIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
+				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
+				case LispNames.DECF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx, className);
+				case LispNames.LENGTH ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLength(cons), ctx, className);
+				case LispNames.REVERSE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx, className);
+				case LispNames.MEMBER ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
+				case LispNames.ASSOC ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx, className);
+				case LispNames.LAST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx, className);
 				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
 				case LispNames.REMF_TAIL -> JvmRemfTailCompiler.compile(cons, ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);

@@ -625,6 +625,236 @@ public final class LispMacroExpander {
 	 * @param cons the defun expression
 	 * @return the expanded expression
 	 */
+	/**
+	 * Expands (let* ((x 1) (y x)) body...) into nested let forms so each binding sees the
+	 * previous ones.
+	 *
+	 * <pre>
+	 * (let* () body...)                -> (let () body...)
+	 * (let* ((x 1) (y x)) body...)    -> (let ((x 1)) (let ((y x)) body...))
+	 * </pre>
+	 * @param cons the let* expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLetStar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal bindings = parts.get(1);
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (!(bindings instanceof LispCons bindingsCons)) {
+			// (let* () body...) -> (let () body...)
+			List<LispVal> letParts = new java.util.ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET));
+			letParts.add(LispNil.INSTANCE);
+			letParts.addAll(body);
+			return listToCons(letParts);
+		}
+		List<LispVal> bindingList = bindingsCons.toList();
+		// Build from the innermost let outward
+		List<LispVal> innerParts = new java.util.ArrayList<>();
+		innerParts.add(new LispSymbol(LispNames.LET));
+		innerParts.add(new LispCons(bindingList.get(bindingList.size() - 1), LispNil.INSTANCE));
+		innerParts.addAll(body);
+		LispVal result = listToCons(innerParts);
+		for (int i = bindingList.size() - 2; i >= 0; i--) {
+			result = listToCons(
+					List.of(new LispSymbol(LispNames.LET), new LispCons(bindingList.get(i), LispNil.INSTANCE), result));
+		}
+		return result;
+	}
+
+	/**
+	 * Expands (dolist (var list result?) body...) into a let/while loop.
+	 *
+	 * <pre>
+	 * (dolist (x lst r) body...) ->
+	 *   (let ((__dolist lst))
+	 *     (while (consp __dolist)
+	 *       (let ((x (car __dolist))) body...)
+	 *       (setq __dolist (cdr __dolist)))
+	 *     (let ((x nil)) r))
+	 * </pre>
+	 * @param cons the dolist expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDolist(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispCons spec = (LispCons) parts.get(1);
+		List<LispVal> specParts = spec.toList();
+		LispVal var = specParts.get(0);
+		LispVal listForm = specParts.get(1);
+		LispVal resultForm = (specParts.size() > 2) ? specParts.get(2) : LispNil.INSTANCE;
+		List<LispVal> body = parts.subList(2, parts.size());
+		LispSymbol cursor = new LispSymbol(DOLIST_CURSOR_VAR);
+		// (setq __dolist (cdr __dolist))
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cursor, callOf(LispNames.CDR, cursor)));
+		// (while (consp __dolist) iteration? step); the iteration let is omitted for an
+		// empty body (a body-less let does not compile)
+		List<LispVal> whileParts = new java.util.ArrayList<>();
+		whileParts.add(new LispSymbol(LispNames.WHILE));
+		whileParts.add(callOf(LispNames.CONSP, cursor));
+		if (!body.isEmpty()) {
+			// (let ((var (car __dolist))) body...)
+			List<LispVal> iterParts = new java.util.ArrayList<>();
+			iterParts.add(new LispSymbol(LispNames.LET));
+			iterParts.add(new LispCons(listToCons(List.of(var, callOf(LispNames.CAR, cursor))), LispNil.INSTANCE));
+			iterParts.addAll(body);
+			whileParts.add(listToCons(iterParts));
+		}
+		whileParts.add(step);
+		LispVal whileExpr = listToCons(whileParts);
+		// (let ((var nil)) result) -- CL evaluates the result form with var bound to nil
+		LispVal resultExpr = listToCons(List.of(new LispSymbol(LispNames.LET),
+				new LispCons(listToCons(List.of(var, LispNil.INSTANCE)), LispNil.INSTANCE), resultForm));
+		// (let ((__dolist list)) while-expr result-expr)
+		LispVal bindings = new LispCons(listToCons(List.of(cursor, listForm)), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr));
+	}
+
+	/**
+	 * Expands (incf place delta?) into (setf place (+ place delta)).
+	 * @param cons the incf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandIncf(LispCons cons) {
+		return expandIncfDecf(cons, LispNames.ADD);
+	}
+
+	/**
+	 * Expands (decf place delta?) into (setf place (- place delta)).
+	 * @param cons the decf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDecf(LispCons cons) {
+		return expandIncfDecf(cons, LispNames.SUB);
+	}
+
+	private static LispVal expandIncfDecf(LispCons cons, String op) {
+		List<LispVal> parts = cons.toList();
+		LispVal place = parts.get(1);
+		LispVal delta = (parts.size() > 2) ? parts.get(2) : new LispInteger(1);
+		LispVal newValue = listToCons(List.of(new LispSymbol(op), place, delta));
+		return listToCons(List.of(new LispSymbol(LispNames.SETF), place, newValue));
+	}
+
+	/**
+	 * Expands (length lst) into a reduce-based count so all backends compile it through
+	 * existing primitives.
+	 *
+	 * <pre>
+	 * (length lst) -> (reduce (lambda (__acc __x) (+ __acc 1)) 0 lst)
+	 * </pre>
+	 * @param cons the length expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLength(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol acc = new LispSymbol("__length_acc");
+		LispSymbol x = new LispSymbol("__length_x");
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
+				listToCons(List.of(new LispSymbol(LispNames.ADD), acc, new LispInteger(1)))));
+		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda, new LispInteger(0), parts.get(1)));
+	}
+
+	/**
+	 * Expands (reverse lst) into a reduce-based reversal.
+	 *
+	 * <pre>
+	 * (reverse lst) -> (reduce (lambda (__acc __x) (cons __x __acc)) nil lst)
+	 * </pre>
+	 * @param cons the reverse expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReverse(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol acc = new LispSymbol("__reverse_acc");
+		LispSymbol x = new LispSymbol("__reverse_x");
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
+				listToCons(List.of(new LispSymbol(LispNames.CONS), x, acc))));
+		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda, LispNil.INSTANCE, parts.get(1)));
+	}
+
+	/**
+	 * Expands (member item lst) into a let/while scan returning the tail whose car is
+	 * {@code eq} to the item, or nil.
+	 * @param cons the member expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMember(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__member_item");
+		LispSymbol cur = new LispSymbol("__member_cur");
+		// (and (consp __cur) (not (eq __item (car __cur))))
+		LispVal test = listToCons(
+				List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, cur), callOf(LispNames.NOT,
+						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), item, callOf(LispNames.CAR, cur))))));
+		// (while test (setq __cur (cdr __cur)))
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
+		// (let ((__item item) (__cur lst)) while-expr __cur)
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(cur, parts.get(2)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, cur));
+	}
+
+	/**
+	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
+	 * is {@code eq} to the key, or nil.
+	 * @param cons the assoc expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandAssoc(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol key = new LispSymbol("__assoc_key");
+		LispSymbol cur = new LispSymbol("__assoc_cur");
+		// match: (and (consp (car __cur)) (eq __key (car (car __cur))))
+		LispVal pair = callOf(LispNames.CAR, cur);
+		LispVal match = listToCons(
+				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
+						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), key,
+								listToCons(List.of(new LispSymbol(LispNames.CAR), pair))))));
+		// (while (and (consp __cur) (not match)) (setq __cur (cdr __cur)))
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, cur),
+				listToCons(List.of(new LispSymbol(LispNames.NOT), match))));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
+		// (if (consp __cur) (car __cur) nil)
+		LispVal result = makeIf(callOf(LispNames.CONSP, cur), callOf(LispNames.CAR, cur), LispNil.INSTANCE);
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(key, parts.get(1))), listToCons(List.of(cur, parts.get(2)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, result));
+	}
+
+	/**
+	 * Expands (last lst) into a let/while walk returning the last cons cell (or nil for
+	 * an empty list).
+	 * @param cons the last expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLast(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol cur = new LispSymbol("__last_cur");
+		// (while (and (consp __cur) (consp (cdr __cur))) (setq __cur (cdr __cur)))
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, cur),
+				listToCons(List.of(new LispSymbol(LispNames.CONSP), callOf(LispNames.CDR, cur)))));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
+		LispVal bindings = new LispCons(listToCons(List.of(cur, parts.get(1))), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, cur));
+	}
+
+	private static final String DOLIST_CURSOR_VAR = "__dolist";
+
+	private static LispVal callOf(String op, LispVal arg) {
+		return listToCons(List.of(new LispSymbol(op), arg));
+	}
+
+	/**
+	 * Expands (defun name (params...) body...) into (setq name (lambda (params...)
+	 * body...)), the canonical shape the compilers collect in Pass 1. The interpreter
+	 * handles defun natively (Lisp-2 function namespace) and does not use this.
+	 * @param cons the defun expression
+	 * @return the expanded expression
+	 */
 	public static LispVal expandDefun(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispVal name = parts.get(1);

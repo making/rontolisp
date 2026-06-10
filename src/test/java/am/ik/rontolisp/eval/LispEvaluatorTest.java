@@ -749,6 +749,74 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLetStar() {
+		assertThat(eval("(let* ((x 2) (y (* x 3))) (+ x y))")).isEqualTo(new LispInteger(8));
+	}
+
+	@Test
+	void evalDolist() {
+		assertThat(evalMulti("(setq s 0) (dolist (e '(1 2 3 4)) (setq s (+ s e))) s")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalDolistResultForm() {
+		assertThat(eval("(dolist (e '(1 2) 99))")).isEqualTo(new LispInteger(99));
+	}
+
+	@Test
+	void evalIncfDecf() {
+		assertThat(evalMulti("(setq n 10) (incf n) (incf n 5) (decf n 6) n")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalIncfPlace() {
+		assertThat(evalMulti("(setq l (list 1 2 3)) (incf (cadr l)) l").print()).isEqualTo("(1 3 3)");
+	}
+
+	@Test
+	void evalLength() {
+		assertThat(eval("(length '(1 2 3 4 5))")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(length nil)")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalReverse() {
+		assertThat(eval("(reverse '(1 2 3))").print()).isEqualTo("(3 2 1)");
+		assertThat(eval("(reverse nil)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalMember() {
+		assertThat(eval("(member 3 '(1 2 3 4))").print()).isEqualTo("(3 4)");
+		assertThat(eval("(member 9 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalAssoc() {
+		assertThat(eval("(assoc 'b '((a 1) (b 2) (c 3)))").print()).isEqualTo("(b 2)");
+		assertThat(eval("(assoc 'z '((a 1)))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalLast() {
+		assertThat(eval("(last '(1 2 3))").print()).isEqualTo("(3)");
+		assertThat(eval("(last nil)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalSequenceFunctionsAsFirstClass() {
+		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(map #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
+		assertThat(eval("(funcall #'member 2 '(1 2 3))").print()).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void evalSharpQuoteOfLetStarIsAnError() {
+		assertThatThrownBy(() -> eval("#'let*")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("is a macro or special operator, not a function");
+	}
+
+	@Test
 	void evalMapWithBuiltinCar() {
 		assertThat(eval("(map #'car '((1 2) (3 4) (5 6)))").print()).isEqualTo("(1 3 5)");
 	}

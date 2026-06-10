@@ -36,7 +36,8 @@ public final class LispEvaluator {
 	private static final java.util.Set<String> SPECIAL_OPERATORS = java.util.Set.of(LispNames.QUOTE, LispNames.IF,
 			LispNames.LET, LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION,
 			LispNames.DEFUN, LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN, LispNames.UNLESS,
-			LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF, LispNames.IN_PACKAGE);
+			LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF, LispNames.IN_PACKAGE,
+			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF);
 
 	private final Environment globalEnv;
 
@@ -238,6 +239,14 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandPop(cons), env);
 				case LispNames.REMF:
 					return eval(LispMacroExpander.expandRemf(cons), env);
+				case LispNames.LET_STAR:
+					return eval(LispMacroExpander.expandLetStar(cons), env);
+				case LispNames.DOLIST:
+					return eval(LispMacroExpander.expandDolist(cons), env);
+				case LispNames.INCF:
+					return eval(LispMacroExpander.expandIncf(cons), env);
+				case LispNames.DECF:
+					return eval(LispMacroExpander.expandDecf(cons), env);
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

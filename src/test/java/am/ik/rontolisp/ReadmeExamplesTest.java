@@ -267,6 +267,35 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void lengthFn() {
+			assertThat(eval("(length '(1 2 3))")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(length nil)")).isEqualTo(new LispInteger(0));
+		}
+
+		@Test
+		void reverseFn() {
+			assertThat(eval("(reverse '(1 2 3))").print()).isEqualTo("(3 2 1)");
+		}
+
+		@Test
+		void memberFn() {
+			assertThat(eval("(member 2 '(1 2 3))").print()).isEqualTo("(2 3)");
+			assertThat(eval("(member 9 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
+		}
+
+		@Test
+		void assocFn() {
+			assertThat(eval("(assoc 'b '((a 1) (b 2)))").print()).isEqualTo("(b 2)");
+			assertThat(eval("(assoc 'z '((a 1)))")).isSameAs(LispNil.INSTANCE);
+		}
+
+		@Test
+		void lastFn() {
+			assertThat(eval("(last '(1 2 3))").print()).isEqualTo("(3)");
+			assertThat(eval("(last nil)")).isSameAs(LispNil.INSTANCE);
+		}
+
+		@Test
 		void funcall() {
 			assertThat(evalAll("(defun square (x) (* x x)) (funcall #'square 5)")).isEqualTo(new LispInteger(25));
 		}
@@ -655,6 +684,29 @@ class ReadmeExamplesTest {
 		void remf() {
 			assertThat(evalAll("(setq plist (list 'a 1 'b 2 'c 3)) (remf plist 'b) plist").print())
 				.isEqualTo("(a 1 c 3)");
+		}
+
+		@Test
+		void letStar() {
+			assertThat(eval("(let* ((x 1) (y x)) (+ x y))")).isEqualTo(new LispInteger(2));
+		}
+
+		@Test
+		void dolist() {
+			assertThat(evalAll("(setq s 0) (dolist (e '(1 2 3)) (setq s (+ s e))) s")).isEqualTo(new LispInteger(6));
+			assertThat(eval("(dolist (e '(1 2) 99))")).isEqualTo(new LispInteger(99));
+		}
+
+		@Test
+		void incf() {
+			assertThat(evalAll("(setq n 10) (incf n)")).isEqualTo(new LispInteger(11));
+			assertThat(evalAll("(setq n 10) (incf n 5)")).isEqualTo(new LispInteger(15));
+		}
+
+		@Test
+		void decf() {
+			assertThat(evalAll("(setq n 10) (decf n)")).isEqualTo(new LispInteger(9));
+			assertThat(evalAll("(setq n 10) (decf n 4)")).isEqualTo(new LispInteger(6));
 		}
 
 	}
