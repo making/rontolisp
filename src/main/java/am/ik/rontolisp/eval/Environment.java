@@ -10,6 +10,8 @@ import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.DoubleUnaryOperator;
 
 import am.ik.rontolisp.LispBigInteger;
@@ -23,6 +25,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageIntrospection;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
@@ -104,6 +107,15 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Returns the names bound in the function namespace of this environment (not
+	 * including parent scopes).
+	 * @return a snapshot of the function names
+	 */
+	public Set<String> globalFunctionNames() {
+		return Set.copyOf(this.functions.keySet());
+	}
+
+	/**
 	 * Define a new binding in this environment.
 	 * @param name the variable name
 	 * @param value the value to bind
@@ -172,6 +184,40 @@ public final class Environment implements Scope {
 			}
 			return VersionInfo.plist();
 		}));
+		// The introspection functions list the symbols of a package by category. The
+		// cl listings come from the categorized sets in PackageRegistry; the cl-user
+		// function listing reflects the live global function namespace.
+		registerIntrospection(env, LispNames.LIST_FUNCTIONS);
+		registerIntrospection(env, LispNames.LIST_MACROS);
+		registerIntrospection(env, LispNames.LIST_SPECIAL_FORMS);
+	}
+
+	private static void registerIntrospection(Environment env, String member) {
+		String qualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, member);
+		env.defineFunction(qualified, new LispFunction(qualified, args -> {
+			if (args.size() > 1) {
+				throw new LispEvalException(
+						member + " expects at most one package-designator argument, got " + args.size());
+			}
+			String pkg = args.isEmpty() ? LispNames.CL_PKG : designatorName(member, args.get(0));
+			try {
+				return PackageIntrospection
+					.symbolList(PackageIntrospection.listNames(member, pkg, env.globalFunctionNames()));
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), "No such package: " + pkg));
+			}
+		}));
+	}
+
+	private static String designatorName(String member, LispVal designator) {
+		if (designator instanceof LispSymbol sym) {
+			return sym.isKeyword() ? sym.name().substring(1) : sym.name();
+		}
+		if (designator instanceof LispString str) {
+			return str.value();
+		}
+		throw new LispEvalException(member + " expects a package name, got: " + designator.print());
 	}
 
 	private static void registerArithmetic(Environment env) {
@@ -745,6 +791,36 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("cdr expects a cons cell, got: " + args.get(0).print());
 		}));
+		env.defineFunction(LispNames.FIRST, new LispFunction(LispNames.FIRST, args -> {
+			requireArgCount(LispNames.FIRST, args, 1);
+			if (args.get(0) instanceof LispCons cons) {
+				return cons.car();
+			}
+			throw new LispEvalException("first expects a cons cell, got: " + args.get(0).print());
+		}));
+		env.defineFunction(LispNames.REST, new LispFunction(LispNames.REST, args -> {
+			requireArgCount(LispNames.REST, args, 1);
+			if (args.get(0) instanceof LispCons cons) {
+				return cons.cdr();
+			}
+			throw new LispEvalException("rest expects a cons cell, got: " + args.get(0).print());
+		}));
+		env.defineFunction(LispNames.NTH, new LispFunction(LispNames.NTH, args -> {
+			requireArgCount(LispNames.NTH, args, 2);
+			return nthValue(LispNames.NTH, asLong(args.get(0)), args.get(1));
+		}));
+		env.defineFunction(LispNames.SECOND, new LispFunction(LispNames.SECOND, args -> {
+			requireArgCount(LispNames.SECOND, args, 1);
+			return nthValue(LispNames.SECOND, 1, args.get(0));
+		}));
+		env.defineFunction(LispNames.THIRD, new LispFunction(LispNames.THIRD, args -> {
+			requireArgCount(LispNames.THIRD, args, 1);
+			return nthValue(LispNames.THIRD, 2, args.get(0));
+		}));
+		env.defineFunction(LispNames.FOURTH, new LispFunction(LispNames.FOURTH, args -> {
+			requireArgCount(LispNames.FOURTH, args, 1);
+			return nthValue(LispNames.FOURTH, 3, args.get(0));
+		}));
 		env.defineFunction(LispNames.LIST, new LispFunction(LispNames.LIST, args -> {
 			LispVal result = LispNil.INSTANCE;
 			for (int i = args.size() - 1; i >= 0; i--) {
@@ -833,6 +909,22 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+	}
+
+	/**
+	 * Walks {@code n} cdrs and returns the car, matching the macro expansion
+	 * {@code (car (nthcdr n list))}: walking off the end yields nil, whose car is an
+	 * error.
+	 */
+	private static LispVal nthValue(String name, long n, LispVal list) {
+		LispVal cur = list;
+		for (long i = 0; i < n && cur instanceof LispCons cons; i++) {
+			cur = cons.cdr();
+		}
+		if (cur instanceof LispCons cons) {
+			return cons.car();
+		}
+		throw new LispEvalException(name + " expects a cons cell, got: " + cur.print());
 	}
 
 	private static LispVal appendTwo(LispVal list, LispVal tail) {

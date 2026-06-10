@@ -87,9 +87,17 @@ final class JvmExprCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.VERSION.equals(qn.member())) {
-				JvmVersionCompiler.compile(cons, ctx, className);
-				return;
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
+				if (LispNames.VERSION.equals(qn.member())) {
+					JvmVersionCompiler.compile(cons, ctx, className);
+					return;
+				}
+				if (LispNames.LIST_FUNCTIONS.equals(qn.member()) || LispNames.LIST_MACROS.equals(qn.member())
+						|| LispNames.LIST_SPECIAL_FORMS.equals(qn.member())) {
+					JvmIntrospectionCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
+				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {
 				case LispNames.ADD ->

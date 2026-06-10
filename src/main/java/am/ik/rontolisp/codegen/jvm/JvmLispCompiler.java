@@ -299,7 +299,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.objectEquals(objectEquals)
 			.readLineHelper(readLineHelperMethod)
 			.dynamic(this.dynamic)
-			.className(this.className);
+			.className(this.className)
+			.userDefunNames(Set.copyOf(userDefinedNames));
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -922,9 +923,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		String className = "";
 
+		Set<String> userDefunNames = Set.of();
+
 		private Ctx(Builder builder) {
 			this.dynamic = builder.dynamic;
 			this.className = builder.className;
+			this.userDefunNames = builder.userDefunNames;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
@@ -1049,6 +1053,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean dynamic = false;
 
 			private String className = "";
+
+			private Set<String> userDefunNames = Set.of();
 
 			private Map<String, MethodrefConstant> numOps = Map.of();
 
@@ -1246,6 +1252,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder className(String className) {
 				this.className = className;
+				return this;
+			}
+
+			Builder userDefunNames(Set<String> userDefunNames) {
+				this.userDefunNames = userDefunNames;
 				return this;
 			}
 

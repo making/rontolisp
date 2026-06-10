@@ -97,9 +97,17 @@ final class WasmExprCompiler {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.VERSION.equals(qn.member())) {
-				WasmVersionCompiler.compile(cons, ctx);
-				return;
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
+				if (LispNames.VERSION.equals(qn.member())) {
+					WasmVersionCompiler.compile(cons, ctx);
+					return;
+				}
+				if (LispNames.LIST_FUNCTIONS.equals(qn.member()) || LispNames.LIST_MACROS.equals(qn.member())
+						|| LispNames.LIST_SPECIAL_FORMS.equals(qn.member())) {
+					WasmIntrospectionCompiler.compile(qn.member(), cons, ctx);
+					return;
+				}
+				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {
 				case LispNames.ADD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD);

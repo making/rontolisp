@@ -797,6 +797,22 @@ class ReadmeExamplesTest {
 			assertThat(output).contains(":version").endsWith("1");
 		}
 
+		@Test
+		void packageIntrospection() {
+			String output = evalAndCaptureOutput("""
+					(print (rontolisp:list-macros))
+					(print (rontolisp:list-special-forms))
+					(print (length (rontolisp:list-functions)))
+					(defun square (x) (* x x))
+					(print (rontolisp:list-functions :cl-user))
+					(print (rontolisp:list-functions :rontolisp))
+					""");
+			assertThat(output.lines().toList()).containsExactly(
+					"(and cond decf dolist dotimes incf let* or pop push remf setf unless when)",
+					"(defun function if in-package lambda let progn quote setq while)", "85", "(square)",
+					"(list-functions list-macros list-special-forms version)");
+		}
+
 	}
 
 }

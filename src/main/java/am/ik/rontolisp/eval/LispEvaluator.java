@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
@@ -33,11 +34,7 @@ public final class LispEvaluator {
 	 * Lisp. Function-like macros (1+, zerop, ...) are excluded because they are also
 	 * registered as functions in the global environment.
 	 */
-	private static final java.util.Set<String> SPECIAL_OPERATORS = java.util.Set.of(LispNames.QUOTE, LispNames.IF,
-			LispNames.LET, LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION,
-			LispNames.DEFUN, LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN, LispNames.UNLESS,
-			LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF, LispNames.IN_PACKAGE,
-			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF);
+	private static final java.util.Set<String> SPECIAL_OPERATORS = PackageRegistry.specialOperatorNames();
 
 	private final Environment globalEnv;
 

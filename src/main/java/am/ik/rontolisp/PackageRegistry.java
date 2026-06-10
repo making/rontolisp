@@ -17,30 +17,67 @@ import org.jspecify.annotations.Nullable;
 public final class PackageRegistry {
 
 	/**
-	 * The names of the symbols owned by the {@code cl} package: the standard functions,
-	 * macros, special forms and variables. Car/cdr compositions ({@code cadr},
-	 * {@code cddr}, ...) are recognized separately by
-	 * {@link LispMacroExpander#isCarCdrComposition}.
+	 * The {@code cl} special forms: operators handled natively by the evaluator and the
+	 * compilers that have no function value ({@code #'if} is an error).
 	 */
-	private static final Set<String> CL_SYMBOLS = Set.of(LispNames.QUOTE, LispNames.IF, LispNames.LET, LispNames.PROGN,
-			LispNames.SETQ, LispNames.LAMBDA, LispNames.FUNCALL, LispNames.WHILE, LispNames.ADD, LispNames.SUB,
+	private static final Set<String> CL_SPECIAL_FORMS = Set.of(LispNames.QUOTE, LispNames.IF, LispNames.LET,
+			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
+			LispNames.IN_PACKAGE);
+
+	/**
+	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no
+	 * function value. Names that expand internally but are also usable as function values
+	 * ({@code first}, {@code length}, {@code 1+}, ...) are classified as functions.
+	 */
+	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN,
+			LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF,
+			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF);
+
+	/**
+	 * The {@code cl} functions: every standard name usable as a function value via
+	 * {@code #'name}. Car/cdr compositions ({@code cadr}, {@code cddr}, ...) are
+	 * recognized separately by {@link LispMacroExpander#isCarCdrComposition} and are not
+	 * enumerated here.
+	 */
+	private static final Set<String> CL_FUNCTIONS = Set.of(LispNames.FUNCALL, LispNames.ADD, LispNames.SUB,
 			LispNames.MUL, LispNames.DIV, LispNames.MOD, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.SQRT,
 			LispNames.ISQRT, LispNames.EXPT, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS, LispNames.TAN,
 			LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH, LispNames.TANH,
 			LispNames.GCD, LispNames.LCM, LispNames.SIGNUM, LispNames.EQ, LispNames.EQ_GENERAL, LispNames.LT,
 			LispNames.GT, LispNames.LE, LispNames.GE, LispNames.CONS, LispNames.CAR, LispNames.CDR, LispNames.LIST,
-			LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.REMF_TAIL, LispNames.MAP,
-			LispNames.REDUCE, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF, LispNames.DEFUN,
-			LispNames.COND, LispNames.AND, LispNames.OR, LispNames.NOT, LispNames.WHEN, LispNames.DOTIMES,
-			LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP, LispNames.SYMBOLP,
-			LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT,
+			LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAP, LispNames.REDUCE,
+			LispNames.NOT, LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
+			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT,
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.ONE_PLUS,
 			LispNames.ONE_MINUS, LispNames.ZEROP, LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP,
-			LispNames.UNLESS, LispNames.FIRST, LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.NTH,
-			LispNames.PRINT, LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ,
-			LispNames.EVAL, LispNames.LOAD, LispNames.IN_PACKAGE, LispNames.PACKAGE_VAR, LispNames.FUNCTION,
-			LispNames.SYMBOL_FUNCTION, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF,
-			LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER, LispNames.ASSOC, LispNames.LAST, LispNames.REST);
+			LispNames.FIRST, LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT,
+			LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL,
+			LispNames.LOAD, LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER,
+			LispNames.ASSOC, LispNames.LAST, LispNames.REST);
+
+	/** The {@code cl} variables. */
+	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
+
+	/**
+	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
+	 * introspection listings.
+	 */
+	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL);
+
+	/**
+	 * The names of the symbols owned by the {@code cl} package, derived as the union of
+	 * the categorized sets above.
+	 */
+	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
+			CL_INTERNALS);
+
+	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
+
+	private static final List<String> CL_MACRO_NAMES = sorted(CL_MACROS);
+
+	private static final List<String> CL_SPECIAL_FORM_NAMES = sorted(CL_SPECIAL_FORMS);
+
+	private static final Set<String> SPECIAL_OPERATOR_NAMES = union(CL_SPECIAL_FORMS, CL_MACROS);
 
 	private final Map<String, LispPackage> packages = new HashMap<>();
 
@@ -50,7 +87,54 @@ public final class PackageRegistry {
 	public PackageRegistry() {
 		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS));
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>()));
-		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION))));
+		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION,
+				LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS))));
+	}
+
+	/**
+	 * Returns the names of the {@code cl} functions, sorted alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> clFunctionNames() {
+		return CL_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names of the {@code cl} macros, sorted alphabetically.
+	 * @return the sorted macro names
+	 */
+	public static List<String> clMacroNames() {
+		return CL_MACRO_NAMES;
+	}
+
+	/**
+	 * Returns the names of the {@code cl} special forms, sorted alphabetically.
+	 * @return the sorted special form names
+	 */
+	public static List<String> clSpecialFormNames() {
+		return CL_SPECIAL_FORM_NAMES;
+	}
+
+	/**
+	 * Returns the names of the operators that have no function value ({@code #'name} is
+	 * an error): the special forms and the macros.
+	 * @return the special operator names
+	 */
+	public static Set<String> specialOperatorNames() {
+		return SPECIAL_OPERATOR_NAMES;
+	}
+
+	@SafeVarargs
+	private static Set<String> union(Set<String>... sets) {
+		Set<String> result = new HashSet<>();
+		for (Set<String> set : sets) {
+			result.addAll(set);
+		}
+		return Set.copyOf(result);
+	}
+
+	private static List<String> sorted(Set<String> names) {
+		return names.stream().sorted().toList();
 	}
 
 	/**

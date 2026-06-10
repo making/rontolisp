@@ -1117,6 +1117,113 @@ class LispEvaluatorTest {
 			.hasMessageContaining("The function version is undefined");
 	}
 
+	private static java.util.List<String> symbolNames(LispVal val) {
+		java.util.List<String> names = new java.util.ArrayList<>();
+		while (val instanceof LispCons cons) {
+			names.add(((LispSymbol) cons.car()).name());
+			val = cons.cdr();
+		}
+		return names;
+	}
+
+	@Test
+	void listMacrosReturnsSortedClMacros() {
+		assertThat(eval("(rontolisp:list-macros)").print())
+			.isEqualTo("(and cond decf dolist dotimes incf let* or pop push remf setf unless when)");
+	}
+
+	@Test
+	void listSpecialFormsReturnsSortedClSpecialForms() {
+		assertThat(eval("(rontolisp:list-special-forms)").print())
+			.isEqualTo("(defun function if in-package lambda let progn quote setq while)");
+	}
+
+	@Test
+	void listFunctionsReturnsSortedClFunctions() {
+		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
+		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
+			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
+			.isSorted()
+			.hasSize(85);
+	}
+
+	@Test
+	void listFunctionsAcceptsAllDesignatorSpellings() {
+		LispVal byDefault = eval("(rontolisp:list-functions)");
+		assertThat(eval("(rontolisp:list-functions :cl)")).isEqualTo(byDefault);
+		assertThat(eval("(rontolisp:list-functions cl)")).isEqualTo(byDefault);
+		assertThat(eval("(rontolisp:list-functions \"cl\")")).isEqualTo(byDefault);
+		assertThat(eval("(rontolisp:list-functions 'cl)")).isEqualTo(byDefault);
+	}
+
+	@Test
+	void listFunctionsForClUserReflectsUserDefuns() {
+		assertThat(eval("(rontolisp:list-functions :cl-user)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("""
+				(defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+				(defun add2 (a) (+ a 2))
+				(rontolisp:list-functions :cl-user)
+				""").print()).isEqualTo("(add2 fib)");
+	}
+
+	@Test
+	void listFunctionsForClUserExcludesShadowingAndInternalNames() {
+		// A defun shadowing a cl name is filtered so all backends agree.
+		assertThat(evalMulti("(defun length (x) 42) (rontolisp:list-functions :cl-user)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void listFunctionsForRontolispReturnsOwnedFunctions() {
+		assertThat(eval("(rontolisp:list-functions :rontolisp)").print())
+			.isEqualTo("(list-functions list-macros list-special-forms version)");
+	}
+
+	@Test
+	void listMacrosAndSpecialFormsAreNilForClUserAndRontolisp() {
+		assertThat(eval("(rontolisp:list-macros :cl-user)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(rontolisp:list-macros :rontolisp)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(rontolisp:list-special-forms :cl-user)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(rontolisp:list-special-forms :rontolisp)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void listFunctionsUnknownPackageThrows() {
+		assertThatThrownBy(() -> eval("(rontolisp:list-functions :foo)"))
+			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
+			.hasMessageContaining("No such package: foo");
+	}
+
+	@Test
+	void listFunctionsUnknownPackageViaFuncallThrows() {
+		assertThatThrownBy(() -> eval("(funcall #'rontolisp:list-functions :foo)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("No such package: foo");
+	}
+
+	@Test
+	void listMacrosWorksViaEvalAndFuncall() {
+		LispVal expected = eval("(rontolisp:list-macros)");
+		assertThat(eval("(eval '(rontolisp:list-macros))")).isEqualTo(expected);
+		assertThat(eval("(funcall #'rontolisp:list-macros :cl)")).isEqualTo(expected);
+	}
+
+	@Test
+	void unqualifiedIntrospectionWorksInRontolispPackage() {
+		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print())
+			.isEqualTo("(list-functions list-macros list-special-forms version)");
+	}
+
+	@Test
+	void firstRestNthAreFirstClassFunctions() {
+		assertThat(eval("(funcall #'first '(1 2 3))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(funcall #'rest '(1 2 3))").print()).isEqualTo("(2 3)");
+		assertThat(eval("(funcall #'nth 1 '(1 2 3))")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(funcall #'second '(1 2 3))")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(funcall #'third '(1 2 3))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(funcall #'fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(map #'first '((1 2) (3 4)))").print()).isEqualTo("(1 3)");
+	}
+
 	@Test
 	void packageDefaultsToClUser() {
 		assertThat(eval("*package*")).isEqualTo(new LispSymbol("cl-user"));

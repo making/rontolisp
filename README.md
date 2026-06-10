@@ -198,19 +198,6 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
 | `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
 | `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
-| `1+` | `(1+ x)` | Expands to `(+ x 1)` |
-| `1-` | `(1- x)` | Expands to `(- x 1)` |
-| `zerop` | `(zerop x)` | Expands to `(= x 0)` |
-| `plusp` | `(plusp x)` | Expands to `(> x 0)` |
-| `minusp` | `(minusp x)` | Expands to `(< x 0)` |
-| `evenp` | `(evenp x)` | Expands to `(= (mod x 2) 0)` |
-| `oddp` | `(oddp x)` | Expands to `(not (= (mod x 2) 0))` |
-| `first` | `(first lst)` | Expands to `(car lst)` |
-| `rest` | `(rest lst)` | Expands to `(cdr lst)` |
-| `nth` | `(nth n lst)` | Expands to `(car (nthcdr n lst))`. 0-based indexing |
-| `second` | `(second lst)` | Expands to `(nth 1 lst)` |
-| `third` | `(third lst)` | Expands to `(nth 2 lst)` |
-| `fourth` | `(fourth lst)` | Expands to `(nth 3 lst)` |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
 | `pop` | `(pop place)` | Remove and return the first element from list at place |
@@ -219,6 +206,12 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `dolist` | `(dolist (var list result?) body...)` | Evaluate body with `var` bound to each element. Returns `result` (or nil) with `var` bound to nil |
 | `incf` | `(incf place delta?)` | Expands to `(setf place (+ place delta))`. `delta` defaults to 1. Returns the new value |
 | `decf` | `(decf place delta?)` | Expands to `(setf place (- place delta))`. `delta` defaults to 1. Returns the new value |
+
+Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
+accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,
+`second`..`fourth`, `1+`, `1-`, `zerop`, `plusp`, `minusp`, `evenp`, `oddp`) are listed
+under [Built-in Functions](#built-in-functions) because they are also usable as function
+values (`#'first`).
 
 ### Built-in Functions
 
@@ -258,6 +251,10 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `car` | `(car (cons 1 2))` | `1` |
 | `cdr` | `(cdr (cons 1 2))` | `2` |
 | `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
+| `first` | `(first '(1 2 3))` | `1` (same as `car`) |
+| `rest` | `(rest '(1 2 3))` | `(2 3)` (same as `cdr`) |
+| `nth` | `(nth 1 '(1 2 3))` | `2` (0-based indexing) |
+| `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
 | `length` | `(length '(1 2 3))` | `3` (`0` for nil) |
@@ -267,6 +264,13 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `last` | `(last '(1 2 3))` | `(3)` (last cons cell, nil for an empty list) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
+| `1+` | `(1+ 41)` | `42` (same as `(+ x 1)`) |
+| `1-` | `(1- 43)` | `42` (same as `(- x 1)`) |
+| `zerop` | `(zerop 0)` | `t` |
+| `plusp` | `(plusp 3)` | `t` |
+| `minusp` | `(minusp -3)` | `t` |
+| `evenp` | `(evenp 4)` | `t` |
+| `oddp` | `(oddp 3)` | `t` |
 | `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
 | `min` | `(min 3 5)`, `(min 1.5 2.5)` | `3`, `1.5` |
 | `max` | `(max 3 5)`, `(max 1.5 2.5)` | `5`, `2.5` |
@@ -323,6 +327,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
 - **`let*`, `dolist`, `incf` and `decf` are not supported.** These macros are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) work, since they resolve through the compiled function registry.
+- **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
 
@@ -353,7 +358,7 @@ rontolisp has a small namespace (package) system with three built-in packages:
 
 - **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
 - **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
-- **`rontolisp`** — a package for implementation-specific symbols. It does **not** use `cl`. It owns the `version` function.
+- **`rontolisp`** — a package for implementation-specific symbols. It does **not** use `cl`. It owns the `version`, `list-functions`, `list-macros` and `list-special-forms` functions.
 
 A symbol can be referenced with a package qualifier, `package:symbol` (e.g. `cl:car`, `rontolisp:version`). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`).
 
@@ -375,7 +380,32 @@ Because the `rontolisp` package does not use `cl`, standard symbols must be qual
 
 The default package `cl-user` is empty and uses `cl`, so ordinary programs do not need any qualifiers.
 
-Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; `version` is not available as a first-class value (it cannot be passed to `map`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
+#### Package introspection
+
+`rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` return the symbols of a package by category, sorted alphabetically. The optional argument is a package designator — a keyword, a bare symbol, a quoted symbol or a string (`:cl`, `cl`, `'cl`, `"cl"`) — and defaults to `:cl`. An unknown package is an error (`No such package: foo`).
+
+```lisp
+(print (rontolisp:list-macros))
+; => (and cond decf dolist dotimes incf let* or pop push remf setf unless when)
+(print (rontolisp:list-special-forms))
+; => (defun function if in-package lambda let progn quote setq while)
+(print (length (rontolisp:list-functions)))
+; => 85
+(defun square (x) (* x x))
+(print (rontolisp:list-functions :cl-user))
+; => (square)
+(print (rontolisp:list-functions :rontolisp))
+; => (list-functions list-macros list-special-forms version)
+```
+
+The classification follows the function namespace: a name is listed as a function exactly when it is usable as a function value via `#'name` (so `first`, `length`, `1+`, ... are functions even though they compile via inline expansion), and `list-macros`/`list-special-forms` list the operators that have no function value. Notes:
+
+- `list-functions` of `cl-user` lists the user-defined functions (`defun`s); names that are package-qualified, `%`-prefixed internals or shadow a `cl` symbol are excluded. In compiled output it is a **compile-time snapshot** of the program's `defun`s — functions defined at runtime through `load`/`eval` (even with `--dynamic`) are not included, and functions defined while `(in-package :rontolisp)` is in effect are not listed for any package.
+- Car/cdr compositions (`cadr`, `caddr`, ...) are recognized by pattern, not enumerated, so they do not appear in `list-functions`.
+- The package designator must be a literal; a computed designator is rejected at read/compile time (the interpreter additionally accepts a computed designator through `funcall`).
+- Like `version`, these functions are not supported inside the compiled runtime `eval`/`load`.
+
+Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, `list-functions`, ...) are not available as first-class values (they cannot be passed to `map`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 
 ### Function Namespace and First-Class Functions
 

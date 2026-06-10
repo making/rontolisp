@@ -117,8 +117,9 @@ public final class BuiltinFunctionWrappers {
 			// List/utility (arity 2)
 			binary(LispNames.CONS), binary(LispNames.EQ_GENERAL), binary(LispNames.MIN), binary(LispNames.MAX),
 			binary(LispNames.NTHCDR), binary(LispNames.APPEND),
-			// List access (arity 1)
-			unary(LispNames.CAR), unary(LispNames.CDR),
+			// List access (arity 1; first/rest/second/... compile via macro expansion)
+			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
+			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
 			// Sequence operations (compiled via macro expansion in call position)
 			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), binary(LispNames.MEMBER),
 			binary(LispNames.ASSOC),

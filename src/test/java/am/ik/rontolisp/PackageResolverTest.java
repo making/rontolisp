@@ -92,6 +92,57 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void introspectionDesignatorIsNormalizedToKeyword() {
+		assertThat(resolve("(rontolisp:list-functions cl)")).isEqualTo("(rontolisp:list-functions :cl)");
+		assertThat(resolve("(rontolisp:list-functions :cl-user)")).isEqualTo("(rontolisp:list-functions :cl-user)");
+		assertThat(resolve("(rontolisp:list-macros \"cl\")")).isEqualTo("(rontolisp:list-macros :cl)");
+		assertThat(resolve("(rontolisp:list-special-forms 'rontolisp)"))
+			.isEqualTo("(rontolisp:list-special-forms :rontolisp)");
+	}
+
+	@Test
+	void introspectionWithoutArgumentIsKeptAsIs() {
+		assertThat(resolve("(rontolisp:list-functions)")).isEqualTo("(rontolisp:list-functions)");
+	}
+
+	@Test
+	void introspectionIsNormalizedInNestedForms() {
+		assertThat(resolve("(print (rontolisp:list-macros cl))")).isEqualTo("(print (rontolisp:list-macros :cl))");
+	}
+
+	@Test
+	void unqualifiedIntrospectionInRontolispBecomesQualified() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(in-package :rontolisp)");
+		assertThat(resolve(resolver, "(list-functions)")).isEqualTo("(rontolisp:list-functions)");
+	}
+
+	@Test
+	void introspectionUnknownPackageIsRejected() {
+		assertThatThrownBy(() -> resolve("(rontolisp:list-functions :foo)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: foo");
+	}
+
+	@Test
+	void introspectionWithTooManyArgumentsIsRejected() {
+		assertThatThrownBy(() -> resolve("(rontolisp:list-functions :cl :cl-user)"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("at most one package-designator argument");
+	}
+
+	@Test
+	void introspectionWithNonLiteralDesignatorIsRejected() {
+		assertThatThrownBy(() -> resolve("(rontolisp:list-functions (car x))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("expects a package name");
+	}
+
+	@Test
+	void unqualifiedListFunctionsInClUserStaysUserSymbol() {
+		// list-functions is not a cl symbol; in cl-user it remains a bare user symbol.
+		assertThat(resolve("(list-functions)")).isEqualTo("(list-functions)");
+	}
+
+	@Test
 	void newPackageInRegistryResolvesViaUseListAndQualifiesOwnSymbols() {
 		// Extensibility: registering a package that uses rontolisp makes its symbols
 		// (version) visible unqualified, and the resolution logic is unchanged.

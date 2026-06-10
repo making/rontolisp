@@ -246,3 +246,13 @@ nil
 (2 3)
 nil
 (1 9)
+(and cond decf dolist dotimes incf let* or pop push remf setf unless when)
+(defun function if in-package lambda let progn quote setq while)
+85
+(list-functions list-macros list-special-forms version)
+ci-intro-fn
+nil
+nil
+1
+(2 4)
+8

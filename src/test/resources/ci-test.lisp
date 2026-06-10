@@ -416,3 +416,18 @@
 (setq rest-lst (list 1 2 3))
 (setf (rest rest-lst) '(9))
 (print rest-lst)
+
+; rontolisp package introspection
+(print (rontolisp:list-macros))
+(print (rontolisp:list-special-forms))
+(print (length (rontolisp:list-functions)))
+(print (rontolisp:list-functions :rontolisp))
+(defun ci-intro-fn (x) (+ x 1))
+(print (car (member 'ci-intro-fn (rontolisp:list-functions :cl-user))))
+(print (member 'car (rontolisp:list-functions :cl-user)))
+(print (rontolisp:list-macros :cl-user))
+
+; first/rest/nth as first-class function values
+(print (funcall #'first '(1 2 3)))
+(print (map #'second '((1 2) (3 4))))
+(print (funcall #'nth 1 '(7 8 9)))

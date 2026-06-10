@@ -1455,4 +1455,64 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(code)).isEqualTo("\"" + am.ik.rontolisp.Version.getVersion() + "\"");
 	}
 
+	@Test
+	void compileAndRunListMacros() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:list-macros))"))
+			.isEqualTo("(and cond decf dolist dotimes incf let* or pop push remf setf unless when)");
+	}
+
+	@Test
+	void compileAndRunListSpecialForms() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:list-special-forms))"))
+			.isEqualTo("(defun function if in-package lambda let progn quote setq while)");
+	}
+
+	@Test
+	void compileAndRunListFunctionsLength() throws Exception {
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("85");
+	}
+
+	@Test
+	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("85");
+	}
+
+	@Test
+	void compileAndRunListFunctionsForClUserListsUserDefunsOnly() throws Exception {
+		// Wrapper defuns injected for built-ins (car, +, ...) must not appear.
+		String code = """
+				(defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+				(defun add2 (a) (+ a 2))
+				(print (rontolisp:list-functions :cl-user))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("(add2 fib)");
+	}
+
+	@Test
+	void compileAndRunListFunctionsForClUserWithoutDefunsIsNil() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:list-functions :cl-user))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunListFunctionsForRontolisp() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
+			.isEqualTo("(list-functions list-macros list-special-forms version)");
+		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileListFunctionsUnknownPackageThrows() {
+		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:list-functions :foo))"))
+			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
+			.hasMessageContaining("No such package: foo");
+	}
+
+	@Test
+	void compileAndRunFirstRestNthAsFunctionValues() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'first '(1 2 3)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (map #'rest '((1 2) (3 4))))")).isEqualTo("((2) (4))");
+		assertThat(compileAndRun("(print (funcall #'nth 1 '(1 2 3)))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (map #'second '((1 2) (3 4))))")).isEqualTo("(2 4)");
+	}
+
 }

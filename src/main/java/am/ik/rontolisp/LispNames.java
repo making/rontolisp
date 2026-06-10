@@ -364,6 +364,17 @@ public final class LispNames {
 	/** The {@code version} function provided by the {@code rontolisp} package. */
 	public static final String VERSION = "version";
 
+	/** The {@code list-functions} function provided by the {@code rontolisp} package. */
+	public static final String LIST_FUNCTIONS = "list-functions";
+
+	/** The {@code list-macros} function provided by the {@code rontolisp} package. */
+	public static final String LIST_MACROS = "list-macros";
+
+	/**
+	 * The {@code list-special-forms} function provided by the {@code rontolisp} package.
+	 */
+	public static final String LIST_SPECIAL_FORMS = "list-special-forms";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";
 

@@ -270,7 +270,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.nextFuncId(nextFuncId)
-			.dynamic(this.dynamic);
+			.dynamic(this.dynamic)
+			.userDefunNames(Set.copyOf(userDefinedNames));
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
@@ -894,6 +895,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		boolean dynamic = false;
 
+		Set<String> userDefunNames = Set.of();
+
 		private Ctx(Builder builder) {
 			this.writer = Objects.requireNonNull(builder.writer);
 			this.bodyStream = Objects.requireNonNull(builder.bodyStream);
@@ -903,6 +906,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.indirectCallArities = builder.indirectCallArities;
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
+			this.userDefunNames = builder.userDefunNames;
 		}
 
 		static Builder builder() {
@@ -926,6 +930,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private boolean dynamic = false;
+
+			private Set<String> userDefunNames = Set.of();
 
 			Builder writer(WasmWriter writer) {
 				this.writer = writer;
@@ -964,6 +970,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder dynamic(boolean dynamic) {
 				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder userDefunNames(Set<String> userDefunNames) {
+				this.userDefunNames = userDefunNames;
 				return this;
 			}
 
