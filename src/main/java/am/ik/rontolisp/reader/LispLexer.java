@@ -91,6 +91,24 @@ public final class LispLexer {
 		// between two digits (e.g., "1,000" -> 1000). A comma not followed by a
 		// digit is not consumed, so token boundaries are otherwise unchanged.
 		consumeDigitsWithGrouping();
+		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '/' && this.pos + 1 < this.input.length()
+				&& isDigit(this.input.charAt(this.pos + 1))) {
+			int slash = this.pos;
+			this.pos++; // consume '/'
+			int denominatorStart = this.pos;
+			consumeDigitsWithGrouping();
+			// If symbol characters follow, treat the whole lexeme as a symbol.
+			if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
+					&& this.input.charAt(this.pos) != '.') {
+				while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+					this.pos++;
+				}
+				return new Token.SymbolToken(this.input.substring(start, this.pos));
+			}
+			String numerator = stripGrouping(this.input.substring(start, slash));
+			String denominator = stripGrouping(this.input.substring(denominatorStart, this.pos));
+			return new Token.FractionToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
+		}
 		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.' && this.pos + 1 < this.input.length()
 				&& isDigit(this.input.charAt(this.pos + 1))) {
 			this.pos++; // consume '.'

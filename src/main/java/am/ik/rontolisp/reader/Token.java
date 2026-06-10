@@ -39,6 +39,15 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Fraction token.
+	 *
+	 * @param numerator the numerator
+	 * @param denominator the denominator
+	 */
+	record FractionToken(java.math.BigInteger numerator, java.math.BigInteger denominator) implements Token {
+	}
+
+	/**
 	 * Floating-point number token.
 	 *
 	 * @param value the double value

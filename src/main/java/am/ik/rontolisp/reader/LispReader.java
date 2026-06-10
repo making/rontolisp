@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFraction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -65,6 +66,7 @@ public final class LispReader {
 		return switch (token) {
 			case Token.NumberToken n -> new LispInteger(n.value());
 			case Token.BigIntegerToken b -> new LispBigInteger(b.value());
+			case Token.FractionToken f -> new LispFraction(f.numerator(), f.denominator());
 			case Token.DoubleToken d -> new LispDouble(d.value());
 			case Token.StringToken s -> new LispString(s.value());
 			case Token.SymbolToken sym -> readSymbol(sym);

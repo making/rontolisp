@@ -70,6 +70,20 @@ class LispLexerTest {
 	}
 
 	@Test
+	void tokenizeFraction() {
+		List<Token> tokens = new LispLexer("1/3").tokenize();
+		assertThat(tokens)
+			.containsExactly(new Token.FractionToken(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3)));
+	}
+
+	@Test
+	void tokenizeNegativeFraction() {
+		List<Token> tokens = new LispLexer("-2/5").tokenize();
+		assertThat(tokens).containsExactly(
+				new Token.FractionToken(java.math.BigInteger.valueOf(-2), java.math.BigInteger.valueOf(5)));
+	}
+
+	@Test
 	void tokenizeOnePlus() {
 		List<Token> tokens = new LispLexer("(1+ x)").tokenize();
 		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("1+"),

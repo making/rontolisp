@@ -9,6 +9,7 @@ import java.util.List;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFraction;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
@@ -159,6 +160,7 @@ public final class LispEvaluator {
 		return switch (expr) {
 			case LispInteger i -> i;
 			case LispBigInteger b -> b;
+			case LispFraction f -> f;
 			case LispDouble d -> d;
 			case LispString s -> s;
 			case LispNil n -> n;

@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFraction;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -59,7 +60,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalDivision() {
-		assertThat(eval("(/ 10 3)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(/ 10 3)")).isEqualTo(new LispFraction(BigInteger.TEN, BigInteger.valueOf(3)));
 	}
 
 	@Test
@@ -336,6 +337,21 @@ class LispEvaluatorTest {
 	@Test
 	void evalDoubleDivision() {
 		assertThat(eval("(/ 7.0 2.0)")).isEqualTo(new LispDouble(3.5));
+	}
+
+	@Test
+	void evalFractionLiteral() {
+		assertThat(eval("1/3")).isEqualTo(new LispFraction(BigInteger.ONE, BigInteger.valueOf(3)));
+	}
+
+	@Test
+	void evalFractionArithmetic() {
+		assertThat(eval("(+ 1/2 1/3)")).isEqualTo(new LispFraction(BigInteger.valueOf(5), BigInteger.valueOf(6)));
+	}
+
+	@Test
+	void evalFractionWithFloatPromotesToDouble() {
+		assertThat(eval("(/ 1 2.0)")).isEqualTo(new LispDouble(0.5));
 	}
 
 	@Test
