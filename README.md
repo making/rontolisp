@@ -206,11 +206,12 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `evenp` | `(evenp x)` | Expands to `(= (mod x 2) 0)` |
 | `oddp` | `(oddp x)` | Expands to `(not (= (mod x 2) 0))` |
 | `first` | `(first lst)` | Expands to `(car lst)` |
+| `rest` | `(rest lst)` | Expands to `(cdr lst)` |
 | `nth` | `(nth n lst)` | Expands to `(car (nthcdr n lst))`. 0-based indexing |
 | `second` | `(second lst)` | Expands to `(nth 1 lst)` |
 | `third` | `(third lst)` | Expands to `(nth 2 lst)` |
 | `fourth` | `(fourth lst)` | Expands to `(nth 3 lst)` |
-| `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `caXXXr` as places |
+| `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
 | `pop` | `(pop place)` | Remove and return the first element from list at place |
 | `remf` | `(remf place indicator)` | Remove key-value pair from property list at place. Returns `t` if found, `nil` otherwise |

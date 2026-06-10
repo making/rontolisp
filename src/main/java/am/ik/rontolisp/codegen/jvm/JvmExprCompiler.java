@@ -208,6 +208,7 @@ final class JvmExprCompiler {
 				case LispNames.SIGNUM -> JvmSignumCompiler.compile(cons, ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
+				case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);
 				case LispNames.NTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx, className);
 				case LispNames.SECOND ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx, className);

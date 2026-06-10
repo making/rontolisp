@@ -40,7 +40,7 @@ public final class PackageRegistry {
 			LispNames.PRINT, LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ,
 			LispNames.EVAL, LispNames.LOAD, LispNames.IN_PACKAGE, LispNames.PACKAGE_VAR, LispNames.FUNCTION,
 			LispNames.SYMBOL_FUNCTION, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF,
-			LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER, LispNames.ASSOC, LispNames.LAST);
+			LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER, LispNames.ASSOC, LispNames.LAST, LispNames.REST);
 
 	private final Map<String, LispPackage> packages = new HashMap<>();
 

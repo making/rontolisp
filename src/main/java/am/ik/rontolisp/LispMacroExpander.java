@@ -373,6 +373,16 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (rest x) into (cdr x).
+	 * @param cons the rest expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRest(LispCons cons) {
+		LispVal arg = cons.toList().get(1);
+		return listToCons(List.of(new LispSymbol(LispNames.CDR), arg));
+	}
+
+	/**
 	 * Expands (nth n list) into (car (nthcdr n list)).
 	 * @param cons the nth expression
 	 * @return the expanded expression
@@ -449,7 +459,7 @@ public final class LispMacroExpander {
 			String accessor = ((LispSymbol) placeParts.get(0)).name();
 			return switch (accessor) {
 				case LispNames.CAR, LispNames.FIRST -> expandSetfWithRplaca(placeParts.get(1), value);
-				case LispNames.CDR -> expandSetfWithRplacd(placeParts.get(1), value);
+				case LispNames.CDR, LispNames.REST -> expandSetfWithRplacd(placeParts.get(1), value);
 				case LispNames.NTH -> {
 					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
 					// __setf) __setf)

@@ -646,6 +646,11 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void rest() {
+			assertThat(eval("(rest '(1 2 3))").print()).isEqualTo("(2 3)");
+		}
+
+		@Test
 		void second() {
 			assertThat(eval("(second '(1 2 3))")).isEqualTo(new LispInteger(2));
 		}

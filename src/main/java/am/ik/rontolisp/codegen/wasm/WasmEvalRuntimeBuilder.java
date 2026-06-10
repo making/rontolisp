@@ -1200,6 +1200,14 @@ final class WasmEvalRuntimeBuilder {
 		emitFixedAccessor(w, REST, ENV, ACC, 3);
 		w.write(Instruction.END);
 
+		// ---- rest: (rest lst) -> (cdr lst) ----
+		openSpecial(w, OFF, off.of(LispNames.REST));
+		emitEvalCar(w, REST, ENV);
+		setLocal(w, ACC);
+		emitCdrOf(w, ACC);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
 		// ---- nth: (nth n list) -> (car (nthcdr n list)) ----
 		openSpecial(w, OFF, off.of(LispNames.NTH));
 		emitEvalCar(w, REST, ENV);

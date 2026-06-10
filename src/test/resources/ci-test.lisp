@@ -409,3 +409,10 @@
 (print (funcall #'length '(7 8 9)))
 (print (map #'reverse '((1 2) (3 4))))
 (print (funcall #'member 2 '(1 2 3)))
+
+; rest (alias for cdr, also a setf place)
+(print (rest '(1 2 3)))
+(print (rest '(1)))
+(setq rest-lst (list 1 2 3))
+(setf (rest rest-lst) '(9))
+(print rest-lst)

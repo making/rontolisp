@@ -749,6 +749,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRest() {
+		assertThat(eval("(rest '(1 2 3))").print()).isEqualTo("(2 3)");
+		assertThat(eval("(rest '(1))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalSetfRestPlace() {
+		assertThat(evalMulti("(setq l (list 1 2 3)) (setf (rest l) '(9)) l").print()).isEqualTo("(1 9)");
+	}
+
+	@Test
 	void evalLetStar() {
 		assertThat(eval("(let* ((x 2) (y (* x 3))) (+ x y))")).isEqualTo(new LispInteger(8));
 	}

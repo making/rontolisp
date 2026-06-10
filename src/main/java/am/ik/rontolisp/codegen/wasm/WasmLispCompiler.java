@@ -488,6 +488,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.DIV)
 				.add(stringTable, "t")
 				.add(stringTable, LispNames.FIRST)
+				.add(stringTable, LispNames.REST)
 				.add(stringTable, LispNames.SECOND)
 				.add(stringTable, LispNames.THIRD)
 				.add(stringTable, LispNames.FOURTH)

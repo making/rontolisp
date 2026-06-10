@@ -312,6 +312,9 @@ public final class LispNames {
 	/** The {@code first} macro. */
 	public static final String FIRST = "first";
 
+	/** The {@code rest} macro. */
+	public static final String REST = "rest";
+
 	/** The {@code second} macro. */
 	public static final String SECOND = "second";
 

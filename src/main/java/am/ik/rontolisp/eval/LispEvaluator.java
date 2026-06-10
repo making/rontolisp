@@ -223,6 +223,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandOddp(cons), env);
 				case LispNames.FIRST:
 					return eval(LispMacroExpander.expandFirst(cons), env);
+				case LispNames.REST:
+					return eval(LispMacroExpander.expandRest(cons), env);
 				case LispNames.NTH:
 					return eval(LispMacroExpander.expandNth(cons), env);
 				case LispNames.SECOND:

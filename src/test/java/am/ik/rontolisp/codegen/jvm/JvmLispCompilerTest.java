@@ -845,6 +845,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRest() throws Exception {
+		assertThat(compileAndRun("(print (rest '(1 2 3))) (print (rest '(1)))")).isEqualTo("(2 3)\nnil");
+	}
+
+	@Test
+	void compileAndRunSetfRestPlace() throws Exception {
+		assertThat(compileAndRun("(setq l (list 1 2 3)) (setf (rest l) '(9)) (print l)")).isEqualTo("(1 9)");
+	}
+
+	@Test
+	void compileAndRunRestInsideEval() throws Exception {
+		assertThat(compileAndRun("(print (eval '(rest '(1 2 3))))")).isEqualTo("(2 3)");
+	}
+
+	@Test
 	void compileAndRunLetStar() throws Exception {
 		assertThat(compileAndRun("(print (let* ((x 2) (y (* x 3))) (+ x y)))")).isEqualTo("8");
 	}

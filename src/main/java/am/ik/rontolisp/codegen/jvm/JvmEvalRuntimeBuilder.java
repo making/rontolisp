@@ -2206,6 +2206,14 @@ final class JvmEvalRuntimeBuilder {
 		fixedAccessorEval(a, OP, LispNames.THIRD, REST, ENV, ACC, 2);
 		fixedAccessorEval(a, OP, LispNames.FOURTH, REST, ENV, ACC, 3);
 
+		// ---- rest: (rest lst) -> (cdr lst) ----
+		n = special(a, OP, LispNames.REST);
+		evalCar(a, REST, ENV);
+		a.astore(ACC);
+		cdr(a, ACC);
+		a.areturn();
+		a.bind(n);
+
 		// ---- nth: (nth n list) ----
 		n = special(a, OP, LispNames.NTH);
 		evalCar(a, REST, ENV);
