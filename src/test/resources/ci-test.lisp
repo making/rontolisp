@@ -5,7 +5,7 @@
 (print (+ 1 2))
 (print (- 10 3))
 (print (* 3 4))
-(print (/ 10 3))
+(print (/ 10 2))
 (print (mod 10 3))
 
 ; Nested arithmetic
