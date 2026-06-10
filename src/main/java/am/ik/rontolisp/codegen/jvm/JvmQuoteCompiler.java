@@ -1,5 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -39,17 +42,35 @@ final class JvmQuoteCompiler {
 	}
 
 	private static void compileQuotedCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		compileQuotedVal(cons.car(), ctx, className);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
-		compileQuotedVal(cons.cdr(), ctx, className);
-		ctx.emit(Opcode.AASTORE);
+		// Walk the cdr spine and build the list tail-first through a temp slot, like
+		// JvmListCompiler: recursing through the cdr would grow the operand stack
+		// linearly with the list length and overflow the fixed max_stack. Only nested
+		// sublists recurse (via the car), so the stack depth is bounded by the tree
+		// depth, not the list length.
+		List<LispVal> cars = new ArrayList<>();
+		LispVal tail = cons;
+		while (tail instanceof LispCons cell) {
+			cars.add(cell.car());
+			tail = cell.cdr();
+		}
+		compileQuotedVal(tail, ctx, className);
+		for (int i = cars.size() - 1; i >= 0; i--) {
+			int tempSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(tempSlot);
+			ctx.emit(Opcode.ICONST_2);
+			ctx.emit(Opcode.ANEWARRAY);
+			ctx.emitU2(ctx.objectClass.index());
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.ICONST_0);
+			compileQuotedVal(cars.get(i), ctx, className);
+			ctx.emit(Opcode.AASTORE);
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tempSlot);
+			ctx.emit(Opcode.AASTORE);
+		}
 	}
 
 }
