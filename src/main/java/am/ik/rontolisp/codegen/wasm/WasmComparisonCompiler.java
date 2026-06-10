@@ -24,10 +24,14 @@ final class WasmComparisonCompiler {
 			ctx.writer.write(f64Opcode);
 		}
 		else {
+			// _rat_cmp returns -1/0/1 for any mix of integers and ratios, so the
+			// original comparison opcode is applied against zero.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
-			WasmEmitHelper.castI31GetS(ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(am.ik.wasm.Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
+			ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(i32Opcode);
 		}
 		WasmEmitHelper.emitBoolFromI32(ctx);

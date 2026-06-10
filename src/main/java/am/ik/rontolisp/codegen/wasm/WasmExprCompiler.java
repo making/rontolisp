@@ -41,6 +41,15 @@ final class WasmExprCompiler {
 				ctx.writer.writeSignedLeb128(1);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
+			case am.ik.rontolisp.LispRatio r -> {
+				// The literal is already normalized; components are i31-range i32.
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(r.numerator().intValue());
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(r.denominator().intValue());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_RATIO);
+			}
 			case LispDouble d -> {
 				ctx.writer.write(Instruction.F64_CONST);
 				ctx.writer.writeF64(d.value());
@@ -110,11 +119,15 @@ final class WasmExprCompiler {
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {
-				case LispNames.ADD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD);
-				case LispNames.SUB -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB);
-				case LispNames.MUL -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_MUL, Instruction.F64_MUL);
-				case LispNames.DIV -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV);
-				case LispNames.MOD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1);
+				case LispNames.ADD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD,
+						WasmLispCompiler.FUNC_RAT_ADD);
+				case LispNames.SUB -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB,
+						WasmLispCompiler.FUNC_RAT_SUB);
+				case LispNames.MUL -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_MUL, Instruction.F64_MUL,
+						WasmLispCompiler.FUNC_RAT_MUL);
+				case LispNames.DIV -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV,
+						WasmLispCompiler.FUNC_RAT_DIV);
+				case LispNames.MOD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1, -1);
 				case LispNames.EQ -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
 				case LispNames.LT ->
 					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
@@ -173,6 +186,10 @@ final class WasmExprCompiler {
 				case LispNames.NUMBERP -> WasmNumberpCompiler.compile(cons, ctx);
 				case LispNames.INTEGERP -> WasmIntegerpCompiler.compile(cons, ctx);
 				case LispNames.FLOATP -> WasmFloatpCompiler.compile(cons, ctx);
+				case LispNames.RATIONALP -> WasmRationalpCompiler.compile(cons, ctx);
+				case LispNames.NUMERATOR -> WasmRatioAccessorCompiler.compile(cons, ctx, WasmLispCompiler.FUNC_RAT_NUM);
+				case LispNames.DENOMINATOR ->
+					WasmRatioAccessorCompiler.compile(cons, ctx, WasmLispCompiler.FUNC_RAT_DEN);
 				case LispNames.SYMBOLP -> WasmSymbolpCompiler.compile(cons, ctx);
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);

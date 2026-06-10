@@ -1485,6 +1485,17 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(notDouble);
 
+		// --- ratios (BigInteger[]) are self-evaluating; checked before the generic
+		// Object[] form handling because a ratio is also an Object[] ---
+		ClassConstant ratioArrayClass = this.k.cp().addClass(this.k.cp().addUtf8("[Ljava/math/BigInteger;"));
+		int notRatio = a.label();
+		a.aload(VAL);
+		a.instanceOf(ratioArrayClass);
+		a.branch(Opcode.IFEQ, notRatio);
+		a.aload(VAL);
+		a.areturn();
+		a.bind(notRatio);
+
 		// --- strings: string literal (self-eval) or symbol (variable reference) ---
 		int notStr = a.label();
 		a.aload(VAL);

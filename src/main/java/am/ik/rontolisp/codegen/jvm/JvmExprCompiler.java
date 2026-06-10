@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -28,6 +29,7 @@ final class JvmExprCompiler {
 		switch (expr) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
 			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
+			case LispRatio r -> JvmEmitHelper.compileRatio(r, ctx);
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileLong(1, ctx);
@@ -171,6 +173,9 @@ final class JvmExprCompiler {
 				case LispNames.NUMBERP -> JvmNumberpCompiler.compile(cons, ctx, className);
 				case LispNames.INTEGERP -> JvmIntegerpCompiler.compile(cons, ctx, className);
 				case LispNames.FLOATP -> JvmFloatpCompiler.compile(cons, ctx, className);
+				case LispNames.RATIONALP -> JvmRationalpCompiler.compile(cons, ctx, className);
+				case LispNames.NUMERATOR -> JvmRatioAccessorCompiler.compileNumerator(cons, ctx, className);
+				case LispNames.DENOMINATOR -> JvmRatioAccessorCompiler.compileDenominator(cons, ctx, className);
 				case LispNames.SYMBOLP -> JvmSymbolpCompiler.compile(cons, ctx, className);
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);

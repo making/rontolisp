@@ -30,14 +30,15 @@ final class JvmExptCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
+			// _pow keeps an exact rational result for any integer exponent: a ratio base
+			// raises numerator and denominator, and a negative exponent yields the
+			// reciprocal (e.g. (expt 2 -1) -> 1/2).
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmEmitHelper.toBigInteger(ctx);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmEmitHelper.unboxLong(ctx);
 			ctx.emit(Opcode.L2I);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "pow", "(I)Ljava/math/BigInteger;").index());
-			JvmEmitHelper.normalizeBigInteger(ctx);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.POW).index());
 		}
 	}
 

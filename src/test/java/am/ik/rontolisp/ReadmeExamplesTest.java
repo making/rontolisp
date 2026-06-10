@@ -187,8 +187,25 @@ class ReadmeExamplesTest {
 
 		@Test
 		void divide() {
-			assertThat(eval("(/ 10 3)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(/ 10 3)"))
+				.isEqualTo(new LispRatio(java.math.BigInteger.TEN, java.math.BigInteger.valueOf(3)));
+			assertThat(eval("(/ 10 2)")).isEqualTo(new LispInteger(5));
 			assertThat(eval("(/ 7.0 2.0)")).isEqualTo(new LispDouble(3.5));
+		}
+
+		@Test
+		void ratios() {
+			assertThat(eval("1/3").print()).isEqualTo("1/3");
+			assertThat(eval("(/ 1 2)").print()).isEqualTo("1/2");
+			assertThat(eval("(+ 1/2 1/3)").print()).isEqualTo("5/6");
+			assertThat(eval("(/ 1 2.0)")).isEqualTo(new LispDouble(0.5));
+			assertThat(eval("(float 1/2)")).isEqualTo(new LispDouble(0.5));
+			assertThat(eval("(* 2/3 3)")).isEqualTo(new LispInteger(2));
+			assertThat(eval("(numerator 3/4)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(denominator 3/4)")).isEqualTo(new LispInteger(4));
+			assertThat(eval("(rationalp 1/2)")).isEqualTo(LispTrue.INSTANCE);
+			assertThat(eval("(expt 2 -1)").print()).isEqualTo("1/2");
+			assertThat(eval("(/ 2)").print()).isEqualTo("1/2");
 		}
 
 		@Test
@@ -809,7 +826,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and cond decf dolist dotimes incf let* or pop push remf setf unless when)",
-					"(defun function if in-package lambda let progn quote setq while)", "85", "(square)",
+					"(defun function if in-package lambda let progn quote setq while)", "88", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

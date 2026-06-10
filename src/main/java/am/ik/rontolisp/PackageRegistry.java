@@ -47,13 +47,14 @@ public final class PackageRegistry {
 			LispNames.GT, LispNames.LE, LispNames.GE, LispNames.CONS, LispNames.CAR, LispNames.CDR, LispNames.LIST,
 			LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAP, LispNames.REDUCE,
 			LispNames.NOT, LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
-			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT,
-			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.ONE_PLUS,
-			LispNames.ONE_MINUS, LispNames.ZEROP, LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP,
-			LispNames.FIRST, LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT,
-			LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL,
-			LispNames.LOAD, LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER,
-			LispNames.ASSOC, LispNames.LAST, LispNames.REST);
+			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.SYMBOLP, LispNames.STRINGP,
+			LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT, LispNames.TRUNCATE, LispNames.FLOOR,
+			LispNames.CEILING, LispNames.ROUND, LispNames.ONE_PLUS, LispNames.ONE_MINUS, LispNames.ZEROP,
+			LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP, LispNames.FIRST, LispNames.SECOND,
+			LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT, LispNames.PRIN1, LispNames.PRINC,
+			LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL, LispNames.LOAD,
+			LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER, LispNames.ASSOC,
+			LispNames.LAST, LispNames.REST);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

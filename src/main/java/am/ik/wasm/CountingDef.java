@@ -49,7 +49,9 @@ public class CountingDef<T extends CountingDef<?>> {
 	protected final byte[] toByteArray() {
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		final WasmWriter out = new WasmWriter(stream);
-		out.write(this.count);
+		// The entry count is a LEB128 integer; a raw byte would be malformed for
+		// sections with 128 or more entries.
+		out.writeUnsignedLeb128(this.count);
 		out.write((Object) this.out.toByteArray());
 		return stream.toByteArray();
 	}

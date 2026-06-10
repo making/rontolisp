@@ -7,11 +7,12 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code numberp} predicate.
+ * Compiles the {@code rationalp} predicate. A rational is an integer ({@code Long} or
+ * {@code BigInteger}) or a ratio ({@code BigInteger[]}).
  */
-final class JvmNumberpCompiler {
+final class JvmRationalpCompiler {
 
-	private JvmNumberpCompiler() {
+	private JvmRationalpCompiler() {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -23,7 +24,12 @@ final class JvmNumberpCompiler {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(temp);
 		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.numberClass.index());
+		ctx.emitU2(ctx.longClass.index());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(temp);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(JvmEmitHelper.bigIntegerClass(ctx).index());
+		ctx.emit(Opcode.IOR);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(temp);
 		ctx.emit(Opcode.INSTANCEOF);

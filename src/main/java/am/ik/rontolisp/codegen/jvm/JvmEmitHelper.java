@@ -63,6 +63,29 @@ final class JvmEmitHelper {
 		ctx.emitU2(ctor.index());
 	}
 
+	/**
+	 * Compiles a ratio literal to its runtime representation: a normalized
+	 * {@code BigInteger[2]} of numerator and denominator.
+	 */
+	static void compileRatio(am.ik.rontolisp.LispRatio value, JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(bigIntegerClass(ctx).index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		compileBigInteger(value.numerator(), ctx);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		compileBigInteger(value.denominator(), ctx);
+		ctx.emit(Opcode.AASTORE);
+	}
+
+	/** The {@code BigInteger[]} (ratio runtime representation) class constant. */
+	static ConstantPool.ClassConstant ratioArrayClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/math/BigInteger;"));
+	}
+
 	static void compileStringLiteral(String value, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.StringConstant sc = ctx.cp.addString(value);
 		if (sc.index() <= 255) {
@@ -114,6 +137,10 @@ final class JvmEmitHelper {
 	}
 
 	static void unboxDouble(JvmLispCompiler.Ctx ctx) {
+		// _dbl coerces Long/BigInteger/Double and ratios (BigInteger[]) to a Double, so
+		// float contagion also works when a ratio flows into a double-literal operation.
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DBL).index());
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.numberClass.index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);

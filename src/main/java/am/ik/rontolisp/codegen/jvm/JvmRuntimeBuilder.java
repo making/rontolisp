@@ -145,14 +145,15 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Builds bytecode for _lispToString. Handles Long, Double, String, Object[] (cons or
-	 * function), and fallback toString.
+	 * Builds bytecode for _lispToString. Handles Long, Double, String, BigInteger[]
+	 * (ratio), Object[] (cons or function), and fallback toString.
 	 */
 	static List<Integer> buildLispToStringBody(ClassConstant longClass, ClassConstant doubleClass,
 			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
 			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
 			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
-			ConstantPool.StringConstant funcStr) {
+			ConstantPool.StringConstant funcStr, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
+			ConstantPool.StringConstant slashStr) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -205,8 +206,13 @@ final class JvmRuntimeBuilder {
 		emitU2(code, stringClass.index());
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof Object[])
+		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]
+		// check: a ratio is also an Object[])
 		patchBranch(code, ifNotStringPos, code.size());
+		int ifNotRatioPos = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
+
+		// if (val instanceof Object[])
+		patchBranch(code, ifNotRatioPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, objectArrayClass.index());
@@ -253,11 +259,45 @@ final class JvmRuntimeBuilder {
 		return code;
 	}
 
+	// Emits the ratio branch of _lispToString/_lispToDisplayString: if the value in
+	// slot 0 is a BigInteger[], returns numerator + "/" + denominator. Returns the
+	// branch position to patch to the next type check.
+	private static int emitRatioToString(List<Integer> code, ClassConstant ratioArrayClass,
+			MethodrefConstant objectToString, MethodrefConstant stringConcat, ConstantPool.StringConstant slashStr) {
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, ratioArrayClass.index());
+		int ifNotRatioPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, ratioArrayClass.index());
+		code.add(Opcode.ASTORE_1);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectToString.index());
+		emitLdc(code, slashStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringConcat.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectToString.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringConcat.index());
+		code.add(Opcode.ARETURN);
+		return ifNotRatioPos;
+	}
+
 	static List<Integer> buildConsToStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
-			ConstantPool.StringConstant dotStr) {
+			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass) {
 		List<Integer> code = new ArrayList<>();
 		code.add(Opcode.NEW);
 		emitU2(code, stringBuilderClass.index());
@@ -276,6 +316,14 @@ final class JvmRuntimeBuilder {
 		emitU2(code, objectArrayClass.index());
 		int ifNotArrayPos = code.size();
 		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// A ratio (BigInteger[]) is also an Object[]; treat it as an improper tail
+		// (e.g. (1 . 1/2)) rather than walking into it as a cons cell.
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, ratioArrayClass.index());
+		int ifRatioTailPos = code.size();
+		code.add(Opcode.IFNE);
 		emitU2(code, 0);
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.CHECKCAST);
@@ -314,6 +362,7 @@ final class JvmRuntimeBuilder {
 		emitU2(code, 0);
 		patchBranch(code, gotoPos, loopStart);
 		patchBranch(code, ifNotArrayPos, code.size());
+		patchBranch(code, ifRatioTailPos, code.size());
 		code.add(Opcode.ALOAD_2);
 		int ifNullPos = code.size();
 		code.add(Opcode.IFNULL);
@@ -352,7 +401,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
 			MethodrefConstant consToDisplayStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring) {
+			MethodrefConstant stringSubstring, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
+			ConstantPool.StringConstant slashStr) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -429,8 +479,13 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof Object[])
+		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]
+		// check: a ratio is also an Object[])
 		patchBranch(code, ifNotStringPos, code.size());
+		int ifNotRatioPos = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
+
+		// if (val instanceof Object[])
+		patchBranch(code, ifNotRatioPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, objectArrayClass.index());
@@ -482,9 +537,9 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToDisplayStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
-			ConstantPool.StringConstant dotStr) {
+			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass) {
 		return buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
+				lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr, dotStr, ratioArrayClass);
 	}
 
 	/**

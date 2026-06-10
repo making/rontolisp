@@ -192,8 +192,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
 		MethodrefConstant sbToString = cp.addMethodref(stringBuilderClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassConstant ratioArrayClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
 		ConstantPool.StringConstant nilStr = cp.addString("nil");
 		ConstantPool.StringConstant funcStr = cp.addString("#<function>");
+		ConstantPool.StringConstant slashStr = cp.addString("/");
 		ConstantPool.StringConstant openParenStr = cp.addString("(");
 		ConstantPool.StringConstant closeParenStr = cp.addString(")");
 		ConstantPool.StringConstant spaceStr = cp.addString(" ");
@@ -498,15 +500,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
-				nilStr, funcStr);
+				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
-				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr);
+				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
+				ratioArrayClass);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
-				nilStr, funcStr, stringCharAt, stringLength, stringSubstring);
+				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
-				dotStr);
+				dotStr, ratioArrayClass);
 		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass, appendMethod);
 		ConstantPool.StringConstant quoteStr = cp.addString("\"");
 		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
@@ -602,7 +605,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(2)
+							attr.writeU2(3)
 								.writeU2(2)
 								.writeCode((Object[]) ltsCode.toArray(new Integer[0]))
 								.writeU2(0)

@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -59,7 +60,169 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalDivision() {
-		assertThat(eval("(/ 10 3)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(/ 10 3)")).isEqualTo(new LispRatio(BigInteger.TEN, BigInteger.valueOf(3)));
+	}
+
+	@Test
+	void evalExactDivision() {
+		assertThat(eval("(/ 10 2)")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalDivisionReturnsRatio() {
+		assertThat(eval("(/ 1 2)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
+	}
+
+	@Test
+	void evalDivisionByFloat() {
+		assertThat(eval("(/ 1 2.0)")).isEqualTo(new LispDouble(0.5));
+	}
+
+	@Test
+	void evalUnaryDivisionIsReciprocal() {
+		assertThat(eval("(/ 2)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
+		assertThat(eval("(/ 2.0)")).isEqualTo(new LispDouble(0.5));
+	}
+
+	@Test
+	void evalDivisionByZero() {
+		assertThatThrownBy(() -> eval("(/ 1 0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Division by zero");
+	}
+
+	@Test
+	void ratioLiteral() {
+		assertThat(eval("1/3")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.valueOf(3)));
+	}
+
+	@Test
+	void ratioLiteralNormalizes() {
+		assertThat(eval("2/4")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
+		assertThat(eval("4/2")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void negativeRatioLiteral() {
+		assertThat(eval("-1/3")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.valueOf(3)));
+	}
+
+	@Test
+	void ratioPrint() {
+		assertThat(eval("1/3").print()).isEqualTo("1/3");
+		assertThat(eval("-2/4").print()).isEqualTo("-1/2");
+	}
+
+	@Test
+	void ratioAddition() {
+		assertThat(eval("(+ 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.valueOf(5), BigInteger.valueOf(6)));
+	}
+
+	@Test
+	void ratioAdditionDemotesToInteger() {
+		assertThat(eval("(+ 1/2 1/2)")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void ratioMixedWithInteger() {
+		assertThat(eval("(+ 1 1/2)")).isEqualTo(new LispRatio(BigInteger.valueOf(3), BigInteger.TWO));
+		assertThat(eval("(* 2/3 3)")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void ratioMixedWithFloat() {
+		assertThat(eval("(+ 1/2 0.5)")).isEqualTo(new LispDouble(1.0));
+	}
+
+	@Test
+	void ratioSubtraction() {
+		assertThat(eval("(- 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.valueOf(6)));
+		assertThat(eval("(- 1/2)")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.TWO));
+	}
+
+	@Test
+	void ratioDivision() {
+		assertThat(eval("(/ 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.valueOf(3), BigInteger.TWO));
+	}
+
+	@Test
+	void ratioComparison() {
+		assertThat(eval("(< 1/3 1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(= 2/4 1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(= 1/2 0.5)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(> 1/3 1/2)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void floatOfRatio() {
+		assertThat(eval("(float 1/2)")).isEqualTo(new LispDouble(0.5));
+	}
+
+	@Test
+	void ratioTruncateFloorCeilingRound() {
+		assertThat(eval("(truncate 7/2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(truncate -7/2)")).isEqualTo(new LispInteger(-3));
+		assertThat(eval("(floor 7/2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(floor -7/2)")).isEqualTo(new LispInteger(-4));
+		assertThat(eval("(ceiling 7/2)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(ceiling -7/2)")).isEqualTo(new LispInteger(-3));
+		assertThat(eval("(round 7/2)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(round 5/2)")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(round 1/3)")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void numeratorAndDenominator() {
+		assertThat(eval("(numerator 3/4)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(denominator 3/4)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(numerator 5)")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(denominator 5)")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void rationalpPredicate() {
+		assertThat(eval("(rationalp 1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(rationalp 5)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(rationalp 0.5)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void ratioPredicates() {
+		assertThat(eval("(numberp 1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(integerp 1/2)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(plusp 1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(minusp -1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(zerop 1/2)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void ratioAbsMinMax() {
+		assertThat(eval("(abs -1/2)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
+		assertThat(eval("(min 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.valueOf(3)));
+		assertThat(eval("(max 1/2 1/3)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
+	}
+
+	@Test
+	void ratioOnePlusOneMinus() {
+		assertThat(eval("(1+ 1/2)")).isEqualTo(new LispRatio(BigInteger.valueOf(3), BigInteger.TWO));
+		assertThat(eval("(1- 1/2)")).isEqualTo(new LispRatio(BigInteger.valueOf(-1), BigInteger.TWO));
+	}
+
+	@Test
+	void ratioExpt() {
+		assertThat(eval("(expt 1/2 2)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.valueOf(4)));
+		assertThat(eval("(expt 1/2 -2)")).isEqualTo(new LispInteger(4));
+	}
+
+	@Test
+	void ratioSymbolFallback() {
+		// "1/2x" and "1/2/3" are not ratio literals; they read as symbols.
+		assertThatThrownBy(() -> eval("1/2x")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The variable 1/2x is unbound");
+	}
+
+	@Test
+	void ratioLiteralDivisionByZero() {
+		assertThatThrownBy(() -> eval("1/0")).hasMessageContaining("Division by zero");
 	}
 
 	@Test
@@ -1144,7 +1307,7 @@ class LispEvaluatorTest {
 		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(85);
+			.hasSize(88);
 	}
 
 	@Test

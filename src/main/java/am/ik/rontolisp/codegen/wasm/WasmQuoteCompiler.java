@@ -31,6 +31,14 @@ final class WasmQuoteCompiler {
 				ctx.writer.writeSignedLeb128((int) i.value());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
+			case am.ik.rontolisp.LispRatio r -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(r.numerator().intValue());
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(r.denominator().intValue());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_RATIO);
+			}
 			case LispDouble d -> {
 				ctx.writer.write(Instruction.F64_CONST);
 				ctx.writer.writeF64(d.value());

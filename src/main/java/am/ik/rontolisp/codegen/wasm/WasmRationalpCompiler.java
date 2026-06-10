@@ -8,11 +8,12 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the {@code numberp} predicate.
+ * Compiles the {@code rationalp} predicate. A rational is an integer (i31ref) or a ratio
+ * struct.
  */
-final class WasmNumberpCompiler {
+final class WasmRationalpCompiler {
 
-	private WasmNumberpCompiler() {
+	private WasmRationalpCompiler() {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -25,11 +26,6 @@ final class WasmNumberpCompiler {
 		ctx.writer.writeSignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);

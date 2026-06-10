@@ -39,6 +39,15 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Ratio literal token (e.g., {@code 1/3}).
+	 *
+	 * @param numerator the numerator
+	 * @param denominator the denominator
+	 */
+	record RatioToken(java.math.BigInteger numerator, java.math.BigInteger denominator) implements Token {
+	}
+
+	/**
 	 * Floating-point number token.
 	 *
 	 * @param value the double value

@@ -92,7 +92,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunDivision() throws Exception {
-		assertThat(compileAndRun("(print (/ 10 3))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (/ 10 3))")).isEqualTo("10/3");
+		assertThat(compileAndRun("(print (/ 10 2))")).isEqualTo("5");
 	}
 
 	@Test
@@ -990,6 +991,89 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("Cannot compile symbol reference: car");
 	}
 
+	@Test
+	void compileRatioLiteral() throws Exception {
+		assertThat(compileAndRun("(print 1/3)")).isEqualTo("1/3");
+		assertThat(compileAndRun("(print -2/4)")).isEqualTo("-1/2");
+		assertThat(compileAndRun("(print '4/2)")).isEqualTo("2");
+	}
+
+	@Test
+	void compileRatioArithmetic() throws Exception {
+		assertThat(compileAndRun("(print (+ 1/2 1/3))")).isEqualTo("5/6");
+		assertThat(compileAndRun("(print (+ 1/2 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (- 1/2 1/3))")).isEqualTo("1/6");
+		assertThat(compileAndRun("(print (* 2/3 3))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (/ 1/2 1/3))")).isEqualTo("3/2");
+		assertThat(compileAndRun("(print (- 1/2))")).isEqualTo("-1/2");
+		assertThat(compileAndRun("(print (+ 1 1/2))")).isEqualTo("3/2");
+	}
+
+	@Test
+	void compileRatioFloatContagion() throws Exception {
+		assertThat(compileAndRun("(print (/ 1 2.0))")).isEqualTo("0.5");
+		assertThat(compileAndRun("(print (float 1/2))")).isEqualTo("0.5");
+		assertThat(compileAndRun("(print (+ 1/2 0.5))")).isEqualTo("1.0");
+	}
+
+	@Test
+	void compileRatioComparison() throws Exception {
+		assertThat(compileAndRun("(print (if (< 1/3 1/2) 1 0))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (if (= 2/4 1/2) 1 0))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (if (= 1/2 0.5) 1 0))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (max 1/2 1/3))")).isEqualTo("1/2");
+		assertThat(compileAndRun("(print (min 1/2 1/3))")).isEqualTo("1/3");
+		assertThat(compileAndRun("(print (abs -1/2))")).isEqualTo("1/2");
+	}
+
+	@Test
+	void compileRatioConversions() throws Exception {
+		assertThat(compileAndRun("(print (truncate 7/2))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (truncate -7/2))")).isEqualTo("-3");
+		assertThat(compileAndRun("(print (floor 7/2))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (floor -7/2))")).isEqualTo("-4");
+		assertThat(compileAndRun("(print (ceiling 7/2))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (ceiling -7/2))")).isEqualTo("-3");
+		assertThat(compileAndRun("(print (round 7/2))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (round 5/2))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (round 1/3))")).isEqualTo("0");
+	}
+
+	@Test
+	void compileRatioPredicatesAndAccessors() throws Exception {
+		assertThat(compileAndRun("(print (numberp 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (integerp 1/2))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (rationalp 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rationalp 5))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rationalp 0.5))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (numerator 3/4))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (denominator 3/4))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (numerator 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (denominator 5))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (consp 1/2))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (atom 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (listp 1/2))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (zerop 1/2))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (plusp 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (minusp -1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (signum -1/2))")).isEqualTo("-1");
+	}
+
+	@Test
+	void compileRatioExpt() throws Exception {
+		assertThat(compileAndRun("(print (expt 1/2 2))")).isEqualTo("1/4");
+		assertThat(compileAndRun("(print (expt 1/2 -2))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (expt 2 -1))")).isEqualTo("1/2");
+	}
+
+	@Test
+	void compileRatioInList() throws Exception {
+		assertThat(compileAndRun("(print (list 1/2 2/3))")).isEqualTo("(1/2 2/3)");
+		assertThat(compileAndRun("(print (cons 1 1/2))")).isEqualTo("(1 . 1/2)");
+		assertThat(compileAndRun("(print (1+ 1/2))")).isEqualTo("3/2");
+	}
+
 	// read-line tests
 
 	private String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
@@ -1469,12 +1553,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("85");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("88");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("85");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("88");
 	}
 
 	@Test

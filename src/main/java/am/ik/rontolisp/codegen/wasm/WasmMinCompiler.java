@@ -37,13 +37,15 @@ final class WasmMinCompiler {
 			int bSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeSignedLeb128(bSlot);
-			// Condition: a < b
+			// Condition: a < b (via _rat_cmp, which handles integers and ratios)
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(aSlot);
-			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(bSlot);
-			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.I32_LT_S);
 			// if a < b: return a
 			ctx.writer.write(Instruction.IF);

@@ -7,10 +7,11 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles the {@code expt} built-in for the i31 integer range: repeated multiplication
- * of the base by itself {@code power} times. The exponent must be a non-negative integer
- * (a non-positive exponent yields 1); fractional or negative powers require the
- * interpreter or JVM backend. There is no overflow promotion (i31 wraps).
+ * Compiles the {@code expt} built-in for the i31 integer range: repeated rational
+ * multiplication of the base by itself {@code power} times, so a ratio base stays exact
+ * and a negative integer exponent yields the reciprocal (e.g. {@code (expt 2 -1)} is
+ * {@code 1/2}). Fractional powers require the interpreter or JVM backend. There is no
+ * overflow promotion (i31 wraps).
  */
 final class WasmExptCompiler {
 
@@ -30,9 +31,30 @@ final class WasmExptCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(pSlot);
 
+		// Negative exponent: base = (/ 1 base), power = -power.
+		WasmMathHelper.getI32(ctx, pSlot);
+		WasmMathHelper.constI32(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		WasmMathHelper.constI32(ctx, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(baseSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(baseSlot);
+		WasmMathHelper.constI32(ctx, 0);
+		WasmMathHelper.getI32(ctx, pSlot);
+		ctx.writer.write(Instruction.I32_SUB);
+		WasmMathHelper.setI32(ctx, pSlot);
+		ctx.writer.write(Instruction.END);
+
 		// r = 1
 		WasmMathHelper.constI32(ctx, 1);
-		WasmMathHelper.setI32(ctx, rSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(rSlot);
 
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
@@ -41,11 +63,15 @@ final class WasmExptCompiler {
 		WasmMathHelper.constI32(ctx, 0);
 		ctx.writer.write(Instruction.I32_LE_S);
 		ctx.writer.write(Instruction.BR_IF, 1);
-		// r = r * base
-		WasmMathHelper.getI32(ctx, rSlot);
-		WasmMathHelper.getI32(ctx, baseSlot);
-		ctx.writer.write(Instruction.I32_MUL);
-		WasmMathHelper.setI32(ctx, rSlot);
+		// r = r * base (rational multiplication keeps ratio bases exact)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(rSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(baseSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_MUL);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(rSlot);
 		// power = power - 1
 		WasmMathHelper.getI32(ctx, pSlot);
 		WasmMathHelper.constI32(ctx, 1);

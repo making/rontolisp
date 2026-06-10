@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -65,6 +66,7 @@ public final class LispReader {
 		return switch (token) {
 			case Token.NumberToken n -> new LispInteger(n.value());
 			case Token.BigIntegerToken b -> new LispBigInteger(b.value());
+			case Token.RatioToken r -> readRatio(r);
 			case Token.DoubleToken d -> new LispDouble(d.value());
 			case Token.StringToken s -> new LispString(s.value());
 			case Token.SymbolToken sym -> readSymbol(sym);
@@ -75,6 +77,14 @@ public final class LispReader {
 			case Token.Dot ignored -> throw new LispReadException("Unexpected '.'");
 			case Token.Eof ignored -> throw new LispReadException("Unexpected end of input");
 		};
+	}
+
+	private static LispVal readRatio(Token.RatioToken ratio) {
+		if (ratio.denominator().signum() == 0) {
+			throw new LispReadException("Division by zero in ratio literal: " + ratio.numerator() + "/0");
+		}
+		// Normalization may demote to an integer (e.g., "4/2" reads as 2).
+		return LispRatio.valueOf(ratio.numerator(), ratio.denominator());
 	}
 
 	private LispVal readSymbol(Token.SymbolToken sym) {

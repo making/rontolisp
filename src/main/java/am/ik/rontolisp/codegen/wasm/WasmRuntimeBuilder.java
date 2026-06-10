@@ -709,6 +709,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check ratio struct -> "numerator/denominator"
+		emitPrintRatio(w, st);
+
 		// Check float struct
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
@@ -912,6 +915,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check ratio struct -> "numerator/denominator"
+		emitPrintRatio(w, st);
+
 		// Check float struct
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
@@ -1098,6 +1104,36 @@ final class WasmRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Emits the ratio branch shared by _print_val and _princ_val: if the value in
+	// param 0 is a ratio struct, prints "numerator/denominator" and returns.
+	private static void emitPrintRatio(WasmWriter w, WasmLispCompiler.StringTable st) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.slash.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.slash.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 	}
 
 	/**

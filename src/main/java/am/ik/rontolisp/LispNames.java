@@ -251,6 +251,9 @@ public final class LispNames {
 	/** The {@code floatp} built-in function. */
 	public static final String FLOATP = "floatp";
 
+	/** The {@code rationalp} built-in function. */
+	public static final String RATIONALP = "rationalp";
+
 	/** The {@code symbolp} built-in function. */
 	public static final String SYMBOLP = "symbolp";
 
@@ -282,6 +285,12 @@ public final class LispNames {
 
 	/** The {@code round} built-in function. */
 	public static final String ROUND = "round";
+
+	/** The {@code numerator} built-in function. */
+	public static final String NUMERATOR = "numerator";
+
+	/** The {@code denominator} built-in function. */
+	public static final String DENOMINATOR = "denominator";
 
 	// Convenience macros
 

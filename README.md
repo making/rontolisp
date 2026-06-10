@@ -141,6 +141,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | Type | Example | Description |
 |------|---------|-------------|
 | Integer | `42`, `-5`, `1,000` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM), 31-bit signed integer (WASM) |
+| Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
 | Double | `3.14`, `-0.5`, `3,000.50` | 64-bit floating-point number |
 | String | `"hello"` | String literal (interpreter only) |
 | Symbol | `x`, `foo` | Identifier |
@@ -166,6 +167,41 @@ a single canonical representation. For example, with
 `(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))`, `(fact 32)` returns the
 exact `263130836933693530167218012160000000`. The **WASM compiler** does not
 support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
+
+**All three backends** support Common Lisp ratios (exact rational numbers).
+`1/3` reads as a ratio literal, and integer division that does not divide
+evenly returns a ratio instead of truncating:
+
+```lisp
+> 1/3
+1/3
+> (/ 1 2)
+1/2
+> (+ 1/2 1/3)
+5/6
+> (/ 1 2.0)
+0.5
+> (float 1/2)
+0.5
+```
+
+Ratio results are always normalized -- reduced by the gcd with the sign on the
+numerator (`2/4` reads as `1/2`), and demoted to an integer when the
+denominator reduces to one (`(/ 10 2)` is `5`, `(+ 1/2 1/2)` is `1`).
+Arithmetic, comparisons (`= < > <= >=`), `eq`, `abs`/`min`/`max`/`1+`/`1-`/
+`signum`, the predicates (`numberp`, `rationalp`, `zerop`, `plusp`, `minusp`),
+`truncate`/`floor`/`ceiling`/`round`, `expt` with an integer exponent
+(`(expt 2 -1)` is `1/2`), and `numerator`/`denominator` all handle ratios;
+mixing in a float switches to float contagion. Unary `(/ x)` is the reciprocal
+(`(/ 2)` is `1/2`).
+
+Per backend, the components follow the integer representation: the
+**interpreter and the JVM compiler** use big integers (a ratio of huge
+numerators/denominators stays exact), while the **WASM compiler** keeps them
+in the 31-bit `i31` range with no overflow promotion, like all of its integer
+arithmetic. The runtime reader emitted for compiled `read`/`load` does not
+parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
+`evenp`/`oddp`, `gcd`/`lcm` and `isqrt` remain integer-only.
 
 ### Special Forms
 
@@ -220,7 +256,7 @@ values (`#'first`).
 | `+` | `(+ 1 2 3)`, `(+ 1.5 2.5)` | `6`, `4.0` |
 | `-` | `(- 10 3)`, `(- 3.5 1.5)` | `7`, `2.0` |
 | `*` | `(* 3 4)`, `(* 2.0 3.0)` | `12`, `6.0` |
-| `/` | `(/ 10 3)`, `(/ 7.0 2.0)` | `3` (integer division), `3.5` |
+| `/` | `(/ 1 2)`, `(/ 10 2)`, `(/ 7.0 2.0)` | `1/2` (exact ratio), `5`, `3.5` |
 | `mod` | `(mod 10 3)` | `1` |
 | `=` | `(= 1 1)` | `t` |
 | `eq` | `(eq 'foo 'foo)` | `t` (general equality; reference identity for cons cells) |
@@ -242,6 +278,9 @@ values (`#'first`).
 | `numberp` | `(numberp 42)` | `t` |
 | `integerp` | `(integerp 42)` | `t` |
 | `floatp` | `(floatp 3.14)` | `t` |
+| `rationalp` | `(rationalp 1/2)` | `t` (integers and ratios) |
+| `numerator` | `(numerator 3/4)` | `3` (an integer is its own numerator) |
+| `denominator` | `(denominator 3/4)` | `4` (`1` for integers) |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
 | `listp` | `(listp '(1 2))` | `t` |
@@ -349,7 +388,7 @@ The math built-ins differ in how widely they are supported, because the WASM bac
 
 - **`sqrt`, `isqrt`, `gcd`, `lcm`, `signum`, `expt`** are supported on all three backends (interpreter, JVM, WASM) and through the compiled `eval`. `sqrt` uses the native `f64.sqrt` instruction.
 - **Transcendental functions** (`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are therefore **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
-- **`expt`** keeps an exact integer result for an integer base raised to a non-negative integer exponent (with big-integer promotion in the interpreter and JVM); a float base/exponent uses `Math.pow` and returns a float. The integer path requires a non-negative exponent. The WASM `expt` is integer-only and, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
+- **`expt`** keeps an exact rational result for an integer or ratio base raised to an integer exponent (with big-integer promotion in the interpreter and JVM); a negative exponent yields the reciprocal (`(expt 2 -1)` is `1/2`) and a float base/exponent uses `Math.pow` and returns a float. The WASM `expt`, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
 - **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
 
 ### Packages
@@ -390,7 +429,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))
-; => 85
+; => 88
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

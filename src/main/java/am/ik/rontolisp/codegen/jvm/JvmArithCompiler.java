@@ -18,7 +18,17 @@ final class JvmArithCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode, String className) {
 		List<LispVal> args = cons.toList();
+		boolean unaryDiv = JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2;
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
+			// Unary (/ x) is the reciprocal: 1.0 / x.
+			if (unaryDiv) {
+				ctx.emit(Opcode.DCONST_1);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmEmitHelper.unboxDouble(ctx);
+				ctx.emit(doubleOpcode);
+				JvmEmitHelper.boxDouble(ctx);
+				return;
+			}
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmEmitHelper.unboxDouble(ctx);
 			for (int i = 2; i < args.size(); i++) {
@@ -27,6 +37,14 @@ final class JvmArithCompiler {
 				ctx.emit(doubleOpcode);
 			}
 			JvmEmitHelper.boxDouble(ctx);
+			return;
+		}
+		// Unary (/ x) is the reciprocal: _div(1, x).
+		if (unaryDiv) {
+			JvmEmitHelper.compileLong(1, ctx);
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DIV).index());
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);

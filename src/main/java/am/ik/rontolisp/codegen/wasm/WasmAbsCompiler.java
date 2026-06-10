@@ -26,28 +26,31 @@ final class WasmAbsCompiler {
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		}
 		else {
-			// Integer path: store boxed value, use if/else with unbox on demand
+			// Integer/ratio path: x < 0 (via _rat_cmp against 0) ? 0 - x : x
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeSignedLeb128(tmpSlot);
-			// Condition: x < 0
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(tmpSlot);
-			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.I32_LT_S);
-			// if x < 0: return (0 - x) as i31ref
+			// if x < 0: return (0 - x)
 			ctx.writer.write(Instruction.IF);
 			ctx.writer.write(Type.REFNULL.code());
 			ctx.writer.writeHeapType(Type.EQ.code());
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(tmpSlot);
-			WasmEmitHelper.castI31GetS(ctx);
-			ctx.writer.write(Instruction.I32_SUB);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_SUB);
 			// else: return x as-is
 			ctx.writer.write(Instruction.ELSE);
 			ctx.writer.write(Instruction.GET_LOCAL);

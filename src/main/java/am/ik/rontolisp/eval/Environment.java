@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -229,6 +230,9 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
+			if (hasRatio(args)) {
+				return addRational(args);
+			}
 			if (hasBigInteger(args)) {
 				return addBig(args);
 			}
@@ -253,6 +257,9 @@ public final class Environment implements Scope {
 					result -= asDouble(args.get(i));
 				}
 				return new LispDouble(result);
+			}
+			if (hasRatio(args)) {
+				return subRational(args);
 			}
 			if (hasBigInteger(args)) {
 				return subBig(args);
@@ -279,6 +286,9 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
+			if (hasRatio(args)) {
+				return mulRational(args);
+			}
 			if (hasBigInteger(args)) {
 				return mulBig(args);
 			}
@@ -295,25 +305,39 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.DIV, new LispFunction(LispNames.DIV, args -> {
 			if (hasDouble(args)) {
+				if (args.size() == 1) {
+					return new LispDouble(1.0 / asDouble(args.get(0)));
+				}
 				double result = asDouble(args.get(0));
 				for (int i = 1; i < args.size(); i++) {
 					result /= asDouble(args.get(i));
 				}
 				return new LispDouble(result);
 			}
-			if (hasBigInteger(args)) {
-				return divBig(args);
+			// Exact rational division (Common Lisp semantics): (/ 1 2) -> 1/2,
+			// (/ 4 2) -> 2, and unary (/ x) is the reciprocal.
+			BigInteger num;
+			BigInteger den;
+			int first;
+			if (args.size() == 1) {
+				num = BigInteger.ONE;
+				den = BigInteger.ONE;
+				first = 0;
 			}
-			long result = asLong(args.get(0));
-			for (int i = 1; i < args.size(); i++) {
-				long divisor = asLong(args.get(i));
-				// Only Long.MIN_VALUE / -1 overflows long division; promote that case.
-				if (result == Long.MIN_VALUE && divisor == -1) {
-					return divBig(args);
+			else {
+				num = numeratorOf(args.get(0));
+				den = denominatorOf(args.get(0));
+				first = 1;
+			}
+			for (int i = first; i < args.size(); i++) {
+				BigInteger divisorNum = numeratorOf(args.get(i));
+				if (divisorNum.signum() == 0) {
+					throw new LispEvalException("Division by zero");
 				}
-				result /= divisor;
+				num = num.multiply(denominatorOf(args.get(i)));
+				den = den.multiply(divisorNum);
 			}
-			return new LispInteger(result);
+			return LispRatio.valueOf(num, den);
 		}));
 		env.defineFunction(LispNames.MOD, new LispFunction(LispNames.MOD, args -> {
 			requireArgCount(LispNames.MOD, args, 2);
@@ -330,6 +354,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.abs(asDouble(args.get(0))));
 			}
+			if (args.get(0) instanceof LispRatio r) {
+				return LispRatio.valueOf(r.numerator().abs(), r.denominator());
+			}
 			if (args.get(0) instanceof LispBigInteger b) {
 				return normalizeBig(b.value().abs());
 			}
@@ -344,6 +371,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.min(asDouble(args.get(0)), asDouble(args.get(1))));
 			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) <= 0 ? args.get(0) : args.get(1);
+			}
 			if (hasBigInteger(args)) {
 				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) <= 0 ? args.get(0) : args.get(1);
 			}
@@ -354,6 +384,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.max(asDouble(args.get(0)), asDouble(args.get(1))));
 			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) >= 0 ? args.get(0) : args.get(1);
+			}
 			if (hasBigInteger(args)) {
 				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) >= 0 ? args.get(0) : args.get(1);
 			}
@@ -363,6 +396,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ONE_PLUS, args, 1);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) + 1);
+			}
+			if (args.get(0) instanceof LispRatio r) {
+				return LispRatio.valueOf(r.numerator().add(r.denominator()), r.denominator());
 			}
 			if (args.get(0) instanceof LispBigInteger b) {
 				return normalizeBig(b.value().add(BigInteger.ONE));
@@ -378,6 +414,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ONE_MINUS, args, 1);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) - 1);
+			}
+			if (args.get(0) instanceof LispRatio r) {
+				return LispRatio.valueOf(r.numerator().subtract(r.denominator()), r.denominator());
 			}
 			if (args.get(0) instanceof LispBigInteger b) {
 				return normalizeBig(b.value().subtract(BigInteger.ONE));
@@ -414,13 +453,17 @@ public final class Environment implements Scope {
 			}
 			return normalizeBig(n.sqrt());
 		}));
-		// expt: integer^non-negative-integer stays exact; otherwise Math.pow (double).
+		// expt: rational^integer stays exact (a negative exponent yields the
+		// reciprocal, e.g. (expt 2 -1) -> 1/2); otherwise Math.pow (double).
 		env.defineFunction(LispNames.EXPT, new LispFunction(LispNames.EXPT, args -> {
 			requireArgCount(LispNames.EXPT, args, 2);
-			if (!hasDouble(args)) {
+			if (!hasDouble(args) && !(args.get(1) instanceof LispRatio)) {
 				long power = asLong(args.get(1));
-				if (power >= 0 && power <= Integer.MAX_VALUE) {
-					return normalizeBig(asBigInteger(args.get(0)).pow((int) power));
+				if (power >= -Integer.MAX_VALUE && power <= Integer.MAX_VALUE) {
+					BigInteger baseNum = numeratorOf(args.get(0));
+					BigInteger baseDen = denominatorOf(args.get(0));
+					return power >= 0 ? LispRatio.valueOf(baseNum.pow((int) power), baseDen.pow((int) power))
+							: LispRatio.valueOf(baseDen.pow((int) -power), baseNum.pow((int) -power));
 				}
 			}
 			return new LispDouble(Math.pow(asDouble(args.get(0)), asDouble(args.get(1))));
@@ -447,6 +490,9 @@ public final class Environment implements Scope {
 			if (arg instanceof LispDouble d) {
 				return new LispDouble(Math.signum(d.value()));
 			}
+			if (arg instanceof LispRatio r) {
+				return new LispInteger(r.numerator().signum());
+			}
 			if (arg instanceof LispBigInteger b) {
 				return new LispInteger(b.value().signum());
 			}
@@ -467,6 +513,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) == asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
@@ -476,6 +525,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.LT, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -487,6 +539,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
@@ -497,6 +552,9 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) <= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
@@ -506,6 +564,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.GE, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) >= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (hasRatio(args)) {
+				return compareRational(args.get(0), args.get(1)) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -691,8 +752,8 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NUMBERP, new LispFunction(LispNames.NUMBERP, args -> {
 			requireArgCount(LispNames.NUMBERP, args, 1);
 			LispVal arg = args.get(0);
-			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispDouble)
-					? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispRatio
+					|| arg instanceof LispDouble) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.INTEGERP, new LispFunction(LispNames.INTEGERP, args -> {
 			requireArgCount(LispNames.INTEGERP, args, 1);
@@ -702,6 +763,12 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.FLOATP, new LispFunction(LispNames.FLOATP, args -> {
 			requireArgCount(LispNames.FLOATP, args, 1);
 			return args.get(0) instanceof LispDouble ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.RATIONALP, new LispFunction(LispNames.RATIONALP, args -> {
+			requireArgCount(LispNames.RATIONALP, args, 1);
+			LispVal arg = args.get(0);
+			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispRatio)
+					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.SYMBOLP, new LispFunction(LispNames.SYMBOLP, args -> {
 			requireArgCount(LispNames.SYMBOLP, args, 1);
@@ -730,8 +797,8 @@ public final class Environment implements Scope {
 				return asDouble(args.get(0)) == 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			// A normalized LispBigInteger is always outside the long range, hence
-			// non-zero.
-			if (args.get(0) instanceof LispBigInteger) {
+			// non-zero, and a normalized LispRatio is never an integer, hence non-zero.
+			if (args.get(0) instanceof LispBigInteger || args.get(0) instanceof LispRatio) {
 				return LispNil.INSTANCE;
 			}
 			return asLong(args.get(0)) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -740,6 +807,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.PLUSP, args, 1);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (args.get(0) instanceof LispRatio r) {
+				return r.numerator().signum() > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (args.get(0) instanceof LispBigInteger b) {
 				return b.value().signum() > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -750,6 +820,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.MINUSP, args, 1);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			if (args.get(0) instanceof LispRatio r) {
+				return r.numerator().signum() < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (args.get(0) instanceof LispBigInteger b) {
 				return b.value().signum() < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -950,6 +1023,9 @@ public final class Environment implements Scope {
 			if (arg instanceof LispBigInteger b) {
 				return new LispDouble(b.value().doubleValue());
 			}
+			if (arg instanceof LispRatio r) {
+				return new LispDouble(r.doubleValue());
+			}
 			throw new LispEvalException("float expects a number, got: " + arg.print());
 		}));
 		env.defineFunction(LispNames.TRUNCATE, new LispFunction(LispNames.TRUNCATE, args -> {
@@ -960,6 +1036,9 @@ public final class Environment implements Scope {
 			}
 			if (arg instanceof LispDouble d) {
 				return new LispInteger((long) d.value());
+			}
+			if (arg instanceof LispRatio r) {
+				return normalizeBig(r.truncate());
 			}
 			throw new LispEvalException("truncate expects a number, got: " + arg.print());
 		}));
@@ -972,6 +1051,9 @@ public final class Environment implements Scope {
 			if (arg instanceof LispDouble d) {
 				return new LispInteger((long) Math.floor(d.value()));
 			}
+			if (arg instanceof LispRatio r) {
+				return normalizeBig(r.floor());
+			}
 			throw new LispEvalException("floor expects a number, got: " + arg.print());
 		}));
 		env.defineFunction(LispNames.CEILING, new LispFunction(LispNames.CEILING, args -> {
@@ -982,6 +1064,9 @@ public final class Environment implements Scope {
 			}
 			if (arg instanceof LispDouble d) {
 				return new LispInteger((long) Math.ceil(d.value()));
+			}
+			if (arg instanceof LispRatio r) {
+				return normalizeBig(r.ceiling());
 			}
 			throw new LispEvalException("ceiling expects a number, got: " + arg.print());
 		}));
@@ -994,7 +1079,32 @@ public final class Environment implements Scope {
 			if (arg instanceof LispDouble d) {
 				return new LispInteger((long) Math.rint(d.value()));
 			}
+			if (arg instanceof LispRatio r) {
+				return normalizeBig(r.round());
+			}
 			throw new LispEvalException("round expects a number, got: " + arg.print());
+		}));
+		env.defineFunction(LispNames.NUMERATOR, new LispFunction(LispNames.NUMERATOR, args -> {
+			requireArgCount(LispNames.NUMERATOR, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispRatio r) {
+				return normalizeBig(r.numerator());
+			}
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
+				return arg;
+			}
+			throw new LispEvalException("numerator expects a rational, got: " + arg.print());
+		}));
+		env.defineFunction(LispNames.DENOMINATOR, new LispFunction(LispNames.DENOMINATOR, args -> {
+			requireArgCount(LispNames.DENOMINATOR, args, 1);
+			LispVal arg = args.get(0);
+			if (arg instanceof LispRatio r) {
+				return normalizeBig(r.denominator());
+			}
+			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
+				return new LispInteger(1);
+			}
+			throw new LispEvalException("denominator expects a rational, got: " + arg.print());
 		}));
 	}
 
@@ -1014,6 +1124,9 @@ public final class Environment implements Scope {
 		}
 		if (val instanceof LispBigInteger b) {
 			return b.value().doubleValue();
+		}
+		if (val instanceof LispRatio r) {
+			return r.doubleValue();
 		}
 		throw new LispEvalException("Expected number, got: " + val.print());
 	}
@@ -1065,16 +1178,84 @@ public final class Environment implements Scope {
 		return normalizeBig(result);
 	}
 
-	private static LispVal divBig(List<LispVal> args) {
-		BigInteger result = asBigInteger(args.get(0));
-		for (int i = 1; i < args.size(); i++) {
-			result = result.divide(asBigInteger(args.get(i)));
+	/**
+	 * Returns the numerator of a rational value (an integer is treated as itself over
+	 * one).
+	 */
+	private static BigInteger numeratorOf(LispVal val) {
+		if (val instanceof LispRatio r) {
+			return r.numerator();
 		}
-		return normalizeBig(result);
+		return asBigInteger(val);
+	}
+
+	/**
+	 * Returns the denominator of a rational value (one for integers).
+	 */
+	private static BigInteger denominatorOf(LispVal val) {
+		if (val instanceof LispRatio r) {
+			return r.denominator();
+		}
+		if (val instanceof LispInteger || val instanceof LispBigInteger) {
+			return BigInteger.ONE;
+		}
+		throw new LispEvalException("Expected rational, got: " + val.print());
+	}
+
+	private static LispVal addRational(List<LispVal> args) {
+		BigInteger num = BigInteger.ZERO;
+		BigInteger den = BigInteger.ONE;
+		for (LispVal arg : args) {
+			BigInteger argDen = denominatorOf(arg);
+			num = num.multiply(argDen).add(numeratorOf(arg).multiply(den));
+			den = den.multiply(argDen);
+		}
+		return LispRatio.valueOf(num, den);
+	}
+
+	private static LispVal subRational(List<LispVal> args) {
+		if (args.size() == 1) {
+			return LispRatio.valueOf(numeratorOf(args.get(0)).negate(), denominatorOf(args.get(0)));
+		}
+		BigInteger num = numeratorOf(args.get(0));
+		BigInteger den = denominatorOf(args.get(0));
+		for (int i = 1; i < args.size(); i++) {
+			BigInteger argDen = denominatorOf(args.get(i));
+			num = num.multiply(argDen).subtract(numeratorOf(args.get(i)).multiply(den));
+			den = den.multiply(argDen);
+		}
+		return LispRatio.valueOf(num, den);
+	}
+
+	private static LispVal mulRational(List<LispVal> args) {
+		BigInteger num = BigInteger.ONE;
+		BigInteger den = BigInteger.ONE;
+		for (LispVal arg : args) {
+			num = num.multiply(numeratorOf(arg));
+			den = den.multiply(denominatorOf(arg));
+		}
+		return LispRatio.valueOf(num, den);
+	}
+
+	/**
+	 * Compares two rational values by cross-multiplication (denominators are always
+	 * positive, so the comparison direction is preserved).
+	 */
+	private static int compareRational(LispVal a, LispVal b) {
+		return numeratorOf(a).multiply(denominatorOf(b)).compareTo(numeratorOf(b).multiply(denominatorOf(a)));
 	}
 
 	private static int compareBig(List<LispVal> args) {
 		return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1)));
+	}
+
+	private static boolean hasRatio(List<LispVal> args) {
+		for (LispVal arg : args) {
+			if (arg instanceof LispRatio) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean hasBigInteger(List<LispVal> args) {

@@ -105,12 +105,39 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_LOAD = 22;
 
-	static final int FUNC_DISPATCH_BASE = 23;
+	// Rational (ratio) runtime: always present. _rat_new normalizes and constructs,
+	// _rat_num/_rat_den read components (treating an i31 integer as value/1), and the
+	// arithmetic helpers dispatch between the i31 fast path and exact ratio arithmetic.
+	static final int FUNC_RAT_NEW = 23;
+
+	static final int FUNC_RAT_NUM = 24;
+
+	static final int FUNC_RAT_DEN = 25;
+
+	static final int FUNC_RAT_ADD = 26;
+
+	static final int FUNC_RAT_SUB = 27;
+
+	static final int FUNC_RAT_MUL = 28;
+
+	static final int FUNC_RAT_DIV = 29;
+
+	static final int FUNC_RAT_CMP = 30;
+
+	static final int FUNC_RAT_TRUNC = 31;
+
+	static final int FUNC_RAT_FLOOR = 32;
+
+	static final int FUNC_RAT_CEIL = 33;
+
+	static final int FUNC_RAT_ROUND = 34;
+
+	static final int FUNC_DISPATCH_BASE = 35;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 23..30 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 31
+	// Dispatch functions occupy indices 35..42 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 43
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -156,6 +183,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// type index for path_open: (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
 	static final int TYPE_PATH_OPEN = TYPE_ENV_LOOKUP + 2; // 23
+
+	// Ratio struct {i32 numerator, i32 denominator}, always normalized (coprime,
+	// denominator > 1, sign on the numerator). A rational whose denominator reduces to
+	// one is represented as a plain i31 integer instead.
+	static final int TYPE_RATIO = TYPE_PATH_OPEN + 1; // 24
+
+	// type index for _rat_new: (i32, i32) -> (ref null eq)
+	static final int TYPE_RAT_NEW = TYPE_RATIO + 1; // 25
+
+	// type index for _rat_num/_rat_den: ((ref null eq)) -> (i32)
+	static final int TYPE_RAT_GET = TYPE_RAT_NEW + 1; // 26
+
+	// type index for _rat_cmp: ((ref null eq), (ref null eq)) -> (i32)
+	static final int TYPE_RAT_CMP = TYPE_RAT_GET + 1; // 27
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -647,6 +688,41 @@ public final class WasmLispCompiler implements LispCompiler {
 				// type 23: path_open (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I64, Type.I64,
 						Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				// type 24: ratio struct {i32 numerator, i32 denominator}
+				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+					fields.addField(false, w -> w.write(Type.I32));
+					fields.addField(false, w -> w.write(Type.I32));
+				}));
+				// type 25: _rat_new (i32, i32) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 26: _rat_num/_rat_den ((ref null eq)) -> (i32)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(1);
+					w.write(Type.I32);
+				});
+				// type 27: _rat_cmp ((ref null eq), (ref null eq)) -> (i32)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(1);
+					w.write(Type.I32);
+				});
 			})
 			// Import section
 			.writeImportSection(imports -> imports
@@ -676,6 +752,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_READ_LINE); // _read_list () -> value
 				fnDef.addFunction(TYPE_READ_LINE); // _read () -> value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _load (path) -> value
+				// Rational runtime
+				fnDef.addFunction(TYPE_RAT_NEW); // _rat_new
+				fnDef.addFunction(TYPE_RAT_GET); // _rat_num
+				fnDef.addFunction(TYPE_RAT_GET); // _rat_den
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_add
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_sub
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mul
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_div
+				fnDef.addFunction(TYPE_RAT_CMP); // _rat_cmp
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_trunc
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_floor
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_ceil
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_round
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -733,7 +822,19 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(readExprBody)
 					.addFunction(readListBody)
 					.addFunction(readBody)
-					.addFunction(loadBody);
+					.addFunction(loadBody)
+					.addFunction(WasmRatioRuntimeBuilder.buildRatNewBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_SUB))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatTruncBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(false))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(true))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundBody());
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
@@ -1022,6 +1123,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry period;
 
+		final StringEntry slash;
+
 		StringTable(int baseOffset) {
 			this.nextOffset = baseOffset;
 			this.nil = addString("nil");
@@ -1033,6 +1136,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.funcStr = addString("#<function>");
 			this.minus = addString("-");
 			this.period = addString(".");
+			this.slash = addString("/");
 		}
 
 		StringEntry addString(String s) {

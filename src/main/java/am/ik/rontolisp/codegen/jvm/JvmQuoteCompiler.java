@@ -31,6 +31,7 @@ final class JvmQuoteCompiler {
 		switch (val) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
 			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
+			case am.ik.rontolisp.LispRatio r -> JvmEmitHelper.compileRatio(r, ctx);
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileLong(1, ctx);

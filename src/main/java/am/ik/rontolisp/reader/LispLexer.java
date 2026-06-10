@@ -107,6 +107,24 @@ public final class LispLexer {
 			}
 			return new Token.DoubleToken(Double.parseDouble(stripGrouping(this.input.substring(start, this.pos))));
 		}
+		// Ratio literal: integer digits '/' integer digits (e.g., "1/3", "-1/3").
+		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '/' && this.pos + 1 < this.input.length()
+				&& isDigit(this.input.charAt(this.pos + 1))) {
+			int slash = this.pos;
+			this.pos++; // consume '/'
+			consumeDigitsWithGrouping();
+			// If a symbol character follows the denominator digits (e.g., "1/2x",
+			// "1/2/3"), treat the entire token as a symbol.
+			if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+					this.pos++;
+				}
+				return new Token.SymbolToken(this.input.substring(start, this.pos));
+			}
+			String numerator = stripGrouping(this.input.substring(start, slash));
+			String denominator = stripGrouping(this.input.substring(slash + 1, this.pos));
+			return new Token.RatioToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
+		}
 		// If non-dot symbol character follows digits, treat entire token as symbol
 		// (e.g., "1+" -> Symbol("1+"), "1-" -> Symbol("1-"))
 		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))

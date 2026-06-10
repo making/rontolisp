@@ -32,6 +32,14 @@ final class JvmListpCompiler {
 		int ifNotArrayPos = ctx.code.size();
 		ctx.emit(Opcode.IFEQ);
 		ctx.emitU2(0);
+		// A ratio (BigInteger[]) is also an Object[] but is not a list.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(JvmEmitHelper.ratioArrayClass(ctx).index());
+		int ifRatioPos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.CHECKCAST);
@@ -49,6 +57,7 @@ final class JvmListpCompiler {
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		JvmEmitHelper.patchBranch(ctx, ifNotArrayPos, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, ifRatioPos, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, ifFuncRefPos, ctx.code.size());
 		ctx.emit(Opcode.ACONST_NULL);
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());

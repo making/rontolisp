@@ -57,8 +57,10 @@ final class JvmEqGeneralCompiler {
 		ctx.emit(aSlot);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(bSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.objectEquals.index());
+		// _eqv is a.equals(b) plus element-wise comparison for ratios (array equals is
+		// reference equality).
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.EQV).index());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 		// end
 		JvmEmitHelper.patchBranch(ctx, gotoBothNullPos, ctx.code.size());

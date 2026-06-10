@@ -26,7 +26,10 @@ final class JvmSignumCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
-			JvmEmitHelper.toBigInteger(ctx);
+			// _ratnum coerces Long/BigInteger via _big and a ratio to its numerator;
+			// the sign of a ratio is the sign of its numerator.
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RAT_NUM).index());
 			ctx.emit(Opcode.INVOKEVIRTUAL);
 			ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "signum", "()I").index());
 			ctx.emit(Opcode.I2L);

@@ -15,6 +15,7 @@ import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.PackageRegistry;
@@ -159,6 +160,7 @@ public final class LispEvaluator {
 		return switch (expr) {
 			case LispInteger i -> i;
 			case LispBigInteger b -> b;
+			case LispRatio r -> r;
 			case LispDouble d -> d;
 			case LispString s -> s;
 			case LispNil n -> n;
