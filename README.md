@@ -258,9 +258,9 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `round` | `(round 3.5)`, `(round 2.5)` | `4`, `2` (banker's rounding) |
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
-| `expt` | `(expt 2 10)`, `(expt 2.0 0.5)` | `1024`, `1.4142135623730951` |
-| `exp` | `(exp 1)` | `2.7182818284590455` (interpreter/JVM only) |
-| `log` | `(log 2.718281828459045)` | `1.0` (natural log; interpreter/JVM only) |
+| `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
+| `exp` | `(exp 0)` | `1.0` (interpreter/JVM only) |
+| `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM only) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |
 | `asin` `acos` `atan` | `(atan 0)` | `0.0` (interpreter/JVM only) |
 | `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0` (interpreter/JVM only) |

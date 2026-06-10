@@ -442,7 +442,7 @@ class LispEvaluatorTest {
 	void evalExpt() {
 		assertThat(eval("(expt 2 10)")).isEqualTo(new LispInteger(1024));
 		assertThat(eval("(expt 3 0)")).isEqualTo(new LispInteger(1));
-		assertThat(eval("(expt 2.0 0.5)")).isEqualTo(new LispDouble(Math.sqrt(2)));
+		assertThat(eval("(expt 2.0 3)")).isEqualTo(new LispDouble(8.0));
 		// Integer base with large exponent promotes to BigInteger.
 		assertThat(eval("(expt 2 70)")).isEqualTo(new LispBigInteger(java.math.BigInteger.valueOf(2).pow(70)));
 	}

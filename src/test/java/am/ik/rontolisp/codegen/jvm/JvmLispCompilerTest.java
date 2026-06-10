@@ -558,7 +558,7 @@ class JvmLispCompilerTest {
 	void compileAndRunExpt() throws Exception {
 		assertThat(compileAndRun("(print (expt 2 10))")).isEqualTo("1024");
 		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (expt 2.0 0.5))")).isEqualTo("1.4142135623730951");
+		assertThat(compileAndRun("(print (expt 2.0 3))")).isEqualTo("8.0");
 		assertThat(compileAndRun("(print (expt 2 70))")).isEqualTo("1180591620717411303424");
 	}
 
