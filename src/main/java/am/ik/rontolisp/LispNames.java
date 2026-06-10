@@ -317,6 +317,26 @@ public final class LispNames {
 	/** The {@code load} built-in function (interpreter only). */
 	public static final String LOAD = "load";
 
+	// Packages
+
+	/** The {@code in-package} directive that switches the current package. */
+	public static final String IN_PACKAGE = "in-package";
+
+	/** The {@code *package*} variable holding the current package name. */
+	public static final String PACKAGE_VAR = "*package*";
+
+	/** The {@code version} function provided by the {@code rontolisp} package. */
+	public static final String VERSION = "version";
+
+	/** The {@code cl} package name (standard functions, macros and variables). */
+	public static final String CL_PKG = "cl";
+
+	/** The {@code cl-user} package name (default working package, uses {@code cl}). */
+	public static final String CL_USER_PKG = "cl-user";
+
+	/** The {@code rontolisp} package name (does not use {@code cl}). */
+	public static final String RONTOLISP_PKG = "rontolisp";
+
 	private LispNames() {
 	}
 

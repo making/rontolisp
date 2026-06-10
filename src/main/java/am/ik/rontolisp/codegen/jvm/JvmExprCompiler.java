@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 
 import am.ik.jvm.Opcode;
 
@@ -95,6 +96,11 @@ final class JvmExprCompiler {
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.VERSION.equals(qn.member())) {
+				JvmVersionCompiler.compile(cons, ctx, className);
+				return;
+			}
 			switch (sym.name()) {
 				case LispNames.ADD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);

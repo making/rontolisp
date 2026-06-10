@@ -42,7 +42,8 @@ eval, reader -> rontolisp (AST types only)
 - **Three-pass compilation**: Pass 1 collects defuns. Pass 2a compiles defun bodies, 2b compiles top-level, 2c iteratively compiles lambda bodies. Top-level must compile before lambda iteration.
 - **`%` prefix convention**: Internal helper functions that are not part of the public Lisp API use a `%` prefix (e.g., `%remf-tail`). These are implementation details used by macros and should not be called directly by users. They are registered in `Environment.java` and have dedicated compiler classes (`Jvm<Name>Compiler`, `Wasm<Name>Compiler`), but are not documented in the README.
 - **Built-in function wrappers**: `BuiltinFunctionWrappers` (compiler pkg) generates synthetic `(setq name (lambda ...))` defuns for built-in operators. These are injected in Pass 1 of both compilers so that built-in operators like `+`, `car` can be used as first-class function values (passed to `map`, `reduce`, `funcall`). The wrapper body uses the operator in call position, where `compileCons` inlines it. User defuns with the same name take priority.
-- **JVM method name mangling**: The JVM spec forbids `/`, `<`, `>` in method names. `JvmLispCompiler.mangleMethodName()` maps these to `$div`, `$lt`, `$gt`, `$le`, `$ge`.
+- **JVM method name mangling**: The JVM spec forbids `/`, `<`, `>` in method names. `JvmLispCompiler.mangleMethodName()` maps these to `$div`, `$lt`, `$gt`, `$le`, `$ge`, and `:` (from package-qualified user symbols) to `$colon`.
+- **Packages**: A small namespace system with three built-in packages: `cl` (standard functions/macros/special forms/variables), `cl-user` (default, empty, uses `cl`), and `rontolisp` (does not use `cl`; owns `version`). The whole system is implemented as a single read/compile-time pass, `PackageResolver` (root `am.ik.rontolisp`), that runs before the evaluator (top-level entry of `LispEvaluator.eval`) and before both compilers (`JvmLispCompiler.compile`/`WasmLispCompiler.compile`). **Design decision**: resolving at the pass rather than at runtime keeps the evaluator, both compilers, `LispMacroExpander`, and the embedded read/load/eval runtimes untouched. The pass tracks the current package (driven by `in-package`), enforces the package discipline (an unqualified `cl` symbol in a package that does not use `cl` is the one hard error, `LispPackageException`), and rewrites every form into a canonical shape the existing backends already handle: `cl` symbols and `cl-user` user symbols become bare names, non-default-package symbols become `pkg:name` (so `rontolisp:version` is registered under that exact key in `Environment` and dispatched by `Jvm/WasmVersionCompiler`), `*package*` becomes a quoted current-package symbol, and `(in-package P)` is consumed. The model is generic over `PackageRegistry`/`LispPackage`, so adding a package (or a future `defpackage`) is a registry change, not a resolver change. `cl`'s symbol set lives in `PackageRegistry.CL_SYMBOLS`. Limitations are listed in the README "Packages" section. Tests: `PackageResolverTest`, and package cases in `LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`.
 - **`read`/`load` are supported in all three backends**: A runtime reader/parser is emitted into the compiled output (like `eval`). `read-line` (returns raw string) is also supported in all three modes.
   - *Interpreter*: `read` calls `LispReader.readFromString()`; `load` reads a file with `Files.readString` and evaluates each form in the global environment.
   - *JVM*: `JvmReadRuntimeBuilder` emits a recursive-descent reader (`_read`/`_readExpr`/`_readList`/`_readAtom`/`_readStr`/`_classify`, plus `_load`) into the generated `.class`, assembled with the shared `JvmAsm` label-based assembler. Because the JDK is on the classpath at runtime it has full parity (`Long.parseLong`, `new BigInteger`, `Double.parseDouble`, `java.nio.file`). `load` reads the file and evaluates every form via the `_eval` runtime, so it forces the eval runtime to be emitted. Gated by `programUsesSymbol(READ)`/`programUsesSymbol(LOAD)`.
@@ -68,16 +69,17 @@ When adding a new built-in function or special form:
 
 ### Adding a New Built-in Function
 
-1. **Environment.java**: Add in `createGlobal()` using `env.define("name", new LispFunction(...))`.
-2. **JVM compiler**: Create `Jvm<Name>Compiler.java`, add case in `JvmExprCompiler.compileCons()`.
-3. **WASM compiler**: Create `Wasm<Name>Compiler.java`, add case in `WasmExprCompiler.compileCons()`. Use `WasmEmitHelper.castI31GetS()` to unbox to `i32` and `ref.i31` to re-box.
-4. **BuiltinFunctionWrappers.java**: Add a wrapper entry in `WRAPPER_DEFS` with the appropriate arity and body AST so the function can be used as a first-class value.
+1. **LispNames.java / PackageRegistry.java**: Add the name constant in `LispNames`, and add it to `PackageRegistry.CL_SYMBOLS` so the package resolver treats it as a `cl` symbol (otherwise it is misclassified as a user symbol and unqualified use in the `rontolisp` package would not be rejected).
+2. **Environment.java**: Add in `createGlobal()` using `env.define("name", new LispFunction(...))`.
+3. **JVM compiler**: Create `Jvm<Name>Compiler.java`, add case in `JvmExprCompiler.compileCons()`.
+4. **WASM compiler**: Create `Wasm<Name>Compiler.java`, add case in `WasmExprCompiler.compileCons()`. Use `WasmEmitHelper.castI31GetS()` to unbox to `i32` and `ref.i31` to re-box.
+5. **BuiltinFunctionWrappers.java**: Add a wrapper entry in `WRAPPER_DEFS` with the appropriate arity and body AST so the function can be used as a first-class value.
 
 ### Adding a New Macro
 
 Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`) at the AST level. `LispMacroExpander` (in `am.ik.rontolisp` package) is shared by the evaluator and both compilers.
 
-1. **LispMacroExpander.java**: Add a `public static LispVal expand<Name>(LispCons cons)` method that returns the expanded AST.
+1. **LispMacroExpander.java**: Add a `public static LispVal expand<Name>(LispCons cons)` method that returns the expanded AST. Also add the macro name to `LispNames` and `PackageRegistry.CL_SYMBOLS` (it is a `cl` symbol).
 2. **LispEvaluator.java**: Add case in `evalCons()` switch: `return eval(LispMacroExpander.expand<Name>(cons), env);`
 3. **JvmExprCompiler.java**: Add case: `JvmExprCompiler.compileExpr(LispMacroExpander.expand<Name>(cons), ctx, className);`
 4. **WasmExprCompiler.java**: Add case: `WasmExprCompiler.compileExpr(LispMacroExpander.expand<Name>(cons), ctx);`

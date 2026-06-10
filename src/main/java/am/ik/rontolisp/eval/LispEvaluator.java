@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
@@ -27,6 +28,8 @@ import am.ik.rontolisp.reader.LispReader;
 public final class LispEvaluator {
 
 	private final Environment globalEnv;
+
+	private final PackageResolver packageResolver = new PackageResolver();
 
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
 
@@ -82,9 +85,10 @@ public final class LispEvaluator {
 						LispNames.LOAD + ": cannot read file " + path.value() + ": " + ex.getMessage());
 			}
 			// Evaluate every top-level form in the global environment so that
-			// definitions become reusable after load returns.
+			// definitions become reusable after load returns. Route through the
+			// top-level entry so package directives in the loaded file are processed.
 			for (LispVal form : LispReader.readAllFromString(source)) {
-				eval(form, this.globalEnv);
+				eval(form);
 			}
 			return LispTrue.INSTANCE;
 		}));
@@ -96,7 +100,9 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	public LispVal eval(LispVal expr) {
-		return eval(expr, this.globalEnv);
+		// Resolve packages at the top-level entry only; nested evaluation and macro
+		// expansion operate on the already-resolved canonical form.
+		return eval(this.packageResolver.resolve(expr), this.globalEnv);
 	}
 
 	/**

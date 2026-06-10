@@ -23,7 +23,9 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
+import am.ik.rontolisp.VersionInfo;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -108,7 +110,23 @@ public final class Environment implements Scope {
 		registerPredicates(env);
 		registerListOps(env);
 		registerTypeConversion(env);
+		registerPackages(env);
 		return env;
+	}
+
+	private static void registerPackages(Environment env) {
+		// The version function belongs to the rontolisp package. It is registered under
+		// its
+		// canonical qualified name so that PackageResolver output resolves to it
+		// directly,
+		// and it is NOT visible unqualified in the cl-user package.
+		String versionName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.VERSION);
+		env.define(versionName, new LispFunction(versionName, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(LispNames.VERSION + " expects no arguments, got " + args.size());
+			}
+			return VersionInfo.plist();
+		}));
 	}
 
 	private static void registerArithmetic(Environment env) {

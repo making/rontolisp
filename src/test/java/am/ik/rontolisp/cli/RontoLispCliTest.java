@@ -84,4 +84,16 @@ class RontoLispCliTest {
 		assertThat(output).contains("\"gitCommit\":");
 	}
 
+	@Test
+	void interpretFileUsingPackages() throws Exception {
+		Path file = tempDir.resolve("pkg.lisp");
+		Files.writeString(file, """
+				(print *package*)
+				(in-package :rontolisp)
+				(cl:print (cl:car (version)))
+				""");
+		String output = runCli("", file.toString());
+		assertThat(output).contains("cl-user").contains(":version");
+	}
+
 }

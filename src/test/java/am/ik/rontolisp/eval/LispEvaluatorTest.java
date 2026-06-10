@@ -962,4 +962,56 @@ class LispEvaluatorTest {
 			.hasMessageContaining("cannot read file");
 	}
 
+	@Test
+	void rontolispVersionReturnsPlist() {
+		assertThat(eval("(car (rontolisp:version))")).isEqualTo(new LispSymbol(":version"));
+		assertThat(eval("(cadr (rontolisp:version))")).isEqualTo(new LispString(am.ik.rontolisp.Version.getVersion()));
+	}
+
+	@Test
+	void versionIsNotVisibleUnqualifiedInClUser() {
+		assertThatThrownBy(() -> eval("(version)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Undefined symbol: version");
+	}
+
+	@Test
+	void packageDefaultsToClUser() {
+		assertThat(eval("*package*")).isEqualTo(new LispSymbol("cl-user"));
+	}
+
+	@Test
+	void inPackageMakesVersionVisibleUnqualified() {
+		assertThat(evalMulti("(in-package :rontolisp) (cl:cadr (version))"))
+			.isEqualTo(new LispString(am.ik.rontolisp.Version.getVersion()));
+	}
+
+	@Test
+	void inPackageUpdatesPackageVar() {
+		assertThat(evalMulti("(in-package :rontolisp) cl:*package*")).isEqualTo(new LispSymbol("rontolisp"));
+	}
+
+	@Test
+	void clQualifiedStandardFunctionWorksInRontolisp() {
+		assertThat(evalMulti("(in-package :rontolisp) (cl:car '(1 2))")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void unqualifiedStandardSymbolInRontolispIsRejected() {
+		assertThatThrownBy(() -> evalMulti("(in-package :rontolisp) (car '(1 2))"))
+			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
+			.hasMessageContaining("use cl:car");
+	}
+
+	@Test
+	void inPackageCanSwitchBackToClUser() {
+		assertThat(evalMulti("(in-package :rontolisp) (in-package :cl-user) *package*"))
+			.isEqualTo(new LispSymbol("cl-user"));
+	}
+
+	@Test
+	void inPackageUnknownPackageThrows() {
+		assertThatThrownBy(() -> eval("(in-package foo)")).isInstanceOf(am.ik.rontolisp.LispPackageException.class)
+			.hasMessageContaining("No such package: foo");
+	}
+
 }

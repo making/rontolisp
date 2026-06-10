@@ -358,3 +358,11 @@
 (print (signum -7))
 (print (signum 3.5))
 (print (map sqrt (list 1 4 9)))
+
+; packages: cl-user (default, uses cl) and the rontolisp package (version lives there).
+; keep package switches last since they affect every following form.
+(print *package*)
+(print (car (rontolisp:version)))
+(in-package rontolisp)
+(cl:print cl:*package*)
+(cl:print (cl:car (version)))

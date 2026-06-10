@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LispCompiler;
@@ -66,6 +67,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
+		// Resolve packages (in-package directives, qualified symbols, *package*) up front
+		// so
+		// the rest of compilation sees canonical names.
+		program = new PackageResolver().resolveProgram(program);
 		ConstantPool cp = new ConstantPool();
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
 		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
@@ -791,7 +796,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * names.
 	 */
 	static String mangleMethodName(String name) {
-		return switch (name) {
+		String mangled = switch (name) {
 			case "/" -> "$div";
 			case "<" -> "$lt";
 			case ">" -> "$gt";
@@ -799,6 +804,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			case ">=" -> "$ge";
 			default -> name;
 		};
+		// Package-qualified names (e.g. rontolisp:foo) cannot contain ':' in a JVM method
+		// name; map it so user-defined symbols of non-default packages compile.
+		return mangled.indexOf(':') >= 0 ? mangled.replace(":", "$colon") : mangled;
 	}
 
 	record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {

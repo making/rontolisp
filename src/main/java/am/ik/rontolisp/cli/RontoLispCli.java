@@ -13,6 +13,7 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;

@@ -211,3 +211,7 @@ hello
 -1
 1.0
 (1.0 2.0 3.0)
+cl-user
+:version
+rontolisp
+:version

@@ -1219,4 +1219,18 @@ class WasmLispCompilerIntegrationTest {
 			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
+	@Test
+	void packageVar() throws Exception {
+		assertThat(compileAndRun("(print *package*)")).isEqualTo("cl-user");
+	}
+
+	@Test
+	void inPackageThenUnqualifiedVersion() throws Exception {
+		String code = """
+				(in-package rontolisp)
+				(cl:print (cl:cadr (version)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("\"" + am.ik.rontolisp.Version.getVersion() + "\"");
+	}
+
 }

@@ -674,4 +674,31 @@ class ReadmeExamplesTest {
 
 	}
 
+	// == Packages examples (Language Reference > Packages section) ==
+
+	@Nested
+	class PackageExamples {
+
+		@Test
+		void packageVarDefaultsToClUser() {
+			assertThat(evalAndCaptureOutput("(print *package*)")).isEqualTo("cl-user");
+		}
+
+		@Test
+		void rontolispVersionReturnsPlist() {
+			assertThat(evalAndCaptureOutput("(print (rontolisp:version))")).startsWith("(:version ");
+		}
+
+		@Test
+		void inPackageRontolisp() {
+			String output = evalAndCaptureOutput("""
+					(in-package rontolisp)
+					(cl:print (version))
+					(cl:print (cl:car '(1 2)))
+					""");
+			assertThat(output).contains(":version").endsWith("1");
+		}
+
+	}
+
 }

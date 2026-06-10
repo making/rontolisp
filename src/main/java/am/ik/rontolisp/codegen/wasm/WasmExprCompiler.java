@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -105,6 +106,11 @@ final class WasmExprCompiler {
 	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		LispVal head = cons.car();
 		if (head instanceof LispSymbol sym) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.VERSION.equals(qn.member())) {
+				WasmVersionCompiler.compile(cons, ctx);
+				return;
+			}
 			switch (sym.name()) {
 				case LispNames.ADD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD);
 				case LispNames.SUB -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB);

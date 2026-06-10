@@ -325,6 +325,36 @@ The math built-ins differ in how widely they are supported, because the WASM bac
 - **`expt`** keeps an exact integer result for an integer base raised to a non-negative integer exponent (with big-integer promotion in the interpreter and JVM); a float base/exponent uses `Math.pow` and returns a float. The integer path requires a non-negative exponent. The WASM `expt` is integer-only and, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
 - **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
 
+### Packages
+
+rontolisp has a small namespace (package) system with three built-in packages:
+
+- **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
+- **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
+- **`rontolisp`** — a package for implementation-specific symbols. It does **not** use `cl`. It owns the `version` function.
+
+A symbol can be referenced with a package qualifier, `package:symbol` (e.g. `cl:car`, `rontolisp:version`). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`).
+
+```lisp
+(print *package*)              ; => cl-user
+(print (rontolisp:version))    ; => (:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")
+```
+
+`rontolisp:version` returns the same information as `rontolisp --version`, as a property list.
+
+Because the `rontolisp` package does not use `cl`, standard symbols must be qualified with `cl:` inside it, while `version` (which it owns) is available unqualified:
+
+```lisp
+(in-package rontolisp)
+(cl:print (version))           ; the rontolisp package owns version
+(cl:print (cl:car '(1 2)))     ; standard symbols need the cl: prefix here
+;; (car '(1 2)) would be an error: Undefined symbol: car (use cl:car)
+```
+
+The default package `cl-user` is empty and uses `cl`, so ordinary programs do not need any qualifiers.
+
+Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; `version` is not available as a first-class value (it cannot be passed to `map`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
+
 ### First-Class Functions
 
 Functions are first-class values in all three execution modes. They can be passed as arguments, returned from functions, and stored in data structures.

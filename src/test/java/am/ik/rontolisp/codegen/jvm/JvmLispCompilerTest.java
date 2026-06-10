@@ -1303,4 +1303,24 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(code)).isEqualTo("265252859812191058636308480000000");
 	}
 
+	@Test
+	void compileAndRunRontolispVersion() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:version))")).contains(":version")
+			.contains(am.ik.rontolisp.Version.getVersion());
+	}
+
+	@Test
+	void compileAndRunPackageVar() throws Exception {
+		assertThat(compileAndRun("(print *package*)")).isEqualTo("cl-user");
+	}
+
+	@Test
+	void compileAndRunInPackageThenUnqualifiedVersion() throws Exception {
+		String code = """
+				(in-package rontolisp)
+				(cl:print (cl:cadr (version)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("\"" + am.ik.rontolisp.Version.getVersion() + "\"");
+	}
+
 }
