@@ -50,7 +50,7 @@ class ByteCodeWriterTest {
 		// Assemble the class file
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
 		new ByteCodeWriter(classOut).write(0xCA, 0xFE, 0xBA, 0xBE) // magic
-			.writeVersion(0, 50) // class file version 50 (Java 6)
+			.writeVersion(0, 52) // class file version 52 (Java 8)
 			.writeConstantPool(cp)
 			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass)
 			.writeInterfaces(i -> {
