@@ -159,6 +159,7 @@ jobs:
       run: |
         set -e
         mvn -V \
+            generate-sources \
             javadoc:jar \
             source:jar \
             package \
