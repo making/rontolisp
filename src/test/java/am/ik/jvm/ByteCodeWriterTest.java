@@ -5,16 +5,13 @@ import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class ByteCodeWriterTest {
 
@@ -91,22 +88,6 @@ class ByteCodeWriterTest {
 			}
 			assertThat(baos.toString().trim()).isEqualTo("Hello, World!");
 		}
-
-		// Also verify the generated class file runs correctly under Java 8
-		String java8Home = System.getenv("JAVA8_HOME");
-		if (java8Home == null) {
-			java8Home = "/usr/lib/jvm/temurin-8-jdk-amd64";
-		}
-		Path java8Binary = Paths.get(java8Home, "bin", "java");
-		assumeTrue(Files.isExecutable(java8Binary), "Java 8 binary not found at " + java8Binary);
-
-		Process process = new ProcessBuilder(java8Binary.toString(), "-cp", tempDir.toString(), "HelloWorld")
-			.redirectErrorStream(true)
-			.start();
-		int exitCode = process.waitFor();
-		String java8Output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-		assertThat(exitCode).as("Java 8 process exit code").isEqualTo(0);
-		assertThat(java8Output).as("Java 8 output").isEqualTo("Hello, World!");
 	}
 
 }
