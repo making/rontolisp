@@ -39,12 +39,12 @@ public sealed interface Token {
 	}
 
 	/**
-	 * Fraction token.
+	 * Ratio token.
 	 *
 	 * @param numerator the numerator
 	 * @param denominator the denominator
 	 */
-	record FractionToken(java.math.BigInteger numerator, java.math.BigInteger denominator) implements Token {
+	record RatioToken(java.math.BigInteger numerator, java.math.BigInteger denominator) implements Token {
 	}
 
 	/**

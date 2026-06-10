@@ -107,7 +107,7 @@ public final class LispLexer {
 			}
 			String numerator = stripGrouping(this.input.substring(start, slash));
 			String denominator = stripGrouping(this.input.substring(denominatorStart, this.pos));
-			return new Token.FractionToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
+			return new Token.RatioToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
 		}
 		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.' && this.pos + 1 < this.input.length()
 				&& isDigit(this.input.charAt(this.pos + 1))) {

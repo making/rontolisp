@@ -17,7 +17,7 @@ import java.util.function.DoubleUnaryOperator;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
-import am.ik.rontolisp.LispFraction;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
@@ -230,8 +230,8 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			if (hasFraction(args)) {
-				return addFraction(args);
+			if (hasRatio(args)) {
+				return addRatio(args);
 			}
 			if (hasBigInteger(args)) {
 				return addBig(args);
@@ -258,8 +258,8 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			if (hasFraction(args)) {
-				return subFraction(args);
+			if (hasRatio(args)) {
+				return subRatio(args);
 			}
 			if (hasBigInteger(args)) {
 				return subBig(args);
@@ -286,8 +286,8 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			if (hasFraction(args)) {
-				return mulFraction(args);
+			if (hasRatio(args)) {
+				return mulRatio(args);
 			}
 			if (hasBigInteger(args)) {
 				return mulBig(args);
@@ -311,7 +311,7 @@ public final class Environment implements Scope {
 				}
 				return new LispDouble(result);
 			}
-			return divFraction(args);
+			return divRatio(args);
 		}));
 		env.defineFunction(LispNames.MOD, new LispFunction(LispNames.MOD, args -> {
 			requireArgCount(LispNames.MOD, args, 2);
@@ -328,8 +328,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.abs(asDouble(args.get(0))));
 			}
-			if (args.get(0) instanceof LispFraction f) {
-				return normalizeFraction(f.numerator().abs(), f.denominator());
+			if (args.get(0) instanceof LispRatio f) {
+				return normalizeRatio(f.numerator().abs(), f.denominator());
 			}
 			if (args.get(0) instanceof LispBigInteger b) {
 				return normalizeBig(b.value().abs());
@@ -345,8 +345,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.min(asDouble(args.get(0)), asDouble(args.get(1))));
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) <= 0 ? args.get(0) : args.get(1);
+			if (hasRatio(args)) {
+				return compareRatio(args) <= 0 ? args.get(0) : args.get(1);
 			}
 			if (hasBigInteger(args)) {
 				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) <= 0 ? args.get(0) : args.get(1);
@@ -358,8 +358,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return new LispDouble(Math.max(asDouble(args.get(0)), asDouble(args.get(1))));
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) >= 0 ? args.get(0) : args.get(1);
+			if (hasRatio(args)) {
+				return compareRatio(args) >= 0 ? args.get(0) : args.get(1);
 			}
 			if (hasBigInteger(args)) {
 				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) >= 0 ? args.get(0) : args.get(1);
@@ -474,8 +474,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) == asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			if (hasRatio(args)) {
+				return compareRatio(args) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -487,8 +487,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			if (hasRatio(args)) {
+				return compareRatio(args) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -500,8 +500,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			if (hasRatio(args)) {
+				return compareRatio(args) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -513,8 +513,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) <= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			if (hasRatio(args)) {
+				return compareRatio(args) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -526,8 +526,8 @@ public final class Environment implements Scope {
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) >= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			if (hasFraction(args)) {
-				return compareFraction(args) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			if (hasRatio(args)) {
+				return compareRatio(args) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			if (hasBigInteger(args)) {
 				return compareBig(args) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -713,7 +713,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NUMBERP, new LispFunction(LispNames.NUMBERP, args -> {
 			requireArgCount(LispNames.NUMBERP, args, 1);
 			LispVal arg = args.get(0);
-			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispFraction
+			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispRatio
 					|| arg instanceof LispDouble) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.INTEGERP, new LispFunction(LispNames.INTEGERP, args -> {
@@ -966,7 +966,7 @@ public final class Environment implements Scope {
 			if (arg instanceof LispDouble) {
 				return arg;
 			}
-			if (arg instanceof LispFraction f) {
+			if (arg instanceof LispRatio f) {
 				return new LispDouble(f.doubleValue());
 			}
 			if (arg instanceof LispInteger i) {
@@ -1034,7 +1034,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispDouble d) {
 			return d.value();
 		}
-		if (val instanceof LispFraction f) {
+		if (val instanceof LispRatio f) {
 			return f.doubleValue();
 		}
 		if (val instanceof LispInteger i) {
@@ -1053,7 +1053,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispBigInteger b) {
 			return b.value();
 		}
-		if (val instanceof LispFraction f && BigInteger.ONE.equals(f.denominator())) {
+		if (val instanceof LispRatio f && BigInteger.ONE.equals(f.denominator())) {
 			return f.numerator();
 		}
 		throw new LispEvalException("Expected integer, got: " + val.print());
@@ -1104,75 +1104,75 @@ public final class Environment implements Scope {
 		return normalizeBig(result);
 	}
 
-	private static LispVal addFraction(List<LispVal> args) {
+	private static LispVal addRatio(List<LispVal> args) {
 		BigInteger numerator = BigInteger.ZERO;
 		BigInteger denominator = BigInteger.ONE;
 		for (LispVal arg : args) {
-			LispFraction frac = toFraction(arg);
+			LispRatio frac = toRatio(arg);
 			numerator = numerator.multiply(frac.denominator()).add(frac.numerator().multiply(denominator));
 			denominator = denominator.multiply(frac.denominator());
 		}
-		return normalizeFraction(numerator, denominator);
+		return normalizeRatio(numerator, denominator);
 	}
 
-	private static LispVal subFraction(List<LispVal> args) {
+	private static LispVal subRatio(List<LispVal> args) {
 		if (args.size() == 1) {
-			LispFraction frac = toFraction(args.get(0));
-			return normalizeFraction(frac.numerator().negate(), frac.denominator());
+			LispRatio frac = toRatio(args.get(0));
+			return normalizeRatio(frac.numerator().negate(), frac.denominator());
 		}
-		LispFraction first = toFraction(args.get(0));
+		LispRatio first = toRatio(args.get(0));
 		BigInteger numerator = first.numerator();
 		BigInteger denominator = first.denominator();
 		for (int i = 1; i < args.size(); i++) {
-			LispFraction frac = toFraction(args.get(i));
+			LispRatio frac = toRatio(args.get(i));
 			numerator = numerator.multiply(frac.denominator()).subtract(frac.numerator().multiply(denominator));
 			denominator = denominator.multiply(frac.denominator());
 		}
-		return normalizeFraction(numerator, denominator);
+		return normalizeRatio(numerator, denominator);
 	}
 
-	private static LispVal mulFraction(List<LispVal> args) {
+	private static LispVal mulRatio(List<LispVal> args) {
 		BigInteger numerator = BigInteger.ONE;
 		BigInteger denominator = BigInteger.ONE;
 		for (LispVal arg : args) {
-			LispFraction frac = toFraction(arg);
+			LispRatio frac = toRatio(arg);
 			numerator = numerator.multiply(frac.numerator());
 			denominator = denominator.multiply(frac.denominator());
 		}
-		return normalizeFraction(numerator, denominator);
+		return normalizeRatio(numerator, denominator);
 	}
 
-	private static LispVal divFraction(List<LispVal> args) {
-		LispFraction first = toFraction(args.get(0));
+	private static LispVal divRatio(List<LispVal> args) {
+		LispRatio first = toRatio(args.get(0));
 		BigInteger numerator = first.numerator();
 		BigInteger denominator = first.denominator();
 		for (int i = 1; i < args.size(); i++) {
-			LispFraction frac = toFraction(args.get(i));
+			LispRatio frac = toRatio(args.get(i));
 			numerator = numerator.multiply(frac.denominator());
 			denominator = denominator.multiply(frac.numerator());
 		}
-		return normalizeFraction(numerator, denominator);
+		return normalizeRatio(numerator, denominator);
 	}
 
-	private static LispFraction toFraction(LispVal val) {
-		if (val instanceof LispFraction f) {
+	private static LispRatio toRatio(LispVal val) {
+		if (val instanceof LispRatio f) {
 			return f;
 		}
-		return new LispFraction(asBigInteger(val), BigInteger.ONE);
+		return new LispRatio(asBigInteger(val), BigInteger.ONE);
 	}
 
-	private static LispVal normalizeFraction(BigInteger numerator, BigInteger denominator) {
-		LispFraction fraction = new LispFraction(numerator, denominator);
-		return BigInteger.ONE.equals(fraction.denominator()) ? normalizeBig(fraction.numerator()) : fraction;
+	private static LispVal normalizeRatio(BigInteger numerator, BigInteger denominator) {
+		LispRatio ratio = new LispRatio(numerator, denominator);
+		return BigInteger.ONE.equals(ratio.denominator()) ? normalizeBig(ratio.numerator()) : ratio;
 	}
 
 	private static int compareBig(List<LispVal> args) {
 		return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1)));
 	}
 
-	private static int compareFraction(List<LispVal> args) {
-		LispFraction a = toFraction(args.get(0));
-		LispFraction b = toFraction(args.get(1));
+	private static int compareRatio(List<LispVal> args) {
+		LispRatio a = toRatio(args.get(0));
+		LispRatio b = toRatio(args.get(1));
 		return a.numerator().multiply(b.denominator()).compareTo(b.numerator().multiply(a.denominator()));
 	}
 
@@ -1185,9 +1185,9 @@ public final class Environment implements Scope {
 		return false;
 	}
 
-	private static boolean hasFraction(List<LispVal> args) {
+	private static boolean hasRatio(List<LispVal> args) {
 		for (LispVal arg : args) {
-			if (arg instanceof LispFraction) {
+			if (arg instanceof LispRatio) {
 				return true;
 			}
 		}

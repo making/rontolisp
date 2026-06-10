@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
+import java.math.BigInteger;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -187,7 +188,7 @@ class ReadmeExamplesTest {
 
 		@Test
 		void divide() {
-			assertThat(eval("(/ 10 3)")).isEqualTo(new LispInteger(3));
+			assertThat(eval("(/ 10 3)")).isEqualTo(new LispRatio(BigInteger.TEN, BigInteger.valueOf(3)));
 			assertThat(eval("(/ 7.0 2.0)")).isEqualTo(new LispDouble(3.5));
 		}
 

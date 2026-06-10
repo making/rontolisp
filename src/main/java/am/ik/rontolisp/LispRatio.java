@@ -8,9 +8,9 @@ import java.math.BigInteger;
  * @param numerator the numerator
  * @param denominator the denominator (always positive)
  */
-public record LispFraction(BigInteger numerator, BigInteger denominator) implements LispVal {
+public record LispRatio(BigInteger numerator, BigInteger denominator) implements LispVal {
 
-	public LispFraction {
+	public LispRatio {
 		if (denominator.signum() == 0) {
 			throw new IllegalArgumentException("Denominator must not be zero");
 		}
