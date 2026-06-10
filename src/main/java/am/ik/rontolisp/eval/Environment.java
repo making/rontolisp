@@ -966,6 +966,9 @@ public final class Environment implements Scope {
 			if (arg instanceof LispDouble) {
 				return arg;
 			}
+			if (arg instanceof LispFraction f) {
+				return new LispDouble(f.doubleValue());
+			}
 			if (arg instanceof LispInteger i) {
 				return new LispDouble((double) i.value());
 			}

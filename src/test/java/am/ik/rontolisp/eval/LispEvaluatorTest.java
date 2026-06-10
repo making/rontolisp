@@ -355,6 +355,11 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFloatConvertsFractionToDouble() {
+		assertThat(eval("(float 1/2)")).isEqualTo(new LispDouble(0.5));
+	}
+
+	@Test
 	void evalDoubleMod() {
 		assertThat(eval("(mod 5.5 2.0)")).isEqualTo(new LispDouble(1.5));
 	}
