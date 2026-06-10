@@ -3,8 +3,8 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -17,16 +17,12 @@ final class WasmFunctionCallCompiler {
 	}
 
 	/**
-	 * Compiles the default case in dispatch: direct or indirect call based on symbol
-	 * resolution.
+	 * Compiles the default case in dispatch. Under the Lisp-2 model a symbol in call
+	 * position resolves in the function namespace only, so variable bindings never shadow
+	 * it: this is always a direct call against the function registry.
 	 */
 	static void compileDefault(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name)) {
-			compileIndirectCall(cons, ctx);
-		}
-		else {
-			compileDirectCall(name, cons, ctx);
-		}
+		compileDirectCall(name, cons, ctx);
 	}
 
 	/**
@@ -39,7 +35,7 @@ final class WasmFunctionCallCompiler {
 		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + arity;
 
 		// Push funcval
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(parts.get(1)), ctx);
 		// Push args
 		for (int i = 2; i < parts.size(); i++) {
 			WasmExprCompiler.compileExpr(parts.get(i), ctx);
@@ -68,25 +64,6 @@ final class WasmFunctionCallCompiler {
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}
-	}
-
-	private static void compileIndirectCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		List<LispVal> args = cons.toList();
-		LispSymbol headSym = (LispSymbol) cons.car();
-		int arity = args.size() - 1;
-		ctx.indirectCallArities.add(arity);
-		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + arity;
-
-		// Push funcval as first arg to dispatch
-		WasmExprCompiler.compileSymbolRef(headSym, ctx);
-
-		// Push remaining args
-		for (int i = 1; i < args.size(); i++) {
-			WasmExprCompiler.compileExpr(args.get(i), ctx);
-		}
-		// Call dispatch function
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
 	}
 
 }

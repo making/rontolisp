@@ -161,6 +161,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
 
+	// Global (wasm global section) index holding the runtime eval function namespace
+	// (Lisp-2): defuns evaluated at runtime (e.g. from load) are bound here, separate
+	// from the variable environment above.
+	static final int GLOBAL_FENV = 1;
+
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
 
@@ -205,20 +210,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
 		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic;
-		// Pass 1: Collect defun declarations and top-level expressions
+		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
+		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
+		// binds a variable to a closure like any other setq.
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
 		for (LispVal expr : program) {
-			LispVal expanded = expr;
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
-				expanded = LispMacroExpander.expandDefun(cons);
-			}
-			if (isSetqLambda(expanded)) {
-				defuns.add(extractSetqLambda(expanded));
+				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
 			}
 			else {
-				topLevelExprs.add(expanded);
+				topLevelExprs.add(expr);
 			}
 		}
 
@@ -424,8 +427,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
-				dispatchBodies
-					.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns, stringTable));
+				dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns,
+						stringTable, usesEval));
 			}
 			else {
 				// Unused arity: unreachable body
@@ -492,6 +495,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.SETF)
 				.add(stringTable, LispNames.PUSH)
 				.add(stringTable, LispNames.POP)
+				.add(stringTable, LispNames.FUNCTION)
+				.add(stringTable, LispNames.SYMBOL_FUNCTION)
 				.build();
 			ByteArrayOutputStream registry = new ByteArrayOutputStream();
 			for (int i = 0; i < defuns.size(); i++) {
@@ -684,8 +689,17 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Memory section
 			.writeMemory(memories -> memories.addMemory(1))
-			// Global section: the eval top-level environment, (mut (ref null eq)) = null
+			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
+			// the Lisp-2 function namespace (GLOBAL_FENV), both (mut (ref null eq)) =
+			// null
 			.writeGlobal(globals -> globals.add(g -> {
+				g.write(Type.REFNULL.code());
+				g.writeHeapType(Type.EQ.code());
+				g.write(am.ik.wasm.Mutability.VAR.code());
+				g.write(Instruction.REF_NULL);
+				g.writeHeapType(Type.EQ.code());
+				g.write(Instruction.END);
+			}).add(g -> {
 				g.write(Type.REFNULL.code());
 				g.writeHeapType(Type.EQ.code());
 				g.write(am.ik.wasm.Mutability.VAR.code());
@@ -824,18 +838,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		target.write((value >>> 8) & 0xFF);
 		target.write((value >>> 16) & 0xFF);
 		target.write((value >>> 24) & 0xFF);
-	}
-
-	private static boolean isSetqLambda(LispVal expr) {
-		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
-				&& LispNames.SETQ.equals(sym.name())) {
-			List<LispVal> parts = cons.toList();
-			if (parts.size() == 3 && parts.get(1) instanceof LispSymbol && parts.get(2) instanceof LispCons valueCons
-					&& valueCons.car() instanceof LispSymbol lambdaSym && LispNames.LAMBDA.equals(lambdaSym.name())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static DefunDecl extractSetqLambda(LispVal expr) {

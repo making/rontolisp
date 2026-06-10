@@ -74,7 +74,8 @@ final class WasmRuntimeBuilder {
 	}
 
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
-			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st) {
+			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
+			boolean usesEval) {
 		// Collect all functions with matching arity
 		record Target(int funcId, int funcIndex) {
 		}
@@ -95,18 +96,16 @@ final class WasmRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: param 0 = funcval, params 1..arity = args
-		// Extra local for funcId extraction
-		w.write(1); // 1 local group
+		// Extra locals: funcId (i32) and the arg list for the _apply fallback (ref)
+		w.write(2); // 2 local groups
 		w.write(1); // 1 local of type i32
 		w.write(Type.I32);
+		w.write(1); // 1 local of type (ref null eq)
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
 
 		int funcIdLocal = arity + 1; // after params
-
-		if (targets.isEmpty()) {
-			w.write(Instruction.UNREACHABLE);
-			w.write(Instruction.END);
-			return body.toByteArray();
-		}
+		int argListLocal = arity + 2;
 
 		// Extract funcId from closure struct
 		w.write(Instruction.GET_LOCAL);
@@ -118,6 +117,45 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0); // field 0: funcId
 		w.write(Instruction.SET_LOCAL);
 		w.writeSignedLeb128(funcIdLocal);
+
+		// Interpreted closure (funcId == -1, created by the eval runtime's lambda):
+		// delegate to _apply with the arguments collected into a cons list
+		if (usesEval) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(funcIdLocal);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(-1);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			w.write(Instruction.SET_LOCAL);
+			w.writeSignedLeb128(argListLocal);
+			for (int a = arity; a >= 1; a--) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeSignedLeb128(a);
+				w.write(Instruction.GET_LOCAL);
+				w.writeSignedLeb128(argListLocal);
+				w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				w.write(Instruction.SET_LOCAL);
+				w.writeSignedLeb128(argListLocal);
+			}
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(argListLocal);
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
+
+		if (targets.isEmpty()) {
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
 
 		int numCases = targets.size();
 		int maxFuncId = 0;

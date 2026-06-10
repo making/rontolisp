@@ -199,20 +199,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		ConstantPool.StringConstant spaceStr = cp.addString(" ");
 		ConstantPool.StringConstant dotStr = cp.addString(" . ");
 
-		// Pass 1: Collect defun declarations and top-level expressions
+		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
+		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
+		// binds a variable to a closure like any other setq.
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
 		for (LispVal expr : program) {
-			LispVal expanded = expr;
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
-				expanded = LispMacroExpander.expandDefun(cons);
-			}
-			if (isSetqLambda(expanded)) {
-				defuns.add(extractSetqLambda(expanded));
+				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
 			}
 			else {
-				topLevelExprs.add(expanded);
+				topLevelExprs.add(expr);
 			}
 		}
 
@@ -399,11 +397,17 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaIdx++;
 		}
 
-		// Build dispatch functions for each needed arity
+		// Build dispatch functions for each needed arity. When the eval runtime is
+		// present, the dispatcher falls back to _apply for interpreted closures
+		// (funcId == -1) created by the runtime's lambda.
+		MethodrefConstant applyRefForDispatch = usesEval
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_apply"),
+						cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
+				: null;
 		List<DispatchMethod> dispatchMethods = new ArrayList<>();
 		for (int arity : indirectCallArities) {
 			DispatchMethod dm = JvmRuntimeBuilder.buildDispatchMethod(arity, functions, lambdaDecls, lambdaFuncInfos,
-					cp, thisClass, objectArrayClass, integerClass, integerValue);
+					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, applyRefForDispatch);
 			dispatchMethods.add(dm);
 		}
 
@@ -422,6 +426,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant genvName = cp.addUtf8("_genv");
 		Utf8Constant genvDesc = cp.addUtf8("Ljava/lang/Object;");
 		FieldrefConstant genvField = cp.addFieldref(thisClass, cp.addNameAndType(genvName, genvDesc));
+		Utf8Constant fenvName = cp.addUtf8("_fenv");
+		FieldrefConstant fenvField = cp.addFieldref(thisClass, cp.addNameAndType(fenvName, genvDesc));
 		List<Integer> evalCode = List.of();
 		List<Integer> applyCode = List.of();
 		List<Integer> storeCode = List.of();
@@ -463,6 +469,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.envLookupRef(envLookupRef)
 				.lookupRef(lookupRef)
 				.genvField(genvField)
+				.fenvField(fenvField)
 				.invoke(invoke)
 				.functions(functions)
 				.build();
@@ -531,6 +538,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
+						.writeU2(genvDesc)
+						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(fenvName)
 						.writeU2(genvDesc)
 						.writeU2(0));
 				}
@@ -768,18 +779,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			return List.of();
 		}
 		return ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
-	}
-
-	static boolean isSetqLambda(LispVal expr) {
-		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
-				&& LispNames.SETQ.equals(sym.name())) {
-			List<LispVal> parts = cons.toList();
-			if (parts.size() == 3 && parts.get(1) instanceof LispSymbol && parts.get(2) instanceof LispCons valueCons
-					&& valueCons.car() instanceof LispSymbol lambdaSym && LispNames.LAMBDA.equals(lambdaSym.name())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	static DefunDecl extractSetqLambda(LispVal expr) {

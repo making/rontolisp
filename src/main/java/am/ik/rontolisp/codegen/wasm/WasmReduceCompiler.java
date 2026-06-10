@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -26,7 +27,7 @@ final class WasmReduceCompiler {
 		boolean threeArg = (args.size() == 4);
 
 		// Compile function expression
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
 		int funcSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(funcSlot);

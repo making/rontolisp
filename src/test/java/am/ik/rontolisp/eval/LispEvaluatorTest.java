@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -196,7 +197,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalSetqLambdaAndCall() {
-		assertThat(evalMulti("(setq square (lambda (x) (* x x))) (square 5)")).isEqualTo(new LispInteger(25));
+		assertThat(evalMulti("(setq square (lambda (x) (* x x))) (funcall square 5)")).isEqualTo(new LispInteger(25));
 	}
 
 	@Test
@@ -219,32 +220,35 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalHigherOrderFunction() {
-		assertThat(evalMulti("(defun apply-twice (f x) (f (f x))) (defun square (x) (* x x)) (apply-twice square 3)"))
+		assertThat(evalMulti(
+				"(defun apply-twice (f x) (funcall f (funcall f x))) (defun square (x) (* x x)) (apply-twice #'square 3)"))
 			.isEqualTo(new LispInteger(81));
 	}
 
 	@Test
 	void evalLambdaAsArgument() {
-		assertThat(evalMulti("(defun apply-twice (f x) (f (f x))) (apply-twice (lambda (x) (+ x 1)) 5)"))
+		assertThat(
+				evalMulti("(defun apply-twice (f x) (funcall f (funcall f x))) (apply-twice (lambda (x) (+ x 1)) 5)"))
 			.isEqualTo(new LispInteger(7));
 	}
 
 	@Test
 	void evalClosure() {
-		assertThat(evalMulti("(defun make-adder (n) (lambda (x) (+ x n))) (setq add5 (make-adder 5)) (add5 10)"))
+		assertThat(
+				evalMulti("(defun make-adder (n) (lambda (x) (+ x n))) (setq add5 (make-adder 5)) (funcall add5 10)"))
 			.isEqualTo(new LispInteger(15));
 	}
 
 	@Test
 	void evalClosureMutation() {
 		assertThat(evalMulti(
-				"(defun make-counter () (let ((n 0)) (lambda () (setq n (+ n 1)) n))) (setq c (make-counter)) (c) (c) (c)"))
+				"(defun make-counter () (let ((n 0)) (lambda () (setq n (+ n 1)) n))) (setq c (make-counter)) (funcall c) (funcall c) (funcall c)"))
 			.isEqualTo(new LispInteger(3));
 	}
 
 	@Test
 	void evalDynamicFunctionSelection() {
-		assertThat(evalMulti("(defun sq (x) (* x x)) (setq f (if t sq (lambda (x) x))) (f 5)"))
+		assertThat(evalMulti("(defun sq (x) (* x x)) (setq f (if t #'sq (lambda (x) x))) (funcall f 5)"))
 			.isEqualTo(new LispInteger(25));
 	}
 
@@ -255,7 +259,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalFunctionInList() {
-		assertThat(evalMulti("(defun sq (x) (* x x)) (funcall (car (list sq)) 5)")).isEqualTo(new LispInteger(25));
+		assertThat(evalMulti("(defun sq (x) (* x x)) (funcall (car (list #'sq)) 5)")).isEqualTo(new LispInteger(25));
 	}
 
 	@Test
@@ -736,37 +740,97 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalReduceWithBuiltinPlus() {
-		assertThat(eval("(reduce + 0 '(1 2 3 4 5))")).isEqualTo(new LispInteger(15));
+		assertThat(eval("(reduce #'+ 0 '(1 2 3 4 5))")).isEqualTo(new LispInteger(15));
 	}
 
 	@Test
 	void evalReduceWithBuiltinMul() {
-		assertThat(eval("(reduce * 1 '(1 2 3 4 5))")).isEqualTo(new LispInteger(120));
+		assertThat(eval("(reduce #'* 1 '(1 2 3 4 5))")).isEqualTo(new LispInteger(120));
 	}
 
 	@Test
 	void evalMapWithBuiltinCar() {
-		assertThat(eval("(map car '((1 2) (3 4) (5 6)))").print()).isEqualTo("(1 3 5)");
+		assertThat(eval("(map #'car '((1 2) (3 4) (5 6)))").print()).isEqualTo("(1 3 5)");
 	}
 
 	@Test
 	void evalMapWithBuiltinCdr() {
-		assertThat(eval("(map cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
+		assertThat(eval("(map #'cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
 	}
 
 	@Test
 	void evalFuncallWithBuiltinPlus() {
-		assertThat(eval("(funcall + 3 4)")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(funcall #'+ 3 4)")).isEqualTo(new LispInteger(7));
 	}
 
 	@Test
 	void evalMapWithBuiltin1Plus() {
-		assertThat(eval("(map 1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+		assertThat(eval("(map #'1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
 	}
 
 	@Test
 	void evalBuiltinAsVariable() {
-		assertThat(evalMulti("(setq my-op +) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
+		assertThat(evalMulti("(setq my-op #'+) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
+	}
+
+	// Lisp-2 (separate function/variable namespaces) tests
+
+	@Test
+	void evalBareFunctionNameAsVariableIsUnbound() {
+		assertThatThrownBy(() -> eval("car")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The variable car is unbound");
+	}
+
+	@Test
+	void evalFuncallWithSharpQuotedBuiltin() {
+		assertThat(eval("(funcall #'car '(1 2))")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void evalFunctionFormReturnsFunctionValue() {
+		assertThat(eval("(function car)")).isInstanceOf(LispFunction.class);
+	}
+
+	@Test
+	void evalSharpQuotedLambdaWithFuncall() {
+		assertThat(eval("(funcall #'(lambda (x) (* x 2)) 21)")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalSymbolFunctionWithFuncall() {
+		assertThat(eval("(funcall (symbol-function 'car) '(9 8))")).isEqualTo(new LispInteger(9));
+	}
+
+	@Test
+	void evalFuncallWithSymbolDesignator() {
+		assertThat(eval("(funcall 'car '(7 8))")).isEqualTo(new LispInteger(7));
+	}
+
+	@Test
+	void evalFunctionOfSpecialOperatorThrows() {
+		assertThatThrownBy(() -> eval("#'defun")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("is a macro or special operator, not a function");
+	}
+
+	@Test
+	void evalCallOfUndefinedFunctionThrows() {
+		assertThatThrownBy(() -> eval("(nosuchfn 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The function nosuchfn is undefined");
+	}
+
+	@Test
+	void evalVariableBindingDoesNotShadowFunction() {
+		assertThat(eval("(let ((car 5)) (car (list car 2)))")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalDefunReturnsFunctionNameSymbol() {
+		assertThat(eval("(defun f (x) x)")).isEqualTo(new LispSymbol("f"));
+	}
+
+	@Test
+	void evalMapWithSharpQuotedCarCdrComposition() {
+		assertThat(eval("(map #'cadr '((1 2) (3 4)))").print()).isEqualTo("(2 4)");
 	}
 
 	// eval tests
@@ -971,7 +1035,7 @@ class LispEvaluatorTest {
 	@Test
 	void versionIsNotVisibleUnqualifiedInClUser() {
 		assertThatThrownBy(() -> eval("(version)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("Undefined symbol: version");
+			.hasMessageContaining("The function version is undefined");
 	}
 
 	@Test

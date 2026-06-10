@@ -17,6 +17,10 @@ public sealed interface Token {
 	record Quote() implements Token {
 	}
 
+	/** Function quote ({@code #'}) token. */
+	record FunctionQuote() implements Token {
+	}
+
 	/**
 	 * Integer number token.
 	 *

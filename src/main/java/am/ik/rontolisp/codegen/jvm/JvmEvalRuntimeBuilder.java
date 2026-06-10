@@ -88,6 +88,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final FieldrefConstant genvField;
 
+		private final FieldrefConstant fenvField;
+
 		private final MethodrefConstant[] invoke;
 
 		private final Map<String, JvmLispCompiler.FunctionInfo> functions;
@@ -113,6 +115,7 @@ final class JvmEvalRuntimeBuilder {
 			this.envLookupRef = Objects.requireNonNull(b.envLookupRef);
 			this.lookupRef = Objects.requireNonNull(b.lookupRef);
 			this.genvField = Objects.requireNonNull(b.genvField);
+			this.fenvField = Objects.requireNonNull(b.fenvField);
 			this.invoke = Objects.requireNonNull(b.invoke);
 			this.functions = Objects.requireNonNull(b.functions);
 		}
@@ -197,6 +200,10 @@ final class JvmEvalRuntimeBuilder {
 			return this.genvField;
 		}
 
+		FieldrefConstant fenvField() {
+			return this.fenvField;
+		}
+
 		MethodrefConstant[] invoke() {
 			return this.invoke;
 		}
@@ -250,6 +257,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable MethodrefConstant lookupRef;
 
 			private @Nullable FieldrefConstant genvField;
+
+			private @Nullable FieldrefConstant fenvField;
 
 			private MethodrefConstant @Nullable [] invoke;
 
@@ -352,6 +361,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder genvField(FieldrefConstant f) {
 				this.genvField = f;
+				return this;
+			}
+
+			Builder fenvField(FieldrefConstant f) {
+				this.fenvField = f;
 				return this;
 			}
 
@@ -635,6 +649,89 @@ final class JvmEvalRuntimeBuilder {
 	}
 
 	/**
+	 * Emits code that installs a function binding into the {@code _fenv} function
+	 * namespace: an existing binding's value cell is mutated, otherwise a new binding is
+	 * prepended. Reads the name from {@code nameSlot} and the value from
+	 * {@code valueSlot}; clobbers {@code tmpSlot}. Leaves nothing on the stack.
+	 */
+	private void storeFunctionBinding(Asm a, int nameSlot, int valueSlot, int tmpSlot) {
+		int create = a.label();
+		int done = a.label();
+		a.aload(nameSlot);
+		a.getstatic(this.k.fenvField());
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.branch(Opcode.IFNULL, create);
+		// existing binding: binding[1] = value
+		a.aload(tmpSlot);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(1);
+		a.aload(valueSlot);
+		a.aastore();
+		a.branch(Opcode.GOTO, done);
+		a.bind(create);
+		// binding = new Object[]{name, value}
+		consFromSlots(a, nameSlot, valueSlot);
+		a.astore(tmpSlot);
+		// _fenv = new Object[]{binding, _fenv}
+		a.iconst(2);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		a.aload(tmpSlot);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.getstatic(this.k.fenvField());
+		a.aastore();
+		a.putstatic(this.k.fenvField());
+		a.bind(done);
+	}
+
+	/**
+	 * Emits code that resolves the symbol in {@code nameSlot} against the function
+	 * namespace and returns the function value: a runtime {@code defun} binding in
+	 * {@code _fenv} first, then the compiled function registry (wrapped as a closure
+	 * {@code Object[]{Integer funcId}}), and nil when undefined. Every path ends in
+	 * {@code areturn}; clobbers {@code tmpSlot}.
+	 */
+	private void emitFunctionLookupReturn(Asm a, int nameSlot, int tmpSlot) {
+		int reg = a.label();
+		a.aload(nameSlot);
+		a.getstatic(this.k.fenvField());
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.branch(Opcode.IFNULL, reg);
+		a.aload(tmpSlot);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(1);
+		a.aaload();
+		a.areturn();
+		a.bind(reg);
+		int miss = a.label();
+		a.aload(nameSlot);
+		a.invokestatic(this.k.lookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.branch(Opcode.IFNULL, miss);
+		a.iconst(1);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		a.aload(tmpSlot);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(0);
+		a.aaload();
+		a.aastore();
+		a.areturn();
+		a.bind(miss);
+		a.aconstNull();
+		a.areturn();
+	}
+
+	/**
 	 * Emits {@code aload(opSlot); ldc name; equals; ifeq next} and returns the
 	 * {@code next} label. The caller emits the special-form body (which must end in a
 	 * return) and then binds {@code next}.
@@ -892,6 +989,50 @@ final class JvmEvalRuntimeBuilder {
 		a.aconstNull();
 		a.areturn();
 		a.bind(notNull);
+
+		// symbol designator (CL-style): a String resolves in the function namespace
+		// (_fenv then the compiled registry) and the result replaces fn
+		int notSym = a.label();
+		int resolved = a.label();
+		a.aload(FN);
+		a.instanceOf(this.k.stringClass());
+		a.branch(Opcode.IFEQ, notSym);
+		int desReg = a.label();
+		a.aload(FN);
+		a.getstatic(this.k.fenvField());
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(TMP);
+		a.aload(TMP);
+		a.branch(Opcode.IFNULL, desReg);
+		a.aload(TMP);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(1);
+		a.aaload();
+		a.astore(FN);
+		a.branch(Opcode.GOTO, resolved);
+		a.bind(desReg);
+		int desMiss = a.label();
+		a.aload(FN);
+		a.invokestatic(this.k.lookupRef());
+		a.astore(TMP);
+		a.aload(TMP);
+		a.branch(Opcode.IFNULL, desMiss);
+		a.iconst(1);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		a.aload(TMP);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(0);
+		a.aaload();
+		a.aastore();
+		a.astore(FN);
+		a.branch(Opcode.GOTO, resolved);
+		a.bind(desMiss);
+		a.aconstNull();
+		a.areturn();
+		a.bind(resolved);
+		a.bind(notSym);
 
 		// fn instanceof Object[] ?
 		int notArr = a.label();
@@ -1372,36 +1513,19 @@ final class JvmEvalRuntimeBuilder {
 		a.aaload();
 		a.areturn();
 		a.bind(global);
-		// global lookup
-		int reg = a.label();
+		// global lookup; Lisp-2: a bare symbol resolves the variable namespace only,
+		// never the function registry. An unbound symbol evaluates to itself.
+		int self = a.label();
 		a.aload(VAL);
 		a.getstatic(this.k.genvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, reg);
-		a.aload(TMP);
-		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
-		a.aaload();
-		a.areturn();
-		a.bind(reg);
-		// registered function as a first-class value
-		int self = a.label();
-		a.aload(VAL);
-		a.invokestatic(this.k.lookupRef());
-		a.astore(TMP);
-		a.aload(TMP);
 		a.branch(Opcode.IFNULL, self);
-		a.iconst(1);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.iconst(1);
 		a.aaload();
-		a.aastore();
 		a.areturn();
 		a.bind(self);
 		a.aload(VAL);
@@ -1549,8 +1673,8 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- defun: (defun name (params) body...) treated as
-		// (setq name (lambda (params) body...)) so loaded files can define functions ----
+		// ---- defun: (defun name (params) body...) builds a closure and installs it
+		// into the _fenv function namespace so loaded files can define functions ----
 		n = special(a, OP, LispNames.DEFUN);
 		car(a, REST);
 		a.astore(ACC); // name symbol
@@ -1571,14 +1695,42 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ENV);
 		a.invokestatic(this.k.evalRef());
 		a.astore(NEWCELL); // closure value
-		// _store(name, value, ENV) -> defines/updates the global binding
-		a.aload(ACC);
-		a.aload(NEWCELL);
-		a.aload(ENV);
-		a.invokestatic(this.k.storeRef());
-		a.pop();
+		// install into the function namespace (Lisp-2): _fenv, not _genv
+		storeFunctionBinding(a, ACC, NEWCELL, TMP);
 		a.aload(ACC);
 		a.areturn();
+		a.bind(n);
+
+		// ---- function: (function name) / #'name resolves the function namespace;
+		// (function (lambda ...)) evaluates to a closure ----
+		n = special(a, OP, LispNames.FUNCTION);
+		car(a, REST);
+		a.astore(ACC); // designator (unevaluated)
+		int fnSym = a.label();
+		a.aload(ACC);
+		a.instanceOf(this.k.stringClass());
+		a.branch(Opcode.IFNE, fnSym);
+		// non-symbol designator (a lambda form): evaluate it
+		a.aload(ACC);
+		a.aload(ENV);
+		a.invokestatic(this.k.evalRef());
+		a.areturn();
+		a.bind(fnSym);
+		emitFunctionLookupReturn(a, ACC, TMP);
+		a.bind(n);
+
+		// ---- symbol-function: like function but the argument is evaluated ----
+		n = special(a, OP, LispNames.SYMBOL_FUNCTION);
+		evalCar(a, REST, ENV);
+		a.astore(ACC);
+		int sfSym = a.label();
+		a.aload(ACC);
+		a.instanceOf(this.k.stringClass());
+		a.branch(Opcode.IFNE, sfSym);
+		a.aconstNull();
+		a.areturn();
+		a.bind(sfSym);
+		emitFunctionLookupReturn(a, ACC, TMP);
 		a.bind(n);
 
 		// ---- cond ----
@@ -2142,14 +2294,16 @@ final class JvmEvalRuntimeBuilder {
 		a.bind(notArith);
 
 		// ---- generic named application ----
-		// (a) operator bound in the lexical environment
+		// Lisp-2: the operator resolves in the function namespace only. Variable
+		// bindings (lexical or global) never shadow a function.
+		// (a) operator defined at runtime via defun (the _fenv function namespace)
 		a.aload(OP);
-		a.aload(ENV);
+		a.getstatic(this.k.fenvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
-		int notLexical = a.label();
+		int notFenv = a.label();
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, notLexical);
+		a.branch(Opcode.IFNULL, notFenv);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
 		a.iconst(1);
@@ -2160,26 +2314,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
-		a.bind(notLexical);
-		// (a2) operator bound in the global environment
-		a.aload(OP);
-		a.getstatic(this.k.genvField());
-		a.invokestatic(this.k.envLookupRef());
-		a.astore(TMP);
-		int notGlobal = a.label();
-		a.aload(TMP);
-		a.branch(Opcode.IFNULL, notGlobal);
-		a.aload(TMP);
-		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
-		a.aaload();
-		a.astore(FN);
-		buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
-		a.aload(FN);
-		a.aload(ARGHEAD);
-		a.invokestatic(this.k.applyRef());
-		a.areturn();
-		a.bind(notGlobal);
+		a.bind(notFenv);
 		// (b) registered function: evaluate exactly its arity, then apply
 		a.aload(OP);
 		a.invokestatic(this.k.lookupRef());

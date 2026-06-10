@@ -29,6 +29,12 @@ public final class LispNames {
 	/** The {@code funcall} special form. */
 	public static final String FUNCALL = "funcall";
 
+	/** The {@code function} special form ({@code #'name} reader syntax). */
+	public static final String FUNCTION = "function";
+
+	/** The {@code symbol-function} built-in function. */
+	public static final String SYMBOL_FUNCTION = "symbol-function";
+
 	/** The {@code while} special form. */
 	public static final String WHILE = "while";
 

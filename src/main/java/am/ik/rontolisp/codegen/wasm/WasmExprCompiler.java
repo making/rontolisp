@@ -84,22 +84,12 @@ final class WasmExprCompiler {
 			WasmEmitHelper.emitLoadCapture(ctx, captureIdx);
 			return;
 		}
-		// Check known functions (create function reference)
-		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
-		if (fi != null) {
-			// Create closure struct {funcId, null env}
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(fi.funcId());
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
-			return;
-		}
 		if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileVarRef(name, ctx);
 			return;
 		}
+		// Lisp-2: a bare symbol is a variable reference only; functions must be
+		// referenced via (function name) / #'name.
 		throw new UnsupportedOperationException("Cannot compile symbol: " + name);
 	}
 
@@ -157,6 +147,8 @@ final class WasmExprCompiler {
 				case LispNames.REMF_TAIL -> WasmRemfTailCompiler.compile(cons, ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
+				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
+				case LispNames.SYMBOL_FUNCTION -> WasmFunctionFormCompiler.compileSymbolFunction(cons, ctx);
 				case LispNames.MAP -> WasmMapCompiler.compile(cons, ctx);
 				case LispNames.REDUCE -> WasmReduceCompiler.compile(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);

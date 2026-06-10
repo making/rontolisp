@@ -3,8 +3,8 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
@@ -19,16 +19,12 @@ final class JvmFunctionCallCompiler {
 	}
 
 	/**
-	 * Compiles the default case in dispatch: direct or indirect call based on symbol
-	 * resolution.
+	 * Compiles the default case in dispatch. Under the Lisp-2 model a symbol in call
+	 * position resolves in the function namespace only, so variable bindings never shadow
+	 * it: this is always a direct call against the function registry.
 	 */
 	static void compileDefault(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		if (ctx.locals.containsKey(name) || ctx.captures.containsKey(name)) {
-			compileIndirectCall(name, cons, ctx, className);
-		}
-		else {
-			compileDirectCall(name, cons, ctx, className);
-		}
+		compileDirectCall(name, cons, ctx, className);
 	}
 
 	/**
@@ -38,7 +34,7 @@ final class JvmFunctionCallCompiler {
 		List<LispVal> args = cons.toList();
 		int arity = args.size() - 2;
 		ctx.indirectCallArities.add(arity);
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
 		for (int i = 2; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
@@ -75,17 +71,6 @@ final class JvmFunctionCallCompiler {
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}
-	}
-
-	private static void compileIndirectCall(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		List<LispVal> args = cons.toList();
-		int arity = args.size() - 1;
-		ctx.indirectCallArities.add(arity);
-		JvmExprCompiler.compileSymbolRef(new LispSymbol(name), ctx);
-		for (int i = 1; i < args.size(); i++) {
-			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-		}
-		emitDispatchCall(arity, ctx, className);
 	}
 
 	static void emitDispatchCall(int arity, JvmLispCompiler.Ctx ctx, String className) {

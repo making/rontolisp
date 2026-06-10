@@ -75,8 +75,8 @@
 (print (cadddr '(1 2 3 4)))
 
 ; Higher-order functions
-(defun apply-twice (f x) (f (f x)))
-(print (apply-twice square 3))
+(defun apply-twice (f x) (funcall f (funcall f x)))
+(print (apply-twice #'square 3))
 
 ; Lambda as argument
 (print (apply-twice (lambda (x) (+ x 10)) 5))
@@ -84,21 +84,21 @@
 ; Closure
 (defun make-adder (n) (lambda (x) (+ x n)))
 (setq add5 (make-adder 5))
-(print (add5 10))
+(print (funcall add5 10))
 
 ; Closure mutation (capture by reference)
 (defun make-counter () (let ((n 0)) (lambda () (setq n (+ n 1)) n)))
 (setq counter (make-counter))
-(counter)
-(counter)
-(print (counter))
+(funcall counter)
+(funcall counter)
+(print (funcall counter))
 
 ; Dynamic function selection
-(setq f (if t square forty-two))
-(print (f 6))
+(setq f (if t #'square #'forty-two))
+(print (funcall f 6))
 
 ; funcall
-(print (funcall square 7))
+(print (funcall #'square 7))
 
 ; Type predicates
 (print (if (null nil) 42 99))
@@ -281,7 +281,7 @@
 ; map
 (print (map (lambda (x) (* x x)) '(1 2 3)))
 (print (map (lambda (x) (+ x 10)) '(1 2 3)))
-(print (map square '(1 2 3)))
+(print (map #'square '(1 2 3)))
 (print (map (lambda (x) x) nil))
 
 ; reduce
@@ -292,13 +292,13 @@
 (print (reduce (lambda (a b) (+ a b)) 0 nil))
 
 ; Built-in operators as first-class values
-(print (reduce + 0 '(1 2 3 4 5)))
-(print (reduce * 1 '(1 2 3 4 5)))
-(print (map car '((1 2) (3 4) (5 6))))
-(print (map cdr '((1 2) (3 4) (5 6))))
-(print (map 1+ '(1 2 3)))
-(print (funcall + 3 4))
-(setq my-op +)
+(print (reduce #'+ 0 '(1 2 3 4 5)))
+(print (reduce #'* 1 '(1 2 3 4 5)))
+(print (map #'car '((1 2) (3 4) (5 6))))
+(print (map #'cdr '((1 2) (3 4) (5 6))))
+(print (map #'1+ '(1 2 3)))
+(print (funcall #'+ 3 4))
+(setq my-op #'+)
 (print (funcall my-op 10 20))
 
 ; Logical operators: and, or, not
@@ -357,7 +357,7 @@
 (print (lcm 4 6))
 (print (signum -7))
 (print (signum 3.5))
-(print (map sqrt (list 1 4 9)))
+(print (map #'sqrt (list 1 4 9)))
 
 ; packages: cl-user (default, uses cl) and the rontolisp package (version lives there).
 ; keep package switches last since they affect every following form.
@@ -366,3 +366,16 @@
 (in-package rontolisp)
 (cl:print cl:*package*)
 (cl:print (cl:car (version)))
+
+; Lisp-2: function namespace via #' / function / symbol-function and designators
+(cl:in-package cl-user)
+(print (funcall #'car '(9 8)))
+(print (funcall (function cdr) '(9 8)))
+(print (funcall 'car '(7 8)))
+(print (map #'cadr '((1 2) (3 4))))
+(print (funcall (symbol-function 'car) '(5 6)))
+(setq op2 #'+)
+(print (funcall op2 20 22))
+(print (map #'(lambda (x) (* x 2)) '(1 2 3)))
+(let ((car 5))
+  (print (car (list car 2))))

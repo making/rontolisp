@@ -176,6 +176,90 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 	}
 
+	/** Emits {@code global.get $fenv} (the runtime function namespace). */
+	private static void emitGetGlobalFenv(WasmWriter w) {
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+	}
+
+	/**
+	 * Emits code that resolves a function name offset against the function namespace and
+	 * returns the function value: a runtime {@code defun} binding in {@code $fenv} first,
+	 * then the compiled registry (wrapped as a closure {@code {funcId, null}}), and nil
+	 * when undefined. Every path ends in {@code return}.
+	 */
+	private static void emitFunctionLookupReturn(WasmWriter w, int offSlot, int tmpSlot, int addrSlot) {
+		// runtime defun binding in $fenv?
+		getLocal(w, offSlot);
+		emitGetGlobalFenv(w);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitCdrOf(w, tmpSlot);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// compiled registry?
+		getLocal(w, offSlot);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		setLocal(w, addrSlot);
+		getLocal(w, addrSlot);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, addrSlot);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		emitNull(w);
+		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+	}
+
+	/**
+	 * Emits code that installs a function binding into the {@code $fenv} function
+	 * namespace: an existing binding's value cell is mutated, otherwise a new binding is
+	 * prepended. Reads the name (a string struct) from {@code nameSlot} and the value
+	 * from {@code valueSlot}; clobbers {@code tmpSlot} and {@code offScratch}.
+	 */
+	private static void emitStoreFunctionBinding(WasmWriter w, int nameSlot, int valueSlot, int tmpSlot,
+			int offScratch) {
+		// off = name.offset
+		getLocal(w, nameSlot);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		setLocal(w, offScratch);
+		// existing = _env_lookup(off, $fenv)
+		getLocal(w, offScratch);
+		emitGetGlobalFenv(w);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		// create: $fenv = cons(cons(name, value), $fenv)
+		getLocal(w, nameSlot);
+		getLocal(w, valueSlot);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		emitGetGlobalFenv(w);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		w.write(Instruction.ELSE);
+		// mutate: binding.cdr = value
+		getLocal(w, tmpSlot);
+		refCast(w, WasmLispCompiler.TYPE_CONS);
+		getLocal(w, valueSlot);
+		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
+		w.write(Instruction.END);
+	}
+
 	/**
 	 * Emits {@code binding = _env_lookup(off, $genv); if (binding != null) return
 	 * cdr(binding);} using {@code tmpSlot} for the binding. Used to consult the global
@@ -387,14 +471,16 @@ final class WasmEvalRuntimeBuilder {
 	 *
 	 * <p>
 	 * Supported: self-evaluating atoms (integers, floats, strings, closures, nil);
-	 * variable references resolved against the lexical environment (falling back to the
-	 * function registry, then to the symbol itself); the special forms {@code quote},
-	 * {@code if}, {@code progn}, {@code let}, {@code lambda}, {@code cond}, {@code and},
-	 * {@code or}, {@code when}, {@code unless}, {@code while}, {@code dotimes},
-	 * {@code setq}, {@code eval} (nested), {@code funcall}, {@code map}, {@code reduce}
-	 * and {@code list}; variadic {@code + - * /}; {@code car}/{@code cdr} compositions
-	 * such as {@code cadr}; and application of any registered function (built-in wrappers
-	 * and user defuns) as well as interpreted closures produced by {@code lambda}.
+	 * variable references resolved against the lexical environment then the global
+	 * variable environment (Lisp-2: never the function namespace; an unbound symbol
+	 * evaluates to itself); the special forms {@code quote}, {@code if}, {@code progn},
+	 * {@code let}, {@code lambda}, {@code defun}, {@code function} ({@code #'}),
+	 * {@code symbol-function}, {@code cond}, {@code and}, {@code or}, {@code when},
+	 * {@code unless}, {@code while}, {@code dotimes}, {@code setq}, {@code eval}
+	 * (nested), {@code funcall}, {@code map}, {@code reduce} and {@code list}; variadic
+	 * {@code + - * /}; {@code car}/{@code cdr} compositions such as {@code cadr}; and
+	 * application of any registered function (built-in wrappers and user defuns) as well
+	 * as interpreted closures produced by {@code lambda}.
 	 * @param off the string-table offsets of the special-form symbols
 	 * @return the encoded function body
 	 */
@@ -462,23 +548,10 @@ final class WasmEvalRuntimeBuilder {
 		emitCdrOf(w, TMP);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// not bound lexically: try the global environment
+		// not bound lexically: try the global environment. Lisp-2: a bare symbol
+		// resolves the variable namespace only, never the function registry. An
+		// unbound symbol evaluates to itself.
 		emitGlobalLookupReturn(w, OFF, TMP);
-		// not bound: resolve a registered function as a first-class value
-		getLocal(w, OFF);
-		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
-		setLocal(w, ADDR);
-		getLocal(w, ADDR);
-		i32(w, 0);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x40);
-		getLocal(w, ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x04);
-		emitNull(w);
-		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
 		getLocal(w, VAL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // end string-if
@@ -590,8 +663,8 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- defun: (defun name (params) body...) treated as
-		// (setq name (lambda (params) body...)) so loaded files can define functions ----
+		// ---- defun: (defun name (params) body...) builds a closure and installs it
+		// into the $fenv function namespace so loaded files can define functions ----
 		openSpecial(w, OFF, off.of(LispNames.DEFUN));
 		emitCarOf(w, REST); // name symbol
 		setLocal(w, ACC);
@@ -608,14 +681,48 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, NEWCELL);
-		// _store(name, value, ENV) -> defines/updates the global binding
+		// install into the function namespace (Lisp-2): $fenv, not $genv
+		emitStoreFunctionBinding(w, ACC, NEWCELL, TMP, IDX);
 		getLocal(w, ACC);
-		getLocal(w, NEWCELL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// ---- function: (function name) / #'name resolves the function namespace;
+		// (function (lambda ...)) evaluates to a closure ----
+		openSpecial(w, OFF, off.of(LispNames.FUNCTION));
+		emitCarOf(w, REST);
+		setLocal(w, ACC); // designator (unevaluated)
+		getLocal(w, ACC);
+		refTest(w, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, ACC);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		setLocal(w, IDX);
+		emitFunctionLookupReturn(w, IDX, TMP, ADDR);
+		w.write(Instruction.END);
+		// non-symbol designator (a lambda form): evaluate it
+		getLocal(w, ACC);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
-		w.write(Instruction.DROP);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// ---- symbol-function: like function but the argument is evaluated ----
+		openSpecial(w, OFF, off.of(LispNames.SYMBOL_FUNCTION));
+		emitEvalCar(w, REST, ENV);
+		setLocal(w, ACC);
 		getLocal(w, ACC);
+		refTest(w, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, ACC);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		setLocal(w, IDX);
+		emitFunctionLookupReturn(w, IDX, TMP, ADDR);
+		w.write(Instruction.END);
+		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1190,28 +1297,11 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// ---- generic named application ----
-		// (a) operator bound in the lexical environment -> apply by argument count
+		// Lisp-2: the operator resolves in the function namespace only. Variable
+		// bindings (lexical or global) never shadow a function.
+		// (a) operator defined at runtime via defun (the $fenv function namespace)
 		getLocal(w, OFF);
-		getLocal(w, ENV);
-		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
-		setLocal(w, TMP);
-		getLocal(w, TMP);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		emitCdrOf(w, TMP);
-		setLocal(w, FN);
-		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
-		getLocal(w, FN);
-		getLocal(w, ARGHEAD);
-		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		// (a2) operator bound in the global environment -> apply by argument count
-		getLocal(w, OFF);
-		emitGetGlobalEnv(w);
+		emitGetGlobalFenv(w);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, TMP);
@@ -1590,6 +1680,49 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		emitNull(w);
 		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// symbol designator (CL-style): a symbol resolves in the function namespace
+		// ($fenv then the compiled registry) and the result replaces fn
+		getLocal(w, FN);
+		refTest(w, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, FN);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		setLocal(w, FUNCID); // scratch: name offset
+		// $fenv binding?
+		getLocal(w, FUNCID);
+		emitGetGlobalFenv(w);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, TMP);
+		getLocal(w, TMP);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitCdrOf(w, TMP);
+		setLocal(w, FN);
+		w.write(Instruction.ELSE);
+		// compiled registry?
+		getLocal(w, FUNCID);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		setLocal(w, LEN); // scratch: record address
+		getLocal(w, LEN);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		emitNull(w);
+		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
+		setLocal(w, FN);
+		w.write(Instruction.ELSE);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 
 		// if fn is a closure struct

@@ -23,17 +23,20 @@ final class JvmRuntimeBuilder {
 	static JvmLispCompiler.DispatchMethod buildDispatchMethod(int arity,
 			Map<String, JvmLispCompiler.FunctionInfo> functions, List<JvmLispCompiler.LambdaInfo> lambdaDecls,
 			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassConstant thisClass,
-			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant integerValue) {
+			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant integerValue,
+			ClassConstant objectClass, @org.jspecify.annotations.Nullable MethodrefConstant applyRef) {
 		String name = "_invoke_" + arity;
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object
 		String desc = "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
 		Utf8Constant nameUtf8 = cp.addUtf8(name);
 		Utf8Constant descUtf8 = cp.addUtf8(desc);
 		// Params: slot 0=funcval, slot 1..arity=args
-		// Extra locals: fvSlot=arity+1 (Object[] fv), idSlot=arity+2 (int id)
+		// Extra locals: fvSlot=arity+1 (Object[] fv), idSlot=arity+2 (int id),
+		// restSlot=arity+3 (arg list for the _apply fallback)
 		int fvSlot = arity + 1;
 		int idSlot = arity + 2;
-		int maxLocals = arity + 3;
+		int restSlot = arity + 3;
+		int maxLocals = arity + 4;
 		List<Integer> code = new ArrayList<>();
 		// Object[] fv = (Object[]) funcval;
 		code.add(Opcode.ALOAD_0);
@@ -52,6 +55,43 @@ final class JvmRuntimeBuilder {
 		emitU2(code, integerValue.index());
 		code.add(Opcode.ISTORE);
 		code.add(idSlot);
+		// Interpreted closure (funcId == -1, created by the eval runtime's lambda):
+		// delegate to _apply with the arguments collected into a cons list
+		if (applyRef != null) {
+			code.add(Opcode.ILOAD);
+			code.add(idSlot);
+			code.add(Opcode.ICONST_M1);
+			int ifPos = code.size();
+			code.add(Opcode.IF_ICMPNE);
+			emitU2(code, 0);
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.ASTORE);
+			code.add(restSlot);
+			for (int j = arity - 1; j >= 0; j--) {
+				code.add(Opcode.ICONST_2);
+				code.add(Opcode.ANEWARRAY);
+				emitU2(code, objectClass.index());
+				code.add(Opcode.DUP);
+				code.add(Opcode.ICONST_0);
+				code.add(Opcode.ALOAD);
+				code.add(j + 1);
+				code.add(Opcode.AASTORE);
+				code.add(Opcode.DUP);
+				code.add(Opcode.ICONST_1);
+				code.add(Opcode.ALOAD);
+				code.add(restSlot);
+				code.add(Opcode.AASTORE);
+				code.add(Opcode.ASTORE);
+				code.add(restSlot);
+			}
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ALOAD);
+			code.add(restSlot);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, applyRef.index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifPos, code.size());
+		}
 		// Generate if-else chain for each function with matching arity
 		// Named functions (non-closure)
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {

@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
@@ -21,7 +22,7 @@ final class JvmMapCompiler {
 		ctx.indirectCallArities.add(1);
 
 		// Compile function expression
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
 		int funcSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(funcSlot);

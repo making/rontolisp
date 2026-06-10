@@ -73,22 +73,12 @@ final class JvmExprCompiler {
 			ctx.emit(Opcode.ICONST_0);
 			ctx.emit(Opcode.AALOAD);
 		}
-		else if (ctx.functions.containsKey(name)) {
-			JvmLispCompiler.FunctionInfo fi = ctx.functions.get(name);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
-			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.integerValueOf.index());
-			ctx.emit(Opcode.AASTORE);
-		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
 		}
 		else {
+			// Lisp-2: a bare symbol is a variable reference only; functions must be
+			// referenced via (function name) / #'name.
 			throw new UnsupportedOperationException("Cannot compile symbol reference: " + name);
 		}
 	}
@@ -149,6 +139,8 @@ final class JvmExprCompiler {
 				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);
 				case LispNames.LOAD -> JvmLoadCompiler.compile(cons, ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
+				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
+				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
 				case LispNames.MAP -> JvmMapCompiler.compile(cons, ctx, className);
 				case LispNames.REDUCE -> JvmReduceCompiler.compile(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);

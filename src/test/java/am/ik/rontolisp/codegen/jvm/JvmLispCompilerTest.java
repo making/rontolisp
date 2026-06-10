@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JvmLispCompilerTest {
 
@@ -189,15 +190,18 @@ class JvmLispCompilerTest {
 	void compileAndRunSetqLambdaSquare() throws Exception {
 		assertThat(compileAndRun("""
 				(setq square (lambda (x) (* x x)))
-				(print (square 5))
+				(print (funcall square 5))
 				""")).isEqualTo("25");
 	}
 
 	@Test
 	void compileAndRunSetqLambdaFactorial() throws Exception {
+		// Lisp-2: a recursive function must be defined with defun (a lambda bound by
+		// setq cannot refer to itself through the variable namespace in compiled code).
 		assertThat(compileAndRun("""
-				(setq fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1))))))
-				(print (fact 5))
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(setq fact5 #'fact)
+				(print (funcall fact5 5))
 				""")).isEqualTo("120");
 	}
 
@@ -205,7 +209,7 @@ class JvmLispCompilerTest {
 	void compileAndRunSetqLambdaNoParams() throws Exception {
 		assertThat(compileAndRun("""
 				(setq answer (lambda () 42))
-				(print (answer))
+				(print (funcall answer))
 				""")).isEqualTo("42");
 	}
 
@@ -214,7 +218,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(setq double (lambda (x) (* x 2)))
 				(setq add1 (lambda (x) (+ x 1)))
-				(print (add1 (double 5)))
+				(print (funcall add1 (funcall double 5)))
 				""")).isEqualTo("11");
 	}
 
@@ -223,7 +227,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(defun double (x) (* x 2))
 				(setq add1 (lambda (x) (+ x 1)))
-				(print (add1 (double 5)))
+				(print (funcall add1 (double 5)))
 				""")).isEqualTo("11");
 	}
 
@@ -312,15 +316,15 @@ class JvmLispCompilerTest {
 	void compileAndRunHigherOrderFunction() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
-				(defun apply-twice (f x) (f (f x)))
-				(print (apply-twice square 3))
+				(defun apply-twice (f x) (funcall f (funcall f x)))
+				(print (apply-twice #'square 3))
 				""")).isEqualTo("81");
 	}
 
 	@Test
 	void compileAndRunLambdaAsArgument() throws Exception {
 		assertThat(compileAndRun("""
-				(defun apply-twice (f x) (f (f x)))
+				(defun apply-twice (f x) (funcall f (funcall f x)))
 				(print (apply-twice (lambda (x) (+ x 10)) 5))
 				""")).isEqualTo("25");
 	}
@@ -330,7 +334,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(defun make-adder (n) (lambda (x) (+ x n)))
 				(setq add5 (make-adder 5))
-				(print (add5 10))
+				(print (funcall add5 10))
 				""")).isEqualTo("15");
 	}
 
@@ -343,9 +347,9 @@ class JvmLispCompilerTest {
 				      (setq n (+ n 1))
 				      n)))
 				(setq counter (make-counter))
-				(counter)
-				(counter)
-				(print (counter))
+				(funcall counter)
+				(funcall counter)
+				(print (funcall counter))
 				""")).isEqualTo("3");
 	}
 
@@ -354,8 +358,8 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
 				(defun forty-two (x) 42)
-				(setq f (if t square forty-two))
-				(print (f 6))
+				(setq f (if t #'square #'forty-two))
+				(print (funcall f 6))
 				""")).isEqualTo("36");
 	}
 
@@ -363,7 +367,7 @@ class JvmLispCompilerTest {
 	void compileAndRunFuncall() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
-				(print (funcall square 7))
+				(print (funcall #'square 7))
 				""")).isEqualTo("49");
 	}
 
@@ -378,7 +382,7 @@ class JvmLispCompilerTest {
 	void compileAndRunFunctionInList() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
-				(print (funcall (car (list square)) 5))
+				(print (funcall (car (list #'square)) 5))
 				""")).isEqualTo("25");
 	}
 
@@ -590,8 +594,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunMathAsFirstClass() throws Exception {
-		assertThat(compileAndRun("(print (map sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
-		assertThat(compileAndRun("(print (reduce gcd (list 24 36 48)))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (map #'sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print (reduce #'gcd (list 24 36 48)))")).isEqualTo("12");
 		assertThat(compileAndRun("(print (eval (list (quote expt) 2 8)))")).isEqualTo("256");
 		assertThat(compileAndRun("(print (eval (list (quote sin) 0)))")).isEqualTo("0.0");
 	}
@@ -832,40 +836,81 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReduceWithBuiltinPlus() throws Exception {
-		assertThat(compileAndRun("(print (reduce + 0 '(1 2 3 4 5)))")).isEqualTo("15");
+		assertThat(compileAndRun("(print (reduce #'+ 0 '(1 2 3 4 5)))")).isEqualTo("15");
 	}
 
 	@Test
 	void compileAndRunReduceWithBuiltinMul() throws Exception {
-		assertThat(compileAndRun("(print (reduce * 1 '(1 2 3 4 5)))")).isEqualTo("120");
+		assertThat(compileAndRun("(print (reduce #'* 1 '(1 2 3 4 5)))")).isEqualTo("120");
 	}
 
 	@Test
 	void compileAndRunMapWithBuiltinCar() throws Exception {
-		assertThat(compileAndRun("(print (map car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
+		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
 	}
 
 	@Test
 	void compileAndRunMapWithBuiltinCdr() throws Exception {
-		assertThat(compileAndRun("(print (map cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
+		assertThat(compileAndRun("(print (map #'cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
 	}
 
 	@Test
 	void compileAndRunMapWithBuiltin1Plus() throws Exception {
-		assertThat(compileAndRun("(print (map 1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+		assertThat(compileAndRun("(print (map #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
 	}
 
 	@Test
 	void compileAndRunFuncallWithBuiltinPlus() throws Exception {
-		assertThat(compileAndRun("(print (funcall + 3 4))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (funcall #'+ 3 4))")).isEqualTo("7");
 	}
 
 	@Test
 	void compileAndRunBuiltinAsVariable() throws Exception {
 		assertThat(compileAndRun("""
-				(setq my-op +)
+				(setq my-op #'+)
 				(print (funcall my-op 10 20))
 				""")).isEqualTo("30");
+	}
+
+	// Lisp-2 (separate function/variable namespaces) tests
+
+	@Test
+	void compileAndRunFuncallSharpQuotedPlus() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'+ 1 2))")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunMapSharpQuotedCar() throws Exception {
+		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4))))")).isEqualTo("(1 3)");
+	}
+
+	@Test
+	void compileAndRunFuncallQuotedSymbolDesignator() throws Exception {
+		assertThat(compileAndRun("(print (funcall 'car '(9 8)))")).isEqualTo("9");
+	}
+
+	@Test
+	void compileAndRunMapSharpQuotedCadr() throws Exception {
+		assertThat(compileAndRun("(print (map #'cadr '((1 2) (3 4))))")).isEqualTo("(2 4)");
+	}
+
+	@Test
+	void compileAndRunSetqSharpQuotedBuiltinThenFuncall() throws Exception {
+		assertThat(compileAndRun("""
+				(setq f #'+)
+				(print (funcall f 1 2))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunSymbolFunction() throws Exception {
+		assertThat(compileAndRun("(print (funcall (symbol-function 'car) '(5 6)))")).isEqualTo("5");
+	}
+
+	@Test
+	void compileBareFunctionNameInValuePositionThrows() {
+		assertThatThrownBy(() -> compileAndRun("(print car)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot compile symbol reference: car");
 	}
 
 	// read-line tests
@@ -1182,7 +1227,17 @@ class JvmLispCompilerTest {
 
 	@Test
 	void evalBuiltinAsValue() throws Exception {
-		assertThat(compileAndRun("(print (eval '(funcall + 10 20)))")).isEqualTo("30");
+		assertThat(compileAndRun("(print (eval '(funcall #'+ 10 20)))")).isEqualTo("30");
+	}
+
+	@Test
+	void evalSharpQuotedBuiltinFuncall() throws Exception {
+		assertThat(compileAndRun("(print (eval '(funcall #'+ 10 20)))")).isEqualTo("30");
+	}
+
+	@Test
+	void evalDefunThenCall() throws Exception {
+		assertThat(compileAndRun("(print (eval '(progn (defun sq2 (x) (* x x)) (sq2 6))))")).isEqualTo("36");
 	}
 
 	@Test

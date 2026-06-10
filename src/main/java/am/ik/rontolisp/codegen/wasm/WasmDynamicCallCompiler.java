@@ -18,11 +18,12 @@ import am.ik.wasm.Type;
  * rejecting an unknown symbol at compile time, the generated code looks it up in the
  * global environment when it actually runs.
  * <p>
- * A call {@code (f a b)} compiles to {@code _apply(_eval('f, null), (list a b))}: the
- * operator symbol is resolved to a function value through {@code _eval}, the arguments
- * are compiled normally (so compiled locals remain visible) and collected into a runtime
- * list, and {@code _apply} applies the function value to them. A bare reference {@code x}
- * compiles to {@code _eval('x, null)}.
+ * A call {@code (f a b)} compiles to
+ * {@code _apply(_eval('(function f), null), (list a b))}: the operator symbol is resolved
+ * in the runtime function namespace through {@code _eval}, the arguments are compiled
+ * normally (so compiled locals remain visible) and collected into a runtime list, and
+ * {@code _apply} applies the function value to them. A bare reference {@code x} compiles
+ * to {@code _eval('x, null)}, which resolves the variable namespace only.
  */
 final class WasmDynamicCallCompiler {
 
@@ -33,8 +34,8 @@ final class WasmDynamicCallCompiler {
 	 * Compiles an unresolved function call {@code (name arg...)} as a late-bound apply.
 	 */
 	static void compileCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// fn = _eval('name, null)
-		compileEvalSymbol(name, ctx);
+		// fn = _eval('(function name), null)
+		compileFunctionRef(name, ctx);
 		// args = (list arg...)
 		LispVal listForm = new LispCons(new LispSymbol(LispNames.LIST), cons.cdr());
 		WasmExprCompiler.compileExpr(listForm, ctx);
@@ -45,14 +46,27 @@ final class WasmDynamicCallCompiler {
 
 	/** Compiles an unresolved variable reference {@code name} as a late-bound lookup. */
 	static void compileVarRef(String name, WasmLispCompiler.Ctx ctx) {
-		compileEvalSymbol(name, ctx);
-	}
-
-	// Pushes the result of _eval('name, null) onto the stack.
-	private static void compileEvalSymbol(String name, WasmLispCompiler.Ctx ctx) {
+		// (quote name): the runtime _eval resolves the variable namespace only
 		LispVal quoteForm = new LispCons(new LispSymbol(LispNames.QUOTE),
 				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
-		WasmExprCompiler.compileExpr(quoteForm, ctx);
+		compileEvalForm(quoteForm, ctx);
+	}
+
+	/**
+	 * Compiles an unresolved function reference {@code (function name)} as a late-bound
+	 * lookup in the runtime function namespace.
+	 */
+	static void compileFunctionRef(String name, WasmLispCompiler.Ctx ctx) {
+		// '(function name) is passed unevaluated, so quote the whole form
+		LispVal functionForm = new LispCons(new LispSymbol(LispNames.FUNCTION),
+				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+		LispVal quoteForm = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(functionForm, LispNil.INSTANCE));
+		compileEvalForm(quoteForm, ctx);
+	}
+
+	// Pushes the result of _eval(form, null) onto the stack.
+	private static void compileEvalForm(LispVal quotedForm, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(quotedForm, ctx);
 		// env = ref.null eq (empty/global lexical environment)
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());

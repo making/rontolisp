@@ -106,6 +106,14 @@ public final class FreeVarAnalyzer {
 						case LispNames.DEFUN -> {
 							// defun body is handled separately; skip
 						}
+						case LispNames.FUNCTION -> {
+							// (function name) names the function namespace, not a
+							// variable; (function (lambda ...)) is analyzed like lambda
+							List<LispVal> parts = cons.toList();
+							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
+								collectFreeVars(parts.get(1), boundVars, knownFunctions, freeVars);
+							}
+						}
 						case LispNames.SETQ -> {
 							List<LispVal> parts = cons.toList();
 							String name = ((LispSymbol) parts.get(1)).name();
@@ -116,9 +124,11 @@ public final class FreeVarAnalyzer {
 							collectFreeVars(parts.get(2), boundVars, knownFunctions, freeVars);
 						}
 						default -> {
-							// Function call or special form: recurse into all subexprs
+							// Function call or special form: the operator resolves in
+							// the function namespace (Lisp-2), so only the argument
+							// subexpressions can reference variables
 							List<LispVal> parts = cons.toList();
-							for (int i = 0; i < parts.size(); i++) {
+							for (int i = 1; i < parts.size(); i++) {
 								collectFreeVars(parts.get(i), boundVars, knownFunctions, freeVars);
 							}
 						}
@@ -184,6 +194,12 @@ public final class FreeVarAnalyzer {
 						case LispNames.DEFUN -> {
 							// skip
 						}
+						case LispNames.FUNCTION -> {
+							List<LispVal> parts = cons.toList();
+							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
+								collectCapturedVars(parts.get(1), localVars, knownFunctions, captured, insideLambda);
+							}
+						}
 						case LispNames.SETQ -> {
 							List<LispVal> parts = cons.toList();
 							String name = ((LispSymbol) parts.get(1)).name();
@@ -193,8 +209,9 @@ public final class FreeVarAnalyzer {
 							collectCapturedVars(parts.get(2), localVars, knownFunctions, captured, insideLambda);
 						}
 						default -> {
+							// Lisp-2: the operator symbol is not a variable reference
 							List<LispVal> parts = cons.toList();
-							for (int i = 0; i < parts.size(); i++) {
+							for (int i = 1; i < parts.size(); i++) {
 								collectCapturedVars(parts.get(i), localVars, knownFunctions, captured, insideLambda);
 							}
 						}

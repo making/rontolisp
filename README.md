@@ -68,7 +68,7 @@ java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 > (* 3 (+ 4 5))
 27
 > (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
-#<lambda>
+fact
 > (fact 10)
 3628800
 > (let ((x 10) (y 20)) (+ x y))
@@ -148,6 +148,7 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 | Nil | `nil` | False / empty list |
 | T | `t` | True |
 | Cons | `(1 2 3)` | Linked list built from cons cells |
+| Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
 
 Numeric literals may use `,` as a grouping separator between digits in the
 integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to
@@ -177,12 +178,20 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value)` | Assign a value to a variable |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
+| `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
+| `function` | `(function name)` or `#'name` | Look up a function in the function namespace and return it as a value |
+
+rontolisp is a **Lisp-2** like Common Lisp: functions and variables live in separate
+namespaces. A bare symbol evaluates as a variable (`car` alone is an unbound-variable
+error), a symbol in call position resolves in the function namespace only (a variable
+named `car` does not shadow the function `car`), and a function is obtained as a value
+with `#'name`, `(function name)` or `(symbol-function 'name)`. See
+[Function Namespace and First-Class Functions](#function-namespace-and-first-class-functions).
 
 ### Macros
 
 | Macro | Syntax | Description |
 |-------|--------|-------------|
-| `defun` | `(defun name (params...) body...)` | Expands to `(setq name (lambda (params...) body...))` |
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
@@ -267,9 +276,10 @@ support this: its integers are limited to 31-bit (`i31ref`) and overflow wraps.
 | `gcd` | `(gcd 12 18)` | `6` (greatest common divisor) |
 | `lcm` | `(lcm 4 6)` | `12` (least common multiple; `0` if either argument is `0`) |
 | `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0` (sign, preserving integer/float type) |
-| `funcall` | `(funcall f arg...)` | Apply function `f` to args |
-| `map` | `(map f list)` | Apply `f` to each element, return new list |
-| `reduce` | `(reduce f init list)` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
+| `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
+| `map` | `(map #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
+| `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
+| `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
 
 `read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
 
@@ -287,7 +297,7 @@ rontolisp prog.lisp -o Prog.class --dynamic   # compiles; (cube 3) resolves at r
 rontolisp prog.lisp -o prog.wasm  --dynamic
 ```
 
-A call `(f a b)` compiles to `_apply(_eval('f, null), (list a b))`: the operator is resolved against the global environment at runtime while the arguments are compiled normally, so locals of the enclosing compiled function stay visible (e.g. `(defun caller (n) (cube n))` works). A bare reference `x` compiles to `_eval('x, null)`. Because the fallback uses the embedded `eval` runtime, `--dynamic` always emits it (as if the program used `eval`), and an unknown symbol that is never defined at runtime errors when it is reached rather than at compile time. Functions resolved this way run on the runtime `eval` interpreter, so they are subject to the [Compiled `eval` limitations](#compiled-eval-limitations) above.
+A call `(f a b)` compiles to `_apply(_eval('(function f), null), (list a b))`: the operator is resolved against the runtime function namespace while the arguments are compiled normally, so locals of the enclosing compiled function stay visible (e.g. `(defun caller (n) (cube n))` works). A bare reference `x` compiles to `_eval('x, null)`, which resolves the variable namespace only. Because the fallback uses the embedded `eval` runtime, `--dynamic` always emits it (as if the program used `eval`), and an unknown symbol that is never defined at runtime errors when it is reached rather than at compile time. Functions resolved this way run on the runtime `eval` interpreter, so they are subject to the [Compiled `eval` limitations](#compiled-eval-limitations) above.
 
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
@@ -301,6 +311,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
+- **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
 
@@ -355,16 +366,36 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; `version` is not available as a first-class value (it cannot be passed to `map`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 
-### First-Class Functions
+### Function Namespace and First-Class Functions
 
-Functions are first-class values in all three execution modes. They can be passed as arguments, returned from functions, and stored in data structures.
+rontolisp is a **Lisp-2**, following Common Lisp: functions and variables live in
+separate namespaces.
+
+- A bare symbol evaluates as a **variable**. Evaluating `car` alone is an error
+  (`The variable car is unbound` in the interpreter; a compile error in the compilers).
+- A symbol in **call position** `(f args...)` resolves in the function namespace only.
+  A variable named `car` never shadows the function `car`: `(let ((car 5)) (car (list car 2)))`
+  returns `5`.
+- A function becomes a **value** through `#'name` (reader syntax for `(function name)`),
+  `#'(lambda ...)`, or `(symbol-function 'name)`. This works for built-in operators
+  (`#'+`, `#'car`, `#'1+`, `#'cadr`), user `defun`s, and lambdas.
+- `funcall`/`map`/`reduce` also accept a **symbol** naming a function (a function
+  designator): `(funcall 'car '(1 2))` returns `1`. The compilers support this when the
+  symbol is a quoted literal.
+- `defun` defines into the function namespace and returns the function name.
+  `(setq f (lambda ...))` binds a **variable** to a function value; call it with
+  `(funcall f ...)`, not `(f ...)`.
+- `#'` of a macro or special operator (e.g. `#'if`, `#'defun`) is an error.
+
+Function values can be passed as arguments, returned from functions, and stored in data
+structures in all three execution modes.
 
 **Higher-order functions:**
 
 ```lisp
-(defun apply-twice (f x) (f (f x)))
+(defun apply-twice (f x) (funcall f (funcall f x)))
 (defun square (x) (* x x))
-(print (apply-twice square 3))    ; => 81
+(print (apply-twice #'square 3))    ; => 81
 ```
 
 **Closures (capture by reference):**
@@ -376,31 +407,38 @@ Functions are first-class values in all three execution modes. They can be passe
       (setq n (+ n 1))
       n)))
 (setq c (make-counter))
-(c) ; => 1
-(c) ; => 2
-(c) ; => 3
+(funcall c) ; => 1
+(funcall c) ; => 2
+(funcall c) ; => 3
 ```
 
 **Lambda as argument:**
 
 ```lisp
-(defun apply-twice (f x) (f (f x)))
+(defun apply-twice (f x) (funcall f (funcall f x)))
 (print (apply-twice (lambda (x) (+ x 10)) 5))  ; => 25
 ```
 
 **Built-in operators as first-class values:**
 
-Built-in operators like `+`, `car`, `1+` can be passed directly to higher-order functions:
+Built-in operators like `+`, `car`, `1+` can be passed to higher-order functions via `#'`:
 
 ```lisp
-(print (reduce + 0 '(1 2 3 4 5)))              ; => 15
-(print (reduce * 1 '(1 2 3 4 5)))              ; => 120
-(print (map car '((1 2) (3 4) (5 6))))          ; => (1 3 5)
-(print (map 1+ '(1 2 3)))                       ; => (2 3 4)
-(print (funcall + 3 4))                          ; => 7
-(setq my-op +)
-(print (funcall my-op 10 20))                    ; => 30
+(print (reduce #'+ 0 '(1 2 3 4 5)))              ; => 15
+(print (reduce #'* 1 '(1 2 3 4 5)))              ; => 120
+(print (map #'car '((1 2) (3 4) (5 6))))          ; => (1 3 5)
+(print (map #'1+ '(1 2 3)))                       ; => (2 3 4)
+(print (funcall #'+ 3 4))                          ; => 7
+(setq my-op #'+)
+(print (funcall my-op 10 20))                      ; => 30
+(print (funcall (symbol-function 'car) '(9 8)))    ; => 9
 ```
+
+**Compiler restrictions.** In the JVM/WASM compilers, `#'name` resolves against the
+functions known at compile time (user `defun`s and built-in operators); `#'map`,
+`#'reduce` and `#'funcall` themselves are not available as values. `symbol-function`
+requires a quoted symbol literal argument. In `--dynamic` mode an unresolved `#'name`
+is deferred to the runtime `eval` environment like any other unresolved reference.
 
 ## Project Structure
 

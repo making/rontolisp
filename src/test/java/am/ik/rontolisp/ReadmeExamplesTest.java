@@ -78,7 +78,7 @@ class ReadmeExamplesTest {
 		@Test
 		void factorialDefinitionAndCall() {
 			String output = runRepl("(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))\n(fact 10)\n(quit)\n");
-			assertThat(output).contains("#<lambda>");
+			assertThat(output).contains("fact");
 			assertThat(output).contains("3628800");
 		}
 
@@ -268,7 +268,7 @@ class ReadmeExamplesTest {
 
 		@Test
 		void funcall() {
-			assertThat(evalAll("(defun square (x) (* x x)) (funcall square 5)")).isEqualTo(new LispInteger(25));
+			assertThat(evalAll("(defun square (x) (* x x)) (funcall #'square 5)")).isEqualTo(new LispInteger(25));
 		}
 
 		@Test
@@ -451,9 +451,9 @@ class ReadmeExamplesTest {
 		@Test
 		void higherOrderFunction() {
 			String output = evalAndCaptureOutput("""
-					(defun apply-twice (f x) (f (f x)))
+					(defun apply-twice (f x) (funcall f (funcall f x)))
 					(defun square (x) (* x x))
-					(print (apply-twice square 3))
+					(print (apply-twice #'square 3))
 					""");
 			assertThat(output).isEqualTo("81");
 		}
@@ -467,14 +467,14 @@ class ReadmeExamplesTest {
 					      (setq n (+ n 1))
 					      n)))
 					(setq c (make-counter))
-					(c) (c) (c)
+					(funcall c) (funcall c) (funcall c)
 					""")).isEqualTo(new LispInteger(3));
 		}
 
 		@Test
 		void lambdaAsArgument() {
 			String output = evalAndCaptureOutput("""
-					(defun apply-twice (f x) (f (f x)))
+					(defun apply-twice (f x) (funcall f (funcall f x)))
 					(print (apply-twice (lambda (x) (+ x 10)) 5))
 					""");
 			assertThat(output).isEqualTo("25");
@@ -483,14 +483,55 @@ class ReadmeExamplesTest {
 		@Test
 		void builtinOperatorsAsFirstClassValues() {
 			String output = evalAndCaptureOutput("""
-					(print (reduce + 0 '(1 2 3 4 5)))
-					(print (reduce * 1 '(1 2 3 4 5)))
-					(print (map car '((1 2) (3 4) (5 6))))
-					(print (funcall + 3 4))
-					(setq my-op +)
+					(print (reduce #'+ 0 '(1 2 3 4 5)))
+					(print (reduce #'* 1 '(1 2 3 4 5)))
+					(print (map #'car '((1 2) (3 4) (5 6))))
+					(print (map #'1+ '(1 2 3)))
+					(print (funcall #'+ 3 4))
+					(setq my-op #'+)
 					(print (funcall my-op 10 20))
+					(print (funcall (symbol-function 'car) '(9 8)))
 					""");
-			assertThat(output).isEqualTo("15\n120\n(1 3 5)\n7\n30");
+			assertThat(output).isEqualTo("15\n120\n(1 3 5)\n(2 3 4)\n7\n30\n9");
+		}
+
+	}
+
+	// == Function namespace examples (Function Namespace section) ==
+
+	@Nested
+	class FunctionNamespaceExamples {
+
+		@Test
+		void bareSymbolIsAVariableReference() {
+			org.assertj.core.api.Assertions.assertThatThrownBy(() -> eval("car"))
+				.hasMessageContaining("The variable car is unbound");
+		}
+
+		@Test
+		void variableDoesNotShadowFunctionInCallPosition() {
+			assertThat(eval("(let ((car 5)) (car (list car 2)))")).isEqualTo(new LispInteger(5));
+		}
+
+		@Test
+		void symbolAsFunctionDesignator() {
+			assertThat(eval("(funcall 'car '(1 2))")).isEqualTo(new LispInteger(1));
+		}
+
+		@Test
+		void defunReturnsTheFunctionName() {
+			assertThat(eval("(defun square (x) (* x x))")).isEqualTo(new LispSymbol("square"));
+		}
+
+		@Test
+		void setqLambdaBindsAVariable() {
+			assertThat(evalAll("(setq f (lambda (x) (* x x))) (funcall f 5)")).isEqualTo(new LispInteger(25));
+		}
+
+		@Test
+		void sharpQuoteOfSpecialOperatorIsAnError() {
+			org.assertj.core.api.Assertions.assertThatThrownBy(() -> eval("#'if"))
+				.hasMessageContaining("is a macro or special operator, not a function");
 		}
 
 	}

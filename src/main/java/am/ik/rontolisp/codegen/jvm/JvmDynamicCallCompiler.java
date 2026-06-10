@@ -19,11 +19,12 @@ import am.ik.jvm.Opcode;
  * rejecting an unknown symbol at compile time, the generated code looks it up in the
  * {@code _genv} global environment when it actually runs.
  * <p>
- * A call {@code (f a b)} compiles to {@code _apply(_eval('f, null), (list a b))}: the
- * operator symbol is resolved to a function value through {@code _eval}, the arguments
- * are compiled normally (so compiled locals remain visible) and collected into a runtime
- * list, and {@code _apply} applies the function value to them. A bare reference {@code x}
- * compiles to {@code _eval('x, null)}.
+ * A call {@code (f a b)} compiles to
+ * {@code _apply(_eval('(function f), null), (list a b))}: the operator symbol is resolved
+ * in the runtime function namespace through {@code _eval}, the arguments are compiled
+ * normally (so compiled locals remain visible) and collected into a runtime list, and
+ * {@code _apply} applies the function value to them. A bare reference {@code x} compiles
+ * to {@code _eval('x, null)}, which resolves the variable namespace only.
  */
 final class JvmDynamicCallCompiler {
 
@@ -34,8 +35,8 @@ final class JvmDynamicCallCompiler {
 	 * Compiles an unresolved function call {@code (name arg...)} as a late-bound apply.
 	 */
 	static void compileCall(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		// fn = _eval('name, null)
-		compileEvalSymbol(name, ctx, className);
+		// fn = _eval('(function name), null)
+		compileFunctionRef(name, ctx, className);
 		// args = (list arg...)
 		LispVal listForm = new LispCons(new LispSymbol(LispNames.LIST), cons.cdr());
 		JvmExprCompiler.compileExpr(listForm, ctx, className);
@@ -45,14 +46,27 @@ final class JvmDynamicCallCompiler {
 
 	/** Compiles an unresolved variable reference {@code name} as a late-bound lookup. */
 	static void compileVarRef(String name, JvmLispCompiler.Ctx ctx) {
-		compileEvalSymbol(name, ctx, ctx.className);
-	}
-
-	// Pushes the result of _eval('name, null) onto the stack.
-	private static void compileEvalSymbol(String name, JvmLispCompiler.Ctx ctx, String className) {
+		// (quote name): the runtime _eval resolves the variable namespace only
 		LispVal quoteForm = new LispCons(new LispSymbol(LispNames.QUOTE),
 				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
-		JvmExprCompiler.compileExpr(quoteForm, ctx, className);
+		compileEvalForm(quoteForm, ctx, ctx.className);
+	}
+
+	/**
+	 * Compiles an unresolved function reference {@code (function name)} as a late-bound
+	 * lookup in the runtime function namespace.
+	 */
+	static void compileFunctionRef(String name, JvmLispCompiler.Ctx ctx, String className) {
+		// '(function name) is passed unevaluated, so quote the whole form
+		LispVal functionForm = new LispCons(new LispSymbol(LispNames.FUNCTION),
+				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+		LispVal quoteForm = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(functionForm, LispNil.INSTANCE));
+		compileEvalForm(quoteForm, ctx, className);
+	}
+
+	// Pushes the result of _eval(form, null) onto the stack.
+	private static void compileEvalForm(LispVal quotedForm, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(quotedForm, ctx, className);
 		// env = null (empty/global lexical environment)
 		ctx.emit(Opcode.ACONST_NULL);
 		emitInvoke("_eval", ctx, className);

@@ -178,15 +178,18 @@ class WasmLispCompilerIntegrationTest {
 	void setqLambdaSquare() throws Exception {
 		assertThat(compileAndRun("""
 				(setq square (lambda (x) (* x x)))
-				(print (square 5))
+				(print (funcall square 5))
 				""")).isEqualTo("25");
 	}
 
 	@Test
 	void setqLambdaFactorial() throws Exception {
+		// Lisp-2: a recursive function must be defined with defun (a lambda bound by
+		// setq cannot refer to itself through the variable namespace in compiled code).
 		assertThat(compileAndRun("""
-				(setq fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1))))))
-				(print (fact 5))
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(setq fact5 #'fact)
+				(print (funcall fact5 5))
 				""")).isEqualTo("120");
 	}
 
@@ -194,7 +197,7 @@ class WasmLispCompilerIntegrationTest {
 	void setqLambdaNoParams() throws Exception {
 		assertThat(compileAndRun("""
 				(setq answer (lambda () 42))
-				(print (answer))
+				(print (funcall answer))
 				""")).isEqualTo("42");
 	}
 
@@ -203,7 +206,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(setq double (lambda (x) (* x 2)))
 				(setq add1 (lambda (x) (+ x 1)))
-				(print (add1 (double 5)))
+				(print (funcall add1 (funcall double 5)))
 				""")).isEqualTo("11");
 	}
 
@@ -212,7 +215,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(defun double (x) (* x 2))
 				(setq add1 (lambda (x) (+ x 1)))
-				(print (add1 (double 5)))
+				(print (funcall add1 (double 5)))
 				""")).isEqualTo("11");
 	}
 
@@ -296,15 +299,15 @@ class WasmLispCompilerIntegrationTest {
 	void higherOrderFunction() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
-				(defun apply-twice (f x) (f (f x)))
-				(print (apply-twice square 3))
+				(defun apply-twice (f x) (funcall f (funcall f x)))
+				(print (apply-twice #'square 3))
 				""")).isEqualTo("81");
 	}
 
 	@Test
 	void lambdaAsArgument() throws Exception {
 		assertThat(compileAndRun("""
-				(defun apply-twice (f x) (f (f x)))
+				(defun apply-twice (f x) (funcall f (funcall f x)))
 				(print (apply-twice (lambda (x) (+ x 10)) 5))
 				""")).isEqualTo("25");
 	}
@@ -314,7 +317,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(defun make-adder (n) (lambda (x) (+ x n)))
 				(setq add5 (make-adder 5))
-				(print (add5 10))
+				(print (funcall add5 10))
 				""")).isEqualTo("15");
 	}
 
@@ -327,9 +330,9 @@ class WasmLispCompilerIntegrationTest {
 				      (setq n (+ n 1))
 				      n)))
 				(setq counter (make-counter))
-				(counter)
-				(counter)
-				(print (counter))
+				(funcall counter)
+				(funcall counter)
+				(print (funcall counter))
 				""")).isEqualTo("3");
 	}
 
@@ -338,8 +341,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
 				(defun forty-two (x) 42)
-				(setq f (if t square forty-two))
-				(print (f 6))
+				(setq f (if t #'square #'forty-two))
+				(print (funcall f 6))
 				""")).isEqualTo("36");
 	}
 
@@ -347,7 +350,7 @@ class WasmLispCompilerIntegrationTest {
 	void funcall() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
-				(print (funcall square 7))
+				(print (funcall #'square 7))
 				""")).isEqualTo("49");
 	}
 
@@ -362,7 +365,7 @@ class WasmLispCompilerIntegrationTest {
 	void functionInList() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))
-				(print (funcall (car (list square)) 5))
+				(print (funcall (car (list #'square)) 5))
 				""")).isEqualTo("25");
 	}
 
@@ -744,40 +747,83 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void reduceWithBuiltinPlus() throws Exception {
-		assertThat(compileAndRun("(print (reduce + 0 '(1 2 3 4 5)))")).isEqualTo("15");
+		assertThat(compileAndRun("(print (reduce #'+ 0 '(1 2 3 4 5)))")).isEqualTo("15");
 	}
 
 	@Test
 	void reduceWithBuiltinMul() throws Exception {
-		assertThat(compileAndRun("(print (reduce * 1 '(1 2 3 4 5)))")).isEqualTo("120");
+		assertThat(compileAndRun("(print (reduce #'* 1 '(1 2 3 4 5)))")).isEqualTo("120");
 	}
 
 	@Test
 	void mapWithBuiltinCar() throws Exception {
-		assertThat(compileAndRun("(print (map car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
+		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
 	}
 
 	@Test
 	void mapWithBuiltinCdr() throws Exception {
-		assertThat(compileAndRun("(print (map cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
+		assertThat(compileAndRun("(print (map #'cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
 	}
 
 	@Test
 	void mapWithBuiltin1Plus() throws Exception {
-		assertThat(compileAndRun("(print (map 1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+		assertThat(compileAndRun("(print (map #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
 	}
 
 	@Test
 	void funcallWithBuiltinPlus() throws Exception {
-		assertThat(compileAndRun("(print (funcall + 3 4))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (funcall #'+ 3 4))")).isEqualTo("7");
 	}
 
 	@Test
 	void builtinAsVariable() throws Exception {
 		assertThat(compileAndRun("""
-				(setq my-op +)
+				(setq my-op #'+)
 				(print (funcall my-op 10 20))
 				""")).isEqualTo("30");
+	}
+
+	// Lisp-2 (separate function/variable namespaces) tests
+
+	@Test
+	void funcallSharpQuotedPlus() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'+ 1 2))")).isEqualTo("3");
+	}
+
+	@Test
+	void mapSharpQuotedCar() throws Exception {
+		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4))))")).isEqualTo("(1 3)");
+	}
+
+	@Test
+	void funcallQuotedSymbolDesignator() throws Exception {
+		assertThat(compileAndRun("(print (funcall 'car '(9 8)))")).isEqualTo("9");
+	}
+
+	@Test
+	void mapSharpQuotedCadr() throws Exception {
+		assertThat(compileAndRun("(print (map #'cadr '((1 2) (3 4))))")).isEqualTo("(2 4)");
+	}
+
+	@Test
+	void setqSharpQuotedBuiltinThenFuncall() throws Exception {
+		assertThat(compileAndRun("""
+				(setq f #'+)
+				(print (funcall f 1 2))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void symbolFunction() throws Exception {
+		assertThat(compileAndRun("(print (funcall (symbol-function 'car) '(5 6)))")).isEqualTo("5");
+	}
+
+	@Test
+	void bareFunctionNameInValuePositionIsRejected() {
+		// Compile-time only: no container run is needed to assert the rejection.
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print car)")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot compile symbol: car");
 	}
 
 	// read-line tests
@@ -1013,7 +1059,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void evalLambdaBoundInLet() throws Exception {
-		assertThat(compileAndRun("(print (eval '(let ((f (lambda (x) (* x x)))) (f 6))))")).isEqualTo("36");
+		assertThat(compileAndRun("(print (eval '(let ((f (lambda (x) (* x x)))) (funcall f 6))))")).isEqualTo("36");
 	}
 
 	@Test
@@ -1086,7 +1132,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void evalSetqRuntimeFunctionDefinition() throws Exception {
-		assertThat(compileAndRun("(print (eval '(progn (setq f (lambda (n) (* n 3))) (f 7))))")).isEqualTo("21");
+		assertThat(compileAndRun("(print (eval '(progn (setq f (lambda (n) (* n 3))) (funcall f 7))))"))
+			.isEqualTo("21");
 	}
 
 	@Test
@@ -1097,7 +1144,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void evalFuncall() throws Exception {
 		assertThat(compileAndRun("(print (eval '(funcall (lambda (x y) (+ x y)) 3 4)))")).isEqualTo("7");
-		assertThat(compileAndRun("(print (eval '(funcall + 10 20)))")).isEqualTo("30");
+		assertThat(compileAndRun("(print (eval '(funcall #'+ 10 20)))")).isEqualTo("30");
 	}
 
 	@Test
@@ -1108,7 +1155,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void evalReduce() throws Exception {
 		assertThat(compileAndRun("(print (eval '(reduce (lambda (a b) (+ a b)) (list 1 2 3 4))))")).isEqualTo("10");
-		assertThat(compileAndRun("(print (eval '(reduce + 100 (list 1 2 3))))")).isEqualTo("106");
+		assertThat(compileAndRun("(print (eval '(reduce #'+ 100 (list 1 2 3))))")).isEqualTo("106");
 	}
 
 	@Test
@@ -1206,8 +1253,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void mathAsFirstClass() throws Exception {
-		assertThat(compileAndRun("(print (map sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
-		assertThat(compileAndRun("(print (reduce gcd (list 24 36 48)))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (map #'sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print (reduce #'gcd (list 24 36 48)))")).isEqualTo("12");
 		assertThat(compileAndRun("(print (eval (list (quote expt) 2 8)))")).isEqualTo("256");
 		assertThat(compileAndRun("(print (eval (list (quote sqrt) 25)))")).isEqualTo("5.0");
 	}

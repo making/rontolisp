@@ -30,11 +30,15 @@ import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Lexical environment for variable bindings.
+ * Lexical environment for bindings. Following the Lisp-2 model of Common Lisp, variables
+ * and functions live in separate namespaces: {@link #lookup(String)} resolves the
+ * variable namespace, {@link #lookupFunction(String)} the function namespace.
  */
 public final class Environment implements Scope {
 
 	private final Map<String, LispVal> bindings;
+
+	private final Map<String, LispVal> functions;
 
 	@Nullable private final Environment parent;
 
@@ -44,6 +48,7 @@ public final class Environment implements Scope {
 	 */
 	public Environment(@Nullable Environment parent) {
 		this.bindings = new HashMap<>();
+		this.functions = new HashMap<>();
 		this.parent = parent;
 	}
 
@@ -56,7 +61,46 @@ public final class Environment implements Scope {
 		if (this.parent != null) {
 			return this.parent.lookup(name);
 		}
-		throw new LispEvalException("Undefined symbol: " + name);
+		throw new LispEvalException("The variable " + name + " is unbound");
+	}
+
+	/**
+	 * Look up a name in the function namespace, searching up the scope chain.
+	 * @param name the function name
+	 * @return the function value
+	 * @throws LispEvalException if the function is undefined
+	 */
+	public LispVal lookupFunction(String name) {
+		LispVal val = lookupFunctionOrNull(name);
+		if (val == null) {
+			throw new LispEvalException("The function " + name + " is undefined");
+		}
+		return val;
+	}
+
+	/**
+	 * Look up a name in the function namespace, searching up the scope chain.
+	 * @param name the function name
+	 * @return the function value, or {@code null} if undefined
+	 */
+	public @Nullable LispVal lookupFunctionOrNull(String name) {
+		LispVal val = this.functions.get(name);
+		if (val != null) {
+			return val;
+		}
+		if (this.parent != null) {
+			return this.parent.lookupFunctionOrNull(name);
+		}
+		return null;
+	}
+
+	/**
+	 * Define a binding in the function namespace of this environment.
+	 * @param name the function name
+	 * @param value the function value
+	 */
+	public void defineFunction(String name, LispVal value) {
+		this.functions.put(name, value);
 	}
 
 	/**
@@ -121,7 +165,7 @@ public final class Environment implements Scope {
 		// directly,
 		// and it is NOT visible unqualified in the cl-user package.
 		String versionName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.VERSION);
-		env.define(versionName, new LispFunction(versionName, args -> {
+		env.defineFunction(versionName, new LispFunction(versionName, args -> {
 			if (!args.isEmpty()) {
 				throw new LispEvalException(LispNames.VERSION + " expects no arguments, got " + args.size());
 			}
@@ -130,7 +174,7 @@ public final class Environment implements Scope {
 	}
 
 	private static void registerArithmetic(Environment env) {
-		env.define(LispNames.ADD, new LispFunction(LispNames.ADD, args -> {
+		env.defineFunction(LispNames.ADD, new LispFunction(LispNames.ADD, args -> {
 			if (hasDouble(args)) {
 				double result = 0;
 				for (LispVal arg : args) {
@@ -152,7 +196,7 @@ public final class Environment implements Scope {
 				return addBig(args);
 			}
 		}));
-		env.define(LispNames.SUB, new LispFunction(LispNames.SUB, args -> {
+		env.defineFunction(LispNames.SUB, new LispFunction(LispNames.SUB, args -> {
 			if (hasDouble(args)) {
 				if (args.size() == 1) {
 					return new LispDouble(-asDouble(args.get(0)));
@@ -180,7 +224,7 @@ public final class Environment implements Scope {
 				return subBig(args);
 			}
 		}));
-		env.define(LispNames.MUL, new LispFunction(LispNames.MUL, args -> {
+		env.defineFunction(LispNames.MUL, new LispFunction(LispNames.MUL, args -> {
 			if (hasDouble(args)) {
 				double result = 1;
 				for (LispVal arg : args) {
@@ -202,7 +246,7 @@ public final class Environment implements Scope {
 				return mulBig(args);
 			}
 		}));
-		env.define(LispNames.DIV, new LispFunction(LispNames.DIV, args -> {
+		env.defineFunction(LispNames.DIV, new LispFunction(LispNames.DIV, args -> {
 			if (hasDouble(args)) {
 				double result = asDouble(args.get(0));
 				for (int i = 1; i < args.size(); i++) {
@@ -224,7 +268,7 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(result);
 		}));
-		env.define(LispNames.MOD, new LispFunction(LispNames.MOD, args -> {
+		env.defineFunction(LispNames.MOD, new LispFunction(LispNames.MOD, args -> {
 			requireArgCount(LispNames.MOD, args, 2);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) % asDouble(args.get(1)));
@@ -234,7 +278,7 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(asLong(args.get(0)) % asLong(args.get(1)));
 		}));
-		env.define(LispNames.ABS, new LispFunction(LispNames.ABS, args -> {
+		env.defineFunction(LispNames.ABS, new LispFunction(LispNames.ABS, args -> {
 			requireArgCount(LispNames.ABS, args, 1);
 			if (hasDouble(args)) {
 				return new LispDouble(Math.abs(asDouble(args.get(0))));
@@ -248,7 +292,7 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.abs(value));
 		}));
-		env.define(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
+		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireArgCount(LispNames.MIN, args, 2);
 			if (hasDouble(args)) {
 				return new LispDouble(Math.min(asDouble(args.get(0)), asDouble(args.get(1))));
@@ -258,7 +302,7 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.min(asLong(args.get(0)), asLong(args.get(1))));
 		}));
-		env.define(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
+		env.defineFunction(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
 			requireArgCount(LispNames.MAX, args, 2);
 			if (hasDouble(args)) {
 				return new LispDouble(Math.max(asDouble(args.get(0)), asDouble(args.get(1))));
@@ -268,7 +312,7 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.max(asLong(args.get(0)), asLong(args.get(1))));
 		}));
-		env.define(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
+		env.defineFunction(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
 			requireArgCount(LispNames.ONE_PLUS, args, 1);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) + 1);
@@ -283,7 +327,7 @@ public final class Environment implements Scope {
 				return normalizeBig(asBigInteger(args.get(0)).add(BigInteger.ONE));
 			}
 		}));
-		env.define(LispNames.ONE_MINUS, new LispFunction(LispNames.ONE_MINUS, args -> {
+		env.defineFunction(LispNames.ONE_MINUS, new LispFunction(LispNames.ONE_MINUS, args -> {
 			requireArgCount(LispNames.ONE_MINUS, args, 1);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) - 1);
@@ -315,7 +359,7 @@ public final class Environment implements Scope {
 		defineUnaryDouble(env, LispNames.COSH, Math::cosh);
 		defineUnaryDouble(env, LispNames.TANH, Math::tanh);
 		// isqrt: exact integer square root (floor of the real square root).
-		env.define(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {
+		env.defineFunction(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {
 			requireArgCount(LispNames.ISQRT, args, 1);
 			BigInteger n = asBigInteger(args.get(0));
 			if (n.signum() < 0) {
@@ -324,7 +368,7 @@ public final class Environment implements Scope {
 			return normalizeBig(n.sqrt());
 		}));
 		// expt: integer^non-negative-integer stays exact; otherwise Math.pow (double).
-		env.define(LispNames.EXPT, new LispFunction(LispNames.EXPT, args -> {
+		env.defineFunction(LispNames.EXPT, new LispFunction(LispNames.EXPT, args -> {
 			requireArgCount(LispNames.EXPT, args, 2);
 			if (!hasDouble(args)) {
 				long power = asLong(args.get(1));
@@ -335,12 +379,12 @@ public final class Environment implements Scope {
 			return new LispDouble(Math.pow(asDouble(args.get(0)), asDouble(args.get(1))));
 		}));
 		// gcd: greatest common divisor of two integers (always non-negative).
-		env.define(LispNames.GCD, new LispFunction(LispNames.GCD, args -> {
+		env.defineFunction(LispNames.GCD, new LispFunction(LispNames.GCD, args -> {
 			requireArgCount(LispNames.GCD, args, 2);
 			return normalizeBig(asBigInteger(args.get(0)).gcd(asBigInteger(args.get(1))));
 		}));
 		// lcm: least common multiple of two integers (0 if either is 0).
-		env.define(LispNames.LCM, new LispFunction(LispNames.LCM, args -> {
+		env.defineFunction(LispNames.LCM, new LispFunction(LispNames.LCM, args -> {
 			requireArgCount(LispNames.LCM, args, 2);
 			BigInteger a = asBigInteger(args.get(0));
 			BigInteger b = asBigInteger(args.get(1));
@@ -350,7 +394,7 @@ public final class Environment implements Scope {
 			return normalizeBig(a.divide(a.gcd(b)).multiply(b).abs());
 		}));
 		// signum: sign as -1/0/1, preserving the float/integer type of the argument.
-		env.define(LispNames.SIGNUM, new LispFunction(LispNames.SIGNUM, args -> {
+		env.defineFunction(LispNames.SIGNUM, new LispFunction(LispNames.SIGNUM, args -> {
 			requireArgCount(LispNames.SIGNUM, args, 1);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispDouble d) {
@@ -364,14 +408,14 @@ public final class Environment implements Scope {
 	}
 
 	private static void defineUnaryDouble(Environment env, String name, DoubleUnaryOperator fn) {
-		env.define(name, new LispFunction(name, args -> {
+		env.defineFunction(name, new LispFunction(name, args -> {
 			requireArgCount(name, args, 1);
 			return new LispDouble(fn.applyAsDouble(asDouble(args.get(0))));
 		}));
 	}
 
 	private static void registerComparison(Environment env) {
-		env.define(LispNames.EQ, new LispFunction(LispNames.EQ, args -> {
+		env.defineFunction(LispNames.EQ, new LispFunction(LispNames.EQ, args -> {
 			requireArgCount(LispNames.EQ, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) == asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -381,7 +425,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) == asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.LT, new LispFunction(LispNames.LT, args -> {
+		env.defineFunction(LispNames.LT, new LispFunction(LispNames.LT, args -> {
 			requireArgCount(LispNames.LT, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -391,7 +435,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) < asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.GT, new LispFunction(LispNames.GT, args -> {
+		env.defineFunction(LispNames.GT, new LispFunction(LispNames.GT, args -> {
 			requireArgCount(LispNames.GT, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -401,7 +445,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) > asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.LE, new LispFunction(LispNames.LE, args -> {
+		env.defineFunction(LispNames.LE, new LispFunction(LispNames.LE, args -> {
 			requireArgCount(LispNames.LE, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) <= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -411,7 +455,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) <= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.GE, new LispFunction(LispNames.GE, args -> {
+		env.defineFunction(LispNames.GE, new LispFunction(LispNames.GE, args -> {
 			requireArgCount(LispNames.GE, args, 2);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) >= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -421,7 +465,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) >= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.EQ_GENERAL, new LispFunction(LispNames.EQ_GENERAL, args -> {
+		env.defineFunction(LispNames.EQ_GENERAL, new LispFunction(LispNames.EQ_GENERAL, args -> {
 			requireArgCount(LispNames.EQ_GENERAL, args, 2);
 			LispVal a = args.get(0);
 			LispVal b = args.get(1);
@@ -440,7 +484,7 @@ public final class Environment implements Scope {
 
 	private static void registerIO(Environment env, PrintStream out, InputStream in) {
 		BufferedReader stdinReader = new BufferedReader(new InputStreamReader(in));
-		env.define(LispNames.PRINT, new LispFunction(LispNames.PRINT, args -> {
+		env.defineFunction(LispNames.PRINT, new LispFunction(LispNames.PRINT, args -> {
 			requireArgCount(LispNames.PRINT, args, 1);
 			LispVal val = args.get(0);
 			if (val instanceof LispInteger i) {
@@ -454,7 +498,7 @@ public final class Environment implements Scope {
 			}
 			return val;
 		}));
-		env.define(LispNames.PRIN1, new LispFunction(LispNames.PRIN1, args -> {
+		env.defineFunction(LispNames.PRIN1, new LispFunction(LispNames.PRIN1, args -> {
 			requireArgCount(LispNames.PRIN1, args, 1);
 			LispVal val = args.get(0);
 			if (val instanceof LispInteger i) {
@@ -468,7 +512,7 @@ public final class Environment implements Scope {
 			}
 			return val;
 		}));
-		env.define(LispNames.PRINC, new LispFunction(LispNames.PRINC, args -> {
+		env.defineFunction(LispNames.PRINC, new LispFunction(LispNames.PRINC, args -> {
 			requireArgCount(LispNames.PRINC, args, 1);
 			LispVal val = args.get(0);
 			if (val instanceof LispInteger i) {
@@ -482,12 +526,12 @@ public final class Environment implements Scope {
 			}
 			return val;
 		}));
-		env.define(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
+		env.defineFunction(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
 			requireArgCount(LispNames.TERPRI, args, 0);
 			out.println();
 			return LispNil.INSTANCE;
 		}));
-		env.define(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
+		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
 			requireArgCount(LispNames.READ_LINE, args, 0);
 			try {
 				String line = stdinReader.readLine();
@@ -497,7 +541,7 @@ public final class Environment implements Scope {
 				throw new UncheckedIOException(ex);
 			}
 		}));
-		env.define(LispNames.READ, new LispFunction(LispNames.READ, args -> {
+		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			requireArgCount(LispNames.READ, args, 0);
 			try {
 				String line = stdinReader.readLine();
@@ -517,55 +561,55 @@ public final class Environment implements Scope {
 	}
 
 	private static void registerPredicates(Environment env) {
-		env.define(LispNames.NULL, new LispFunction(LispNames.NULL, args -> {
+		env.defineFunction(LispNames.NULL, new LispFunction(LispNames.NULL, args -> {
 			requireArgCount(LispNames.NULL, args, 1);
 			return args.get(0) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.NOT, new LispFunction(LispNames.NOT, args -> {
+		env.defineFunction(LispNames.NOT, new LispFunction(LispNames.NOT, args -> {
 			requireArgCount(LispNames.NOT, args, 1);
 			return args.get(0) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.ATOM, new LispFunction(LispNames.ATOM, args -> {
+		env.defineFunction(LispNames.ATOM, new LispFunction(LispNames.ATOM, args -> {
 			requireArgCount(LispNames.ATOM, args, 1);
 			return !(args.get(0) instanceof LispCons) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.NUMBERP, new LispFunction(LispNames.NUMBERP, args -> {
+		env.defineFunction(LispNames.NUMBERP, new LispFunction(LispNames.NUMBERP, args -> {
 			requireArgCount(LispNames.NUMBERP, args, 1);
 			LispVal arg = args.get(0);
 			return (arg instanceof LispInteger || arg instanceof LispBigInteger || arg instanceof LispDouble)
 					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.INTEGERP, new LispFunction(LispNames.INTEGERP, args -> {
+		env.defineFunction(LispNames.INTEGERP, new LispFunction(LispNames.INTEGERP, args -> {
 			requireArgCount(LispNames.INTEGERP, args, 1);
 			LispVal arg = args.get(0);
 			return (arg instanceof LispInteger || arg instanceof LispBigInteger) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.FLOATP, new LispFunction(LispNames.FLOATP, args -> {
+		env.defineFunction(LispNames.FLOATP, new LispFunction(LispNames.FLOATP, args -> {
 			requireArgCount(LispNames.FLOATP, args, 1);
 			return args.get(0) instanceof LispDouble ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.SYMBOLP, new LispFunction(LispNames.SYMBOLP, args -> {
+		env.defineFunction(LispNames.SYMBOLP, new LispFunction(LispNames.SYMBOLP, args -> {
 			requireArgCount(LispNames.SYMBOLP, args, 1);
 			return args.get(0) instanceof LispSymbol ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.STRINGP, new LispFunction(LispNames.STRINGP, args -> {
+		env.defineFunction(LispNames.STRINGP, new LispFunction(LispNames.STRINGP, args -> {
 			requireArgCount(LispNames.STRINGP, args, 1);
 			return args.get(0) instanceof LispString ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.LISTP, new LispFunction(LispNames.LISTP, args -> {
+		env.defineFunction(LispNames.LISTP, new LispFunction(LispNames.LISTP, args -> {
 			requireArgCount(LispNames.LISTP, args, 1);
 			LispVal arg = args.get(0);
 			return (arg instanceof LispCons || arg instanceof LispNil) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.CONSP, new LispFunction(LispNames.CONSP, args -> {
+		env.defineFunction(LispNames.CONSP, new LispFunction(LispNames.CONSP, args -> {
 			requireArgCount(LispNames.CONSP, args, 1);
 			return args.get(0) instanceof LispCons ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.KEYWORDP, new LispFunction(LispNames.KEYWORDP, args -> {
+		env.defineFunction(LispNames.KEYWORDP, new LispFunction(LispNames.KEYWORDP, args -> {
 			requireArgCount(LispNames.KEYWORDP, args, 1);
 			return args.get(0) instanceof LispSymbol sym && sym.isKeyword() ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.ZEROP, new LispFunction(LispNames.ZEROP, args -> {
+		env.defineFunction(LispNames.ZEROP, new LispFunction(LispNames.ZEROP, args -> {
 			requireArgCount(LispNames.ZEROP, args, 1);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) == 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -577,7 +621,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.PLUSP, new LispFunction(LispNames.PLUSP, args -> {
+		env.defineFunction(LispNames.PLUSP, new LispFunction(LispNames.PLUSP, args -> {
 			requireArgCount(LispNames.PLUSP, args, 1);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) > 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -587,7 +631,7 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.MINUSP, new LispFunction(LispNames.MINUSP, args -> {
+		env.defineFunction(LispNames.MINUSP, new LispFunction(LispNames.MINUSP, args -> {
 			requireArgCount(LispNames.MINUSP, args, 1);
 			if (hasDouble(args)) {
 				return asDouble(args.get(0)) < 0.0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -597,14 +641,14 @@ public final class Environment implements Scope {
 			}
 			return asLong(args.get(0)) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.EVENP, new LispFunction(LispNames.EVENP, args -> {
+		env.defineFunction(LispNames.EVENP, new LispFunction(LispNames.EVENP, args -> {
 			requireArgCount(LispNames.EVENP, args, 1);
 			if (args.get(0) instanceof LispBigInteger b) {
 				return b.value().testBit(0) ? LispNil.INSTANCE : LispTrue.INSTANCE;
 			}
 			return asLong(args.get(0)) % 2 == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.define(LispNames.ODDP, new LispFunction(LispNames.ODDP, args -> {
+		env.defineFunction(LispNames.ODDP, new LispFunction(LispNames.ODDP, args -> {
 			requireArgCount(LispNames.ODDP, args, 1);
 			if (args.get(0) instanceof LispBigInteger b) {
 				return b.value().testBit(0) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -614,32 +658,32 @@ public final class Environment implements Scope {
 	}
 
 	private static void registerListOps(Environment env) {
-		env.define(LispNames.CONS, new LispFunction(LispNames.CONS, args -> {
+		env.defineFunction(LispNames.CONS, new LispFunction(LispNames.CONS, args -> {
 			requireArgCount(LispNames.CONS, args, 2);
 			return new LispCons(args.get(0), args.get(1));
 		}));
-		env.define(LispNames.CAR, new LispFunction(LispNames.CAR, args -> {
+		env.defineFunction(LispNames.CAR, new LispFunction(LispNames.CAR, args -> {
 			requireArgCount(LispNames.CAR, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.car();
 			}
 			throw new LispEvalException("car expects a cons cell, got: " + args.get(0).print());
 		}));
-		env.define(LispNames.CDR, new LispFunction(LispNames.CDR, args -> {
+		env.defineFunction(LispNames.CDR, new LispFunction(LispNames.CDR, args -> {
 			requireArgCount(LispNames.CDR, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.cdr();
 			}
 			throw new LispEvalException("cdr expects a cons cell, got: " + args.get(0).print());
 		}));
-		env.define(LispNames.LIST, new LispFunction(LispNames.LIST, args -> {
+		env.defineFunction(LispNames.LIST, new LispFunction(LispNames.LIST, args -> {
 			LispVal result = LispNil.INSTANCE;
 			for (int i = args.size() - 1; i >= 0; i--) {
 				result = new LispCons(args.get(i), result);
 			}
 			return result;
 		}));
-		env.define(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
+		env.defineFunction(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
 			requireArgCount(LispNames.NTHCDR, args, 2);
 			long n = asLong(args.get(0));
 			LispVal list = args.get(1);
@@ -653,7 +697,7 @@ public final class Environment implements Scope {
 			}
 			return list;
 		}));
-		env.define(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
+		env.defineFunction(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
 			requireArgCount(LispNames.RPLACA, args, 2);
 			if (args.get(0) instanceof LispCons cons) {
 				cons.setCar(args.get(1));
@@ -661,7 +705,7 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("rplaca expects a cons cell, got: " + args.get(0).print());
 		}));
-		env.define(LispNames.RPLACD, new LispFunction(LispNames.RPLACD, args -> {
+		env.defineFunction(LispNames.RPLACD, new LispFunction(LispNames.RPLACD, args -> {
 			requireArgCount(LispNames.RPLACD, args, 2);
 			if (args.get(0) instanceof LispCons cons) {
 				cons.setCdr(args.get(1));
@@ -669,7 +713,7 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("rplacd expects a cons cell, got: " + args.get(0).print());
 		}));
-		env.define(LispNames.REMF_TAIL, new LispFunction(LispNames.REMF_TAIL, args -> {
+		env.defineFunction(LispNames.REMF_TAIL, new LispFunction(LispNames.REMF_TAIL, args -> {
 			requireArgCount(LispNames.REMF_TAIL, args, 2);
 			LispVal current = args.get(0);
 			LispVal indicator = args.get(1);
@@ -710,7 +754,7 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		}));
-		env.define(LispNames.APPEND, new LispFunction(LispNames.APPEND, args -> {
+		env.defineFunction(LispNames.APPEND, new LispFunction(LispNames.APPEND, args -> {
 			if (args.isEmpty()) {
 				return LispNil.INSTANCE;
 			}
@@ -733,7 +777,7 @@ public final class Environment implements Scope {
 	}
 
 	private static void registerTypeConversion(Environment env) {
-		env.define(LispNames.FLOAT, new LispFunction(LispNames.FLOAT, args -> {
+		env.defineFunction(LispNames.FLOAT, new LispFunction(LispNames.FLOAT, args -> {
 			requireArgCount(LispNames.FLOAT, args, 1);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispDouble) {
@@ -747,7 +791,7 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("float expects a number, got: " + arg.print());
 		}));
-		env.define(LispNames.TRUNCATE, new LispFunction(LispNames.TRUNCATE, args -> {
+		env.defineFunction(LispNames.TRUNCATE, new LispFunction(LispNames.TRUNCATE, args -> {
 			requireArgCount(LispNames.TRUNCATE, args, 1);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
@@ -758,7 +802,7 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("truncate expects a number, got: " + arg.print());
 		}));
-		env.define(LispNames.FLOOR, new LispFunction(LispNames.FLOOR, args -> {
+		env.defineFunction(LispNames.FLOOR, new LispFunction(LispNames.FLOOR, args -> {
 			requireArgCount(LispNames.FLOOR, args, 1);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
@@ -769,7 +813,7 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("floor expects a number, got: " + arg.print());
 		}));
-		env.define(LispNames.CEILING, new LispFunction(LispNames.CEILING, args -> {
+		env.defineFunction(LispNames.CEILING, new LispFunction(LispNames.CEILING, args -> {
 			requireArgCount(LispNames.CEILING, args, 1);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
@@ -780,7 +824,7 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("ceiling expects a number, got: " + arg.print());
 		}));
-		env.define(LispNames.ROUND, new LispFunction(LispNames.ROUND, args -> {
+		env.defineFunction(LispNames.ROUND, new LispFunction(LispNames.ROUND, args -> {
 			requireArgCount(LispNames.ROUND, args, 1);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {

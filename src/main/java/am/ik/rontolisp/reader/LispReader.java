@@ -70,6 +70,7 @@ public final class LispReader {
 			case Token.SymbolToken sym -> readSymbol(sym);
 			case Token.LeftParen ignored -> readList();
 			case Token.Quote ignored -> readQuote();
+			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.RightParen ignored -> throw new LispReadException("Unexpected ')'");
 			case Token.Dot ignored -> throw new LispReadException("Unexpected '.'");
 			case Token.Eof ignored -> throw new LispReadException("Unexpected end of input");
@@ -114,6 +115,11 @@ public final class LispReader {
 	private LispVal readQuote() {
 		LispVal quoted = readExpr();
 		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(quoted, LispNil.INSTANCE));
+	}
+
+	private LispVal readFunctionQuote() {
+		LispVal quoted = readExpr();
+		return new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(quoted, LispNil.INSTANCE));
 	}
 
 }

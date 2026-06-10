@@ -27,6 +27,17 @@ import am.ik.rontolisp.reader.LispReader;
  */
 public final class LispEvaluator {
 
+	/**
+	 * Names that are special operators or macros and therefore have no function value:
+	 * {@code (function name)} / {@code #'name} on these is an error, mirroring Common
+	 * Lisp. Function-like macros (1+, zerop, ...) are excluded because they are also
+	 * registered as functions in the global environment.
+	 */
+	private static final java.util.Set<String> SPECIAL_OPERATORS = java.util.Set.of(LispNames.QUOTE, LispNames.IF,
+			LispNames.LET, LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION,
+			LispNames.DEFUN, LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN, LispNames.UNLESS,
+			LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF, LispNames.IN_PACKAGE);
+
 	private final Environment globalEnv;
 
 	private final PackageResolver packageResolver = new PackageResolver();
@@ -63,13 +74,48 @@ public final class LispEvaluator {
 	}
 
 	private void registerEval() {
-		this.globalEnv.define(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
+		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
 			}
 			return eval(args.get(0));
 		}));
-		this.globalEnv.define(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
+		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.SYMBOL_FUNCTION + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(
+						LispNames.SYMBOL_FUNCTION + " expects a symbol, got " + args.get(0).print());
+			}
+			return resolveFunction(sym.name());
+		}));
+		this.globalEnv.defineFunction(LispNames.FUNCALL, new LispFunction(LispNames.FUNCALL, args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
+			}
+			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
+		}));
+		this.globalEnv.defineFunction(LispNames.MAP, new LispFunction(LispNames.MAP, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.MAP + " expects 2 arguments, got " + args.size());
+			}
+			return mapValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
+			if (args.size() == 2) {
+				LispVal list = args.get(1);
+				if (!(list instanceof LispCons first)) {
+					throw new LispEvalException("reduce requires a non-empty list when no initial value is provided");
+				}
+				return reduceValues(args.get(0), first.car(), first.cdr());
+			}
+			if (args.size() == 3) {
+				return reduceValues(args.get(0), args.get(1), args.get(2));
+			}
+			throw new LispEvalException(LispNames.REDUCE + " expects 2 or 3 arguments, got " + args.size());
+		}));
+		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.LOAD + " expects 1 argument, got " + args.size());
 			}
@@ -137,21 +183,17 @@ public final class LispEvaluator {
 				case LispNames.LET:
 					return evalLet(cons, env);
 				case LispNames.DEFUN:
-					return eval(LispMacroExpander.expandDefun(cons), env);
+					return evalDefun(cons, env);
+				case LispNames.FUNCTION:
+					return evalFunction(cons, env);
 				case LispNames.PROGN:
 					return evalProgn(cons, env);
 				case LispNames.SETQ:
 					return evalSetq(cons, env);
 				case LispNames.LAMBDA:
 					return evalLambdaForm(cons, env);
-				case LispNames.FUNCALL:
-					return evalFuncall(cons, env);
 				case LispNames.WHILE:
 					return evalWhile(cons, env);
-				case LispNames.MAP:
-					return evalMap(cons, env);
-				case LispNames.REDUCE:
-					return evalReduce(cons, env);
 				case LispNames.COND:
 					return eval(LispMacroExpander.expandCond(cons), env);
 				case LispNames.AND:
@@ -200,11 +242,67 @@ public final class LispEvaluator {
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
 			}
+			// Lisp-2: a symbol in call position is resolved in the function namespace
+			// only; variable bindings of the same name do not shadow it.
+			LispVal function = resolveFunction(sym.name());
+			List<LispVal> args = evalArgs(cons, env);
+			return apply(function, args, env);
 		}
-		// Function application
+		// Non-symbol head: a lambda form such as ((lambda (x) x) 5)
 		LispVal function = eval(head, env);
 		List<LispVal> args = evalArgs(cons, env);
 		return apply(function, args, env);
+	}
+
+	private LispVal evalDefun(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol name = (LispSymbol) parts.get(1);
+		List<LispSymbol> params = extractParams(parts.get(2));
+		List<LispVal> body = parts.subList(3, parts.size());
+		// defun installs into the global function namespace, capturing the current
+		// lexical environment, and returns the function name like Common Lisp.
+		this.globalEnv.defineFunction(name.name(), new LispLambda(params, body, env));
+		return name;
+	}
+
+	private LispVal evalFunction(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new LispEvalException(LispNames.FUNCTION + " expects exactly one argument");
+		}
+		LispVal designator = parts.get(1);
+		if (designator instanceof LispCons lambdaForm && lambdaForm.car() instanceof LispSymbol op
+				&& LispNames.LAMBDA.equals(op.name())) {
+			return evalLambdaForm(lambdaForm, env);
+		}
+		if (designator instanceof LispSymbol sym) {
+			return resolveFunction(sym.name());
+		}
+		throw new LispEvalException(
+				LispNames.FUNCTION + " expects a function name or lambda expression, got " + designator.print());
+	}
+
+	/**
+	 * Resolves a function designator name against the global function namespace.
+	 * @param name the function name
+	 * @return the function value
+	 * @throws LispEvalException if the name is a special operator or macro, or undefined
+	 */
+	private LispVal resolveFunction(String name) {
+		if (SPECIAL_OPERATORS.contains(name)) {
+			throw new LispEvalException(name + " is a macro or special operator, not a function");
+		}
+		LispVal fn = this.globalEnv.lookupFunctionOrNull(name);
+		if (fn != null) {
+			return fn;
+		}
+		if (LispMacroExpander.isCarCdrComposition(name)) {
+			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class.
+			LispSymbol param = new LispSymbol("x");
+			LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
+			return new LispLambda(List.of(param), List.of(call), this.globalEnv);
+		}
+		throw new LispEvalException("The function " + name + " is undefined");
 	}
 
 	private LispVal evalQuote(LispCons cons) {
@@ -281,23 +379,10 @@ public final class LispEvaluator {
 		return new LispLambda(params, body, env);
 	}
 
-	private LispVal evalFuncall(LispCons cons, Environment env) {
-		List<LispVal> parts = cons.toList();
-		LispVal function = eval(parts.get(1), env);
-		List<LispVal> args = new ArrayList<>();
-		for (int i = 2; i < parts.size(); i++) {
-			args.add(eval(parts.get(i), env));
-		}
-		return apply(function, args, env);
-	}
-
-	private LispVal evalMap(LispCons cons, Environment env) {
-		List<LispVal> parts = cons.toList();
-		LispVal function = eval(parts.get(1), env);
-		LispVal list = eval(parts.get(2), env);
+	private LispVal mapValues(LispVal function, LispVal list) {
 		List<LispVal> results = new ArrayList<>();
 		while (list instanceof LispCons cell) {
-			LispVal mapped = apply(function, List.of(cell.car()), env);
+			LispVal mapped = apply(function, List.of(cell.car()), this.globalEnv);
 			results.add(mapped);
 			list = cell.cdr();
 		}
@@ -311,29 +396,9 @@ public final class LispEvaluator {
 		return result;
 	}
 
-	private LispVal evalReduce(LispCons cons, Environment env) {
-		List<LispVal> parts = cons.toList();
-		LispVal function;
-		LispVal accumulator;
-		LispVal list;
-		if (parts.size() == 3) {
-			// 2-arg: (reduce fn list)
-			function = eval(parts.get(1), env);
-			list = eval(parts.get(2), env);
-			if (!(list instanceof LispCons first)) {
-				throw new LispEvalException("reduce requires a non-empty list when no initial value is provided");
-			}
-			accumulator = first.car();
-			list = first.cdr();
-		}
-		else {
-			// 3-arg: (reduce fn initial-value list)
-			function = eval(parts.get(1), env);
-			accumulator = eval(parts.get(2), env);
-			list = eval(parts.get(3), env);
-		}
+	private LispVal reduceValues(LispVal function, LispVal accumulator, LispVal list) {
 		while (list instanceof LispCons cell) {
-			accumulator = apply(function, List.of(accumulator, cell.car()), env);
+			accumulator = apply(function, List.of(accumulator, cell.car()), this.globalEnv);
 			list = cell.cdr();
 		}
 		return accumulator;
@@ -350,6 +415,10 @@ public final class LispEvaluator {
 	}
 
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {
+		if (function instanceof LispSymbol sym) {
+			// A symbol is a function designator naming its global function (CL-style).
+			function = resolveFunction(sym.name());
+		}
 		if (function instanceof LispFunction builtIn) {
 			return builtIn.body().apply(args);
 		}
