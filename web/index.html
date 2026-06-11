@@ -284,7 +284,7 @@
 			"hello": '(print "hello, rontolisp")',
 			"factorial": '(defun fact (n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(print (fact 10))',
 			"fibonacci": '(defun fib (n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(print (fib 20))',
-			"higher-order": '(print (map (lambda (x) (* x x)) (list 1 2 3 4 5)))\n(print (reduce #\'+ (list 1 2 3 4 5 6 7 8 9 10)))',
+			"higher-order": '(print (mapcar (lambda (x) (* x x)) (list 1 2 3 4 5)))\n(print (reduce #\'+ (list 1 2 3 4 5 6 7 8 9 10)))',
 			"eval": "(print (eval (list '+ 10 20 30)))",
 			"loop": '(dotimes (i 5) (print (* i i)))',
 		};
