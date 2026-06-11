@@ -141,12 +141,28 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_STRING_CONCAT = 37;
 
-	static final int FUNC_DISPATCH_BASE = 38;
+	// String runtime: produce/compare strings (string-upcase/downcase/capitalize, subseq,
+	// string=/string-equal, string-trim family).
+	static final int FUNC_STRING_UPCASE = 38;
+
+	static final int FUNC_STRING_DOWNCASE = 39;
+
+	static final int FUNC_STRING_CAPITALIZE = 40;
+
+	static final int FUNC_SUBSEQ = 41;
+
+	static final int FUNC_STRING_EQ = 42;
+
+	static final int FUNC_STRING_EQUAL = 43;
+
+	static final int FUNC_STRING_TRIM = 44;
+
+	static final int FUNC_DISPATCH_BASE = 45;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 35..42 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 43
+	// Dispatch functions occupy indices 45..52 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 53
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -785,6 +801,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _princ_to_str
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _prin1_to_str
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _string_concat
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _string_upcase
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _string_downcase
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _string_capitalize
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _subseq
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _string_eq
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _string_equal
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _string_trim
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -857,7 +880,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundBody())
 					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 1))
 					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINT_VAL, 1))
-					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 2));
+					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 2))
+					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(true))
+					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(false))
+					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
+					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody())
+					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
+					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
+					.addFunction(WasmStringRuntimeBuilder.buildTrimBody());
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);

@@ -140,6 +140,15 @@ final class WasmExprCompiler {
 				case LispNames.STRING_CONCAT -> WasmStringConcatCompiler.compile(cons, ctx);
 				case LispNames.CONCATENATE -> WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx);
 				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
+				case LispNames.STRING_UPCASE -> WasmStringUpcaseCompiler.compileUpcase(cons, ctx);
+				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler.compileDowncase(cons, ctx);
+				case LispNames.STRING_CAPITALIZE -> WasmStringCapitalizeCompiler.compile(cons, ctx);
+				case LispNames.SUBSEQ -> WasmSubseqCompiler.compile(cons, ctx);
+				case LispNames.STRING_EQ -> WasmStringEqCompiler.compileEq(cons, ctx);
+				case LispNames.STRING_EQUAL -> WasmStringEqCompiler.compileEqual(cons, ctx);
+				case LispNames.STRING_TRIM -> WasmStringTrimCompiler.compileTrim(cons, ctx);
+				case LispNames.STRING_LEFT_TRIM -> WasmStringTrimCompiler.compileLeft(cons, ctx);
+				case LispNames.STRING_RIGHT_TRIM -> WasmStringTrimCompiler.compileRight(cons, ctx);
 				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(cons, ctx);
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);

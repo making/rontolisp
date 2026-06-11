@@ -250,7 +250,7 @@ nil
 (1 9)
 (and cond decf dolist dotimes format incf let* or pop push remf setf unless when)
 (defun function if in-package lambda let progn quote setq while)
-92
+101
 (list-functions list-macros list-special-forms version)
 ci-intro-fn
 nil
@@ -292,3 +292,10 @@ fmt-nil: world 42 "str" ~
 foobar
 3.14
 "abc"
+HELLO
+hello
+Hello World
+world
+t
+t
+hi

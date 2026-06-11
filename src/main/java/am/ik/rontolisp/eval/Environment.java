@@ -9,6 +9,7 @@ import java.io.UncheckedIOException;
 import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -167,6 +168,7 @@ public final class Environment implements Scope {
 		registerPredicates(env);
 		registerListOps(env);
 		registerSequenceOps(env);
+		registerStringOps(env);
 		registerTypeConversion(env);
 		registerPackages(env);
 		return env;
@@ -638,6 +640,112 @@ public final class Environment implements Scope {
 			}
 			return cur instanceof LispCons ? cur : LispNil.INSTANCE;
 		}));
+	}
+
+	private static void registerStringOps(Environment env) {
+		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE, args -> {
+			requireArgCount(LispNames.STRING_UPCASE, args, 1);
+			return new LispString(requireString(LispNames.STRING_UPCASE, args.get(0)).toUpperCase(Locale.ROOT));
+		}));
+		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE, args -> {
+			requireArgCount(LispNames.STRING_DOWNCASE, args, 1);
+			return new LispString(requireString(LispNames.STRING_DOWNCASE, args.get(0)).toLowerCase(Locale.ROOT));
+		}));
+		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE, args -> {
+			requireArgCount(LispNames.STRING_CAPITALIZE, args, 1);
+			return new LispString(capitalizeString(requireString(LispNames.STRING_CAPITALIZE, args.get(0))));
+		}));
+		// subseq: strings only. (seq start [end]); end defaults to the string length.
+		env.defineFunction(LispNames.SUBSEQ, new LispFunction(LispNames.SUBSEQ, args -> {
+			requireMinArgCount(LispNames.SUBSEQ, args, 2);
+			if (args.size() > 3) {
+				throw new LispEvalException(LispNames.SUBSEQ + " expects 2 or 3 arguments, got " + args.size());
+			}
+			String s = requireString(LispNames.SUBSEQ, args.get(0));
+			int start = requireIndex(LispNames.SUBSEQ, args.get(1));
+			int end = (args.size() == 3 && !(args.get(2) instanceof LispNil))
+					? requireIndex(LispNames.SUBSEQ, args.get(2)) : s.length();
+			if (start < 0 || end > s.length() || start > end) {
+				throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
+						+ " for string of length " + s.length());
+			}
+			return new LispString(s.substring(start, end));
+		}));
+		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
+			requireArgCount(LispNames.STRING_EQ, args, 2);
+			String a = requireString(LispNames.STRING_EQ, args.get(0));
+			String b = requireString(LispNames.STRING_EQ, args.get(1));
+			return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.STRING_EQUAL, new LispFunction(LispNames.STRING_EQUAL, args -> {
+			requireArgCount(LispNames.STRING_EQUAL, args, 2);
+			String a = requireString(LispNames.STRING_EQUAL, args.get(0));
+			String b = requireString(LispNames.STRING_EQUAL, args.get(1));
+			return a.equalsIgnoreCase(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.STRING_TRIM, new LispFunction(LispNames.STRING_TRIM, args -> {
+			requireArgCount(LispNames.STRING_TRIM, args, 2);
+			return new LispString(trimString(LispNames.STRING_TRIM, args.get(0), args.get(1), true, true));
+		}));
+		env.defineFunction(LispNames.STRING_LEFT_TRIM, new LispFunction(LispNames.STRING_LEFT_TRIM, args -> {
+			requireArgCount(LispNames.STRING_LEFT_TRIM, args, 2);
+			return new LispString(trimString(LispNames.STRING_LEFT_TRIM, args.get(0), args.get(1), true, false));
+		}));
+		env.defineFunction(LispNames.STRING_RIGHT_TRIM, new LispFunction(LispNames.STRING_RIGHT_TRIM, args -> {
+			requireArgCount(LispNames.STRING_RIGHT_TRIM, args, 2);
+			return new LispString(trimString(LispNames.STRING_RIGHT_TRIM, args.get(0), args.get(1), false, true));
+		}));
+	}
+
+	private static String requireString(String name, LispVal val) {
+		if (val instanceof LispString str) {
+			return str.value();
+		}
+		throw new LispEvalException(name + " expects a string, got: " + val.print());
+	}
+
+	private static int requireIndex(String name, LispVal val) {
+		if (val instanceof LispInteger i) {
+			return (int) i.value();
+		}
+		throw new LispEvalException(name + " expects an integer index, got: " + val.print());
+	}
+
+	// Capitalizes the first letter of each alphanumeric word and lowercases the rest,
+	// matching Common Lisp string-capitalize.
+	private static String capitalizeString(String s) {
+		char[] chars = s.toCharArray();
+		boolean atWordStart = true;
+		for (int i = 0; i < chars.length; i++) {
+			char ch = chars[i];
+			if (Character.isLetterOrDigit(ch)) {
+				chars[i] = atWordStart ? Character.toUpperCase(ch) : Character.toLowerCase(ch);
+				atWordStart = false;
+			}
+			else {
+				atWordStart = true;
+			}
+		}
+		return new String(chars);
+	}
+
+	// Removes characters that appear in the bag string from the requested ends.
+	private static String trimString(String name, LispVal bagVal, LispVal strVal, boolean left, boolean right) {
+		String bag = requireString(name, bagVal);
+		String s = requireString(name, strVal);
+		int start = 0;
+		int end = s.length();
+		if (left) {
+			while (start < end && bag.indexOf(s.charAt(start)) >= 0) {
+				start++;
+			}
+		}
+		if (right) {
+			while (end > start && bag.indexOf(s.charAt(end - 1)) >= 0) {
+				end--;
+			}
+		}
+		return s.substring(start, end);
 	}
 
 	private static void registerIO(Environment env, PrintStream out, InputStream in) {

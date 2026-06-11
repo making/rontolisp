@@ -312,6 +312,51 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void stringUpcase() {
+			assertThat(eval("(string-upcase \"abc\")")).isEqualTo(new LispString("ABC"));
+		}
+
+		@Test
+		void stringDowncase() {
+			assertThat(eval("(string-downcase \"ABC\")")).isEqualTo(new LispString("abc"));
+		}
+
+		@Test
+		void stringCapitalize() {
+			assertThat(eval("(string-capitalize \"hello world\")")).isEqualTo(new LispString("Hello World"));
+		}
+
+		@Test
+		void subseq() {
+			assertThat(eval("(subseq \"hello\" 1 3)")).isEqualTo(new LispString("el"));
+		}
+
+		@Test
+		void stringEq() {
+			assertThat(eval("(string= \"abc\" \"abc\")")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void stringEqual() {
+			assertThat(eval("(string-equal \"ABC\" \"abc\")")).isSameAs(LispTrue.INSTANCE);
+		}
+
+		@Test
+		void stringTrim() {
+			assertThat(eval("(string-trim \" \" \"  hi  \")")).isEqualTo(new LispString("hi"));
+		}
+
+		@Test
+		void stringLeftTrim() {
+			assertThat(eval("(string-left-trim \"x\" \"xxhi\")")).isEqualTo(new LispString("hi"));
+		}
+
+		@Test
+		void stringRightTrim() {
+			assertThat(eval("(string-right-trim \"x\" \"hixx\")")).isEqualTo(new LispString("hi"));
+		}
+
+		@Test
 		void nullPredicate() {
 			assertThat(eval("(null nil)")).isSameAs(LispTrue.INSTANCE);
 		}
@@ -884,7 +929,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)",
-					"(defun function if in-package lambda let progn quote setq while)", "92", "(square)",
+					"(defun function if in-package lambda let progn quote setq while)", "101", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

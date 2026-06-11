@@ -342,6 +342,15 @@ embedded `eval` runtime in compiled output (see
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- the string `princ` would print |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- the string `prin1` would print (readable form) |
 | `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (only the `'string` result type is supported; the compilers require the literal `'string`) |
+| `string-upcase` | `(string-upcase "abc")` | `"ABC"` (case conversion is ASCII-only in the WASM backend) |
+| `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
+| `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |
+| `subseq` | `(subseq "hello" 1 3)` | `"el"` (strings only; the `end` argument is optional) |
+| `string=` | `(string= "abc" "abc")` | `t` (case-sensitive string equality) |
+| `string-equal` | `(string-equal "ABC" "abc")` | `t` (case-insensitive, ASCII) |
+| `string-trim` | `(string-trim " " "  hi  ")` | `"hi"` (removes the bag's characters from both ends) |
+| `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
+| `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (all three backends). `nil` on EOF |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
@@ -512,7 +521,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))
-; => 92
+; => 101
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

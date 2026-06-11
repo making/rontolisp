@@ -164,6 +164,10 @@ public final class BuiltinFunctionWrappers {
 					List.of(callV(LispNames.NOT,
 							callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
 									new LispInteger(0))))),
+			// String operations
+			unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE), unary(LispNames.STRING_CAPITALIZE),
+			binary(LispNames.SUBSEQ), binary(LispNames.STRING_EQ), binary(LispNames.STRING_EQUAL),
+			binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM), binary(LispNames.STRING_RIGHT_TRIM),
 			// terpri: 0-arity
 			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
 			// read-line: 0-arity

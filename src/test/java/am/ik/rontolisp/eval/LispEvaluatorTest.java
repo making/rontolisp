@@ -509,6 +509,43 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringUpcaseDowncase() {
+		assertThat(eval("(string-upcase \"Hello, World\")")).isEqualTo(new LispString("HELLO, WORLD"));
+		assertThat(eval("(string-downcase \"Hello, World\")")).isEqualTo(new LispString("hello, world"));
+	}
+
+	@Test
+	void evalStringCapitalize() {
+		assertThat(eval("(string-capitalize \"hello world  foo\")")).isEqualTo(new LispString("Hello World  Foo"));
+	}
+
+	@Test
+	void evalSubseq() {
+		assertThat(eval("(subseq \"hello world\" 6)")).isEqualTo(new LispString("world"));
+		assertThat(eval("(subseq \"hello world\" 0 5)")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void evalStringEquality() {
+		assertThat(eval("(string= \"abc\" \"abc\")")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(string= \"abc\" \"abd\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string-equal \"ABC\" \"abc\")")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalStringTrim() {
+		assertThat(eval("(string-trim \" xy\" \"xyhelloyx \")")).isEqualTo(new LispString("hello"));
+		assertThat(eval("(string-left-trim \"x\" \"xxhello\")")).isEqualTo(new LispString("hello"));
+		assertThat(eval("(string-right-trim \"x\" \"helloxx\")")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void evalStringUpcaseAsFunctionValue() {
+		assertThat(eval("(mapcar #'string-upcase (list \"ab\" \"cd\"))"))
+			.isEqualTo(new LispCons(new LispString("AB"), new LispCons(new LispString("CD"), LispNil.INSTANCE)));
+	}
+
+	@Test
 	void evalFormatNonLiteralControlString() {
 		assertThatThrownBy(() -> eval("(format t x)")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("literal control string");
@@ -1486,7 +1523,7 @@ class LispEvaluatorTest {
 		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(92);
+			.hasSize(101);
 	}
 
 	@Test

@@ -396,6 +396,43 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStringUpcaseDowncase() throws Exception {
+		assertThat(compileAndRun("(princ (string-upcase \"Hello, World\"))")).isEqualTo("HELLO, WORLD");
+		assertThat(compileAndRun("(princ (string-downcase \"Hello, World\"))")).isEqualTo("hello, world");
+	}
+
+	@Test
+	void compileAndRunStringCapitalize() throws Exception {
+		assertThat(compileAndRun("(princ (string-capitalize \"hello world  foo\"))")).isEqualTo("Hello World  Foo");
+	}
+
+	@Test
+	void compileAndRunSubseq() throws Exception {
+		assertThat(compileAndRun("(princ (subseq \"hello world\" 6))")).isEqualTo("world");
+		assertThat(compileAndRun("(princ (subseq \"hello world\" 0 5))")).isEqualTo("hello");
+	}
+
+	@Test
+	void compileAndRunStringEquality() throws Exception {
+		assertThat(compileAndRun("(print (string= \"abc\" \"abc\"))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (string= \"abc\" \"abd\"))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (string-equal \"ABC\" \"abc\"))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunStringTrim() throws Exception {
+		assertThat(compileAndRun("(princ (string-trim \" xy\" \"xyhelloyx \"))")).isEqualTo("hello");
+		assertThat(compileAndRun("(princ (string-left-trim \"x\" \"xxhello\"))")).isEqualTo("hello");
+		assertThat(compileAndRun("(princ (string-right-trim \"x\" \"helloxx\"))")).isEqualTo("hello");
+	}
+
+	@Test
+	void compileAndRunStringFunctionsAsValues() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'string-upcase (list \"ab\" \"cd\")))")).isEqualTo("(\"AB\" \"CD\")");
+		assertThat(compileAndRun("(print (funcall #'subseq \"hello\" 2))")).isEqualTo("\"llo\"");
+	}
+
+	@Test
 	void compileAndRunQuoteInteger() throws Exception {
 		assertThat(compileAndRun("(print '42)")).isEqualTo("42");
 	}
@@ -1721,12 +1758,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("92");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("101");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("92");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("101");
 	}
 
 	@Test

@@ -371,6 +371,35 @@ public final class LispNames {
 	/** The {@code read-line} built-in function. */
 	public static final String READ_LINE = "read-line";
 
+	// String operations
+
+	/** The {@code string-upcase} built-in function. */
+	public static final String STRING_UPCASE = "string-upcase";
+
+	/** The {@code string-downcase} built-in function. */
+	public static final String STRING_DOWNCASE = "string-downcase";
+
+	/** The {@code string-capitalize} built-in function. */
+	public static final String STRING_CAPITALIZE = "string-capitalize";
+
+	/** The {@code subseq} built-in function (strings only). */
+	public static final String SUBSEQ = "subseq";
+
+	/** The {@code string=} built-in function (case-sensitive string equality). */
+	public static final String STRING_EQ = "string=";
+
+	/** The {@code string-equal} built-in function (case-insensitive string equality). */
+	public static final String STRING_EQUAL = "string-equal";
+
+	/** The {@code string-trim} built-in function. */
+	public static final String STRING_TRIM = "string-trim";
+
+	/** The {@code string-left-trim} built-in function. */
+	public static final String STRING_LEFT_TRIM = "string-left-trim";
+
+	/** The {@code string-right-trim} built-in function. */
+	public static final String STRING_RIGHT_TRIM = "string-right-trim";
+
 	/** The {@code read} built-in function (interpreter only). */
 	public static final String READ = "read";
 
