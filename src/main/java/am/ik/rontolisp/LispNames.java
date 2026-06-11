@@ -216,6 +216,9 @@ public final class LispNames {
 	/** The {@code decf} macro. */
 	public static final String DECF = "decf";
 
+	/** The {@code format} macro. */
+	public static final String FORMAT = "format";
+
 	/** The {@code defun} macro. */
 	public static final String DEFUN = "defun";
 

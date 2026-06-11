@@ -31,7 +31,7 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN,
 			LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF,
-			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF);
+			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

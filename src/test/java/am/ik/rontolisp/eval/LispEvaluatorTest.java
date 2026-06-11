@@ -403,6 +403,71 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFormat() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(format t \"Hello ~a, you are ~d!~%\" 'world 42)"));
+		assertThat(baos.toString()).isEqualTo("Hello world, you are 42!" + System.lineSeparator());
+		assertThat(result).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalFormatPrin1Directive() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(format t \"~s and ~a\" \"str\" \"str\")"));
+		assertThat(baos.toString()).isEqualTo("\"str\" and str");
+	}
+
+	@Test
+	void evalFormatList() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(format t \"list=~a\" (list 1 2 3))"));
+		assertThat(baos.toString()).isEqualTo("list=(1 2 3)");
+	}
+
+	@Test
+	void evalFormatTildeEscape() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(format t \"100~~\")"));
+		assertThat(baos.toString()).isEqualTo("100~");
+	}
+
+	@Test
+	void evalFormatUppercaseDirectives() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(format t \"~A ~D ~S\" 'sym 42 \"str\")"));
+		assertThat(baos.toString()).isEqualTo("sym 42 \"str\"");
+	}
+
+	@Test
+	void evalFormatNilDestinationUnsupported() {
+		assertThatThrownBy(() -> eval("(format nil \"~a\" 1)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("destination");
+	}
+
+	@Test
+	void evalFormatNonLiteralControlString() {
+		assertThatThrownBy(() -> eval("(format t x)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("literal control string");
+	}
+
+	@Test
+	void evalFormatNotEnoughArguments() {
+		assertThatThrownBy(() -> eval("(format t \"~a ~a\" 1)")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("not enough arguments");
+	}
+
+	@Test
+	void evalFormatUnsupportedDirective() {
+		assertThatThrownBy(() -> eval("(format t \"~c\" 65)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("unsupported directive");
+	}
+
+	@Test
 	void evalSetqLambdaAndCall() {
 		assertThat(evalMulti("(setq square (lambda (x) (* x x))) (funcall square 5)")).isEqualTo(new LispInteger(25));
 	}
@@ -1347,7 +1412,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print())
-			.isEqualTo("(and cond decf dolist dotimes incf let* or pop push remf setf unless when)");
+			.isEqualTo("(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)");
 	}
 
 	@Test

@@ -248,7 +248,7 @@ nil
 (2 3)
 nil
 (1 9)
-(and cond decf dolist dotimes incf let* or pop push remf setf unless when)
+(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)
 (defun function if in-package lambda let progn quote setq while)
 89
 (list-functions list-macros list-special-forms version)
@@ -283,3 +283,7 @@ nil
 12
 12
 5
+Hello world, you are 42!
+"str" and str
+list=(1 2 3) tilde=~
+Hi, alice!

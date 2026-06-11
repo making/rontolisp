@@ -386,6 +386,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void format() throws Exception {
+		assertThat(compileAndRun("(format t \"Hello ~a, you are ~d! ~s~%\" 'world 42 \"str\")"))
+			.isEqualTo("Hello world, you are 42! \"str\"");
+	}
+
+	@Test
+	void formatList() throws Exception {
+		assertThat(compileAndRun("(format t \"list=~a tilde=~~\" (list 1 2 3))")).isEqualTo("list=(1 2 3) tilde=~");
+	}
+
+	@Test
+	void formatInsideDefun() throws Exception {
+		assertThat(compileAndRun("(defun greet (name) (format t \"Hi, ~a!~%\" name)) (greet 'alice) (greet \"bob\")"))
+			.isEqualTo("Hi, alice!\nHi, bob!");
+	}
+
+	@Test
 	void quoteInteger() throws Exception {
 		assertThat(compileAndRun("(print '42)")).isEqualTo("42");
 	}
@@ -1551,7 +1568,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))"))
-			.isEqualTo("(and cond decf dolist dotimes incf let* or pop push remf setf unless when)");
+			.isEqualTo("(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)");
 	}
 
 	@Test

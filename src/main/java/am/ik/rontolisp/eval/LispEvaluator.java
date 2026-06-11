@@ -248,6 +248,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandIncf(cons), env);
 				case LispNames.DECF:
 					return eval(LispMacroExpander.expandDecf(cons), env);
+				case LispNames.FORMAT:
+					return eval(LispMacroExpander.expandFormat(cons), env);
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

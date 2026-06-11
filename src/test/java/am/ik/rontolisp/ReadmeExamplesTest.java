@@ -765,6 +765,14 @@ class ReadmeExamplesTest {
 			assertThat(evalAll("(setq n 10) (decf n 4)")).isEqualTo(new LispInteger(6));
 		}
 
+		@Test
+		void format() {
+			assertThat(evalAndCaptureOutput("(format t \"Hello ~a, you are ~d years old.~%\" 'world 42)"))
+				.isEqualTo("Hello world, you are 42 years old.");
+			assertThat(evalAndCaptureOutput("(format t \"~s and ~a~%\" \"str\" \"str\")")).isEqualTo("\"str\" and str");
+			assertThat(evalAndCaptureOutput("(format t \"list=~a~%\" (list 1 2 3))")).isEqualTo("list=(1 2 3)");
+		}
+
 	}
 
 	// == Special form examples (Language Reference > Special Forms table) ==
@@ -859,7 +867,7 @@ class ReadmeExamplesTest {
 					(print (rontolisp:list-functions :rontolisp))
 					""");
 			assertThat(output.lines().toList()).containsExactly(
-					"(and cond decf dolist dotimes incf let* or pop push remf setf unless when)",
+					"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)",
 					"(defun function if in-package lambda let progn quote setq while)", "89", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}

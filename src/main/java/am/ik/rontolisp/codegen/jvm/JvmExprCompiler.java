@@ -150,6 +150,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
 				case LispNames.DECF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx, className);
+				case LispNames.FORMAT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx, className);
 				case LispNames.LENGTH -> JvmLengthCompiler.compile(cons, ctx, className);
 				case LispNames.REVERSE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx, className);
