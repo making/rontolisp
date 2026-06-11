@@ -1285,6 +1285,36 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, ACC);
 		emitCdrOf(w, REST);
 		setLocal(w, REST);
+		// single argument: (- x) negates and (/ x) takes the reciprocal, by seeding
+		// the fold with the identity element (0 - x, 1 / x)
+		getLocal(w, REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, OFF);
+		i32(w, off.of(LispNames.SUB));
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, FN);
+		i32(w, 0);
+		i31New(w);
+		getLocal(w, ACC);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		setLocal(w, ACC);
+		w.write(Instruction.END);
+		getLocal(w, OFF);
+		i32(w, off.of(LispNames.DIV));
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, FN);
+		i32(w, 1);
+		i31New(w);
+		getLocal(w, ACC);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		setLocal(w, ACC);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
 		getLocal(w, REST);

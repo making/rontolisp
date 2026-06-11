@@ -1182,6 +1182,34 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRunWithStdin("(print (null (read)))", "")).isEqualTo("1");
 	}
 
+	@Test
+	void compileAndRunReadSharpQuote() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "#'car\n")).isEqualTo("(function car)");
+	}
+
+	@Test
+	void compileAndRunReadSharpQuoteThenEvalFuncall() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(funcall #'+ 1 2)\n")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunReadSharpQuoteLambdaThenEval() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(map #'(lambda (x) (* x x)) '(1 2 3))\n"))
+			.isEqualTo("(1 4 9)");
+	}
+
+	@Test
+	void compileAndRunReadSkipsBlankAndCommentLines() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "\n   \n; comment only\n42\n")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunReadEvalPrintLoop() throws Exception {
+		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
+		assertThat(compileAndRunWithStdin(repl, "(defun square (x) (* x x))\n(square 7)\n\n(map #'square '(1 2 3))\n"))
+			.isEqualTo("square\n49\n(1 4 9)");
+	}
+
 	// === load ===
 
 	@Test
@@ -1270,6 +1298,17 @@ class JvmLispCompilerTest {
 	@Test
 	void evalVariadicArithmetic() throws Exception {
 		assertThat(compileAndRun("(print (eval '(+ 1 2 3 4)))")).isEqualTo("10");
+	}
+
+	@Test
+	void evalUnaryMinusNegates() throws Exception {
+		assertThat(compileAndRun("(print (eval '(- 5)))")).isEqualTo("-5");
+		assertThat(compileAndRun("(print (eval '(- -5)))")).isEqualTo("5");
+	}
+
+	@Test
+	void evalUnaryDivideReciprocal() throws Exception {
+		assertThat(compileAndRun("(print (eval '(/ 2)))")).isEqualTo("1/2");
 	}
 
 	@Test

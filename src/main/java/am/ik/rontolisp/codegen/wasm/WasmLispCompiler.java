@@ -573,16 +573,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] readBody;
 		final byte[] loadBody;
 		if (usesRead) {
-			// Intern nil/t/quote before snapshotting so the runtime resolves them to the
-			// same offsets the eval runtime uses.
+			// Intern nil/t/quote/function before snapshotting so the runtime resolves
+			// them to the same offsets the eval runtime uses.
 			int nilOffset = stringTable.addString("nil").offset();
 			int tOffset = stringTable.addString("t").offset();
 			int quoteOffset = stringTable.addString(LispNames.QUOTE).offset();
+			int functionOffset = stringTable.addString(LispNames.FUNCTION).offset();
 			java.util.Collection<StringTable.StringEntry> internEntries = stringTable.entries();
 			int internCount = internEntries.size();
 			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount);
-			readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset);
+			readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset, functionOffset);
 			readListBody = WasmReadRuntimeBuilder.buildReadListBody();
 			readBody = WasmReadRuntimeBuilder.buildReadBody();
 			loadBody = WasmReadRuntimeBuilder.buildLoadBody();

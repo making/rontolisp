@@ -1060,6 +1060,49 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(+ 1 2 3)")).isEqualTo("6");
 	}
 
+	// Pipes stdin through a file in the container so the input may contain single
+	// quotes (e.g. #'car), which would break the echo '...' form above.
+	private static String compileAndRunWithStdinFile(String lispCode, String stdin) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				"/tmp/stdin.txt");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime --wasm gc /tmp/test.wasm < /tmp/stdin.txt");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void readSharpQuote() throws Exception {
+		assertThat(compileAndRunWithStdinFile("(print (read))", "#'car\n")).isEqualTo("(function car)");
+	}
+
+	@Test
+	void readSharpQuoteThenEvalFuncall() throws Exception {
+		assertThat(compileAndRunWithStdinFile("(print (eval (read)))", "(funcall #'+ 1 2)\n")).isEqualTo("3");
+	}
+
+	@Test
+	void readSharpQuoteLambdaThenEval() throws Exception {
+		assertThat(compileAndRunWithStdinFile("(print (eval (read)))", "(map #'(lambda (x) (* x x)) '(1 2 3))\n"))
+			.isEqualTo("(1 4 9)");
+	}
+
+	@Test
+	void readSkipsBlankAndCommentLines() throws Exception {
+		assertThat(compileAndRunWithStdinFile("(print (read))", "\n   \n; comment only\n42\n")).isEqualTo("42");
+	}
+
+	@Test
+	void readEvalPrintLoop() throws Exception {
+		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
+		assertThat(
+				compileAndRunWithStdinFile(repl, "(defun square (x) (* x x))\n(square 7)\n\n(map #'square '(1 2 3))\n"))
+			.isEqualTo("square\n49\n(1 4 9)");
+	}
+
 	// load tests
 
 	private static String compileAndRunLoad(String lispCode, String libContent) throws Exception {
@@ -1156,6 +1199,17 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (eval '(+ 1 2 3 4 5)))")).isEqualTo("15");
 		assertThat(compileAndRun("(print (eval '(- 10 3 2)))")).isEqualTo("5");
 		assertThat(compileAndRun("(print (eval '(* 2 3 4)))")).isEqualTo("24");
+	}
+
+	@Test
+	void evalUnaryMinusNegates() throws Exception {
+		assertThat(compileAndRun("(print (eval '(- 5)))")).isEqualTo("-5");
+		assertThat(compileAndRun("(print (eval '(- -5)))")).isEqualTo("5");
+	}
+
+	@Test
+	void evalUnaryDivideReciprocal() throws Exception {
+		assertThat(compileAndRun("(print (eval '(/ 2)))")).isEqualTo("1/2");
 	}
 
 	@Test

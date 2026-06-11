@@ -134,6 +134,40 @@ The generated `.wasm` binary uses:
 
 Requires a wasm-GC capable runtime such as wasmtime 14+.
 
+### Self-Hosted REPL
+
+Because `read`, `eval` and `print` are available in every backend, a REPL can be written in RontoLisp itself and compiled to a standalone `.class` or `.wasm`:
+
+Example (`repl.lisp`):
+
+```lisp
+(princ "> ")
+(setq form (read))
+(while form
+  (print (eval form))
+  (princ "> ")
+  (setq form (read)))
+```
+
+```bash
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp               # interpret
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp -o repl.class
+java repl                                                                  # REPL on the JVM
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp -o repl.wasm
+wasmtime --wasm gc repl.wasm                                               # REPL on WASM
+```
+
+```
+> (defun square (x) (* x x))
+square
+> (map #'square '(1 2 3))
+(1 4 9)
+> (- 5)
+-5
+```
+
+`read` returns `nil` at EOF, so the loop exits on Ctrl-D (entering `nil` or `()` also ends it). Each form entered at the prompt is parsed by the runtime reader and evaluated by the embedded `eval` runtime, so the [Compiled `eval` limitations](#compiled-eval-limitations) and [Compiled `read`/`load` limitations](#compiled-readload-limitations) apply.
+
 ## Language Reference
 
 ### Data Types
@@ -362,7 +396,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 
 - **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
 - **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
-- **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM), and unary `(- x)` and `(/ x)` return `x` rather than negating/inverting it.
+- **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
 - **`let*`, `dolist`, `incf` and `decf` are not supported.** These macros are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) work, since they resolve through the compiled function registry.
@@ -372,7 +406,9 @@ These differences come from the design: the runtime `eval` resolves operators by
 
 #### Compiled `read`/`load` limitations
 
-The JVM `read`/`load` reuse the JDK at runtime (`Long.parseLong`, `BigInteger`, `Double.parseDouble`, `java.nio.file`), so they parse the same value kinds as the interpreter: integers, big integers, floats, strings, symbols, `nil`/`t`, lists and `'quote`.
+The JVM `read`/`load` reuse the JDK at runtime (`Long.parseLong`, `BigInteger`, `Double.parseDouble`, `java.nio.file`), so they parse the same value kinds as the interpreter: integers, big integers, floats, strings, symbols, `nil`/`t`, lists, `'quote` and `#'function`.
+
+In every backend `read` parses one S-expression from a line of stdin: blank and comment-only lines are skipped (it keeps reading until a line contains a datum), EOF returns `nil`, and a form must fit on a single line.
 
 The WASM reader has a hand-written parser and is narrower:
 

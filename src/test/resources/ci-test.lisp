@@ -340,6 +340,8 @@
 (print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))
 (print (eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)))
 (print (eval '(let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s)))
+(print (eval '(- 5)))
+(print (eval '(/ 2)))
 
 ; numeric literals with comma grouping separators (e.g. 1,000 -> 1000)
 (print (+ 1,000 100))

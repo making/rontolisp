@@ -720,15 +720,17 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			requireArgCount(LispNames.READ, args, 0);
 			try {
-				String line = stdinReader.readLine();
-				if (line == null) {
-					return LispNil.INSTANCE;
+				// Keep reading lines until one contains a datum (blank and
+				// comment-only lines are skipped) or stdin is exhausted (EOF -> nil).
+				String line;
+				while ((line = stdinReader.readLine()) != null) {
+					line = line.trim();
+					if (line.isEmpty() || line.startsWith(";")) {
+						continue;
+					}
+					return LispReader.readFromString(line);
 				}
-				line = line.trim();
-				if (line.isEmpty()) {
-					return LispNil.INSTANCE;
-				}
-				return LispReader.readFromString(line);
+				return LispNil.INSTANCE;
 			}
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);

@@ -2294,6 +2294,35 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(ACC);
 		cdr(a, REST);
 		a.astore(REST);
+		// single argument: (- x) negates and (/ x) takes the reciprocal, by seeding
+		// the fold with the identity element (0 - x, 1 / x)
+		int notUnary = a.label();
+		int unaryDiv = a.label();
+		a.aload(REST);
+		a.branch(Opcode.IFNONNULL, notUnary);
+		a.aload(OP);
+		ldcStr(a, LispNames.SUB);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFEQ, unaryDiv);
+		a.aload(FN);
+		a.op(Opcode.LCONST_0);
+		a.invokestatic(this.k.longValueOf());
+		a.aload(ACC);
+		a.invokestatic(this.k.invoke()[2]);
+		a.astore(ACC);
+		a.branch(Opcode.GOTO, notUnary);
+		a.bind(unaryDiv);
+		a.aload(OP);
+		ldcStr(a, LispNames.DIV);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFEQ, notUnary);
+		a.aload(FN);
+		a.op(Opcode.LCONST_1);
+		a.invokestatic(this.k.longValueOf());
+		a.aload(ACC);
+		a.invokestatic(this.k.invoke()[2]);
+		a.astore(ACC);
+		a.bind(notUnary);
 		int foldLoop = a.label();
 		int foldEnd = a.label();
 		a.bind(foldLoop);

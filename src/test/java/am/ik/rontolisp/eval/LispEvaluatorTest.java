@@ -1160,6 +1160,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalReadSkipsBlankAndCommentLines() {
+		assertThat(evalWithStdin("(read)", "\n   \n; comment only\n42\n")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalReadSharpQuote() {
+		LispVal result = evalWithStdin("(read)", "#'car\n");
+		assertThat(result.print()).isEqualTo("(function car)");
+	}
+
+	@Test
 	void bigIntegerFactorialPromotesOnOverflow() {
 		LispVal result = evalMulti("""
 				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))

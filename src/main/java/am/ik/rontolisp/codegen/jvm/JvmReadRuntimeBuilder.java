@@ -295,6 +295,7 @@ final class JvmReadRuntimeBuilder {
 		int retNull = a.label();
 		int notLp = a.label();
 		int notQuote = a.label();
+		int notSharp = a.label();
 		int notStr = a.label();
 		int atom = a.label();
 		a.invokestatic(this.readSkipWs);
@@ -318,28 +319,32 @@ final class JvmReadRuntimeBuilder {
 		advance(a);
 		a.invokestatic(this.readExpr);
 		a.astore(1); // inner
-		// (quote inner) = new Object[]{"quote", new Object[]{inner, null}}
-		a.iconst(2);
-		a.anewarray(this.objectClass);
-		a.dup();
-		a.iconst(0);
-		ldc(a, LispNames.QUOTE);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.iconst(2);
-		a.anewarray(this.objectClass);
-		a.dup();
-		a.iconst(0);
-		a.aload(1);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aconstNull();
-		a.aastore();
-		a.aastore();
+		wrapWithSymbol(a, LispNames.QUOTE);
 		a.areturn();
 		a.bind(notQuote);
+		// "#'" -> (function inner)
+		a.iload(0);
+		a.iconst('#');
+		a.branch(Opcode.IF_ICMPNE, notSharp);
+		pos(a);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, notSharp);
+		a.getstatic(this.readSrc);
+		pos(a);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.invokevirtual(this.stringCharAt);
+		a.iconst('\'');
+		a.branch(Opcode.IF_ICMPNE, notSharp);
+		advance(a); // consume '#'
+		advance(a); // consume '\''
+		a.invokestatic(this.readExpr);
+		a.astore(1); // inner
+		wrapWithSymbol(a, LispNames.FUNCTION);
+		a.areturn();
+		a.bind(notSharp);
 		// '"'
 		a.iload(0);
 		a.iconst('"');
@@ -361,6 +366,32 @@ final class JvmReadRuntimeBuilder {
 		a.aconstNull();
 		a.areturn();
 		return a.finish();
+	}
+
+	/**
+	 * Emits {@code (sym inner)} = {@code new Object[]{sym, new Object[]{inner, null}}}
+	 * where {@code inner} is in local slot 1. Leaves the result on the stack.
+	 */
+	private void wrapWithSymbol(JvmAsm a, String sym) {
+		a.iconst(2);
+		a.anewarray(this.objectClass);
+		a.dup();
+		a.iconst(0);
+		ldc(a, sym);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.iconst(2);
+		a.anewarray(this.objectClass);
+		a.dup();
+		a.iconst(0);
+		a.aload(1);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.aconstNull();
+		a.aastore();
+		a.aastore();
 	}
 
 	private List<Integer> buildReadList() {
@@ -679,7 +710,11 @@ final class JvmReadRuntimeBuilder {
 
 	private List<Integer> buildRead() {
 		JvmAsm a = new JvmAsm();
+		int loop = a.label();
 		int rnull = a.label();
+		// Keep reading lines until one contains a datum (blank and comment-only lines
+		// are skipped) or stdin is exhausted (EOF -> nil).
+		a.bind(loop);
 		a.invokestatic(this.readLineHelper);
 		a.dup();
 		a.branch(Opcode.IFNULL, rnull);
@@ -696,6 +731,10 @@ final class JvmReadRuntimeBuilder {
 		a.putstatic(this.readSrc);
 		a.iconst(0);
 		a.putstatic(this.readPos);
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, loop);
 		a.invokestatic(this.readExpr);
 		a.areturn();
 		a.bind(rnull);

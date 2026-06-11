@@ -142,6 +142,40 @@ class ReadmeExamplesTest {
 			assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 		}
 
+		private String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
+			java.io.InputStream oldIn = System.in;
+			System.setIn(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+			try {
+				return compileAndRun(lispCode);
+			}
+			finally {
+				System.setIn(oldIn);
+			}
+		}
+
+		// "Self-Hosted REPL" section: repl.lisp compiled to a standalone class
+		@Test
+		void selfHostedRepl() throws Exception {
+			String repl = """
+					(princ "> ")
+					(setq form (read))
+					(while form
+					  (print (eval form))
+					  (princ "> ")
+					  (setq form (read)))
+					""";
+			String session = """
+					(defun square (x) (* x x))
+					(map #'square '(1 2 3))
+					(- 5)
+					""";
+			assertThat(compileAndRunWithStdin(repl, session)).isEqualTo("""
+					> square
+					> (1 4 9)
+					> -5
+					>""");
+		}
+
 	}
 
 	// == Data type examples (Language Reference > Data Types section) ==

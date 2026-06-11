@@ -34,6 +34,8 @@ final class WasmReadRuntimeBuilder {
 
 	private static final int QUOTE_LEN = 5; // "quote"
 
+	private static final int FUNCTION_LEN = 8; // "function"
+
 	private WasmReadRuntimeBuilder() {
 	}
 
@@ -342,7 +344,7 @@ final class WasmReadRuntimeBuilder {
 
 	// === _read_expr() -> value ===
 
-	static byte[] buildReadExprBody(int nilOffset, int tOffset, int quoteOffset) {
+	static byte[] buildReadExprBody(int nilOffset, int tOffset, int quoteOffset, int functionOffset) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
@@ -397,6 +399,45 @@ final class WasmReadRuntimeBuilder {
 		// return cons(quoteSym, cdr)
 		i32(w, quoteOffset);
 		i32(w, QUOTE_LEN);
+		structNew(w, WasmLispCompiler.TYPE_STRING);
+		getLocal(w, CDR);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.RETURN);
+		end(w);
+
+		// "#'" -> (function inner)
+		getLocal(w, BYTE);
+		i32(w, '#');
+		w.write(Instruction.I32_EQ);
+		// and cursor+1 < end
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_AND);
+		// and byte(cursor+1) == '\''
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, '\'');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		advanceCursor(w); // consume '#'
+		advanceCursor(w); // consume '\''
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		setLocal(w, CAR); // inner
+		// cdr = cons(inner, null)
+		getLocal(w, CAR);
+		emitNull(w);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		setLocal(w, CDR);
+		// return cons(functionSym, cdr)
+		i32(w, functionOffset);
+		i32(w, FUNCTION_LEN);
 		structNew(w, WasmLispCompiler.TYPE_STRING);
 		getLocal(w, CDR);
 		structNew(w, WasmLispCompiler.TYPE_CONS);
@@ -819,6 +860,10 @@ final class WasmReadRuntimeBuilder {
 		w.write(Type.I32);
 		final int V = 0, OFF = 1, LEN = 2;
 
+		// Keep reading lines until one contains a datum (blank and comment-only lines
+		// are skipped) or stdin is exhausted (EOF -> nil).
+		block(w);
+		loop(w);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
 		setLocal(w, V);
@@ -852,9 +897,19 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// retry with the next line if nothing remains after whitespace/comments
+		emitSkipWs(w);
+		loadMem32(w, CURSOR);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 0);
 		// parse one datum
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.write(Instruction.RETURN);
+		end(w); // loop
+		end(w); // block
+		emitNull(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
