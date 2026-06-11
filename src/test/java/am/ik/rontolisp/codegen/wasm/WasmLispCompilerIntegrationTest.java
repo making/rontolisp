@@ -22,12 +22,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers(disabledWithoutDocker = true)
 class WasmLispCompilerIntegrationTest {
 
+	// The install script is downloaded to a file first (a failed `curl | bash` exits 0
+	// because bash just sees EOF) and the installed binary is verified, so a transient
+	// download failure fails the image build instead of producing an image without
+	// wasmtime (every test then fails with exit code 127).
 	@Container
 	static GenericContainer<?> wasmtime = new GenericContainer<>(
 			new ImageFromDockerfile().withDockerfileFromBuilder(builder -> builder.from("debian:bookworm-slim")
 				.run("apt-get update && apt-get install -y --no-install-recommends curl ca-certificates xz-utils"
-						+ " && curl https://wasmtime.dev/install.sh -sSf | bash"
-						+ " && ln -s /root/.wasmtime/bin/wasmtime /usr/local/bin/wasmtime"
+						+ " && curl https://wasmtime.dev/install.sh -sSf -o /tmp/install-wasmtime.sh"
+						+ " && bash /tmp/install-wasmtime.sh && rm /tmp/install-wasmtime.sh"
+						+ " && ln -s /root/.wasmtime/bin/wasmtime /usr/local/bin/wasmtime" + " && wasmtime --version"
 						+ " && apt-get remove -y curl && apt-get autoremove -y" + " && rm -rf /var/lib/apt/lists/*")
 				.build()))
 		.withCommand("sleep", "infinity");
