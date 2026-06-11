@@ -70,25 +70,58 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _subseq} (param 0 = string, param 1 = start, param 2 = end or nil).
+	 * Builds {@code _subseq} (param 0 = sequence, param 1 = start, param 2 = end or nil).
+	 * The sequence is either a string struct or a cons chain (nil = null); the runtime
+	 * type is tested with {@code ref.test} to select the branch. For a string the content
+	 * range is copied into a fresh quoted heap string; for a list the elements from
+	 * {@code start} up to {@code end} are copied into a fresh cons chain. A nil
+	 * {@code end} defaults to the sequence length.
 	 * @return the function body
 	 */
 	static byte[] buildSubseqBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// Locals 3..7: pos, end, start, cur, b.
-		declareI32Locals(w, 5);
-		int pos = 3, end = 4, start = 5, cur = 6, b = 7;
-		// pos = string.offset + 1 + i31(startArg)
+		// ref locals 3..6: node, head, tail, newc.
+		// i32 locals 7..14: pos, end, start, cur, b, startIdx, endIdx, ii.
+		w.write(2);
+		w.write(4);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(8);
+		w.write(Type.I32);
+		int node = 3, head = 4, tail = 5, newc = 6;
+		int pos = 7, end = 8, start = 9, cur = 10, b = 11, startIdx = 12, endIdx = 13, ii = 14;
+		// startIdx = i31(startArg); endIdx = (endArg nil) ? -1 : i31(endArg)
+		emitI31GetS(w, 1);
+		set(w, startIdx);
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, -1);
+		w.write(Instruction.ELSE);
+		emitI31GetS(w, 2);
+		w.write(Instruction.END);
+		set(w, endIdx);
+		// Dispatch: string struct vs list.
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		// --- String branch ---
+		// pos = string.offset + 1 + startIdx
 		emitStrOffset(w, 0);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
-		emitI31GetS(w, 1);
+		get(w, startIdx);
 		w.write(Instruction.I32_ADD);
 		set(w, pos);
-		// end = (endArg is nil) ? content end : string.offset + 1 + i31(endArg)
-		get(w, 2);
-		w.write(Instruction.REF_IS_NULL);
+		// end = (endIdx < 0) ? content end : string.offset + 1 + endIdx
+		get(w, endIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
 		emitStrOffset(w, 0);
@@ -100,13 +133,130 @@ final class WasmStringRuntimeBuilder {
 		emitStrOffset(w, 0);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
-		emitI31GetS(w, 2);
+		get(w, endIdx);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.END);
 		set(w, end);
 		emitBuildCore(w, pos, end, start, cur, b, -1, COPY);
-		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// --- List branch ---
+		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii);
+		w.write(Instruction.END); // dispatch if
+		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	// Copies the elements of the list in param 0 from index startIdxLocal up to
+	// endIdxLocal (or to the end when endIdxLocal < 0) into a fresh cons chain, left on
+	// the stack.
+	private static void emitSubseqList(WasmWriter w, int node, int head, int tail, int newc, int startIdx, int endIdx,
+			int ii) {
+		// node = seq
+		get(w, 0);
+		set(w, node);
+		// Skip the first startIdx cells: ii = 0; while (ii < startIdx && node is cons)
+		i32(w, 0);
+		set(w, ii);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, ii);
+		get(w, startIdx);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitCdr(w, node);
+		set(w, node);
+		get(w, ii);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, ii);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// head = null; tail = null; ii = startIdx
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		set(w, head);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		set(w, tail);
+		get(w, startIdx);
+		set(w, ii);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		// stop when node is not a cons
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		// stop when endIdx >= 0 && ii >= endIdx
+		get(w, endIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, ii);
+		get(w, endIdx);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 2);
+		w.write(Instruction.END);
+		// newc = cons(car(node), nil)
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		set(w, newc);
+		// if (head is null) head = tail = newc; else tail.cdr = newc; tail = newc
+		get(w, head);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		get(w, newc);
+		set(w, head);
+		get(w, newc);
+		set(w, tail);
+		w.write(Instruction.ELSE);
+		get(w, tail);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		get(w, newc);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		get(w, newc);
+		set(w, tail);
+		w.write(Instruction.END);
+		// node = cdr(node); ii++
+		emitCdr(w, node);
+		set(w, node);
+		get(w, ii);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, ii);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// result = head
+		get(w, head);
+	}
+
+	// Pushes cdr (field 1) of the cons held in the given local.
+	private static void emitCdr(WasmWriter w, int local) {
+		get(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
 	}
 
 	/**

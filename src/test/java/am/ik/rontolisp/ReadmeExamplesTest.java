@@ -329,6 +329,7 @@ class ReadmeExamplesTest {
 		@Test
 		void subseq() {
 			assertThat(eval("(subseq \"hello\" 1 3)")).isEqualTo(new LispString("el"));
+			assertThat(eval("(subseq '(1 2 3 4) 1 3)").print()).isEqualTo("(2 3)");
 		}
 
 		@Test

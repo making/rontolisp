@@ -345,7 +345,7 @@ embedded `eval` runtime in compiled output (see
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"` (case conversion is ASCII-only in the WASM backend) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |
-| `subseq` | `(subseq "hello" 1 3)` | `"el"` (strings only; the `end` argument is optional) |
+| `subseq` | `(subseq "hello" 1 3)` | `"el"` (works on strings and lists, e.g. `(subseq '(1 2 3 4) 1 3)` => `(2 3)`; the `end` argument is optional) |
 | `string=` | `(string= "abc" "abc")` | `t` (case-sensitive string equality) |
 | `string-equal` | `(string-equal "ABC" "abc")` | `t` (case-insensitive, ASCII) |
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"` (removes the bag's characters from both ends) |

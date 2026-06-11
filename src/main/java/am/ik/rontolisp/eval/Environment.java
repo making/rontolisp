@@ -8,6 +8,7 @@ import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -655,21 +656,43 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.STRING_CAPITALIZE, args, 1);
 			return new LispString(capitalizeString(requireString(LispNames.STRING_CAPITALIZE, args.get(0))));
 		}));
-		// subseq: strings only. (seq start [end]); end defaults to the string length.
+		// subseq: strings and lists. (seq start [end]); end defaults to the sequence
+		// length.
 		env.defineFunction(LispNames.SUBSEQ, new LispFunction(LispNames.SUBSEQ, args -> {
 			requireMinArgCount(LispNames.SUBSEQ, args, 2);
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.SUBSEQ + " expects 2 or 3 arguments, got " + args.size());
 			}
-			String s = requireString(LispNames.SUBSEQ, args.get(0));
+			LispVal endArg = (args.size() == 3 && !(args.get(2) instanceof LispNil)) ? args.get(2) : null;
 			int start = requireIndex(LispNames.SUBSEQ, args.get(1));
-			int end = (args.size() == 3 && !(args.get(2) instanceof LispNil))
-					? requireIndex(LispNames.SUBSEQ, args.get(2)) : s.length();
-			if (start < 0 || end > s.length() || start > end) {
-				throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-						+ " for string of length " + s.length());
+			if (args.get(0) instanceof LispString str) {
+				String s = str.value();
+				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : s.length();
+				if (start < 0 || end > s.length() || start > end) {
+					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
+							+ " for string of length " + s.length());
+				}
+				return new LispString(s.substring(start, end));
 			}
-			return new LispString(s.substring(start, end));
+			if (args.get(0) instanceof LispCons || args.get(0) instanceof LispNil) {
+				List<LispVal> elements = new ArrayList<>();
+				LispVal cur = args.get(0);
+				while (cur instanceof LispCons cell) {
+					elements.add(cell.car());
+					cur = cell.cdr();
+				}
+				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : elements.size();
+				if (start < 0 || end > elements.size() || start > end) {
+					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
+							+ " for list of length " + elements.size());
+				}
+				LispVal result = LispNil.INSTANCE;
+				for (int i = end - 1; i >= start; i--) {
+					result = new LispCons(elements.get(i), result);
+				}
+				return result;
+			}
+			throw new LispEvalException(LispNames.SUBSEQ + " expects a string or list, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
 			requireArgCount(LispNames.STRING_EQ, args, 2);

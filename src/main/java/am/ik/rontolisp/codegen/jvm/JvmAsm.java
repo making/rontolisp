@@ -8,6 +8,7 @@ import java.util.Map;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.Opcode;
 
 /**
@@ -164,6 +165,17 @@ final class JvmAsm {
 	void anew(ClassConstant c) {
 		this.code.add(Opcode.NEW);
 		JvmRuntimeBuilder.emitU2(this.code, c.index());
+	}
+
+	void ldcString(StringConstant sc) {
+		if (sc.index() <= 255) {
+			this.code.add(Opcode.LDC);
+			this.code.add(sc.index());
+		}
+		else {
+			this.code.add(Opcode.LDC_W);
+			JvmRuntimeBuilder.emitU2(this.code, sc.index());
+		}
 	}
 
 	void invokestatic(MethodrefConstant m) {

@@ -526,6 +526,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSubseqList() {
+		assertThat(eval("(subseq '(1 2 3 4 5) 1 3)").print()).isEqualTo("(2 3)");
+		assertThat(eval("(subseq '(1 2 3 4 5) 2)").print()).isEqualTo("(3 4 5)");
+		assertThat(eval("(subseq '(a b c) 0)").print()).isEqualTo("(a b c)");
+		assertThat(eval("(subseq '(1 2 3) 3)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(subseq '() 0)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalStringEquality() {
 		assertThat(eval("(string= \"abc\" \"abc\")")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(string= \"abc\" \"abd\")")).isEqualTo(LispNil.INSTANCE);

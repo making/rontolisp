@@ -485,6 +485,7 @@
 (terpri)
 (princ (subseq "hello world" 6))
 (terpri)
+(print (subseq '(1 2 3 4 5) 1 3))
 (print (string= "abc" "abc"))
 (print (string-equal "ABC" "abc"))
 (princ (string-trim " " "  hi  "))

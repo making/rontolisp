@@ -464,6 +464,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void subseqList() throws Exception {
+		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 1 3))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 2))")).isEqualTo("(3 4 5)");
+		assertThat(compileAndRun("(print (subseq '(a b c) 0))")).isEqualTo("(a b c)");
+		assertThat(compileAndRun("(print (subseq '(1 2 3) 3))")).isEqualTo("nil");
+	}
+
+	@Test
 	void stringEquality() throws Exception {
 		assertThat(compileAndRun("(print (string= \"abc\" \"abc\"))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (string= \"abc\" \"abd\"))")).isEqualTo("nil");
