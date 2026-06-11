@@ -50,7 +50,7 @@ jobs:
     - name: Build playground (rontolisp -> WebAssembly)
       run: ./mvnw -V --no-transfer-progress -Pweb -DskipTests package
     - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
+      uses: actions/upload-pages-artifact@v5
       with:
         path: web/dist
 
