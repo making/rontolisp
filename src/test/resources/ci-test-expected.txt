@@ -250,7 +250,7 @@ nil
 (1 9)
 (and cond decf dolist dotimes incf let* or pop push remf setf unless when)
 (defun function if in-package lambda let progn quote setq while)
-88
+89
 (list-functions list-macros list-special-forms version)
 ci-intro-fn
 nil
@@ -275,3 +275,11 @@ nil
 1
 1/2
 (1/2 2/3)
+3
+-1
+1
+1
+8
+12
+12
+5

@@ -291,13 +291,14 @@ values (`#'first`).
 | `-` | `(- 10 3)`, `(- 3.5 1.5)` | `7`, `2.0` |
 | `*` | `(* 3 4)`, `(* 2.0 3.0)` | `12`, `6.0` |
 | `/` | `(/ 1 2)`, `(/ 10 2)`, `(/ 7.0 2.0)` | `1/2` (exact ratio), `5`, `3.5` |
-| `mod` | `(mod 10 3)` | `1` |
-| `=` | `(= 1 1)` | `t` |
+| `mod` | `(mod 10 3)`, `(mod -13 4)` | `1`, `3` (result takes the sign of the divisor) |
+| `rem` | `(rem 13 4)`, `(rem -13 4)` | `1`, `-1` (result takes the sign of the dividend) |
+| `=` | `(= 1 1)`, `(= 3 3 3)` | `t` (variadic) |
 | `eq` | `(eq 'foo 'foo)` | `t` (general equality; reference identity for cons cells) |
-| `<` | `(< 1 2)` | `t` |
-| `>` | `(> 2 1)` | `t` |
-| `<=` | `(<= 1 1)` | `t` |
-| `>=` | `(>= 2 1)` | `t` |
+| `<` | `(< 1 2)`, `(< 1 2 3)` | `t` (variadic; true when strictly increasing) |
+| `>` | `(> 2 1)`, `(> 3 2 1)` | `t` (variadic) |
+| `<=` | `(<= 1 1)` | `t` (variadic) |
+| `>=` | `(>= 2 1)` | `t` (variadic) |
 | `print` | `(print 42)` | Prints `42` with a newline |
 | `prin1` | `(prin1 42)` | Like `print` but without newline |
 | `princ` | `(princ "hello")` | Prints without quotes and without newline |
@@ -330,7 +331,7 @@ values (`#'first`).
 | `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
-| `length` | `(length '(1 2 3))` | `3` (`0` for nil) |
+| `length` | `(length '(1 2 3))`, `(length "abc")` | `3`, `3` (lists and strings; `0` for nil) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
 | `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eq` to the item, or nil) |
 | `assoc` | `(assoc 'b '((a 1) (b 2)))` | `(b 2)` (first pair whose car is `eq` to the key, or nil) |
@@ -345,8 +346,8 @@ values (`#'first`).
 | `evenp` | `(evenp 4)` | `t` |
 | `oddp` | `(oddp 3)` | `t` |
 | `abs` | `(abs -5)`, `(abs -3.14)` | `5`, `3.14` |
-| `min` | `(min 3 5)`, `(min 1.5 2.5)` | `3`, `1.5` |
-| `max` | `(max 3 5)`, `(max 1.5 2.5)` | `5`, `2.5` |
+| `min` | `(min 3 5)`, `(min 5 2 8 1)` | `3`, `1` (variadic) |
+| `max` | `(max 3 5)`, `(max 5 2 8 1)` | `5`, `8` (variadic) |
 | `float` | `(float 42)` | `42.0` (convert to double) |
 | `truncate` | `(truncate 3.7)`, `(truncate -3.7)` | `3`, `-3` (toward zero) |
 | `floor` | `(floor 3.7)`, `(floor -3.7)` | `3`, `-4` (toward negative infinity) |
@@ -360,13 +361,20 @@ values (`#'first`).
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |
 | `asin` `acos` `atan` | `(atan 0)` | `0.0` (interpreter/JVM only) |
 | `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0` (interpreter/JVM only) |
-| `gcd` | `(gcd 12 18)` | `6` (greatest common divisor) |
-| `lcm` | `(lcm 4 6)` | `12` (least common multiple; `0` if either argument is `0`) |
+| `gcd` | `(gcd 12 18)`, `(gcd 24 36 60)` | `6`, `12` (variadic; greatest common divisor, `(gcd)` is `0`) |
+| `lcm` | `(lcm 4 6)`, `(lcm 2 3 4)` | `12`, `12` (variadic; least common multiple; `0` if any argument is `0`, `(lcm)` is `1`) |
 | `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0` (sign, preserving integer/float type) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
 | `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
+
+**Deviations from Common Lisp.** Some functions accept fewer arguments than the Common
+Lisp standard: `log` takes only one argument (no base: `(log x base)` is unsupported),
+`atan` takes only one argument (no two-argument `(atan y x)` form), and `last` takes only
+a list (no optional count: `(last list n)` is unsupported). The rounding functions
+`truncate`/`floor`/`ceiling`/`round` accept a single argument and return one value (no
+optional divisor and no second remainder value). These remain on the to-do list.
 
 `read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
 
@@ -395,7 +403,7 @@ The compiled `eval` (WASM and JVM) implements a lexical environment plus a persi
 The compiled `eval` (WASM and JVM) differs from the interpreter only in these cases:
 
 - **`let` binding lists must use the `((name value) ...)` form** (a bare `(let (x) ...)` is not supported).
-- **Comparison operators are binary.** Like the rest of the compiler, `=`, `<`, `>`, `<=`, `>=` take two arguments; extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic. User functions with more than 7 parameters return `nil`.
+- **Comparison operators are binary inside `eval`.** Compiled top-level code supports variadic `=`, `<`, `>`, `<=`, `>=` and variadic `min`/`max`/`gcd`/`lcm` (desugared into nested binary operations at compile time), but that desugaring does not reach forms interpreted at runtime by `eval`, where these operators take two arguments and extra arguments are ignored (so `(eval '(= 1 1 2))` evaluates `(= 1 1)` and returns true). `+ - * / list` are fully variadic everywhere. User functions with more than 7 parameters return `nil`.
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
@@ -465,7 +473,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))
-; => 88
+; => 89
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

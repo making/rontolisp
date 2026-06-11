@@ -860,7 +860,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and cond decf dolist dotimes incf let* or pop push remf setf unless when)",
-					"(defun function if in-package lambda let progn quote setq while)", "88", "(square)",
+					"(defun function if in-package lambda let progn quote setq while)", "89", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

@@ -66,6 +66,69 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunModTakesSignOfDivisor() throws Exception {
+		assertThat(compileAndRun("(print (mod 13 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (mod -13 4))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (mod 13 -4))")).isEqualTo("-3");
+		assertThat(compileAndRun("(print (mod -13 -4))")).isEqualTo("-1");
+	}
+
+	@Test
+	void compileAndRunRemTakesSignOfDividend() throws Exception {
+		assertThat(compileAndRun("(print (rem 13 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rem -13 4))")).isEqualTo("-1");
+		assertThat(compileAndRun("(print (rem 13 -4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rem -13 -4))")).isEqualTo("-1");
+	}
+
+	@Test
+	void compileAndRunModBigInteger() throws Exception {
+		assertThat(compileAndRun("(print (mod (- 0 (* 100000000000 100000000000)) 7))")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunModFloat() throws Exception {
+		assertThat(compileAndRun("(print (mod -5.5 2.0))")).isEqualTo("0.5");
+	}
+
+	@Test
+	void compileAndRunVariadicComparison() throws Exception {
+		// In compiled output a true boolean is represented as the integer 1.
+		assertThat(compileAndRun("(print (< 1 2 3 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (< 1 2 2 4))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (<= 1 2 2 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (= 3 3 3))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (> 5 4 3 2 1))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (< 5))")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunVariadicMinMax() throws Exception {
+		assertThat(compileAndRun("(print (min 5 2 8 1 9))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (max 5 2 8 1 9))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (min 7))")).isEqualTo("7");
+	}
+
+	@Test
+	void compileAndRunVariadicGcdLcm() throws Exception {
+		assertThat(compileAndRun("(print (gcd 24 36 60))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (lcm 2 3 4))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (gcd -8))")).isEqualTo("8");
+	}
+
+	@Test
+	void compileAndRunLengthOfString() throws Exception {
+		assertThat(compileAndRun("(print (length \"hello\"))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (length \"\"))")).isEqualTo("0");
+	}
+
+	@Test
+	void compileAndRunLengthOfList() throws Exception {
+		assertThat(compileAndRun("(print (length (list 10 20 30)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (length nil))")).isEqualTo("0");
+	}
+
+	@Test
 	void compileAndRunMultipleExpressions() throws Exception {
 		assertThat(compileAndRun("(print 1) (print 2)")).isEqualTo("1\n2");
 	}
@@ -1593,12 +1656,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("88");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("89");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("88");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("89");
 	}
 
 	@Test

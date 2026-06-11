@@ -110,7 +110,7 @@ public final class BuiltinFunctionWrappers {
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Arithmetic (arity 2)
 			binary(LispNames.ADD), binary(LispNames.SUB), binary(LispNames.MUL), binary(LispNames.DIV),
-			binary(LispNames.MOD),
+			binary(LispNames.MOD), binary(LispNames.REM),
 			// Comparison (arity 2)
 			binary(LispNames.EQ), binary(LispNames.LT), binary(LispNames.GT), binary(LispNames.LE),
 			binary(LispNames.GE),

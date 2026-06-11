@@ -55,6 +55,9 @@ public final class LispNames {
 	/** The {@code mod} built-in function. */
 	public static final String MOD = "mod";
 
+	/** The {@code rem} built-in function. */
+	public static final String REM = "rem";
+
 	/** The {@code abs} built-in function. */
 	public static final String ABS = "abs";
 

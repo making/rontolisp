@@ -452,3 +452,12 @@
 (print (if (< 1/3 1/2) 1 0))
 (print (expt 2 -1))
 (print (list 1/2 2/3))
+; Common Lisp fidelity: mod/rem sign, variadic comparison/min/max/gcd/lcm, length of string
+(print (mod -13 4))
+(print (rem -13 4))
+(print (if (< 1 2 3 4) 1 0))
+(print (min 5 2 8 1))
+(print (max 5 2 8 1))
+(print (gcd 24 36 60))
+(print (lcm 2 3 4))
+(print (length "hello"))

@@ -112,11 +112,13 @@ final class JvmExprCompiler {
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.DIV, Opcode.DDIV, className);
 				case LispNames.MOD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MOD, Opcode.DREM, className);
-				case LispNames.EQ -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFEQ, className);
-				case LispNames.LT -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLT, className);
-				case LispNames.GT -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGT, className);
-				case LispNames.LE -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFLE, className);
-				case LispNames.GE -> JvmComparisonCompiler.compile(cons, ctx, Opcode.IFGE, className);
+				case LispNames.REM ->
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.REM, Opcode.DREM, className);
+				case LispNames.EQ -> compileComparison(cons, ctx, className, Opcode.IFEQ);
+				case LispNames.LT -> compileComparison(cons, ctx, className, Opcode.IFLT);
+				case LispNames.GT -> compileComparison(cons, ctx, className, Opcode.IFGT);
+				case LispNames.LE -> compileComparison(cons, ctx, className, Opcode.IFLE);
+				case LispNames.GE -> compileComparison(cons, ctx, className, Opcode.IFGE);
 				case LispNames.PRINT -> JvmPrintCompiler.compile(cons, ctx, className);
 				case LispNames.PRIN1 -> JvmPrin1Compiler.compile(cons, ctx, className);
 				case LispNames.PRINC -> JvmPrincCompiler.compile(cons, ctx, className);
@@ -148,8 +150,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
 				case LispNames.DECF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx, className);
-				case LispNames.LENGTH ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandLength(cons), ctx, className);
+				case LispNames.LENGTH -> JvmLengthCompiler.compile(cons, ctx, className);
 				case LispNames.REVERSE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx, className);
 				case LispNames.MEMBER ->
@@ -208,16 +209,44 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx, className);
 				case LispNames.ODDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx, className);
 				case LispNames.ABS -> JvmAbsCompiler.compile(cons, ctx, className);
-				case LispNames.MIN -> JvmMinCompiler.compile(cons, ctx, className);
-				case LispNames.MAX -> JvmMaxCompiler.compile(cons, ctx, className);
+				case LispNames.MIN -> {
+					if (isBinaryCall(cons)) {
+						JvmMinCompiler.compile(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
+				case LispNames.MAX -> {
+					if (isBinaryCall(cons)) {
+						JvmMaxCompiler.compile(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
 				case LispNames.SQRT, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS, LispNames.TAN,
 						LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
 						LispNames.TANH ->
 					JvmMathFnCompiler.compile(cons, ctx, className, sym.name());
 				case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
 				case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);
-				case LispNames.GCD -> JvmGcdCompiler.compile(cons, ctx, className);
-				case LispNames.LCM -> JvmLcmCompiler.compile(cons, ctx, className);
+				case LispNames.GCD -> {
+					if (isBinaryCall(cons)) {
+						JvmGcdCompiler.compile(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
+				case LispNames.LCM -> {
+					if (isBinaryCall(cons)) {
+						JvmLcmCompiler.compile(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
 				case LispNames.SIGNUM -> JvmSignumCompiler.compile(cons, ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
@@ -247,6 +276,26 @@ final class JvmExprCompiler {
 		else {
 			JvmFunctionCallCompiler.compileGeneralIndirect(cons, ctx, className);
 		}
+	}
+
+	/**
+	 * Compiles a numeric comparison. The binary form uses the dedicated comparison
+	 * compiler; any other arity is desugared into nested binary comparisons.
+	 */
+	private static void compileComparison(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int branchOpcode) {
+		if (isBinaryCall(cons)) {
+			JvmComparisonCompiler.compile(cons, ctx, branchOpcode, className);
+		}
+		else {
+			JvmExprCompiler.compileExpr(LispMacroExpander.expandComparison(cons), ctx, className);
+		}
+	}
+
+	/**
+	 * Returns whether the call has exactly two arguments (operator plus two operands).
+	 */
+	private static boolean isBinaryCall(LispCons cons) {
+		return cons.toList().size() == 3;
 	}
 
 }

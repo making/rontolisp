@@ -231,6 +231,50 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalModTakesSignOfDivisor() {
+		assertThat(eval("(mod -13 4)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(mod 13 -4)")).isEqualTo(new LispInteger(-3));
+		assertThat(eval("(mod -13 -4)")).isEqualTo(new LispInteger(-1));
+		assertThat(eval("(mod -5.5 2.0)")).isEqualTo(new LispDouble(0.5));
+	}
+
+	@Test
+	void evalRemTakesSignOfDividend() {
+		assertThat(eval("(rem 13 4)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(rem -13 4)")).isEqualTo(new LispInteger(-1));
+		assertThat(eval("(rem 13 -4)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(rem -13 -4)")).isEqualTo(new LispInteger(-1));
+	}
+
+	@Test
+	void evalVariadicComparison() {
+		assertThat(eval("(< 1 2 3 4)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(< 1 2 2 4)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(<= 1 2 2 4)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(= 3 3 3)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(> 5 4 3 2 1)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(< 5)")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalVariadicMinMaxGcdLcm() {
+		assertThat(eval("(min 5 2 8 1 9)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(max 5 2 8 1 9)")).isEqualTo(new LispInteger(9));
+		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("(gcd 24 36 60)")).isEqualTo(new LispInteger(12));
+		assertThat(eval("(lcm 2 3 4)")).isEqualTo(new LispInteger(12));
+		assertThat(eval("(gcd)")).isEqualTo(new LispInteger(0));
+		assertThat(eval("(lcm)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(gcd -8)")).isEqualTo(new LispInteger(8));
+	}
+
+	@Test
+	void evalLengthOfString() {
+		assertThat(eval("(length \"hello\")")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(length \"\")")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
 	void evalNestedArithmetic() {
 		assertThat(eval("(+ (* 3 4) (- 10 5))")).isEqualTo(new LispInteger(17));
 	}
@@ -1318,7 +1362,7 @@ class LispEvaluatorTest {
 		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(88);
+			.hasSize(89);
 	}
 
 	@Test

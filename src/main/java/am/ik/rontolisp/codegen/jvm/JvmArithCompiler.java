@@ -19,6 +19,7 @@ final class JvmArithCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode, String className) {
 		List<LispVal> args = cons.toList();
 		boolean unaryDiv = JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2;
+		boolean isMod = JvmNumericRuntimeBuilder.MOD.equals(opKey);
 		if (JvmLispCompiler.hasDoubleLiteral(args)) {
 			// Unary (/ x) is the reciprocal: 1.0 / x.
 			if (unaryDiv) {
@@ -34,7 +35,14 @@ final class JvmArithCompiler {
 			for (int i = 2; i < args.size(); i++) {
 				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 				JvmEmitHelper.unboxDouble(ctx);
-				ctx.emit(doubleOpcode);
+				if (isMod) {
+					// Common Lisp float modulo (sign of the divisor), not Java's DREM.
+					ctx.emit(Opcode.INVOKESTATIC);
+					ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FMOD).index());
+				}
+				else {
+					ctx.emit(doubleOpcode);
+				}
 			}
 			JvmEmitHelper.boxDouble(ctx);
 			return;

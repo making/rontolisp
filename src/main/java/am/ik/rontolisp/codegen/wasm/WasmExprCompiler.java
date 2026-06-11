@@ -127,16 +127,13 @@ final class WasmExprCompiler {
 						WasmLispCompiler.FUNC_RAT_MUL);
 				case LispNames.DIV -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV,
 						WasmLispCompiler.FUNC_RAT_DIV);
-				case LispNames.MOD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1, -1);
-				case LispNames.EQ -> WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
-				case LispNames.LT ->
-					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
-				case LispNames.GT ->
-					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
-				case LispNames.LE ->
-					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
-				case LispNames.GE ->
-					WasmComparisonCompiler.compile(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
+				case LispNames.MOD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMod(cons), ctx);
+				case LispNames.REM -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1, -1);
+				case LispNames.EQ -> compileComparison(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
+				case LispNames.LT -> compileComparison(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
+				case LispNames.GT -> compileComparison(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
+				case LispNames.LE -> compileComparison(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
+				case LispNames.GE -> compileComparison(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
 				case LispNames.PRINT -> WasmPrintCompiler.compile(cons, ctx);
 				case LispNames.PRIN1 -> WasmPrin1Compiler.compile(cons, ctx);
 				case LispNames.PRINC -> WasmPrincCompiler.compile(cons, ctx);
@@ -168,7 +165,7 @@ final class WasmExprCompiler {
 				case LispNames.DOLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);
 				case LispNames.DECF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx);
-				case LispNames.LENGTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLength(cons), ctx);
+				case LispNames.LENGTH -> WasmLengthCompiler.compile(cons, ctx);
 				case LispNames.REVERSE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx);
 				case LispNames.MEMBER -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx);
 				case LispNames.ASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx);
@@ -214,13 +211,41 @@ final class WasmExprCompiler {
 				case LispNames.EVENP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx);
 				case LispNames.ODDP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx);
 				case LispNames.ABS -> WasmAbsCompiler.compile(cons, ctx);
-				case LispNames.MIN -> WasmMinCompiler.compile(cons, ctx);
-				case LispNames.MAX -> WasmMaxCompiler.compile(cons, ctx);
+				case LispNames.MIN -> {
+					if (isBinaryCall(cons)) {
+						WasmMinCompiler.compile(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
+				case LispNames.MAX -> {
+					if (isBinaryCall(cons)) {
+						WasmMaxCompiler.compile(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);
 				case LispNames.SIGNUM -> WasmSignumCompiler.compile(cons, ctx);
-				case LispNames.GCD -> WasmGcdCompiler.compile(cons, ctx);
-				case LispNames.LCM -> WasmLcmCompiler.compile(cons, ctx);
+				case LispNames.GCD -> {
+					if (isBinaryCall(cons)) {
+						WasmGcdCompiler.compile(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
+				case LispNames.LCM -> {
+					if (isBinaryCall(cons)) {
+						WasmLcmCompiler.compile(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
 				case LispNames.EXPT -> WasmExptCompiler.compile(cons, ctx);
 				case LispNames.FIRST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx);
 				case LispNames.REST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx);
@@ -246,6 +271,26 @@ final class WasmExprCompiler {
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + cons.print());
 		}
+	}
+
+	/**
+	 * Compiles a numeric comparison. The binary form uses the dedicated comparison
+	 * compiler; any other arity is desugared into nested binary comparisons.
+	 */
+	private static void compileComparison(LispCons cons, WasmLispCompiler.Ctx ctx, int i32Opcode, int f64Opcode) {
+		if (isBinaryCall(cons)) {
+			WasmComparisonCompiler.compile(cons, ctx, i32Opcode, f64Opcode);
+		}
+		else {
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandComparison(cons), ctx);
+		}
+	}
+
+	/**
+	 * Returns whether the call has exactly two arguments (operator plus two operands).
+	 */
+	private static boolean isBinaryCall(LispCons cons) {
+		return cons.toList().size() == 3;
 	}
 
 }

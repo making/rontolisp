@@ -339,8 +339,32 @@ public final class Environment implements Scope {
 			}
 			return LispRatio.valueOf(num, den);
 		}));
+		// mod: modulo whose result takes the sign of the divisor (Common Lisp mod).
 		env.defineFunction(LispNames.MOD, new LispFunction(LispNames.MOD, args -> {
 			requireArgCount(LispNames.MOD, args, 2);
+			if (hasDouble(args)) {
+				double a = asDouble(args.get(0));
+				double b = asDouble(args.get(1));
+				double r = a % b;
+				if (r != 0 && ((r < 0) != (b < 0))) {
+					r += b;
+				}
+				return new LispDouble(r);
+			}
+			if (hasBigInteger(args)) {
+				BigInteger a = asBigInteger(args.get(0));
+				BigInteger b = asBigInteger(args.get(1));
+				BigInteger r = a.remainder(b);
+				if (r.signum() != 0 && r.signum() != b.signum()) {
+					r = r.add(b);
+				}
+				return normalizeBig(r);
+			}
+			return new LispInteger(Math.floorMod(asLong(args.get(0)), asLong(args.get(1))));
+		}));
+		// rem: remainder whose result takes the sign of the dividend (Common Lisp rem).
+		env.defineFunction(LispNames.REM, new LispFunction(LispNames.REM, args -> {
+			requireArgCount(LispNames.REM, args, 2);
 			if (hasDouble(args)) {
 				return new LispDouble(asDouble(args.get(0)) % asDouble(args.get(1)));
 			}
@@ -366,31 +390,28 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Math.abs(value));
 		}));
+		// min/max: variadic. Float contagion -- when any argument is a float the result
+		// is
+		// a float (Common Lisp semantics).
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
-			requireArgCount(LispNames.MIN, args, 2);
-			if (hasDouble(args)) {
-				return new LispDouble(Math.min(asDouble(args.get(0)), asDouble(args.get(1))));
+			requireMinArgCount(LispNames.MIN, args, 1);
+			LispVal best = args.get(0);
+			for (int i = 1; i < args.size(); i++) {
+				if (compareNumeric(args.get(i), best) < 0) {
+					best = args.get(i);
+				}
 			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) <= 0 ? args.get(0) : args.get(1);
-			}
-			if (hasBigInteger(args)) {
-				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) <= 0 ? args.get(0) : args.get(1);
-			}
-			return new LispInteger(Math.min(asLong(args.get(0)), asLong(args.get(1))));
+			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
 		}));
 		env.defineFunction(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
-			requireArgCount(LispNames.MAX, args, 2);
-			if (hasDouble(args)) {
-				return new LispDouble(Math.max(asDouble(args.get(0)), asDouble(args.get(1))));
+			requireMinArgCount(LispNames.MAX, args, 1);
+			LispVal best = args.get(0);
+			for (int i = 1; i < args.size(); i++) {
+				if (compareNumeric(args.get(i), best) > 0) {
+					best = args.get(i);
+				}
 			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) >= 0 ? args.get(0) : args.get(1);
-			}
-			if (hasBigInteger(args)) {
-				return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1))) >= 0 ? args.get(0) : args.get(1);
-			}
-			return new LispInteger(Math.max(asLong(args.get(0)), asLong(args.get(1))));
+			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
 		}));
 		env.defineFunction(LispNames.ONE_PLUS, new LispFunction(LispNames.ONE_PLUS, args -> {
 			requireArgCount(LispNames.ONE_PLUS, args, 1);
@@ -468,20 +489,29 @@ public final class Environment implements Scope {
 			}
 			return new LispDouble(Math.pow(asDouble(args.get(0)), asDouble(args.get(1))));
 		}));
-		// gcd: greatest common divisor of two integers (always non-negative).
+		// gcd: greatest common divisor (always non-negative). Variadic: (gcd) is 0 and
+		// (gcd n) is (abs n).
 		env.defineFunction(LispNames.GCD, new LispFunction(LispNames.GCD, args -> {
-			requireArgCount(LispNames.GCD, args, 2);
-			return normalizeBig(asBigInteger(args.get(0)).gcd(asBigInteger(args.get(1))));
-		}));
-		// lcm: least common multiple of two integers (0 if either is 0).
-		env.defineFunction(LispNames.LCM, new LispFunction(LispNames.LCM, args -> {
-			requireArgCount(LispNames.LCM, args, 2);
-			BigInteger a = asBigInteger(args.get(0));
-			BigInteger b = asBigInteger(args.get(1));
-			if (a.signum() == 0 || b.signum() == 0) {
-				return new LispInteger(0);
+			BigInteger result = BigInteger.ZERO;
+			for (LispVal arg : args) {
+				result = result.gcd(asBigInteger(arg));
 			}
-			return normalizeBig(a.divide(a.gcd(b)).multiply(b).abs());
+			return normalizeBig(result);
+		}));
+		// lcm: least common multiple (0 if any argument is 0). Variadic: (lcm) is 1 and
+		// (lcm n) is (abs n).
+		env.defineFunction(LispNames.LCM, new LispFunction(LispNames.LCM, args -> {
+			BigInteger result = BigInteger.ONE;
+			for (LispVal arg : args) {
+				BigInteger b = asBigInteger(arg);
+				if (result.signum() == 0 || b.signum() == 0) {
+					result = BigInteger.ZERO;
+				}
+				else {
+					result = result.divide(result.gcd(b)).multiply(b).abs();
+				}
+			}
+			return normalizeBig(result);
 		}));
 		// signum: sign as -1/0/1, preserving the float/integer type of the argument.
 		env.defineFunction(LispNames.SIGNUM, new LispFunction(LispNames.SIGNUM, args -> {
@@ -508,71 +538,19 @@ public final class Environment implements Scope {
 	}
 
 	private static void registerComparison(Environment env) {
-		env.defineFunction(LispNames.EQ, new LispFunction(LispNames.EQ, args -> {
-			requireArgCount(LispNames.EQ, args, 2);
-			if (hasDouble(args)) {
-				return asDouble(args.get(0)) == asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasBigInteger(args)) {
-				return compareBig(args) == 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			return asLong(args.get(0)) == asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-		}));
-		env.defineFunction(LispNames.LT, new LispFunction(LispNames.LT, args -> {
-			requireArgCount(LispNames.LT, args, 2);
-			if (hasDouble(args)) {
-				return asDouble(args.get(0)) < asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasBigInteger(args)) {
-				return compareBig(args) < 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			return asLong(args.get(0)) < asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-		}));
-		env.defineFunction(LispNames.GT, new LispFunction(LispNames.GT, args -> {
-			requireArgCount(LispNames.GT, args, 2);
-			if (hasDouble(args)) {
-				return asDouble(args.get(0)) > asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasBigInteger(args)) {
-				return compareBig(args) > 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			return asLong(args.get(0)) > asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-		}));
-		env.defineFunction(LispNames.LE, new LispFunction(LispNames.LE, args -> {
-			requireArgCount(LispNames.LE, args, 2);
-			if (hasDouble(args)) {
-				return asDouble(args.get(0)) <= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasBigInteger(args)) {
-				return compareBig(args) <= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			return asLong(args.get(0)) <= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-		}));
-		env.defineFunction(LispNames.GE, new LispFunction(LispNames.GE, args -> {
-			requireArgCount(LispNames.GE, args, 2);
-			if (hasDouble(args)) {
-				return asDouble(args.get(0)) >= asDouble(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasRatio(args)) {
-				return compareRational(args.get(0), args.get(1)) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (hasBigInteger(args)) {
-				return compareBig(args) >= 0 ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			return asLong(args.get(0)) >= asLong(args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-		}));
+		// Numeric comparisons are variadic (Common Lisp): they are true when every
+		// adjacent
+		// pair satisfies the relation, e.g. (< 1 2 3) is t. A single argument is true.
+		env.defineFunction(LispNames.EQ,
+				new LispFunction(LispNames.EQ, args -> compareChain(LispNames.EQ, args, 0, 0)));
+		env.defineFunction(LispNames.LT,
+				new LispFunction(LispNames.LT, args -> compareChain(LispNames.LT, args, -1, -1)));
+		env.defineFunction(LispNames.GT,
+				new LispFunction(LispNames.GT, args -> compareChain(LispNames.GT, args, 1, 1)));
+		env.defineFunction(LispNames.LE,
+				new LispFunction(LispNames.LE, args -> compareChain(LispNames.LE, args, -1, 0)));
+		env.defineFunction(LispNames.GE,
+				new LispFunction(LispNames.GE, args -> compareChain(LispNames.GE, args, 0, 1)));
 		env.defineFunction(LispNames.EQ_GENERAL, new LispFunction(LispNames.EQ_GENERAL, args -> {
 			requireArgCount(LispNames.EQ_GENERAL, args, 2);
 			LispVal a = args.get(0);
@@ -606,6 +584,10 @@ public final class Environment implements Scope {
 	private static void registerSequenceOps(Environment env) {
 		env.defineFunction(LispNames.LENGTH, new LispFunction(LispNames.LENGTH, args -> {
 			requireArgCount(LispNames.LENGTH, args, 1);
+			// length applies to strings as well as lists (Common Lisp sequences).
+			if (args.get(0) instanceof LispString str) {
+				return new LispInteger(str.value().length());
+			}
 			long count = 0;
 			LispVal cur = args.get(0);
 			while (cur instanceof LispCons cell) {
@@ -1247,8 +1229,37 @@ public final class Environment implements Scope {
 		return numeratorOf(a).multiply(denominatorOf(b)).compareTo(numeratorOf(b).multiply(denominatorOf(a)));
 	}
 
-	private static int compareBig(List<LispVal> args) {
-		return asBigInteger(args.get(0)).compareTo(asBigInteger(args.get(1)));
+	/**
+	 * Compares two numbers, returning -1, 0 or 1, promoting to the widest type present
+	 * (double &gt; ratio &gt; bigint &gt; long).
+	 */
+	private static int compareNumeric(LispVal a, LispVal b) {
+		if (a instanceof LispDouble || b instanceof LispDouble) {
+			return Integer.signum(Double.compare(asDouble(a), asDouble(b)));
+		}
+		if (a instanceof LispRatio || b instanceof LispRatio) {
+			return Integer.signum(compareRational(a, b));
+		}
+		if (a instanceof LispBigInteger || b instanceof LispBigInteger) {
+			return Integer.signum(asBigInteger(a).compareTo(asBigInteger(b)));
+		}
+		return Integer.signum(Long.compare(asLong(a), asLong(b)));
+	}
+
+	/**
+	 * Evaluates a variadic numeric comparison: true when, for every adjacent pair, the
+	 * sign of the comparison falls within {@code [loSign, hiSign]}. A single argument is
+	 * trivially true.
+	 */
+	private static LispVal compareChain(String name, List<LispVal> args, int loSign, int hiSign) {
+		requireMinArgCount(name, args, 1);
+		for (int i = 1; i < args.size(); i++) {
+			int sign = compareNumeric(args.get(i - 1), args.get(i));
+			if (sign < loSign || sign > hiSign) {
+				return LispNil.INSTANCE;
+			}
+		}
+		return LispTrue.INSTANCE;
 	}
 
 	private static boolean hasRatio(List<LispVal> args) {
@@ -1281,6 +1292,12 @@ public final class Environment implements Scope {
 	private static void requireArgCount(String name, List<LispVal> args, int expected) {
 		if (args.size() != expected) {
 			throw new LispEvalException(name + " expects " + expected + " arguments, got " + args.size());
+		}
+	}
+
+	private static void requireMinArgCount(String name, List<LispVal> args, int min) {
+		if (args.size() < min) {
+			throw new LispEvalException(name + " expects at least " + min + " arguments, got " + args.size());
 		}
 	}
 

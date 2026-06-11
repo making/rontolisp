@@ -877,6 +877,101 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.SETQ), name, lambda));
 	}
 
+	/**
+	 * Expands {@code (mod a b)} into a {@code rem}-based form whose result takes the sign
+	 * of the divisor (Common Lisp modulo), reusing the {@code rem}, {@code *}, {@code <}
+	 * and {@code +} primitives:
+	 * {@code (let* ((a' a) (b' b) (r (rem a' b'))) (if (< (* r b') 0) (+ r b') r))}. Each
+	 * operand is evaluated exactly once.
+	 * @param cons the mod expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMod(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol av = new LispSymbol("__mod_a");
+		LispSymbol bv = new LispSymbol("__mod_b");
+		LispSymbol rv = new LispSymbol("__mod_r");
+		LispVal remExpr = listToCons(List.of(new LispSymbol(LispNames.REM), av, bv));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(av, parts.get(1))),
+				listToCons(List.of(bv, parts.get(2))), listToCons(List.of(rv, remExpr))));
+		LispVal product = listToCons(List.of(new LispSymbol(LispNames.MUL), rv, bv));
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), product, new LispInteger(0)));
+		LispVal corrected = listToCons(List.of(new LispSymbol(LispNames.ADD), rv, bv));
+		LispVal body = makeIf(test, corrected, rv);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	/**
+	 * Expands a variadic numeric comparison (= &lt; &gt; &lt;= &gt;=) into nested binary
+	 * comparisons so the compilers can reuse the binary comparison code. A two-argument
+	 * comparison is left for the caller to compile directly. For {@code n >= 3} arguments
+	 * the result is
+	 * {@code (let* ((g1 a1) ... (gn an)) (and (op g1 g2) ... (op g(n-1) gn)))},
+	 * evaluating each argument exactly once; a single argument expands to
+	 * {@code (progn a1 t)}.
+	 * @param cons the comparison expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandComparison(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal op = parts.get(0);
+		int n = parts.size() - 1;
+		if (n <= 0) {
+			throw new IllegalArgumentException(((LispSymbol) op).name() + " requires at least one argument");
+		}
+		if (n == 1) {
+			return makeProgn(List.of(parts.get(1), LispTrue.INSTANCE));
+		}
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> gsyms = new java.util.ArrayList<>();
+		for (int i = 1; i <= n; i++) {
+			LispSymbol g = new LispSymbol("__cmp" + i);
+			gsyms.add(g);
+			bindings.add(listToCons(List.of(g, parts.get(i))));
+		}
+		List<LispVal> andParts = new java.util.ArrayList<>();
+		andParts.add(new LispSymbol(LispNames.AND));
+		for (int i = 0; i + 1 < gsyms.size(); i++) {
+			andParts.add(listToCons(List.of(op, gsyms.get(i), gsyms.get(i + 1))));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), listToCons(andParts)));
+	}
+
+	/**
+	 * Expands a variadic associative reduction (min max gcd lcm) into a left fold of
+	 * binary applications, e.g. {@code (min a b c)} becomes {@code (min (min a b) c)}. A
+	 * two-argument call is left for the caller to compile directly. The identity cases
+	 * follow Common Lisp: {@code (gcd)} is 0, {@code (lcm)} is 1, a single argument to
+	 * {@code gcd}/{@code lcm} is its absolute value, and a single argument to
+	 * {@code min}/{@code max} is itself.
+	 * @param cons the reduction expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReduction(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal op = parts.get(0);
+		String name = ((LispSymbol) op).name();
+		int n = parts.size() - 1;
+		boolean gcdLcm = LispNames.GCD.equals(name) || LispNames.LCM.equals(name);
+		if (n == 0) {
+			if (LispNames.GCD.equals(name)) {
+				return new LispInteger(0);
+			}
+			if (LispNames.LCM.equals(name)) {
+				return new LispInteger(1);
+			}
+			throw new IllegalArgumentException(name + " requires at least one argument");
+		}
+		if (n == 1) {
+			return gcdLcm ? listToCons(List.of(new LispSymbol(LispNames.ABS), parts.get(1))) : parts.get(1);
+		}
+		LispVal acc = listToCons(List.of(op, parts.get(1), parts.get(2)));
+		for (int i = 3; i <= n; i++) {
+			acc = listToCons(List.of(op, acc, parts.get(i)));
+		}
+		return acc;
+	}
+
 	private static LispCons listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;
 		for (int i = elements.size() - 1; i >= 0; i--) {

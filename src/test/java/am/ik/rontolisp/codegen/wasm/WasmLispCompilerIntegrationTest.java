@@ -63,6 +63,50 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void modTakesSignOfDivisor() throws Exception {
+		assertThat(compileAndRun("(print (mod 13 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (mod -13 4))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (mod 13 -4))")).isEqualTo("-3");
+		assertThat(compileAndRun("(print (mod -13 -4))")).isEqualTo("-1");
+	}
+
+	@Test
+	void remTakesSignOfDividend() throws Exception {
+		assertThat(compileAndRun("(print (rem 13 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rem -13 4))")).isEqualTo("-1");
+		assertThat(compileAndRun("(print (rem 13 -4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rem -13 -4))")).isEqualTo("-1");
+	}
+
+	@Test
+	void variadicComparison() throws Exception {
+		// In compiled output a true boolean is represented as the integer 1.
+		assertThat(compileAndRun("(print (< 1 2 3 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (< 1 2 2 4))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (<= 1 2 2 4))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (= 3 3 3))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (> 5 4 3 2 1))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (< 5))")).isEqualTo("1");
+	}
+
+	@Test
+	void variadicMinMaxGcdLcm() throws Exception {
+		assertThat(compileAndRun("(print (min 5 2 8 1 9))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (max 5 2 8 1 9))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (gcd 24 36 60))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (lcm 2 3 4))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (gcd -8))")).isEqualTo("8");
+	}
+
+	@Test
+	void lengthOfStringAndList() throws Exception {
+		assertThat(compileAndRun("(print (length \"hello\"))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (length \"\"))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (length (list 10 20 30)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (length nil))")).isEqualTo("0");
+	}
+
+	@Test
 	void ratioLiteral() throws Exception {
 		assertThat(compileAndRun("(print 1/3)")).isEqualTo("1/3");
 		assertThat(compileAndRun("(print -2/4)")).isEqualTo("-1/2");
@@ -1509,7 +1553,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("88");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("89");
 	}
 
 	@Test

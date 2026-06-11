@@ -48,6 +48,11 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String MOD = "_mod";
 
+	static final String REM = "_rem";
+
+	/** Floating-point modulo whose result takes the sign of the divisor. */
+	static final String FMOD = "_fmod";
+
 	static final String CMP = "_cmp";
 
 	static final String ABS = "_abs";
@@ -161,6 +166,8 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("negateExact"), cp.addUtf8("(J)J")));
 		MethodrefConstant absLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
+		MethodrefConstant floorModLong = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("floorMod"), cp.addUtf8("(JJ)J")));
 
 		MethodrefConstant biValueOf = cp.addMethodref(bigClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)" + BIG)));
@@ -240,6 +247,8 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nNeg = cp.addUtf8(NEG);
 		Utf8Constant nDiv = cp.addUtf8(DIV);
 		Utf8Constant nMod = cp.addUtf8(MOD);
+		Utf8Constant nRem = cp.addUtf8(REM);
+		Utf8Constant nFmod = cp.addUtf8(FMOD);
 		Utf8Constant nCmp = cp.addUtf8(CMP);
 		Utf8Constant nAbs = cp.addUtf8(ABS);
 		Utf8Constant nMin = cp.addUtf8(MIN);
@@ -254,6 +263,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant dBinary = cp.addUtf8(BINARY_DESC);
 		Utf8Constant dUnary = cp.addUtf8(UNARY_DESC);
 		Utf8Constant dCmp = cp.addUtf8("(" + OBJ + OBJ + ")I");
+		Utf8Constant dFmod = cp.addUtf8("(DD)D");
 		Utf8Constant dPow = cp.addUtf8("(" + OBJ + "I)" + OBJ);
 
 		MethodrefConstant rAdd = cp.addMethodref(thisClass, cp.addNameAndType(nAdd, dBinary));
@@ -262,6 +272,8 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rNeg = cp.addMethodref(thisClass, cp.addNameAndType(nNeg, dUnary));
 		MethodrefConstant rDiv = cp.addMethodref(thisClass, cp.addNameAndType(nDiv, dBinary));
 		MethodrefConstant rMod = cp.addMethodref(thisClass, cp.addNameAndType(nMod, dBinary));
+		MethodrefConstant rRem = cp.addMethodref(thisClass, cp.addNameAndType(nRem, dBinary));
+		MethodrefConstant rFmod = cp.addMethodref(thisClass, cp.addNameAndType(nFmod, dFmod));
 		MethodrefConstant rCmp = cp.addMethodref(thisClass, cp.addNameAndType(nCmp, dCmp));
 		MethodrefConstant rAbs = cp.addMethodref(thisClass, cp.addNameAndType(nAbs, dUnary));
 		MethodrefConstant rMin = cp.addMethodref(thisClass, cp.addNameAndType(nMin, dBinary));
@@ -290,7 +302,10 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildNeg(nNeg, dUnary, longClass, negExact, longValue, longValueOf, rBig, rNorm, biNeg, arithEx,
 				ratArrClass, rRatNum, rRatDen, rRat));
 		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul));
-		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem));
+		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, floorModLong,
+				biSignum, biAdd));
+		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem));
+		methods.add(buildFmod(nFmod, dFmod));
 		methods
 			.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul));
 		methods.add(buildAbs(nAbs, dUnary, longClass, bigClass, longValue, longValueOf, absLong, biValueOf, biNeg,
@@ -314,6 +329,8 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(NEG, rNeg);
 		ops.put(DIV, rDiv);
 		ops.put(MOD, rMod);
+		ops.put(REM, rRem);
+		ops.put(FMOD, rFmod);
 		ops.put(CMP, rCmp);
 		ops.put(ABS, rAbs);
 		ops.put(MIN, rMin);
@@ -640,8 +657,82 @@ final class JvmNumericRuntimeBuilder {
 		return new NumericMethod(name, desc, c, 3, 2, List.of());
 	}
 
-	// _mod(Object a, Object b): long remainder, BigInteger.remainder otherwise.
+	// _mod(Object a, Object b): Common Lisp modulo whose result takes the sign of the
+	// divisor. Long fast path via Math.floorMod; BigInteger path corrects the remainder
+	// by
+	// adding the divisor when the signs differ.
 	private static NumericMethod buildMod(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
+			MethodrefConstant biRem, MethodrefConstant floorModLong, MethodrefConstant biSignum,
+			MethodrefConstant biAdd) {
+		List<Integer> c = new ArrayList<>();
+		int[] slowJumps = emitLongLongGuard(c, longClass);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, floorModLong.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		int slow = c.size();
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[0], slow);
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
+		// BigInteger A = _big(a); BigInteger B = _big(b); BigInteger r = A.remainder(B);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.ASTORE_2);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.ASTORE_3);
+		c.add(Opcode.ALOAD_2);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biRem.index());
+		c.add(Opcode.ASTORE);
+		c.add(4);
+		// if (r.signum() == 0) goto done
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifZero = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// if (r.signum() == B.signum()) goto done
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		int ifSameSign = c.size();
+		c.add(Opcode.IF_ICMPEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// r = r.add(B)
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.ALOAD_3);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biAdd.index());
+		c.add(Opcode.ASTORE);
+		c.add(4);
+		int done = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifZero, done);
+		JvmRuntimeBuilder.patchBranch(c, ifSameSign, done);
+		c.add(Opcode.ALOAD);
+		c.add(4);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rNorm.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 4, 5, List.of());
+	}
+
+	// _rem(Object a, Object b): remainder whose result takes the sign of the dividend
+	// (Java/BigInteger remainder). Long fast path, BigInteger.remainder otherwise.
+	private static NumericMethod buildRem(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
 			MethodrefConstant biRem) {
 		List<Integer> c = new ArrayList<>();
@@ -657,6 +748,38 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
 		emitBigBinary(c, rBig, biRem, rNorm);
 		return new NumericMethod(name, desc, c, 4, 2, List.of());
+	}
+
+	// _fmod(double a, double b): floating-point modulo whose result takes the sign of the
+	// divisor. r = a % b; if (r * b < 0) r += b (opposite signs and r != 0).
+	private static NumericMethod buildFmod(Utf8Constant name, Utf8Constant desc) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.DLOAD_0);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DREM);
+		c.add(Opcode.DSTORE);
+		c.add(4);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DMUL);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPG);
+		int ifNonNeg = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DADD);
+		c.add(Opcode.DSTORE);
+		c.add(4);
+		int done = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifNonNeg, done);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DRETURN);
+		return new NumericMethod(name, desc, c, 4, 6, List.of());
 	}
 
 	// _cmp(Object a, Object b): long comparison, BigInteger.compareTo, or rational
