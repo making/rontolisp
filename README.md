@@ -160,7 +160,7 @@ wasmtime --wasm gc repl.wasm                                               # REP
 ```
 > (defun square (x) (* x x))
 square
-> (map #'square '(1 2 3))
+> (mapcar #'square '(1 2 3))
 (1 4 9)
 > (- 5)
 -5
@@ -364,7 +364,7 @@ values (`#'first`).
 | `lcm` | `(lcm 4 6)` | `12` (least common multiple; `0` if either argument is `0`) |
 | `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0` (sign, preserving integer/float type) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
-| `map` | `(map #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
+| `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
 | `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
 
@@ -388,7 +388,7 @@ A call `(f a b)` compiles to `_apply(_eval('(function f), null), (list a b))`: t
 
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
-The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `while`, `dotimes`, `setq`, `setf`, `push`, `pop`, `funcall`, `map`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
+The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `while`, `dotimes`, `setq`, `setf`, `push`, `pop`, `funcall`, `mapcar`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
 
 #### Compiled `eval` limitations
 
@@ -480,7 +480,7 @@ The classification follows the function namespace: a name is listed as a functio
 - The package designator must be a literal; a computed designator is rejected at read/compile time (the interpreter additionally accepts a computed designator through `funcall`).
 - Like `version`, these functions are not supported inside the compiled runtime `eval`/`load`.
 
-Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, `list-functions`, ...) are not available as first-class values (they cannot be passed to `map`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
+Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, `list-functions`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 
 ### Function Namespace and First-Class Functions
 
@@ -495,7 +495,7 @@ separate namespaces.
 - A function becomes a **value** through `#'name` (reader syntax for `(function name)`),
   `#'(lambda ...)`, or `(symbol-function 'name)`. This works for built-in operators
   (`#'+`, `#'car`, `#'1+`, `#'cadr`), user `defun`s, and lambdas.
-- `funcall`/`map`/`reduce` also accept a **symbol** naming a function (a function
+- `funcall`/`mapcar`/`reduce` also accept a **symbol** naming a function (a function
   designator): `(funcall 'car '(1 2))` returns `1`. The compilers support this when the
   symbol is a quoted literal.
 - `defun` defines into the function namespace and returns the function name.
@@ -542,8 +542,8 @@ Built-in operators like `+`, `car`, `1+` can be passed to higher-order functions
 ```lisp
 (print (reduce #'+ 0 '(1 2 3 4 5)))              ; => 15
 (print (reduce #'* 1 '(1 2 3 4 5)))              ; => 120
-(print (map #'car '((1 2) (3 4) (5 6))))          ; => (1 3 5)
-(print (map #'1+ '(1 2 3)))                       ; => (2 3 4)
+(print (mapcar #'car '((1 2) (3 4) (5 6))))          ; => (1 3 5)
+(print (mapcar #'1+ '(1 2 3)))                       ; => (2 3 4)
 (print (funcall #'+ 3 4))                          ; => 7
 (setq my-op #'+)
 (print (funcall my-op 10 20))                      ; => 30
@@ -551,7 +551,7 @@ Built-in operators like `+`, `car`, `1+` can be passed to higher-order functions
 ```
 
 **Compiler restrictions.** In the JVM/WASM compilers, `#'name` resolves against the
-functions known at compile time (user `defun`s and built-in operators); `#'map`,
+functions known at compile time (user `defun`s and built-in operators); `#'mapcar`,
 `#'reduce` and `#'funcall` themselves are not available as values. `symbol-function`
 requires a quoted symbol literal argument. In `--dynamic` mode an unresolved `#'name`
 is deferred to the runtime `eval` environment like any other unresolved reference.

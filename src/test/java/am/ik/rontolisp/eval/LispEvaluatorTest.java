@@ -980,7 +980,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
-		assertThat(eval("(map #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
+		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
 		assertThat(eval("(funcall #'member 2 '(1 2 3))").print()).isEqualTo("(2 3)");
 	}
 
@@ -992,12 +992,12 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMapWithBuiltinCar() {
-		assertThat(eval("(map #'car '((1 2) (3 4) (5 6)))").print()).isEqualTo("(1 3 5)");
+		assertThat(eval("(mapcar #'car '((1 2) (3 4) (5 6)))").print()).isEqualTo("(1 3 5)");
 	}
 
 	@Test
 	void evalMapWithBuiltinCdr() {
-		assertThat(eval("(map #'cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
+		assertThat(eval("(mapcar #'cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
 	}
 
 	@Test
@@ -1007,7 +1007,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMapWithBuiltin1Plus() {
-		assertThat(eval("(map #'1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+		assertThat(eval("(mapcar #'1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
 	}
 
 	@Test
@@ -1072,7 +1072,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMapWithSharpQuotedCarCdrComposition() {
-		assertThat(eval("(map #'cadr '((1 2) (3 4)))").print()).isEqualTo("(2 4)");
+		assertThat(eval("(mapcar #'cadr '((1 2) (3 4)))").print()).isEqualTo("(2 4)");
 	}
 
 	// eval tests
@@ -1395,7 +1395,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(funcall #'second '(1 2 3))")).isEqualTo(new LispInteger(2));
 		assertThat(eval("(funcall #'third '(1 2 3))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(funcall #'fourth '(1 2 3 4))")).isEqualTo(new LispInteger(4));
-		assertThat(eval("(map #'first '((1 2) (3 4)))").print()).isEqualTo("(1 3)");
+		assertThat(eval("(mapcar #'first '((1 2) (3 4)))").print()).isEqualTo("(1 3)");
 	}
 
 	@Test

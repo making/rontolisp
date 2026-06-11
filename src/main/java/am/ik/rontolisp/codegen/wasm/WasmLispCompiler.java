@@ -521,7 +521,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.SETQ)
 				.add(stringTable, LispNames.EVAL)
 				.add(stringTable, LispNames.FUNCALL)
-				.add(stringTable, LispNames.MAP)
+				.add(stringTable, LispNames.MAPCAR)
 				.add(stringTable, LispNames.REDUCE)
 				.add(stringTable, LispNames.LIST)
 				.add(stringTable, LispNames.ADD)

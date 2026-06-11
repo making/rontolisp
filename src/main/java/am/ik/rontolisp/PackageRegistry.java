@@ -45,7 +45,7 @@ public final class PackageRegistry {
 			LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH, LispNames.TANH,
 			LispNames.GCD, LispNames.LCM, LispNames.SIGNUM, LispNames.EQ, LispNames.EQ_GENERAL, LispNames.LT,
 			LispNames.GT, LispNames.LE, LispNames.GE, LispNames.CONS, LispNames.CAR, LispNames.CDR, LispNames.LIST,
-			LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAP, LispNames.REDUCE,
+			LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAPCAR, LispNames.REDUCE,
 			LispNames.NOT, LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
 			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.SYMBOLP, LispNames.STRINGP,
 			LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT, LispNames.TRUNCATE, LispNames.FLOOR,

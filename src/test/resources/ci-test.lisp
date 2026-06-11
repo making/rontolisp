@@ -278,11 +278,11 @@
 (print (if (keywordp 'foo) 42 99))
 (print (if (symbolp :foo) 42 99))
 
-; map
-(print (map (lambda (x) (* x x)) '(1 2 3)))
-(print (map (lambda (x) (+ x 10)) '(1 2 3)))
-(print (map #'square '(1 2 3)))
-(print (map (lambda (x) x) nil))
+; mapcar
+(print (mapcar (lambda (x) (* x x)) '(1 2 3)))
+(print (mapcar (lambda (x) (+ x 10)) '(1 2 3)))
+(print (mapcar #'square '(1 2 3)))
+(print (mapcar (lambda (x) x) nil))
 
 ; reduce
 (print (reduce (lambda (a b) (+ a b)) 0 '(1 2 3 4 5)))
@@ -294,9 +294,9 @@
 ; Built-in operators as first-class values
 (print (reduce #'+ 0 '(1 2 3 4 5)))
 (print (reduce #'* 1 '(1 2 3 4 5)))
-(print (map #'car '((1 2) (3 4) (5 6))))
-(print (map #'cdr '((1 2) (3 4) (5 6))))
-(print (map #'1+ '(1 2 3)))
+(print (mapcar #'car '((1 2) (3 4) (5 6))))
+(print (mapcar #'cdr '((1 2) (3 4) (5 6))))
+(print (mapcar #'1+ '(1 2 3)))
 (print (funcall #'+ 3 4))
 (setq my-op #'+)
 (print (funcall my-op 10 20))
@@ -337,7 +337,7 @@
 (print (eval '(if (= 1 1) 42 99)))
 (print (eval '(cadr (list 10 20 30))))
 (print (eval '(funcall (lambda (x) (+ x 1)) 41)))
-(print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))
+(print (eval '(mapcar (lambda (x) (* x x)) (list 1 2 3))))
 (print (eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)))
 (print (eval '(let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s)))
 (print (eval '(- 5)))
@@ -359,7 +359,7 @@
 (print (lcm 4 6))
 (print (signum -7))
 (print (signum 3.5))
-(print (map #'sqrt (list 1 4 9)))
+(print (mapcar #'sqrt (list 1 4 9)))
 
 ; packages: cl-user (default, uses cl) and the rontolisp package (version lives there).
 ; keep package switches last since they affect every following form.
@@ -374,11 +374,11 @@
 (print (funcall #'car '(9 8)))
 (print (funcall (function cdr) '(9 8)))
 (print (funcall 'car '(7 8)))
-(print (map #'cadr '((1 2) (3 4))))
+(print (mapcar #'cadr '((1 2) (3 4))))
 (print (funcall (symbol-function 'car) '(5 6)))
 (setq op2 #'+)
 (print (funcall op2 20 22))
-(print (map #'(lambda (x) (* x 2)) '(1 2 3)))
+(print (mapcar #'(lambda (x) (* x 2)) '(1 2 3)))
 (let ((car 5))
   (print (car (list car 2))))
 
@@ -409,7 +409,7 @@
 (print (last '(1 2 3)))
 (print (last nil))
 (print (funcall #'length '(7 8 9)))
-(print (map #'reverse '((1 2) (3 4))))
+(print (mapcar #'reverse '((1 2) (3 4))))
 (print (funcall #'member 2 '(1 2 3)))
 
 ; rest (alias for cdr, also a setf place)
@@ -431,7 +431,7 @@
 
 ; first/rest/nth as first-class function values
 (print (funcall #'first '(1 2 3)))
-(print (map #'second '((1 2) (3 4))))
+(print (mapcar #'second '((1 2) (3 4))))
 (print (funcall #'nth 1 '(7 8 9)))
 
 ; Rationals (Common Lisp ratios)

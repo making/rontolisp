@@ -8,13 +8,13 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code map} built-in function. Generates an inline loop that applies a
+ * Compiles the {@code mapcar} built-in function. Generates an inline loop that applies a
  * function to each element of a list, building a new list using the
  * sentinel/tail-mutation pattern.
  */
-final class JvmMapCompiler {
+final class JvmMapcarCompiler {
 
-	private JvmMapCompiler() {
+	private JvmMapcarCompiler() {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

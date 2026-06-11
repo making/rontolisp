@@ -181,8 +181,8 @@ public final class LispNames {
 
 	// Higher-order functions
 
-	/** The {@code map} built-in function. */
-	public static final String MAP = "map";
+	/** The {@code mapcar} built-in function. */
+	public static final String MAPCAR = "mapcar";
 
 	/** The {@code reduce} built-in function. */
 	public static final String REDUCE = "reduce";

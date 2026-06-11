@@ -9,13 +9,13 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the {@code map} built-in function. Generates a block/loop that applies a
+ * Compiles the {@code mapcar} built-in function. Generates a block/loop that applies a
  * function to each element of a list, building a new list using the
  * sentinel/tail-mutation pattern.
  */
-final class WasmMapCompiler {
+final class WasmMapcarCompiler {
 
-	private WasmMapCompiler() {
+	private WasmMapcarCompiler() {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {

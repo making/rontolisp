@@ -179,7 +179,7 @@ final class WasmExprCompiler {
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
 				case LispNames.SYMBOL_FUNCTION -> WasmFunctionFormCompiler.compileSymbolFunction(cons, ctx);
-				case LispNames.MAP -> WasmMapCompiler.compile(cons, ctx);
+				case LispNames.MAPCAR -> WasmMapcarCompiler.compile(cons, ctx);
 				case LispNames.REDUCE -> WasmReduceCompiler.compile(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);

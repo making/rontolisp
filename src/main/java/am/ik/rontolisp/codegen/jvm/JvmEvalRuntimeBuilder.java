@@ -2096,8 +2096,8 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- map: (map fn list) ----
-		n = special(a, OP, LispNames.MAP);
+		// ---- mapcar: (mapcar fn list) ----
+		n = special(a, OP, LispNames.MAPCAR);
 		evalCar(a, REST, ENV);
 		a.astore(FN);
 		cdr(a, REST);

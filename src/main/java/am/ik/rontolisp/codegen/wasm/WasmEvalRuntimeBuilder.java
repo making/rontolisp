@@ -1090,8 +1090,8 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- map: (map fn list) ----
-		openSpecial(w, OFF, off.of(LispNames.MAP));
+		// ---- mapcar: (mapcar fn list) ----
+		openSpecial(w, OFF, off.of(LispNames.MAPCAR));
 		emitEvalCar(w, REST, ENV);
 		setLocal(w, FN);
 		emitCdrOf(w, REST);

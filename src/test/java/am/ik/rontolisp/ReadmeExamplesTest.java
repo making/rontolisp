@@ -166,7 +166,7 @@ class ReadmeExamplesTest {
 					""";
 			String session = """
 					(defun square (x) (* x x))
-					(map #'square '(1 2 3))
+					(mapcar #'square '(1 2 3))
 					(- 5)
 					""";
 			assertThat(compileAndRunWithStdin(repl, session)).isEqualTo("""
@@ -565,8 +565,8 @@ class ReadmeExamplesTest {
 			String output = evalAndCaptureOutput("""
 					(print (reduce #'+ 0 '(1 2 3 4 5)))
 					(print (reduce #'* 1 '(1 2 3 4 5)))
-					(print (map #'car '((1 2) (3 4) (5 6))))
-					(print (map #'1+ '(1 2 3)))
+					(print (mapcar #'car '((1 2) (3 4) (5 6))))
+					(print (mapcar #'1+ '(1 2 3)))
 					(print (funcall #'+ 3 4))
 					(setq my-op #'+)
 					(print (funcall my-op 10 20))

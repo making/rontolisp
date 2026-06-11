@@ -95,9 +95,9 @@ public final class LispEvaluator {
 			}
 			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
 		}));
-		this.globalEnv.defineFunction(LispNames.MAP, new LispFunction(LispNames.MAP, args -> {
+		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR, args -> {
 			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.MAP + " expects 2 arguments, got " + args.size());
+				throw new LispEvalException(LispNames.MAPCAR + " expects 2 arguments, got " + args.size());
 			}
 			return mapValues(args.get(0), args.get(1));
 		}));

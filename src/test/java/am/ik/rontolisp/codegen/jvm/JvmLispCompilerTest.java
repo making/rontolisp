@@ -595,7 +595,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunMathAsFirstClass() throws Exception {
-		assertThat(compileAndRun("(print (map #'sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print (mapcar #'sqrt (list 1 4 9)))")).isEqualTo("(1.0 2.0 3.0)");
 		assertThat(compileAndRun("(print (reduce #'gcd (list 24 36 48)))")).isEqualTo("12");
 		assertThat(compileAndRun("(print (eval (list (quote expt) 2 8)))")).isEqualTo("256");
 		assertThat(compileAndRun("(print (eval (list (quote sin) 0)))")).isEqualTo("0.0");
@@ -913,7 +913,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunSequenceFunctionsAsFirstClass() throws Exception {
-		assertThat(compileAndRun("(print (funcall #'length '(7 8 9))) (print (map #'reverse '((1 2) (3 4))))"))
+		assertThat(compileAndRun("(print (funcall #'length '(7 8 9))) (print (mapcar #'reverse '((1 2) (3 4))))"))
 			.isEqualTo("3\n((2 1) (4 3))");
 	}
 
@@ -924,17 +924,17 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunMapWithBuiltinCar() throws Exception {
-		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
+		assertThat(compileAndRun("(print (mapcar #'car '((1 2) (3 4) (5 6))))")).isEqualTo("(1 3 5)");
 	}
 
 	@Test
 	void compileAndRunMapWithBuiltinCdr() throws Exception {
-		assertThat(compileAndRun("(print (map #'cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
+		assertThat(compileAndRun("(print (mapcar #'cdr '((1 2) (3 4) (5 6))))")).isEqualTo("((2) (4) (6))");
 	}
 
 	@Test
 	void compileAndRunMapWithBuiltin1Plus() throws Exception {
-		assertThat(compileAndRun("(print (map #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+		assertThat(compileAndRun("(print (mapcar #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
 	}
 
 	@Test
@@ -959,7 +959,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunMapSharpQuotedCar() throws Exception {
-		assertThat(compileAndRun("(print (map #'car '((1 2) (3 4))))")).isEqualTo("(1 3)");
+		assertThat(compileAndRun("(print (mapcar #'car '((1 2) (3 4))))")).isEqualTo("(1 3)");
 	}
 
 	@Test
@@ -969,7 +969,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunMapSharpQuotedCadr() throws Exception {
-		assertThat(compileAndRun("(print (map #'cadr '((1 2) (3 4))))")).isEqualTo("(2 4)");
+		assertThat(compileAndRun("(print (mapcar #'cadr '((1 2) (3 4))))")).isEqualTo("(2 4)");
 	}
 
 	@Test
@@ -1194,7 +1194,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadSharpQuoteLambdaThenEval() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(map #'(lambda (x) (* x x)) '(1 2 3))\n"))
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(mapcar #'(lambda (x) (* x x)) '(1 2 3))\n"))
 			.isEqualTo("(1 4 9)");
 	}
 
@@ -1206,7 +1206,8 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunReadEvalPrintLoop() throws Exception {
 		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
-		assertThat(compileAndRunWithStdin(repl, "(defun square (x) (* x x))\n(square 7)\n\n(map #'square '(1 2 3))\n"))
+		assertThat(
+				compileAndRunWithStdin(repl, "(defun square (x) (* x x))\n(square 7)\n\n(mapcar #'square '(1 2 3))\n"))
 			.isEqualTo("square\n49\n(1 4 9)");
 	}
 
@@ -1397,7 +1398,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void evalMapWithLambda() throws Exception {
-		assertThat(compileAndRun("(print (eval '(map (lambda (x) (* x x)) (list 1 2 3))))")).isEqualTo("(1 4 9)");
+		assertThat(compileAndRun("(print (eval '(mapcar (lambda (x) (* x x)) (list 1 2 3))))")).isEqualTo("(1 4 9)");
 	}
 
 	@Test
@@ -1633,9 +1634,9 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunFirstRestNthAsFunctionValues() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'first '(1 2 3)))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (map #'rest '((1 2) (3 4))))")).isEqualTo("((2) (4))");
+		assertThat(compileAndRun("(print (mapcar #'rest '((1 2) (3 4))))")).isEqualTo("((2) (4))");
 		assertThat(compileAndRun("(print (funcall #'nth 1 '(1 2 3)))")).isEqualTo("2");
-		assertThat(compileAndRun("(print (map #'second '((1 2) (3 4))))")).isEqualTo("(2 4)");
+		assertThat(compileAndRun("(print (mapcar #'second '((1 2) (3 4))))")).isEqualTo("(2 4)");
 	}
 
 }
