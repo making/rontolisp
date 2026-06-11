@@ -132,7 +132,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_RAT_ROUND = 34;
 
-	static final int FUNC_DISPATCH_BASE = 35;
+	// String runtime: render a value into the heap via the capture mode of _write_str
+	// and return a new string struct (princ-to-string / prin1-to-string /
+	// %string-concat).
+	static final int FUNC_PRINC_TO_STR = 35;
+
+	static final int FUNC_PRIN1_TO_STR = 36;
+
+	static final int FUNC_STRING_CONCAT = 37;
+
+	static final int FUNC_DISPATCH_BASE = 38;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
@@ -230,6 +239,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _intern to give symbols parsed at runtime but absent from the compile-time table
 	// (e.g. lambda parameters in loaded files) a stable offset across occurrences.
 	static final int RT_INTERN_COUNT_ADDR = 100;
+
+	// Capture mode for the string runtime: while CAPTURE_FLAG is non-zero, _write_str
+	// appends bytes at CAPTURE_CUR (a heap cursor) instead of writing to stdout.
+	static final int CAPTURE_FLAG_ADDR = 104;
+
+	static final int CAPTURE_CUR_ADDR = 108;
 
 	static final int RT_INTERN_BASE = 8192;
 
@@ -766,6 +781,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_floor
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_ceil
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_round
+				// String runtime
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _princ_to_str
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _prin1_to_str
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _string_concat
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -835,7 +854,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatTruncBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(false))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(true))
-					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundBody());
+					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundBody())
+					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 1))
+					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINT_VAL, 1))
+					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 2));
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);

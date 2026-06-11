@@ -297,6 +297,21 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void princToString() {
+			assertThat(eval("(princ-to-string '(1 \"x\"))")).isEqualTo(new LispString("(1 x)"));
+		}
+
+		@Test
+		void prin1ToString() {
+			assertThat(eval("(prin1-to-string \"abc\")")).isEqualTo(new LispString("\"abc\""));
+		}
+
+		@Test
+		void concatenate() {
+			assertThat(eval("(concatenate 'string \"foo\" \"bar\")")).isEqualTo(new LispString("foobar"));
+		}
+
+		@Test
 		void nullPredicate() {
 			assertThat(eval("(null nil)")).isSameAs(LispTrue.INSTANCE);
 		}
@@ -770,7 +785,8 @@ class ReadmeExamplesTest {
 			assertThat(evalAndCaptureOutput("(format t \"Hello ~a, you are ~d years old.~%\" 'world 42)"))
 				.isEqualTo("Hello world, you are 42 years old.");
 			assertThat(evalAndCaptureOutput("(format t \"~s and ~a~%\" \"str\" \"str\")")).isEqualTo("\"str\" and str");
-			assertThat(evalAndCaptureOutput("(format t \"list=~a~%\" (list 1 2 3))")).isEqualTo("list=(1 2 3)");
+			assertThat(eval("(format nil \"list=~a\" (list 1 2 3))")).isEqualTo(new LispString("list=(1 2 3)"));
+			assertThat(evalAndCaptureOutput("(princ (format nil \"Hello ~a!\" 'world))")).isEqualTo("Hello world!");
 		}
 
 	}
@@ -868,7 +884,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)",
-					"(defun function if in-package lambda let progn quote setq while)", "89", "(square)",
+					"(defun function if in-package lambda let progn quote setq while)", "92", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

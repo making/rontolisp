@@ -118,6 +118,11 @@ final class JvmEmitHelper {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
 	}
 
+	/** A {@code java.lang.String} instance-method reference. */
+	static ConstantPool.MethodrefConstant stringMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
+		return ctx.cp.addMethodref(ctx.stringClass, ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	}
+
 	/**
 	 * Coerces the {@code Object} on the stack (Long or BigInteger) to a
 	 * {@code BigInteger}.

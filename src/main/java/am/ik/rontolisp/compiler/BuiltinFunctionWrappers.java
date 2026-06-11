@@ -133,7 +133,7 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.ROUND),
 			// Math/IO/list (arity 1)
 			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.PRIN1), unary(LispNames.PRINC),
-			unary(LispNames.LIST),
+			unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING), unary(LispNames.LIST),
 			// Math functions (arity 1)
 			unary(LispNames.SQRT), unary(LispNames.ISQRT), unary(LispNames.SIGNUM), unary(LispNames.EXP),
 			unary(LispNames.LOG), unary(LispNames.SIN), unary(LispNames.COS), unary(LispNames.TAN),

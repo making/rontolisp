@@ -250,7 +250,7 @@ nil
 (1 9)
 (and cond decf dolist dotimes format incf let* or pop push remf setf unless when)
 (defun function if in-package lambda let progn quote setq while)
-89
+92
 (list-functions list-macros list-special-forms version)
 ci-intro-fn
 nil
@@ -287,3 +287,8 @@ Hello world, you are 42!
 "str" and str
 list=(1 2 3) tilde=~
 Hi, alice!
+fmt-nil: world 42 "str" ~
+5
+foobar
+3.14
+"abc"

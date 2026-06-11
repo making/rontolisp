@@ -689,6 +689,41 @@ public final class Environment implements Scope {
 			out.println();
 			return LispNil.INSTANCE;
 		}));
+		// princ-to-string / prin1-to-string: the string that princ / prin1 would print.
+		env.defineFunction(LispNames.PRINC_TO_STRING, new LispFunction(LispNames.PRINC_TO_STRING, args -> {
+			requireArgCount(LispNames.PRINC_TO_STRING, args, 1);
+			return new LispString(displayString(args.get(0)));
+		}));
+		env.defineFunction(LispNames.PRIN1_TO_STRING, new LispFunction(LispNames.PRIN1_TO_STRING, args -> {
+			requireArgCount(LispNames.PRIN1_TO_STRING, args, 1);
+			return new LispString(printString(args.get(0)));
+		}));
+		// concatenate: only the string result type is supported.
+		env.defineFunction(LispNames.CONCATENATE, new LispFunction(LispNames.CONCATENATE, args -> {
+			requireMinArgCount(LispNames.CONCATENATE, args, 1);
+			if (!(args.get(0) instanceof LispSymbol type) || !"string".equals(type.name())) {
+				throw new LispEvalException(
+						"concatenate supports only the string result type, got: " + args.get(0).print());
+			}
+			StringBuilder sb = new StringBuilder();
+			for (int i = 1; i < args.size(); i++) {
+				if (!(args.get(i) instanceof LispString str)) {
+					throw new LispEvalException("concatenate expects strings, got: " + args.get(i).print());
+				}
+				sb.append(str.value());
+			}
+			return new LispString(sb.toString());
+		}));
+		// %string-concat: internal binary string concatenation used by
+		// format/concatenate.
+		env.defineFunction(LispNames.STRING_CONCAT, new LispFunction(LispNames.STRING_CONCAT, args -> {
+			requireArgCount(LispNames.STRING_CONCAT, args, 2);
+			if (!(args.get(0) instanceof LispString a) || !(args.get(1) instanceof LispString b)) {
+				throw new LispEvalException(
+						"%string-concat expects strings, got: " + args.get(0).print() + ", " + args.get(1).print());
+			}
+			return new LispString(a.value() + b.value());
+		}));
 		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
 			requireArgCount(LispNames.READ_LINE, args, 0);
 			try {
@@ -1090,6 +1125,34 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("denominator expects a rational, got: " + arg.print());
 		}));
+	}
+
+	/**
+	 * Returns the text that {@code princ} would print for the value (no quotes on
+	 * strings). Mirrors the numeric special-casing of the princ builtin.
+	 */
+	private static String displayString(LispVal val) {
+		if (val instanceof LispInteger i) {
+			return Long.toString(i.value());
+		}
+		if (val instanceof LispDouble d) {
+			return Double.toString(d.value());
+		}
+		return val.display();
+	}
+
+	/**
+	 * Returns the text that {@code prin1} would print for the value (readable form,
+	 * strings quoted). Mirrors the numeric special-casing of the prin1 builtin.
+	 */
+	private static String printString(LispVal val) {
+		if (val instanceof LispInteger i) {
+			return Long.toString(i.value());
+		}
+		if (val instanceof LispDouble d) {
+			return Double.toString(d.value());
+		}
+		return val.print();
 	}
 
 	private static long asLong(LispVal val) {

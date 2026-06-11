@@ -444,9 +444,68 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalFormatNilDestinationUnsupported() {
-		assertThatThrownBy(() -> eval("(format nil \"~a\" 1)")).isInstanceOf(UnsupportedOperationException.class)
+	void evalFormatNilReturnsString() {
+		assertThat(eval("(format nil \"Hello ~a, you are ~d!~%\" 'world 42)"))
+			.isEqualTo(new LispString("Hello world, you are 42!\n"));
+	}
+
+	@Test
+	void evalFormatNilPrin1Directive() {
+		assertThat(eval("(format nil \"~s and ~a\" \"str\" \"str\")")).isEqualTo(new LispString("\"str\" and str"));
+	}
+
+	@Test
+	void evalFormatNilList() {
+		assertThat(eval("(format nil \"list=~a\" (list 1 2 3))")).isEqualTo(new LispString("list=(1 2 3)"));
+	}
+
+	@Test
+	void evalFormatNilLiteralOnly() {
+		assertThat(eval("(format nil \"plain ~~ text\")")).isEqualTo(new LispString("plain ~ text"));
+	}
+
+	@Test
+	void evalFormatNilEmpty() {
+		assertThat(eval("(format nil \"\")")).isEqualTo(new LispString(""));
+	}
+
+	@Test
+	void evalFormatUnsupportedDestination() {
+		assertThatThrownBy(() -> eval("(format 'foo \"~a\" 1)")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("destination");
+	}
+
+	@Test
+	void evalPrincToString() {
+		assertThat(eval("(princ-to-string 42)")).isEqualTo(new LispString("42"));
+		assertThat(eval("(princ-to-string \"abc\")")).isEqualTo(new LispString("abc"));
+		assertThat(eval("(princ-to-string 'sym)")).isEqualTo(new LispString("sym"));
+		assertThat(eval("(princ-to-string (list 1 \"x\" 3))")).isEqualTo(new LispString("(1 x 3)"));
+	}
+
+	@Test
+	void evalPrin1ToString() {
+		assertThat(eval("(prin1-to-string 42)")).isEqualTo(new LispString("42"));
+		assertThat(eval("(prin1-to-string \"abc\")")).isEqualTo(new LispString("\"abc\""));
+	}
+
+	@Test
+	void evalConcatenateStrings() {
+		assertThat(eval("(concatenate 'string \"foo\" \"bar\" \"baz\")")).isEqualTo(new LispString("foobarbaz"));
+		assertThat(eval("(concatenate 'string)")).isEqualTo(new LispString(""));
+		assertThat(eval("(concatenate 'string \"x\")")).isEqualTo(new LispString("x"));
+	}
+
+	@Test
+	void evalConcatenateRejectsNonStringResultType() {
+		assertThatThrownBy(() -> eval("(concatenate 'list \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("string result type");
+	}
+
+	@Test
+	void evalPrincToStringAsFunctionValue() {
+		assertThat(eval("(mapcar #'princ-to-string (list 1 2))"))
+			.isEqualTo(new LispCons(new LispString("1"), new LispCons(new LispString("2"), LispNil.INSTANCE)));
 	}
 
 	@Test
@@ -1427,7 +1486,7 @@ class LispEvaluatorTest {
 		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(89);
+			.hasSize(92);
 	}
 
 	@Test

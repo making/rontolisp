@@ -593,14 +593,10 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		}
 
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.IOV_OFFSET);
+		// Emit the rendered digits through _write_str so the capture mode of the
+		// string runtime also sees integer output.
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.OUT_BUF_OFFSET);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.IOV_OFFSET + 4);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.GET_LOCAL);
@@ -611,19 +607,8 @@ final class WasmRuntimeBuilder {
 			w.writeSignedLeb128(1);
 			w.write(Instruction.I32_ADD);
 		}
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.IOV_OFFSET);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.NWRITTEN_OFFSET);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
-		w.write(Instruction.DROP);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -633,7 +618,74 @@ final class WasmRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		w.write(0);
+		// Locals: 2=capture cursor (i32), 3=copy index (i32); params: 0=ptr, 1=len
+		w.write(1);
+		w.write(2);
+		w.write(Type.I32);
+
+		// Capture mode (string runtime): append the bytes at the capture cursor
+		// instead of writing to stdout.
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_FLAG_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.IF, 0x40);
+
+		// cur = memory[CAPTURE_CUR_ADDR]
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_CUR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+
+		// i = 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3);
+
+		// while (i < len) { memory[cur + i] = memory[ptr + i]; i++; }
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+
+		// memory[CAPTURE_CUR_ADDR] = cur + len
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_CUR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.IOV_OFFSET);
@@ -658,6 +710,115 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the body of a string-runtime function (_princ_to_str, _prin1_to_str or
+	 * _string_concat). It renders the argument value(s) between two quote bytes into the
+	 * heap by turning on the capture mode of {@code _write_str}, bumps the heap pointer
+	 * and returns a new string struct over the captured bytes.
+	 * @param renderFunc the rendering function ({@code FUNC_PRINC_VAL} for display text,
+	 * {@code FUNC_PRINT_VAL} for the readable form)
+	 * @param argCount 1 (to-string) or 2 (concatenation: both rendered back to back)
+	 * @return the function body
+	 */
+	static byte[] buildToStringBody(int renderFunc, int argCount) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// Locals: argCount=start (i32), argCount+1=cur (i32)
+		int start = argCount;
+		int cur = argCount + 1;
+		w.write(1);
+		w.write(2);
+		w.write(Type.I32);
+
+		// start = memory[HEAP_PTR_ADDR]
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(start);
+
+		// memory[start] = 0x22 ('"' prefix)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(start);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+
+		// memory[CAPTURE_CUR_ADDR] = start + 1
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_CUR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(start);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+
+		// memory[CAPTURE_FLAG_ADDR] = 1
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_FLAG_ADDR);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+
+		// Render each argument; _write_str appends the bytes at the capture cursor.
+		for (int i = 0; i < argCount; i++) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(i);
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(renderFunc);
+		}
+
+		// memory[CAPTURE_FLAG_ADDR] = 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_FLAG_ADDR);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+
+		// cur = memory[CAPTURE_CUR_ADDR]
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.CAPTURE_CUR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(cur);
+
+		// memory[cur] = 0x22 ('"' suffix)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(cur);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+
+		// memory[HEAP_PTR_ADDR] = cur + 1
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(cur);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+
+		// return struct.new string(start, cur + 1 - start)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(start);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(cur);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(start);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
 
 		w.write(Instruction.END);
 		return body.toByteArray();

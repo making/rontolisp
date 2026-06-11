@@ -467,3 +467,12 @@
 (format t "list=~a tilde=~~~%" (list 1 2 3))
 (defun ci-greet (name) (format t "Hi, ~a!~%" name))
 (ci-greet 'alice)
+; format nil / princ-to-string / prin1-to-string / concatenate
+(princ (format nil "fmt-nil: ~a ~d ~s ~~~%" 'world 42 "str"))
+(print (length (format nil "~a" 12345)))
+(princ (concatenate 'string "foo" "bar"))
+(terpri)
+(princ (princ-to-string 3.14))
+(terpri)
+(princ (prin1-to-string "abc"))
+(terpri)

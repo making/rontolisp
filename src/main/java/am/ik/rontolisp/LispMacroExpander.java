@@ -878,11 +878,12 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (format t control-string args...) into a sequence of princ/prin1/terpri
-	 * calls, returning nil. The control string must be a literal string and the
-	 * destination must be the literal {@code t} (standard output). Supported directives:
-	 * {@code ~a}/{@code ~A} (princ), {@code ~s}/{@code ~S} (prin1), {@code ~d}/{@code ~D}
-	 * (princ), {@code ~%} (terpri) and {@code ~~} (a literal tilde).
+	 * Expands (format destination control-string args...). The control string must be a
+	 * literal string and the destination must be the literal {@code t} (print to standard
+	 * output, return nil) or {@code nil} (return the formatted string). Supported
+	 * directives: {@code ~a}/{@code ~A} (princ), {@code ~s}/{@code ~S} (prin1),
+	 * {@code ~d}/{@code ~D} (princ), {@code ~%} (newline) and {@code ~~} (a literal
+	 * tilde).
 	 *
 	 * <pre>
 	 * (format t "Hello ~a!~%" name) ->
@@ -892,6 +893,10 @@ public final class LispMacroExpander {
 	 *   (princ "!")
 	 *   (terpri)
 	 *   nil)
+	 *
+	 * (format nil "Hello ~a!" name) ->
+	 * (let ((__format_arg0 name))
+	 *   (%string-concat (%string-concat "Hello " (princ-to-string __format_arg0)) "!"))
 	 * </pre>
 	 *
 	 * All arguments are bound to temporaries up front so they are evaluated left to right
@@ -904,9 +909,17 @@ public final class LispMacroExpander {
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException("format expects a destination and a control string");
 		}
-		if (!(parts.get(1) instanceof LispTrue)) {
+		boolean toString;
+		if (parts.get(1) instanceof LispTrue) {
+			toString = false;
+		}
+		else if (parts.get(1) instanceof LispNil) {
+			toString = true;
+		}
+		else {
 			throw new UnsupportedOperationException(
-					"format supports only t (standard output) as destination, got: " + parts.get(1).print());
+					"format supports only t (standard output) or nil (string) as destination, got: "
+							+ parts.get(1).print());
 		}
 		if (!(parts.get(2) instanceof LispString control)) {
 			throw new UnsupportedOperationException(
@@ -920,42 +933,23 @@ public final class LispMacroExpander {
 			argSyms.add(g);
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
-		List<LispVal> forms = new java.util.ArrayList<>();
-		String s = control.value();
-		StringBuilder literal = new StringBuilder();
-		int argIndex = 0;
-		for (int i = 0; i < s.length(); i++) {
-			char c = s.charAt(i);
-			if (c != '~') {
-				literal.append(c);
-				continue;
+		List<LispVal> forms = toString ? formatStringPieces(control.value(), argSyms)
+				: formatOutputForms(control.value(), argSyms);
+		if (toString) {
+			// Fold the pieces into nested %string-concat calls (left-associative).
+			LispVal result = forms.isEmpty() ? new LispString("") : forms.get(0);
+			for (int i = 1; i < forms.size(); i++) {
+				result = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), result, forms.get(i)));
 			}
-			if (i + 1 >= s.length()) {
-				throw new IllegalArgumentException("format: control string ends with ~");
-			}
-			char directive = s.charAt(++i);
-			switch (Character.toLowerCase(directive)) {
-				case '~' -> literal.append('~');
-				case '%' -> {
-					flushFormatLiteral(literal, forms);
-					forms.add(listToCons(List.of(new LispSymbol(LispNames.TERPRI))));
-				}
-				case 'a', 'd', 's' -> {
-					flushFormatLiteral(literal, forms);
-					if (argIndex >= argSyms.size()) {
-						throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
-					}
-					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1 : LispNames.PRINC;
-					forms.add(listToCons(List.of(new LispSymbol(op), argSyms.get(argIndex++))));
-				}
-				default -> throw new UnsupportedOperationException("format: unsupported directive ~" + directive);
-			}
+			forms = new java.util.ArrayList<>(List.of(result));
 		}
-		flushFormatLiteral(literal, forms);
-		// format returns nil
-		forms.add(LispNil.INSTANCE);
+		else {
+			// format t returns nil
+			forms = new java.util.ArrayList<>(forms);
+			forms.add(LispNil.INSTANCE);
+		}
 		if (bindings.isEmpty()) {
-			return makeProgn(forms);
+			return forms.size() == 1 ? forms.get(0) : makeProgn(forms);
 		}
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET));
@@ -966,9 +960,95 @@ public final class LispMacroExpander {
 
 	private static final String FORMAT_ARG_VAR = "__format_arg";
 
-	private static void flushFormatLiteral(StringBuilder literal, List<LispVal> forms) {
+	/**
+	 * Parses the control string into output forms for the {@code t} destination: literal
+	 * segments become {@code (princ "...")}, argument directives become
+	 * {@code (princ arg)} / {@code (prin1 arg)}, and {@code ~%} becomes {@code (terpri)}.
+	 */
+	private static List<LispVal> formatOutputForms(String s, List<LispSymbol> argSyms) {
+		List<LispVal> forms = new java.util.ArrayList<>();
+		StringBuilder literal = new StringBuilder();
+		int argIndex = 0;
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c != '~') {
+				literal.append(c);
+				continue;
+			}
+			char directive = nextFormatDirective(s, i++);
+			switch (Character.toLowerCase(directive)) {
+				case '~' -> literal.append('~');
+				case '%' -> {
+					flushFormatLiteral(literal, forms, LispNames.PRINC);
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.TERPRI))));
+				}
+				case 'a', 'd', 's' -> {
+					flushFormatLiteral(literal, forms, LispNames.PRINC);
+					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1 : LispNames.PRINC;
+					forms.add(listToCons(List.of(new LispSymbol(op), nextFormatArg(argSyms, argIndex++, directive))));
+				}
+				default -> throw new UnsupportedOperationException("format: unsupported directive ~" + directive);
+			}
+		}
+		flushFormatLiteral(literal, forms, LispNames.PRINC);
+		return forms;
+	}
+
+	/**
+	 * Parses the control string into string-valued pieces for the {@code nil}
+	 * destination: literal segments (with {@code ~%} as a newline character) become
+	 * string literals and argument directives become {@code (princ-to-string arg)} /
+	 * {@code (prin1-to-string arg)} calls.
+	 */
+	private static List<LispVal> formatStringPieces(String s, List<LispSymbol> argSyms) {
+		List<LispVal> pieces = new java.util.ArrayList<>();
+		StringBuilder literal = new StringBuilder();
+		int argIndex = 0;
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c != '~') {
+				literal.append(c);
+				continue;
+			}
+			char directive = nextFormatDirective(s, i++);
+			switch (Character.toLowerCase(directive)) {
+				case '~' -> literal.append('~');
+				case '%' -> literal.append('\n');
+				case 'a', 'd', 's' -> {
+					if (!literal.isEmpty()) {
+						pieces.add(new LispString(literal.toString()));
+						literal.setLength(0);
+					}
+					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_TO_STRING
+							: LispNames.PRINC_TO_STRING;
+					pieces.add(listToCons(List.of(new LispSymbol(op), nextFormatArg(argSyms, argIndex++, directive))));
+				}
+				default -> throw new UnsupportedOperationException("format: unsupported directive ~" + directive);
+			}
+		}
 		if (!literal.isEmpty()) {
-			forms.add(listToCons(List.of(new LispSymbol(LispNames.PRINC), new LispString(literal.toString()))));
+			pieces.add(new LispString(literal.toString()));
+		}
+		return pieces;
+	}
+
+	private static char nextFormatDirective(String s, int tildeIndex) {
+		if (tildeIndex + 1 >= s.length()) {
+			throw new IllegalArgumentException("format: control string ends with ~");
+		}
+		return s.charAt(tildeIndex + 1);
+	}
+
+	private static LispSymbol nextFormatArg(List<LispSymbol> argSyms, int argIndex, char directive) {
+		if (argIndex >= argSyms.size()) {
+			throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
+		}
+		return argSyms.get(argIndex);
+	}
+
+	private static void flushFormatLiteral(StringBuilder literal, List<LispVal> forms, String op) {
+		if (!literal.isEmpty()) {
+			forms.add(listToCons(List.of(new LispSymbol(op), new LispString(literal.toString()))));
 			literal.setLength(0);
 		}
 	}

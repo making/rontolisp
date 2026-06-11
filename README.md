@@ -177,7 +177,7 @@ square
 | Integer | `42`, `-5`, `1,000` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM), 31-bit signed integer (WASM) |
 | Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
 | Double | `3.14`, `-0.5`, `3,000.50` | 64-bit floating-point number |
-| String | `"hello"` | String literal (interpreter only) |
+| String | `"hello"` | String literal |
 | Symbol | `x`, `foo` | Identifier |
 | Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
 | Nil | `nil` | False / empty list |
@@ -276,7 +276,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `dolist` | `(dolist (var list result?) body...)` | Evaluate body with `var` bound to each element. Returns `result` (or nil) with `var` bound to nil |
 | `incf` | `(incf place delta?)` | Expands to `(setf place (+ place delta))`. `delta` defaults to 1. Returns the new value |
 | `decf` | `(decf place delta?)` | Expands to `(setf place (- place delta))`. `delta` defaults to 1. Returns the new value |
-| `format` | `(format t "Hello ~a, ~d!~%" 'world 42)` | Formatted output to standard output. Returns nil. See [format](#format) |
+| `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | Formatted output to standard output (`t`, returns nil) or to a string (`nil`). See [format](#format) |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,
@@ -286,18 +286,20 @@ values (`#'first`).
 
 #### format
 
-A minimal subset of Common Lisp's `format`, implemented as a macro that expands into
-`princ`/`prin1`/`terpri` calls, so it works identically in the interpreter and both
-compilers. The destination must be the literal `t` (standard output) and the control
-string must be a string literal. All arguments are evaluated left to right before any
-output. Returns nil.
+A minimal subset of Common Lisp's `format`, implemented as a macro shared by the
+interpreter and both compilers. With destination `t` it expands into
+`princ`/`prin1`/`terpri` calls and returns nil; with destination `nil` it builds and
+returns the formatted string (expanding into `princ-to-string`/`prin1-to-string` calls
+folded with the internal string concatenation). The destination must be the literal `t`
+or `nil` and the control string must be a string literal. All arguments are evaluated
+left to right before any output.
 
 | Directive | Meaning |
 |-----------|---------|
 | `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes) |
 | `~s`, `~S` | Standard: prints the argument like `prin1` (readable, strings quoted) |
 | `~d`, `~D` | Decimal: prints an integer argument like `princ` |
-| `~%` | Newline (`terpri`) |
+| `~%` | Newline (`terpri` for destination `t`, a newline character for `nil`) |
 | `~~` | A literal `~` |
 
 ```lisp
@@ -305,14 +307,16 @@ output. Returns nil.
 ;; Hello world, you are 42 years old.
 (format t "~s and ~a~%" "str" "str")
 ;; "str" and str
-(format t "list=~a~%" (list 1 2 3))
-;; list=(1 2 3)
+(format nil "list=~a" (list 1 2 3))
+;; => "list=(1 2 3)"
+(princ (format nil "Hello ~a!" 'world))
+;; Hello world!
 ```
 
-Limitations: `(format nil ...)` (returning the formatted output as a string) and other
-destinations are not supported, the control string cannot be a runtime value, and the
-remaining directives (`~c`, `~f`, `~{`, ...) are not implemented. Like the other macros,
-`format` is not recognized by the embedded `eval` runtime in compiled output (see
+Limitations: other destinations (streams, strings with fill pointers) are not supported,
+the control string cannot be a runtime value, and the remaining directives (`~c`, `~f`,
+`~{`, ...) are not implemented. Like the other macros, `format` is not recognized by the
+embedded `eval` runtime in compiled output (see
 [Compiled `eval` limitations](#compiled-eval-limitations)).
 
 ### Built-in Functions
@@ -335,6 +339,9 @@ remaining directives (`~c`, `~f`, `~{`, ...) are not implemented. Like the other
 | `prin1` | `(prin1 42)` | Like `print` but without newline |
 | `princ` | `(princ "hello")` | Prints without quotes and without newline |
 | `terpri` | `(terpri)` | Prints a newline only |
+| `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- the string `princ` would print |
+| `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- the string `prin1` would print (readable form) |
+| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (only the `'string` result type is supported; the compilers require the literal `'string`) |
 | `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
 | `read` | `(read)` | Read one S-expression from stdin (all three backends). `nil` on EOF |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
@@ -439,7 +446,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `dolist`, `incf`, `decf` and `format` are not supported.** These macros are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) work, since they resolve through the compiled function registry.
+- **`let*`, `dolist`, `incf`, `decf`, `format` and `concatenate` are not supported.** These forms are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -505,7 +512,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))
-; => 89
+; => 92
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

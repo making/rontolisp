@@ -357,6 +357,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFormatNil() throws Exception {
+		assertThat(compileAndRun("(princ (format nil \"Hello ~a, ~d! ~s~%\" 'world 42 \"str\"))"))
+			.isEqualTo("Hello world, 42! \"str\"");
+	}
+
+	@Test
+	void compileAndRunFormatNilList() throws Exception {
+		assertThat(compileAndRun("(princ (format nil \"list=~a tilde=~~\" (list 1 2 3)))"))
+			.isEqualTo("list=(1 2 3) tilde=~");
+	}
+
+	@Test
+	void compileAndRunFormatNilIsString() throws Exception {
+		assertThat(compileAndRun("(print (stringp (format nil \"~a\" 1))) (print (length (format nil \"~a\" 12345)))"))
+			.isEqualTo("t\n5");
+	}
+
+	@Test
+	void compileAndRunPrincToString() throws Exception {
+		assertThat(compileAndRun("(print (princ-to-string 42)) (princ (princ-to-string 'sym))"))
+			.isEqualTo("\"42\"\nsym");
+	}
+
+	@Test
+	void compileAndRunPrin1ToString() throws Exception {
+		assertThat(compileAndRun("(princ (prin1-to-string \"abc\"))")).isEqualTo("\"abc\"");
+	}
+
+	@Test
+	void compileAndRunConcatenate() throws Exception {
+		assertThat(compileAndRun("(princ (concatenate 'string \"foo\" \"bar\" \"baz\"))")).isEqualTo("foobarbaz");
+	}
+
+	@Test
+	void compileAndRunPrincToStringAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'princ-to-string (list 1 2)))")).isEqualTo("(\"1\" \"2\")");
+	}
+
+	@Test
 	void compileAndRunQuoteInteger() throws Exception {
 		assertThat(compileAndRun("(print '42)")).isEqualTo("42");
 	}
@@ -1682,12 +1721,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("89");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("92");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("89");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("92");
 	}
 
 	@Test

@@ -356,6 +356,18 @@ public final class LispNames {
 	/** The {@code terpri} built-in function. */
 	public static final String TERPRI = "terpri";
 
+	/** The {@code princ-to-string} built-in function. */
+	public static final String PRINC_TO_STRING = "princ-to-string";
+
+	/** The {@code prin1-to-string} built-in function. */
+	public static final String PRIN1_TO_STRING = "prin1-to-string";
+
+	/** The {@code concatenate} built-in function (only {@code 'string} is supported). */
+	public static final String CONCATENATE = "concatenate";
+
+	/** The {@code %string-concat} built-in function. */
+	public static final String STRING_CONCAT = "%string-concat";
+
 	/** The {@code read-line} built-in function. */
 	public static final String READ_LINE = "read-line";
 

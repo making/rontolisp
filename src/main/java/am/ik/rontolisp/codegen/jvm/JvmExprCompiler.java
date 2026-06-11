@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.ConcatenateForms;
 
 import am.ik.jvm.Opcode;
 
@@ -123,6 +124,11 @@ final class JvmExprCompiler {
 				case LispNames.PRIN1 -> JvmPrin1Compiler.compile(cons, ctx, className);
 				case LispNames.PRINC -> JvmPrincCompiler.compile(cons, ctx, className);
 				case LispNames.TERPRI -> JvmTerpriCompiler.compile(cons, ctx, className);
+				case LispNames.PRINC_TO_STRING -> JvmPrincToStringCompiler.compile(cons, ctx, className);
+				case LispNames.PRIN1_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
+				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
+				case LispNames.CONCATENATE ->
+					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx, className);
 				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);
 				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);

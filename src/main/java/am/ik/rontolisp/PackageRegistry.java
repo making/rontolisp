@@ -54,7 +54,8 @@ public final class PackageRegistry {
 			LispNames.FIRST, LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT,
 			LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL,
 			LispNames.LOAD, LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER,
-			LispNames.ASSOC, LispNames.LAST, LispNames.REST);
+			LispNames.ASSOC, LispNames.LAST, LispNames.REST, LispNames.PRINC_TO_STRING, LispNames.PRIN1_TO_STRING,
+			LispNames.CONCATENATE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
@@ -63,7 +64,7 @@ public final class PackageRegistry {
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
 	 * introspection listings.
 	 */
-	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL);
+	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
