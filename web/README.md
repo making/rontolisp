@@ -8,11 +8,21 @@ so the page has no server-side component.
 It offers:
 
 - **REPL** — interpret expressions in a persistent environment (definitions and
-  variables survive across inputs).
+  variables survive across inputs). Input history is kept in `localStorage`
+  (it survives page reloads) and is navigated with the Up/Down arrow keys.
+  The input area accepts multi-line expressions: Shift+Enter inserts a newline,
+  Enter evaluates.
 - **Compile to JVM** — compile the source to a `.class` file and download it.
   The downloaded file runs on a real JVM (`java Main`).
 - **Compile to WASM** — compile the source to a `.wasm` module and download it.
   The downloaded file runs on a real wasm runtime (`wasmtime --wasm gc output.wasm`).
+
+The source and REPL panes are resized by dragging the divider between them,
+the REPL input area is resized by dragging the bar above it (both positions
+are remembered in `localStorage`), and the sample selector loads
+ready-to-run programs covering recursion, higher-order functions, closures,
+string operations, `format`, list/association-list operations, `setf`/`push`/`pop`,
+math (including exact rationals), `eval`, and loops.
 
 ## How it works
 
