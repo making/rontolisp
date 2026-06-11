@@ -86,6 +86,15 @@ final class JvmEmitHelper {
 		return ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/math/BigInteger;"));
 	}
 
+	/**
+	 * Compiles the Lisp boolean true. It is the symbol {@code t} (represented at runtime
+	 * as the bare String {@code "t"}, like any other symbol), so it prints as {@code t}
+	 * and is {@code eq} to a quoted {@code 't}, matching the interpreter.
+	 */
+	static void compileTrue(JvmLispCompiler.Ctx ctx) {
+		compileStringLiteral("t", ctx);
+	}
+
 	static void compileStringLiteral(String value, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.StringConstant sc = ctx.cp.addString(value);
 		if (sc.index() <= 255) {
@@ -168,7 +177,7 @@ final class JvmEmitHelper {
 
 	/**
 	 * Converts an i32 (0=false, non-0=true) on the JVM stack into a Lisp boolean
-	 * (null=nil or Long(1)=t).
+	 * (null=nil or the symbol {@code t}).
 	 */
 	static void emitBoolFromInt(JvmLispCompiler.Ctx ctx) {
 		int ifPos = ctx.code.size();
@@ -179,7 +188,7 @@ final class JvmEmitHelper {
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		patchBranch(ctx, ifPos, ctx.code.size());
-		compileLong(1, ctx);
+		compileTrue(ctx);
 		patchBranch(ctx, gotoEndPos, ctx.code.size());
 	}
 

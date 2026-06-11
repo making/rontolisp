@@ -49,11 +49,7 @@ final class WasmQuoteCompiler {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
-			case LispTrue ignored -> {
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128(1);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			}
+			case LispTrue ignored -> WasmEmitHelper.emitTrue(ctx);
 			case LispString s -> WasmEmitHelper.compileStringLiteral(s.print(), ctx);
 			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx);

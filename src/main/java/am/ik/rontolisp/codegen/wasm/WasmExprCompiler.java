@@ -36,11 +36,7 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
-			case LispTrue ignored -> {
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128(1);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			}
+			case LispTrue ignored -> WasmEmitHelper.emitTrue(ctx);
 			case am.ik.rontolisp.LispRatio r -> {
 				// The literal is already normalized; components are i31-range i32.
 				ctx.writer.write(Instruction.I32_CONST);

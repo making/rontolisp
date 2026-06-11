@@ -73,16 +73,23 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits the Lisp boolean true. It is the symbol {@code t} (represented at runtime as
+	 * a TYPE_STRING struct pointing at {@code "t"}, like any other symbol), so it prints
+	 * as {@code t} and is {@code eq} to a quoted {@code 't}, matching the interpreter.
+	 */
+	static void emitTrue(WasmLispCompiler.Ctx ctx) {
+		compileStringLiteral("t", ctx);
+	}
+
+	/**
 	 * Converts an i32 (0=false, non-0=true) on the WASM stack into a Lisp boolean
-	 * (ref.null eq = nil, or i31ref(1) = t).
+	 * (ref.null eq = nil, or the symbol {@code t}).
 	 */
 	static void emitBoolFromI32(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		emitTrue(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());

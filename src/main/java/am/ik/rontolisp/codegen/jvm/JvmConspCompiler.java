@@ -46,7 +46,7 @@ final class JvmConspCompiler {
 		int ifFuncRefPos = ctx.code.size();
 		ctx.emit(Opcode.IFNE);
 		ctx.emitU2(0);
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		int gotoEndPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

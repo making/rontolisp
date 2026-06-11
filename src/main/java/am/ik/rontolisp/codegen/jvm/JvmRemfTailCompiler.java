@@ -117,7 +117,7 @@ final class JvmRemfTailCompiler {
 		ctx.emit(Opcode.AALOAD); // cddr(nextKeyCell)
 		ctx.emit(Opcode.AASTORE);
 		// Return t = Long(1)
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		int gotoEndPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

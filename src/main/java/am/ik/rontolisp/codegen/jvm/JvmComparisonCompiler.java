@@ -40,7 +40,7 @@ final class JvmComparisonCompiler {
 		ctx.emitU2(0);
 		int trueLabel = ctx.code.size();
 		JvmEmitHelper.patchBranch(ctx, ifPos, trueLabel);
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		int endLabel = ctx.code.size();
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, endLabel);
 	}

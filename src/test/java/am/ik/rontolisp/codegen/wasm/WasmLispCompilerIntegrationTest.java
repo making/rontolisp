@@ -80,13 +80,22 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void variadicComparison() throws Exception {
-		// In compiled output a true boolean is represented as the integer 1.
-		assertThat(compileAndRun("(print (< 1 2 3 4))")).isEqualTo("1");
+		// A true boolean is the symbol t, like the interpreter.
+		assertThat(compileAndRun("(print (< 1 2 3 4))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (< 1 2 2 4))")).isEqualTo("nil");
-		assertThat(compileAndRun("(print (<= 1 2 2 4))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (= 3 3 3))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (> 5 4 3 2 1))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (< 5))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (<= 1 2 2 4))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (= 3 3 3))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (> 5 4 3 2 1))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (< 5))")).isEqualTo("t");
+	}
+
+	@Test
+	void booleanIsSymbolT() throws Exception {
+		// A boolean true prints as the symbol t (not the integer 1), matching the
+		// interpreter, so it is indistinguishable from t in a list.
+		assertThat(compileAndRun("(print (list (= 1 1) (= 1 0)))")).isEqualTo("(t nil)");
+		assertThat(compileAndRun("(print t)")).isEqualTo("t");
+		assertThat(compileAndRun("(print (eq t (= 1 1)))")).isEqualTo("t");
 	}
 
 	@Test
@@ -137,7 +146,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (if (< 1/3 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 2/4 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 1/2 0.5) 1 0))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (max 1/2 1/3))")).isEqualTo("1/2");
 		assertThat(compileAndRun("(print (min 1/2 1/3))")).isEqualTo("1/3");
 		assertThat(compileAndRun("(print (abs -1/2))")).isEqualTo("1/2");
@@ -158,20 +167,20 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void ratioPredicatesAndAccessors() throws Exception {
-		assertThat(compileAndRun("(print (numberp 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (numberp 1/2))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (integerp 1/2))")).isEqualTo("nil");
-		assertThat(compileAndRun("(print (rationalp 1/2))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (rationalp 5))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (rationalp 1/2))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (rationalp 5))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (rationalp 0.5))")).isEqualTo("nil");
 		assertThat(compileAndRun("(print (numerator 3/4))")).isEqualTo("3");
 		assertThat(compileAndRun("(print (denominator 3/4))")).isEqualTo("4");
 		assertThat(compileAndRun("(print (numerator 5))")).isEqualTo("5");
 		assertThat(compileAndRun("(print (denominator 5))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (consp 1/2))")).isEqualTo("nil");
-		assertThat(compileAndRun("(print (atom 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (atom 1/2))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (zerop 1/2))")).isEqualTo("nil");
-		assertThat(compileAndRun("(print (plusp 1/2))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (minusp -1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (plusp 1/2))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (minusp -1/2))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (signum -1/2))")).isEqualTo("-1");
 	}
 
@@ -1054,12 +1063,12 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c", "echo -n '' | wasmtime --wasm gc /tmp/test.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("1");
+		assertThat(result.getStdout().trim()).isEqualTo("t");
 	}
 
 	@Test
 	void readLineStringp() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello")).isEqualTo("1");
+		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello")).isEqualTo("t");
 	}
 
 	// read tests
@@ -1096,7 +1105,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readNil() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (null (read)))", "nil")).isEqualTo("1");
+		assertThat(compileAndRunWithStdin("(print (null (read)))", "nil")).isEqualTo("t");
 	}
 
 	@Test

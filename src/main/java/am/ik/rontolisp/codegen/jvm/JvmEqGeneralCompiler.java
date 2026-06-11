@@ -41,7 +41,7 @@ final class JvmEqGeneralCompiler {
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
 		// both null -> t
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		int gotoBothNullPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

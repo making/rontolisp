@@ -25,7 +25,7 @@ final class JvmNullPredCompiler {
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
 	}
 

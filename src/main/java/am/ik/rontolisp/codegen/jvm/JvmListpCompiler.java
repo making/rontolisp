@@ -52,7 +52,7 @@ final class JvmListpCompiler {
 		ctx.emit(Opcode.IFNE);
 		ctx.emitU2(0);
 		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		int gotoEndPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

@@ -38,7 +38,7 @@ final class JvmKeywordpCompiler {
 		int ifNotColonPos = ctx.code.size();
 		ctx.emit(Opcode.IF_ICMPNE);
 		ctx.emitU2(0);
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		int gotoEndPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

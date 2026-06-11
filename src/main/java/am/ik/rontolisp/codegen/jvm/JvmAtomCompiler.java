@@ -53,7 +53,7 @@ final class JvmAtomCompiler {
 		JvmEmitHelper.patchBranch(ctx, ifNotArrayPos, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, ifRatioPos, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, ifFuncRefPos, ctx.code.size());
-		JvmEmitHelper.compileLong(1, ctx);
+		JvmEmitHelper.compileTrue(ctx);
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
 	}
 

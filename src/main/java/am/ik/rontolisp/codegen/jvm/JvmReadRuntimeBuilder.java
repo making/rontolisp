@@ -606,13 +606,13 @@ final class JvmReadRuntimeBuilder {
 		a.aconstNull();
 		a.areturn();
 		a.bind(notNil);
-		// t?
+		// t? -> the symbol t (the bare String "t", like the interpreter's reader), so it
+		// prints as t and is eq to a quoted 't.
 		a.aload(0);
 		ldc(a, "t");
 		a.invokevirtual(this.objectEquals);
 		a.branch(Opcode.IFEQ, notT);
-		a.op(Opcode.LCONST_1);
-		a.invokestatic(this.longValueOf);
+		ldc(a, "t");
 		a.areturn();
 		a.bind(notT);
 		// n = token.length(); slot2

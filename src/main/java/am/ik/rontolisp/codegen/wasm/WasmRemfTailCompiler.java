@@ -125,9 +125,7 @@ final class WasmRemfTailCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.writeSignedLeb128(1);
 		// Push t and break to $result
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.BR, 2); // break to $result
 		ctx.writer.write(Instruction.END); // end if (match)
 
