@@ -490,3 +490,6 @@
 (print (string-equal "ABC" "abc"))
 (princ (string-trim " " "  hi  "))
 (terpri)
+; the pi constant (output kept backend-agnostic: WASM float printing differs)
+(print (truncate pi))
+(print (floatp pi))

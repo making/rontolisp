@@ -182,6 +182,7 @@ square
 | Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
 | Nil | `nil` | False / empty list |
 | T | `t` | True |
+| Pi | `pi` | The constant π, read as the double `3.141592653589793` |
 | Cons | `(1 2 3)` | Linked list built from cons cells |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
 

@@ -95,6 +95,11 @@ public final class LispReader {
 		if ("t".equals(name)) {
 			return LispTrue.INSTANCE;
 		}
+		if ("pi".equals(name)) {
+			// The mathematical constant pi, read as a self-evaluating double like
+			// nil/t. This gives all three backends parity for free.
+			return new LispDouble(Math.PI);
+		}
 		return new LispSymbol(name);
 	}
 

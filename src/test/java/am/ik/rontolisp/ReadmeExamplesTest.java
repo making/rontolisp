@@ -194,6 +194,11 @@ class ReadmeExamplesTest {
 			assertThat(eval("3,000.50")).isEqualTo(new LispDouble(3000.5));
 		}
 
+		@Test
+		void piConstant() {
+			assertThat(eval("pi")).isEqualTo(new LispDouble(Math.PI));
+		}
+
 	}
 
 	// == Built-in function examples (Language Reference > Built-in Functions table) ==

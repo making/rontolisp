@@ -623,6 +623,11 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPiConstant() throws Exception {
+		assertThat(compileAndRun("(print pi)")).isEqualTo("3.141592653589793");
+	}
+
+	@Test
 	void compileAndRunDoubleAddition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1.5 2.5))")).isEqualTo("4.0");
 	}

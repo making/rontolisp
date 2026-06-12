@@ -57,6 +57,12 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void piConstant() throws Exception {
+		// WASM float printing is limited to 6 fractional digits.
+		assertThat(compileAndRun("(print pi)")).isEqualTo("3.141592");
+	}
+
+	@Test
 	void multiplication() throws Exception {
 		assertThat(compileAndRun("(print (* 3 4))")).isEqualTo("12");
 	}

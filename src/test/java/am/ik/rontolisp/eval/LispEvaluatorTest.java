@@ -79,6 +79,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPiConstant() {
+		assertThat(eval("pi")).isEqualTo(new LispDouble(Math.PI));
+	}
+
+	@Test
+	void evalPiInExpression() {
+		assertThat(eval("(* 2 pi)")).isEqualTo(new LispDouble(2 * Math.PI));
+	}
+
+	@Test
 	void evalUnaryDivisionIsReciprocal() {
 		assertThat(eval("(/ 2)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
 		assertThat(eval("(/ 2.0)")).isEqualTo(new LispDouble(0.5));
