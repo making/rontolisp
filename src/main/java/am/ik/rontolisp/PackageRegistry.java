@@ -31,7 +31,8 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN,
 			LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF,
-			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT);
+			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
+			LispNames.WITH_OPEN_FILE);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -57,7 +58,8 @@ public final class PackageRegistry {
 			LispNames.ASSOC, LispNames.LAST, LispNames.REST, LispNames.PRINC_TO_STRING, LispNames.PRIN1_TO_STRING,
 			LispNames.CONCATENATE, LispNames.STRING_UPCASE, LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE,
 			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.STRING_EQUAL, LispNames.STRING_TRIM,
-			LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM);
+			LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE,
+			LispNames.WRITE_LINE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

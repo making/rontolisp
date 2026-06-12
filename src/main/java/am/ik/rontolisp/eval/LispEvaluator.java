@@ -250,6 +250,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandDecf(cons), env);
 				case LispNames.FORMAT:
 					return eval(LispMacroExpander.expandFormat(cons), env);
+				case LispNames.WITH_OPEN_FILE:
+					return eval(LispMacroExpander.expandWithOpenFile(cons), env);
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

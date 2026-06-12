@@ -130,6 +130,11 @@ final class JvmExprCompiler {
 				case LispNames.CONCATENATE ->
 					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx, className);
 				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);
+				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
+				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
+				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
+				case LispNames.WITH_OPEN_FILE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
 				case LispNames.STRING_UPCASE -> JvmStringUpcaseCompiler.compileUpcase(cons, ctx, className);
 				case LispNames.STRING_DOWNCASE -> JvmStringUpcaseCompiler.compileDowncase(cons, ctx, className);
 				case LispNames.STRING_CAPITALIZE -> JvmStringCapitalizeCompiler.compile(cons, ctx, className);

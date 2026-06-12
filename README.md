@@ -278,6 +278,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `incf` | `(incf place delta?)` | Expands to `(setf place (+ place delta))`. `delta` defaults to 1. Returns the new value |
 | `decf` | `(decf place delta?)` | Expands to `(setf place (- place delta))`. `delta` defaults to 1. Returns the new value |
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | Formatted output to standard output (`t`, returns nil) or to a string (`nil`). See [format](#format) |
+| `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | Open a file, bind the stream to `s`, evaluate the body, close the file. Returns the body value. Only the `:direction` option (`:input` default, `:output`) is supported, and it must be a literal keyword |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,
@@ -352,7 +353,10 @@ embedded `eval` runtime in compiled output (see
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"` (removes the bag's characters from both ends) |
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |
-| `read-line` | `(read-line)` | Read one line from stdin, return as string. `nil` on EOF |
+| `read-line` | `(read-line)`, `(read-line stream)` | Read one line from stdin (or from an input stream), return as string. `nil` on EOF |
+| `open` | `(open "f.txt")`, `(open "f.txt" :output)` | Open a file and return a stream. The direction must be the literal `:input` (default, read) or `:output` (create/truncate, write) |
+| `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
+| `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
 | `read` | `(read)` | Read one S-expression from stdin (all three backends). `nil` on EOF |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
@@ -429,6 +433,19 @@ optional divisor and no second remainder value). These remain on the to-do list.
 
 `load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime --wasm gc --dir . prog.wasm`).
 
+`with-open-file`/`open`/`close`/`write-line` and the stream-taking `read-line` work in all three backends. A stream value is an opaque handle (interpreter/JVM: an index into a stream table; WASM: the WASI file descriptor), so streams can be stored in variables and passed to functions, but they are only valid within the producing run. `open` supports the `:input` and `:output` directions only ( `:output` creates or truncates), and the direction must be a literal keyword so the compilers can pick the file mode statically. Like `load`, the WASM `open` resolves paths relative to the first preopened directory, so run with `--dir`.
+
+```lisp
+(with-open-file (out "greeting.txt" :direction :output)
+  (write-line "hello" out)
+  (write-line "world" out))
+
+(with-open-file (in "greeting.txt")
+  (print (read-line in)) ; => "hello"
+  (print (read-line in)) ; => "world"
+  (print (read-line in))) ; => nil (EOF)
+```
+
 #### `--dynamic` (late binding)
 
 By default the JVM and WASM compilers resolve every call and variable reference statically and reject anything they cannot find at compile time (`Cannot compile: cube`). That catches typos, but it also means a source that calls a function defined later by `load` must wrap the call in `eval` (`(eval '(cube 3))`) to compile.
@@ -456,7 +473,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `dolist`, `incf`, `decf`, `format` and `concatenate` are not supported.** These forms are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `dolist`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -518,11 +535,11 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and cond decf dolist dotimes format incf let* or pop push remf setf unless when)
+; => (and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))
-; => 101
+; => 104
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

@@ -207,6 +207,22 @@ class ReadmeExamplesTest {
 	class BuiltInFunctionExamples {
 
 		@Test
+		void withOpenFileWriteThenRead(@TempDir Path tempDir) {
+			String file = tempDir.resolve("greeting.txt").toString().replace("\\", "\\\\");
+			String output = evalAndCaptureOutput("""
+					(with-open-file (out "%s" :direction :output)
+					  (write-line "hello" out)
+					  (write-line "world" out))
+
+					(with-open-file (in "%s")
+					  (print (read-line in)) ; => "hello"
+					  (print (read-line in)) ; => "world"
+					  (print (read-line in))) ; => nil (EOF)
+					""".formatted(file, file));
+			assertThat(output.lines().toList()).containsExactly("\"hello\"", "\"world\"", "nil");
+		}
+
+		@Test
 		void add() {
 			assertThat(eval("(+ 1 2 3)")).isEqualTo(new LispInteger(6));
 			assertThat(eval("(+ 1.5 2.5)")).isEqualTo(new LispDouble(4.0));
@@ -934,8 +950,8 @@ class ReadmeExamplesTest {
 					(print (rontolisp:list-functions :rontolisp))
 					""");
 			assertThat(output.lines().toList()).containsExactly(
-					"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)",
-					"(defun function if in-package lambda let progn quote setq while)", "101", "(square)",
+					"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)",
+					"(defun function if in-package lambda let progn quote setq while)", "104", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

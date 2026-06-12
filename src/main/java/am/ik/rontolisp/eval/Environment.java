@@ -1,12 +1,16 @@
 package am.ik.rontolisp.eval;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -855,10 +859,87 @@ public final class Environment implements Scope {
 			}
 			return new LispString(a.value() + b.value());
 		}));
-		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
-			requireArgCount(LispNames.READ_LINE, args, 0);
+		// File streams opened by open/with-open-file: an integer handle indexes this
+		// table, matching the compiled backends (JVM: a static stream table; WASM: the
+		// WASI file descriptor).
+		Map<Long, Closeable> streams = new HashMap<>();
+		long[] nextStreamHandle = { 0 };
+		env.defineFunction(LispNames.OPEN, new LispFunction(LispNames.OPEN, args -> {
+			requireMinArgCount(LispNames.OPEN, args, 1);
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.OPEN + " expects a string filename");
+			}
+			boolean output = false;
+			if (args.size() > 1) {
+				if (!(args.get(1) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
+						|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+					throw new LispEvalException(LispNames.OPEN + " supports :input and :output directions");
+				}
+				output = LispNames.OUTPUT_KEYWORD.equals(dir.name());
+			}
 			try {
-				String line = stdinReader.readLine();
+				Closeable stream = output ? Files.newBufferedWriter(Path.of(path.value()))
+						: Files.newBufferedReader(Path.of(path.value()));
+				long handle = nextStreamHandle[0]++;
+				streams.put(handle, stream);
+				return new LispInteger(handle);
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						LispNames.OPEN + ": cannot open file " + path.value() + ": " + ex.getMessage());
+			}
+		}));
+		env.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
+			requireArgCount(LispNames.CLOSE, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.CLOSE + " expects a stream");
+			}
+			Closeable stream = streams.remove(handle.value());
+			if (stream == null) {
+				throw new LispEvalException(LispNames.CLOSE + ": not an open stream: " + handle.value());
+			}
+			try {
+				stream.close();
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+			return LispTrue.INSTANCE;
+		}));
+		env.defineFunction(LispNames.WRITE_LINE, new LispFunction(LispNames.WRITE_LINE, args -> {
+			requireMinArgCount(LispNames.WRITE_LINE, args, 1);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.WRITE_LINE + " expects a string");
+			}
+			if (args.size() == 1) {
+				out.println(str.value());
+				return str;
+			}
+			if (!(args.get(1) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof BufferedWriter writer)) {
+				throw new LispEvalException(LispNames.WRITE_LINE + " expects an output stream");
+			}
+			try {
+				writer.write(str.value());
+				writer.write("\n");
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+			return str;
+		}));
+		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
+			try {
+				if (args.isEmpty()) {
+					String line = stdinReader.readLine();
+					return line == null ? LispNil.INSTANCE : new LispString(line);
+				}
+				requireArgCount(LispNames.READ_LINE, args, 1);
+				if (!(args.get(0) instanceof LispInteger handle)
+						|| !(streams.get(handle.value()) instanceof BufferedReader reader)) {
+					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
+				}
+				String line = reader.readLine();
 				return line == null ? LispNil.INSTANCE : new LispString(line);
 			}
 			catch (IOException ex) {

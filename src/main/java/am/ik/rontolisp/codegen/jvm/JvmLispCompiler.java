@@ -515,6 +515,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
 				brInit, brReadLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
 
+		// File-stream runtime (open/close/write-line/read-line with a stream)
+		MethodrefConstant stringLengthForIo = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
+			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
+					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod)
+			.methods();
+		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
+		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
+		Utf8Constant streamCountFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
+		Utf8Constant streamCountFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
+
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
 		Utf8Constant codeUtf8 = cp.addUtf8("Code");
@@ -538,6 +550,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 					.writeU2(stdinReaderFieldName)
 					.writeU2(stdinReaderFieldDesc)
+					.writeU2(0));
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					.writeU2(streamsFieldName)
+					.writeU2(streamsFieldDesc)
+					.writeU2(0));
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					.writeU2(streamCountFieldName)
+					.writeU2(streamCountFieldDesc)
 					.writeU2(0));
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
@@ -635,6 +655,16 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, im.name(), im.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(im.maxStack())
+									.writeU2(im.maxLocals())
+									.writeCode((Object[]) im.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {

@@ -864,6 +864,7 @@ final class WasmReadRuntimeBuilder {
 		// are skipped) or stdin is exhausted (EOF -> nil).
 		block(w);
 		loop(w);
+		i32(w, 0); // fd = 0 (stdin)
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
 		setLocal(w, V);

@@ -409,6 +409,29 @@ public final class LispNames {
 	/** The {@code load} built-in function (interpreter only). */
 	public static final String LOAD = "load";
 
+	// File I/O
+
+	/** The {@code open} built-in function. */
+	public static final String OPEN = "open";
+
+	/** The {@code close} built-in function. */
+	public static final String CLOSE = "close";
+
+	/** The {@code write-line} built-in function. */
+	public static final String WRITE_LINE = "write-line";
+
+	/** The {@code with-open-file} macro. */
+	public static final String WITH_OPEN_FILE = "with-open-file";
+
+	/** The {@code :direction} keyword recognized by {@code with-open-file}. */
+	public static final String DIRECTION_KEYWORD = ":direction";
+
+	/** The {@code :input} keyword (open a file for reading). */
+	public static final String INPUT_KEYWORD = ":input";
+
+	/** The {@code :output} keyword (open a file for writing). */
+	public static final String OUTPUT_KEYWORD = ":output";
+
 	// Packages
 
 	/** The {@code in-package} directive that switches the current package. */

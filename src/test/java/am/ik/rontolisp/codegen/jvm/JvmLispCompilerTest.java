@@ -56,6 +56,62 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void withOpenFileWriteThenRead() throws Exception {
+		String file = tempDir.resolve("wof.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line "hello" out)
+				  (write-line "world" out))
+				(with-open-file (in "%s")
+				  (print (read-line in))
+				  (print (read-line in))
+				  (print (read-line in)))
+				""".formatted(file, file))).isEqualTo("\"hello\"\n\"world\"\nnil");
+	}
+
+	@Test
+	void withOpenFileReturnsBodyValue() throws Exception {
+		String file = tempDir.resolve("wof-ret.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"(print (with-open-file (out \"" + file + "\" :direction :output) (write-line \"x\" out) 42))"))
+			.isEqualTo("42");
+	}
+
+	@Test
+	void openCloseExplicitStreams() throws Exception {
+		String file = tempDir.resolve("manual.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(setq out (open "%s" :output))
+				(write-line "line1" out)
+				(close out)
+				(setq in (open "%s" :input))
+				(print (read-line in))
+				(close in)
+				""".formatted(file, file))).isEqualTo("\"line1\"");
+	}
+
+	@Test
+	void writeLineWithoutStreamPrintsToStdout() throws Exception {
+		assertThat(compileAndRun("(write-line \"to stdout\")")).isEqualTo("to stdout");
+	}
+
+	@Test
+	void readLinesInLoop() throws Exception {
+		String file = tempDir.resolve("loop.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line "a" out)
+				  (write-line "b" out)
+				  (write-line "c" out))
+				(with-open-file (in "%s")
+				  (setq line (read-line in))
+				  (while line
+				    (princ line)
+				    (setq line (read-line in))))
+				""".formatted(file, file))).isEqualTo("abc");
+	}
+
+	@Test
 	void compileAndRunMultiplication() throws Exception {
 		assertThat(compileAndRun("(print (* 3 4))")).isEqualTo("12");
 	}
@@ -1759,8 +1815,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListMacros() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-macros))"))
-			.isEqualTo("(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)");
+		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
+				"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
 	}
 
 	@Test
@@ -1771,12 +1827,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("101");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("104");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("101");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("104");
 	}
 
 	@Test

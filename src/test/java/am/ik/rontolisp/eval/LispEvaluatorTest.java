@@ -1496,6 +1496,80 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void withOpenFileWriteThenRead(@TempDir Path tempDir) {
+		String file = tempDir.resolve("out.txt").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line "hello" out)
+				  (write-line "world" out))
+				(with-open-file (in "%s")
+				  (list (read-line in) (read-line in) (read-line in)))
+				""".formatted(file, file));
+		assertThat(result.print()).isEqualTo("(\"hello\" \"world\" nil)");
+	}
+
+	@Test
+	void withOpenFileReturnsBodyValue(@TempDir Path tempDir) {
+		String file = tempDir.resolve("ret.txt").toString().replace("\\", "\\\\");
+		assertThat(eval("(with-open-file (out \"" + file + "\" :direction :output) (write-line \"x\" out) 42)"))
+			.isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void openCloseExplicitStreams(@TempDir Path tempDir) {
+		String file = tempDir.resolve("manual.txt").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(setq out (open "%s" :output))
+				(write-line "line1" out)
+				(close out)
+				(setq in (open "%s" :input))
+				(setq first-line (read-line in))
+				(close in)
+				first-line
+				""".formatted(file, file));
+		assertThat(result).isEqualTo(new LispString("line1"));
+	}
+
+	@Test
+	void writeLineWithoutStreamPrintsToStdout() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(write-line \"to stdout\")"));
+		assertThat(result).isEqualTo(new LispString("to stdout"));
+		assertThat(baos.toString(StandardCharsets.UTF_8).trim()).isEqualTo("to stdout");
+	}
+
+	@Test
+	void withOpenFileClosesStreamAfterBody(@TempDir Path tempDir) {
+		String file = tempDir.resolve("closed.txt").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(setq s nil)
+				(with-open-file (out "%s" :direction :output) (setq s out))
+				""".formatted(file));
+		assertThat(result.print()).isNotEmpty();
+		assertThatThrownBy(() -> evalMulti("""
+				(setq s (open "%s" :output))
+				(close s)
+				(close s)
+				""".formatted(file))).isInstanceOf(LispEvalException.class).hasMessageContaining("not an open stream");
+	}
+
+	@Test
+	void openMissingFileThrows(@TempDir Path tempDir) {
+		String missing = tempDir.resolve("nope.txt").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> eval("(open \"" + missing + "\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot open file");
+	}
+
+	@Test
+	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
+		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :append) s)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("supports only the :direction option");
+	}
+
+	@Test
 	void loadMissingFileThrows(@TempDir Path tempDir) {
 		Path missing = tempDir.resolve("nope.lisp");
 		assertThatThrownBy(() -> eval("(load \"" + missing.toString().replace("\\", "\\\\") + "\")"))
@@ -1526,8 +1600,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void listMacrosReturnsSortedClMacros() {
-		assertThat(eval("(rontolisp:list-macros)").print())
-			.isEqualTo("(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)");
+		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
+				"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
 	}
 
 	@Test
@@ -1542,7 +1616,7 @@ class LispEvaluatorTest {
 		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(101);
+			.hasSize(104);
 	}
 
 	@Test

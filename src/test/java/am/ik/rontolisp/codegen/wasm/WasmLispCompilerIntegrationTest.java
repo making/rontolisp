@@ -1286,6 +1286,71 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// file I/O tests (with-open-file/open/close/write-line/read-line)
+
+	private static String compileAndRunWithDir(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "cd /tmp && wasmtime --wasm gc --dir . test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void withOpenFileWriteThenRead() throws Exception {
+		String code = """
+				(with-open-file (out "wof.txt" :direction :output)
+				  (write-line "hello" out)
+				  (write-line "world" out))
+				(with-open-file (in "wof.txt")
+				  (print (read-line in))
+				  (print (read-line in))
+				  (print (read-line in)))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("\"hello\"\n\"world\"\nnil");
+	}
+
+	@Test
+	void withOpenFileReturnsBodyValue() throws Exception {
+		String code = "(print (with-open-file (out \"wof-ret.txt\" :direction :output) (write-line \"x\" out) 42))";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("42");
+	}
+
+	@Test
+	void openCloseExplicitStreams() throws Exception {
+		String code = """
+				(setq out (open "manual.txt" :output))
+				(write-line "line1" out)
+				(close out)
+				(setq in (open "manual.txt" :input))
+				(print (read-line in))
+				(close in)
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("\"line1\"");
+	}
+
+	@Test
+	void writeLineWithoutStreamPrintsToStdout() throws Exception {
+		assertThat(compileAndRun("(write-line \"to stdout\")")).isEqualTo("to stdout");
+	}
+
+	@Test
+	void readLinesInLoop() throws Exception {
+		String code = """
+				(with-open-file (out "loop.txt" :direction :output)
+				  (write-line "a" out)
+				  (write-line "b" out)
+				  (write-line "c" out))
+				(with-open-file (in "loop.txt")
+				  (setq line (read-line in))
+				  (while line
+				    (princ line)
+				    (setq line (read-line in))))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("abc");
+	}
+
 	@Test
 	void loadDefunAndUseViaEval() throws Exception {
 		// Definitions from the loaded file live in the eval runtime's global env.
@@ -1667,8 +1732,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listMacros() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-macros))"))
-			.isEqualTo("(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)");
+		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
+				"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
 	}
 
 	@Test
@@ -1679,7 +1744,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("101");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("104");
 	}
 
 	@Test

@@ -854,6 +854,73 @@ public final class LispMacroExpander {
 
 	private static final String DOLIST_CURSOR_VAR = "__dolist";
 
+	/**
+	 * Expands (with-open-file (var filename options...) body...) into open/close calls.
+	 * The only supported option is {@code :direction} with a literal {@code :input}
+	 * (default) or {@code :output} value, so the direction is known at expansion time and
+	 * the compilers can pick the file mode statically.
+	 *
+	 * <pre>
+	 * (with-open-file (s "f.txt" :direction :output) body...) ->
+	 *   (let ((s (open "f.txt" :output)))
+	 *     (let ((__wof_result (progn body...)))
+	 *       (close s)
+	 *       __wof_result))
+	 * </pre>
+	 * @param cons the with-open-file expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithOpenFile(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_OPEN_FILE + " expects a (var filename options...) spec as the first argument");
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_OPEN_FILE + " expects a (var filename options...) spec as the first argument");
+		}
+		LispVal var = specParts.get(0);
+		LispVal filename = specParts.get(1);
+		String direction = LispNames.INPUT_KEYWORD;
+		for (int i = 2; i < specParts.size(); i += 2) {
+			if (!(specParts.get(i) instanceof LispSymbol key) || !LispNames.DIRECTION_KEYWORD.equals(key.name())) {
+				throw new UnsupportedOperationException(
+						LispNames.WITH_OPEN_FILE + " supports only the :direction option");
+			}
+			if (i + 1 >= specParts.size() || !(specParts.get(i + 1) instanceof LispSymbol dir)
+					|| !(LispNames.INPUT_KEYWORD.equals(dir.name()) || LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+				throw new UnsupportedOperationException(
+						LispNames.WITH_OPEN_FILE + " :direction must be the literal :input or :output");
+			}
+			direction = dir.name();
+		}
+		List<LispVal> body = parts.subList(2, parts.size());
+		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
+		// (progn body...) -- nil for an empty body (a body-less progn does not compile)
+		LispVal bodyExpr;
+		if (body.isEmpty()) {
+			bodyExpr = LispNil.INSTANCE;
+		}
+		else {
+			List<LispVal> prognParts = new java.util.ArrayList<>();
+			prognParts.add(new LispSymbol(LispNames.PROGN));
+			prognParts.addAll(body);
+			bodyExpr = listToCons(prognParts);
+		}
+		LispSymbol result = new LispSymbol(WOF_RESULT_VAR);
+		// (let ((__wof_result body-expr)) (close var) __wof_result)
+		LispVal innerBindings = new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE);
+		LispVal innerLet = listToCons(
+				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
+		// (let ((var (open filename direction))) inner-let)
+		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
+	}
+
+	private static final String WOF_RESULT_VAR = "__wof_result";
+
 	private static LispVal callOf(String op, LispVal arg) {
 		return listToCons(List.of(new LispSymbol(op), arg));
 	}

@@ -61,108 +61,119 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FD_READ = 1; // imported
 
-	static final int FUNC_PATH_OPEN = 2; // imported (for load)
+	static final int FUNC_PATH_OPEN = 2; // imported (for load/open)
 
-	static final int FUNC_START = 3;
+	static final int FUNC_FD_CLOSE = 3; // imported (for close)
 
-	static final int FUNC_PRINT_I32 = 4;
+	static final int FUNC_START = 4;
 
-	static final int FUNC_WRITE_STR = 5;
+	static final int FUNC_PRINT_I32 = 5;
 
-	static final int FUNC_PRINT_VAL = 6;
+	static final int FUNC_WRITE_STR = 6;
 
-	static final int FUNC_PRINT_I32_NO_NL = 7;
+	static final int FUNC_PRINT_VAL = 7;
 
-	static final int FUNC_PRINT_F64 = 8;
+	static final int FUNC_PRINT_I32_NO_NL = 8;
 
-	static final int FUNC_PRINT_F64_NO_NL = 9;
+	static final int FUNC_PRINT_F64 = 9;
 
-	static final int FUNC_APPEND = 10;
+	static final int FUNC_PRINT_F64_NO_NL = 10;
 
-	static final int FUNC_READ_LINE = 11;
+	static final int FUNC_APPEND = 11;
 
-	static final int FUNC_PRINC_VAL = 12;
+	static final int FUNC_READ_LINE = 12;
 
-	static final int FUNC_LOOKUP = 13;
+	static final int FUNC_PRINC_VAL = 13;
 
-	static final int FUNC_ENV_LOOKUP = 14;
+	static final int FUNC_LOOKUP = 14;
 
-	static final int FUNC_EVAL = 15;
+	static final int FUNC_ENV_LOOKUP = 15;
 
-	static final int FUNC_APPLY = 16;
+	static final int FUNC_EVAL = 16;
 
-	static final int FUNC_STORE = 17;
+	static final int FUNC_APPLY = 17;
+
+	static final int FUNC_STORE = 18;
 
 	// Reader runtime (for read/load); always present (stubs when unused) to keep indices
 	// stable.
-	static final int FUNC_INTERN = 18;
+	static final int FUNC_INTERN = 19;
 
-	static final int FUNC_READ_EXPR = 19;
+	static final int FUNC_READ_EXPR = 20;
 
-	static final int FUNC_READ_LIST = 20;
+	static final int FUNC_READ_LIST = 21;
 
-	static final int FUNC_READ = 21;
+	static final int FUNC_READ = 22;
 
-	static final int FUNC_LOAD = 22;
+	static final int FUNC_LOAD = 23;
 
 	// Rational (ratio) runtime: always present. _rat_new normalizes and constructs,
 	// _rat_num/_rat_den read components (treating an i31 integer as value/1), and the
 	// arithmetic helpers dispatch between the i31 fast path and exact ratio arithmetic.
-	static final int FUNC_RAT_NEW = 23;
+	static final int FUNC_RAT_NEW = 24;
 
-	static final int FUNC_RAT_NUM = 24;
+	static final int FUNC_RAT_NUM = 25;
 
-	static final int FUNC_RAT_DEN = 25;
+	static final int FUNC_RAT_DEN = 26;
 
-	static final int FUNC_RAT_ADD = 26;
+	static final int FUNC_RAT_ADD = 27;
 
-	static final int FUNC_RAT_SUB = 27;
+	static final int FUNC_RAT_SUB = 28;
 
-	static final int FUNC_RAT_MUL = 28;
+	static final int FUNC_RAT_MUL = 29;
 
-	static final int FUNC_RAT_DIV = 29;
+	static final int FUNC_RAT_DIV = 30;
 
-	static final int FUNC_RAT_CMP = 30;
+	static final int FUNC_RAT_CMP = 31;
 
-	static final int FUNC_RAT_TRUNC = 31;
+	static final int FUNC_RAT_TRUNC = 32;
 
-	static final int FUNC_RAT_FLOOR = 32;
+	static final int FUNC_RAT_FLOOR = 33;
 
-	static final int FUNC_RAT_CEIL = 33;
+	static final int FUNC_RAT_CEIL = 34;
 
-	static final int FUNC_RAT_ROUND = 34;
+	static final int FUNC_RAT_ROUND = 35;
 
 	// String runtime: render a value into the heap via the capture mode of _write_str
 	// and return a new string struct (princ-to-string / prin1-to-string /
 	// %string-concat).
-	static final int FUNC_PRINC_TO_STR = 35;
+	static final int FUNC_PRINC_TO_STR = 36;
 
-	static final int FUNC_PRIN1_TO_STR = 36;
+	static final int FUNC_PRIN1_TO_STR = 37;
 
-	static final int FUNC_STRING_CONCAT = 37;
+	static final int FUNC_STRING_CONCAT = 38;
 
 	// String runtime: produce/compare strings (string-upcase/downcase/capitalize, subseq,
 	// string=/string-equal, string-trim family).
-	static final int FUNC_STRING_UPCASE = 38;
+	static final int FUNC_STRING_UPCASE = 39;
 
-	static final int FUNC_STRING_DOWNCASE = 39;
+	static final int FUNC_STRING_DOWNCASE = 40;
 
-	static final int FUNC_STRING_CAPITALIZE = 40;
+	static final int FUNC_STRING_CAPITALIZE = 41;
 
-	static final int FUNC_SUBSEQ = 41;
+	static final int FUNC_SUBSEQ = 42;
 
-	static final int FUNC_STRING_EQ = 42;
+	static final int FUNC_STRING_EQ = 43;
 
-	static final int FUNC_STRING_EQUAL = 43;
+	static final int FUNC_STRING_EQUAL = 44;
 
-	static final int FUNC_STRING_TRIM = 44;
+	static final int FUNC_STRING_TRIM = 45;
 
-	static final int FUNC_DISPATCH_BASE = 45;
+	// File-stream runtime: open a file via path_open (the stream handle is the WASI
+	// file descriptor boxed as an i31 integer), close it via fd_close, and write a
+	// line to it via fd_write.
+	static final int FUNC_OPEN = 46;
+
+	static final int FUNC_CLOSE = 47;
+
+	static final int FUNC_WRITE_LINE = 48;
+
+	static final int FUNC_DISPATCH_BASE = 49;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 45..52 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 53
+	// Dispatch functions occupy indices 49..56 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 57
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -197,7 +208,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_READ_LINE: () -> (ref null eq)
 	static final int TYPE_READ_LINE = TYPE_CALLABLE_BASE + MAX_CALLABLE_ARITY + 1; // 19
 
-	// type index for _lookup: (i32) -> (i32)
+	// type index for _lookup: (i32) -> (i32); also used by the fd_close import
 	static final int TYPE_LOOKUP = TYPE_READ_LINE + 1; // 20
 
 	// type index for _env_lookup: (i32, (ref null eq)) -> (ref null eq)
@@ -222,6 +233,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// type index for _rat_cmp: ((ref null eq), (ref null eq)) -> (i32)
 	static final int TYPE_RAT_CMP = TYPE_RAT_GET + 1; // 27
+
+	// type index for _read_line: (i32 fd) -> (ref null eq)
+	static final int TYPE_READ_LINE_FD = TYPE_RAT_CMP + 1; // 28
+
+	// type index for _open: ((ref null eq) path, i32 mode) -> (ref null eq)
+	static final int TYPE_OPEN = TYPE_READ_LINE_FD + 1; // 29
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -261,6 +278,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int CAPTURE_FLAG_ADDR = 104;
 
 	static final int CAPTURE_CUR_ADDR = 108;
+
+	// Scratch for path_open's output file descriptor (for open).
+	static final int OPEN_FD_ADDR = 112;
 
 	static final int RT_INTERN_BASE = 8192;
 
@@ -755,12 +775,33 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 				});
+				// type 28: _read_line (i32 fd) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1);
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 29: _open ((ref null eq) path, i32 mode) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
 			})
 			// Import section
 			.writeImportSection(imports -> imports
 				.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
 				.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
-				.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN))
+				.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
+				.addImport("wasi_snapshot_preview1", "fd_close", ExternalKind.FUNCTION, TYPE_LOOKUP))
 			// Function section
 			.writeFunction(fnDef -> {
 				fnDef.addFunction(TYPE_START) // _start
@@ -771,7 +812,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(TYPE_PRINT_F64) // _print_f64
 					.addFunction(TYPE_PRINT_F64) // _print_f64_no_nl
 					.addFunction(TYPE_CALLABLE_BASE + 1) // _append
-					.addFunction(TYPE_READ_LINE) // _read_line
+					.addFunction(TYPE_READ_LINE_FD) // _read_line
 					.addFunction(TYPE_PRINT_VAL); // _princ_val
 				fnDef.addFunction(TYPE_LOOKUP); // _lookup
 				fnDef.addFunction(TYPE_ENV_LOOKUP); // _env_lookup
@@ -808,6 +849,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _string_eq
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _string_equal
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _string_trim
+				// File-stream runtime
+				fnDef.addFunction(TYPE_OPEN); // _open
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _close
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _write_line
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -887,7 +932,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody())
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
-					.addFunction(WasmStringRuntimeBuilder.buildTrimBody());
+					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
+					.addFunction(WasmIoRuntimeBuilder.buildOpenBody())
+					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable))
+					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable));
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
