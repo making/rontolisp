@@ -248,9 +248,9 @@ nil
 (2 3)
 nil
 (1 9)
-(and cond decf dolist dotimes format incf let* or pop push remf setf unless when)
+(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)
 (defun function if in-package lambda let progn quote setq while)
-101
+104
 (list-functions list-macros list-special-forms version)
 ci-intro-fn
 nil
