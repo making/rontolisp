@@ -130,6 +130,15 @@ public final class FreeVarAnalyzer {
 							}
 							collectFreeVars(parts.get(2), boundVars, knownFunctions, freeVars);
 						}
+						case LispNames.DEFVAR -> {
+							// defvar names a global variable, not a lexical reference;
+							// only
+							// the optional init form can reference variables.
+							List<LispVal> parts = cons.toList();
+							if (parts.size() > 2) {
+								collectFreeVars(parts.get(2), boundVars, knownFunctions, freeVars);
+							}
+						}
 						default -> {
 							// Function call or special form: the operator resolves in
 							// the function namespace (Lisp-2), so only the argument
@@ -220,6 +229,14 @@ public final class FreeVarAnalyzer {
 								captured.add(name);
 							}
 							collectCapturedVars(parts.get(2), localVars, knownFunctions, captured, insideLambda);
+						}
+						case LispNames.DEFVAR -> {
+							// defvar names a global variable; only the optional init form
+							// can reference captured locals.
+							List<LispVal> parts = cons.toList();
+							if (parts.size() > 2) {
+								collectCapturedVars(parts.get(2), localVars, knownFunctions, captured, insideLambda);
+							}
 						}
 						default -> {
 							// Lisp-2: the operator symbol is not a variable reference

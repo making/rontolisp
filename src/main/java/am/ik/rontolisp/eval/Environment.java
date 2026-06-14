@@ -132,6 +132,16 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Returns whether a variable is bound in this environment (not including parent
+	 * scopes). Used by {@code defvar} to decide whether to assign the initial value.
+	 * @param name the variable name
+	 * @return {@code true} if the name is bound in this environment
+	 */
+	public boolean isBound(String name) {
+		return this.bindings.containsKey(name);
+	}
+
+	/**
 	 * Set an existing binding, searching up the scope chain.
 	 * @param name the variable name
 	 * @param value the new value

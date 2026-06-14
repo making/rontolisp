@@ -22,7 +22,7 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_SPECIAL_FORMS = Set.of(LispNames.QUOTE, LispNames.IF, LispNames.LET,
 			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
-			LispNames.RETURN, LispNames.IN_PACKAGE);
+			LispNames.DEFVAR, LispNames.RETURN, LispNames.IN_PACKAGE);
 
 	/**
 	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no

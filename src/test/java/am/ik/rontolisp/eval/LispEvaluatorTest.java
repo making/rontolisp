@@ -331,6 +331,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalDefvarDefinesGlobal() {
+		assertThat(evalMulti("(defvar *x* 42) *x*")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalDefvarReturnsName() {
+		assertThat(eval("(defvar *x* 42)")).isEqualTo(new LispSymbol("*x*"));
+	}
+
+	@Test
+	void evalDefvarIsIdempotent() {
+		// The second defvar must not overwrite the already-bound variable.
+		assertThat(evalMulti("(defvar *x* 1) (defvar *x* 2) *x*")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
 	void evalProgn() {
 		assertThat(eval("(progn 1 2 3)")).isEqualTo(new LispInteger(3));
 	}
@@ -1704,7 +1720,7 @@ class LispEvaluatorTest {
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print())
-			.isEqualTo("(defun function if in-package lambda let progn quote return setq while)");
+			.isEqualTo("(defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test

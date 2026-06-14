@@ -184,6 +184,8 @@ public final class LispEvaluator {
 					return evalLet(cons, env);
 				case LispNames.DEFUN:
 					return evalDefun(cons, env);
+				case LispNames.DEFVAR:
+					return evalDefvar(cons, env);
 				case LispNames.FUNCTION:
 					return evalFunction(cons, env);
 				case LispNames.PROGN:
@@ -286,6 +288,19 @@ public final class LispEvaluator {
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
 		this.globalEnv.defineFunction(name.name(), new LispLambda(params, body, env));
+		return name;
+	}
+
+	private LispVal evalDefvar(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol name = (LispSymbol) parts.get(1);
+		// defvar is idempotent (Common Lisp semantics): the initial value form is
+		// evaluated and bound in the global environment only if the variable is not
+		// already bound. (defvar name) with no value leaves it unbound. Returns the
+		// variable name like Common Lisp.
+		if (parts.size() > 2 && !this.globalEnv.isBound(name.name())) {
+			this.globalEnv.define(name.name(), eval(parts.get(2), env));
+		}
 		return name;
 	}
 

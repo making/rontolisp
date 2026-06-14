@@ -32,6 +32,12 @@
 (print (progn (setq x 10) x))
 (print (progn (setq a 10) (setq a 20) a))
 
+; defvar (idempotent global definition; returns the name symbol)
+(print (defvar *gv* 100))
+(print *gv*)
+(defvar *gv* 200)
+(print *gv*)
+
 ; defun
 (defun square (x) (* x x))
 (print (square 5))

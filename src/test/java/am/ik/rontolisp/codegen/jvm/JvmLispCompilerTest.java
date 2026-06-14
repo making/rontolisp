@@ -56,6 +56,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDefvarDefinesGlobal() throws Exception {
+		assertThat(compileAndRun("(defvar *x* 42) (print *x*)")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunDefvarReturnsName() throws Exception {
+		assertThat(compileAndRun("(print (defvar *x* 42))")).isEqualTo("*x*");
+	}
+
+	@Test
+	void compileAndRunDefvarIsIdempotent() throws Exception {
+		assertThat(compileAndRun("(defvar *x* 1) (defvar *x* 2) (print *x*)")).isEqualTo("1");
+	}
+
+	@Test
 	void withOpenFileWriteThenRead() throws Exception {
 		String file = tempDir.resolve("wof.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
@@ -1885,7 +1900,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))"))
-			.isEqualTo("(defun function if in-package lambda let progn quote return setq while)");
+			.isEqualTo("(defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test

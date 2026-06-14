@@ -222,6 +222,9 @@ public final class LispNames {
 	/** The {@code defun} macro. */
 	public static final String DEFUN = "defun";
 
+	/** The {@code defvar} special form. */
+	public static final String DEFVAR = "defvar";
+
 	/** The {@code cond} macro. */
 	public static final String COND = "cond";
 
