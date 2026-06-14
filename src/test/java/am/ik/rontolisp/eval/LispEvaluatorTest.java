@@ -929,6 +929,48 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalCaseSingleKey() {
+		assertThat(eval("(case 2 (1 'one) (2 'two) (3 'three))")).isEqualTo(new LispSymbol("two"));
+	}
+
+	@Test
+	void evalCaseKeyList() {
+		assertThat(eval("(case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big))")).isEqualTo(new LispSymbol("small"));
+	}
+
+	@Test
+	void evalCaseOtherwise() {
+		assertThat(eval("(case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big))")).isEqualTo(new LispSymbol("big"));
+	}
+
+	@Test
+	void evalCaseTDefault() {
+		assertThat(eval("(case 99 (1 'one) (t 'fallback))")).isEqualTo(new LispSymbol("fallback"));
+	}
+
+	@Test
+	void evalCaseNoMatchReturnsNil() {
+		assertThat(eval("(case 5 (1 'a) (2 'b))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalCaseSymbolKey() {
+		assertThat(eval("(case 'x (x \"matched\") (y \"other\"))")).isEqualTo(new LispString("matched"));
+	}
+
+	@Test
+	void evalCaseEvaluatesKeyformOnce() {
+		assertThat(evalMulti("(setq n 0) (defun bump () (setq n (+ n 1)) 2)" + " (case (bump) (1 'one) (2 'two)) n"))
+			.isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void evalCaseMultipleBodyForms() {
+		assertThat(evalMulti("(setq acc 0) (case 1 (1 (setq acc 10) (setq acc (+ acc 5)))) acc"))
+			.isEqualTo(new LispInteger(15));
+	}
+
+	@Test
 	void evalThird() {
 		assertThat(eval("(third '(1 2 3))")).isEqualTo(new LispInteger(3));
 	}
@@ -1601,7 +1643,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
+				"(and case cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
 	}
 
 	@Test

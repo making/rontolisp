@@ -1105,6 +1105,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunCaseSingleKey() throws Exception {
+		assertThat(compileAndRun("(print (case 2 (1 'one) (2 'two) (3 'three)))")).isEqualTo("two");
+	}
+
+	@Test
+	void compileAndRunCaseKeyList() throws Exception {
+		assertThat(compileAndRun("(print (case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big)))")).isEqualTo("small");
+	}
+
+	@Test
+	void compileAndRunCaseOtherwise() throws Exception {
+		assertThat(compileAndRun("(print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))")).isEqualTo("big");
+	}
+
+	@Test
+	void compileAndRunCaseNoMatchReturnsNil() throws Exception {
+		assertThat(compileAndRun("(print (case 5 (1 'a) (2 'b)))")).isEqualTo("nil");
+	}
+
+	@Test
 	void compileAndRunDolistResultForm() throws Exception {
 		assertThat(compileAndRun("(print (dolist (e '(1 2) 99)))")).isEqualTo("99");
 	}
@@ -1816,7 +1836,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
+				"(and case cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
 	}
 
 	@Test

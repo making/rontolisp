@@ -29,9 +29,9 @@ public final class PackageRegistry {
 	 * function value. Names that expand internally but are also usable as function values
 	 * ({@code first}, {@code length}, {@code 1+}, ...) are classified as functions.
 	 */
-	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.AND, LispNames.OR, LispNames.WHEN,
-			LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP, LispNames.REMF,
-			LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
+	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.CASE, LispNames.AND, LispNames.OR,
+			LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP,
+			LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
 			LispNames.WITH_OPEN_FILE);
 
 	/**

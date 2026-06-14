@@ -214,6 +214,7 @@ final class WasmExprCompiler {
 				case LispNames.CEILING -> WasmIntConvCompiler.compileCeiling(cons, ctx);
 				case LispNames.ROUND -> WasmIntConvCompiler.compileRound(cons, ctx);
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
+				case LispNames.CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
 				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);

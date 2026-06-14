@@ -196,6 +196,8 @@ public final class LispEvaluator {
 					return evalWhile(cons, env);
 				case LispNames.COND:
 					return eval(LispMacroExpander.expandCond(cons), env);
+				case LispNames.CASE:
+					return eval(LispMacroExpander.expandCase(cons), env);
 				case LispNames.AND:
 					return eval(LispMacroExpander.expandAnd(cons), env);
 				case LispNames.OR:

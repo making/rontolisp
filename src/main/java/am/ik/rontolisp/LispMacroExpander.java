@@ -60,6 +60,87 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (case keyform clause...) into a let/cond expression. The keyform is
+	 * evaluated once and bound to a temporary, then each clause's keys are compared with
+	 * {@code eq}.
+	 *
+	 * <pre>
+	 * (case x
+	 *   (a 1)              ; single key
+	 *   ((b c) 2)          ; list of keys (matches b or c)
+	 *   (otherwise 3))     ; default clause (also t)
+	 * ->
+	 * (let ((__case x))
+	 *   (cond ((eq __case 'a) 1)
+	 *         ((or (eq __case 'b) (eq __case 'c)) 2)
+	 *         (t 3)))
+	 * </pre>
+	 *
+	 * The clause keys are object designators and are not evaluated. A clause key of
+	 * {@code t} or {@code otherwise} marks the default clause. A list key matches when
+	 * the keyform is {@code eq} to any element; any other atom is a single key. (Unlike
+	 * Common Lisp, a {@code nil} key is treated as a single key matching {@code nil}, not
+	 * as an empty key list.) A clause with no body returns nil.
+	 * @param cons the case expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCase(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("case expects a keyform");
+		}
+		LispVal keyform = parts.get(1);
+		List<LispVal> clauses = parts.subList(2, parts.size());
+		LispSymbol keyVar = new LispSymbol(CASE_VAR);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (LispVal clauseVal : clauses) {
+			if (!(clauseVal instanceof LispCons clause)) {
+				throw new IllegalArgumentException("case clause must be a list, got: " + clauseVal.print());
+			}
+			List<LispVal> clauseParts = clause.toList();
+			LispVal keys = clauseParts.get(0);
+			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
+			LispVal test;
+			if (isCaseDefaultKey(keys)) {
+				test = LispTrue.INSTANCE;
+			}
+			else if (keys instanceof LispCons keyList) {
+				List<LispVal> orParts = new java.util.ArrayList<>();
+				orParts.add(new LispSymbol(LispNames.OR));
+				for (LispVal k : keyList.toList()) {
+					orParts.add(makeCaseEq(keyVar, k));
+				}
+				test = listToCons(orParts);
+			}
+			else {
+				test = makeCaseEq(keyVar, keys);
+			}
+			List<LispVal> condClause = new java.util.ArrayList<>();
+			condClause.add(test);
+			if (body.isEmpty()) {
+				condClause.add(LispNil.INSTANCE);
+			}
+			else {
+				condClause.addAll(body);
+			}
+			condParts.add(listToCons(condClause));
+		}
+		return makeLet(CASE_VAR, keyform, listToCons(condParts));
+	}
+
+	private static final String CASE_VAR = "__case";
+
+	private static boolean isCaseDefaultKey(LispVal keys) {
+		return keys instanceof LispTrue || (keys instanceof LispSymbol sym && LispNames.OTHERWISE.equals(sym.name()));
+	}
+
+	private static LispVal makeCaseEq(LispVal var, LispVal key) {
+		LispVal quoted = listToCons(List.of(new LispSymbol(LispNames.QUOTE), key));
+		return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), var, quoted));
+	}
+
+	/**
 	 * Expands (and ...) into cond expressions.
 	 *
 	 * <pre>

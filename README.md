@@ -264,6 +264,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | Macro | Syntax | Description |
 |-------|--------|-------------|
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
+| `case` | `(case key (k1 body1...) ((k2 k3) body2...) (otherwise body...))` | Dispatch on a key compared with `eq`. Keys are unevaluated; a list key matches any element; `t`/`otherwise` is the default. Returns nil if nothing matches |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
@@ -535,7 +536,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)
+; => (and case cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))

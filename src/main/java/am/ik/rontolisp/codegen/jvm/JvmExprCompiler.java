@@ -210,6 +210,7 @@ final class JvmExprCompiler {
 				case LispNames.CEILING -> JvmIntConvCompiler.compileCeiling(cons, ctx, className);
 				case LispNames.ROUND -> JvmIntConvCompiler.compileRound(cons, ctx, className);
 				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
+				case LispNames.CASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);

@@ -225,6 +225,12 @@ public final class LispNames {
 	/** The {@code cond} macro. */
 	public static final String COND = "cond";
 
+	/** The {@code case} macro. */
+	public static final String CASE = "case";
+
+	/** The {@code otherwise} default-clause designator recognized by {@code case}. */
+	public static final String OTHERWISE = "otherwise";
+
 	/** The {@code and} macro. */
 	public static final String AND = "and";
 

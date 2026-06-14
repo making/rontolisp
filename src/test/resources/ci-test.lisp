@@ -219,6 +219,12 @@
 (print (cond (nil 1) (nil 2) (t 3)))
 (print (cond ((= 1 2) 10) ((= 1 1) 20) (t 30)))
 
+; case
+(print (case 2 (1 'one) (2 'two) (3 'three)))
+(print (case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
+(print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
+(print (case 5 (1 'a) (2 'b)))
+
 ; Type conversion: float
 (print (float 42))
 (print (float 3.14))
