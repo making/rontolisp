@@ -249,6 +249,19 @@ public final class LispNames {
 	/** The {@code prog1} macro. */
 	public static final String PROG1 = "prog1";
 
+	/** The {@code do} macro (parallel iteration). */
+	public static final String DO = "do";
+
+	/** The {@code return} special form (non-local exit from the nearest loop block). */
+	public static final String RETURN = "return";
+
+	/**
+	 * The internal {@code %block} special form establishing the {@code return} boundary
+	 * that the loop macros ({@code do}/{@code dolist}/{@code dotimes}) wrap their
+	 * expansion in. Not part of the public Lisp API.
+	 */
+	public static final String BLOCK_INTERNAL = "%block";
+
 	// Type predicates
 
 	/** The {@code null} built-in function. */

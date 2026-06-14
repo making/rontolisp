@@ -22,6 +22,9 @@ final class WasmIfCompiler {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
+		// The branches are compiled inside the if structure; track the depth so a return
+		// nested in a branch computes the correct br depth to its enclosing %block.
+		ctx.wasmCtrlDepth++;
 		if (parts.size() > 3) {
 			WasmExprCompiler.compileExpr(parts.get(3), ctx);
 		}
@@ -31,6 +34,7 @@ final class WasmIfCompiler {
 		}
 		ctx.writer.write(Instruction.ELSE);
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
 	}
 

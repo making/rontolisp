@@ -1214,6 +1214,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalDo() {
+		// Sum 0..4 using a stepped counter and an accumulator mutated in the body.
+		assertThat(eval("(do ((i 0 (+ i 1)) (s 0)) ((= i 5) s) (setq s (+ s i)))")).isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalDoParallelStep() {
+		// Parallel step: a <- b, b <- a+b computes Fibonacci (fib 10 = 55).
+		assertThat(eval("(do ((i 0 (+ i 1)) (a 0 b) (b 1 (+ a b))) ((= i 10) a))")).isEqualTo(new LispInteger(55));
+	}
+
+	@Test
+	void evalDoNoResultForm() {
+		assertThat(eval("(do ((i 0 (+ i 1))) ((= i 3)))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalReturnFromDolist() {
+		// return exits the dolist immediately, skipping the t result form.
+		assertThat(eval("(dolist (m '(2 3 5) t) (if (= m 3) (return)))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalReturnWithValue() {
+		assertThat(eval("(dotimes (i 5 -1) (if (evenp i) (return i)))")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalReturnFromDo() {
+		assertThat(eval("(do ((i 0 (+ i 1))) ((> i 100) -1) (if (= i 4) (return i)))")).isEqualTo(new LispInteger(4));
+	}
+
+	@Test
+	void evalReturnExitsInnermostLoopOnly() {
+		// The inner return exits only the inner dolist; the outer loop keeps iterating.
+		assertThat(eval("""
+				(let ((total 0))
+				  (dolist (a '(1 2 3))
+				    (dolist (b '(10 20 30))
+				      (if (= b 20) (return))
+				      (setq total (+ total b))))
+				  total)""")).isEqualTo(new LispInteger(30));
+	}
+
+	@Test
 	void evalIncfDecf() {
 		assertThat(evalMulti("(setq n 10) (incf n) (incf n 5) (decf n 6) n")).isEqualTo(new LispInteger(10));
 	}
@@ -1653,13 +1698,13 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
+				"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
 	}
 
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print())
-			.isEqualTo("(defun function if in-package lambda let progn quote setq while)");
+			.isEqualTo("(defun function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test

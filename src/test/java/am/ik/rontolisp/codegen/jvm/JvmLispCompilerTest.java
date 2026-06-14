@@ -1137,6 +1137,42 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDo() throws Exception {
+		assertThat(compileAndRun("(print (do ((i 0 (+ i 1)) (s 0)) ((= i 5) s) (setq s (+ s i))))")).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunDoParallelStep() throws Exception {
+		assertThat(compileAndRun("(print (do ((i 0 (+ i 1)) (a 0 b) (b 1 (+ a b))) ((= i 10) a)))")).isEqualTo("55");
+	}
+
+	@Test
+	void compileAndRunReturnFromDolist() throws Exception {
+		assertThat(compileAndRun("(print (dolist (m '(2 3 5) t) (if (= m 3) (return))))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunReturnWithValue() throws Exception {
+		assertThat(compileAndRun("(print (dotimes (i 5 -1) (if (evenp i) (return i))))")).isEqualTo("0");
+	}
+
+	@Test
+	void compileAndRunReturnFromDo() throws Exception {
+		assertThat(compileAndRun("(print (do ((i 0 (+ i 1))) ((> i 100) -1) (if (= i 4) (return i))))")).isEqualTo("4");
+	}
+
+	@Test
+	void compileAndRunReturnExitsInnermostLoopOnly() throws Exception {
+		assertThat(compileAndRun("""
+				(setq total 0)
+				(dolist (a '(1 2 3))
+				  (dolist (b '(10 20 30))
+				    (if (= b 20) (return))
+				    (setq total (+ total b))))
+				(print total)""")).isEqualTo("30");
+	}
+
+	@Test
 	void compileAndRunIncfDecf() throws Exception {
 		assertThat(compileAndRun("(setq n 10) (incf n) (incf n 5) (decf n 6) (print n)")).isEqualTo("10");
 	}
@@ -1843,13 +1879,13 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
+				"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
 	}
 
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))"))
-			.isEqualTo("(defun function if in-package lambda let progn quote setq while)");
+			.isEqualTo("(defun function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test

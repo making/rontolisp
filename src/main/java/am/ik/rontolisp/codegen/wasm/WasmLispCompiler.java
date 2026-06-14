@@ -2,7 +2,9 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -1098,6 +1100,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		Set<String> userDefunNames = Set.of();
+
+		/**
+		 * The number of currently-open WASM control structures (block/loop/if) that
+		 * lexically enclose the form being compiled. Tracked by the {@code if}, {@code
+		 * while} and {@code %block} compilers so that {@code return} can compute the
+		 * relative {@code br} depth to the nearest enclosing block.
+		 */
+		int wasmCtrlDepth = 0;
+
+		/**
+		 * Stack of {@code wasmCtrlDepth} values, one per active {@code %block}. The top
+		 * is the depth at which the innermost block sits; {@code return} branches out
+		 * {@code wasmCtrlDepth - marker} levels to reach it.
+		 */
+		final Deque<Integer> blockMarkers = new ArrayDeque<>();
 
 		private Ctx(Builder builder) {
 			this.writer = Objects.requireNonNull(builder.writer);

@@ -22,6 +22,9 @@ final class WasmWhileCompiler {
 		List<LispVal> parts = cons.toList();
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
+		// The test and body are compiled inside the block/loop pair; track the two extra
+		// levels so a return nested in the body computes the correct br depth.
+		ctx.wasmCtrlDepth += 2;
 		// Evaluate the test; exit the block (depth 1) when it is nil.
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.REF_IS_NULL);
@@ -33,6 +36,7 @@ final class WasmWhileCompiler {
 		}
 		// Jump back to the top of the loop (depth 0).
 		ctx.writer.write(Instruction.BR, 0);
+		ctx.wasmCtrlDepth -= 2;
 		ctx.writer.write(Instruction.END); // loop
 		ctx.writer.write(Instruction.END); // block
 		// Push nil as the result of the while form.

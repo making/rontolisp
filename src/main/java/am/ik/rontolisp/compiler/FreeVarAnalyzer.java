@@ -111,6 +111,8 @@ public final class FreeVarAnalyzer {
 							collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars, knownFunctions, freeVars);
 						case LispNames.DOLIST ->
 							collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars, knownFunctions, freeVars);
+						case LispNames.DO ->
+							collectFreeVars(LispMacroExpander.expandDo(cons), boundVars, knownFunctions, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -202,6 +204,8 @@ public final class FreeVarAnalyzer {
 						case LispNames.LET_STAR -> collectCapturedVars(LispMacroExpander.expandLetStar(cons), localVars,
 								knownFunctions, captured, insideLambda);
 						case LispNames.DOLIST -> collectCapturedVars(LispMacroExpander.expandDolist(cons), localVars,
+								knownFunctions, captured, insideLambda);
+						case LispNames.DO -> collectCapturedVars(LispMacroExpander.expandDo(cons), localVars,
 								knownFunctions, captured, insideLambda);
 						case LispNames.FUNCTION -> {
 							List<LispVal> parts = cons.toList();

@@ -2,7 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -856,6 +858,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	record DispatchMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxLocals) {
 	}
 
+	/**
+	 * An active {@code %block} return boundary during compilation. {@code rvSlot} is the
+	 * local that holds the block's value; {@code exitPatches} collects the positions of
+	 * the {@code goto} instructions emitted by {@code return} forms, all back-patched to
+	 * the block's exit once its body has been compiled.
+	 */
+	record BlockTarget(int rvSlot, List<Integer> exitPatches) {
+	}
+
 	static final class Ctx {
 
 		final ConstantPool cp;
@@ -957,6 +968,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		String className = "";
 
 		Set<String> userDefunNames = Set.of();
+
+		/**
+		 * Stack of active {@code %block} return boundaries. The innermost block is on
+		 * top; a {@code return} stores its value into the block's slot and jumps to its
+		 * exit.
+		 */
+		final Deque<BlockTarget> blockTargets = new ArrayDeque<>();
 
 		private Ctx(Builder builder) {
 			this.dynamic = builder.dynamic;

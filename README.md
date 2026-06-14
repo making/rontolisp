@@ -249,6 +249,7 @@ parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value)` | Assign a value to a variable |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
+| `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`), which evaluates to `value` (or nil) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
 | `function` | `(function name)` or `#'name` | Look up a function in the function namespace and return it as a value |
 
@@ -270,6 +271,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
 | `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
 | `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
+| `do` | `(do ((var init step?)...) (end-test result...) body...)` | Iterate with parallel-stepped variables. Returns the `result` forms when `end-test` is true |
 | `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
@@ -475,7 +477,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `dolist`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `do`, `dolist`, `return`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -537,9 +539,9 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)
+; => (and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)
 (print (rontolisp:list-special-forms))
-; => (defun function if in-package lambda let progn quote setq while)
+; => (defun function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
 ; => 104
 (defun square (x) (* x x))

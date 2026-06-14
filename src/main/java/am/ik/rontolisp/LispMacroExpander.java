@@ -279,7 +279,7 @@ public final class LispMacroExpander {
 		letParts.add(bindings);
 		letParts.add(whileExpr);
 		letParts.add(resultForm);
-		return listToCons(letParts);
+		return makeBlock(listToCons(letParts));
 	}
 
 	private static final String DOTIMES_LIMIT_VAR = "__dotimes_limit";
@@ -319,6 +319,122 @@ public final class LispMacroExpander {
 	}
 
 	private static final String PROG1_RESULT_VAR = "__prog1_result";
+
+	/**
+	 * Expands (do ((var init [step])...) (end-test result...) body...) into a let/while
+	 * loop wrapped in a {@code %block} so that {@code return} exits it.
+	 *
+	 * <pre>
+	 * (do ((v1 i1 s1) (v2 i2)) (end r...) body...) ->
+	 * (%block
+	 *   (let ((v1 i1) (v2 i2))
+	 *     (while (not end)
+	 *       body...
+	 *       (setq v1 s1))       ; only stepped vars are reassigned (in parallel)
+	 *     (progn r...)))
+	 * </pre>
+	 *
+	 * Steps are evaluated in parallel: when more than one variable has a step form, all
+	 * step forms are first evaluated into temporaries and only then assigned, matching
+	 * Common Lisp. A variable without a step keeps its value (mutated only by the body).
+	 * @param cons the do expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDo(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal bindingsForm = parts.get(1);
+		LispVal endClause = parts.get(2);
+		List<LispVal> body = parts.subList(3, parts.size());
+		List<LispVal> letBindings = new java.util.ArrayList<>();
+		// Stepped variables, in source order: each entry is {var, step-form}.
+		List<LispVal[]> steps = new java.util.ArrayList<>();
+		if (bindingsForm instanceof LispCons bindingsCons) {
+			for (LispVal binding : bindingsCons.toList()) {
+				if (binding instanceof LispSymbol bare) {
+					// (do (x) ...) -- a bare symbol binds x to nil with no step.
+					letBindings.add(listToCons(List.of(bare, LispNil.INSTANCE)));
+				}
+				else {
+					List<LispVal> spec = ((LispCons) binding).toList();
+					LispVal var = spec.get(0);
+					LispVal init = spec.size() > 1 ? spec.get(1) : LispNil.INSTANCE;
+					letBindings.add(listToCons(List.of(var, init)));
+					if (spec.size() > 2) {
+						steps.add(new LispVal[] { var, spec.get(2) });
+					}
+				}
+			}
+		}
+		// (end-test result...): loop while the test is false, then evaluate the results.
+		LispVal endTest = LispNil.INSTANCE;
+		List<LispVal> resultForms = List.of();
+		if (endClause instanceof LispCons endCons) {
+			List<LispVal> endParts = endCons.toList();
+			endTest = endParts.get(0);
+			resultForms = endParts.subList(1, endParts.size());
+		}
+		// (while (not end-test) body... step)
+		List<LispVal> whileParts = new java.util.ArrayList<>();
+		whileParts.add(new LispSymbol(LispNames.WHILE));
+		whileParts.add(makeNot(endTest));
+		whileParts.addAll(body);
+		whileParts.addAll(makeStepForms(steps));
+		LispVal whileExpr = listToCons(whileParts);
+		// Result: nil with no result forms, the form itself for one, else a progn.
+		LispVal resultExpr;
+		if (resultForms.isEmpty()) {
+			resultExpr = LispNil.INSTANCE;
+		}
+		else if (resultForms.size() == 1) {
+			resultExpr = resultForms.get(0);
+		}
+		else {
+			resultExpr = makeProgn(resultForms);
+		}
+		LispVal bindings = listToCons(letBindings);
+		LispVal letExpr = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr));
+		return makeBlock(letExpr);
+	}
+
+	/**
+	 * Builds the per-iteration step assignments for {@code do}. A single stepped variable
+	 * becomes a direct {@code setq}; multiple stepped variables are assigned in parallel
+	 * via temporaries so a step form sees the previous iteration's values.
+	 */
+	private static List<LispVal> makeStepForms(List<LispVal[]> steps) {
+		if (steps.isEmpty()) {
+			return List.of();
+		}
+		if (steps.size() == 1) {
+			LispVal[] s = steps.get(0);
+			return List.of(listToCons(List.of(new LispSymbol(LispNames.SETQ), s[0], s[1])));
+		}
+		List<LispVal> tempBindings = new java.util.ArrayList<>();
+		List<LispVal> assignments = new java.util.ArrayList<>();
+		for (int i = 0; i < steps.size(); i++) {
+			LispVal[] s = steps.get(i);
+			LispSymbol temp = new LispSymbol(DO_STEP_VAR + i);
+			tempBindings.add(listToCons(List.of(temp, s[1])));
+			assignments.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), s[0], temp)));
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(listToCons(tempBindings));
+		letParts.addAll(assignments);
+		return List.of(listToCons(letParts));
+	}
+
+	private static final String DO_STEP_VAR = "__do_step_";
+
+	/** Wraps a form in the internal {@code %block} return boundary. */
+	private static LispVal makeBlock(LispVal body) {
+		return listToCons(List.of(new LispSymbol(LispNames.BLOCK_INTERNAL), body));
+	}
+
+	/** Builds a {@code (return value)} form for non-local exit from the nearest loop. */
+	private static LispVal makeReturn(LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.RETURN), value));
+	}
 
 	private static LispVal makeIf(LispVal cond, LispVal then, LispVal else_) {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), cond, then, else_));
@@ -831,9 +947,9 @@ public final class LispMacroExpander {
 		// (let ((var nil)) result) -- CL evaluates the result form with var bound to nil
 		LispVal resultExpr = listToCons(List.of(new LispSymbol(LispNames.LET),
 				new LispCons(listToCons(List.of(var, LispNil.INSTANCE)), LispNil.INSTANCE), resultForm));
-		// (let ((__dolist list)) while-expr result-expr)
+		// (let ((__dolist list)) while-expr result-expr), wrapped in a return boundary.
 		LispVal bindings = new LispCons(listToCons(List.of(cursor, listForm)), LispNil.INSTANCE);
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr));
+		return makeBlock(listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr)));
 	}
 
 	/**
@@ -909,17 +1025,15 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		LispSymbol item = new LispSymbol("__member_item");
 		LispSymbol cur = new LispSymbol("__member_cur");
-		// (and (consp __cur) (not (eq __item (car __cur))))
-		LispVal test = listToCons(
-				List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, cur), callOf(LispNames.NOT,
-						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), item, callOf(LispNames.CAR, cur))))));
-		// (while test (setq __cur (cdr __cur)))
-		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
-		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
-		// (let ((__item item) (__cur lst)) while-expr __cur)
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(cur, parts.get(2)))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, cur));
+		// (do ((__member_item item) (__member_cur lst (cdr __member_cur)))
+		// ((atom __member_cur) nil)
+		// (if (eq __member_item (car __member_cur)) (return __member_cur)))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), item, callOf(LispNames.CAR, cur)));
+		LispVal body = makeIf(match, makeReturn(cur), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 
 	/**
@@ -932,22 +1046,19 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		LispSymbol key = new LispSymbol("__assoc_key");
 		LispSymbol cur = new LispSymbol("__assoc_cur");
-		// match: (and (consp (car __cur)) (eq __key (car (car __cur))))
 		LispVal pair = callOf(LispNames.CAR, cur);
+		// (do ((__assoc_key key) (__assoc_cur alist (cdr __assoc_cur)))
+		// ((atom __assoc_cur) nil)
+		// (if (and (consp (car __assoc_cur)) (eq __assoc_key (car (car __assoc_cur))))
+		// (return (car __assoc_cur))))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
 		LispVal match = listToCons(
 				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
-						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), key,
-								listToCons(List.of(new LispSymbol(LispNames.CAR), pair))))));
-		// (while (and (consp __cur) (not match)) (setq __cur (cdr __cur)))
-		LispVal test = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, cur),
-				listToCons(List.of(new LispSymbol(LispNames.NOT), match))));
-		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
-		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
-		// (if (consp __cur) (car __cur) nil)
-		LispVal result = makeIf(callOf(LispNames.CONSP, cur), callOf(LispNames.CAR, cur), LispNil.INSTANCE);
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(key, parts.get(1))), listToCons(List.of(cur, parts.get(2)))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, result));
+						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), key, callOf(LispNames.CAR, pair)))));
+		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 
 	/**

@@ -206,6 +206,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWhen(cons), env);
 				case LispNames.DOTIMES:
 					return eval(LispMacroExpander.expandDotimes(cons), env);
+				case LispNames.DO:
+					return eval(LispMacroExpander.expandDo(cons), env);
+				case LispNames.BLOCK_INTERNAL:
+					return evalBlock(cons, env);
+				case LispNames.RETURN:
+					throw new LispReturnSignal(evalReturnValue(cons, env));
 				case LispNames.PROG1:
 					return eval(LispMacroExpander.expandProg1(cons), env);
 				case LispNames.UNLESS:
@@ -388,6 +394,30 @@ public final class LispEvaluator {
 			}
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Evaluates the internal {@code %block} return boundary: runs the body normally, but
+	 * if a {@code return} fires inside it, yields the returned value instead.
+	 */
+	private LispVal evalBlock(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 1; i < parts.size(); i++) {
+				result = eval(parts.get(i), env);
+			}
+			return result;
+		}
+		catch (LispReturnSignal signal) {
+			return signal.value();
+		}
+	}
+
+	/** Evaluates the optional value of a {@code return} form, defaulting to nil. */
+	private LispVal evalReturnValue(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		return parts.size() > 1 ? eval(parts.get(1), env) : LispNil.INSTANCE;
 	}
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {

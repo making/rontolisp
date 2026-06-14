@@ -958,8 +958,8 @@ class ReadmeExamplesTest {
 					(print (rontolisp:list-functions :rontolisp))
 					""");
 			assertThat(output.lines().toList()).containsExactly(
-					"(and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)",
-					"(defun function if in-package lambda let progn quote setq while)", "104", "(square)",
+					"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)",
+					"(defun function if in-package lambda let progn quote return setq while)", "104", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 
