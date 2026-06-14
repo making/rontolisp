@@ -236,6 +236,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void prog1() throws Exception {
+		assertThat(compileAndRun("(print (prog1 1 2 3))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (prog1 99))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (let ((x (list 1 2 3))) (prog1 (car x) (setq x (cdr x)))))")).isEqualTo("1");
+	}
+
+	@Test
 	void ifTrue() throws Exception {
 		assertThat(compileAndRun("(print (if t 1 2))")).isEqualTo("1");
 	}
@@ -1753,7 +1760,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
+				"(and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
 	}
 
 	@Test

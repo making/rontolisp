@@ -206,6 +206,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWhen(cons), env);
 				case LispNames.DOTIMES:
 					return eval(LispMacroExpander.expandDotimes(cons), env);
+				case LispNames.PROG1:
+					return eval(LispMacroExpander.expandProg1(cons), env);
 				case LispNames.UNLESS:
 					return eval(LispMacroExpander.expandUnless(cons), env);
 				case LispNames.ONE_PLUS:

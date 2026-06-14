@@ -216,6 +216,8 @@ final class JvmExprCompiler {
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
 				case LispNames.DOTIMES ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
+				case LispNames.PROG1 ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg1(cons), ctx, className);
 				case LispNames.UNLESS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx, className);
 				case LispNames.ONE_PLUS ->

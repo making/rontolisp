@@ -270,6 +270,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
 | `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
 | `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
+| `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
 | `pop` | `(pop place)` | Remove and return the first element from list at place |
@@ -536,7 +537,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)
+; => (and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defun function if in-package lambda let progn quote setq while)
 (print (length (rontolisp:list-functions)))

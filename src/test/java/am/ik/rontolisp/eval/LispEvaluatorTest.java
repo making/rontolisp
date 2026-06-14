@@ -904,6 +904,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalProg1() {
+		// returns the value of the first form
+		assertThat(eval("(prog1 1 2 3)")).isEqualTo(new LispInteger(1));
+		// a single form behaves like the identity
+		assertThat(eval("(prog1 99)")).isEqualTo(new LispInteger(99));
+		// the first form is saved before the body runs
+		assertThat(eval("(let ((x (list 1 2 3))) (prog1 (car x) (setq x (cdr x))))")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
 	void evalFirst() {
 		assertThat(eval("(first '(1 2 3))")).isEqualTo(new LispInteger(1));
 	}
@@ -1643,7 +1653,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case cond decf dolist dotimes format incf let* or pop push remf setf unless when with-open-file)");
+				"(and case cond decf dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
 	}
 
 	@Test

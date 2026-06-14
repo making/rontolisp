@@ -284,6 +284,42 @@ public final class LispMacroExpander {
 
 	private static final String DOTIMES_LIMIT_VAR = "__dotimes_limit";
 
+	/**
+	 * Expands (prog1 first body...) into a let that evaluates first, then the body forms,
+	 * and finally returns the saved value of first.
+	 *
+	 * <pre>
+	 * (prog1 first body...) ->
+	 * (let ((__prog1_result first))
+	 *   body...
+	 *   __prog1_result)
+	 * </pre>
+	 *
+	 * The first form is evaluated once and saved before the body runs, so its value is
+	 * returned even if the body mutates whatever first referred to. With no body forms
+	 * the expansion simply returns the value of first.
+	 * @param cons the prog1 expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandProg1(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal first = parts.get(1);
+		List<LispVal> body = parts.subList(2, parts.size());
+		LispSymbol resultSym = new LispSymbol(PROG1_RESULT_VAR);
+		// ((__prog1_result first))
+		LispVal binding = listToCons(List.of(resultSym, first));
+		LispVal bindings = new LispCons(binding, LispNil.INSTANCE);
+		// (let (bindings) body... __prog1_result)
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(bindings);
+		letParts.addAll(body);
+		letParts.add(resultSym);
+		return listToCons(letParts);
+	}
+
+	private static final String PROG1_RESULT_VAR = "__prog1_result";
+
 	private static LispVal makeIf(LispVal cond, LispVal then, LispVal else_) {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), cond, then, else_));
 	}
@@ -633,10 +669,11 @@ public final class LispMacroExpander {
 	private static final String PUSH_VAR = "__push_item";
 
 	/**
-	 * Expands (pop place) into a let/progn/setf expression.
+	 * Expands (pop place) into a prog1 expression: save the head, advance the place, and
+	 * return the saved head.
 	 *
 	 * <pre>
-	 * (pop place) -> (let ((__pop (car place))) (progn (setf place (cdr place)) __pop))
+	 * (pop place) -> (prog1 (car place) (setf place (cdr place)))
 	 * </pre>
 	 * @param cons the pop expression
 	 * @return the expanded expression
@@ -650,12 +687,10 @@ public final class LispMacroExpander {
 		LispVal cdrExpr = listToCons(List.of(new LispSymbol(LispNames.CDR), place));
 		// (setf place (cdr place))
 		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, cdrExpr));
-		// (progn (setf place (cdr place)) __pop)
-		LispVal body = makeProgn(List.of(setfExpr, new LispSymbol(POP_VAR)));
-		return makeLet(POP_VAR, carExpr, body);
+		// (prog1 (car place) (setf place (cdr place)))
+		LispCons prog1Expr = (LispCons) listToCons(List.of(new LispSymbol(LispNames.PROG1), carExpr, setfExpr));
+		return expandProg1(prog1Expr);
 	}
-
-	private static final String POP_VAR = "__pop";
 
 	/**
 	 * Expands (remf place indicator) into conditional setf/%remf-tail expression.

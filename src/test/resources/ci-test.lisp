@@ -169,6 +169,11 @@
 (print (let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2)))))
 (print (let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s))
 
+; prog1
+(print (prog1 1 2 3))
+(print (let ((x (list 1 2 3))) (prog1 (car x) (setq x (cdr x)))))
+(print (prog1 99))
+
 ; first, nth, nthcdr
 (print (first '(1 2 3)))
 (print (nth 0 '(1 2 3)))

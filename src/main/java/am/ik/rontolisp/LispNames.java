@@ -246,6 +246,9 @@ public final class LispNames {
 	/** The {@code dotimes} macro. */
 	public static final String DOTIMES = "dotimes";
 
+	/** The {@code prog1} macro. */
+	public static final String PROG1 = "prog1";
+
 	// Type predicates
 
 	/** The {@code null} built-in function. */
