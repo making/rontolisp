@@ -172,7 +172,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (if (< 1/3 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 2/4 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 1/2 0.5) 1 0))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (eql 1/2 1/2))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("nil");
 		assertThat(compileAndRun("(print (max 1/2 1/3))")).isEqualTo("1/2");
 		assertThat(compileAndRun("(print (min 1/2 1/3))")).isEqualTo("1/3");
 		assertThat(compileAndRun("(print (abs -1/2))")).isEqualTo("1/2");
@@ -934,6 +935,41 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void eqNilAndValue() throws Exception {
 		assertThat(compileAndRun("(print (if (eq nil 1) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void eqlSameInteger() throws Exception {
+		assertThat(compileAndRun("(print (if (eql 3 3) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void eqlDifferentTypeNumbers() throws Exception {
+		assertThat(compileAndRun("(print (if (eql 3 3.0) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void eqlSymbols() throws Exception {
+		assertThat(compileAndRun("(print (if (eql 'foo 'foo) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void eqlAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'eql 5 5))")).isEqualTo("t");
+	}
+
+	@Test
+	void eqlFloatsByValue() throws Exception {
+		assertThat(compileAndRun("(print (eql 1.5 1.5))")).isEqualTo("t");
+	}
+
+	@Test
+	void eqFloatsNotEq() throws Exception {
+		assertThat(compileAndRun("(print (eq 1.5 1.5))")).isEqualTo("nil");
+	}
+
+	@Test
+	void eqIntegersStillEq() throws Exception {
+		assertThat(compileAndRun("(print (eq 3 3))")).isEqualTo("t");
 	}
 
 	@Test
@@ -1822,7 +1858,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("104");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("105");
 	}
 
 	@Test

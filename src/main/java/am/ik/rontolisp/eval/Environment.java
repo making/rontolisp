@@ -570,19 +570,37 @@ public final class Environment implements Scope {
 				new LispFunction(LispNames.GE, args -> compareChain(LispNames.GE, args, 0, 1)));
 		env.defineFunction(LispNames.EQ_GENERAL, new LispFunction(LispNames.EQ_GENERAL, args -> {
 			requireArgCount(LispNames.EQ_GENERAL, args, 2);
-			LispVal a = args.get(0);
-			LispVal b = args.get(1);
-			if (a instanceof LispCons || b instanceof LispCons) {
-				return a == b ? LispTrue.INSTANCE : LispNil.INSTANCE;
-			}
-			if (a instanceof LispNil && b instanceof LispNil) {
-				return LispTrue.INSTANCE;
-			}
-			if (a instanceof LispNil || b instanceof LispNil) {
-				return LispNil.INSTANCE;
-			}
-			return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return eqValue(args.get(0), args.get(1));
 		}));
+		env.defineFunction(LispNames.EQL, new LispFunction(LispNames.EQL, args -> {
+			requireArgCount(LispNames.EQL, args, 2);
+			return eqlValue(args.get(0), args.get(1));
+		}));
+	}
+
+	// eq: object identity. Like eql, but floats and ratios (which are distinct boxed
+	// objects, not interned like small integers or symbols) are never eq.
+	private static LispVal eqValue(LispVal a, LispVal b) {
+		if ((a instanceof LispDouble && b instanceof LispDouble)
+				|| (a instanceof LispRatio && b instanceof LispRatio)) {
+			return LispNil.INSTANCE;
+		}
+		return eqlValue(a, b);
+	}
+
+	// eql: like eq, but numbers of the same type and value are eql. Cons cells (and other
+	// aggregates) compare by reference identity.
+	private static LispVal eqlValue(LispVal a, LispVal b) {
+		if (a instanceof LispCons || b instanceof LispCons) {
+			return a == b ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}
+		if (a instanceof LispNil && b instanceof LispNil) {
+			return LispTrue.INSTANCE;
+		}
+		if (a instanceof LispNil || b instanceof LispNil) {
+			return LispNil.INSTANCE;
+		}
+		return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 	}
 
 	private static boolean isEq(LispVal a, LispVal b) {

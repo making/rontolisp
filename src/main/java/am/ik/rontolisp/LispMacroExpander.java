@@ -78,7 +78,7 @@ public final class LispMacroExpander {
 	 *
 	 * The clause keys are object designators and are not evaluated. A clause key of
 	 * {@code t} or {@code otherwise} marks the default clause. A list key matches when
-	 * the keyform is {@code eq} to any element; any other atom is a single key. (Unlike
+	 * the keyform is {@code eql} to any element; any other atom is a single key. (Unlike
 	 * Common Lisp, a {@code nil} key is treated as a single key matching {@code nil}, not
 	 * as an empty key list.) A clause with no body returns nil.
 	 * @param cons the case expression
@@ -137,7 +137,10 @@ public final class LispMacroExpander {
 
 	private static LispVal makeCaseEq(LispVal var, LispVal key) {
 		LispVal quoted = listToCons(List.of(new LispSymbol(LispNames.QUOTE), key));
-		return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), var, quoted));
+		// case keys are compared with eql (the Common Lisp default), so numeric keys
+		// match
+		// by value.
+		return listToCons(List.of(new LispSymbol(LispNames.EQL), var, quoted));
 	}
 
 	/**
@@ -1017,7 +1020,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (member item lst) into a let/while scan returning the tail whose car is
-	 * {@code eq} to the item, or nil.
+	 * {@code eql} to the item, or nil.
 	 * @param cons the member expression
 	 * @return the expanded expression
 	 */
@@ -1031,14 +1034,14 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), item, callOf(LispNames.CAR, cur)));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
 		LispVal body = makeIf(match, makeReturn(cur), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 
 	/**
 	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
-	 * is {@code eq} to the key, or nil.
+	 * is {@code eql} to the key, or nil.
 	 * @param cons the assoc expression
 	 * @return the expanded expression
 	 */
@@ -1056,7 +1059,7 @@ public final class LispMacroExpander {
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
 		LispVal match = listToCons(
 				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
-						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), key, callOf(LispNames.CAR, pair)))));
+						listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, pair)))));
 		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}

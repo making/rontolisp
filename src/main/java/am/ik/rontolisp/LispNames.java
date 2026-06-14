@@ -126,6 +126,9 @@ public final class LispNames {
 	/** The {@code eq} built-in function (general equality). */
 	public static final String EQ_GENERAL = "eq";
 
+	/** The {@code eql} built-in function (type-aware value equality). */
+	public static final String EQL = "eql";
+
 	/** The {@code <} built-in function. */
 	public static final String LT = "<";
 

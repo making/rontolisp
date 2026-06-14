@@ -7,17 +7,27 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code eq} built-in function (general equality). Uses
- * {@code Object.equals()} for value comparison, which gives reference equality for
- * Object[] (cons cells) and value equality for Long, String, etc. Handles null (nil)
- * correctly.
+ * Compiles the {@code eq} and {@code eql} built-in functions. Both give reference
+ * equality for Object[] (cons cells) and value equality for Long, String, etc.; they
+ * differ only on floats and ratios, which are eql (by value) but not eq (distinct boxed
+ * objects). Handles null (nil) correctly.
  */
 final class JvmEqGeneralCompiler {
 
 	private JvmEqGeneralCompiler() {
 	}
 
+	/** Compiles {@code eql} (numbers compared by type and value). */
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compile(cons, ctx, className, JvmNumericRuntimeBuilder.EQV);
+	}
+
+	/** Compiles {@code eq} (like {@code eql} but floats and ratios are never equal). */
+	static void compileEq(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compile(cons, ctx, className, JvmNumericRuntimeBuilder.EQ_STRICT);
+	}
+
+	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String opName) {
 		List<LispVal> args = cons.toList();
 		// Evaluate both args
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -57,10 +67,11 @@ final class JvmEqGeneralCompiler {
 		ctx.emit(aSlot);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(bSlot);
-		// _eqv is a.equals(b) plus element-wise comparison for ratios (array equals is
-		// reference equality).
+		// _eqv (eql) is a.equals(b) plus element-wise comparison for ratios; _eq (eq) is
+		// the
+		// same but floats and ratios are never equal.
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.EQV).index());
+		ctx.emitU2(ctx.numOp(opName).index());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 		// end
 		JvmEmitHelper.patchBranch(ctx, gotoBothNullPos, ctx.code.size());

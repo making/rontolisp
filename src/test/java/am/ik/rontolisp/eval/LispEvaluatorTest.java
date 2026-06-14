@@ -1111,6 +1111,69 @@ class LispEvaluatorTest {
 		assertThat(eval("(eq (cons 1 2) (cons 1 2))")).isSameAs(LispNil.INSTANCE);
 	}
 
+	// eql tests
+
+	@Test
+	void evalEqlSameInteger() {
+		assertThat(eval("(eql 3 3)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqlDifferentTypeNumbers() {
+		assertThat(eval("(eql 3 3.0)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqlSameFloat() {
+		assertThat(eval("(eql 3.0 3.0)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqlSymbols() {
+		assertThat(eval("(eql 'foo 'foo)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqlNilNil() {
+		assertThat(eval("(eql nil nil)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqlConsDifferentInstances() {
+		assertThat(eval("(eql (cons 1 2) (cons 1 2))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqlAsFunctionValue() {
+		assertThat(eval("(funcall #'eql 5 5)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqlFloatsByValue() {
+		assertThat(eval("(eql 1.5 1.5)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqFloatsNotEq() {
+		// eq differs from eql: floats are distinct boxed objects, never eq
+		assertThat(eval("(eq 1.5 1.5)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqlRatiosByValue() {
+		assertThat(eval("(eql 1/2 1/2)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqRatiosNotEq() {
+		assertThat(eval("(eq 1/2 1/2)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqIntegersStillEq() {
+		assertThat(eval("(eq 3 3)")).isSameAs(LispTrue.INSTANCE);
+	}
+
 	// push tests
 
 	@Test
@@ -1729,7 +1792,7 @@ class LispEvaluatorTest {
 		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(104);
+			.hasSize(105);
 	}
 
 	@Test

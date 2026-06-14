@@ -486,6 +486,13 @@ class ReadmeExamplesTest {
 		@Test
 		void eqGeneral() {
 			assertThat(eval("(eq 'foo 'foo)")).isSameAs(LispTrue.INSTANCE);
+			assertThat(eval("(eq 1.5 1.5)")).isSameAs(LispNil.INSTANCE);
+		}
+
+		@Test
+		void eql() {
+			assertThat(eval("(eql 1.5 1.5)")).isSameAs(LispTrue.INSTANCE);
+			assertThat(eval("(eql 3 3.0)")).isSameAs(LispNil.INSTANCE);
 		}
 
 		@Test
@@ -959,7 +966,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)",
-					"(defun defvar function if in-package lambda let progn quote return setq while)", "104", "(square)",
+					"(defun defvar function if in-package lambda let progn quote return setq while)", "105", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

@@ -223,7 +223,7 @@ evenly returns a ratio instead of truncating:
 Ratio results are always normalized -- reduced by the gcd with the sign on the
 numerator (`2/4` reads as `1/2`), and demoted to an integer when the
 denominator reduces to one (`(/ 10 2)` is `5`, `(+ 1/2 1/2)` is `1`).
-Arithmetic, comparisons (`= < > <= >=`), `eq`, `abs`/`min`/`max`/`1+`/`1-`/
+Arithmetic, comparisons (`= < > <= >=`), `eq`/`eql`, `abs`/`min`/`max`/`1+`/`1-`/
 `signum`, the predicates (`numberp`, `rationalp`, `zerop`, `plusp`, `minusp`),
 `truncate`/`floor`/`ceiling`/`round`, `expt` with an integer exponent
 (`(expt 2 -1)` is `1/2`), and `numerator`/`denominator` all handle ratios;
@@ -266,7 +266,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | Macro | Syntax | Description |
 |-------|--------|-------------|
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
-| `case` | `(case key (k1 body1...) ((k2 k3) body2...) (otherwise body...))` | Dispatch on a key compared with `eq`. Keys are unevaluated; a list key matches any element; `t`/`otherwise` is the default. Returns nil if nothing matches |
+| `case` | `(case key (k1 body1...) ((k2 k3) body2...) (otherwise body...))` | Dispatch on a key compared with `eql`. Keys are unevaluated; a list key matches any element; `t`/`otherwise` is the default. Returns nil if nothing matches |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
@@ -337,7 +337,8 @@ embedded `eval` runtime in compiled output (see
 | `mod` | `(mod 10 3)`, `(mod -13 4)` | `1`, `3` (result takes the sign of the divisor) |
 | `rem` | `(rem 13 4)`, `(rem -13 4)` | `1`, `-1` (result takes the sign of the dividend) |
 | `=` | `(= 1 1)`, `(= 3 3 3)` | `t` (variadic) |
-| `eq` | `(eq 'foo 'foo)` | `t` (general equality; reference identity for cons cells) |
+| `eq` | `(eq 'foo 'foo)`, `(eq 1.5 1.5)` | `t`, `nil` (object identity: symbols and small integers compare equal, but floats and ratios are distinct objects, so never `eq`; reference identity for cons cells) |
+| `eql` | `(eql 1.5 1.5)`, `(eql 3 3.0)` | `t`, `nil` (like `eq`, but numbers of the same type and value are equal — e.g. floats and ratios) |
 | `<` | `(< 1 2)`, `(< 1 2 3)` | `t` (variadic; true when strictly increasing) |
 | `>` | `(> 2 1)`, `(> 3 2 1)` | `t` (variadic) |
 | `<=` | `(<= 1 1)` | `t` (variadic) |
@@ -391,8 +392,8 @@ embedded `eval` runtime in compiled output (see
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
 | `length` | `(length '(1 2 3))`, `(length "abc")` | `3`, `3` (lists and strings; `0` for nil) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
-| `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eq` to the item, or nil) |
-| `assoc` | `(assoc 'b '((a 1) (b 2)))` | `(b 2)` (first pair whose car is `eq` to the key, or nil) |
+| `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil) |
+| `assoc` | `(assoc 'b '((a 1) (b 2)))` | `(b 2)` (first pair whose car is `eql` to the key, or nil) |
 | `last` | `(last '(1 2 3))` | `(3)` (last cons cell, nil for an empty list) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
@@ -544,7 +545,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 104
+; => 105
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

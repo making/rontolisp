@@ -82,8 +82,14 @@ final class JvmNumericRuntimeBuilder {
 	/** Raises a rational base to an integer power, keeping an exact result. */
 	static final String POW = "_pow";
 
-	/** Value equality that compares ratios element-wise ({@code eq} semantics). */
+	/** Value equality that compares ratios element-wise ({@code eql} semantics). */
 	static final String EQV = "_eqv";
+
+	/**
+	 * Object identity ({@code eq} semantics): like {@link #EQV} but floats and ratios are
+	 * never equal (they are distinct boxed objects, not interned).
+	 */
+	static final String EQ_STRICT = "_eq";
 
 	/** Truncates a rational toward zero. */
 	static final String RAT_TRUNC = "_rtrunc";
@@ -256,6 +262,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nDbl = cp.addUtf8(DBL);
 		Utf8Constant nPow = cp.addUtf8(POW);
 		Utf8Constant nEqv = cp.addUtf8(EQV);
+		Utf8Constant nEqStrict = cp.addUtf8(EQ_STRICT);
 		Utf8Constant nRatTrunc = cp.addUtf8(RAT_TRUNC);
 		Utf8Constant nRatFloor = cp.addUtf8(RAT_FLOOR);
 		Utf8Constant nRatCeil = cp.addUtf8(RAT_CEIL);
@@ -281,6 +288,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rDbl = cp.addMethodref(thisClass, cp.addNameAndType(nDbl, dUnary));
 		MethodrefConstant rPow = cp.addMethodref(thisClass, cp.addNameAndType(nPow, dPow));
 		MethodrefConstant rEqv = cp.addMethodref(thisClass, cp.addNameAndType(nEqv, dCmp));
+		MethodrefConstant rEqStrict = cp.addMethodref(thisClass, cp.addNameAndType(nEqStrict, dCmp));
 		MethodrefConstant rRatTrunc = cp.addMethodref(thisClass, cp.addNameAndType(nRatTrunc, dUnary));
 		MethodrefConstant rRatFloor = cp.addMethodref(thisClass, cp.addNameAndType(nRatFloor, dUnary));
 		MethodrefConstant rRatCeil = cp.addMethodref(thisClass, cp.addNameAndType(nRatCeil, dUnary));
@@ -316,6 +324,7 @@ final class JvmNumericRuntimeBuilder {
 				mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen));
 		methods.add(buildPow(nPow, dPow, rRatNum, rRatDen, rRat, biPow));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, objEquals));
+		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
 		methods.add(buildRatFloor(nRatFloor, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, null, null));
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
@@ -343,6 +352,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(DBL, rDbl);
 		ops.put(POW, rPow);
 		ops.put(EQV, rEqv);
+		ops.put(EQ_STRICT, rEqStrict);
 		ops.put(RAT_TRUNC, rRatTrunc);
 		ops.put(RAT_FLOOR, rRatFloor);
 		ops.put(RAT_CEIL, rRatCeil);
@@ -1062,6 +1072,56 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, objEquals.index());
 		c.add(Opcode.IRETURN);
 		return new NumericMethod(name, desc, c, 3, 2, List.of());
+	}
+
+	// _eq(Object a, Object b): eq semantics. Floats (Double) and ratios (BigInteger[])
+	// are
+	// distinct boxed objects, so two of them are never eq; everything else delegates to
+	// _eqv (so integers and symbols still compare by value/name).
+	private static NumericMethod buildEqStrict(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
+			ClassConstant ratArrClass, MethodrefConstant eqv) {
+		List<Integer> c = new ArrayList<>();
+		// if (a instanceof Double && b instanceof Double) return 0;
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDoubleA = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDoubleB = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		// if (a instanceof BigInteger[] && b instanceof BigInteger[]) return 0;
+		JvmRuntimeBuilder.patchBranch(c, ifNotDoubleA, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifNotDoubleB, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		int ifNotRatA = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		int ifNotRatB = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		// return _eqv(a, b);
+		JvmRuntimeBuilder.patchBranch(c, ifNotRatA, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifNotRatB, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, eqv.index());
+		c.add(Opcode.IRETURN);
+		return new NumericMethod(name, desc, c, 2, 2, List.of());
 	}
 
 	// _rtrunc(Object x): num/den truncating toward zero (BigInteger.divide).

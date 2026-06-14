@@ -1008,6 +1008,41 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEqlSameInteger() throws Exception {
+		assertThat(compileAndRun("(print (if (eql 3 3) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunEqlDifferentTypeNumbers() throws Exception {
+		assertThat(compileAndRun("(print (if (eql 3 3.0) 42 99))")).isEqualTo("99");
+	}
+
+	@Test
+	void compileAndRunEqlSymbols() throws Exception {
+		assertThat(compileAndRun("(print (if (eql 'foo 'foo) 42 99))")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunEqlAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'eql 5 5))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunEqlFloatsByValue() throws Exception {
+		assertThat(compileAndRun("(print (eql 1.5 1.5))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunEqFloatsNotEq() throws Exception {
+		assertThat(compileAndRun("(print (eq 1.5 1.5))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunEqIntegersStillEq() throws Exception {
+		assertThat(compileAndRun("(print (eq 3 3))")).isEqualTo("t");
+	}
+
+	@Test
 	void compileAndRunPush() throws Exception {
 		assertThat(compileAndRun("""
 				(setq x (list 2 3))
@@ -1333,7 +1368,8 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (if (< 1/3 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 2/4 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 1/2 0.5) 1 0))")).isEqualTo("1");
-		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (eql 1/2 1/2))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("nil");
 		assertThat(compileAndRun("(print (max 1/2 1/3))")).isEqualTo("1/2");
 		assertThat(compileAndRun("(print (min 1/2 1/3))")).isEqualTo("1/3");
 		assertThat(compileAndRun("(print (abs -1/2))")).isEqualTo("1/2");
@@ -1905,12 +1941,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("104");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("105");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("104");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("105");
 	}
 
 	@Test
