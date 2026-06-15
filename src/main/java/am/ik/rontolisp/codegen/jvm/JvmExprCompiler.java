@@ -181,6 +181,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx, className);
 				case LispNames.MEMBER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
+				case LispNames.FIND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx, className);
 				case LispNames.ASSOC ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx, className);
 				case LispNames.EVERY ->

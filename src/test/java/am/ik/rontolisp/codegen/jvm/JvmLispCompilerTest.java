@@ -1279,6 +1279,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFind() throws Exception {
+		assertThat(compileAndRun(
+				"(print (find 3 '(1 2 3 4))) (print (find 9 '(1 2 3))) (print (funcall #'find 2 '(1 2 3)))"))
+			.isEqualTo("3\nnil\n2");
+	}
+
+	@Test
 	void compileAndRunAssoc() throws Exception {
 		assertThat(compileAndRun("(print (assoc 'b '((a 1) (b 2) (c 3)))) (print (assoc 'z '((a 1))))"))
 			.isEqualTo("(b 2)\nnil");
@@ -2007,12 +2014,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("111");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("112");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("111");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("112");
 	}
 
 	@Test

@@ -394,6 +394,7 @@ embedded `eval` runtime in compiled output (see
 | `length` | `(length '(1 2 3))`, `(length "abc")` | `3`, `3` (lists and strings; `0` for nil) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
 | `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil) |
+| `find` | `(find 2 '(1 2 3))` | `2` (first element `eql` to the item, or nil) |
 | `assoc` | `(assoc 'b '((a 1) (b 2)))` | `(b 2)` (first pair whose car is `eql` to the key, or nil) |
 | `last` | `(last '(1 2 3))` | `(3)` (last cons cell, nil for an empty list) |
 | `remove` | `(remove 2 '(1 2 3 2))` | `(1 3)` (new list without items `eql` to the given one) |
@@ -485,7 +486,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `assoc`, `last`, `remove`, `remove-if`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `find`, `assoc`, `last`, `remove`, `remove-if`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -551,7 +552,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 111
+; => 112
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

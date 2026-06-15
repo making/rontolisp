@@ -122,8 +122,8 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
 			// Sequence operations (compiled via macro expansion in call position)
 			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), binary(LispNames.MEMBER),
-			binary(LispNames.ASSOC), binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE),
-			binary(LispNames.REMOVE_IF),
+			binary(LispNames.FIND), binary(LispNames.ASSOC), binary(LispNames.EVERY), binary(LispNames.SOME),
+			binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)

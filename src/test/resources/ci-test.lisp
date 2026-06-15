@@ -428,6 +428,9 @@
 (print (funcall #'length '(7 8 9)))
 (print (mapcar #'reverse '((1 2) (3 4))))
 (print (funcall #'member 2 '(1 2 3)))
+(print (find 3 '(1 2 3 4)))
+(print (find 9 '(1 2 3)))
+(print (funcall #'find 2 '(1 2 3)))
 
 ; every / some / remove / remove-if
 (print (every #'evenp '(2 4 6)))

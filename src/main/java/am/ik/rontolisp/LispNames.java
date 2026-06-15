@@ -173,6 +173,12 @@ public final class LispNames {
 	/** The {@code member} built-in function. */
 	public static final String MEMBER = "member";
 
+	/**
+	 * The {@code find} built-in function (return the first element {@code eql} to the
+	 * given item, or nil).
+	 */
+	public static final String FIND = "find";
+
 	/** The {@code assoc} built-in function. */
 	public static final String ASSOC = "assoc";
 

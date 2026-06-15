@@ -1040,6 +1040,29 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (find item lst) into a do/return scan returning the first element
+	 * {@code eql} to the item, or nil. Like {@code member} but yields the element itself
+	 * rather than the tail.
+	 * @param cons the find expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFind(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__find_item");
+		LispSymbol cur = new LispSymbol("__find_cur");
+		// (do ((__find_item item) (__find_cur lst (cdr __find_cur)))
+		// ((atom __find_cur) nil)
+		// (if (eql __find_item (car __find_cur)) (return (car __find_cur)) nil))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, elem));
+		LispVal body = makeIf(match, makeReturn(elem), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
 	 * is {@code eql} to the key, or nil.
 	 * @param cons the assoc expression

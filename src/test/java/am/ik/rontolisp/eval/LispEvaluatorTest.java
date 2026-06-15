@@ -1398,6 +1398,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFind() {
+		assertThat(eval("(find 3 '(1 2 3 4))").print()).isEqualTo("3");
+		assertThat(eval("(find 'b '(a b c))").print()).isEqualTo("b");
+		assertThat(eval("(find 9 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'find 2 '(1 2 3))").print()).isEqualTo("2");
+	}
+
+	@Test
 	void evalAssoc() {
 		assertThat(eval("(assoc 'b '((a 1) (b 2) (c 3)))").print()).isEqualTo("(b 2)");
 		assertThat(eval("(assoc 'z '((a 1)))")).isSameAs(LispNil.INSTANCE);
@@ -1871,10 +1879,10 @@ class LispEvaluatorTest {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
 			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
-					"some", "remove", "remove-if")
+					"some", "remove", "remove-if", "find")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(111);
+			.hasSize(112);
 	}
 
 	@Test
