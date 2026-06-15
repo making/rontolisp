@@ -1460,6 +1460,41 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(setq my-op #'+) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
 	}
 
+	@Test
+	void evalEvery() {
+		assertThat(eval("(every #'evenp '(2 4 6))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(every #'evenp '(2 3 6))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(every #'evenp '())")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(every (lambda (x) (> x 0)) '(1 2 3))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalSome() {
+		assertThat(eval("(some #'oddp '(2 4 5))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(some #'oddp '(2 4 6))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(some #'evenp '())")).isSameAs(LispNil.INSTANCE);
+		// some returns the first non-nil predicate result, not just t.
+		assertThat(eval("(some (lambda (x) (if (> x 3) (* x 10))) '(1 2 5))")).isEqualTo(new LispInteger(50));
+	}
+
+	@Test
+	void evalRemove() {
+		assertThat(eval("(remove 2 '(1 2 3 2 4))").print()).isEqualTo("(1 3 4)");
+		assertThat(eval("(remove 9 '(1 2 3))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(remove 1 '())").print()).isEqualTo("nil");
+	}
+
+	@Test
+	void evalRemoveIf() {
+		assertThat(eval("(remove-if #'evenp '(1 2 3 4 5))").print()).isEqualTo("(1 3 5)");
+		assertThat(eval("(remove-if (lambda (x) (> x 3)) '(1 2 3 4 5))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalEveryAsFunctionValue() {
+		assertThat(evalMulti("(funcall #'remove 2 '(1 2 3 2)) ").print()).isEqualTo("(1 3)");
+	}
+
 	// Lisp-2 (separate function/variable namespaces) tests
 
 	@Test
@@ -1835,10 +1870,11 @@ class LispEvaluatorTest {
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
-			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc")
+			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
+					"some", "remove", "remove-if")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(107);
+			.hasSize(111);
 	}
 
 	@Test

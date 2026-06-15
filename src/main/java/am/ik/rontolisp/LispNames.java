@@ -179,6 +179,18 @@ public final class LispNames {
 	/** The {@code last} built-in function. */
 	public static final String LAST = "last";
 
+	/**
+	 * The {@code remove} built-in function (return a copy without items eql to the given
+	 * one).
+	 */
+	public static final String REMOVE = "remove";
+
+	/**
+	 * The {@code remove-if} built-in function (return a copy without items satisfying a
+	 * predicate).
+	 */
+	public static final String REMOVE_IF = "remove-if";
+
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
 
@@ -198,6 +210,17 @@ public final class LispNames {
 
 	/** The {@code reduce} built-in function. */
 	public static final String REDUCE = "reduce";
+
+	/**
+	 * The {@code every} built-in function (true if the predicate holds for every
+	 * element).
+	 */
+	public static final String EVERY = "every";
+
+	/**
+	 * The {@code some} built-in function (the first non-nil predicate result, or nil).
+	 */
+	public static final String SOME = "some";
 
 	// Macros
 

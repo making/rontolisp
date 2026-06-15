@@ -1065,6 +1065,103 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (every pred lst) into a do/return scan that yields t when the predicate
+	 * holds for every element and nil at the first element for which it fails.
+	 * @param cons the every expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEvery(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__every_pred");
+		LispSymbol cur = new LispSymbol("__every_cur");
+		// (do ((__every_pred pred) (__every_cur lst (cdr __every_cur)))
+		// ((atom __every_cur) t)
+		// (if (funcall __every_pred (car __every_cur)) nil (return nil)))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispTrue.INSTANCE));
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
+		LispVal body = makeIf(test, LispNil.INSTANCE, makeReturn(LispNil.INSTANCE));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (some pred lst) into a do/return scan that yields the first non-nil
+	 * predicate result, or nil when the predicate fails for every element.
+	 * @param cons the some expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSome(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__some_pred");
+		LispSymbol res = new LispSymbol("__some_res");
+		LispSymbol cur = new LispSymbol("__some_cur");
+		// (do ((__some_pred pred) (__some_res nil) (__some_cur lst (cdr __some_cur)))
+		// ((atom __some_cur) nil)
+		// (setq __some_res (funcall __some_pred (car __some_cur)))
+		// (if __some_res (return __some_res) nil))
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(pred, parts.get(1))), listToCons(List.of(res, LispNil.INSTANCE)),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
+		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), res, call));
+		LispVal check = makeIf(res, makeReturn(res), LispNil.INSTANCE);
+		return expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, assign, check)));
+	}
+
+	/**
+	 * Expands (remove item lst) into a do scan that accumulates, then reverses, the
+	 * elements that are not {@code eql} to the item.
+	 * @param cons the remove expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemove(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__remove_item");
+		return expandFilter(item, parts.get(1), parts.get(2), "__remove", LispNames.EQL, item);
+	}
+
+	/**
+	 * Expands (remove-if pred lst) into a do scan that accumulates, then reverses, the
+	 * elements for which the predicate fails.
+	 * @param cons the remove-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemoveIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__removeif_pred");
+		return expandFilter(pred, parts.get(1), parts.get(2), "__removeif", LispNames.FUNCALL, pred);
+	}
+
+	/**
+	 * Shared expansion for {@code remove}/{@code remove-if}: bind the test operand, walk
+	 * the list, and accumulate (in reverse) every element for which the match form
+	 * {@code (matchOp matchArg (car cursor))} is false. The result form reverses the
+	 * accumulator back to source order. For {@code remove} the match form is
+	 * {@code (eql item (car cursor))}; for {@code remove-if} it is
+	 * {@code (funcall pred (car cursor))}.
+	 */
+	private static LispVal expandFilter(LispSymbol operand, LispVal operandInit, LispVal list, String prefix,
+			String matchOp, LispVal matchArg) {
+		LispSymbol acc = new LispSymbol(prefix + "_acc");
+		LispSymbol cur = new LispSymbol(prefix + "_cur");
+		LispVal match = listToCons(List.of(new LispSymbol(matchOp), matchArg, callOf(LispNames.CAR, cur)));
+		// (do ((operand operandInit) (acc nil) (cur list (cdr cur)))
+		// ((atom cur) (reverse acc))
+		// (if match nil (setq acc (cons (car cur) acc))))
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(operand, operandInit)), listToCons(List.of(acc, LispNil.INSTANCE)),
+						listToCons(List.of(cur, list, callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
+		LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
+		LispVal body = makeIf(match, LispNil.INSTANCE, keep);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (last lst) into a let/while walk returning the last cons cell (or nil for
 	 * an empty list).
 	 * @param cons the last expression

@@ -429,6 +429,15 @@
 (print (mapcar #'reverse '((1 2) (3 4))))
 (print (funcall #'member 2 '(1 2 3)))
 
+; every / some / remove / remove-if
+(print (every #'evenp '(2 4 6)))
+(print (every #'evenp '(2 3 6)))
+(print (some #'oddp '(2 4 5)))
+(print (some #'oddp '(2 4 6)))
+(print (remove 2 '(1 2 3 2 4)))
+(print (remove-if #'evenp '(1 2 3 4 5)))
+(print (funcall #'remove 9 '(1 2 3)))
+
 ; rest (alias for cdr, also a setf place)
 (print (rest '(1 2 3)))
 (print (rest '(1)))

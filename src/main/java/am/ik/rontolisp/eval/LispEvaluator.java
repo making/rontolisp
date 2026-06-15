@@ -120,6 +120,24 @@ public final class LispEvaluator {
 			}
 			throw new LispEvalException(LispNames.REDUCE + " expects 2 or 3 arguments, got " + args.size());
 		}));
+		this.globalEnv.defineFunction(LispNames.EVERY, new LispFunction(LispNames.EVERY, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.EVERY + " expects 2 arguments, got " + args.size());
+			}
+			return everyValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.SOME, new LispFunction(LispNames.SOME, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.SOME + " expects 2 arguments, got " + args.size());
+			}
+			return someValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.REMOVE_IF, new LispFunction(LispNames.REMOVE_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
+			}
+			return removeIfValues(args.get(0), args.get(1));
+		}));
 		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.LOAD + " expects 1 argument, got " + args.size());
@@ -474,6 +492,49 @@ public final class LispEvaluator {
 			cursor = cell.cdr();
 		}
 		return list;
+	}
+
+	// Return t when the predicate is non-nil for every element, nil at the first failure
+	// (Common Lisp every semantics, single-list form).
+	private LispVal everyValues(LispVal predicate, LispVal list) {
+		while (list instanceof LispCons cell) {
+			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				return LispNil.INSTANCE;
+			}
+			list = cell.cdr();
+		}
+		return LispTrue.INSTANCE;
+	}
+
+	// Return the first non-nil predicate result, or nil when every element fails
+	// (Common Lisp some semantics, single-list form).
+	private LispVal someValues(LispVal predicate, LispVal list) {
+		while (list instanceof LispCons cell) {
+			LispVal result = apply(predicate, List.of(cell.car()), this.globalEnv);
+			if (isTruthy(result)) {
+				return result;
+			}
+			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return a fresh list of the elements for which the predicate is nil
+	// (Common Lisp remove-if semantics, no keyword arguments).
+	private LispVal removeIfValues(LispVal predicate, LispVal list) {
+		List<LispVal> kept = new ArrayList<>();
+		LispVal cursor = list;
+		while (cursor instanceof LispCons cell) {
+			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				kept.add(cell.car());
+			}
+			cursor = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = kept.size() - 1; i >= 0; i--) {
+			result = new LispCons(kept.get(i), result);
+		}
+		return result;
 	}
 
 	private LispVal reduceValues(LispVal function, LispVal accumulator, LispVal list) {

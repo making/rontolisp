@@ -689,6 +689,23 @@ public final class Environment implements Scope {
 			}
 			return cur instanceof LispCons ? cur : LispNil.INSTANCE;
 		}));
+		env.defineFunction(LispNames.REMOVE, new LispFunction(LispNames.REMOVE, args -> {
+			requireArgCount(LispNames.REMOVE, args, 2);
+			LispVal item = args.get(0);
+			List<LispVal> kept = new java.util.ArrayList<>();
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (!isEq(item, cell.car())) {
+					kept.add(cell.car());
+				}
+				cur = cell.cdr();
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = kept.size() - 1; i >= 0; i--) {
+				result = new LispCons(kept.get(i), result);
+			}
+			return result;
+		}));
 	}
 
 	private static void registerStringOps(Environment env) {

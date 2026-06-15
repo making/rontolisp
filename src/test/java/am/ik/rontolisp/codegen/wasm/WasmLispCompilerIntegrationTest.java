@@ -1220,6 +1220,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void everyFunction() throws Exception {
+		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
+			.isEqualTo("t\nnil");
+	}
+
+	@Test
+	void someFunction() throws Exception {
+		assertThat(compileAndRun("(print (some #'oddp '(2 4 5))) (print (some #'oddp '(2 4 6)))")).isEqualTo("t\nnil");
+		assertThat(compileAndRun("(print (some (lambda (x) (if (> x 3) (* x 10))) '(1 2 5)))")).isEqualTo("50");
+	}
+
+	@Test
+	void removeFunction() throws Exception {
+		assertThat(compileAndRun("(print (remove 2 '(1 2 3 2 4))) (print (remove 9 '(1 2 3)))"))
+			.isEqualTo("(1 3 4)\n(1 2 3)");
+	}
+
+	@Test
+	void removeIfFunction() throws Exception {
+		assertThat(compileAndRun("(print (remove-if #'evenp '(1 2 3 4 5)))")).isEqualTo("(1 3 5)");
+	}
+
+	@Test
+	void removeAsFirstClass() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'remove 2 '(1 2 3 2)))")).isEqualTo("(1 3)");
+	}
+
+	@Test
 	void sequenceFunctionsAsFirstClass() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'length '(7 8 9))) (print (mapcar #'reverse '((1 2) (3 4))))"))
 			.isEqualTo("3\n((2 1) (4 3))");
@@ -1895,7 +1923,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("107");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("111");
 	}
 
 	@Test
