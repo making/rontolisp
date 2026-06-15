@@ -150,6 +150,24 @@ public final class LispEvaluator {
 			}
 			return removeIfValues(args.get(0), args.get(1), true);
 		}));
+		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.MAPCAN + " expects 2 arguments, got " + args.size());
+			}
+			return mapcanValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.SORT, new LispFunction(LispNames.SORT, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.SORT + " expects 2 arguments, got " + args.size());
+			}
+			return sortValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.APPLY, new LispFunction(LispNames.APPLY, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.APPLY + " expects at least 2 arguments, got " + args.size());
+			}
+			return applyValues(args);
+		}));
 		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.LOAD + " expects 1 argument, got " + args.size());
@@ -569,6 +587,86 @@ public final class LispEvaluator {
 			list = cell.cdr();
 		}
 		return accumulator;
+	}
+
+	// Apply the function to each element and concatenate the resulting lists (Common Lisp
+	// mapcan semantics; the concatenation is non-destructive append rather than nconc).
+	private LispVal mapcanValues(LispVal function, LispVal list) {
+		List<LispVal> pieces = new ArrayList<>();
+		while (list instanceof LispCons cell) {
+			pieces.add(apply(function, List.of(cell.car()), this.globalEnv));
+			list = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = pieces.size() - 1; i >= 0; i--) {
+			result = appendTwo(pieces.get(i), result);
+		}
+		return result;
+	}
+
+	// Build a fresh list of the elements of 'a' followed by 'b' (the tail 'b' is shared).
+	private LispVal appendTwo(LispVal a, LispVal b) {
+		List<LispVal> elems = new ArrayList<>();
+		while (a instanceof LispCons cell) {
+			elems.add(cell.car());
+			a = cell.cdr();
+		}
+		LispVal result = b;
+		for (int i = elems.size() - 1; i >= 0; i--) {
+			result = new LispCons(elems.get(i), result);
+		}
+		return result;
+	}
+
+	// Sort a list ascending using the comparison predicate (Common Lisp sort semantics;
+	// the
+	// predicate is true when its first argument strictly precedes its second).
+	// Implemented
+	// with insertion sort calling the predicate, which keeps the ordering
+	// self-consistent.
+	private LispVal sortValues(LispVal list, LispVal predicate) {
+		List<LispVal> elems = new ArrayList<>();
+		LispVal cursor = list;
+		while (cursor instanceof LispCons cell) {
+			elems.add(cell.car());
+			cursor = cell.cdr();
+		}
+		for (int i = 1; i < elems.size(); i++) {
+			LispVal key = elems.get(i);
+			int j = i - 1;
+			while (j >= 0 && isTruthy(apply(predicate, List.of(key, elems.get(j)), this.globalEnv))) {
+				elems.set(j + 1, elems.get(j));
+				j--;
+			}
+			elems.set(j + 1, key);
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elems.size() - 1; i >= 0; i--) {
+			result = new LispCons(elems.get(i), result);
+		}
+		return result;
+	}
+
+	// Apply a function to a spread argument list (Common Lisp apply semantics): the
+	// leading
+	// arguments are taken literally and the final argument must be a list whose elements
+	// are
+	// spread as the remaining arguments.
+	private LispVal applyValues(List<LispVal> args) {
+		LispVal function = args.get(0);
+		List<LispVal> callArgs = new ArrayList<>();
+		for (int i = 1; i < args.size() - 1; i++) {
+			callArgs.add(args.get(i));
+		}
+		LispVal tail = args.get(args.size() - 1);
+		while (tail instanceof LispCons cell) {
+			callArgs.add(cell.car());
+			tail = cell.cdr();
+		}
+		if (!(tail instanceof LispNil)) {
+			throw new LispEvalException(LispNames.APPLY + ": last argument must be a list");
+		}
+		return apply(function, callArgs, this.globalEnv);
 	}
 
 	private List<LispVal> evalArgs(LispCons cons, Environment env) {

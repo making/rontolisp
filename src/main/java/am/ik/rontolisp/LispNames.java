@@ -221,6 +221,12 @@ public final class LispNames {
 	 */
 	public static final String REMOVE_IF_NOT = "remove-if-not";
 
+	/**
+	 * The {@code sort} built-in function (destructively sort a list using a comparison
+	 * predicate).
+	 */
+	public static final String SORT = "sort";
+
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
 
@@ -237,6 +243,17 @@ public final class LispNames {
 
 	/** The {@code mapc} built-in function (apply for effect, return the list). */
 	public static final String MAPC = "mapc";
+
+	/**
+	 * The {@code mapcan} built-in function (apply over a list and concatenate the result
+	 * lists).
+	 */
+	public static final String MAPCAN = "mapcan";
+
+	/**
+	 * The {@code apply} built-in function (apply a function to a spread argument list).
+	 */
+	public static final String APPLY = "apply";
 
 	/** The {@code reduce} built-in function. */
 	public static final String REDUCE = "reduce";

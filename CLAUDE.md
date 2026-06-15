@@ -66,9 +66,8 @@ When adding a new built-in function or special form:
 1. **Interpreter** (`LispEvaluator` / `Environment`) -> run `LispEvaluatorTest`
 2. **JVM compiler** -> run `JvmLispCompilerTest`
 3. **WASM compiler** -> run `WasmLispCompilerIntegrationTest`
-4. **native-image test** -> run `NativeImageTest`
-5. Update `src/test/resources/ci-test.lisp` and `ci-test-expected.txt` if needed
-6. Update Built-in Functions / Compiler Limitations in README and `ReadmeExamplesTest`
+4. Update `src/test/resources/ci-test.lisp` and `ci-test-expected.txt` if needed
+5. Update Built-in Functions / Compiler Limitations in README and `ReadmeExamplesTest`
 
 ### Adding a New Built-in Function
 

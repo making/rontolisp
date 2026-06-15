@@ -403,6 +403,7 @@ embedded `eval` runtime in compiled output (see
 | `remove` | `(remove 2 '(1 2 3 2))` | `(1 3)` (new list without items `eql` to the given one) |
 | `remove-if` | `(remove-if #'evenp '(1 2 3 4))` | `(1 3)` (new list without items satisfying the predicate) |
 | `remove-if-not` | `(remove-if-not #'evenp '(1 2 3 4))` | `(2 4)` (new list keeping only items satisfying the predicate) |
+| `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)` (destructively sort a list with a comparison predicate; not stable) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
 | `1+` | `(1+ 41)` | `42` (same as `(+ x 1)`) |
@@ -434,6 +435,8 @@ embedded `eval` runtime in compiled output (see
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
 | `mapc` | `(mapc #'print '(1 2 3))` | Apply a function to each element for effect, return the original list |
+| `mapcan` | `(mapcan (lambda (x) (list x x)) '(1 2))` | `(1 1 2 2)` (apply a function and concatenate the result lists; uses non-destructive `append`) |
+| `apply` | `(apply #'+ 1 2 '(3 4))` | `10` (apply a function to the leading args plus the spread final list) |
 | `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 | `every` | `(every #'evenp '(2 4 6))` | `t` if the predicate is non-nil for every element, else `nil` (single-list form) |
 | `some` | `(some #'oddp '(2 4 5))` | The first non-nil predicate result, or `nil` if every element fails (single-list form) |
@@ -490,7 +493,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `find`, `find-if`, `position`, `count`, `assoc`, `last`, `remove`, `remove-if`, `remove-if-not`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `find`, `find-if`, `position`, `count`, `assoc`, `last`, `remove`, `remove-if`, `remove-if-not`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -556,7 +559,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 116
+; => 119
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
@@ -643,9 +646,17 @@ Built-in operators like `+`, `car`, `1+` can be passed to higher-order functions
 
 **Compiler restrictions.** In the JVM/WASM compilers, `#'name` resolves against the
 functions known at compile time (user `defun`s and built-in operators); `#'mapcar`,
-`#'reduce` and `#'funcall` themselves are not available as values. `symbol-function`
-requires a quoted symbol literal argument. In `--dynamic` mode an unresolved `#'name`
-is deferred to the runtime `eval` environment like any other unresolved reference.
+`#'reduce`, `#'apply` and `#'funcall` themselves are not available as values (`#'mapcan`
+and `#'sort` are). `symbol-function` requires a quoted symbol literal argument. In
+`--dynamic` mode an unresolved `#'name` is deferred to the runtime `eval` environment like
+any other unresolved reference. In compiled code `apply` reuses the runtime `eval`
+machinery (it forces the `eval` runtime to be emitted) and dispatches by the actual
+argument count, so the applied function must have a matching arity -- binary built-in
+wrappers (e.g. `(apply #'+ '(1 2))`, `(apply #'cons 1 '(2))`) and user `defun`s of any
+fixed arity work, while variadic built-ins applied to a different count (e.g.
+`(apply #'+ '(1 2 3))`, `(apply #'list ...)`) do not, matching the
+[Compiled `eval` limitations](#compiled-eval-limitations). The interpreter has no such
+restriction.
 
 ## Project Structure
 

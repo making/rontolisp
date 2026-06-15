@@ -306,7 +306,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
 		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic;
+		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
+				|| programUsesSymbol(program, LispNames.APPLY);
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.

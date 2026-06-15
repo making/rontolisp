@@ -213,7 +213,10 @@ final class JvmExprCompiler {
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
 				case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);
 				case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
+				case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);
 				case LispNames.REDUCE -> JvmReduceCompiler.compile(cons, ctx, className);
+				case LispNames.SORT -> JvmSortCompiler.compile(cons, ctx, className);
+				case LispNames.APPLY -> JvmApplyCompiler.compile(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
 				case LispNames.NUMBERP -> JvmNumberpCompiler.compile(cons, ctx, className);

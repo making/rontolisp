@@ -451,6 +451,17 @@
 (print (remove-if-not #'evenp '(1 2 3 4 5)))
 (print (funcall #'remove 9 '(1 2 3)))
 
+; mapcan / sort / apply
+(print (mapcan (lambda (x) (list x x)) '(1 2 3)))
+(print (mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4)))
+(print (funcall #'mapcan (lambda (x) (list x)) '(1 2 3)))
+(print (sort '(3 1 4 1 5 9 2 6) #'<))
+(print (sort '(3 1 4) #'>))
+(print (funcall #'sort '(2 3 1) #'<))
+(print (apply #'+ '(1 2)))
+(print (apply #'cons 1 '(2)))
+(print (apply (lambda (a b) (+ a b)) '(3 4)))
+
 ; rest (alias for cdr, also a setf place)
 (print (rest '(1 2 3)))
 (print (rest '(1)))

@@ -250,8 +250,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
 
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
-		// every arity up to the maximum callable must have a dispatch method.
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic;
+		// every arity up to the maximum callable must have a dispatch method. The apply
+		// built-in reuses _apply, so it forces the eval runtime to be emitted as well.
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
+				|| programUsesSymbol(program, LispNames.APPLY);
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);

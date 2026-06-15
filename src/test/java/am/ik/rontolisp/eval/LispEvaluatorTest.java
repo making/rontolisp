@@ -1536,6 +1536,33 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(funcall #'remove 2 '(1 2 3 2)) ").print()).isEqualTo("(1 3)");
 	}
 
+	@Test
+	void evalMapcan() {
+		assertThat(eval("(mapcan (lambda (x) (list x x)) '(1 2 3))").print()).isEqualTo("(1 1 2 2 3 3)");
+		assertThat(eval("(mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4))").print()).isEqualTo("(2 4)");
+		assertThat(eval("(mapcan #'list '())").print()).isEqualTo("nil");
+		assertThat(evalMulti("(funcall #'mapcan (lambda (x) (list x)) '(1 2 3))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalSort() {
+		assertThat(eval("(sort '(3 1 4 1 5 9 2 6) #'<)").print()).isEqualTo("(1 1 2 3 4 5 6 9)");
+		assertThat(eval("(sort '(3 1 4) #'>)").print()).isEqualTo("(4 3 1)");
+		assertThat(eval("(sort '() #'<)").print()).isEqualTo("nil");
+		assertThat(eval("(sort '(5) #'<)").print()).isEqualTo("(5)");
+		assertThat(evalMulti("(funcall #'sort '(2 3 1) #'<)").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalApply() {
+		assertThat(eval("(apply #'+ '(1 2 3))").print()).isEqualTo("6");
+		assertThat(eval("(apply #'+ 1 2 '(3 4))").print()).isEqualTo("10");
+		assertThat(eval("(apply #'max '(3 1 4 1 5))").print()).isEqualTo("5");
+		assertThat(eval("(apply #'list 1 2 '(3 4))").print()).isEqualTo("(1 2 3 4)");
+		assertThat(eval("(apply #'cons '(1 2))").print()).isEqualTo("(1 . 2)");
+		assertThat(eval("(apply (lambda (a b) (+ a b)) '(10 20))").print()).isEqualTo("30");
+	}
+
 	// Lisp-2 (separate function/variable namespaces) tests
 
 	@Test
@@ -1912,10 +1939,11 @@ class LispEvaluatorTest {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
 			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
-					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "position", "count")
+					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "position", "count", "mapcan",
+					"apply", "sort")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(116);
+			.hasSize(119);
 	}
 
 	@Test

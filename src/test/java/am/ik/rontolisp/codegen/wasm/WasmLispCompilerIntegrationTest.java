@@ -1286,6 +1286,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void mapcanFunction() throws Exception {
+		assertThat(compileAndRun("(print (mapcan (lambda (x) (list x x)) '(1 2 3)))")).isEqualTo("(1 1 2 2 3 3)");
+		assertThat(compileAndRun("(print (mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4)))"))
+			.isEqualTo("(2 4)");
+		assertThat(compileAndRun("(print (funcall #'mapcan (lambda (x) (list x)) '(1 2 3)))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void sortFunction() throws Exception {
+		assertThat(compileAndRun("(print (sort '(3 1 4 1 5 9 2 6) #'<))")).isEqualTo("(1 1 2 3 4 5 6 9)");
+		assertThat(compileAndRun("(print (sort '(3 1 4) #'>))")).isEqualTo("(4 3 1)");
+		assertThat(compileAndRun("(print (sort '() #'<)) (print (sort '(5) #'<))")).isEqualTo("nil\n(5)");
+		assertThat(compileAndRun("(print (funcall #'sort '(2 3 1) #'<))")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void applyFunction() throws Exception {
+		// In compiled code apply dispatches by the actual argument count, so the applied
+		// function must have a matching arity (the eval-runtime limitation).
+		assertThat(compileAndRun("(print (apply #'+ '(1 2)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (apply #'cons 1 '(2)))")).isEqualTo("(1 . 2)");
+		assertThat(compileAndRun("(print (apply (lambda (a b) (+ a b)) '(3 4)))")).isEqualTo("7");
+		assertThat(compileAndRun("(defun add3 (a b c) (+ a (+ b c))) (print (apply #'add3 1 2 '(3)))")).isEqualTo("6");
+	}
+
+	@Test
 	void sequenceFunctionsAsFirstClass() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'length '(7 8 9))) (print (mapcar #'reverse '((1 2) (3 4))))"))
 			.isEqualTo("3\n((2 1) (4 3))");
@@ -1961,7 +1987,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("116");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("119");
 	}
 
 	@Test
