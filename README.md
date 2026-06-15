@@ -409,6 +409,13 @@ embedded `eval` runtime in compiled output (see
 | `remove-if-not` | `(remove-if-not #'evenp '(1 2 3 4))` | `(2 4)` (new list keeping only items satisfying the predicate) |
 | `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)` (copy with duplicate elements removed, keeping the last occurrence; `eql` compare, no `:test`/`:key`) |
 | `nconc` | `(nconc (list 1 2) (list 3 4))` | `(1 2 3 4)` (destructively concatenate two lists; two arguments only) |
+| `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)` (shallow copy of a list) |
+| `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)` (reverse a list; this implementation is non-destructive, sharing semantics with `reverse`) |
+| `make-list` | `(make-list 3)` | `(nil nil nil)` (list of n nil elements; no `:initial-element`) |
+| `union` | `(union '(1 2 3) '(2 3 4))` | `(4 1 2 3)` (set union, `eql` compare, no `:test`/`:key`; result order unspecified) |
+| `intersection` | `(intersection '(1 2 3) '(2 3 4))` | `(3 2)` (set intersection, `eql` compare; result order unspecified) |
+| `set-difference` | `(set-difference '(1 2 3) '(2))` | `(3 1)` (elements of the first list not in the second, `eql` compare; result order unspecified) |
+| `adjoin` | `(adjoin 1 '(2 3))` | `(1 2 3)` (prepend the item unless already a member; `eql` compare) |
 | `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)` (destructively sort a list with a comparison predicate; not stable) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
@@ -447,6 +454,7 @@ embedded `eval` runtime in compiled output (see
 | `every` | `(every #'evenp '(2 4 6))` | `t` if the predicate is non-nil for every element, else `nil` (single-list form) |
 | `some` | `(some #'oddp '(2 4 5))` | The first non-nil predicate result, or `nil` if every element fails (single-list form) |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
+| `identity` | `(identity 42)` | `42` (return the argument unchanged) |
 
 **Deviations from Common Lisp.** Some functions accept fewer arguments than the Common
 Lisp standard: `log` takes only one argument (no base: `(log x base)` is unsupported),
@@ -502,7 +510,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `nconc`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `nconc`, `copy-list`, `nreverse`, `make-list`, `union`, `intersection`, `set-difference`, `adjoin`, `identity`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -568,7 +576,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 125
+; => 133
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

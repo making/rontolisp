@@ -576,3 +576,14 @@
 ; mapc: apply for effect, return the original list (not the mapped results)
 (print (mapc #'print '(10 20)))
 (print (mapc #'1+ '(1 2 3)))
+
+; list utilities and set operations
+(print (identity 42))
+(print (copy-list '(1 2 3)))
+(print (nreverse '(1 2 3)))
+(print (make-list 3))
+(print (union '(1 2 3) '(2 3 4)))
+(print (intersection '(1 2 3) '(2 3 4)))
+(print (set-difference '(1 2 3) '(2)))
+(print (adjoin 1 '(2 3)))
+(print (adjoin 2 '(1 2 3)))

@@ -63,7 +63,8 @@ public final class PackageRegistry {
 			LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING_UPCASE, LispNames.STRING_DOWNCASE,
 			LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.STRING_EQUAL,
 			LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN,
-			LispNames.CLOSE, LispNames.WRITE_LINE);
+			LispNames.CLOSE, LispNames.WRITE_LINE, LispNames.IDENTITY, LispNames.COPY_LIST, LispNames.NREVERSE,
+			LispNames.MAKE_LIST, LispNames.UNION, LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

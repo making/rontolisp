@@ -1326,6 +1326,158 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (identity x) into the argument form itself.
+	 * @param cons the identity expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandIdentity(LispCons cons) {
+		return cons.toList().get(1);
+	}
+
+	/**
+	 * Expands (nreverse lst) into (reverse lst). This implementation is non-destructive
+	 * and shares semantics with {@code reverse}.
+	 * @param cons the nreverse expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNreverse(LispCons cons) {
+		return callOf(LispNames.REVERSE, cons.toList().get(1));
+	}
+
+	/**
+	 * Expands (copy-list lst) into (append lst nil). {@code append} copies every argument
+	 * except the last, so this yields a shallow copy of the list.
+	 * @param cons the copy-list expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCopyList(LispCons cons) {
+		return listToCons(List.of(new LispSymbol(LispNames.APPEND), cons.toList().get(1), LispNil.INSTANCE));
+	}
+
+	/**
+	 * Expands (make-list n) into a do loop that conses n nil elements. The CL
+	 * {@code :initial-element} keyword is not supported.
+	 * @param cons the make-list expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeList(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol i = new LispSymbol("__ml_i");
+		LispSymbol acc = new LispSymbol("__ml_acc");
+		// (do ((__ml_i n (- __ml_i 1)) (__ml_acc nil (cons nil __ml_acc)))
+		// ((<= __ml_i 0) __ml_acc))
+		LispVal iStep = listToCons(List.of(new LispSymbol(LispNames.SUB), i, new LispInteger(1)));
+		LispVal accStep = listToCons(List.of(new LispSymbol(LispNames.CONS), LispNil.INSTANCE, acc));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(i, parts.get(1), iStep)),
+				listToCons(List.of(acc, LispNil.INSTANCE, accStep))));
+		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.LE), i, new LispInteger(0)));
+		LispVal endClause = listToCons(List.of(endTest, acc));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
+	}
+
+	/**
+	 * Expands (adjoin item lst) into a let/if that prepends the item to the list unless
+	 * it is already a member (compared with {@code eql}). Both operands are bound once to
+	 * avoid re-evaluation.
+	 * @param cons the adjoin expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandAdjoin(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__adjoin_item");
+		LispSymbol lst = new LispSymbol("__adjoin_lst");
+		// (let ((__adjoin_item item) (__adjoin_lst lst))
+		// (if (member __adjoin_item __adjoin_lst) __adjoin_lst
+		// (cons __adjoin_item __adjoin_lst)))
+		LispVal memberTest = listToCons(List.of(new LispSymbol(LispNames.MEMBER), item, lst));
+		LispVal consCall = listToCons(List.of(new LispSymbol(LispNames.CONS), item, lst));
+		LispVal ifExpr = makeIf(memberTest, lst, consCall);
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(lst, parts.get(2)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifExpr));
+	}
+
+	/**
+	 * Expands (union a b) into a do scan that starts from {@code a} and prepends each
+	 * element of {@code b} not already present (compared with {@code eql}). The result
+	 * order is implementation-defined (CL leaves it unspecified).
+	 * @param cons the union expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUnion(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol cur = new LispSymbol("__un_cur");
+		LispSymbol acc = new LispSymbol("__un_acc");
+		// (do ((__un_cur b (cdr __un_cur)) (__un_acc a))
+		// ((atom __un_cur) __un_acc)
+		// (if (member (car __un_cur) __un_acc) nil
+		// (setq __un_acc (cons (car __un_cur) __un_acc))))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur))),
+				listToCons(List.of(acc, parts.get(1)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.MEMBER), elem, acc));
+		LispVal prepend = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), elem, acc))));
+		LispVal body = makeIf(match, LispNil.INSTANCE, prepend);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (intersection a b) into a do scan that collects each element of {@code a}
+	 * that is a member of {@code b} (compared with {@code eql}). The result order is
+	 * implementation-defined (CL leaves it unspecified).
+	 * @param cons the intersection expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandIntersection(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol cur = new LispSymbol("__in_cur");
+		LispSymbol b = new LispSymbol("__in_b");
+		LispSymbol acc = new LispSymbol("__in_acc");
+		// (do ((__in_cur a (cdr __in_cur)) (__in_b b) (__in_acc nil))
+		// ((atom __in_cur) __in_acc)
+		// (if (member (car __in_cur) __in_b)
+		// (setq __in_acc (cons (car __in_cur) __in_acc)) nil))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
+				listToCons(List.of(b, parts.get(2))), listToCons(List.of(acc, LispNil.INSTANCE))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.MEMBER), elem, b));
+		LispVal collect = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), elem, acc))));
+		LispVal body = makeIf(match, collect, LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (set-difference a b) into a do scan that collects each element of {@code a}
+	 * that is not a member of {@code b} (compared with {@code eql}). The result order is
+	 * implementation-defined (CL leaves it unspecified).
+	 * @param cons the set-difference expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSetDifference(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol cur = new LispSymbol("__sd_cur");
+		LispSymbol b = new LispSymbol("__sd_b");
+		LispSymbol acc = new LispSymbol("__sd_acc");
+		// (do ((__sd_cur a (cdr __sd_cur)) (__sd_b b) (__sd_acc nil))
+		// ((atom __sd_cur) __sd_acc)
+		// (if (member (car __sd_cur) __sd_b) nil
+		// (setq __sd_acc (cons (car __sd_cur) __sd_acc))))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
+				listToCons(List.of(b, parts.get(2))), listToCons(List.of(acc, LispNil.INSTANCE))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.MEMBER), elem, b));
+		LispVal collect = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), elem, acc))));
+		LispVal body = makeIf(match, LispNil.INSTANCE, collect);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (every pred lst) into a do/return scan that yields t when the predicate
 	 * holds for every element and nil at the first element for which it fails.
 	 * @param cons the every expression

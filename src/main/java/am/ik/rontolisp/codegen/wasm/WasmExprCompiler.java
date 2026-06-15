@@ -207,6 +207,16 @@ final class WasmExprCompiler {
 				case LispNames.NCONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx);
 				case LispNames.LAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx);
 				case LispNames.BUTLAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx);
+				case LispNames.IDENTITY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx);
+				case LispNames.COPY_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx);
+				case LispNames.NREVERSE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx);
+				case LispNames.MAKE_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx);
+				case LispNames.UNION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnion(cons), ctx);
+				case LispNames.INTERSECTION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandIntersection(cons), ctx);
+				case LispNames.SET_DIFFERENCE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSetDifference(cons), ctx);
+				case LispNames.ADJOIN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx);
 				case LispNames.EQ_GENERAL -> WasmEqGeneralCompiler.compile(cons, ctx);
 				case LispNames.EQL -> WasmEqGeneralCompiler.compileEql(cons, ctx);
 				case LispNames.EQUAL -> WasmEqualCompiler.compile(cons, ctx);

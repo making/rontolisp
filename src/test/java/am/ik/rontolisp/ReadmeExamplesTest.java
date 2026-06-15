@@ -459,6 +459,46 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void identityFn() {
+			assertThat(eval("(identity 42)").print()).isEqualTo("42");
+		}
+
+		@Test
+		void copyListFn() {
+			assertThat(eval("(copy-list '(1 2 3))").print()).isEqualTo("(1 2 3)");
+		}
+
+		@Test
+		void nreverseFn() {
+			assertThat(eval("(nreverse '(1 2 3))").print()).isEqualTo("(3 2 1)");
+		}
+
+		@Test
+		void makeListFn() {
+			assertThat(eval("(make-list 3)").print()).isEqualTo("(nil nil nil)");
+		}
+
+		@Test
+		void unionFn() {
+			assertThat(eval("(union '(1 2 3) '(2 3 4))").print()).isEqualTo("(4 1 2 3)");
+		}
+
+		@Test
+		void intersectionFn() {
+			assertThat(eval("(intersection '(1 2 3) '(2 3 4))").print()).isEqualTo("(3 2)");
+		}
+
+		@Test
+		void setDifferenceFn() {
+			assertThat(eval("(set-difference '(1 2 3) '(2))").print()).isEqualTo("(3 1)");
+		}
+
+		@Test
+		void adjoinFn() {
+			assertThat(eval("(adjoin 1 '(2 3))").print()).isEqualTo("(1 2 3)");
+		}
+
+		@Test
 		void funcall() {
 			assertThat(evalAll("(defun square (x) (* x x)) (funcall #'square 5)")).isEqualTo(new LispInteger(25));
 		}
@@ -996,7 +1036,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)",
-					"(defun defvar function if in-package lambda let progn quote return setq while)", "125", "(square)",
+					"(defun defvar function if in-package lambda let progn quote return setq while)", "133", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

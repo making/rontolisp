@@ -1290,6 +1290,60 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void identityFunction() throws Exception {
+		assertThat(compileAndRun("(print (identity 42)) (print (identity '(1 2 3))) (print (funcall #'identity 'x))"))
+			.isEqualTo("42\n(1 2 3)\nx");
+	}
+
+	@Test
+	void copyListFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (copy-list '(1 2 3))) (print (copy-list nil)) (print (funcall #'copy-list '(a b)))"))
+			.isEqualTo("(1 2 3)\nnil\n(a b)");
+	}
+
+	@Test
+	void nreverseFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (nreverse '(1 2 3))) (print (nreverse nil)) (print (funcall #'nreverse '(a b c)))"))
+			.isEqualTo("(3 2 1)\nnil\n(c b a)");
+	}
+
+	@Test
+	void makeListFunction() throws Exception {
+		assertThat(compileAndRun("(print (make-list 3)) (print (make-list 0)) (print (funcall #'make-list 2))"))
+			.isEqualTo("(nil nil nil)\nnil\n(nil nil)");
+	}
+
+	@Test
+	void unionFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (union '(1 2 3) '(2 3 4))) (print (union nil '(1 2))) (print (funcall #'union '(a) '(a b)))"))
+			.isEqualTo("(4 1 2 3)\n(2 1)\n(b a)");
+	}
+
+	@Test
+	void intersectionFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (intersection '(1 2 3) '(2 3 4))) (print (intersection '(1 2) '(3 4))) (print (funcall #'intersection '(a b c) '(b c d)))"))
+			.isEqualTo("(3 2)\nnil\n(c b)");
+	}
+
+	@Test
+	void setDifferenceFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (set-difference '(1 2 3) '(2))) (print (set-difference '(1 2 3) '(1 2 3))) (print (funcall #'set-difference '(a b c) '(b)))"))
+			.isEqualTo("(3 1)\nnil\n(c a)");
+	}
+
+	@Test
+	void adjoinFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (adjoin 1 '(2 3))) (print (adjoin 2 '(1 2 3))) (print (adjoin 'a nil)) (print (funcall #'adjoin 5 '(5 6)))"))
+			.isEqualTo("(1 2 3)\n(1 2 3)\n(a)\n(5 6)");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -2029,7 +2083,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("125");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("133");
 	}
 
 	@Test

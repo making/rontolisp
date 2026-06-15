@@ -819,6 +819,127 @@ public final class Environment implements Scope {
 			tail.setCdr(b);
 			return head;
 		}));
+		env.defineFunction(LispNames.IDENTITY, new LispFunction(LispNames.IDENTITY, args -> {
+			requireArgCount(LispNames.IDENTITY, args, 1);
+			return args.get(0);
+		}));
+		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
+			requireArgCount(LispNames.COPY_LIST, args, 1);
+			List<LispVal> elements = new java.util.ArrayList<>();
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				elements.add(cell.car());
+				cur = cell.cdr();
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				result = new LispCons(elements.get(i), result);
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
+			requireArgCount(LispNames.NREVERSE, args, 1);
+			// Non-destructive: shares semantics with reverse.
+			LispVal result = LispNil.INSTANCE;
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				result = new LispCons(cell.car(), result);
+				cur = cell.cdr();
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
+			requireArgCount(LispNames.MAKE_LIST, args, 1);
+			// (make-list n): a list of n nil elements (:initial-element not supported).
+			long n = asLong(args.get(0));
+			LispVal result = LispNil.INSTANCE;
+			for (long i = 0; i < n; i++) {
+				result = new LispCons(LispNil.INSTANCE, result);
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.UNION, new LispFunction(LispNames.UNION, args -> {
+			requireArgCount(LispNames.UNION, args, 2);
+			// Start from the first list, then prepend each element of the second not
+			// already
+			// present (eql compare). Order matches the compilers' macro expansion: new
+			// elements of the second list appear at the front. CL leaves order
+			// unspecified.
+			List<LispVal> seen = toJavaList(args.get(0));
+			LispVal result = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (!listContains(seen, cell.car())) {
+					result = new LispCons(cell.car(), result);
+					seen.add(cell.car());
+				}
+				cur = cell.cdr();
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.INTERSECTION, new LispFunction(LispNames.INTERSECTION, args -> {
+			requireArgCount(LispNames.INTERSECTION, args, 2);
+			// Collect each element of the first list that is a member of the second,
+			// prepending so the result order matches the compilers' macro expansion.
+			List<LispVal> second = toJavaList(args.get(1));
+			LispVal result = LispNil.INSTANCE;
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				if (listContains(second, cell.car())) {
+					result = new LispCons(cell.car(), result);
+				}
+				cur = cell.cdr();
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.SET_DIFFERENCE, new LispFunction(LispNames.SET_DIFFERENCE, args -> {
+			requireArgCount(LispNames.SET_DIFFERENCE, args, 2);
+			// Collect each element of the first list not present in the second,
+			// prepending
+			// so the result order matches the compilers' macro expansion.
+			List<LispVal> second = toJavaList(args.get(1));
+			LispVal result = LispNil.INSTANCE;
+			LispVal cur = args.get(0);
+			while (cur instanceof LispCons cell) {
+				if (!listContains(second, cell.car())) {
+					result = new LispCons(cell.car(), result);
+				}
+				cur = cell.cdr();
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.ADJOIN, new LispFunction(LispNames.ADJOIN, args -> {
+			requireArgCount(LispNames.ADJOIN, args, 2);
+			LispVal item = args.get(0);
+			LispVal lst = args.get(1);
+			LispVal cur = lst;
+			while (cur instanceof LispCons cell) {
+				if (isEq(item, cell.car())) {
+					return lst;
+				}
+				cur = cell.cdr();
+			}
+			return new LispCons(item, lst);
+		}));
+	}
+
+	private static List<LispVal> toJavaList(LispVal list) {
+		List<LispVal> elements = new java.util.ArrayList<>();
+		LispVal cur = list;
+		while (cur instanceof LispCons cell) {
+			elements.add(cell.car());
+			cur = cell.cdr();
+		}
+		return elements;
+	}
+
+	private static boolean listContains(List<LispVal> list, LispVal item) {
+		for (LispVal element : list) {
+			if (isEq(item, element)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void registerStringOps(Environment env) {

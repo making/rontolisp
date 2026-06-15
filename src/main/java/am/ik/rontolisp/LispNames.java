@@ -263,6 +263,48 @@ public final class LispNames {
 	 */
 	public static final String SORT = "sort";
 
+	/** The {@code identity} built-in function (returns its argument unchanged). */
+	public static final String IDENTITY = "identity";
+
+	/** The {@code copy-list} built-in function (returns a shallow copy of a list). */
+	public static final String COPY_LIST = "copy-list";
+
+	/**
+	 * The {@code nreverse} built-in function (reverses a list; this implementation is
+	 * non-destructive and shares semantics with {@code reverse}).
+	 */
+	public static final String NREVERSE = "nreverse";
+
+	/**
+	 * The {@code make-list} built-in function (creates a list of n nil elements; the CL
+	 * {@code :initial-element} keyword is not supported).
+	 */
+	public static final String MAKE_LIST = "make-list";
+
+	/**
+	 * The {@code union} built-in function (set union of two lists, compared with
+	 * {@code eql}; CL {@code :test}/{@code :key} keywords are not supported).
+	 */
+	public static final String UNION = "union";
+
+	/**
+	 * The {@code intersection} built-in function (set intersection of two lists, compared
+	 * with {@code eql}).
+	 */
+	public static final String INTERSECTION = "intersection";
+
+	/**
+	 * The {@code set-difference} built-in function (elements of the first list not
+	 * present in the second, compared with {@code eql}).
+	 */
+	public static final String SET_DIFFERENCE = "set-difference";
+
+	/**
+	 * The {@code adjoin} built-in function (prepends an item to a list unless it is
+	 * already a member, compared with {@code eql}).
+	 */
+	public static final String ADJOIN = "adjoin";
+
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
 

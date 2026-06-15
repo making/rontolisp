@@ -125,8 +125,11 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND), binary(LispNames.FIND_IF),
 			binary(LispNames.POSITION), binary(LispNames.COUNT), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
 			binary(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES), binary(LispNames.NCONC),
-			binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF),
-			binary(LispNames.REMOVE_IF_NOT), binary(LispNames.MAPCAN), binary(LispNames.SORT),
+			unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE),
+			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),
+			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN), binary(LispNames.EVERY), binary(LispNames.SOME),
+			binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT),
+			binary(LispNames.MAPCAN), binary(LispNames.SORT),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)

@@ -211,6 +211,22 @@ final class JvmExprCompiler {
 				case LispNames.LAST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx, className);
 				case LispNames.BUTLAST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx, className);
+				case LispNames.IDENTITY ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx, className);
+				case LispNames.COPY_LIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx, className);
+				case LispNames.NREVERSE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx, className);
+				case LispNames.MAKE_LIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx, className);
+				case LispNames.UNION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandUnion(cons), ctx, className);
+				case LispNames.INTERSECTION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandIntersection(cons), ctx, className);
+				case LispNames.SET_DIFFERENCE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSetDifference(cons), ctx, className);
+				case LispNames.ADJOIN ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx, className);
 				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compileEq(cons, ctx, className);
 				case LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
 				case LispNames.EQUAL -> JvmEqualCompiler.compile(cons, ctx, className);
