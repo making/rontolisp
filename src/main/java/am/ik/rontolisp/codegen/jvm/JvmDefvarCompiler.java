@@ -14,17 +14,18 @@ import am.ik.jvm.Opcode;
  * local, mirroring a top-level {@code setq}; the assignment is idempotent (Common Lisp
  * semantics): the initial value is bound only when the variable has not already been
  * bound, the compile-time analog of "if not already bound". The form returns the variable
- * name symbol.
+ * name symbol. {@code defparameter}/{@code defconstant} pass {@code force=true} and
+ * always (re)bind the initial value.
  */
 final class JvmDefvarCompiler {
 
 	private JvmDefvarCompiler() {
 	}
 
-	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean force) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
-		if (parts.size() > 2 && !ctx.locals.containsKey(name.name())) {
+		if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
 			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 			int slot = ctx.allocLocal(name.name());
 			ctx.emit(Opcode.ASTORE);

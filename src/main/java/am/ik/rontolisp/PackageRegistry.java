@@ -22,7 +22,7 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_SPECIAL_FORMS = Set.of(LispNames.QUOTE, LispNames.IF, LispNames.LET,
 			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
-			LispNames.DEFVAR, LispNames.RETURN, LispNames.IN_PACKAGE);
+			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN, LispNames.IN_PACKAGE);
 
 	/**
 	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no
@@ -32,8 +32,8 @@ public final class PackageRegistry {
 	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.CASE, LispNames.AND, LispNames.OR,
 			LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP,
 			LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
-			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.PROG2, LispNames.PSETQ,
-			LispNames.TYPECASE);
+			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.DO_STAR, LispNames.PROG2,
+			LispNames.PSETQ, LispNames.TYPECASE);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -69,7 +69,8 @@ public final class PackageRegistry {
 			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR,
 			LispNames.LOGNOT, LispNames.ASH, LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP, LispNames.ELT,
 			LispNames.RASSOC, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON,
-			LispNames.NOTANY, LispNames.NOTEVERY);
+			LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT,
+			LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

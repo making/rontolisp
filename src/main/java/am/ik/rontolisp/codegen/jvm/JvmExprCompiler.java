@@ -153,7 +153,9 @@ final class JvmExprCompiler {
 				case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
 				case LispNames.DEFUN ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx, className);
-				case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className);
+				case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className, false);
+				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT ->
+					JvmDefvarCompiler.compile(cons, ctx, className, true);
 				case LispNames.LIST -> JvmListCompiler.compile(cons, ctx, className);
 				case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
 				case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
@@ -170,6 +172,8 @@ final class JvmExprCompiler {
 				case LispNames.DOLIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
 				case LispNames.DO -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx, className);
+				case LispNames.DO_STAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx, className);
 				case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
@@ -204,12 +208,14 @@ final class JvmExprCompiler {
 				case LispNames.EVERY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx, className);
 				case LispNames.SOME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx, className);
-				case LispNames.REMOVE ->
+				case LispNames.REMOVE, LispNames.DELETE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx, className);
-				case LispNames.REMOVE_IF ->
+				case LispNames.REMOVE_IF, LispNames.DELETE_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx, className);
-				case LispNames.REMOVE_IF_NOT ->
+				case LispNames.REMOVE_IF_NOT, LispNames.DELETE_IF_NOT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx, className);
+				case LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx, className);
 				case LispNames.REMOVE_DUPLICATES ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx, className);
 				case LispNames.NCONC ->

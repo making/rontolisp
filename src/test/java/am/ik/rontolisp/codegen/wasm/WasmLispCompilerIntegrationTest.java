@@ -67,6 +67,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void defparameterAlwaysAssigns() throws Exception {
+		assertThat(compileAndRun("(defparameter *x* 1) (defparameter *x* 2) (print *x*)")).isEqualTo("2");
+	}
+
+	@Test
+	void defconstant() throws Exception {
+		assertThat(compileAndRun("(defconstant +k+ 7) (print +k+)")).isEqualTo("7");
+	}
+
+	@Test
+	void doStar() throws Exception {
+		assertThat(compileAndRun("(print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))")).isEqualTo("720");
+	}
+
+	@Test
+	void delete() throws Exception {
+		assertThat(compileAndRun("(print (delete 2 '(1 2 3 2 1)))")).isEqualTo("(1 3 1)");
+		assertThat(compileAndRun("(print (delete-if #'evenp '(1 2 3 4 5)))")).isEqualTo("(1 3 5)");
+		assertThat(compileAndRun("(print (delete-if-not #'oddp '(1 2 3 4 5)))")).isEqualTo("(1 3 5)");
+	}
+
+	@Test
+	void substitute() throws Exception {
+		assertThat(compileAndRun("(print (substitute 0 2 '(1 2 3 2 1)))")).isEqualTo("(1 0 3 0 1)");
+		assertThat(compileAndRun("(print (nsubstitute 9 1 '(1 2 1 3)))")).isEqualTo("(9 2 9 3)");
+	}
+
+	@Test
 	void subtraction() throws Exception {
 		assertThat(compileAndRun("(print (- 10 3))")).isEqualTo("7");
 	}
@@ -2148,18 +2176,18 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test
 	void listSpecialForms() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-special-forms))"))
-			.isEqualTo("(defun defvar function if in-package lambda let progn quote return setq while)");
+		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
+				"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("152");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("157");
 	}
 
 	@Test

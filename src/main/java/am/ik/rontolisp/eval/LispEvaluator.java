@@ -180,6 +180,21 @@ public final class LispEvaluator {
 			}
 			return removeIfValues(args.get(0), args.get(1), true);
 		}));
+		// delete-if/delete-if-not are aliases for remove-if/remove-if-not (rontolisp
+		// treats
+		// lists immutably).
+		this.globalEnv.defineFunction(LispNames.DELETE_IF, new LispFunction(LispNames.DELETE_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.DELETE_IF + " expects 2 arguments, got " + args.size());
+			}
+			return removeIfValues(args.get(0), args.get(1), false);
+		}));
+		this.globalEnv.defineFunction(LispNames.DELETE_IF_NOT, new LispFunction(LispNames.DELETE_IF_NOT, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.DELETE_IF_NOT + " expects 2 arguments, got " + args.size());
+			}
+			return removeIfValues(args.get(0), args.get(1), true);
+		}));
 		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.MAPCAN + " expects 2 arguments, got " + args.size());
@@ -269,7 +284,10 @@ public final class LispEvaluator {
 				case LispNames.DEFUN:
 					return evalDefun(cons, env);
 				case LispNames.DEFVAR:
-					return evalDefvar(cons, env);
+					return evalDefvar(cons, env, false);
+				case LispNames.DEFPARAMETER:
+				case LispNames.DEFCONSTANT:
+					return evalDefvar(cons, env, true);
 				case LispNames.FUNCTION:
 					return evalFunction(cons, env);
 				case LispNames.PROGN:
@@ -294,6 +312,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandDotimes(cons), env);
 				case LispNames.DO:
 					return eval(LispMacroExpander.expandDo(cons), env);
+				case LispNames.DO_STAR:
+					return eval(LispMacroExpander.expandDoStar(cons), env);
 				case LispNames.BLOCK_INTERNAL:
 					return evalBlock(cons, env);
 				case LispNames.RETURN:
@@ -403,14 +423,16 @@ public final class LispEvaluator {
 		return name;
 	}
 
-	private LispVal evalDefvar(LispCons cons, Environment env) {
+	private LispVal evalDefvar(LispCons cons, Environment env, boolean force) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
 		// defvar is idempotent (Common Lisp semantics): the initial value form is
 		// evaluated and bound in the global environment only if the variable is not
-		// already bound. (defvar name) with no value leaves it unbound. Returns the
+		// already bound. (defvar name) with no value leaves it unbound. defparameter and
+		// defconstant pass force=true and always (re)assign the initial value. Returns
+		// the
 		// variable name like Common Lisp.
-		if (parts.size() > 2 && !this.globalEnv.isBound(name.name())) {
+		if (parts.size() > 2 && (force || !this.globalEnv.isBound(name.name()))) {
 			this.globalEnv.define(name.name(), eval(parts.get(2), env));
 		}
 		return name;

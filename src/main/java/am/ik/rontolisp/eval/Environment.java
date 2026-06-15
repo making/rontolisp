@@ -779,6 +779,44 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+		// delete is an alias for remove (rontolisp treats lists immutably).
+		env.defineFunction(LispNames.DELETE, new LispFunction(LispNames.DELETE, args -> {
+			requireArgCount(LispNames.DELETE, args, 2);
+			LispVal item = args.get(0);
+			List<LispVal> kept = new java.util.ArrayList<>();
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (!isEq(item, cell.car())) {
+					kept.add(cell.car());
+				}
+				cur = cell.cdr();
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = kept.size() - 1; i >= 0; i--) {
+				result = new LispCons(kept.get(i), result);
+			}
+			return result;
+		}));
+		// substitute new old list: replace every element eql to old with new. nsubstitute
+		// is an alias (rontolisp treats lists immutably).
+		LispFunction substitute = new LispFunction(LispNames.SUBSTITUTE, args -> {
+			requireArgCount(LispNames.SUBSTITUTE, args, 3);
+			LispVal newItem = args.get(0);
+			LispVal oldItem = args.get(1);
+			List<LispVal> out = new java.util.ArrayList<>();
+			LispVal cur = args.get(2);
+			while (cur instanceof LispCons cell) {
+				out.add(isEq(oldItem, cell.car()) ? newItem : cell.car());
+				cur = cell.cdr();
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = out.size() - 1; i >= 0; i--) {
+				result = new LispCons(out.get(i), result);
+			}
+			return result;
+		});
+		env.defineFunction(LispNames.SUBSTITUTE, substitute);
+		env.defineFunction(LispNames.NSUBSTITUTE, new LispFunction(LispNames.NSUBSTITUTE, substitute.body()));
 		env.defineFunction(LispNames.BUTLAST, new LispFunction(LispNames.BUTLAST, args -> {
 			requireArgCount(LispNames.BUTLAST, args, 1);
 			List<LispVal> kept = new java.util.ArrayList<>();

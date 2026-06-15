@@ -1733,6 +1733,42 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalDelete() {
+		assertThat(eval("(delete 2 '(1 2 3 2 1))").print()).isEqualTo("(1 3 1)");
+		assertThat(eval("(delete-if #'evenp '(1 2 3 4 5))").print()).isEqualTo("(1 3 5)");
+		assertThat(eval("(delete-if-not #'oddp '(1 2 3 4 5))").print()).isEqualTo("(1 3 5)");
+		assertThat(evalMulti("(funcall #'delete 2 '(1 2 3 2))").print()).isEqualTo("(1 3)");
+	}
+
+	@Test
+	void evalSubstitute() {
+		assertThat(eval("(substitute 0 2 '(1 2 3 2 1))").print()).isEqualTo("(1 0 3 0 1)");
+		assertThat(eval("(substitute 9 1 '())").print()).isEqualTo("nil");
+		assertThat(eval("(nsubstitute 9 1 '(1 2 1 3))").print()).isEqualTo("(9 2 9 3)");
+		assertThat(evalMulti("(funcall #'substitute 0 2 '(2 2 2))").print()).isEqualTo("(0 0 0)");
+	}
+
+	@Test
+	void evalDefparameterAlwaysAssigns() {
+		// Unlike defvar, defparameter re-assigns even when already bound.
+		assertThat(evalMulti("(defparameter *x* 1) (defparameter *x* 2) *x*")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(defparameter *y* 7)")).isEqualTo(new LispSymbol("*y*"));
+	}
+
+	@Test
+	void evalDefconstant() {
+		assertThat(evalMulti("(defconstant +pi3+ 3) +pi3+")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalDoStarSequentialBindings() {
+		// do* binds sequentially: acc sees i's value when binding, then steps
+		// sequentially.
+		assertThat(eval("(do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc))")).isEqualTo(new LispInteger(720));
+		assertThat(eval("(do* ((a 1 (+ a 1)) (b a)) ((> a 3) b))")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
 	void evalMapcan() {
 		assertThat(eval("(mapcan (lambda (x) (list x x)) '(1 2 3))").print()).isEqualTo("(1 1 2 2 3 3)");
 		assertThat(eval("(mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4))").print()).isEqualTo("(2 4)");
@@ -2121,13 +2157,13 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
-		assertThat(eval("(rontolisp:list-special-forms)").print())
-			.isEqualTo("(defun defvar function if in-package lambda let progn quote return setq while)");
+		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
+				"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -2139,10 +2175,11 @@ class LispEvaluatorTest {
 					"position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if", "getf",
 					"butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list", "union",
 					"intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash", "list*",
-					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery")
+					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
+					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(152);
+			.hasSize(157);
 	}
 
 	@Test

@@ -165,7 +165,8 @@ final class WasmExprCompiler {
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
 				case LispNames.DEFUN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx);
-				case LispNames.DEFVAR -> WasmDefvarCompiler.compile(cons, ctx);
+				case LispNames.DEFVAR -> WasmDefvarCompiler.compile(cons, ctx, false);
+				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> WasmDefvarCompiler.compile(cons, ctx, true);
 				case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
 				case LispNames.CAR -> WasmCarCompiler.compile(cons, ctx);
 				case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
@@ -180,6 +181,7 @@ final class WasmExprCompiler {
 				case LispNames.LET_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx);
 				case LispNames.DOLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx);
 				case LispNames.DO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx);
+				case LispNames.DO_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx);
 				case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx);
 				case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);
@@ -203,10 +205,14 @@ final class WasmExprCompiler {
 				case LispNames.GETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx);
 				case LispNames.EVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx);
 				case LispNames.SOME -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx);
-				case LispNames.REMOVE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx);
-				case LispNames.REMOVE_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx);
-				case LispNames.REMOVE_IF_NOT ->
+				case LispNames.REMOVE, LispNames.DELETE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx);
+				case LispNames.REMOVE_IF, LispNames.DELETE_IF ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx);
+				case LispNames.REMOVE_IF_NOT, LispNames.DELETE_IF_NOT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx);
+				case LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx);
 				case LispNames.REMOVE_DUPLICATES ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx);
 				case LispNames.NCONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx);

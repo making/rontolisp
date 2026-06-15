@@ -252,6 +252,8 @@ parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`), which evaluates to `value` (or nil) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
 | `defvar` | `(defvar name value?)` | Define a global variable, binding `value` only if `name` is not already bound (idempotent). With no `value`, leaves it unbound. Returns the name |
+| `defparameter` | `(defparameter name value)` | Define a global variable, **always** (re)binding `value` even if `name` is already bound. Returns the name |
+| `defconstant` | `(defconstant name value)` | Like `defparameter` (rontolisp does not enforce constancy). Returns the name |
 | `function` | `(function name)` or `#'name` | Look up a function in the function namespace and return it as a value |
 
 rontolisp is a **Lisp-2** like Common Lisp: functions and variables live in separate
@@ -273,6 +275,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `unless` | `(unless condition body...)` | Evaluates body when condition is nil, returns nil otherwise |
 | `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
 | `do` | `(do ((var init step?)...) (end-test result...) body...)` | Iterate with parallel-stepped variables. Returns the `result` forms when `end-test` is true |
+| `do*` | `(do* ((var init step?)...) (end-test result...) body...)` | Like `do` but bindings and steps are sequential (`let*`-style): each init/step form sees the variables already updated this iteration |
 | `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
 | `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
@@ -414,6 +417,11 @@ embedded `eval` runtime in compiled output (see
 | `remove-if` | `(remove-if #'evenp '(1 2 3 4))` | `(1 3)` (new list without items satisfying the predicate) |
 | `remove-if-not` | `(remove-if-not #'evenp '(1 2 3 4))` | `(2 4)` (new list keeping only items satisfying the predicate) |
 | `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)` (copy with duplicate elements removed, keeping the last occurrence; `eql` compare, no `:test`/`:key`) |
+| `delete` | `(delete 2 '(1 2 3 2))` | `(1 3)` (alias for `remove`; rontolisp treats lists immutably) |
+| `delete-if` | `(delete-if #'evenp '(1 2 3 4))` | `(1 3)` (alias for `remove-if`) |
+| `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)` (alias for `remove-if-not`) |
+| `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (copy with every element `eql` to the old item replaced by the new one; positional args only, no `:test`/`:key`) |
+| `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (alias for `substitute`) |
 | `nconc` | `(nconc (list 1 2) (list 3 4))` | `(1 2 3 4)` (destructively concatenate two lists; two arguments only) |
 | `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)` (shallow copy of a list) |
 | `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)` (reverse a list; this implementation is non-destructive, sharing semantics with `reverse`) |
@@ -532,7 +540,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `do`, `dolist`, `return`, `defvar`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `nconc`, `copy-list`, `nreverse`, `make-list`, `union`, `intersection`, `set-difference`, `adjoin`, `identity`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `do`, `do*`, `dolist`, `return`, `defvar`, `defparameter`, `defconstant`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `delete`, `delete-if`, `delete-if-not`, `substitute`, `nsubstitute`, `nconc`, `copy-list`, `nreverse`, `make-list`, `union`, `intersection`, `set-difference`, `adjoin`, `identity`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -595,11 +603,11 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
+; => (and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
-; => (defun defvar function if in-package lambda let progn quote return setq while)
+; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 152
+; => 157
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

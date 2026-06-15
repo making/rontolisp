@@ -14,17 +14,18 @@ import am.ik.wasm.Instruction;
  * local, mirroring a top-level {@code setq}; the assignment is idempotent (Common Lisp
  * semantics): the initial value is bound only when the variable has not already been
  * bound, the compile-time analog of "if not already bound". The form returns the variable
- * name symbol.
+ * name symbol. {@code defparameter}/{@code defconstant} pass {@code force=true} and
+ * always (re)bind the initial value.
  */
 final class WasmDefvarCompiler {
 
 	private WasmDefvarCompiler() {
 	}
 
-	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean force) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
-		if (parts.size() > 2 && !ctx.locals.containsKey(name.name())) {
+		if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
 			WasmExprCompiler.compileExpr(parts.get(2), ctx);
 			int slot = ctx.allocLocal(name.name());
 			ctx.writer.write(Instruction.SET_LOCAL);

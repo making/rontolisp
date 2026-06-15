@@ -397,6 +397,73 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(letBindings);
 		LispVal letExpr = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr));
 		return makeBlock(letExpr);
+
+	}
+
+	/**
+	 * Expands (do* ((var init [step])...) (end-test result...) body...) into a
+	 * {@code let*} plus {@code while} loop wrapped in a {@code %block}. Unlike
+	 * {@code do}, bindings are established sequentially (each init form sees the
+	 * variables bound before it) and step forms are assigned sequentially each iteration
+	 * (each step sees the updates already made this iteration), matching Common Lisp
+	 * {@code do*} semantics.
+	 * @param cons the do* expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDoStar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal bindingsForm = parts.get(1);
+		LispVal endClause = parts.get(2);
+		List<LispVal> body = parts.subList(3, parts.size());
+		List<LispVal> letBindings = new java.util.ArrayList<>();
+		// Stepped variables, in source order: each entry is {var, step-form}.
+		List<LispVal[]> steps = new java.util.ArrayList<>();
+		if (bindingsForm instanceof LispCons bindingsCons) {
+			for (LispVal binding : bindingsCons.toList()) {
+				if (binding instanceof LispSymbol bare) {
+					letBindings.add(listToCons(List.of(bare, LispNil.INSTANCE)));
+				}
+				else {
+					List<LispVal> spec = ((LispCons) binding).toList();
+					LispVal var = spec.get(0);
+					LispVal init = spec.size() > 1 ? spec.get(1) : LispNil.INSTANCE;
+					letBindings.add(listToCons(List.of(var, init)));
+					if (spec.size() > 2) {
+						steps.add(new LispVal[] { var, spec.get(2) });
+					}
+				}
+			}
+		}
+		LispVal endTest = LispNil.INSTANCE;
+		List<LispVal> resultForms = List.of();
+		if (endClause instanceof LispCons endCons) {
+			List<LispVal> endParts = endCons.toList();
+			endTest = endParts.get(0);
+			resultForms = endParts.subList(1, endParts.size());
+		}
+		// (while (not end-test) body... (setq v1 s1) (setq v2 s2) ...) -- sequential
+		// steps.
+		List<LispVal> whileParts = new java.util.ArrayList<>();
+		whileParts.add(new LispSymbol(LispNames.WHILE));
+		whileParts.add(makeNot(endTest));
+		whileParts.addAll(body);
+		for (LispVal[] s : steps) {
+			whileParts.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), s[0], s[1])));
+		}
+		LispVal whileExpr = listToCons(whileParts);
+		LispVal resultExpr;
+		if (resultForms.isEmpty()) {
+			resultExpr = LispNil.INSTANCE;
+		}
+		else if (resultForms.size() == 1) {
+			resultExpr = resultForms.get(0);
+		}
+		else {
+			resultExpr = makeProgn(resultForms);
+		}
+		LispVal bindings = listToCons(letBindings);
+		LispVal letExpr = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, whileExpr, resultExpr));
+		return makeBlock(letExpr);
 	}
 
 	/**
@@ -702,25 +769,38 @@ public final class LispMacroExpander {
 					LispVal n = placeParts.get(1);
 					LispVal list = placeParts.get(2);
 					LispVal nthcdrExpr = listToCons(List.of(new LispSymbol(LispNames.NTHCDR), n, list));
+
 					yield expandSetfWithRplaca(nthcdrExpr, value);
 				}
-				case LispNames.SECOND -> {
+				case LispNames.SECOND ->
+
+				{
 					LispVal nthcdrExpr = listToCons(
 							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(1), placeParts.get(1)));
+
 					yield expandSetfWithRplaca(nthcdrExpr, value);
 				}
-				case LispNames.THIRD -> {
+				case LispNames.THIRD ->
+
+				{
 					LispVal nthcdrExpr = listToCons(
 							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(2), placeParts.get(1)));
+
 					yield expandSetfWithRplaca(nthcdrExpr, value);
 				}
-				case LispNames.FOURTH -> {
+				case LispNames.FOURTH ->
+
+				{
 					LispVal nthcdrExpr = listToCons(
 							List.of(new LispSymbol(LispNames.NTHCDR), new LispInteger(3), placeParts.get(1)));
+
 					yield expandSetfWithRplaca(nthcdrExpr, value);
 				}
-				default -> {
+				default ->
+
+				{
 					if (isCarCdrComposition(accessor)) {
+
 						yield expandSetfCarCdr(accessor, placeParts.get(1), value);
 					}
 					throw new UnsupportedOperationException("setf does not support place: " + accessor);
@@ -1637,6 +1717,36 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__removeifnot_pred");
 		return expandFilter(pred, parts.get(1), parts.get(2), "__removeifnot", LispNames.FUNCALL, pred, true);
+	}
+
+	/**
+	 * Expands (substitute new old lst) into a do scan that accumulates, then reverses, a
+	 * copy of the list with every element {@code eql} to {@code old} replaced by
+	 * {@code new}.
+	 * @param cons the substitute expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSubstitute(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol newItem = new LispSymbol("__subst_new");
+		LispSymbol oldItem = new LispSymbol("__subst_old");
+		LispSymbol acc = new LispSymbol("__subst_acc");
+		LispSymbol cur = new LispSymbol("__subst_cur");
+		// (do ((__subst_new new) (__subst_old old) (__subst_acc nil)
+		// (__subst_cur lst (cdr __subst_cur)))
+		// ((atom __subst_cur) (reverse __subst_acc))
+		// (setq __subst_acc
+		// (cons (if (eql __subst_old (car __subst_cur)) __subst_new (car __subst_cur))
+		// __subst_acc)))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(newItem, parts.get(1))),
+				listToCons(List.of(oldItem, parts.get(2))), listToCons(List.of(acc, LispNil.INSTANCE)),
+				listToCons(List.of(cur, parts.get(3), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), oldItem, callOf(LispNames.CAR, cur)));
+		LispVal chosen = makeIf(match, newItem, callOf(LispNames.CAR, cur));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 
 	/**

@@ -293,6 +293,38 @@ public final class LispNames {
 	public static final String REMOVE_DUPLICATES = "remove-duplicates";
 
 	/**
+	 * The {@code delete} built-in function. In Common Lisp this is the destructive
+	 * variant of {@code remove}; rontolisp treats lists immutably, so it is an alias for
+	 * {@code remove}.
+	 */
+	public static final String DELETE = "delete";
+
+	/**
+	 * The {@code delete-if} built-in function (alias for {@code remove-if}; see
+	 * {@link #DELETE}).
+	 */
+	public static final String DELETE_IF = "delete-if";
+
+	/**
+	 * The {@code delete-if-not} built-in function (alias for {@code remove-if-not}; see
+	 * {@link #DELETE}).
+	 */
+	public static final String DELETE_IF_NOT = "delete-if-not";
+
+	/**
+	 * The {@code substitute} built-in function (return a copy of the list with each
+	 * element {@code eql} to the old item replaced by the new item).
+	 */
+	public static final String SUBSTITUTE = "substitute";
+
+	/**
+	 * The {@code nsubstitute} built-in function. In Common Lisp this is the destructive
+	 * variant of {@code substitute}; rontolisp treats lists immutably, so it is an alias
+	 * for {@code substitute}.
+	 */
+	public static final String NSUBSTITUTE = "nsubstitute";
+
+	/**
 	 * The {@code nconc} built-in function (destructively concatenate two lists).
 	 */
 	public static final String NCONC = "nconc";
@@ -488,6 +520,15 @@ public final class LispNames {
 	/** The {@code defvar} special form. */
 	public static final String DEFVAR = "defvar";
 
+	/** The {@code defparameter} special form (unconditional global assignment). */
+	public static final String DEFPARAMETER = "defparameter";
+
+	/**
+	 * The {@code defconstant} special form. rontolisp does not enforce constancy; it
+	 * behaves like {@code defparameter}.
+	 */
+	public static final String DEFCONSTANT = "defconstant";
+
 	/** The {@code cond} macro. */
 	public static final String COND = "cond";
 
@@ -535,6 +576,11 @@ public final class LispNames {
 
 	/** The {@code do} macro (parallel iteration). */
 	public static final String DO = "do";
+
+	/**
+	 * The {@code do*} macro (sequential iteration; {@code let*}-style bindings/steps).
+	 */
+	public static final String DO_STAR = "do*";
 
 	/** The {@code return} special form (non-local exit from the nearest loop block). */
 	public static final String RETURN = "return";

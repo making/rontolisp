@@ -107,6 +107,10 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("a", "b"), List.of(call(name, "a", "b")));
 	}
 
+	private static WrapperDef ternary(String name) {
+		return new WrapperDef(name, List.of("a", "b", "c"), List.of(call(name, "a", "b", "c")));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Arithmetic (arity 2)
 			binary(LispNames.ADD), binary(LispNames.SUB), binary(LispNames.MUL), binary(LispNames.DIV),
@@ -130,7 +134,9 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),
 			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN), binary(LispNames.EVERY), binary(LispNames.SOME),
 			binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT),
-			binary(LispNames.MAPCAN), binary(LispNames.SORT),
+			binary(LispNames.DELETE), binary(LispNames.DELETE_IF), binary(LispNames.DELETE_IF_NOT),
+			ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE), binary(LispNames.MAPCAN),
+			binary(LispNames.SORT),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)
