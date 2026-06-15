@@ -426,6 +426,7 @@ embedded `eval` runtime in compiled output (see
 | `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0` (sign, preserving integer/float type) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
+| `mapc` | `(mapc #'print '(1 2 3))` | Apply a function to each element for effect, return the original list |
 | `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
 
@@ -469,7 +470,7 @@ A call `(f a b)` compiles to `_apply(_eval('(function f), null), (list a b))`: t
 
 `eval` works in all three backends. In the interpreter it is the full tree-walking evaluator. The WASM and JVM compilers each emit a small tree-walking interpreter into their output (`_eval`/`_apply`/`_store` plus the helpers `_envLookup`/`_lookup`) that runs the form at runtime, so no separate evaluator or parser is needed.
 
-The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `while`, `dotimes`, `setq`, `setf`, `push`, `pop`, `funcall`, `mapcar`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
+The compiled `eval` (WASM and JVM) implements a lexical environment plus a persistent global environment, and aims for parity with the interpreter: self-evaluating atoms, variable references, closures, the special forms and higher-order functions (`let`, `lambda`, `cond`, `while`, `dotimes`, `setq`, `setf`, `push`, `pop`, `funcall`, `mapcar`, `mapc`, `reduce`, nested `eval`, ...), and application of any function or interpreted closure all behave as in the interpreter. Rather than enumerate everything, the differences are listed below.
 
 #### Compiled `eval` limitations
 
@@ -546,7 +547,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 106
+; => 107
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

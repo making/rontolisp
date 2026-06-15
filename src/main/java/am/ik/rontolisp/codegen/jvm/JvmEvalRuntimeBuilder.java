@@ -2151,6 +2151,46 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
+		// ---- mapc: (mapc fn list) — apply for effect, return the list ----
+		n = special(a, OP, LispNames.MAPC);
+		evalCar(a, REST, ENV);
+		a.astore(FN);
+		cdr(a, REST);
+		a.astore(REST);
+		evalCar(a, REST, ENV);
+		a.astore(ARGHEAD); // original list, returned at the end
+		a.aload(ARGHEAD);
+		a.astore(ELEM); // input list cursor
+		int mapcLoop = a.label();
+		int mapcEnd = a.label();
+		a.bind(mapcLoop);
+		a.aload(ELEM);
+		a.instanceOf(this.k.objectArrayClass());
+		a.branch(Opcode.IFEQ, mapcEnd);
+		// argl = cons(car(ELEM), null)
+		a.iconst(2);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		car(a, ELEM);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.aconstNull();
+		a.aastore();
+		a.astore(NEWCELL);
+		a.aload(FN);
+		a.aload(NEWCELL);
+		a.invokestatic(this.k.applyRef());
+		a.pop(); // discard the result
+		cdr(a, ELEM);
+		a.astore(ELEM);
+		a.branch(Opcode.GOTO, mapcLoop);
+		a.bind(mapcEnd);
+		a.aload(ARGHEAD);
+		a.areturn();
+		a.bind(n);
+
 		// ---- reduce: (reduce fn list) or (reduce fn init list) ----
 		n = special(a, OP, LispNames.REDUCE);
 		evalCar(a, REST, ENV);

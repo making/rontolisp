@@ -532,3 +532,7 @@
 (print (equal "abc" "abc"))
 (print (equal (list 1 2) (list 1 2)))
 (print (if (eql (list 1 2) (list 1 2)) 42 99))
+
+; mapc: apply for effect, return the original list (not the mapped results)
+(print (mapc #'print '(10 20)))
+(print (mapc #'1+ '(1 2 3)))

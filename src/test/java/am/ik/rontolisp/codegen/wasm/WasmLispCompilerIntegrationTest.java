@@ -1246,6 +1246,12 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void mapcReturnsOriginalList() throws Exception {
+		// mapc prints each element (side effect) and returns the original list.
+		assertThat(compileAndRun("(print (mapc #'print '(10 20)))")).isEqualTo("10\n20\n(10 20)");
+	}
+
+	@Test
 	void funcallWithBuiltinPlus() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'+ 3 4))")).isEqualTo("7");
 	}
@@ -1889,7 +1895,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("106");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("107");
 	}
 
 	@Test

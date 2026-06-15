@@ -1316,6 +1316,12 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMapcReturnsOriginalList() throws Exception {
+		// mapc prints each element (side effect) and returns the original list.
+		assertThat(compileAndRun("(print (mapc #'print '(10 20)))")).isEqualTo("10\n20\n(10 20)");
+	}
+
+	@Test
 	void compileAndRunFuncallWithBuiltinPlus() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'+ 3 4))")).isEqualTo("7");
 	}
@@ -1972,12 +1978,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("106");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("107");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("106");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("107");
 	}
 
 	@Test

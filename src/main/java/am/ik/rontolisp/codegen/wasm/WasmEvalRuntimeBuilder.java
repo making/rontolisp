@@ -1133,6 +1133,41 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// ---- mapc: (mapc fn list) — apply for effect, return the list ----
+		openSpecial(w, OFF, off.of(LispNames.MAPC));
+		emitEvalCar(w, REST, ENV);
+		setLocal(w, FN);
+		emitCdrOf(w, REST);
+		setLocal(w, REST);
+		emitEvalCar(w, REST, ENV);
+		setLocal(w, ARGHEAD); // original list, returned at the end
+		getLocal(w, ARGHEAD);
+		setLocal(w, ELEM); // input list cursor
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, ELEM);
+		refTest(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		// apply(FN, list(car(ELEM)))
+		emitCarOf(w, ELEM);
+		emitNull(w);
+		structNew(w, WasmLispCompiler.TYPE_CONS);
+		setLocal(w, NEWCELL);
+		getLocal(w, FN);
+		getLocal(w, NEWCELL);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.write(Instruction.DROP); // discard the result
+		emitCdrOf(w, ELEM);
+		setLocal(w, ELEM);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, ARGHEAD);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
 		// ---- reduce: (reduce fn list) or (reduce fn init list) ----
 		openSpecial(w, OFF, off.of(LispNames.REDUCE));
 		emitEvalCar(w, REST, ENV);

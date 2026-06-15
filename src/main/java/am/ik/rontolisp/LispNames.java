@@ -193,6 +193,9 @@ public final class LispNames {
 	/** The {@code mapcar} built-in function. */
 	public static final String MAPCAR = "mapcar";
 
+	/** The {@code mapc} built-in function (apply for effect, return the list). */
+	public static final String MAPC = "mapc";
+
 	/** The {@code reduce} built-in function. */
 	public static final String REDUCE = "reduce";
 

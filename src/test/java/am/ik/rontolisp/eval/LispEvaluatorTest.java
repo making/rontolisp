@@ -1443,6 +1443,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMapcReturnsOriginalList() {
+		// mapc applies the function for effect and returns the original list,
+		// not the mapped results (unlike mapcar).
+		assertThat(eval("(mapc #'1+ '(1 2 3))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalMapcRunsSideEffectsInOrder() {
+		assertThat(eval("(progn (setq acc nil) (mapc (lambda (x) (setq acc (cons x acc))) '(1 2 3)) acc)").print())
+			.isEqualTo("(3 2 1)");
+	}
+
+	@Test
 	void evalBuiltinAsVariable() {
 		assertThat(evalMulti("(setq my-op #'+) (funcall my-op 10 20)")).isEqualTo(new LispInteger(30));
 	}
@@ -1821,10 +1834,11 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
-		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal")
+		assertThat(names)
+			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(106);
+			.hasSize(107);
 	}
 
 	@Test

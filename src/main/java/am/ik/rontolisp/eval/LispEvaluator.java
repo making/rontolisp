@@ -101,6 +101,12 @@ public final class LispEvaluator {
 			}
 			return mapValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.MAPC + " expects 2 arguments, got " + args.size());
+			}
+			return mapForEffect(args.get(0), args.get(1));
+		}));
 		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
 			if (args.size() == 2) {
 				LispVal list = args.get(1);
@@ -457,6 +463,17 @@ public final class LispEvaluator {
 			result = new LispCons(results.get(i), result);
 		}
 		return result;
+	}
+
+	// Apply the function to each element for its side effects and return the
+	// original list (Common Lisp mapc semantics).
+	private LispVal mapForEffect(LispVal function, LispVal list) {
+		LispVal cursor = list;
+		while (cursor instanceof LispCons cell) {
+			apply(function, List.of(cell.car()), this.globalEnv);
+			cursor = cell.cdr();
+		}
+		return list;
 	}
 
 	private LispVal reduceValues(LispVal function, LispVal accumulator, LispVal list) {
