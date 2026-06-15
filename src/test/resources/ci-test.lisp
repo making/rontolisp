@@ -525,3 +525,10 @@
 (print (if (eq 1.5 1.5) 42 99))
 (print (if (eq 3 3) 42 99))
 (print (member 1.0 (list 2.0 1.0)))
+
+; equal (structural equality): cons cells compared recursively, unlike eql
+(print (equal '(1 2 (3)) '(1 2 (3))))
+(print (equal '(1 2) '(1 3)))
+(print (equal "abc" "abc"))
+(print (equal (list 1 2) (list 1 2)))
+(print (if (eql (list 1 2) (list 1 2)) 42 99))

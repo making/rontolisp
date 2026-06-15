@@ -129,6 +129,9 @@ public final class LispNames {
 	/** The {@code eql} built-in function (type-aware value equality). */
 	public static final String EQL = "eql";
 
+	/** The {@code equal} built-in function (structural equality). */
+	public static final String EQUAL = "equal";
+
 	/** The {@code <} built-in function. */
 	public static final String LT = "<";
 

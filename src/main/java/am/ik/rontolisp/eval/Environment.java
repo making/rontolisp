@@ -576,6 +576,10 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.EQL, args, 2);
 			return eqlValue(args.get(0), args.get(1));
 		}));
+		env.defineFunction(LispNames.EQUAL, new LispFunction(LispNames.EQUAL, args -> {
+			requireArgCount(LispNames.EQUAL, args, 2);
+			return equalValue(args.get(0), args.get(1));
+		}));
 	}
 
 	// eq: object identity. Like eql, but floats and ratios (which are distinct boxed
@@ -601,6 +605,18 @@ public final class Environment implements Scope {
 			return LispNil.INSTANCE;
 		}
 		return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	}
+
+	// equal: structural equality. Cons cells are compared recursively by car and cdr;
+	// everything else falls back to eql (so numbers, symbols, strings, and nil compare by
+	// value).
+	private static LispVal equalValue(LispVal a, LispVal b) {
+		if (a instanceof LispCons consA && b instanceof LispCons consB) {
+			return (equalValue(consA.car(), consB.car()) == LispTrue.INSTANCE
+					&& equalValue(consA.cdr(), consB.cdr()) == LispTrue.INSTANCE) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
+		}
+		return eqlValue(a, b);
 	}
 
 	private static boolean isEq(LispVal a, LispVal b) {

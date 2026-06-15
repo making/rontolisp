@@ -1174,6 +1174,38 @@ class LispEvaluatorTest {
 		assertThat(eval("(eq 3 3)")).isSameAs(LispTrue.INSTANCE);
 	}
 
+	@Test
+	void evalEqualNestedLists() {
+		assertThat(eval("(equal '(1 2 (3)) '(1 2 (3)))")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqualDifferentLists() {
+		assertThat(eval("(equal '(1 2) '(1 3))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqualStrings() {
+		assertThat(eval("(equal \"abc\" \"abc\")")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqualDifferentTypeNumbers() {
+		assertThat(eval("(equal 3 3.0)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEqualFreshConsesUnlikeEql() {
+		// equal compares structure recursively, where eql only compares cons by identity
+		assertThat(eval("(eql (list 1 2) (list 1 2))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(equal (list 1 2) (list 1 2))")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEqualAsFunctionValue() {
+		assertThat(eval("(funcall #'equal '(1) '(1))")).isSameAs(LispTrue.INSTANCE);
+	}
+
 	// push tests
 
 	@Test
@@ -1789,10 +1821,10 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
-		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not")
+		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(105);
+			.hasSize(106);
 	}
 
 	@Test

@@ -73,6 +73,155 @@ final class WasmRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the _equal helper function body (structural equality). Takes two (ref null
+	 * eq) args (locals 0 and 1), returns i32 (1=equal, 0=not). Identical references
+	 * (ref.eq, which also covers i31 integers) are equal; two cons cells are equal when
+	 * their cars and cdrs are recursively _equal; otherwise it reproduces eql semantics
+	 * for the remaining value types (floats by value, ratios by numerator/denominator,
+	 * symbols and strings by interned offset).
+	 */
+	static byte[] buildEqualBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		w.write(0); // 0 extra locals; params (local 0 = a, local 1 = b) suffice
+
+		// if (ref.eq a b) -> 1
+		getLocal(w, 0);
+		getLocal(w, 1);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.ELSE);
+
+		// else if both cons -> _equal(car, car) && _equal(cdr, cdr)
+		refTest(w, 0, WasmLispCompiler.TYPE_CONS);
+		refTest(w, 1, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		consField(w, 0, 0); // a.car
+		consField(w, 1, 0); // b.car
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		consField(w, 0, 1); // a.cdr
+		consField(w, 1, 1); // b.cdr
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // end car-equal if
+		w.write(Instruction.ELSE);
+
+		// else (ref.eq already false): eql base case for value types.
+		// both floats -> f64 fields equal
+		refTest(w, 0, WasmLispCompiler.TYPE_FLOAT);
+		refTest(w, 1, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		floatField(w, 0);
+		floatField(w, 1);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.ELSE);
+
+		// both ratios -> numerators and denominators equal
+		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
+		refTest(w, 1, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_NUM);
+		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.I32_EQ);
+		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_DEN);
+		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.ELSE);
+
+		// symbols and strings -> interned offsets equal
+		emitStringOffsetEq(w);
+		w.write(Instruction.END); // end ratio if
+		w.write(Instruction.END); // end float if
+		w.write(Instruction.END); // end both-cons if
+		w.write(Instruction.END); // end ref.eq if
+
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
+	// 1 if both locals are TYPE_STRING structs with the same data offset, else 0.
+	private static void emitStringOffsetEq(WasmWriter w) {
+		refTest(w, 0, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		refTest(w, 1, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		stringOffset(w, 0);
+		stringOffset(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // end b-string if
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // end a-string if
+	}
+
+	private static void getLocal(WasmWriter w, int idx) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(idx);
+	}
+
+	private static void refTest(WasmWriter w, int local, int typeIndex) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(typeIndex);
+	}
+
+	private static void consField(WasmWriter w, int local, int field) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(field);
+	}
+
+	private static void floatField(WasmWriter w, int local) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeSignedLeb128(0);
+	}
+
+	private static void stringOffset(WasmWriter w, int local) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(0);
+	}
+
+	private static void ratioComponent(WasmWriter w, int local, int func) {
+		getLocal(w, local);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(func);
+	}
+
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval) {

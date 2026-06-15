@@ -1043,6 +1043,37 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEqualNestedLists() throws Exception {
+		assertThat(compileAndRun("(print (equal '(1 2 (3)) '(1 2 (3))))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunEqualDifferentLists() throws Exception {
+		assertThat(compileAndRun("(print (equal '(1 2) '(1 3)))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunEqualStrings() throws Exception {
+		assertThat(compileAndRun("(print (equal \"abc\" \"abc\"))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunEqualDifferentTypeNumbers() throws Exception {
+		assertThat(compileAndRun("(print (equal 3 3.0))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunEqualFreshConsesUnlikeEql() throws Exception {
+		assertThat(compileAndRun("(print (eql (list 1 2) (list 1 2)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (equal (list 1 2) (list 1 2)))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunEqualAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'equal '(1) '(1)))")).isEqualTo("t");
+	}
+
+	@Test
 	void compileAndRunPush() throws Exception {
 		assertThat(compileAndRun("""
 				(setq x (list 2 3))
@@ -1941,12 +1972,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("105");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("106");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("105");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("106");
 	}
 
 	@Test

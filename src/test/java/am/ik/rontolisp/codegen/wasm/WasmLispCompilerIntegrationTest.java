@@ -973,6 +973,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void equalNestedLists() throws Exception {
+		assertThat(compileAndRun("(print (equal '(1 2 (3)) '(1 2 (3))))")).isEqualTo("t");
+	}
+
+	@Test
+	void equalDifferentLists() throws Exception {
+		assertThat(compileAndRun("(print (equal '(1 2) '(1 3)))")).isEqualTo("nil");
+	}
+
+	@Test
+	void equalStrings() throws Exception {
+		assertThat(compileAndRun("(print (equal \"abc\" \"abc\"))")).isEqualTo("t");
+	}
+
+	@Test
+	void equalDifferentTypeNumbers() throws Exception {
+		assertThat(compileAndRun("(print (equal 3 3.0))")).isEqualTo("nil");
+	}
+
+	@Test
+	void equalFreshConsesUnlikeEql() throws Exception {
+		assertThat(compileAndRun("(print (eql (list 1 2) (list 1 2)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (equal (list 1 2) (list 1 2)))")).isEqualTo("t");
+	}
+
+	@Test
+	void equalAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'equal '(1) '(1)))")).isEqualTo("t");
+	}
+
+	@Test
 	void push() throws Exception {
 		assertThat(compileAndRun("""
 				(setq x (list 2 3))
@@ -1858,7 +1889,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("105");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("106");
 	}
 
 	@Test

@@ -192,6 +192,7 @@ final class WasmExprCompiler {
 				case LispNames.LAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx);
 				case LispNames.EQ_GENERAL -> WasmEqGeneralCompiler.compile(cons, ctx);
 				case LispNames.EQL -> WasmEqGeneralCompiler.compileEql(cons, ctx);
+				case LispNames.EQUAL -> WasmEqualCompiler.compile(cons, ctx);
 				case LispNames.REMF_TAIL -> WasmRemfTailCompiler.compile(cons, ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);

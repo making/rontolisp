@@ -170,12 +170,15 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_WRITE_LINE = 48;
 
-	static final int FUNC_DISPATCH_BASE = 49;
+	// Structural equality (equal): recursively compares cons cells; always present.
+	static final int FUNC_EQUAL = 49;
+
+	static final int FUNC_DISPATCH_BASE = 50;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy indices 49..56 (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 57
+	// Dispatch functions occupy indices 50..57 (arities 0..7)
+	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1; // 58
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -855,6 +858,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_OPEN); // _open
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _close
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _write_line
+				// Structural equality runtime
+				fnDef.addFunction(TYPE_RAT_CMP); // _equal ((ref null eq), (ref null eq))
+													// -> i32
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -937,7 +943,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
 					.addFunction(WasmIoRuntimeBuilder.buildOpenBody())
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable))
-					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable));
+					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable))
+					.addFunction(WasmRuntimeBuilder.buildEqualBody());
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);

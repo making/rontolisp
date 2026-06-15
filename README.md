@@ -339,6 +339,7 @@ embedded `eval` runtime in compiled output (see
 | `=` | `(= 1 1)`, `(= 3 3 3)` | `t` (variadic) |
 | `eq` | `(eq 'foo 'foo)`, `(eq 1.5 1.5)` | `t`, `nil` (object identity: symbols and small integers compare equal, but floats and ratios are distinct objects, so never `eq`; reference identity for cons cells) |
 | `eql` | `(eql 1.5 1.5)`, `(eql 3 3.0)` | `t`, `nil` (like `eq`, but numbers of the same type and value are equal — e.g. floats and ratios) |
+| `equal` | `(equal '(1 2 (3)) '(1 2 (3)))`, `(equal "abc" "abc")` | `t`, `t` (structural equality: cons cells compared recursively by car and cdr, otherwise like `eql`) |
 | `<` | `(< 1 2)`, `(< 1 2 3)` | `t` (variadic; true when strictly increasing) |
 | `>` | `(> 2 1)`, `(> 3 2 1)` | `t` (variadic) |
 | `<=` | `(<= 1 1)` | `t` (variadic) |
@@ -545,7 +546,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 105
+; => 106
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

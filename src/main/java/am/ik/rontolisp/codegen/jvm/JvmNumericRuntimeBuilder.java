@@ -91,6 +91,12 @@ final class JvmNumericRuntimeBuilder {
 	 */
 	static final String EQ_STRICT = "_eq";
 
+	/**
+	 * Structural equality ({@code equal} semantics): cons cells are compared recursively
+	 * by car and cdr, everything else delegates to {@link #EQV}.
+	 */
+	static final String EQUAL = "_equal";
+
 	/** Truncates a rational toward zero. */
 	static final String RAT_TRUNC = "_rtrunc";
 
@@ -154,6 +160,8 @@ final class JvmNumericRuntimeBuilder {
 		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
 		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
 		ClassConstant ratArrClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
+		ClassConstant objArrClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
 		ClassConstant bigDecClass = cp.addClass(cp.addUtf8("java/math/BigDecimal"));
 		ClassConstant mathCtxClass = cp.addClass(cp.addUtf8("java/math/MathContext"));
 
@@ -263,6 +271,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nPow = cp.addUtf8(POW);
 		Utf8Constant nEqv = cp.addUtf8(EQV);
 		Utf8Constant nEqStrict = cp.addUtf8(EQ_STRICT);
+		Utf8Constant nEqual = cp.addUtf8(EQUAL);
 		Utf8Constant nRatTrunc = cp.addUtf8(RAT_TRUNC);
 		Utf8Constant nRatFloor = cp.addUtf8(RAT_FLOOR);
 		Utf8Constant nRatCeil = cp.addUtf8(RAT_CEIL);
@@ -289,6 +298,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rPow = cp.addMethodref(thisClass, cp.addNameAndType(nPow, dPow));
 		MethodrefConstant rEqv = cp.addMethodref(thisClass, cp.addNameAndType(nEqv, dCmp));
 		MethodrefConstant rEqStrict = cp.addMethodref(thisClass, cp.addNameAndType(nEqStrict, dCmp));
+		MethodrefConstant rEqual = cp.addMethodref(thisClass, cp.addNameAndType(nEqual, dCmp));
 		MethodrefConstant rRatTrunc = cp.addMethodref(thisClass, cp.addNameAndType(nRatTrunc, dUnary));
 		MethodrefConstant rRatFloor = cp.addMethodref(thisClass, cp.addNameAndType(nRatFloor, dUnary));
 		MethodrefConstant rRatCeil = cp.addMethodref(thisClass, cp.addNameAndType(nRatCeil, dUnary));
@@ -325,6 +335,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildPow(nPow, dPow, rRatNum, rRatDen, rRat, biPow));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, objEquals));
 		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
+		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
 		methods.add(buildRatFloor(nRatFloor, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, null, null));
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
@@ -353,6 +364,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(POW, rPow);
 		ops.put(EQV, rEqv);
 		ops.put(EQ_STRICT, rEqStrict);
+		ops.put(EQUAL, rEqual);
 		ops.put(RAT_TRUNC, rRatTrunc);
 		ops.put(RAT_FLOOR, rRatFloor);
 		ops.put(RAT_CEIL, rRatCeil);
@@ -1122,6 +1134,105 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, eqv.index());
 		c.add(Opcode.IRETURN);
 		return new NumericMethod(name, desc, c, 2, 2, List.of());
+	}
+
+	// _equal(Object a, Object b): structural equality. Two cons cells (Object[] of length
+	// 2 whose head is not an Integer, distinguishing them from function references and
+	// ratios) are equal when their cars and cdrs are recursively _equal; everything else
+	// (including nil/null) delegates to _eqv, so numbers, symbols, strings and nil
+	// compare
+	// by value. Returns 1 for equal, 0 otherwise.
+	private static NumericMethod buildEqual(Utf8Constant name, Utf8Constant desc, ClassConstant objArrClass,
+			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant eqv, MethodrefConstant equal) {
+		List<Integer> c = new ArrayList<>();
+		// if (a == null) return (b == null) ? 1 : 0;
+		c.add(Opcode.ALOAD_0);
+		int ifANotNull = c.size();
+		c.add(Opcode.IFNONNULL);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		int ifBNotNull = c.size();
+		c.add(Opcode.IFNONNULL);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifBNotNull, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		// a is not null
+		JvmRuntimeBuilder.patchBranch(c, ifANotNull, c.size());
+		// Detect both cons: instanceof Object[], not BigInteger[], head not Integer.
+		List<Integer> notBothCons = new ArrayList<>();
+		emitConsGuard(c, Opcode.ALOAD_0, objArrClass, ratArrClass, integerClass, notBothCons);
+		emitConsGuard(c, Opcode.ALOAD_1, objArrClass, ratArrClass, integerClass, notBothCons);
+		// both cons: return _equal(a[0], b[0]) && _equal(a[1], b[1])
+		emitArrayElement(c, Opcode.ALOAD_0, objArrClass, Opcode.ICONST_0);
+		emitArrayElement(c, Opcode.ALOAD_1, objArrClass, Opcode.ICONST_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, equal.index());
+		int ifCarFalse = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitArrayElement(c, Opcode.ALOAD_0, objArrClass, Opcode.ICONST_1);
+		emitArrayElement(c, Opcode.ALOAD_1, objArrClass, Opcode.ICONST_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, equal.index());
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifCarFalse, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		// not both cons: delegate to _eqv(a, b)
+		int notCons = c.size();
+		for (int pos : notBothCons) {
+			JvmRuntimeBuilder.patchBranch(c, pos, notCons);
+		}
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, eqv.index());
+		c.add(Opcode.IRETURN);
+		return new NumericMethod(name, desc, c, 3, 2, List.of());
+	}
+
+	// Emits a cons-cell guard for the value loaded by loadOpcode: if it is not a cons
+	// cell
+	// (not an Object[], or a BigInteger[] ratio, or an Object[] whose head is an Integer
+	// function reference), branch to the not-cons target (the position is recorded so the
+	// caller can patch it).
+	private static void emitConsGuard(List<Integer> c, int loadOpcode, ClassConstant objArrClass,
+			ClassConstant ratArrClass, ClassConstant integerClass, List<Integer> notBothCons) {
+		c.add(loadOpcode);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		notBothCons.add(c.size());
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(loadOpcode);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		notBothCons.add(c.size());
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(loadOpcode);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.AALOAD);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, integerClass.index());
+		notBothCons.add(c.size());
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+	}
+
+	// Loads element at the given index (ICONST_0/ICONST_1) of the Object[] loaded by
+	// loadOpcode.
+	private static void emitArrayElement(List<Integer> c, int loadOpcode, ClassConstant objArrClass, int indexOpcode) {
+		c.add(loadOpcode);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		c.add(indexOpcode);
+		c.add(Opcode.AALOAD);
 	}
 
 	// _rtrunc(Object x): num/den truncating toward zero (BigInteger.divide).
