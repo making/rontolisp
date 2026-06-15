@@ -258,6 +258,9 @@ nil
 3
 nil
 2
+2
+nil
+1
 t
 nil
 t
@@ -270,7 +273,7 @@ nil
 (1 9)
 (and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)
 (defun defvar function if in-package lambda let progn quote return setq while)
-112
+113
 (list-functions list-macros list-special-forms version)
 ci-intro-fn
 nil

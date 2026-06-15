@@ -179,6 +179,12 @@ public final class LispNames {
 	 */
 	public static final String FIND = "find";
 
+	/**
+	 * The {@code position} built-in function (return the 0-based index of the first
+	 * element {@code eql} to the given item, or nil).
+	 */
+	public static final String POSITION = "position";
+
 	/** The {@code assoc} built-in function. */
 	public static final String ASSOC = "assoc";
 

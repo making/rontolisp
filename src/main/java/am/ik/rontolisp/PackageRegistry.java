@@ -56,11 +56,11 @@ public final class PackageRegistry {
 			LispNames.FIRST, LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT,
 			LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL,
 			LispNames.LOAD, LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER,
-			LispNames.FIND, LispNames.ASSOC, LispNames.LAST, LispNames.REST, LispNames.PRINC_TO_STRING,
-			LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING_UPCASE, LispNames.STRING_DOWNCASE,
-			LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.STRING_EQUAL,
-			LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN,
-			LispNames.CLOSE, LispNames.WRITE_LINE);
+			LispNames.FIND, LispNames.POSITION, LispNames.ASSOC, LispNames.LAST, LispNames.REST,
+			LispNames.PRINC_TO_STRING, LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING_UPCASE,
+			LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ,
+			LispNames.STRING_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM,
+			LispNames.OPEN, LispNames.CLOSE, LispNames.WRITE_LINE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

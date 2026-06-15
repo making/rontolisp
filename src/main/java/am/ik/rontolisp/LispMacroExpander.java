@@ -1063,6 +1063,32 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (position item lst) into a do/return scan returning the 0-based index of
+	 * the first element {@code eql} to the item, or nil. Like {@code find} but yields the
+	 * position rather than the element.
+	 * @param cons the position expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPosition(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__pos_item");
+		LispSymbol idx = new LispSymbol("__pos_idx");
+		LispSymbol cur = new LispSymbol("__pos_cur");
+		// (do ((__pos_item item) (__pos_idx 0 (+ __pos_idx 1))
+		// (__pos_cur lst (cdr __pos_cur)))
+		// ((atom __pos_cur) nil)
+		// (if (eql __pos_item (car __pos_cur)) (return __pos_idx) nil))
+		LispVal idxStep = listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(idx, new LispInteger(0), idxStep)),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
+		LispVal body = makeIf(match, makeReturn(idx), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
 	 * is {@code eql} to the key, or nil.
 	 * @param cons the assoc expression

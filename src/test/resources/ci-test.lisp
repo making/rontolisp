@@ -431,6 +431,9 @@
 (print (find 3 '(1 2 3 4)))
 (print (find 9 '(1 2 3)))
 (print (funcall #'find 2 '(1 2 3)))
+(print (position 3 '(1 2 3 4)))
+(print (position 9 '(1 2 3)))
+(print (funcall #'position 2 '(1 2 3)))
 
 ; every / some / remove / remove-if
 (print (every #'evenp '(2 4 6)))
