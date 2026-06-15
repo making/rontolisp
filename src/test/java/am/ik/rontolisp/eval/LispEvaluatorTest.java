@@ -1414,11 +1414,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFindIfNot() {
+		assertThat(eval("(find-if-not #'evenp '(2 4 5 6))").print()).isEqualTo("5");
+		assertThat(eval("(find-if-not #'oddp '(1 3 4 5))").print()).isEqualTo("4");
+		assertThat(eval("(find-if-not #'plusp '(1 2 3))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'find-if-not #'evenp '(2 4 3))").print()).isEqualTo("3");
+	}
+
+	@Test
 	void evalPosition() {
 		assertThat(eval("(position 3 '(1 2 3 4))").print()).isEqualTo("2");
 		assertThat(eval("(position 'a '(a b c))").print()).isEqualTo("0");
 		assertThat(eval("(position 9 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
 		assertThat(eval("(funcall #'position 2 '(5 2 8))").print()).isEqualTo("1");
+	}
+
+	@Test
+	void evalPositionIf() {
+		assertThat(eval("(position-if #'evenp '(1 3 5 6 7))").print()).isEqualTo("3");
+		assertThat(eval("(position-if #'oddp '(2 4 5))").print()).isEqualTo("2");
+		assertThat(eval("(position-if #'plusp '(-1 -2 -3))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'position-if #'evenp '(1 2 3))").print()).isEqualTo("1");
 	}
 
 	@Test
@@ -1428,6 +1444,14 @@ class LispEvaluatorTest {
 		assertThat(eval("(count 9 '(1 2 3))").print()).isEqualTo("0");
 		assertThat(eval("(count 1 nil)").print()).isEqualTo("0");
 		assertThat(eval("(funcall #'count 2 '(2 2 8))").print()).isEqualTo("2");
+	}
+
+	@Test
+	void evalCountIf() {
+		assertThat(eval("(count-if #'evenp '(1 2 3 4 5 6))").print()).isEqualTo("3");
+		assertThat(eval("(count-if #'oddp '(2 4 6))").print()).isEqualTo("0");
+		assertThat(eval("(count-if #'plusp nil)").print()).isEqualTo("0");
+		assertThat(eval("(funcall #'count-if #'evenp '(2 2 8 1))").print()).isEqualTo("3");
 	}
 
 	@Test
@@ -2043,13 +2067,15 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
-		assertThat(names).contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal",
-				"mapc", "every", "some", "remove", "remove-if", "remove-if-not", "find", "find-if", "position", "count",
-				"mapcan", "apply", "sort", "member-if", "assoc-if", "getf", "butlast", "remove-duplicates", "nconc",
-				"identity", "copy-list", "nreverse", "make-list", "union", "intersection", "set-difference", "adjoin")
+		assertThat(names)
+			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
+					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "find-if-not", "position",
+					"position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if", "getf",
+					"butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list", "union",
+					"intersection", "set-difference", "adjoin")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(133);
+			.hasSize(136);
 	}
 
 	@Test

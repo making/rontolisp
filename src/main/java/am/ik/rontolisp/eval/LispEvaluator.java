@@ -138,6 +138,24 @@ public final class LispEvaluator {
 			}
 			return findIfValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.FIND_IF_NOT, new LispFunction(LispNames.FIND_IF_NOT, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.FIND_IF_NOT + " expects 2 arguments, got " + args.size());
+			}
+			return findIfNotValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.POSITION_IF, new LispFunction(LispNames.POSITION_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.POSITION_IF + " expects 2 arguments, got " + args.size());
+			}
+			return positionIfValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.COUNT_IF, new LispFunction(LispNames.COUNT_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.COUNT_IF + " expects 2 arguments, got " + args.size());
+			}
+			return countIfValues(args.get(0), args.get(1));
+		}));
 		this.globalEnv.defineFunction(LispNames.MEMBER_IF, new LispFunction(LispNames.MEMBER_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.MEMBER_IF + " expects 2 arguments, got " + args.size());
@@ -571,6 +589,45 @@ public final class LispEvaluator {
 			list = cell.cdr();
 		}
 		return LispNil.INSTANCE;
+	}
+
+	// Return the first element for which the predicate is false, or nil
+	// (Common Lisp find-if-not semantics, single-list form; the complement of find-if).
+	private LispVal findIfNotValues(LispVal predicate, LispVal list) {
+		while (list instanceof LispCons cell) {
+			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				return cell.car();
+			}
+			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the 0-based index of the first element satisfying the predicate
+	// (Common Lisp position-if), or nil. Like position but tests with the predicate.
+	private LispVal positionIfValues(LispVal predicate, LispVal list) {
+		long index = 0;
+		while (list instanceof LispCons cell) {
+			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				return new LispInteger(index);
+			}
+			index++;
+			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the number of elements satisfying the predicate (Common Lisp count-if),
+	// as an integer. Like count but tests with the predicate rather than eql.
+	private LispVal countIfValues(LispVal predicate, LispVal list) {
+		long count = 0;
+		while (list instanceof LispCons cell) {
+			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				count++;
+			}
+			list = cell.cdr();
+		}
+		return new LispInteger(count);
 	}
 
 	// Return the tail of the list starting at the first element satisfying the predicate

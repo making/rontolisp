@@ -396,9 +396,12 @@ embedded `eval` runtime in compiled output (see
 | `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil) |
 | `find` | `(find 2 '(1 2 3))` | `2` (first element `eql` to the item, or nil) |
 | `find-if` | `(find-if #'evenp '(1 3 6 7))` | `6` (first element satisfying the predicate, or nil) |
+| `find-if-not` | `(find-if-not #'evenp '(2 4 5 6))` | `5` (first element failing the predicate, or nil) |
 | `member-if` | `(member-if #'oddp '(2 4 5 6))` | `(5 6)` (tail starting at the first element satisfying the predicate, or nil) |
 | `position` | `(position 3 '(1 2 3))` | `2` (0-based index of the first element `eql` to the item, or nil) |
+| `position-if` | `(position-if #'evenp '(1 3 6 7))` | `2` (0-based index of the first element satisfying the predicate, or nil) |
 | `count` | `(count 2 '(1 2 3 2 2))` | `3` (number of elements `eql` to the item) |
+| `count-if` | `(count-if #'evenp '(1 2 3 4))` | `2` (number of elements satisfying the predicate) |
 | `assoc` | `(assoc 'b '((a 1) (b 2)))` | `(b 2)` (first pair whose car is `eql` to the key, or nil) |
 | `assoc-if` | `(assoc-if #'oddp '((2 a) (3 b)))` | `(3 b)` (first pair whose car satisfies the predicate, or nil) |
 | `getf` | `(getf '(:a 1 :b 2) :b)` | `2` (value following the indicator in a property list, or nil; the partner of `remf`. Two arguments only: no `&optional default`) |
@@ -576,7 +579,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 133
+; => 136
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

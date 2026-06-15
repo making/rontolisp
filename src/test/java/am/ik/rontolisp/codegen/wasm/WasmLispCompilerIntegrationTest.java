@@ -1223,6 +1223,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void findIfNotFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (find-if-not #'evenp '(2 4 5 6))) (print (find-if-not #'plusp '(1 2 3))) (print (funcall #'find-if-not #'oddp '(1 3 4)))"))
+			.isEqualTo("5\nnil\n4");
+	}
+
+	@Test
 	void positionFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position 3 '(1 2 3 4))) (print (position 9 '(1 2 3))) (print (funcall #'position 2 '(5 2 8)))"))
@@ -1230,10 +1237,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void positionIfFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (position-if #'evenp '(1 3 5 6 7))) (print (position-if #'plusp '(-1 -2 -3))) (print (funcall #'position-if #'oddp '(2 4 5)))"))
+			.isEqualTo("3\nnil\n2");
+	}
+
+	@Test
 	void countFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (count 2 '(1 2 3 2 2))) (print (count 9 '(1 2 3))) (print (funcall #'count 2 '(2 2 8)))"))
 			.isEqualTo("3\n0\n2");
+	}
+
+	@Test
+	void countIfFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (count-if #'evenp '(1 2 3 4 5 6))) (print (count-if #'oddp '(2 4 6))) (print (funcall #'count-if #'evenp '(2 2 8 1)))"))
+			.isEqualTo("3\n0\n3");
 	}
 
 	@Test
@@ -2083,7 +2104,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("133");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("136");
 	}
 
 	@Test

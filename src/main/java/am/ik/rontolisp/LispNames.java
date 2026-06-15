@@ -186,6 +186,12 @@ public final class LispNames {
 	public static final String FIND_IF = "find-if";
 
 	/**
+	 * The {@code find-if-not} built-in function (return the first element for which the
+	 * predicate is false, or nil).
+	 */
+	public static final String FIND_IF_NOT = "find-if-not";
+
+	/**
 	 * The {@code member-if} built-in function (return the tail of the list starting at
 	 * the first element for which the predicate is true, or nil).
 	 */
@@ -198,10 +204,22 @@ public final class LispNames {
 	public static final String POSITION = "position";
 
 	/**
+	 * The {@code position-if} built-in function (return the 0-based index of the first
+	 * element for which the predicate is true, or nil).
+	 */
+	public static final String POSITION_IF = "position-if";
+
+	/**
 	 * The {@code count} built-in function (return the number of elements {@code eql} to
 	 * the given item).
 	 */
 	public static final String COUNT = "count";
+
+	/**
+	 * The {@code count-if} built-in function (return the number of elements for which the
+	 * predicate is true).
+	 */
+	public static final String COUNT_IF = "count-if";
 
 	/** The {@code assoc} built-in function. */
 	public static final String ASSOC = "assoc";

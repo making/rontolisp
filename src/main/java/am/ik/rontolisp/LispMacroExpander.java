@@ -1087,6 +1087,31 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (find-if-not pred lst) into a do/return scan returning the first element
+	 * for which the predicate is false, or nil. The complement of {@code find-if}: the
+	 * test is {@code (not (funcall pred element))}.
+	 * @param cons the find-if-not expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFindIfNot(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__findifnot_pred");
+		LispSymbol cur = new LispSymbol("__findifnot_cur");
+		// (do ((__findifnot_pred pred) (__findifnot_cur lst (cdr __findifnot_cur)))
+		// ((atom __findifnot_cur) nil)
+		// (if (not (funcall __findifnot_pred (car __findifnot_cur)))
+		// (return (car __findifnot_cur)) nil))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem));
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.NOT), call));
+		LispVal body = makeIf(test, makeReturn(elem), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (position item lst) into a do/return scan returning the 0-based index of
 	 * the first element {@code eql} to the item, or nil. Like {@code find} but yields the
 	 * position rather than the element.
@@ -1109,6 +1134,32 @@ public final class LispMacroExpander {
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
 		LispVal body = makeIf(match, makeReturn(idx), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (position-if pred lst) into a do/return scan returning the 0-based index of
+	 * the first element for which the predicate is true, or nil. Like {@code position}
+	 * but tests each element with {@code (funcall pred element)} rather than {@code eql}.
+	 * @param cons the position-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPositionIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__posif_pred");
+		LispSymbol idx = new LispSymbol("__posif_idx");
+		LispSymbol cur = new LispSymbol("__posif_cur");
+		// (do ((__posif_pred pred) (__posif_idx 0 (+ __posif_idx 1))
+		// (__posif_cur lst (cdr __posif_cur)))
+		// ((atom __posif_cur) nil)
+		// (if (funcall __posif_pred (car __posif_cur)) (return __posif_idx) nil))
+		LispVal idxStep = listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(pred, parts.get(1))), listToCons(List.of(idx, new LispInteger(0), idxStep)),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
+		LispVal body = makeIf(test, makeReturn(idx), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 
@@ -1137,6 +1188,34 @@ public final class LispMacroExpander {
 		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.ADD), n, new LispInteger(1)));
 		LispVal incrementStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), n, increment));
 		LispVal body = makeIf(match, incrementStep, LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (count-if pred lst) into a do scan returning the number of elements for
+	 * which the predicate is true. Like {@code count} but tests each element with
+	 * {@code (funcall pred element)} rather than {@code eql}.
+	 * @param cons the count-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCountIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__countif_pred");
+		LispSymbol n = new LispSymbol("__countif_n");
+		LispSymbol cur = new LispSymbol("__countif_cur");
+		// (do ((__countif_pred pred) (__countif_n 0)
+		// (__countif_cur lst (cdr __countif_cur)))
+		// ((atom __countif_cur) __countif_n)
+		// (if (funcall __countif_pred (car __countif_cur))
+		// (setq __countif_n (+ __countif_n 1)) nil))
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(pred, parts.get(1))), listToCons(List.of(n, new LispInteger(0))),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), n));
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
+		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.ADD), n, new LispInteger(1)));
+		LispVal incrementStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), n, increment));
+		LispVal body = makeIf(test, incrementStep, LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 

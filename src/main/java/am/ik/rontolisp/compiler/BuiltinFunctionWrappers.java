@@ -123,7 +123,8 @@ public final class BuiltinFunctionWrappers {
 			// Sequence operations (compiled via macro expansion in call position)
 			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), unary(LispNames.BUTLAST),
 			binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND), binary(LispNames.FIND_IF),
-			binary(LispNames.POSITION), binary(LispNames.COUNT), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
+			binary(LispNames.FIND_IF_NOT), binary(LispNames.POSITION), binary(LispNames.POSITION_IF),
+			binary(LispNames.COUNT), binary(LispNames.COUNT_IF), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
 			binary(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES), binary(LispNames.NCONC),
 			unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE),
 			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),
