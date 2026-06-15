@@ -745,6 +745,80 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+		env.defineFunction(LispNames.BUTLAST, new LispFunction(LispNames.BUTLAST, args -> {
+			requireArgCount(LispNames.BUTLAST, args, 1);
+			List<LispVal> kept = new java.util.ArrayList<>();
+			LispVal cur = args.get(0);
+			// Accumulate every element except the last; an empty or single-element list
+			// yields nil.
+			while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons) {
+				kept.add(cell.car());
+				cur = cell.cdr();
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = kept.size() - 1; i >= 0; i--) {
+				result = new LispCons(kept.get(i), result);
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.GETF, new LispFunction(LispNames.GETF, args -> {
+			requireArgCount(LispNames.GETF, args, 2);
+			// (getf plist indicator): the property list is the first argument.
+			LispVal cur = args.get(0);
+			LispVal key = args.get(1);
+			// Walk the property list two cells at a time, returning the value after the
+			// first key eql to the indicator.
+			while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons valueCell) {
+				if (isEq(key, cell.car())) {
+					return valueCell.car();
+				}
+				cur = valueCell.cdr();
+			}
+			return LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.REMOVE_DUPLICATES, new LispFunction(LispNames.REMOVE_DUPLICATES, args -> {
+			requireArgCount(LispNames.REMOVE_DUPLICATES, args, 1);
+			List<LispVal> kept = new java.util.ArrayList<>();
+			LispVal cur = args.get(0);
+			// Keep an element only when it does not occur again later in the list, so the
+			// last occurrence of each value survives (Common Lisp default; eql compare).
+			while (cur instanceof LispCons cell) {
+				LispVal rest = cell.cdr();
+				boolean dup = false;
+				while (rest instanceof LispCons restCell) {
+					if (isEq(cell.car(), restCell.car())) {
+						dup = true;
+						break;
+					}
+					rest = restCell.cdr();
+				}
+				if (!dup) {
+					kept.add(cell.car());
+				}
+				cur = cell.cdr();
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = kept.size() - 1; i >= 0; i--) {
+				result = new LispCons(kept.get(i), result);
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.NCONC, new LispFunction(LispNames.NCONC, args -> {
+			requireArgCount(LispNames.NCONC, args, 2);
+			LispVal a = args.get(0);
+			LispVal b = args.get(1);
+			// Destructively link the last cons of 'a' to 'b'; return 'b' when 'a' is
+			// empty.
+			if (!(a instanceof LispCons head)) {
+				return b;
+			}
+			LispCons tail = head;
+			while (tail.cdr() instanceof LispCons next) {
+				tail = next;
+			}
+			tail.setCdr(b);
+			return head;
+		}));
 	}
 
 	private static void registerStringOps(Environment env) {

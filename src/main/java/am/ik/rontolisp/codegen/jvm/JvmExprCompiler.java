@@ -184,12 +184,17 @@ final class JvmExprCompiler {
 				case LispNames.FIND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx, className);
 				case LispNames.FIND_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons), ctx, className);
+				case LispNames.MEMBER_IF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMemberIf(cons), ctx, className);
 				case LispNames.POSITION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx, className);
 				case LispNames.COUNT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCount(cons), ctx, className);
 				case LispNames.ASSOC ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx, className);
+				case LispNames.ASSOC_IF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAssocIf(cons), ctx, className);
+				case LispNames.GETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx, className);
 				case LispNames.EVERY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx, className);
 				case LispNames.SOME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx, className);
@@ -199,7 +204,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx, className);
 				case LispNames.REMOVE_IF_NOT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx, className);
+				case LispNames.REMOVE_DUPLICATES ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx, className);
+				case LispNames.NCONC ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx, className);
 				case LispNames.LAST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx, className);
+				case LispNames.BUTLAST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx, className);
 				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compileEq(cons, ctx, className);
 				case LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
 				case LispNames.EQUAL -> JvmEqualCompiler.compile(cons, ctx, className);

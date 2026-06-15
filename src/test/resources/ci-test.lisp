@@ -440,6 +440,13 @@
 (print (count 2 '(1 2 3 2 2)))
 (print (count 9 '(1 2 3)))
 (print (funcall #'count 2 '(1 2 2)))
+(print (member-if #'oddp '(2 4 5 6)))
+(print (assoc-if #'oddp '((2 a) (3 b))))
+(print (getf '(:a 1 :b 2) :b))
+(print (getf '(:a 1) :x))
+(print (remove-duplicates '(1 2 1 3)))
+(print (butlast '(1 2 3)))
+(print (nconc (list 1 2) (list 3 4)))
 
 ; every / some / remove / remove-if
 (print (every #'evenp '(2 4 6)))

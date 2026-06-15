@@ -1318,6 +1318,48 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMemberIf() throws Exception {
+		assertThat(compileAndRun(
+				"(print (member-if #'oddp '(2 4 5 6))) (print (member-if #'evenp '(1 3 5))) (print (funcall #'member-if #'plusp '(-1 3 4)))"))
+			.isEqualTo("(5 6)\nnil\n(3 4)");
+	}
+
+	@Test
+	void compileAndRunAssocIf() throws Exception {
+		assertThat(compileAndRun(
+				"(print (assoc-if #'oddp '((2 a) (3 b) (5 c)))) (print (assoc-if #'evenp '((1 a) (3 b)))) (print (funcall #'assoc-if #'plusp '((-1 a) (2 b))))"))
+			.isEqualTo("(3 b)\nnil\n(2 b)");
+	}
+
+	@Test
+	void compileAndRunGetf() throws Exception {
+		assertThat(compileAndRun(
+				"(print (getf '(:a 1 :b 2) :b)) (print (getf '(:a 1) :x)) (print (funcall #'getf '(:x 10 :y 20) :y))"))
+			.isEqualTo("2\nnil\n20");
+	}
+
+	@Test
+	void compileAndRunRemoveDuplicates() throws Exception {
+		assertThat(compileAndRun(
+				"(print (remove-duplicates '(1 2 1 3))) (print (remove-duplicates '(1 2 3))) (print (funcall #'remove-duplicates '(a b a a c)))"))
+			.isEqualTo("(2 1 3)\n(1 2 3)\n(b a c)");
+	}
+
+	@Test
+	void compileAndRunButlast() throws Exception {
+		assertThat(compileAndRun(
+				"(print (butlast '(1 2 3))) (print (butlast '(1))) (print (butlast nil)) (print (funcall #'butlast '(a b c d)))"))
+			.isEqualTo("(1 2)\nnil\nnil\n(a b c)");
+	}
+
+	@Test
+	void compileAndRunNconc() throws Exception {
+		assertThat(compileAndRun(
+				"(print (nconc (list 1 2) (list 3 4))) (print (nconc nil (list 1 2))) (print (funcall #'nconc (list 'a) (list 'b 'c)))"))
+			.isEqualTo("(1 2 3 4)\n(1 2)\n(a b c)");
+	}
+
+	@Test
 	void compileAndRunEvery() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -2072,12 +2114,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("119");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("125");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("119");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("125");
 	}
 
 	@Test

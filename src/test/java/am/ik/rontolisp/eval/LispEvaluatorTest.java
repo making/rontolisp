@@ -1443,6 +1443,53 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMemberIf() {
+		assertThat(eval("(member-if #'oddp '(2 4 5 6))").print()).isEqualTo("(5 6)");
+		assertThat(eval("(member-if #'evenp '(1 3 5))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'member-if #'plusp '(-1 -2 3 4))").print()).isEqualTo("(3 4)");
+	}
+
+	@Test
+	void evalAssocIf() {
+		assertThat(eval("(assoc-if #'oddp '((2 a) (3 b) (5 c)))").print()).isEqualTo("(3 b)");
+		assertThat(eval("(assoc-if #'evenp '((1 a) (3 b)))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'assoc-if #'plusp '((-1 a) (2 b)))").print()).isEqualTo("(2 b)");
+	}
+
+	@Test
+	void evalGetf() {
+		assertThat(eval("(getf '(:a 1 :b 2) :b)").print()).isEqualTo("2");
+		assertThat(eval("(getf '(:a 1 :b 2) :a)").print()).isEqualTo("1");
+		assertThat(eval("(getf '(:a 1) :x)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(getf nil :x)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'getf '(:x 10 :y 20) :y)").print()).isEqualTo("20");
+	}
+
+	@Test
+	void evalRemoveDuplicates() {
+		assertThat(eval("(remove-duplicates '(1 2 1 3))").print()).isEqualTo("(2 1 3)");
+		assertThat(eval("(remove-duplicates '(1 2 3))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(remove-duplicates nil)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'remove-duplicates '(a b a a c))").print()).isEqualTo("(b a c)");
+	}
+
+	@Test
+	void evalButlast() {
+		assertThat(eval("(butlast '(1 2 3))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(butlast '(1))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(butlast nil)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'butlast '(a b c d))").print()).isEqualTo("(a b c)");
+	}
+
+	@Test
+	void evalNconc() {
+		assertThat(eval("(nconc (list 1 2) (list 3 4))").print()).isEqualTo("(1 2 3 4)");
+		assertThat(eval("(nconc nil (list 1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(nconc (list 1 2) nil)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(funcall #'nconc (list 'a) (list 'b 'c))").print()).isEqualTo("(a b c)");
+	}
+
+	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
@@ -1940,10 +1987,10 @@ class LispEvaluatorTest {
 		assertThat(names)
 			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
 					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "position", "count", "mapcan",
-					"apply", "sort")
+					"apply", "sort", "member-if", "assoc-if", "getf", "butlast", "remove-duplicates", "nconc")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(119);
+			.hasSize(125);
 	}
 
 	@Test

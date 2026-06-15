@@ -1166,6 +1166,166 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (member-if pred lst) into a do/return scan returning the tail of the list
+	 * starting at the first element for which the predicate is true, or nil. Like
+	 * {@code member} but tests each element with {@code (funcall pred element)} rather
+	 * than {@code eql}, and like {@code find-if} but yields the tail rather than the
+	 * element.
+	 * @param cons the member-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMemberIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__memberif_pred");
+		LispSymbol cur = new LispSymbol("__memberif_cur");
+		// (do ((__memberif_pred pred) (__memberif_cur lst (cdr __memberif_cur)))
+		// ((atom __memberif_cur) nil)
+		// (if (funcall __memberif_pred (car __memberif_cur)) (return __memberif_cur)
+		// nil))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
+		LispVal body = makeIf(test, makeReturn(cur), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (assoc-if pred alist) into a do/return scan returning the first pair whose
+	 * car satisfies the predicate, or nil. Like {@code assoc} but tests each pair's car
+	 * with {@code (funcall pred (car pair))} rather than {@code eql}.
+	 * @param cons the assoc-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandAssocIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__associf_pred");
+		LispSymbol cur = new LispSymbol("__associf_cur");
+		LispVal pair = callOf(LispNames.CAR, cur);
+		// (do ((__associf_pred pred) (__associf_cur alist (cdr __associf_cur)))
+		// ((atom __associf_cur) nil)
+		// (if (and (consp (car __associf_cur))
+		// (funcall __associf_pred (car (car __associf_cur))))
+		// (return (car __associf_cur))))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal match = listToCons(
+				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, pair)))));
+		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (getf plist key) into a do/return scan over a property list, returning the
+	 * value following the first key {@code eql} to the indicator, or nil. The cursor
+	 * advances two cells at a time ({@code cddr}). The partner of {@code remf}.
+	 * @param cons the getf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandGetf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol key = new LispSymbol("__getf_key");
+		LispSymbol cur = new LispSymbol("__getf_cur");
+		// (getf plist key): plist is parts.get(1), the indicator is parts.get(2).
+		// (do ((__getf_key key) (__getf_cur plist (cddr __getf_cur)))
+		// ((atom __getf_cur) nil)
+		// (if (eql __getf_key (car __getf_cur)) (return (cadr __getf_cur)) nil))
+		LispVal cddrStep = listToCons(List.of(new LispSymbol("cddr"), cur));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(key, parts.get(2))), listToCons(List.of(cur, parts.get(1), cddrStep))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, cur)));
+		LispVal value = listToCons(List.of(new LispSymbol("cadr"), cur));
+		LispVal body = makeIf(match, makeReturn(value), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (remove-duplicates lst) into a do scan that accumulates (in reverse) every
+	 * element that does not occur again later in the list, then reverses the accumulator
+	 * back to source order. Elements are compared with {@code eql} via {@code member}, so
+	 * the last occurrence of each element is kept (Common Lisp's default).
+	 * @param cons the remove-duplicates expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemoveDuplicates(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol acc = new LispSymbol("__rd_acc");
+		LispSymbol cur = new LispSymbol("__rd_cur");
+		// (do ((__rd_acc nil) (__rd_cur lst (cdr __rd_cur)))
+		// ((atom __rd_cur) (reverse __rd_acc))
+		// (if (member (car __rd_cur) (cdr __rd_cur)) nil
+		// (setq __rd_acc (cons (car __rd_cur) __rd_acc))))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
+				listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
+		LispVal dup = listToCons(
+				List.of(new LispSymbol(LispNames.MEMBER), callOf(LispNames.CAR, cur), callOf(LispNames.CDR, cur)));
+		LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
+		LispVal body = makeIf(dup, LispNil.INSTANCE, keep);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (butlast lst) into a do scan that accumulates (in reverse) every element
+	 * except the last, then reverses the accumulator back to source order. An empty or
+	 * single-element list yields nil.
+	 * @param cons the butlast expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandButlast(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol acc = new LispSymbol("__butlast_acc");
+		LispSymbol cur = new LispSymbol("__butlast_cur");
+		// (do ((__butlast_acc nil) (__butlast_cur lst (cdr __butlast_cur)))
+		// ((or (atom __butlast_cur) (atom (cdr __butlast_cur))) (reverse __butlast_acc))
+		// (setq __butlast_acc (cons (car __butlast_cur) __butlast_acc)))
+		// The (atom __butlast_cur) guard short-circuits so (cdr __butlast_cur) is never
+		// evaluated on nil (the compiled cdr requires a cons).
+		LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
+				listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur)))));
+		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.ATOM, cur),
+				callOf(LispNames.ATOM, callOf(LispNames.CDR, cur))));
+		LispVal endClause = listToCons(List.of(endTest, callOf(LispNames.REVERSE, acc)));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (nconc a b) into a let/while walk that destructively links the last cons of
+	 * {@code a} to {@code b} and returns {@code a} (or {@code b} when {@code a} is
+	 * empty). Both operands are bound once to avoid re-evaluation.
+	 * @param cons the nconc expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNconc(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol a = new LispSymbol("__nconc_a");
+		LispSymbol b = new LispSymbol("__nconc_b");
+		LispSymbol tail = new LispSymbol("__nconc_tail");
+		// (let ((__nconc_a a) (__nconc_b b))
+		// (if (atom __nconc_a) __nconc_b
+		// (let ((__nconc_tail __nconc_a))
+		// (while (consp (cdr __nconc_tail)) (setq __nconc_tail (cdr __nconc_tail)))
+		// (rplacd __nconc_tail __nconc_b)
+		// __nconc_a)))
+		LispVal whileTest = listToCons(List.of(new LispSymbol(LispNames.CONSP), callOf(LispNames.CDR, tail)));
+		LispVal whileStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), tail, callOf(LispNames.CDR, tail)));
+		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, whileStep));
+		LispVal rplacd = listToCons(List.of(new LispSymbol(LispNames.RPLACD), tail, b));
+		LispVal innerBindings = new LispCons(listToCons(List.of(tail, a)), LispNil.INSTANCE);
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, whileExpr, rplacd, a));
+		LispVal ifExpr = makeIf(callOf(LispNames.ATOM, a), b, innerLet);
+		LispVal outerBindings = listToCons(
+				List.of(listToCons(List.of(a, parts.get(1))), listToCons(List.of(b, parts.get(2)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, ifExpr));
+	}
+
+	/**
 	 * Expands (every pred lst) into a do/return scan that yields t when the predicate
 	 * holds for every element and nil at the first element for which it fails.
 	 * @param cons the every expression

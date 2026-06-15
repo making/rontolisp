@@ -121,11 +121,12 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
 			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
 			// Sequence operations (compiled via macro expansion in call position)
-			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), binary(LispNames.MEMBER),
-			binary(LispNames.FIND), binary(LispNames.FIND_IF), binary(LispNames.POSITION), binary(LispNames.COUNT),
-			binary(LispNames.ASSOC), binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE),
-			binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT), binary(LispNames.MAPCAN),
-			binary(LispNames.SORT),
+			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), unary(LispNames.BUTLAST),
+			binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND), binary(LispNames.FIND_IF),
+			binary(LispNames.POSITION), binary(LispNames.COUNT), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
+			binary(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES), binary(LispNames.NCONC),
+			binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF),
+			binary(LispNames.REMOVE_IF_NOT), binary(LispNames.MAPCAN), binary(LispNames.SORT),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)

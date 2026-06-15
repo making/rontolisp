@@ -429,6 +429,36 @@ class ReadmeExamplesTest {
 		}
 
 		@Test
+		void memberIfFn() {
+			assertThat(eval("(member-if #'oddp '(2 4 5 6))").print()).isEqualTo("(5 6)");
+		}
+
+		@Test
+		void assocIfFn() {
+			assertThat(eval("(assoc-if #'oddp '((2 a) (3 b)))").print()).isEqualTo("(3 b)");
+		}
+
+		@Test
+		void getfFn() {
+			assertThat(eval("(getf '(:a 1 :b 2) :b)").print()).isEqualTo("2");
+		}
+
+		@Test
+		void butlastFn() {
+			assertThat(eval("(butlast '(1 2 3))").print()).isEqualTo("(1 2)");
+		}
+
+		@Test
+		void removeDuplicatesFn() {
+			assertThat(eval("(remove-duplicates '(1 2 1 3))").print()).isEqualTo("(2 1 3)");
+		}
+
+		@Test
+		void nconcFn() {
+			assertThat(eval("(nconc (list 1 2) (list 3 4))").print()).isEqualTo("(1 2 3 4)");
+		}
+
+		@Test
 		void funcall() {
 			assertThat(evalAll("(defun square (x) (* x x)) (funcall #'square 5)")).isEqualTo(new LispInteger(25));
 		}
@@ -966,7 +996,7 @@ class ReadmeExamplesTest {
 					""");
 			assertThat(output.lines().toList()).containsExactly(
 					"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)",
-					"(defun defvar function if in-package lambda let progn quote return setq while)", "119", "(square)",
+					"(defun defvar function if in-package lambda let progn quote return setq while)", "125", "(square)",
 					"(list-functions list-macros list-special-forms version)");
 		}
 

@@ -186,6 +186,12 @@ public final class LispNames {
 	public static final String FIND_IF = "find-if";
 
 	/**
+	 * The {@code member-if} built-in function (return the tail of the list starting at
+	 * the first element for which the predicate is true, or nil).
+	 */
+	public static final String MEMBER_IF = "member-if";
+
+	/**
 	 * The {@code position} built-in function (return the 0-based index of the first
 	 * element {@code eql} to the given item, or nil).
 	 */
@@ -200,8 +206,26 @@ public final class LispNames {
 	/** The {@code assoc} built-in function. */
 	public static final String ASSOC = "assoc";
 
+	/**
+	 * The {@code assoc-if} built-in function (return the first pair whose car satisfies
+	 * the predicate, or nil).
+	 */
+	public static final String ASSOC_IF = "assoc-if";
+
 	/** The {@code last} built-in function. */
 	public static final String LAST = "last";
+
+	/**
+	 * The {@code butlast} built-in function (return a copy of the list without its last
+	 * element).
+	 */
+	public static final String BUTLAST = "butlast";
+
+	/**
+	 * The {@code getf} built-in function (return the value following the indicator in a
+	 * property list, or nil). The partner of {@code remf}.
+	 */
+	public static final String GETF = "getf";
 
 	/**
 	 * The {@code remove} built-in function (return a copy without items eql to the given
@@ -220,6 +244,18 @@ public final class LispNames {
 	 * satisfying a predicate).
 	 */
 	public static final String REMOVE_IF_NOT = "remove-if-not";
+
+	/**
+	 * The {@code remove-duplicates} built-in function (return a copy of the list with
+	 * duplicate elements removed, keeping the last occurrence; elements compared with
+	 * {@code eql}).
+	 */
+	public static final String REMOVE_DUPLICATES = "remove-duplicates";
+
+	/**
+	 * The {@code nconc} built-in function (destructively concatenate two lists).
+	 */
+	public static final String NCONC = "nconc";
 
 	/**
 	 * The {@code sort} built-in function (destructively sort a list using a comparison

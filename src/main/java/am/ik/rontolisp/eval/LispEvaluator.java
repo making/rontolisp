@@ -138,6 +138,18 @@ public final class LispEvaluator {
 			}
 			return findIfValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.MEMBER_IF, new LispFunction(LispNames.MEMBER_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.MEMBER_IF + " expects 2 arguments, got " + args.size());
+			}
+			return memberIfValues(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.ASSOC_IF, new LispFunction(LispNames.ASSOC_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.ASSOC_IF + " expects 2 arguments, got " + args.size());
+			}
+			return assocIfValues(args.get(0), args.get(1));
+		}));
 		this.globalEnv.defineFunction(LispNames.REMOVE_IF, new LispFunction(LispNames.REMOVE_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
@@ -557,6 +569,32 @@ public final class LispEvaluator {
 				return cell.car();
 			}
 			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the tail of the list starting at the first element satisfying the predicate
+	// (Common Lisp member-if), or nil. Like find-if but yields the cons rather than the
+	// element.
+	private LispVal memberIfValues(LispVal predicate, LispVal list) {
+		while (list instanceof LispCons cell) {
+			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				return cell;
+			}
+			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the first pair whose car satisfies the predicate (Common Lisp assoc-if), or
+	// nil. Like assoc but tests with the predicate rather than eql.
+	private LispVal assocIfValues(LispVal predicate, LispVal alist) {
+		while (alist instanceof LispCons cell) {
+			if (cell.car() instanceof LispCons pair
+					&& isTruthy(apply(predicate, List.of(pair.car()), this.globalEnv))) {
+				return pair;
+			}
+			alist = cell.cdr();
 		}
 		return LispNil.INSTANCE;
 	}
