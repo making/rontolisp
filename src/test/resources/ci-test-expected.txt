@@ -303,9 +303,9 @@ nil
 (2 3)
 nil
 (1 9)
-(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)
+(and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
 (defun defvar function if in-package lambda let progn quote return setq while)
-119
+152
 (list-functions list-macros list-special-forms version)
 ci-intro-fn
 nil
@@ -387,3 +387,27 @@ t
 (3 1)
 (1 2 3)
 (1 2 3)
+8
+14
+6
+-6
+16
+15
+0
+15
+(1 2 3 4)
+(1 2 . 3)
+((a . 1))
+b
+t
+nil
+(b . 2)
+(3 2 1 4 5)
+(3 2 1 4 5)
+((1 2 3) (2 3) (3))
+(1 2 3)
+t
+nil
+2
+(2 1)
+"i"

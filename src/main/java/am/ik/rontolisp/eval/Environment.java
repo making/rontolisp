@@ -545,6 +545,40 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Long.signum(asLong(arg)));
 		}));
+		// Bitwise integer operations, computed on exact BigInteger values.
+		// logand/logior/logxor are variadic with identities -1/0/0.
+		env.defineFunction(LispNames.LOGAND, new LispFunction(LispNames.LOGAND, args -> {
+			BigInteger result = BigInteger.valueOf(-1);
+			for (LispVal arg : args) {
+				result = result.and(asBigInteger(arg));
+			}
+			return normalizeBig(result);
+		}));
+		env.defineFunction(LispNames.LOGIOR, new LispFunction(LispNames.LOGIOR, args -> {
+			BigInteger result = BigInteger.ZERO;
+			for (LispVal arg : args) {
+				result = result.or(asBigInteger(arg));
+			}
+			return normalizeBig(result);
+		}));
+		env.defineFunction(LispNames.LOGXOR, new LispFunction(LispNames.LOGXOR, args -> {
+			BigInteger result = BigInteger.ZERO;
+			for (LispVal arg : args) {
+				result = result.xor(asBigInteger(arg));
+			}
+			return normalizeBig(result);
+		}));
+		env.defineFunction(LispNames.LOGNOT, new LispFunction(LispNames.LOGNOT, args -> {
+			requireArgCount(LispNames.LOGNOT, args, 1);
+			return normalizeBig(asBigInteger(args.get(0)).not());
+		}));
+		// ash: shift left for a non-negative count, arithmetic right shift otherwise.
+		env.defineFunction(LispNames.ASH, new LispFunction(LispNames.ASH, args -> {
+			requireArgCount(LispNames.ASH, args, 2);
+			BigInteger value = asBigInteger(args.get(0));
+			long count = asLong(args.get(1));
+			return normalizeBig(value.shiftLeft((int) count));
+		}));
 	}
 
 	private static void defineUnaryDouble(Environment env, String name, DoubleUnaryOperator fn) {

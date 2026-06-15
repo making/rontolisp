@@ -332,6 +332,58 @@ final class JvmExprCompiler {
 					}
 				}
 				case LispNames.SIGNUM -> JvmSignumCompiler.compile(cons, ctx, className);
+				case LispNames.LOGAND -> {
+					if (isBinaryCall(cons)) {
+						JvmBitwiseCompiler.compileLogand(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
+				case LispNames.LOGIOR -> {
+					if (isBinaryCall(cons)) {
+						JvmBitwiseCompiler.compileLogior(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
+				case LispNames.LOGXOR -> {
+					if (isBinaryCall(cons)) {
+						JvmBitwiseCompiler.compileLogxor(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+					}
+				}
+				case LispNames.LOGNOT -> JvmBitwiseCompiler.compileLognot(cons, ctx, className);
+				case LispNames.ASH -> JvmBitwiseCompiler.compileAsh(cons, ctx, className);
+				case LispNames.LIST_STAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx, className);
+				case LispNames.ACONS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx, className);
+				case LispNames.ENDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandEndp(cons), ctx, className);
+				case LispNames.ELT -> JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx, className);
+				case LispNames.RASSOC ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx, className);
+				case LispNames.REVAPPEND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRevappend(cons), ctx, className);
+				case LispNames.NRECONC ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNreconc(cons), ctx, className);
+				case LispNames.MAPLIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaplist(cons), ctx, className);
+				case LispNames.MAPCON ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMapcon(cons), ctx, className);
+				case LispNames.NOTANY ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNotany(cons), ctx, className);
+				case LispNames.NOTEVERY ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNotevery(cons), ctx, className);
+				case LispNames.PROG2 ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx, className);
+				case LispNames.PSETQ ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx, className);
+				case LispNames.TYPECASE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons), ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 				case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);

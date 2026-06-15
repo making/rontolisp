@@ -348,6 +348,34 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandFormat(cons), env);
 				case LispNames.WITH_OPEN_FILE:
 					return eval(LispMacroExpander.expandWithOpenFile(cons), env);
+				case LispNames.PROG2:
+					return eval(LispMacroExpander.expandProg2(cons), env);
+				case LispNames.PSETQ:
+					return eval(LispMacroExpander.expandPsetq(cons), env);
+				case LispNames.TYPECASE:
+					return eval(LispMacroExpander.expandTypecase(cons), env);
+				case LispNames.LIST_STAR:
+					return eval(LispMacroExpander.expandListStar(cons), env);
+				case LispNames.ACONS:
+					return eval(LispMacroExpander.expandAcons(cons), env);
+				case LispNames.ENDP:
+					return eval(LispMacroExpander.expandEndp(cons), env);
+				case LispNames.ELT:
+					return eval(LispMacroExpander.expandElt(cons), env);
+				case LispNames.RASSOC:
+					return eval(LispMacroExpander.expandRassoc(cons), env);
+				case LispNames.REVAPPEND:
+					return eval(LispMacroExpander.expandRevappend(cons), env);
+				case LispNames.NRECONC:
+					return eval(LispMacroExpander.expandNreconc(cons), env);
+				case LispNames.MAPLIST:
+					return eval(LispMacroExpander.expandMaplist(cons), env);
+				case LispNames.MAPCON:
+					return eval(LispMacroExpander.expandMapcon(cons), env);
+				case LispNames.NOTANY:
+					return eval(LispMacroExpander.expandNotany(cons), env);
+				case LispNames.NOTEVERY:
+					return eval(LispMacroExpander.expandNotevery(cons), env);
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

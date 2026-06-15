@@ -1573,6 +1573,72 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalBitwiseOps() {
+		assertThat(eval("(logand 12 10)").print()).isEqualTo("8");
+		assertThat(eval("(logior 12 10)").print()).isEqualTo("14");
+		assertThat(eval("(logxor 12 10)").print()).isEqualTo("6");
+		assertThat(eval("(lognot 0)").print()).isEqualTo("-1");
+		assertThat(eval("(lognot 5)").print()).isEqualTo("-6");
+		assertThat(eval("(ash 1 4)").print()).isEqualTo("16");
+		assertThat(eval("(ash 255 -4)").print()).isEqualTo("15");
+		// Variadic forms (identities: logand -1, logior/logxor 0).
+		assertThat(eval("(logand)").print()).isEqualTo("-1");
+		assertThat(eval("(logior)").print()).isEqualTo("0");
+		assertThat(eval("(logand 12 10 6)").print()).isEqualTo("0");
+		assertThat(eval("(logior 1 2 4 8)").print()).isEqualTo("15");
+		assertThat(eval("(funcall #'logand 6 3)").print()).isEqualTo("2");
+		assertThat(eval("(funcall #'lognot 0)").print()).isEqualTo("-1");
+	}
+
+	@Test
+	void evalListStarAndAcons() {
+		assertThat(eval("(list* 1 2 '(3 4))").print()).isEqualTo("(1 2 3 4)");
+		assertThat(eval("(list* 1 2 3)").print()).isEqualTo("(1 2 . 3)");
+		assertThat(eval("(list* 'x)").print()).isEqualTo("x");
+		assertThat(eval("(acons 'a 1 nil)").print()).isEqualTo("((a . 1))");
+		assertThat(eval("(acons 'b 2 (list (cons 'a 1)))").print()).isEqualTo("((b . 2) (a . 1))");
+	}
+
+	@Test
+	void evalEltEndpRassoc() {
+		assertThat(eval("(elt '(a b c) 1)").print()).isEqualTo("b");
+		assertThat(eval("(endp nil)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(endp '(1))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(rassoc 2 (list (cons 'a 1) (cons 'b 2)))").print()).isEqualTo("(b . 2)");
+		assertThat(eval("(rassoc 9 (list (cons 'a 1) (cons 'b 2)))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalRevappendNreconcMaplistMapcon() {
+		assertThat(eval("(revappend '(1 2 3) '(4 5))").print()).isEqualTo("(3 2 1 4 5)");
+		assertThat(eval("(nreconc '(1 2 3) '(4 5))").print()).isEqualTo("(3 2 1 4 5)");
+		assertThat(eval("(maplist #'identity '(1 2 3))").print()).isEqualTo("((1 2 3) (2 3) (3))");
+		assertThat(eval("(mapcon #'(lambda (x) (list (car x))) '(1 2 3))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalNotanyNotevery() {
+		assertThat(eval("(notany #'evenp '(1 3 5))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(notany #'evenp '(1 2 3))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(notevery #'evenp '(2 4 5))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(notevery #'evenp '(2 4 6))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalProg2Psetq() {
+		assertThat(eval("(prog2 1 2 3)").print()).isEqualTo("2");
+		assertThat(eval("(let ((a 1) (b 2)) (psetq a b b a) (list a b))").print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void evalTypecase() {
+		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
+		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");
+		assertThat(eval("(typecase 'sym (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"?\"");
+		assertThat(eval("(typecase '(1) (cons \"c\") (null \"n\"))").print()).isEqualTo("\"c\"");
+	}
+
+	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
@@ -2055,7 +2121,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
+				"(and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -2072,10 +2138,11 @@ class LispEvaluatorTest {
 					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "find-if-not", "position",
 					"position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if", "getf",
 					"butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list", "union",
-					"intersection", "set-difference", "adjoin")
+					"intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash", "list*",
+					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(136);
+			.hasSize(152);
 	}
 
 	@Test

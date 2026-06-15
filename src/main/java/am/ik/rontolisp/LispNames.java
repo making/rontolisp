@@ -118,6 +118,28 @@ public final class LispNames {
 	/** The {@code signum} built-in function. */
 	public static final String SIGNUM = "signum";
 
+	/** The {@code logand} built-in function (bitwise AND, variadic; identity -1). */
+	public static final String LOGAND = "logand";
+
+	/**
+	 * The {@code logior} built-in function (bitwise inclusive OR, variadic; identity 0).
+	 */
+	public static final String LOGIOR = "logior";
+
+	/**
+	 * The {@code logxor} built-in function (bitwise exclusive OR, variadic; identity 0).
+	 */
+	public static final String LOGXOR = "logxor";
+
+	/** The {@code lognot} built-in function (bitwise NOT, i.e. ones' complement). */
+	public static final String LOGNOT = "lognot";
+
+	/**
+	 * The {@code ash} built-in function (arithmetic shift; left when the count is
+	 * non-negative, right otherwise).
+	 */
+	public static final String ASH = "ash";
+
 	// Comparison
 
 	/** The {@code =} built-in function. */
@@ -323,6 +345,60 @@ public final class LispNames {
 	 */
 	public static final String ADJOIN = "adjoin";
 
+	/**
+	 * The {@code list*} built-in function (build a list whose final element is the last
+	 * argument used as the tail: {@code (list* a b c) -> (cons a (cons b c))}).
+	 */
+	public static final String LIST_STAR = "list*";
+
+	/**
+	 * The {@code acons} built-in function (prepend a {@code (key . value)} pair to an
+	 * association list: {@code (acons k v alist) -> (cons (cons k v) alist)}).
+	 */
+	public static final String ACONS = "acons";
+
+	/**
+	 * The {@code endp} built-in function (true at the end of a list; here a synonym for
+	 * {@code null}, the improper-list error of CL is relaxed).
+	 */
+	public static final String ENDP = "endp";
+
+	/**
+	 * The {@code elt} built-in function (0-based element access; lists only, a synonym
+	 * for {@code nth} with reversed argument order, string indexing is not supported).
+	 */
+	public static final String ELT = "elt";
+
+	/**
+	 * The {@code rassoc} built-in function (return the first pair whose cdr is
+	 * {@code eql} to the given value, or nil).
+	 */
+	public static final String RASSOC = "rassoc";
+
+	/**
+	 * The {@code revappend} built-in function (reverse the first list and append the
+	 * second: {@code (revappend x y) -> (append (reverse x) y)}).
+	 */
+	public static final String REVAPPEND = "revappend";
+
+	/**
+	 * The {@code nreconc} built-in function (destructive {@code revappend}; this
+	 * implementation is non-destructive and shares semantics with {@code revappend}).
+	 */
+	public static final String NRECONC = "nreconc";
+
+	/**
+	 * The {@code maplist} built-in function (apply the function to successive cdrs of the
+	 * list and collect the results; single-list only).
+	 */
+	public static final String MAPLIST = "maplist";
+
+	/**
+	 * The {@code mapcon} built-in function (apply the function to successive cdrs of the
+	 * list and concatenate the result lists; single-list only).
+	 */
+	public static final String MAPCON = "mapcon";
+
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
 
@@ -364,6 +440,18 @@ public final class LispNames {
 	 * The {@code some} built-in function (the first non-nil predicate result, or nil).
 	 */
 	public static final String SOME = "some";
+
+	/**
+	 * The {@code notany} built-in function (true if the predicate holds for no element;
+	 * the complement of {@code some}).
+	 */
+	public static final String NOTANY = "notany";
+
+	/**
+	 * The {@code notevery} built-in function (true if the predicate fails for some
+	 * element; the complement of {@code every}).
+	 */
+	public static final String NOTEVERY = "notevery";
 
 	// Macros
 
@@ -426,6 +514,24 @@ public final class LispNames {
 
 	/** The {@code prog1} macro. */
 	public static final String PROG1 = "prog1";
+
+	/**
+	 * The {@code prog2} macro (evaluate the forms in order and return the value of the
+	 * second).
+	 */
+	public static final String PROG2 = "prog2";
+
+	/**
+	 * The {@code psetq} macro (parallel assignment: every right-hand side is evaluated
+	 * before any variable is assigned).
+	 */
+	public static final String PSETQ = "psetq";
+
+	/**
+	 * The {@code typecase} macro (dispatch on the type of an object using the built-in
+	 * type predicates).
+	 */
+	public static final String TYPECASE = "typecase";
 
 	/** The {@code do} macro (parallel iteration). */
 	public static final String DO = "do";

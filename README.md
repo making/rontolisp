@@ -274,6 +274,9 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
 | `do` | `(do ((var init step?)...) (end-test result...) body...)` | Iterate with parallel-stepped variables. Returns the `result` forms when `end-test` is true |
 | `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
+| `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
+| `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
+| `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | Dispatch on the type of `x`. Supported type names: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom` (plus `t`/`otherwise`). Returns nil if nothing matches |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
 | `pop` | `(pop place)` | Remove and return the first element from list at place |
@@ -419,6 +422,15 @@ embedded `eval` runtime in compiled output (see
 | `intersection` | `(intersection '(1 2 3) '(2 3 4))` | `(3 2)` (set intersection, `eql` compare; result order unspecified) |
 | `set-difference` | `(set-difference '(1 2 3) '(2))` | `(3 1)` (elements of the first list not in the second, `eql` compare; result order unspecified) |
 | `adjoin` | `(adjoin 1 '(2 3))` | `(1 2 3)` (prepend the item unless already a member; `eql` compare) |
+| `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)` (cons the leading arguments onto the last one as the tail) |
+| `acons` | `(acons 'a 1 nil)` | `((a . 1))` (prepend a `(key . value)` pair to an alist) |
+| `endp` | `(endp nil)`, `(endp '(1))` | `t`, `nil` (end-of-list test; a synonym for `null`, the improper-list error is relaxed) |
+| `elt` | `(elt '(a b c) 1)` | `b` (0-based element access; lists only, no string indexing) |
+| `rassoc` | `(rassoc 2 (list (cons 'a 1) (cons 'b 2)))` | `(b . 2)` (first pair whose cdr is `eql` to the value, or nil) |
+| `revappend` | `(revappend '(1 2 3) '(4 5))` | `(3 2 1 4 5)` (reverse the first list and append the second) |
+| `nreconc` | `(nreconc '(1 2 3) '(4 5))` | `(3 2 1 4 5)` (destructive `revappend`; this implementation is non-destructive) |
+| `maplist` | `(maplist #'identity '(1 2 3))` | `((1 2 3) (2 3) (3))` (apply to successive tails, collect results; single-list form) |
+| `mapcon` | `(mapcon (lambda (x) (list (car x))) '(1 2 3))` | `(1 2 3)` (apply to successive tails, concatenate the result lists; single-list form) |
 | `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)` (destructively sort a list with a comparison predicate; not stable) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
@@ -448,6 +460,11 @@ embedded `eval` runtime in compiled output (see
 | `gcd` | `(gcd 12 18)`, `(gcd 24 36 60)` | `6`, `12` (variadic; greatest common divisor, `(gcd)` is `0`) |
 | `lcm` | `(lcm 4 6)`, `(lcm 2 3 4)` | `12`, `12` (variadic; least common multiple; `0` if any argument is `0`, `(lcm)` is `1`) |
 | `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0` (sign, preserving integer/float type) |
+| `logand` | `(logand 12 10)`, `(logand 12 10 6)` | `8`, `0` (variadic bitwise AND; `(logand)` is `-1`) |
+| `logior` | `(logior 12 10)`, `(logior 1 2 4 8)` | `14`, `15` (variadic bitwise inclusive OR; `(logior)` is `0`) |
+| `logxor` | `(logxor 12 10)` | `6` (variadic bitwise exclusive OR; `(logxor)` is `0`) |
+| `lognot` | `(lognot 5)` | `-6` (bitwise NOT, i.e. ones' complement) |
+| `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15` (arithmetic shift: left for a non-negative count, right otherwise) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
 | `mapc` | `(mapc #'print '(1 2 3))` | Apply a function to each element for effect, return the original list |
@@ -456,6 +473,8 @@ embedded `eval` runtime in compiled output (see
 | `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
 | `every` | `(every #'evenp '(2 4 6))` | `t` if the predicate is non-nil for every element, else `nil` (single-list form) |
 | `some` | `(some #'oddp '(2 4 5))` | The first non-nil predicate result, or `nil` if every element fails (single-list form) |
+| `notany` | `(notany #'evenp '(1 3 5))` | `t` if the predicate is nil for every element, else `nil` (the complement of `some`) |
+| `notevery` | `(notevery #'evenp '(2 4 5))` | `t` if the predicate is nil for some element, else `nil` (the complement of `every`) |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
 | `identity` | `(identity 42)` | `42` (return the argument unchanged) |
 
@@ -540,6 +559,7 @@ The math built-ins differ in how widely they are supported, because the WASM bac
 - **Transcendental functions** (`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are therefore **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
 - **`expt`** keeps an exact rational result for an integer or ratio base raised to an integer exponent (with big-integer promotion in the interpreter and JVM); a negative exponent yields the reciprocal (`(expt 2 -1)` is `1/2`) and a float base/exponent uses `Math.pow` and returns a float. The WASM `expt`, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
 - **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
+- **`logand`, `logior`, `logxor`, `lognot`, `ash`** are supported on all three backends. The interpreter and JVM compute on exact `BigInteger` values (`ash` shifts left for a non-negative count, right otherwise); the WASM backend uses the i31 integer range, so a result that overflows 31 bits is truncated.
 
 ### Packages
 
@@ -575,11 +595,11 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)
+; => (and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 136
+; => 152
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

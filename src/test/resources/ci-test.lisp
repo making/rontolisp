@@ -596,3 +596,33 @@
 (print (set-difference '(1 2 3) '(2)))
 (print (adjoin 1 '(2 3)))
 (print (adjoin 2 '(1 2 3)))
+
+; bitwise integer operations (variadic logand/logior/logxor; lognot; ash)
+(print (logand 12 10))
+(print (logior 12 10))
+(print (logxor 12 10))
+(print (lognot 5))
+(print (ash 1 4))
+(print (ash 255 -4))
+(print (logand 12 10 6))
+(print (logior 1 2 4 8))
+
+; list/sequence additions
+(print (list* 1 2 '(3 4)))
+(print (list* 1 2 3))
+(print (acons 'a 1 nil))
+(print (elt '(a b c) 1))
+(print (endp nil))
+(print (endp '(1)))
+(print (rassoc 2 (list (cons 'a 1) (cons 'b 2))))
+(print (revappend '(1 2 3) '(4 5)))
+(print (nreconc '(1 2 3) '(4 5)))
+(print (maplist #'identity '(1 2 3)))
+(print (mapcon #'(lambda (x) (list (car x))) '(1 2 3)))
+(print (notany #'evenp '(1 3 5)))
+(print (notevery #'evenp '(2 4 6)))
+
+; control macros: prog2, psetq, typecase
+(print (prog2 1 2 3))
+(print (let ((a 1) (b 2)) (psetq a b b a) (list a b)))
+(print (typecase 42 (string "s") (integer "i") (t "?")))

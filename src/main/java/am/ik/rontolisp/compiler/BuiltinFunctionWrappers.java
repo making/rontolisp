@@ -149,6 +149,9 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.COSH), unary(LispNames.TANH),
 			// Math functions (arity 2)
 			binary(LispNames.EXPT), binary(LispNames.GCD), binary(LispNames.LCM),
+			// Bitwise integer operations
+			binary(LispNames.LOGAND), binary(LispNames.LOGIOR), binary(LispNames.LOGXOR), unary(LispNames.LOGNOT),
+			binary(LispNames.ASH),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
 					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),

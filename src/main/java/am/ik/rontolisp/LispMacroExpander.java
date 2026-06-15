@@ -2031,11 +2031,14 @@ public final class LispMacroExpander {
 		int n = parts.size() - 1;
 		boolean gcdLcm = LispNames.GCD.equals(name) || LispNames.LCM.equals(name);
 		if (n == 0) {
-			if (LispNames.GCD.equals(name)) {
+			if (LispNames.GCD.equals(name) || LispNames.LOGIOR.equals(name) || LispNames.LOGXOR.equals(name)) {
 				return new LispInteger(0);
 			}
 			if (LispNames.LCM.equals(name)) {
 				return new LispInteger(1);
+			}
+			if (LispNames.LOGAND.equals(name)) {
+				return new LispInteger(-1);
 			}
 			throw new IllegalArgumentException(name + " requires at least one argument");
 		}
@@ -2047,6 +2050,277 @@ public final class LispMacroExpander {
 			acc = listToCons(List.of(op, acc, parts.get(i)));
 		}
 		return acc;
+	}
+
+	/**
+	 * Expands (list* a b ... z) into nested cons cells whose final tail is the last
+	 * argument: {@code (list* a b c) -> (cons a (cons b c))}. A single argument expands
+	 * to itself.
+	 * @param cons the list* expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandListStar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		int n = parts.size() - 1;
+		if (n == 0) {
+			throw new IllegalArgumentException("list* requires at least one argument");
+		}
+		// The last argument becomes the tail; cons the preceding ones onto it.
+		LispVal result = parts.get(n);
+		for (int i = n - 1; i >= 1; i--) {
+			result = listToCons(List.of(new LispSymbol(LispNames.CONS), parts.get(i), result));
+		}
+		return result;
+	}
+
+	/**
+	 * Expands (acons key value alist) into (cons (cons key value) alist).
+	 * @param cons the acons expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandAcons(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal pair = listToCons(List.of(new LispSymbol(LispNames.CONS), parts.get(1), parts.get(2)));
+		return listToCons(List.of(new LispSymbol(LispNames.CONS), pair, parts.get(3)));
+	}
+
+	/**
+	 * Expands (endp x) into (null x). The Common Lisp improper-list error is relaxed.
+	 * @param cons the endp expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEndp(LispCons cons) {
+		return callOf(LispNames.NULL, cons.toList().get(1));
+	}
+
+	/**
+	 * Expands (elt seq n) into (nth n seq). Lists only; string indexing is not supported.
+	 * @param cons the elt expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandElt(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), parts.get(2), parts.get(1)));
+		return expandNth(nthCons);
+	}
+
+	/**
+	 * Expands (rassoc value alist) into a do/return scan returning the first pair whose
+	 * cdr is {@code eql} to the value, or nil. The mirror of {@code assoc} (which matches
+	 * on the car).
+	 * @param cons the rassoc expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRassoc(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol key = new LispSymbol("__rassoc_key");
+		LispSymbol cur = new LispSymbol("__rassoc_cur");
+		LispVal pair = callOf(LispNames.CAR, cur);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal match = listToCons(
+				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
+						listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CDR, pair)))));
+		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (revappend x y) into (append (reverse x) y).
+	 * @param cons the revappend expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRevappend(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal rev = callOf(LispNames.REVERSE, parts.get(1));
+		return listToCons(List.of(new LispSymbol(LispNames.APPEND), rev, parts.get(2)));
+	}
+
+	/**
+	 * Expands (nreconc x y) into (nconc (nreverse x) y). Like {@code nreverse}, this
+	 * implementation is non-destructive.
+	 * @param cons the nreconc expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNreconc(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal rev = callOf(LispNames.NREVERSE, parts.get(1));
+		return listToCons(List.of(new LispSymbol(LispNames.NCONC), rev, parts.get(2)));
+	}
+
+	/**
+	 * Expands (maplist fn lst) into a do scan that applies the function to successive
+	 * cdrs (tails) of the list, accumulating the results and reversing them at the end.
+	 * Single-list only.
+	 * @param cons the maplist expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMaplist(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol fn = new LispSymbol("__maplist_fn");
+		LispSymbol acc = new LispSymbol("__maplist_acc");
+		LispSymbol cur = new LispSymbol("__maplist_cur");
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(fn, parts.get(1))), listToCons(List.of(acc, LispNil.INSTANCE)),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), call, acc))));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (mapcon fn lst) like {@code maplist} but concatenates the result lists with
+	 * {@code append} rather than collecting them. Single-list only.
+	 * @param cons the mapcon expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMapcon(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol fn = new LispSymbol("__mapcon_fn");
+		LispSymbol acc = new LispSymbol("__mapcon_acc");
+		LispSymbol cur = new LispSymbol("__mapcon_cur");
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(fn, parts.get(1))), listToCons(List.of(acc, LispNil.INSTANCE)),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.APPEND), acc, call))));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (notany pred lst) into (not (some pred lst)).
+	 * @param cons the notany expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNotany(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal some = listToCons(List.of(new LispSymbol(LispNames.SOME), parts.get(1), parts.get(2)));
+		return makeNot(some);
+	}
+
+	/**
+	 * Expands (notevery pred lst) into (not (every pred lst)).
+	 * @param cons the notevery expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNotevery(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal every = listToCons(List.of(new LispSymbol(LispNames.EVERY), parts.get(1), parts.get(2)));
+		return makeNot(every);
+	}
+
+	/**
+	 * Expands (prog2 first second body...) into (progn first (prog1 second body...)): all
+	 * forms are evaluated in order and the value of the second is returned.
+	 * @param cons the prog2 expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandProg2(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal first = parts.get(1);
+		List<LispVal> prog1Parts = new java.util.ArrayList<>();
+		prog1Parts.add(new LispSymbol(LispNames.PROG1));
+		prog1Parts.addAll(parts.subList(2, parts.size()));
+		LispVal prog1Expr = expandProg1((LispCons) listToCons(prog1Parts));
+		return makeProgn(List.of(first, prog1Expr));
+	}
+
+	/**
+	 * Expands (psetq v1 e1 v2 e2 ...) into a let that binds every right-hand side to a
+	 * temporary before assigning any variable, giving the parallel-assignment semantics
+	 * of Common Lisp. The result is nil.
+	 * @param cons the psetq expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPsetq(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if ((parts.size() - 1) % 2 != 0) {
+			throw new IllegalArgumentException("psetq requires an even number of arguments");
+		}
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> assignments = new java.util.ArrayList<>();
+		for (int i = 1; i < parts.size(); i += 2) {
+			LispVal var = parts.get(i);
+			LispVal val = parts.get(i + 1);
+			LispSymbol temp = new LispSymbol("__psetq_" + (i / 2));
+			bindings.add(listToCons(List.of(temp, val)));
+			assignments.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), var, temp)));
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings));
+		letParts.addAll(assignments);
+		letParts.add(LispNil.INSTANCE);
+		return listToCons(letParts);
+	}
+
+	private static final String TYPECASE_VAR = "__typecase";
+
+	/**
+	 * Expands (typecase keyform (type body...) ... (t default)) into a let/cond that
+	 * dispatches on the type of the keyform using the built-in type predicates. An
+	 * unknown type symbol is rejected at expansion time.
+	 * @param cons the typecase expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandTypecase(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("typecase expects a keyform");
+		}
+		LispVal keyform = parts.get(1);
+		List<LispVal> clauses = parts.subList(2, parts.size());
+		LispSymbol var = new LispSymbol(TYPECASE_VAR);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (LispVal clauseVal : clauses) {
+			if (!(clauseVal instanceof LispCons clause)) {
+				throw new IllegalArgumentException("typecase clause must be a list, got: " + clauseVal.print());
+			}
+			List<LispVal> clauseParts = clause.toList();
+			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
+			LispVal test = makeTypecaseTest(var, clauseParts.get(0));
+			List<LispVal> condClause = new java.util.ArrayList<>();
+			condClause.add(test);
+			if (body.isEmpty()) {
+				condClause.add(LispNil.INSTANCE);
+			}
+			else {
+				condClause.addAll(body);
+			}
+			condParts.add(listToCons(condClause));
+		}
+		return makeLet(TYPECASE_VAR, keyform, listToCons(condParts));
+	}
+
+	private static LispVal makeTypecaseTest(LispSymbol var, LispVal typeSpec) {
+		if (typeSpec instanceof LispTrue
+				|| (typeSpec instanceof LispSymbol s && LispNames.OTHERWISE.equals(s.name()))) {
+			return LispTrue.INSTANCE;
+		}
+		if (!(typeSpec instanceof LispSymbol sym)) {
+			throw new IllegalArgumentException("typecase type must be a type symbol, got: " + typeSpec.print());
+		}
+		String pred = switch (sym.name()) {
+			case "integer", "fixnum", "bignum" -> LispNames.INTEGERP;
+			case "float", "single-float", "double-float", "short-float", "long-float" -> LispNames.FLOATP;
+			case "number", "real" -> LispNames.NUMBERP;
+			case "rational", "ratio" -> LispNames.RATIONALP;
+			case "string" -> LispNames.STRINGP;
+			case "symbol" -> LispNames.SYMBOLP;
+			case "keyword" -> LispNames.KEYWORDP;
+			case "cons" -> LispNames.CONSP;
+			case "list" -> LispNames.LISTP;
+			case "null" -> LispNames.NULL;
+			case "atom" -> LispNames.ATOM;
+			default -> throw new IllegalArgumentException("typecase does not support the type: " + sym.name());
+		};
+		return callOf(pred, var);
 	}
 
 	private static LispCons listToCons(List<LispVal> elements) {

@@ -32,7 +32,8 @@ public final class PackageRegistry {
 	private static final Set<String> CL_MACROS = Set.of(LispNames.COND, LispNames.CASE, LispNames.AND, LispNames.OR,
 			LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP,
 			LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
-			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO);
+			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.PROG2, LispNames.PSETQ,
+			LispNames.TYPECASE);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -65,7 +66,10 @@ public final class PackageRegistry {
 			LispNames.STRING_EQ, LispNames.STRING_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
 			LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE, LispNames.WRITE_LINE, LispNames.IDENTITY,
 			LispNames.COPY_LIST, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.INTERSECTION,
-			LispNames.SET_DIFFERENCE, LispNames.ADJOIN);
+			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR,
+			LispNames.LOGNOT, LispNames.ASH, LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP, LispNames.ELT,
+			LispNames.RASSOC, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON,
+			LispNames.NOTANY, LispNames.NOTEVERY);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

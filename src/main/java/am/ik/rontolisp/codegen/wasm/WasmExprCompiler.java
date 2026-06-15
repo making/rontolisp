@@ -290,6 +290,46 @@ final class WasmExprCompiler {
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);
 				case LispNames.SIGNUM -> WasmSignumCompiler.compile(cons, ctx);
+				case LispNames.LOGAND -> {
+					if (isBinaryCall(cons)) {
+						WasmBitwiseCompiler.compileLogand(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
+				case LispNames.LOGIOR -> {
+					if (isBinaryCall(cons)) {
+						WasmBitwiseCompiler.compileLogior(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
+				case LispNames.LOGXOR -> {
+					if (isBinaryCall(cons)) {
+						WasmBitwiseCompiler.compileLogxor(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
+					}
+				}
+				case LispNames.LOGNOT -> WasmBitwiseCompiler.compileLognot(cons, ctx);
+				case LispNames.ASH -> WasmBitwiseCompiler.compileAsh(cons, ctx);
+				case LispNames.LIST_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx);
+				case LispNames.ACONS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx);
+				case LispNames.ENDP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEndp(cons), ctx);
+				case LispNames.ELT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx);
+				case LispNames.RASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx);
+				case LispNames.REVAPPEND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRevappend(cons), ctx);
+				case LispNames.NRECONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNreconc(cons), ctx);
+				case LispNames.MAPLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMaplist(cons), ctx);
+				case LispNames.MAPCON -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapcon(cons), ctx);
+				case LispNames.NOTANY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNotany(cons), ctx);
+				case LispNames.NOTEVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNotevery(cons), ctx);
+				case LispNames.PROG2 -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx);
+				case LispNames.PSETQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx);
+				case LispNames.TYPECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons), ctx);
 				case LispNames.GCD -> {
 					if (isBinaryCall(cons)) {
 						WasmGcdCompiler.compile(cons, ctx);

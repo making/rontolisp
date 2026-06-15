@@ -1365,6 +1365,61 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void bitwiseOps() throws Exception {
+		assertThat(compileAndRun(
+				"(print (logand 12 10)) (print (logior 12 10)) (print (logxor 12 10)) (print (lognot 5)) (print (ash 1 4)) (print (ash 255 -4))"))
+			.isEqualTo("8\n14\n6\n-6\n16\n15");
+	}
+
+	@Test
+	void bitwiseVariadicAndFirstClass() throws Exception {
+		assertThat(compileAndRun(
+				"(print (logand 12 10 6)) (print (logior 1 2 4 8)) (print (funcall #'logand 6 3)) (print (funcall #'lognot 0))"))
+			.isEqualTo("0\n15\n2\n-1");
+	}
+
+	@Test
+	void listStarAndAcons() throws Exception {
+		assertThat(compileAndRun(
+				"(print (list* 1 2 '(3 4))) (print (list* 1 2 3)) (print (list* 'x)) (print (acons 'a 1 nil))"))
+			.isEqualTo("(1 2 3 4)\n(1 2 . 3)\nx\n((a . 1))");
+	}
+
+	@Test
+	void eltEndpRassoc() throws Exception {
+		assertThat(compileAndRun(
+				"(print (elt '(a b c) 1)) (print (endp nil)) (print (endp '(1))) (print (rassoc 2 (list (cons 'a 1) (cons 'b 2))))"))
+			.isEqualTo("b\nt\nnil\n(b . 2)");
+	}
+
+	@Test
+	void revappendMaplistMapcon() throws Exception {
+		assertThat(compileAndRun(
+				"(print (revappend '(1 2 3) '(4 5))) (print (nreconc '(1 2 3) '(4 5))) (print (maplist #'identity '(1 2 3))) (print (mapcon #'(lambda (x) (list (car x))) '(1 2 3)))"))
+			.isEqualTo("(3 2 1 4 5)\n(3 2 1 4 5)\n((1 2 3) (2 3) (3))\n(1 2 3)");
+	}
+
+	@Test
+	void notanyNotevery() throws Exception {
+		assertThat(compileAndRun(
+				"(print (notany #'evenp '(1 3 5))) (print (notany #'evenp '(1 2 3))) (print (notevery #'evenp '(2 4 5))) (print (notevery #'evenp '(2 4 6)))"))
+			.isEqualTo("t\nnil\nt\nnil");
+	}
+
+	@Test
+	void prog2Psetq() throws Exception {
+		assertThat(compileAndRun("(print (prog2 1 2 3)) (print (let ((a 1) (b 2)) (psetq a b b a) (list a b)))"))
+			.isEqualTo("2\n(2 1)");
+	}
+
+	@Test
+	void typecaseForm() throws Exception {
+		assertThat(compileAndRun(
+				"(print (typecase 42 (string \"s\") (integer \"i\") (t \"?\"))) (print (typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))) (print (typecase 'sym (string \"s\") (integer \"i\") (t \"?\")))"))
+			.isEqualTo("\"i\"\n\"s\"\n\"?\"");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -2093,7 +2148,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case cond decf do dolist dotimes format incf let* or pop prog1 push remf setf unless when with-open-file)");
+				"(and case cond decf do dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -2104,7 +2159,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("136");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("152");
 	}
 
 	@Test
