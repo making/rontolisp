@@ -1406,6 +1406,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFindIf() {
+		assertThat(eval("(find-if #'evenp '(1 3 5 6 7))").print()).isEqualTo("6");
+		assertThat(eval("(find-if #'oddp '(2 4 6))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(find-if #'plusp '(-1 -2 3 4))").print()).isEqualTo("3");
+		assertThat(eval("(funcall #'find-if #'evenp '(1 2 3))").print()).isEqualTo("2");
+	}
+
+	@Test
 	void evalPosition() {
 		assertThat(eval("(position 3 '(1 2 3 4))").print()).isEqualTo("2");
 		assertThat(eval("(position 'a '(a b c))").print()).isEqualTo("0");
@@ -1896,10 +1904,10 @@ class LispEvaluatorTest {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
 			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
-					"some", "remove", "remove-if", "find", "position", "count")
+					"some", "remove", "remove-if", "find", "find-if", "position", "count")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(114);
+			.hasSize(115);
 	}
 
 	@Test

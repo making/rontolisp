@@ -1286,6 +1286,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFindIf() throws Exception {
+		assertThat(compileAndRun(
+				"(print (find-if #'evenp '(1 3 5 6 7))) (print (find-if #'oddp '(2 4 6))) (print (funcall #'find-if #'plusp '(-1 -2 3 4)))"))
+			.isEqualTo("6\nnil\n3");
+	}
+
+	@Test
 	void compileAndRunPosition() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position 3 '(1 2 3 4))) (print (position 9 '(1 2 3))) (print (funcall #'position 2 '(5 2 8)))"))
@@ -2028,12 +2035,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("114");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("115");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("114");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("115");
 	}
 
 	@Test

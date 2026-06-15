@@ -132,6 +132,12 @@ public final class LispEvaluator {
 			}
 			return someValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.FIND_IF, new LispFunction(LispNames.FIND_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.FIND_IF + " expects 2 arguments, got " + args.size());
+			}
+			return findIfValues(args.get(0), args.get(1));
+		}));
 		this.globalEnv.defineFunction(LispNames.REMOVE_IF, new LispFunction(LispNames.REMOVE_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
@@ -513,6 +519,18 @@ public final class LispEvaluator {
 			LispVal result = apply(predicate, List.of(cell.car()), this.globalEnv);
 			if (isTruthy(result)) {
 				return result;
+			}
+			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the first element for which the predicate is true, or nil
+	// (Common Lisp find-if semantics, single-list form).
+	private LispVal findIfValues(LispVal predicate, LispVal list) {
+		while (list instanceof LispCons cell) {
+			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				return cell.car();
 			}
 			list = cell.cdr();
 		}

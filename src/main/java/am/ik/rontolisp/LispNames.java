@@ -180,6 +180,12 @@ public final class LispNames {
 	public static final String FIND = "find";
 
 	/**
+	 * The {@code find-if} built-in function (return the first element for which the
+	 * predicate is true, or nil).
+	 */
+	public static final String FIND_IF = "find-if";
+
+	/**
 	 * The {@code position} built-in function (return the 0-based index of the first
 	 * element {@code eql} to the given item, or nil).
 	 */

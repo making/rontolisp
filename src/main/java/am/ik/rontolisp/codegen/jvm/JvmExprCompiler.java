@@ -182,6 +182,8 @@ final class JvmExprCompiler {
 				case LispNames.MEMBER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
 				case LispNames.FIND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx, className);
+				case LispNames.FIND_IF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons), ctx, className);
 				case LispNames.POSITION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx, className);
 				case LispNames.COUNT ->

@@ -1063,6 +1063,30 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (find-if pred lst) into a do/return scan returning the first element for
+	 * which the predicate is true, or nil. Like {@code find} but tests each element with
+	 * {@code (funcall pred element)} rather than {@code eql}.
+	 * @param cons the find-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFindIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__findif_pred");
+		LispSymbol cur = new LispSymbol("__findif_cur");
+		// (do ((__findif_pred pred) (__findif_cur lst (cdr __findif_cur)))
+		// ((atom __findif_cur) nil)
+		// (if (funcall __findif_pred (car __findif_cur)) (return (car __findif_cur))
+		// nil))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem));
+		LispVal body = makeIf(test, makeReturn(elem), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (position item lst) into a do/return scan returning the 0-based index of
 	 * the first element {@code eql} to the item, or nil. Like {@code find} but yields the
 	 * position rather than the element.
