@@ -185,6 +185,12 @@ public final class LispNames {
 	 */
 	public static final String POSITION = "position";
 
+	/**
+	 * The {@code count} built-in function (return the number of elements {@code eql} to
+	 * the given item).
+	 */
+	public static final String COUNT = "count";
+
 	/** The {@code assoc} built-in function. */
 	public static final String ASSOC = "assoc";
 

@@ -1223,6 +1223,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void countFunction() throws Exception {
+		assertThat(compileAndRun(
+				"(print (count 2 '(1 2 3 2 2))) (print (count 9 '(1 2 3))) (print (funcall #'count 2 '(2 2 8)))"))
+			.isEqualTo("3\n0\n2");
+	}
+
+	@Test
 	void assocFunction() throws Exception {
 		assertThat(compileAndRun("(print (assoc 'b '((a 1) (b 2) (c 3)))) (print (assoc 'z '((a 1))))"))
 			.isEqualTo("(b 2)\nnil");
@@ -1937,7 +1944,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("113");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("114");
 	}
 
 	@Test

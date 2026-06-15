@@ -695,6 +695,19 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		}));
+		env.defineFunction(LispNames.COUNT, new LispFunction(LispNames.COUNT, args -> {
+			requireArgCount(LispNames.COUNT, args, 2);
+			LispVal item = args.get(0);
+			LispVal cur = args.get(1);
+			long count = 0;
+			while (cur instanceof LispCons cell) {
+				if (isEq(item, cell.car())) {
+					count++;
+				}
+				cur = cell.cdr();
+			}
+			return new LispInteger(count);
+		}));
 		env.defineFunction(LispNames.ASSOC, new LispFunction(LispNames.ASSOC, args -> {
 			requireArgCount(LispNames.ASSOC, args, 2);
 			LispVal key = args.get(0);

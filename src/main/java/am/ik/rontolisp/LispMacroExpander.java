@@ -1089,6 +1089,34 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (count item lst) into a do scan returning the number of elements
+	 * {@code eql} to the item. Like {@code position} but accumulates a count of all
+	 * matches rather than returning the first index.
+	 * @param cons the count expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCount(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__count_item");
+		LispSymbol n = new LispSymbol("__count_n");
+		LispSymbol cur = new LispSymbol("__count_cur");
+		// (do ((__count_item item) (__count_n 0)
+		// (__count_cur lst (cdr __count_cur)))
+		// ((atom __count_cur) __count_n)
+		// (if (eql __count_item (car __count_cur))
+		// (setq __count_n (+ __count_n 1)) nil))
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(n, new LispInteger(0))),
+						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), n));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
+		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.ADD), n, new LispInteger(1)));
+		LispVal incrementStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), n, increment));
+		LispVal body = makeIf(match, incrementStep, LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
 	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
 	 * is {@code eql} to the key, or nil.
 	 * @param cons the assoc expression
