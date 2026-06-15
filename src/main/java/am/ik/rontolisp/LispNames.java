@@ -215,6 +215,12 @@ public final class LispNames {
 	 */
 	public static final String REMOVE_IF = "remove-if";
 
+	/**
+	 * The {@code remove-if-not} built-in function (return a copy keeping only items
+	 * satisfying a predicate).
+	 */
+	public static final String REMOVE_IF_NOT = "remove-if-not";
+
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
 

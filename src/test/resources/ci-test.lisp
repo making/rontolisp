@@ -448,6 +448,7 @@
 (print (some #'oddp '(2 4 6)))
 (print (remove 2 '(1 2 3 2 4)))
 (print (remove-if #'evenp '(1 2 3 4 5)))
+(print (remove-if-not #'evenp '(1 2 3 4 5)))
 (print (funcall #'remove 9 '(1 2 3)))
 
 ; rest (alias for cdr, also a setf place)

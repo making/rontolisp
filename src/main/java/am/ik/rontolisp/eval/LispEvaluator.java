@@ -142,7 +142,13 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
 			}
-			return removeIfValues(args.get(0), args.get(1));
+			return removeIfValues(args.get(0), args.get(1), false);
+		}));
+		this.globalEnv.defineFunction(LispNames.REMOVE_IF_NOT, new LispFunction(LispNames.REMOVE_IF_NOT, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.REMOVE_IF_NOT + " expects 2 arguments, got " + args.size());
+			}
+			return removeIfValues(args.get(0), args.get(1), true);
 		}));
 		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
 			if (args.size() != 1) {
@@ -537,13 +543,15 @@ public final class LispEvaluator {
 		return LispNil.INSTANCE;
 	}
 
-	// Return a fresh list of the elements for which the predicate is nil
-	// (Common Lisp remove-if semantics, no keyword arguments).
-	private LispVal removeIfValues(LispVal predicate, LispVal list) {
+	// Return a fresh list of the elements that are kept (Common Lisp
+	// remove-if/remove-if-not semantics, no keyword arguments). When keepWhenTrue is
+	// false (remove-if) elements failing the predicate are kept; when true
+	// (remove-if-not) elements satisfying the predicate are kept.
+	private LispVal removeIfValues(LispVal predicate, LispVal list, boolean keepWhenTrue) {
 		List<LispVal> kept = new ArrayList<>();
 		LispVal cursor = list;
 		while (cursor instanceof LispCons cell) {
-			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv)) == keepWhenTrue) {
 				kept.add(cell.car());
 			}
 			cursor = cell.cdr();

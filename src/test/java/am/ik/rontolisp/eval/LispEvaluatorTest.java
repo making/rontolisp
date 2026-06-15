@@ -1524,6 +1524,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRemoveIfNot() {
+		assertThat(eval("(remove-if-not #'evenp '(1 2 3 4 5))").print()).isEqualTo("(2 4)");
+		assertThat(eval("(remove-if-not (lambda (x) (> x 3)) '(1 2 3 4 5))").print()).isEqualTo("(4 5)");
+		assertThat(eval("(remove-if-not #'evenp '())").print()).isEqualTo("nil");
+		assertThat(evalMulti("(funcall #'remove-if-not #'oddp '(1 2 3 4))").print()).isEqualTo("(1 3)");
+	}
+
+	@Test
 	void evalEveryAsFunctionValue() {
 		assertThat(evalMulti("(funcall #'remove 2 '(1 2 3 2)) ").print()).isEqualTo("(1 3)");
 	}
@@ -1904,10 +1912,10 @@ class LispEvaluatorTest {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
 			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
-					"some", "remove", "remove-if", "find", "find-if", "position", "count")
+					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "position", "count")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
 			.isSorted()
-			.hasSize(115);
+			.hasSize(116);
 	}
 
 	@Test

@@ -1271,6 +1271,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void removeIfNotFunction() throws Exception {
+		assertThat(compileAndRun("(print (remove-if-not #'evenp '(1 2 3 4 5)))")).isEqualTo("(2 4)");
+	}
+
+	@Test
+	void removeIfNotAsFirstClass() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'remove-if-not #'oddp '(1 2 3 4)))")).isEqualTo("(1 3)");
+	}
+
+	@Test
 	void removeAsFirstClass() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'remove 2 '(1 2 3 2)))")).isEqualTo("(1 3)");
 	}
@@ -1951,7 +1961,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("115");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("116");
 	}
 
 	@Test

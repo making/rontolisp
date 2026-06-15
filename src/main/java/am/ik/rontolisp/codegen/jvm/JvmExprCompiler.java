@@ -197,6 +197,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx, className);
 				case LispNames.REMOVE_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx, className);
+				case LispNames.REMOVE_IF_NOT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx, className);
 				case LispNames.LAST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx, className);
 				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compileEq(cons, ctx, className);
 				case LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);

@@ -197,6 +197,8 @@ final class WasmExprCompiler {
 				case LispNames.SOME -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx);
 				case LispNames.REMOVE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx);
 				case LispNames.REMOVE_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx);
+				case LispNames.REMOVE_IF_NOT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx);
 				case LispNames.LAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx);
 				case LispNames.EQ_GENERAL -> WasmEqGeneralCompiler.compile(cons, ctx);
 				case LispNames.EQL -> WasmEqGeneralCompiler.compileEql(cons, ctx);

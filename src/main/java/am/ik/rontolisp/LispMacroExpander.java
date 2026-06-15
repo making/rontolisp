@@ -1221,7 +1221,7 @@ public final class LispMacroExpander {
 	public static LispVal expandRemove(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol item = new LispSymbol("__remove_item");
-		return expandFilter(item, parts.get(1), parts.get(2), "__remove", LispNames.EQL, item);
+		return expandFilter(item, parts.get(1), parts.get(2), "__remove", LispNames.EQL, item, false);
 	}
 
 	/**
@@ -1233,32 +1233,47 @@ public final class LispMacroExpander {
 	public static LispVal expandRemoveIf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__removeif_pred");
-		return expandFilter(pred, parts.get(1), parts.get(2), "__removeif", LispNames.FUNCALL, pred);
+		return expandFilter(pred, parts.get(1), parts.get(2), "__removeif", LispNames.FUNCALL, pred, false);
 	}
 
 	/**
-	 * Shared expansion for {@code remove}/{@code remove-if}: bind the test operand, walk
-	 * the list, and accumulate (in reverse) every element for which the match form
-	 * {@code (matchOp matchArg (car cursor))} is false. The result form reverses the
-	 * accumulator back to source order. For {@code remove} the match form is
-	 * {@code (eql item (car cursor))}; for {@code remove-if} it is
-	 * {@code (funcall pred (car cursor))}.
+	 * Expands (remove-if-not pred lst) into a do scan that accumulates, then reverses,
+	 * the elements for which the predicate holds (the complement of {@code remove-if}).
+	 * @param cons the remove-if-not expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemoveIfNot(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__removeifnot_pred");
+		return expandFilter(pred, parts.get(1), parts.get(2), "__removeifnot", LispNames.FUNCALL, pred, true);
+	}
+
+	/**
+	 * Shared expansion for {@code remove}/{@code remove-if}/{@code remove-if-not}: bind
+	 * the test operand, walk the list, and accumulate (in reverse) every element to keep.
+	 * The result form reverses the accumulator back to source order. The match form is
+	 * {@code (matchOp matchArg (car cursor))}; for {@code remove} it is
+	 * {@code (eql item (car cursor))} and for the {@code -if} variants it is
+	 * {@code (funcall pred (car cursor))}. When {@code keepWhenMatch} is false an element
+	 * is kept when the match is false ({@code remove}/{@code remove-if}); when true it is
+	 * kept when the match is true ({@code remove-if-not}).
 	 */
 	private static LispVal expandFilter(LispSymbol operand, LispVal operandInit, LispVal list, String prefix,
-			String matchOp, LispVal matchArg) {
+			String matchOp, LispVal matchArg, boolean keepWhenMatch) {
 		LispSymbol acc = new LispSymbol(prefix + "_acc");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
 		LispVal match = listToCons(List.of(new LispSymbol(matchOp), matchArg, callOf(LispNames.CAR, cur)));
 		// (do ((operand operandInit) (acc nil) (cur list (cdr cur)))
 		// ((atom cur) (reverse acc))
-		// (if match nil (setq acc (cons (car cur) acc))))
+		// (if match nil (setq acc (cons (car cur) acc)))) ; keepWhenMatch swaps the
+		// branches
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(operand, operandInit)), listToCons(List.of(acc, LispNil.INSTANCE)),
 						listToCons(List.of(cur, list, callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
 		LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
-		LispVal body = makeIf(match, LispNil.INSTANCE, keep);
+		LispVal body = keepWhenMatch ? makeIf(match, keep, LispNil.INSTANCE) : makeIf(match, LispNil.INSTANCE, keep);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 
