@@ -866,7 +866,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
+      (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
       157
       (list-functions list-macros list-special-forms version)
