@@ -1168,14 +1168,15 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- reduce: (reduce fn list) or (reduce fn init list) ----
+		// ---- reduce: (reduce fn list) or (reduce fn list :initial-value init) ----
 		openSpecial(w, OFF, off.of(LispNames.REDUCE));
 		emitEvalCar(w, REST, ENV);
 		setLocal(w, FN);
 		emitCdrOf(w, REST);
 		setLocal(w, REST);
 		emitCdrOf(w, REST);
-		setLocal(w, TMP); // cdr(rest): null for 2-arg, (list) for 3-arg
+		setLocal(w, TMP); // cdr(rest): null for 2-arg, (:initial-value init) for keyword
+							// form
 		getLocal(w, TMP);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
@@ -1187,11 +1188,13 @@ final class WasmEvalRuntimeBuilder {
 		emitCdrOf(w, ELEM);
 		setLocal(w, ELEM);
 		w.write(Instruction.ELSE);
-		// 3-arg: acc = eval(car rest); list = eval(car (cdr rest))
+		// keyword form: list = eval(car rest); acc = eval(car (cdr (cdr rest)))
 		emitEvalCar(w, REST, ENV);
-		setLocal(w, ACC);
-		emitEvalCar(w, TMP, ENV);
 		setLocal(w, ELEM);
+		emitCdrOf(w, TMP); // TMP = (init)
+		setLocal(w, TMP);
+		emitEvalCar(w, TMP, ENV);
+		setLocal(w, ACC);
 		w.write(Instruction.END);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);

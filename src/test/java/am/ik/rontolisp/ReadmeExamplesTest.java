@@ -722,8 +722,8 @@ class ReadmeExamplesTest {
 		@Test
 		void builtinOperatorsAsFirstClassValues() {
 			String output = evalAndCaptureOutput("""
-					(print (reduce #'+ 0 '(1 2 3 4 5)))
-					(print (reduce #'* 1 '(1 2 3 4 5)))
+					(print (reduce #'+ '(1 2 3 4 5) :initial-value 0))
+					(print (reduce #'* '(1 2 3 4 5) :initial-value 1))
 					(print (mapcar #'car '((1 2) (3 4) (5 6))))
 					(print (mapcar #'1+ '(1 2 3)))
 					(print (funcall #'+ 3 4))

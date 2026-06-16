@@ -537,11 +537,11 @@ cases:
       nil
   - name: reduce
     source: |
-      (print (reduce (lambda (a b) (+ a b)) 0 '(1 2 3 4 5)))
-      (print (reduce (lambda (a b) (* a b)) 1 '(1 2 3 4 5)))
+      (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5) :initial-value 0))
+      (print (reduce (lambda (a b) (* a b)) '(1 2 3 4 5) :initial-value 1))
       (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5)))
-      (print (reduce (lambda (acc x) (+ acc (* x x))) 0 '(1 2 3)))
-      (print (reduce (lambda (a b) (+ a b)) 0 nil))
+      (print (reduce (lambda (acc x) (+ acc (* x x))) '(1 2 3) :initial-value 0))
+      (print (reduce (lambda (a b) (+ a b)) nil :initial-value 0))
     expected: |
       15
       120
@@ -550,8 +550,8 @@ cases:
       0
   - name: built-in-operators-as-first-class-values
     source: |
-      (print (reduce #'+ 0 '(1 2 3 4 5)))
-      (print (reduce #'* 1 '(1 2 3 4 5)))
+      (print (reduce #'+ '(1 2 3 4 5) :initial-value 0))
+      (print (reduce #'* '(1 2 3 4 5) :initial-value 1))
       (print (mapcar #'car '((1 2) (3 4) (5 6))))
       (print (mapcar #'cdr '((1 2) (3 4) (5 6))))
       (print (mapcar #'1+ '(1 2 3)))
@@ -1236,7 +1236,7 @@ cases:
       (print (fadd 1 2.0))
       (print (fcmp 1.5 2.5))
       (print (fcmp 3.0 1.0))
-      (print (reduce #'+ 0 (list 1.0 2.0 3.0)))
+      (print (reduce #'+ (list 1.0 2.0 3.0) :initial-value 0))
       (print (mapcar (lambda (x) (* x x)) (list 1.0 2.0 3.0)))
       (print (fadd 1 2))
       (print (fdiv 1 3))

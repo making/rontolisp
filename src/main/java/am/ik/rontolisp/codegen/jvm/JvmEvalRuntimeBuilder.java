@@ -2191,18 +2191,19 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- reduce: (reduce fn list) or (reduce fn init list) ----
+		// ---- reduce: (reduce fn list) or (reduce fn list :initial-value init) ----
 		n = special(a, OP, LispNames.REDUCE);
 		evalCar(a, REST, ENV);
 		a.astore(FN);
 		cdr(a, REST);
 		a.astore(REST);
 		cdr(a, REST);
-		a.astore(TMP); // cdr(rest): null for 2-arg, (list) for 3-arg
-		int threeArg = a.label();
+		a.astore(TMP); // cdr(rest): null for 2-arg, (:initial-value init) for keyword
+						// form
+		int withInit = a.label();
 		int afterInit = a.label();
 		a.aload(TMP);
-		a.branch(Opcode.IFNONNULL, threeArg);
+		a.branch(Opcode.IFNONNULL, withInit);
 		// 2-arg: list = eval(car rest); acc = car(list); list = cdr(list)
 		evalCar(a, REST, ENV);
 		a.astore(ELEM);
@@ -2211,12 +2212,14 @@ final class JvmEvalRuntimeBuilder {
 		cdr(a, ELEM);
 		a.astore(ELEM);
 		a.branch(Opcode.GOTO, afterInit);
-		a.bind(threeArg);
-		// 3-arg: acc = eval(car rest); list = eval(car (cdr rest))
+		a.bind(withInit);
+		// keyword form: list = eval(car rest); acc = eval(car (cdr (cdr rest)))
 		evalCar(a, REST, ENV);
-		a.astore(ACC);
-		evalCar(a, TMP, ENV);
 		a.astore(ELEM);
+		cdr(a, TMP); // TMP = (init)
+		a.astore(TMP);
+		evalCar(a, TMP, ENV);
+		a.astore(ACC);
 		a.bind(afterInit);
 		int redLoop = a.label();
 		int redEnd = a.label();

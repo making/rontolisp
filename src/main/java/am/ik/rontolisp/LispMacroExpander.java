@@ -1141,7 +1141,7 @@ public final class LispMacroExpander {
 	 * existing primitives.
 	 *
 	 * <pre>
-	 * (length lst) -> (reduce (lambda (__acc __x) (+ __acc 1)) 0 lst)
+	 * (length lst) -> (reduce (lambda (__acc __x) (+ __acc 1)) lst :initial-value 0)
 	 * </pre>
 	 * @param cons the length expression
 	 * @return the expanded expression
@@ -1152,14 +1152,15 @@ public final class LispMacroExpander {
 		LispSymbol x = new LispSymbol("__length_x");
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
 				listToCons(List.of(new LispSymbol(LispNames.ADD), acc, new LispInteger(1)))));
-		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda, new LispInteger(0), parts.get(1)));
+		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda, parts.get(1),
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispInteger(0)));
 	}
 
 	/**
 	 * Expands (reverse lst) into a reduce-based reversal.
 	 *
 	 * <pre>
-	 * (reverse lst) -> (reduce (lambda (__acc __x) (cons __x __acc)) nil lst)
+	 * (reverse lst) -> (reduce (lambda (__acc __x) (cons __x __acc)) lst :initial-value nil)
 	 * </pre>
 	 * @param cons the reverse expression
 	 * @return the expanded expression
@@ -1170,7 +1171,8 @@ public final class LispMacroExpander {
 		LispSymbol x = new LispSymbol("__reverse_x");
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
 				listToCons(List.of(new LispSymbol(LispNames.CONS), x, acc))));
-		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda, LispNil.INSTANCE, parts.get(1)));
+		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda, parts.get(1),
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE));
 	}
 
 	/**

@@ -814,6 +814,9 @@ public final class LispNames {
 	/** The {@code :direction} keyword recognized by {@code with-open-file}. */
 	public static final String DIRECTION_KEYWORD = ":direction";
 
+	/** The {@code :initial-value} keyword recognized by {@code reduce}. */
+	public static final String INITIAL_VALUE_KEYWORD = ":initial-value";
+
 	/** The {@code :input} keyword (open a file for reading). */
 	public static final String INPUT_KEYWORD = ":input";
 

@@ -493,7 +493,7 @@ embedded `eval` runtime in compiled output (see
 | `mapc` | `(mapc #'print '(1 2 3))` | Apply a function to each element for effect, return the original list |
 | `mapcan` | `(mapcan (lambda (x) (list x x)) '(1 2))` | `(1 1 2 2)` (apply a function and concatenate the result lists; uses non-destructive `append`) |
 | `apply` | `(apply #'+ 1 2 '(3 4))` | `10` (apply a function to the leading args plus the spread final list) |
-| `reduce` | `(reduce #'+ 0 '(1 2 3))` | Left fold: `(f (f (f init a) b) c)`. 2-arg form `(reduce f list)` uses first element as init |
+| `reduce` | `(reduce #'+ '(1 2 3) :initial-value 0)` | Left fold: `(f (f (f init a) b) c)`. Plain form `(reduce f list)` uses the first element as init; the `:initial-value` keyword (literal) supplies an explicit seed |
 | `every` | `(every #'evenp '(2 4 6))` | `t` if the predicate is non-nil for every element, else `nil` (single-list form) |
 | `some` | `(some #'oddp '(2 4 5))` | The first non-nil predicate result, or `nil` if every element fails (single-list form) |
 | `notany` | `(notany #'evenp '(1 3 5))` | `t` if the predicate is nil for every element, else `nil` (the complement of `some`) |
@@ -699,8 +699,8 @@ structures in all three execution modes.
 Built-in operators like `+`, `car`, `1+` can be passed to higher-order functions via `#'`:
 
 ```lisp
-(print (reduce #'+ 0 '(1 2 3 4 5)))              ; => 15
-(print (reduce #'* 1 '(1 2 3 4 5)))              ; => 120
+(print (reduce #'+ '(1 2 3 4 5) :initial-value 0))   ; => 15
+(print (reduce #'* '(1 2 3 4 5) :initial-value 1))   ; => 120
 (print (mapcar #'car '((1 2) (3 4) (5 6))))          ; => (1 3 5)
 (print (mapcar #'1+ '(1 2 3)))                       ; => (2 3 4)
 (print (funcall #'+ 3 4))                          ; => 7

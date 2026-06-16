@@ -893,7 +893,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(defun gt (a b) (if (> a b) 1 0)) (print (gt 1.5 2.5))")).isEqualTo("0");
 		assertThat(compileAndRun("(defun eq2 (a b) (if (= a b) 1 0)) (print (eq2 2.0 2.0))")).isEqualTo("1");
 		// Operators as first-class values over floats.
-		assertThat(compileAndRun("(print (reduce #'+ 0 (list 1.0 2.0 3.0)))")).isEqualTo("6.0");
+		assertThat(compileAndRun("(print (reduce #'+ (list 1.0 2.0 3.0) :initial-value 0))")).isEqualTo("6.0");
 		assertThat(compileAndRun("(print (funcall #'* 1.5 2.0))")).isEqualTo("3.0");
 		// Integer, big-integer and ratio paths are unaffected by the float fast path.
 		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1 2))")).isEqualTo("3");
@@ -1250,12 +1250,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReduceWithBuiltinPlus() throws Exception {
-		assertThat(compileAndRun("(print (reduce #'+ 0 '(1 2 3 4 5)))")).isEqualTo("15");
+		assertThat(compileAndRun("(print (reduce #'+ '(1 2 3 4 5) :initial-value 0))")).isEqualTo("15");
 	}
 
 	@Test
 	void compileAndRunReduceWithBuiltinMul() throws Exception {
-		assertThat(compileAndRun("(print (reduce #'* 1 '(1 2 3 4 5)))")).isEqualTo("120");
+		assertThat(compileAndRun("(print (reduce #'* '(1 2 3 4 5) :initial-value 1))")).isEqualTo("120");
 	}
 
 	@Test

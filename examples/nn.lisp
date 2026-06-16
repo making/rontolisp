@@ -1,8 +1,6 @@
 ;;;; Feed-forward neural network in rontolisp
 ;;;; Learns the XOR function via backpropagation + gradient descent.
 ;;;; Topology: 2 inputs -> 4 hidden (sigmoid) -> 1 output (sigmoid).
-;;;;
-;;;; NOTE: rontolisp's reduce is (reduce fn init list) -- initial value first.
 
 ;;; --- random weights via the built-in random ---
 ;;; random returns a value in [0, limit) of the limit's type. On the interpreter
@@ -20,7 +18,7 @@
 (defun map2 (fn a b)
   (if (null a) nil
       (cons (funcall fn (car a) (car b)) (map2 fn (cdr a) (cdr b)))))
-(defun dot (a b) (reduce #'+ 0 (map2 #'* a b)))
+(defun dot (a b) (reduce #'+ (map2 #'* a b) :initial-value 0))
 (defun vec+ (a b) (map2 #'+ a b))
 (defun vec- (a b) (map2 #'- a b))
 (defun vec-scale (s v) (mapcar (lambda (x) (* s x)) v))
@@ -73,7 +71,7 @@
          (diff (vec- yhat (second ex))))
     (* 0.5 (dot diff diff))))
 (defun total-loss (net data)
-  (reduce #'+ 0 (mapcar (lambda (ex) (example-loss net ex)) data)))
+  (reduce #'+ (mapcar (lambda (ex) (example-loss net ex)) data) :initial-value 0))
 (defun train (net data epochs lr)
   (let ((e 0))
     (while (< e epochs)

@@ -3,6 +3,8 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
@@ -10,8 +12,8 @@ import am.ik.jvm.Opcode;
 /**
  * Compiles the {@code reduce} built-in function. Generates an inline loop that applies a
  * binary function to accumulate elements of a list into a single value (left fold).
- * Supports both 2-arg {@code (reduce f list)} and 3-arg
- * {@code (reduce f initial-value list)} forms.
+ * Supports both 2-arg {@code (reduce f list)} and the Common Lisp keyword form
+ * {@code (reduce f list :initial-value init)}.
  */
 final class JvmReduceCompiler {
 
@@ -22,7 +24,7 @@ final class JvmReduceCompiler {
 		List<LispVal> args = cons.toList();
 		ctx.indirectCallArities.add(2);
 
-		boolean threeArg = (args.size() == 4);
+		boolean withInit = hasInitialValue(args);
 
 		// Compile function expression
 		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
@@ -33,13 +35,13 @@ final class JvmReduceCompiler {
 		int accSlot = ctx.allocTemp();
 		int listSlot = ctx.allocTemp();
 
-		if (threeArg) {
-			// 3-arg: (reduce fn initial-value list)
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		if (withInit) {
+			// (reduce fn list :initial-value init)
+			JvmExprCompiler.compileExpr(args.get(4), ctx, className);
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(accSlot);
 
-			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(listSlot);
 		}
@@ -116,6 +118,25 @@ final class JvmReduceCompiler {
 		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(accSlot);
+	}
+
+	/**
+	 * Determines whether the {@code reduce} form carries a literal {@code :initial-value}
+	 * keyword. Args are {@code [reduce, fn, list]} (2-arg) or
+	 * {@code [reduce, fn, list, :initial-value, init]}.
+	 * @param args the full reduce form parts
+	 * @return {@code true} for the keyword initial-value form
+	 */
+	static boolean hasInitialValue(List<LispVal> args) {
+		if (args.size() == 3) {
+			return false;
+		}
+		if (args.size() == 5 && args.get(3) instanceof LispSymbol kw
+				&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
+			return true;
+		}
+		throw new UnsupportedOperationException(
+				"reduce expects (reduce fn list) or (reduce fn list :initial-value init)");
 	}
 
 }

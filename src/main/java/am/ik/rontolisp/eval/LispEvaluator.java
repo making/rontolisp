@@ -108,6 +108,7 @@ public final class LispEvaluator {
 			return mapForEffect(args.get(0), args.get(1));
 		}));
 		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
+			// (reduce fn list) or (reduce fn list :initial-value init)
 			if (args.size() == 2) {
 				LispVal list = args.get(1);
 				if (!(list instanceof LispCons first)) {
@@ -115,10 +116,12 @@ public final class LispEvaluator {
 				}
 				return reduceValues(args.get(0), first.car(), first.cdr());
 			}
-			if (args.size() == 3) {
-				return reduceValues(args.get(0), args.get(1), args.get(2));
+			if (args.size() == 4 && args.get(2) instanceof LispSymbol kw
+					&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
+				return reduceValues(args.get(0), args.get(3), args.get(1));
 			}
-			throw new LispEvalException(LispNames.REDUCE + " expects 2 or 3 arguments, got " + args.size());
+			throw new LispEvalException(
+					LispNames.REDUCE + " expects (reduce fn list) or (reduce fn list :initial-value init)");
 		}));
 		this.globalEnv.defineFunction(LispNames.EVERY, new LispFunction(LispNames.EVERY, args -> {
 			if (args.size() != 2) {

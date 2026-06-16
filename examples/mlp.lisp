@@ -4,9 +4,6 @@
 ;;;; Task: binary classification of 2-D points (inside vs. outside a circle),
 ;;;; a non-linearly-separable problem. We train with SGD + backprop and
 ;;;; report accuracy on a held-out test set.
-;;;;
-;;;; NOTE: rontolisp's reduce is (reduce fn init list) -- initial value comes
-;;;; BEFORE the list (the opposite of Common Lisp's keyword form).
 
 ;;; ---------------------------------------------------------------------------
 ;;; Randomness via the built-in random.  random returns a value in [0, limit)
@@ -33,7 +30,7 @@
       (cons (funcall fn (car a) (car b))
             (map2 fn (cdr a) (cdr b)))))
 
-(defun dot (a b) (reduce #'+ 0 (map2 #'* a b)))
+(defun dot (a b) (reduce #'+ (map2 #'* a b) :initial-value 0))
 (defun vec+ (a b) (map2 #'+ a b))
 (defun vec- (a b) (map2 #'- a b))
 (defun vec-scale (s v) (mapcar (lambda (x) (* s x)) v))
@@ -130,18 +127,19 @@
     (* 0.5 (dot diff diff))))
 
 (defun total-loss (layers data)
-  (reduce #'+ 0 (mapcar (lambda (ex) (example-loss layers ex)) data)))
+  (reduce #'+ (mapcar (lambda (ex) (example-loss layers ex)) data) :initial-value 0))
 
 (defun classify (layers x)               ; threshold the single output
   (if (> (first (predict layers x)) 0.5) 1.0 0.0))
 
 (defun accuracy (layers data)
-  (let ((correct (reduce #'+ 0
+  (let ((correct (reduce #'+
                          (mapcar (lambda (ex)
                                    (if (= (classify layers (first ex))
                                           (first (second ex)))
                                        1 0))
-                                 data))))
+                                 data)
+                         :initial-value 0)))
     (/ (float correct) (length data))))
 
 (defun train (layers data epochs lr)

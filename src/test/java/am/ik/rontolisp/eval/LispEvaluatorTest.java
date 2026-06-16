@@ -1318,12 +1318,12 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalReduceWithBuiltinPlus() {
-		assertThat(eval("(reduce #'+ 0 '(1 2 3 4 5))")).isEqualTo(new LispInteger(15));
+		assertThat(eval("(reduce #'+ '(1 2 3 4 5) :initial-value 0)")).isEqualTo(new LispInteger(15));
 	}
 
 	@Test
 	void evalReduceWithBuiltinMul() {
-		assertThat(eval("(reduce #'* 1 '(1 2 3 4 5))")).isEqualTo(new LispInteger(120));
+		assertThat(eval("(reduce #'* '(1 2 3 4 5) :initial-value 1)")).isEqualTo(new LispInteger(120));
 	}
 
 	@Test
