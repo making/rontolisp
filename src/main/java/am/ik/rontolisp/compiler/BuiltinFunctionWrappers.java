@@ -152,7 +152,7 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.SQRT), unary(LispNames.ISQRT), unary(LispNames.SIGNUM), unary(LispNames.EXP),
 			unary(LispNames.LOG), unary(LispNames.SIN), unary(LispNames.COS), unary(LispNames.TAN),
 			unary(LispNames.ASIN), unary(LispNames.ACOS), unary(LispNames.ATAN), unary(LispNames.SINH),
-			unary(LispNames.COSH), unary(LispNames.TANH),
+			unary(LispNames.COSH), unary(LispNames.TANH), unary(LispNames.RANDOM),
 			// Math functions (arity 2)
 			binary(LispNames.EXPT), binary(LispNames.GCD), binary(LispNames.LCM),
 			// Bitwise integer operations

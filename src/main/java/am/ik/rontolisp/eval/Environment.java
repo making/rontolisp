@@ -482,6 +482,36 @@ public final class Environment implements Scope {
 		defineUnaryDouble(env, LispNames.SINH, Math::sinh);
 		defineUnaryDouble(env, LispNames.COSH, Math::cosh);
 		defineUnaryDouble(env, LispNames.TANH, Math::tanh);
+		// random: a non-negative random number below the (positive) limit, of the same
+		// type as the limit (integer -> integer, float -> float). The interpreter and the
+		// JVM backend draw from Math.random(); the WASM backend uses a deterministic
+		// linear-congruential generator instead (it has no entropy source).
+		env.defineFunction(LispNames.RANDOM, new LispFunction(LispNames.RANDOM, args -> {
+			requireArgCount(LispNames.RANDOM, args, 1);
+			LispVal limit = args.get(0);
+			if (limit instanceof LispDouble d) {
+				if (d.value() <= 0.0) {
+					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+				}
+				return new LispDouble(Math.random() * d.value());
+			}
+			if (limit instanceof LispInteger i) {
+				if (i.value() <= 0) {
+					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+				}
+				return new LispInteger((long) (Math.random() * i.value()));
+			}
+			if (limit instanceof LispBigInteger b) {
+				if (b.value().signum() <= 0) {
+					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+				}
+				// Scale a [0,1) random fraction across the bignum range, then floor.
+				return normalizeBig(
+						new java.math.BigDecimal(b.value()).multiply(java.math.BigDecimal.valueOf(Math.random()))
+							.toBigInteger());
+			}
+			throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
+		}));
 		// isqrt: exact integer square root (floor of the real square root).
 		env.defineFunction(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {
 			requireArgCount(LispNames.ISQRT, args, 1);
@@ -1333,6 +1363,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
 			try {
 				if (args.isEmpty()) {
+					// Drain buffered output so any prompt is visible before we block on
+					// stdin.
+					out.flush();
 					String line = stdinReader.readLine();
 					return line == null ? LispNil.INSTANCE : new LispString(line);
 				}
@@ -1351,6 +1384,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			requireArgCount(LispNames.READ, args, 0);
 			try {
+				// Drain buffered output so any prompt is visible before we block on
+				// stdin.
+				out.flush();
 				// Keep reading lines until one contains a datum (blank and
 				// comment-only lines are skipped) or stdin is exhausted (EOF -> nil).
 				String line;

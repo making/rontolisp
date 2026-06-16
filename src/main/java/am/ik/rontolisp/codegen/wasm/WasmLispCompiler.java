@@ -254,6 +254,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// from the variable environment above.
 	static final int GLOBAL_FENV = 1;
 
+	// Global (wasm global section) index holding the mutable i32 seed for the random
+	// number generator. WASM has no entropy source, so random is a deterministic
+	// linear-congruential generator seeded from this fixed value (see
+	// WasmRandomCompiler).
+	static final int GLOBAL_SEED = 2;
+
+	// Initial seed for GLOBAL_SEED (the classic glibc LCG starting value).
+	static final int RANDOM_SEED_INIT = 12345;
+
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
 
@@ -896,6 +905,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				g.write(Instruction.REF_NULL);
 				g.writeHeapType(Type.EQ.code());
 				g.write(Instruction.END);
+			}).add(g -> {
+				// GLOBAL_SEED: a mutable i32 random seed (deterministic LCG state).
+				g.write(Type.I32.code());
+				g.write(am.ik.wasm.Mutability.VAR.code());
+				g.write(Instruction.I32_CONST);
+				g.writeSignedLeb128(RANDOM_SEED_INIT);
+				g.write(Instruction.END);
 			}))
 			// Export section
 			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0)
@@ -925,9 +941,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNewBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
-					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD))
-					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_SUB))
-					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD, Instruction.F64_ADD))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_SUB, Instruction.F64_SUB))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL, Instruction.F64_MUL))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatTruncBody())

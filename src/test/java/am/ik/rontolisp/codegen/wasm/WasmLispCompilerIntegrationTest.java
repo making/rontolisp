@@ -2168,6 +2168,44 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void floatArithmeticOnNonLiteralOperands() throws Exception {
+		// Float values reaching an operator through variables/parameters (not as a
+		// literal) must still use float arithmetic, with integer contagion.
+		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1.5 2.5))")).isEqualTo("4.0");
+		assertThat(compileAndRun("(defun f (a b) (- a b)) (print (f 1.0 0.25))")).isEqualTo("0.75");
+		assertThat(compileAndRun("(defun f (a b) (* a b)) (print (f 1.5 2.5))")).isEqualTo("3.75");
+		assertThat(compileAndRun("(defun f (a b) (/ a b)) (print (f 3.0 2.0))")).isEqualTo("1.5");
+		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1 2.0))")).isEqualTo("3.0");
+		assertThat(compileAndRun("(defun neg (a) (- a)) (print (neg 2.5))")).isEqualTo("-2.5");
+		// Comparisons on non-literal float operands.
+		assertThat(compileAndRun("(defun lt (a b) (if (< a b) 1 0)) (print (lt 1.5 2.5))")).isEqualTo("1");
+		assertThat(compileAndRun("(defun gt (a b) (if (> a b) 1 0)) (print (gt 1.5 2.5))")).isEqualTo("0");
+		assertThat(compileAndRun("(defun eq2 (a b) (if (= a b) 1 0)) (print (eq2 2.0 2.0))")).isEqualTo("1");
+		// Operators as first-class values over floats.
+		assertThat(compileAndRun("(print (reduce #'+ 0 (list 1.0 2.0 3.0)))")).isEqualTo("6.0");
+		assertThat(compileAndRun("(print (funcall #'* 1.5 2.0))")).isEqualTo("3.0");
+		// Integer and ratio paths are unaffected by the float fast path.
+		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1 2))")).isEqualTo("3");
+		assertThat(compileAndRun("(defun f (a b) (/ a b)) (print (f 1 3))")).isEqualTo("1/3");
+	}
+
+	@Test
+	void random() throws Exception {
+		// (random 1) is always 0; the result type follows the limit and stays in range.
+		assertThat(compileAndRun("(print (random 1))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (integerp (random 100)))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (floatp (random 5.0)))")).isEqualTo("t");
+		assertThat(compileAndRun("(let ((r (random 10))) (if (and (>= r 0) (< r 10)) (print \"in\") (print \"oob\")))"))
+			.isEqualTo("\"in\"");
+		assertThat(compileAndRun(
+				"(let ((r (random 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print \"in\") (print \"oob\")))"))
+			.isEqualTo("\"in\"");
+		// The WASM backend uses a deterministic LCG seeded from a fixed value, so the
+		// sequence is reproducible from a fresh module (seed 12345).
+		assertThat(compileAndRun("(dotimes (i 3) (print (random 1000)))")).isEqualTo("606\n775\n924");
+	}
+
+	@Test
 	void isqrt() throws Exception {
 		assertThat(compileAndRun("(print (isqrt 17))")).isEqualTo("4");
 		assertThat(compileAndRun("(print (isqrt 16))")).isEqualTo("4");
@@ -2242,7 +2280,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("157");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("158");
 	}
 
 	@Test

@@ -839,6 +839,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRandom() {
+		// (random 1) is always 0; the result type follows the limit and stays in range.
+		assertThat(eval("(random 1)")).isEqualTo(new LispInteger(0));
+		for (int trial = 0; trial < 100; trial++) {
+			LispVal intResult = eval("(random 10)");
+			assertThat(intResult).isInstanceOf(LispInteger.class);
+			long v = ((LispInteger) intResult).value();
+			assertThat(v).isGreaterThanOrEqualTo(0).isLessThan(10);
+			LispVal floatResult = eval("(random 2.0)");
+			assertThat(floatResult).isInstanceOf(LispDouble.class);
+			double d = ((LispDouble) floatResult).value();
+			assertThat(d).isGreaterThanOrEqualTo(0.0).isLessThan(2.0);
+		}
+		// A non-positive limit is an error.
+		assertThatThrownBy(() -> eval("(random 0)")).hasMessageContaining("positive");
+		assertThatThrownBy(() -> eval("(random -3)")).hasMessageContaining("positive");
+	}
+
+	@Test
 	void evalIsqrt() {
 		assertThat(eval("(isqrt 16)")).isEqualTo(new LispInteger(4));
 		assertThat(eval("(isqrt 17)")).isEqualTo(new LispInteger(4));
@@ -2235,8 +2254,9 @@ class LispEvaluatorTest {
 					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
 					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error")
+			.contains("random")
 			.isSorted()
-			.hasSize(157);
+			.hasSize(158);
 	}
 
 	@Test

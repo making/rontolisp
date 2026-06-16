@@ -334,6 +334,7 @@ final class JvmExprCompiler {
 						LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
 						LispNames.TANH ->
 					JvmMathFnCompiler.compile(cons, ctx, className, sym.name());
+				case LispNames.RANDOM -> JvmRandomCompiler.compile(cons, ctx, className);
 				case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
 				case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);
 				case LispNames.GCD -> {

@@ -163,11 +163,22 @@ final class WasmRatioRuntimeBuilder {
 
 	// _rat_add/_rat_sub/_rat_mul((ref null eq) a, (ref null eq) b) -> (ref null eq):
 	// i31 fast path with plain i32 arithmetic, exact rational path otherwise.
-	static byte[] buildRatBinaryBody(int i32Opcode) {
+	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
+
+		// Float fast path: if either operand is a float, compute in f64 (float contagion)
+		// and box the result. Mirrors the JVM _add/_sub/_mul Double prologue.
+		emitEitherFloat(w);
+		ifRefNullEq(w);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(f64Opcode);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.ELSE);
 
 		getLocal(w, 0);
 		refTestI31(w);
@@ -211,7 +222,9 @@ final class WasmRatioRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_RAT_DEN);
 		w.write(Instruction.I32_MUL);
 		call(w, WasmLispCompiler.FUNC_RAT_NEW);
-		w.write(Instruction.END);
+		w.write(Instruction.END); // end i31-fast-path if
+
+		w.write(Instruction.END); // end float-fast-path if
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -225,6 +238,16 @@ final class WasmRatioRuntimeBuilder {
 
 		w.write(0); // no extra locals
 
+		// Float fast path: f64 division when either operand is a float.
+		emitEitherFloat(w);
+		ifRefNullEq(w);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.ELSE);
+
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
 		getLocal(w, 1);
@@ -236,6 +259,7 @@ final class WasmRatioRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
 		w.write(Instruction.I32_MUL);
 		call(w, WasmLispCompiler.FUNC_RAT_NEW);
+		w.write(Instruction.END); // end float-fast-path if
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -251,6 +275,20 @@ final class WasmRatioRuntimeBuilder {
 		w.write(1);
 		w.write(2);
 		w.write(Type.I64);
+
+		// Float fast path: f64 comparison, (a > b) - (a < b), when either operand is a
+		// float. Mirrors the JVM _cmp Double prologue.
+		emitEitherFloat(w);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_GT);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.ELSE);
 
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
@@ -276,6 +314,7 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 3);
 		w.write(Instruction.I64_LT_S);
 		w.write(Instruction.I32_SUB);
+		w.write(Instruction.END); // end float-fast-path if
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -453,6 +492,61 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+	}
+
+	// Emits ref.test against a concrete struct type index (e.g. TYPE_FLOAT, TYPE_RATIO).
+	private static void refTestType(WasmWriter w, int typeIndex) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(typeIndex);
+	}
+
+	// Converts the value held in local[slot] to an f64, dispatching on its runtime type:
+	// an i31 integer converts directly, a ratio divides numerator by denominator, and a
+	// TYPE_FLOAT struct yields its field. Mirrors WasmEmitHelper.castFloatGetF64 but
+	// works
+	// on a value already stored in a local (no temp allocation), so it is usable from the
+	// raw-WasmWriter ratio runtime.
+	private static void emitLocalToF64(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		getLocal(w, slot);
+		castI31GetS(w);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		refTestType(w, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		getLocal(w, slot);
+		call(w, WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		getLocal(w, slot);
+		call(w, WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Emits the test `(a is TYPE_FLOAT) | (b is TYPE_FLOAT)` over locals 0 and 1, leaving
+	// an
+	// i32 on the stack (non-zero when either operand is a float).
+	private static void emitEitherFloat(WasmWriter w) {
+		getLocal(w, 0);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		getLocal(w, 1);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.I32_OR);
 	}
 
 	private static void ifRefNullEq(WasmWriter w) {

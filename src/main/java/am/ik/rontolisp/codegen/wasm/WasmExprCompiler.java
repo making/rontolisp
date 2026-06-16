@@ -301,6 +301,7 @@ final class WasmExprCompiler {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
 					}
 				}
+				case LispNames.RANDOM -> WasmRandomCompiler.compile(cons, ctx);
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);
 				case LispNames.SIGNUM -> WasmSignumCompiler.compile(cons, ctx);

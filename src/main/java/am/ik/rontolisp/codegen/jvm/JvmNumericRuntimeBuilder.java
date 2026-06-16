@@ -312,20 +312,24 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildRat(nRat, dRat, bigClass, arithEx, aeInit, divZeroStr, biSignum, biNeg, biGcd, biDiv, biOne,
 				objEquals, rNorm));
 		methods.add(buildExactBinary(nAdd, dBinary, longClass, addExact, longValue, longValueOf, rBig, rNorm, biAdd,
-				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biAdd));
+				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biAdd, doubleClass, rDbl, numberClass,
+				numDoubleValue, doubleValueOf, Opcode.DADD));
 		methods.add(buildExactBinary(nSub, dBinary, longClass, subExact, longValue, longValueOf, rBig, rNorm, biSub,
-				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biSub));
+				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biSub, doubleClass, rDbl, numberClass,
+				numDoubleValue, doubleValueOf, Opcode.DSUB));
 		methods.add(buildExactBinary(nMul, dBinary, longClass, mulExact, longValue, longValueOf, rBig, rNorm, biMul,
-				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, null));
+				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, null, doubleClass, rDbl, numberClass,
+				numDoubleValue, doubleValueOf, Opcode.DMUL));
 		methods.add(buildNeg(nNeg, dUnary, longClass, negExact, longValue, longValueOf, rBig, rNorm, biNeg, arithEx,
-				ratArrClass, rRatNum, rRatDen, rRat));
-		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul));
+				ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf));
+		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
+				numDoubleValue, doubleValueOf));
 		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, floorModLong,
 				biSignum, biAdd));
 		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem));
 		methods.add(buildFmod(nFmod, dFmod));
-		methods
-			.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul));
+		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
+				doubleClass, rDbl, numberClass, numDoubleValue));
 		methods.add(buildAbs(nAbs, dUnary, longClass, bigClass, longValue, longValueOf, absLong, biValueOf, biNeg,
 				biAbs, rNorm, cMin, ratArrClass, rRatNum, rRatDen, rRat));
 		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
@@ -560,8 +564,11 @@ final class JvmNumericRuntimeBuilder {
 			MethodrefConstant exact, MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig,
 			MethodrefConstant rNorm, MethodrefConstant biOp, ClassConstant arithEx, ClassConstant ratArrClass,
 			MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul,
-			@Nullable MethodrefConstant ratioCross) {
+			@Nullable MethodrefConstant ratioCross, ClassConstant doubleClass, MethodrefConstant rDbl,
+			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+			int doubleOpcode) {
 		List<Integer> c = new ArrayList<>();
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOpcode);
 		int[] ratJumps = emitRatioGuard(c, ratArrClass);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
@@ -602,8 +609,11 @@ final class JvmNumericRuntimeBuilder {
 	private static NumericMethod buildNeg(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant negExact, MethodrefConstant longValue, MethodrefConstant longValueOf,
 			MethodrefConstant rBig, MethodrefConstant rNorm, MethodrefConstant biNeg, ClassConstant arithEx,
-			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat) {
+			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat,
+			ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
+			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf) {
 		List<Integer> c = new ArrayList<>();
+		emitDoubleUnaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DNEG);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
@@ -655,8 +665,11 @@ final class JvmNumericRuntimeBuilder {
 	// integers and ratios: _rat(num(a)*den(b), den(a)*num(b)). The result demotes to an
 	// integer when the division is exact; division by zero throws inside _rat.
 	private static NumericMethod buildDiv(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul) {
+			MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul, ClassConstant doubleClass,
+			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
+			MethodrefConstant doubleValueOf) {
 		List<Integer> c = new ArrayList<>();
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, Opcode.DDIV);
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRatNum.index());
@@ -676,7 +689,7 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRat.index());
 		c.add(Opcode.ARETURN);
-		return new NumericMethod(name, desc, c, 3, 2, List.of());
+		return new NumericMethod(name, desc, c, 4, 2, List.of());
 	}
 
 	// _mod(Object a, Object b): Common Lisp modulo whose result takes the sign of the
@@ -808,8 +821,11 @@ final class JvmNumericRuntimeBuilder {
 	// cross-multiplication (denominators are positive), returning -1/0/1.
 	private static NumericMethod buildCmp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			MethodrefConstant longValue, MethodrefConstant rBig, MethodrefConstant biCompareTo,
-			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant biMul) {
+			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant biMul,
+			ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
+			MethodrefConstant numDoubleValue) {
 		List<Integer> c = new ArrayList<>();
+		emitDoubleCmpPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue);
 		int[] ratJumps = emitRatioGuard(c, ratArrClass);
 		int[] slowJumps = emitLongLongGuard(c, longClass);
 		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
@@ -1422,6 +1438,95 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, longClass.index());
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, longValue.index());
+	}
+
+	// Emits: load slot, _dbl(x) (boxed Double), checkcast Number, Number.doubleValue() ->
+	// double on stack. _dbl coerces Long/BigInteger/ratio/Double to a Double.
+	private static void emitToDouble(List<Integer> c, int loadOpcode, MethodrefConstant rDbl, ClassConstant numberClass,
+			MethodrefConstant numDoubleValue) {
+		c.add(loadOpcode);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rDbl.index());
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, numberClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, numDoubleValue.index());
+	}
+
+	// Emits a Double fast path at the top of a binary numeric op: when either operand is
+	// a
+	// Double, computes _dbl(a) <doubleOpcode> _dbl(b) in double arithmetic, boxes it, and
+	// returns. Otherwise falls through to the existing integer/ratio body. This gives
+	// float
+	// contagion for non-literal operands (variables, parameters, #'+/#'* as values),
+	// which
+	// the compile-site double-literal fast path cannot detect.
+	private static void emitDoubleBinaryPrologue(List<Integer> c, ClassConstant doubleClass, MethodrefConstant rDbl,
+			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+			int doubleOpcode) {
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifADouble = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifBNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifADouble, c.size());
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		emitToDouble(c, Opcode.ALOAD_1, rDbl, numberClass, numDoubleValue);
+		c.add(doubleOpcode);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifBNotDouble, c.size());
+	}
+
+	// Like emitDoubleBinaryPrologue, but for _cmp: the Double path leaves an int (-1/0/1)
+	// via dcmpl and returns it directly, matching the integer/ratio path's int result.
+	private static void emitDoubleCmpPrologue(List<Integer> c, ClassConstant doubleClass, MethodrefConstant rDbl,
+			ClassConstant numberClass, MethodrefConstant numDoubleValue) {
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifADouble = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifBNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifADouble, c.size());
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		emitToDouble(c, Opcode.ALOAD_1, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.DCMPL);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifBNotDouble, c.size());
+	}
+
+	// Like emitDoubleBinaryPrologue, but for the unary _neg: negates _dbl(a) when a is a
+	// Double.
+	private static void emitDoubleUnaryPrologue(List<Integer> c, ClassConstant doubleClass, MethodrefConstant rDbl,
+			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+			int doubleOpcode) {
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		c.add(doubleOpcode);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
 	}
 
 	// Emits: _norm(_big(a).<biOp>(_big(b))) followed by areturn.

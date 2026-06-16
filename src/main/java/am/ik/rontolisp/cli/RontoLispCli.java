@@ -1,11 +1,15 @@
 package am.ik.rontolisp.cli;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -212,7 +216,21 @@ public final class RontoLispCli {
 	 * @param args the command-line arguments
 	 */
 	public static void main(String[] args) {
-		new RontoLispCli(System.in, System.out).run(args);
+		// Replace stdout with a block-buffered, non-auto-flushing stream. Flushing on
+		// every print/format call interleaves badly when the output is piped; buffering
+		// coalesces it into whole writes. A shutdown hook drains the buffer even on
+		// System.exit, and the REPL flushes before each prompt to stay interactive.
+		PrintStream bufferedOut = new PrintStream(
+				new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 1 << 16), false,
+				StandardCharsets.UTF_8);
+		System.setOut(bufferedOut);
+		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
+		try {
+			new RontoLispCli(System.in, bufferedOut).run(args);
+		}
+		finally {
+			bufferedOut.flush();
+		}
 	}
 
 }

@@ -82,6 +82,9 @@ public final class LispNames {
 	/** The {@code log} built-in function. */
 	public static final String LOG = "log";
 
+	/** The {@code random} built-in function. */
+	public static final String RANDOM = "random";
+
 	/** The {@code sin} built-in function. */
 	public static final String SIN = "sin";
 

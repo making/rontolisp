@@ -464,6 +464,7 @@ embedded `eval` runtime in compiled output (see
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
+| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`) |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM only) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM only) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |
@@ -571,6 +572,7 @@ The math built-ins differ in how widely they are supported, because the WASM bac
 - **Transcendental functions** (`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are therefore **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
 - **`expt`** keeps an exact rational result for an integer or ratio base raised to an integer exponent (with big-integer promotion in the interpreter and JVM); a negative exponent yields the reciprocal (`(expt 2 -1)` is `1/2`) and a float base/exponent uses `Math.pow` and returns a float. The WASM `expt`, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
 - **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
+- **`random`** is supported on all three backends. It returns a non-negative random number below the (positive) limit, of the same type as the limit (an integer limit yields an integer, a float limit a float). The integer and float paths are chosen from the literal shape of the argument, so use a float literal (`(random 1.0)`) when a float result is wanted. The interpreter and JVM draw from `Math.random()`; the WASM backend has no entropy source, so it uses a **deterministic** linear-congruential generator (`seed = (seed * 1103515245 + 12345) & 0x7fffffff`) seeded from a fixed value, producing a reproducible pseudo-random sequence. `random` is not available inside the compiled `eval`.
 - **`logand`, `logior`, `logxor`, `lognot`, `ash`** are supported on all three backends. The interpreter and JVM compute on exact `BigInteger` values (`ash` shifts left for a non-negative count, right otherwise); the WASM backend uses the i31 integer range, so a result that overflows 31 bits is truncated.
 
 ### Packages

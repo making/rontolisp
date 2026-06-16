@@ -180,6 +180,7 @@ public final class LispLexer {
 				char escaped = this.input.charAt(this.pos);
 				switch (escaped) {
 					case 'n' -> sb.append('\n');
+					case 'r' -> sb.append('\r');
 					case 't' -> sb.append('\t');
 					case '\\' -> sb.append('\\');
 					case '"' -> sb.append('"');

@@ -26,6 +26,9 @@ final class JvmMathFnCompiler {
 	/** Key for {@code Math.signum(D)D} in the math ops map. */
 	static final String SIGNUM_D = "signum.d";
 
+	/** Key for {@code Math.random()D} in the math ops map. */
+	static final String RANDOM = "random";
+
 	/**
 	 * The Lisp names handled by this compiler, each mapping to {@code Math.<name>(D)D}.
 	 */
@@ -50,6 +53,7 @@ final class JvmMathFnCompiler {
 		}
 		ops.put(POW, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D"))));
 		ops.put(SIGNUM_D, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D"))));
+		ops.put(RANDOM, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("random"), cp.addUtf8("()D"))));
 		return ops;
 	}
 
