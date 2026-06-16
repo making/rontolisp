@@ -95,6 +95,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void destructiveListOps() throws Exception {
+		// The destructive ops reuse cons cells; an alias to the original list observes
+		// the
+		// mutation (Common Lisp semantics).
+		assertThat(compileAndRun("(setq a (list 1 2 3)) (setq b a) (nreverse a) (print b)")).isEqualTo("(1)");
+		assertThat(compileAndRun("(setq a (list 1 2 3 2 1)) (setq b a) (delete 2 a) (print b)")).isEqualTo("(1 3 1)");
+		assertThat(compileAndRun("(setq a (list 1 2 3 4 5)) (setq b a) (delete-if #'evenp a) (print b)"))
+			.isEqualTo("(1 3 5)");
+		assertThat(compileAndRun("(setq a (list 1 2 1 3)) (setq b a) (nsubstitute 9 1 a) (print b)"))
+			.isEqualTo("(9 2 9 3)");
+	}
+
+	@Test
 	void subtraction() throws Exception {
 		assertThat(compileAndRun("(print (- 10 3))")).isEqualTo("7");
 	}

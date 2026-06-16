@@ -779,26 +779,35 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
-		// delete is an alias for remove (rontolisp treats lists immutably).
+		// delete is the destructive variant of remove: splice out matching cells in place
+		// (Common Lisp semantics; use the return value since the head may change).
 		env.defineFunction(LispNames.DELETE, new LispFunction(LispNames.DELETE, args -> {
 			requireArgCount(LispNames.DELETE, args, 2);
 			LispVal item = args.get(0);
-			List<LispVal> kept = new java.util.ArrayList<>();
-			LispVal cur = args.get(1);
+			LispVal head = args.get(1);
+			// Drop matching cells from the front by advancing the head.
+			while (head instanceof LispCons cell && isEq(item, cell.car())) {
+				head = cell.cdr();
+			}
+			if (!(head instanceof LispCons headCell)) {
+				return head;
+			}
+			// Splice out matching cells in the interior.
+			LispCons prev = headCell;
+			LispVal cur = headCell.cdr();
 			while (cur instanceof LispCons cell) {
-				if (!isEq(item, cell.car())) {
-					kept.add(cell.car());
+				if (isEq(item, cell.car())) {
+					prev.setCdr(cell.cdr());
+				}
+				else {
+					prev = cell;
 				}
 				cur = cell.cdr();
 			}
-			LispVal result = LispNil.INSTANCE;
-			for (int i = kept.size() - 1; i >= 0; i--) {
-				result = new LispCons(kept.get(i), result);
-			}
-			return result;
+			return head;
 		}));
-		// substitute new old list: replace every element eql to old with new. nsubstitute
-		// is an alias (rontolisp treats lists immutably).
+		// substitute new old list: return a fresh copy with every element eql to old
+		// replaced by new (non-destructive).
 		LispFunction substitute = new LispFunction(LispNames.SUBSTITUTE, args -> {
 			requireArgCount(LispNames.SUBSTITUTE, args, 3);
 			LispVal newItem = args.get(0);
@@ -816,7 +825,23 @@ public final class Environment implements Scope {
 			return result;
 		});
 		env.defineFunction(LispNames.SUBSTITUTE, substitute);
-		env.defineFunction(LispNames.NSUBSTITUTE, new LispFunction(LispNames.NSUBSTITUTE, substitute.body()));
+		// nsubstitute is the destructive variant: rewrite matching cars in place and
+		// return
+		// the (possibly mutated) original list (Common Lisp semantics).
+		env.defineFunction(LispNames.NSUBSTITUTE, new LispFunction(LispNames.NSUBSTITUTE, args -> {
+			requireArgCount(LispNames.NSUBSTITUTE, args, 3);
+			LispVal newItem = args.get(0);
+			LispVal oldItem = args.get(1);
+			LispVal list = args.get(2);
+			LispVal cur = list;
+			while (cur instanceof LispCons cell) {
+				if (isEq(oldItem, cell.car())) {
+					cell.setCar(newItem);
+				}
+				cur = cell.cdr();
+			}
+			return list;
+		}));
 		env.defineFunction(LispNames.BUTLAST, new LispFunction(LispNames.BUTLAST, args -> {
 			requireArgCount(LispNames.BUTLAST, args, 1);
 			List<LispVal> kept = new java.util.ArrayList<>();
@@ -911,14 +936,17 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
 			requireArgCount(LispNames.NREVERSE, args, 1);
-			// Non-destructive: shares semantics with reverse.
-			LispVal result = LispNil.INSTANCE;
+			// Destructive: rewire each cdr to its predecessor and return the former last
+			// cell as the new head (Common Lisp semantics; use the return value).
+			LispVal prev = LispNil.INSTANCE;
 			LispVal cur = args.get(0);
 			while (cur instanceof LispCons cell) {
-				result = new LispCons(cell.car(), result);
-				cur = cell.cdr();
+				LispVal next = cell.cdr();
+				cell.setCdr(prev);
+				prev = cell;
+				cur = next;
 			}
-			return result;
+			return prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
 			requireArgCount(LispNames.MAKE_LIST, args, 1);

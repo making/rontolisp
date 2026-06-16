@@ -208,14 +208,22 @@ final class JvmExprCompiler {
 				case LispNames.EVERY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx, className);
 				case LispNames.SOME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx, className);
-				case LispNames.REMOVE, LispNames.DELETE ->
+				case LispNames.REMOVE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx, className);
-				case LispNames.REMOVE_IF, LispNames.DELETE_IF ->
+				case LispNames.REMOVE_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx, className);
-				case LispNames.REMOVE_IF_NOT, LispNames.DELETE_IF_NOT ->
+				case LispNames.REMOVE_IF_NOT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx, className);
-				case LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE ->
+				case LispNames.DELETE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons), ctx, className);
+				case LispNames.DELETE_IF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons), ctx, className);
+				case LispNames.DELETE_IF_NOT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIfNot(cons), ctx, className);
+				case LispNames.SUBSTITUTE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx, className);
+				case LispNames.NSUBSTITUTE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx, className);
 				case LispNames.REMOVE_DUPLICATES ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx, className);
 				case LispNames.NCONC ->

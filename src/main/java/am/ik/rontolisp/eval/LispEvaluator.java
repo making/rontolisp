@@ -180,20 +180,21 @@ public final class LispEvaluator {
 			}
 			return removeIfValues(args.get(0), args.get(1), true);
 		}));
-		// delete-if/delete-if-not are aliases for remove-if/remove-if-not (rontolisp
-		// treats
-		// lists immutably).
+		// delete-if/delete-if-not are the destructive variants of
+		// remove-if/remove-if-not:
+		// splice out matching cells in place (Common Lisp semantics; use the return
+		// value).
 		this.globalEnv.defineFunction(LispNames.DELETE_IF, new LispFunction(LispNames.DELETE_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.DELETE_IF + " expects 2 arguments, got " + args.size());
 			}
-			return removeIfValues(args.get(0), args.get(1), false);
+			return deleteIfValues(args.get(0), args.get(1), true);
 		}));
 		this.globalEnv.defineFunction(LispNames.DELETE_IF_NOT, new LispFunction(LispNames.DELETE_IF_NOT, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.DELETE_IF_NOT + " expects 2 arguments, got " + args.size());
 			}
-			return removeIfValues(args.get(0), args.get(1), true);
+			return deleteIfValues(args.get(0), args.get(1), false);
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN, args -> {
 			if (args.size() != 2) {
@@ -732,6 +733,35 @@ public final class LispEvaluator {
 			result = new LispCons(kept.get(i), result);
 		}
 		return result;
+	}
+
+	// Destructively splice out every cell whose car satisfies the predicate
+	// (deleteWhenTrue) or fails it (delete-if-not). The surviving cells are reused and
+	// the
+	// new head is returned (Common Lisp semantics).
+	private LispVal deleteIfValues(LispVal predicate, LispVal list, boolean deleteWhenTrue) {
+		LispVal head = list;
+		// Drop matching cells from the front by advancing the head.
+		while (head instanceof LispCons cell
+				&& isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv)) == deleteWhenTrue) {
+			head = cell.cdr();
+		}
+		if (!(head instanceof LispCons headCell)) {
+			return head;
+		}
+		// Splice out matching cells in the interior.
+		LispCons prev = headCell;
+		LispVal cursor = headCell.cdr();
+		while (cursor instanceof LispCons cell) {
+			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv)) == deleteWhenTrue) {
+				prev.setCdr(cell.cdr());
+			}
+			else {
+				prev = cell;
+			}
+			cursor = cell.cdr();
+		}
+		return head;
 	}
 
 	private LispVal reduceValues(LispVal function, LispVal accumulator, LispVal list) {

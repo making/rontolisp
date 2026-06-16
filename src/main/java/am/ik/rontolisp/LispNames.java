@@ -293,21 +293,21 @@ public final class LispNames {
 	public static final String REMOVE_DUPLICATES = "remove-duplicates";
 
 	/**
-	 * The {@code delete} built-in function. In Common Lisp this is the destructive
-	 * variant of {@code remove}; rontolisp treats lists immutably, so it is an alias for
-	 * {@code remove}.
+	 * The {@code delete} built-in function (destructive variant of {@code remove}:
+	 * splices out every element {@code eql} to the given one in place, reusing the
+	 * surviving cons cells; use the return value since the head may change).
 	 */
 	public static final String DELETE = "delete";
 
 	/**
-	 * The {@code delete-if} built-in function (alias for {@code remove-if}; see
-	 * {@link #DELETE}).
+	 * The {@code delete-if} built-in function (destructive variant of {@code remove-if};
+	 * see {@link #DELETE}).
 	 */
 	public static final String DELETE_IF = "delete-if";
 
 	/**
-	 * The {@code delete-if-not} built-in function (alias for {@code remove-if-not}; see
-	 * {@link #DELETE}).
+	 * The {@code delete-if-not} built-in function (destructive variant of
+	 * {@code remove-if-not}; see {@link #DELETE}).
 	 */
 	public static final String DELETE_IF_NOT = "delete-if-not";
 
@@ -318,9 +318,9 @@ public final class LispNames {
 	public static final String SUBSTITUTE = "substitute";
 
 	/**
-	 * The {@code nsubstitute} built-in function. In Common Lisp this is the destructive
-	 * variant of {@code substitute}; rontolisp treats lists immutably, so it is an alias
-	 * for {@code substitute}.
+	 * The {@code nsubstitute} built-in function (destructive variant of
+	 * {@code substitute}: rewrites every {@code car} {@code eql} to the old item with the
+	 * new item in place and returns the mutated list).
 	 */
 	public static final String NSUBSTITUTE = "nsubstitute";
 
@@ -342,8 +342,9 @@ public final class LispNames {
 	public static final String COPY_LIST = "copy-list";
 
 	/**
-	 * The {@code nreverse} built-in function (reverses a list; this implementation is
-	 * non-destructive and shares semantics with {@code reverse}).
+	 * The {@code nreverse} built-in function (destructively reverses a list by rewiring
+	 * each {@code cdr} and returning the former last cell as the new head; use the return
+	 * value).
 	 */
 	public static final String NREVERSE = "nreverse";
 
@@ -414,8 +415,9 @@ public final class LispNames {
 	public static final String REVAPPEND = "revappend";
 
 	/**
-	 * The {@code nreconc} built-in function (destructive {@code revappend}; this
-	 * implementation is non-destructive and shares semantics with {@code revappend}).
+	 * The {@code nreconc} built-in function (destructive {@code revappend}: expands to
+	 * {@code (nconc (nreverse x) y)}, so the cons cells of {@code x} are reused; use the
+	 * return value).
 	 */
 	public static final String NRECONC = "nreconc";
 

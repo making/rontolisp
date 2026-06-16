@@ -1146,7 +1146,7 @@ cases:
       (print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))
     expected: |
       720
-  - name: delete-delete-if-delete-if-not-aliases
+  - name: delete-delete-if-delete-if-not
     source: |
       (print (delete 2 '(1 2 3 2 1)))
       (print (delete-if #'evenp '(1 2 3 4 5)))
@@ -1161,6 +1161,24 @@ cases:
       (print (nsubstitute 9 1 '(1 2 1 3)))
     expected: |
       (1 0 3 0 1)
+      (9 2 9 3)
+  - name: destructive-list-ops-mutate-in-place
+    source: |
+      (setq dl1 (list 1 2 3))
+      (setq dl2 dl1)
+      (nreverse dl1)
+      (print dl2)
+      (setq dl3 (list 1 2 3 2 1))
+      (setq dl4 dl3)
+      (delete 2 dl3)
+      (print dl4)
+      (setq dl5 (list 1 2 1 3))
+      (setq dl6 dl5)
+      (nsubstitute 9 1 dl5)
+      (print dl6)
+    expected: |
+      (1)
+      (1 3 1)
       (9 2 9 3)
   - name: ecase-etypecase-exhaustive-dispatch
     source: |

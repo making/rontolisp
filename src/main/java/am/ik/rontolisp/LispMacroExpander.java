@@ -1569,13 +1569,36 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (nreverse lst) into (reverse lst). This implementation is non-destructive
-	 * and shares semantics with {@code reverse}.
+	 * Expands (nreverse lst) into an in-place reversal loop that rewires the {@code cdr}
+	 * of every cons to its predecessor, returning the former last cell as the new head.
+	 * This is destructive: the argument's cons cells are reused and the original list
+	 * head is left pointing at a single-element list (Common Lisp semantics; use the
+	 * return value).
 	 * @param cons the nreverse expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNreverse(LispCons cons) {
-		return callOf(LispNames.REVERSE, cons.toList().get(1));
+		LispVal list = cons.toList().get(1);
+		LispSymbol prev = new LispSymbol("__nrev_prev");
+		LispSymbol cur = new LispSymbol("__nrev_cur");
+		LispSymbol next = new LispSymbol("__nrev_next");
+		// (let ((__nrev_prev nil) (__nrev_cur lst) (__nrev_next nil))
+		// (while (consp __nrev_cur)
+		// (setq __nrev_next (cdr __nrev_cur))
+		// (rplacd __nrev_cur __nrev_prev)
+		// (setq __nrev_prev __nrev_cur)
+		// (setq __nrev_cur __nrev_next))
+		// __nrev_prev)
+		LispVal whileTest = listToCons(List.of(new LispSymbol(LispNames.CONSP), cur));
+		LispVal saveNext = listToCons(List.of(new LispSymbol(LispNames.SETQ), next, callOf(LispNames.CDR, cur)));
+		LispVal relink = listToCons(List.of(new LispSymbol(LispNames.RPLACD), cur, prev));
+		LispVal advancePrev = listToCons(List.of(new LispSymbol(LispNames.SETQ), prev, cur));
+		LispVal advanceCur = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, next));
+		LispVal whileExpr = listToCons(
+				List.of(new LispSymbol(LispNames.WHILE), whileTest, saveNext, relink, advancePrev, advanceCur));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(prev, LispNil.INSTANCE)),
+				listToCons(List.of(cur, list)), listToCons(List.of(next, LispNil.INSTANCE))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, prev));
 	}
 
 	/**
@@ -1822,6 +1845,145 @@ public final class LispMacroExpander {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (nsubstitute new old lst) into an in-place scan that rewrites the
+	 * {@code car} of every cons whose value is {@code eql} to {@code old} with
+	 * {@code new}, returning the (possibly mutated) original list. This is destructive:
+	 * the argument's cons cells are reused (Common Lisp semantics).
+	 * @param cons the nsubstitute expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstitute(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol newItem = new LispSymbol("__nsub_new");
+		LispSymbol oldItem = new LispSymbol("__nsub_old");
+		LispSymbol lst = new LispSymbol("__nsub_lst");
+		LispSymbol cur = new LispSymbol("__nsub_cur");
+		// (let ((__nsub_new new) (__nsub_old old) (__nsub_lst lst) (__nsub_cur nil))
+		// (setq __nsub_cur __nsub_lst)
+		// (while (consp __nsub_cur)
+		// (if (eql __nsub_old (car __nsub_cur)) (rplaca __nsub_cur __nsub_new) nil)
+		// (setq __nsub_cur (cdr __nsub_cur)))
+		// __nsub_lst)
+		LispVal initCur = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, lst));
+		LispVal whileTest = listToCons(List.of(new LispSymbol(LispNames.CONSP), cur));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), oldItem, callOf(LispNames.CAR, cur)));
+		LispVal replace = listToCons(List.of(new LispSymbol(LispNames.RPLACA), cur, newItem));
+		LispVal ifExpr = makeIf(match, replace, LispNil.INSTANCE);
+		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, ifExpr, advance));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(newItem, parts.get(1))), listToCons(List.of(oldItem, parts.get(2))),
+						listToCons(List.of(lst, parts.get(3))), listToCons(List.of(cur, LispNil.INSTANCE))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, initCur, whileExpr, lst));
+	}
+
+	/**
+	 * Expands (delete item lst) into a destructive splice that removes every cons whose
+	 * {@code car} is {@code eql} to {@code item}, reusing the surviving cons cells.
+	 * @param cons the delete expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDelete(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol item = new LispSymbol("__delete_item");
+		return expandDeleteFilter(item, parts.get(1), parts.get(2), "__delete", LispNames.EQL, item, true);
+	}
+
+	/**
+	 * Expands (delete-if pred lst) into a destructive splice that removes every cons
+	 * whose {@code car} satisfies the predicate, reusing the surviving cons cells.
+	 * @param cons the delete-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDeleteIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__deleteif_pred");
+		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteif", LispNames.FUNCALL, pred, true);
+	}
+
+	/**
+	 * Expands (delete-if-not pred lst) into a destructive splice that removes every cons
+	 * whose {@code car} fails the predicate, reusing the surviving cons cells.
+	 * @param cons the delete-if-not expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDeleteIfNot(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol pred = new LispSymbol("__deleteifnot_pred");
+		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteifnot", LispNames.FUNCALL, pred, false);
+	}
+
+	/**
+	 * Shared destructive expansion for
+	 * {@code delete}/{@code delete-if}/{@code delete-if-not}: bind the test operand once,
+	 * drop matching cons cells from the front by advancing the head, then splice out
+	 * matching cons cells in the interior with {@code rplacd}. The deletion test is
+	 * {@code (matchOp matchArg (car cursor))}; when {@code deleteWhenMatch} is false the
+	 * cons is deleted when the test is false ({@code delete-if-not}). The surviving cons
+	 * cells are reused (Common Lisp semantics; use the return value).
+	 */
+	private static LispVal expandDeleteFilter(LispSymbol operand, LispVal operandInit, LispVal list, String prefix,
+			String matchOp, LispVal matchArg, boolean deleteWhenMatch) {
+		LispSymbol head = new LispSymbol(prefix + "_head");
+		LispSymbol prev = new LispSymbol(prefix + "_prev");
+		LispSymbol cur = new LispSymbol(prefix + "_cur");
+		LispVal match = listToCons(List.of(new LispSymbol(matchOp), matchArg, callOf(LispNames.CAR, cur)));
+		LispVal deleteForm = deleteWhenMatch ? match : listToCons(List.of(new LispSymbol(LispNames.NOT), match));
+		// (let ((operand operandInit) (head list) (prev nil) (cur nil))
+		// (while (and (consp head) deleteFormOnHead) (setq head (cdr head))) ; drop
+		// leading
+		// (setq prev head)
+		// (if (consp head) (setq cur (cdr head)) nil)
+		// (while (consp cur)
+		// (if deleteFormOnCur (rplacd prev (cdr cur)) (setq prev cur))
+		// (setq cur (cdr cur)))
+		// head)
+		LispVal deleteOnHead = substituteCursor(deleteForm, cur, head);
+		LispVal leadTest = listToCons(List.of(new LispSymbol(LispNames.AND),
+				listToCons(List.of(new LispSymbol(LispNames.CONSP), head)), deleteOnHead));
+		LispVal leadStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), head, callOf(LispNames.CDR, head)));
+		LispVal leadWhile = listToCons(List.of(new LispSymbol(LispNames.WHILE), leadTest, leadStep));
+		LispVal setPrev = listToCons(List.of(new LispSymbol(LispNames.SETQ), prev, head));
+		LispVal initCur = makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), head)),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, head))),
+				LispNil.INSTANCE);
+		LispVal mainTest = listToCons(List.of(new LispSymbol(LispNames.CONSP), cur));
+		LispVal splice = listToCons(List.of(new LispSymbol(LispNames.RPLACD), prev, callOf(LispNames.CDR, cur)));
+		LispVal keepPrev = listToCons(List.of(new LispSymbol(LispNames.SETQ), prev, cur));
+		LispVal mainIf = makeIf(deleteForm, splice, keepPrev);
+		LispVal mainAdvance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal mainWhile = listToCons(List.of(new LispSymbol(LispNames.WHILE), mainTest, mainIf, mainAdvance));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(operand, operandInit)), listToCons(List.of(head, list)),
+						listToCons(List.of(prev, LispNil.INSTANCE)), listToCons(List.of(cur, LispNil.INSTANCE))));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), bindings, leadWhile, setPrev, initCur, mainWhile, head));
+	}
+
+	/**
+	 * Returns a copy of {@code form} (a deletion test referencing {@code (car from)})
+	 * rebuilt to reference {@code (car to)} instead, so the same test can run against the
+	 * head cursor and the interior cursor. Only the {@code (car from)} subforms are
+	 * rewritten; everything else is shared.
+	 */
+	private static LispVal substituteCursor(LispVal form, LispSymbol from, LispSymbol to) {
+		if (form instanceof LispCons cell) {
+			List<LispVal> parts = cell.toList();
+			// Replace the exact subform (car from) with (car to).
+			if (parts.size() == 2 && parts.get(0) instanceof LispSymbol op && LispNames.CAR.equals(op.name())
+					&& parts.get(1) instanceof LispSymbol s && from.name().equals(s.name())) {
+				return callOf(LispNames.CAR, to);
+			}
+			List<LispVal> rebuilt = new java.util.ArrayList<>();
+			for (LispVal part : parts) {
+				rebuilt.add(substituteCursor(part, from, to));
+			}
+			return listToCons(rebuilt);
+		}
+		return form;
 	}
 
 	/**

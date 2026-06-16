@@ -421,14 +421,14 @@ embedded `eval` runtime in compiled output (see
 | `remove-if` | `(remove-if #'evenp '(1 2 3 4))` | `(1 3)` (new list without items satisfying the predicate) |
 | `remove-if-not` | `(remove-if-not #'evenp '(1 2 3 4))` | `(2 4)` (new list keeping only items satisfying the predicate) |
 | `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)` (copy with duplicate elements removed, keeping the last occurrence; `eql` compare, no `:test`/`:key`) |
-| `delete` | `(delete 2 '(1 2 3 2))` | `(1 3)` (alias for `remove`; rontolisp treats lists immutably) |
-| `delete-if` | `(delete-if #'evenp '(1 2 3 4))` | `(1 3)` (alias for `remove-if`) |
-| `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)` (alias for `remove-if-not`) |
+| `delete` | `(delete 2 '(1 2 3 2))` | `(1 3)` (destructive `remove`: splices out matching cells in place; use the return value since the head may change) |
+| `delete-if` | `(delete-if #'evenp '(1 2 3 4))` | `(1 3)` (destructive `remove-if`) |
+| `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)` (destructive `remove-if-not`) |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (copy with every element `eql` to the old item replaced by the new one; positional args only, no `:test`/`:key`) |
-| `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (alias for `substitute`) |
+| `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (destructive `substitute`: rewrites matching cars in place) |
 | `nconc` | `(nconc (list 1 2) (list 3 4))` | `(1 2 3 4)` (destructively concatenate two lists; two arguments only) |
 | `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)` (shallow copy of a list) |
-| `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)` (reverse a list; this implementation is non-destructive, sharing semantics with `reverse`) |
+| `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)` (destructively reverse a list by rewiring each `cdr`; use the return value) |
 | `make-list` | `(make-list 3)` | `(nil nil nil)` (list of n nil elements; no `:initial-element`) |
 | `union` | `(union '(1 2 3) '(2 3 4))` | `(4 1 2 3)` (set union, `eql` compare, no `:test`/`:key`; result order unspecified) |
 | `intersection` | `(intersection '(1 2 3) '(2 3 4))` | `(3 2)` (set intersection, `eql` compare; result order unspecified) |
@@ -440,7 +440,7 @@ embedded `eval` runtime in compiled output (see
 | `elt` | `(elt '(a b c) 1)` | `b` (0-based element access; lists only, no string indexing) |
 | `rassoc` | `(rassoc 2 (list (cons 'a 1) (cons 'b 2)))` | `(b . 2)` (first pair whose cdr is `eql` to the value, or nil) |
 | `revappend` | `(revappend '(1 2 3) '(4 5))` | `(3 2 1 4 5)` (reverse the first list and append the second) |
-| `nreconc` | `(nreconc '(1 2 3) '(4 5))` | `(3 2 1 4 5)` (destructive `revappend`; this implementation is non-destructive) |
+| `nreconc` | `(nreconc '(1 2 3) '(4 5))` | `(3 2 1 4 5)` (destructive `revappend`: expands to `(nconc (nreverse x) y)`, reusing the cons cells of the first list) |
 | `maplist` | `(maplist #'identity '(1 2 3))` | `((1 2 3) (2 3) (3))` (apply to successive tails, collect results; single-list form) |
 | `mapcon` | `(mapcon (lambda (x) (list (car x))) '(1 2 3))` | `(1 2 3)` (apply to successive tails, concatenate the result lists; single-list form) |
 | `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)` (destructively sort a list with a comparison predicate; not stable) |

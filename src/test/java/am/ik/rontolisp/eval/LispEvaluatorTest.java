@@ -1536,6 +1536,30 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalNreverseIsDestructive() {
+		// The original head cell is reused and left as the tail, so an alias to it sees
+		// the
+		// mutation (Common Lisp semantics).
+		assertThat(evalMulti("(setq a (list 1 2 3)) (setq b a) (nreverse a) b").print()).isEqualTo("(1)");
+	}
+
+	@Test
+	void evalDeleteIsDestructive() {
+		// Interior cells are spliced out in place, so an alias to the surviving head sees
+		// the deletion of later elements.
+		assertThat(evalMulti("(setq a (list 1 2 3 2 1)) (setq b a) (delete 2 a) b").print()).isEqualTo("(1 3 1)");
+		assertThat(evalMulti("(setq a (list 1 2 3 4 5)) (setq b a) (delete-if #'evenp a) b").print())
+			.isEqualTo("(1 3 5)");
+	}
+
+	@Test
+	void evalNsubstituteIsDestructive() {
+		// Matching cars are rewritten in place, so an alias sees the replacement.
+		assertThat(evalMulti("(setq a (list 1 2 1 3)) (setq b a) (nsubstitute 9 1 a) b").print())
+			.isEqualTo("(9 2 9 3)");
+	}
+
+	@Test
 	void evalMakeList() {
 		assertThat(eval("(make-list 3)").print()).isEqualTo("(nil nil nil)");
 		assertThat(eval("(make-list 0)")).isSameAs(LispNil.INSTANCE);

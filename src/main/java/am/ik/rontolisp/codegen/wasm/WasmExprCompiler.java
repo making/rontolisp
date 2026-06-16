@@ -205,14 +205,18 @@ final class WasmExprCompiler {
 				case LispNames.GETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx);
 				case LispNames.EVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx);
 				case LispNames.SOME -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx);
-				case LispNames.REMOVE, LispNames.DELETE ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx);
-				case LispNames.REMOVE_IF, LispNames.DELETE_IF ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx);
-				case LispNames.REMOVE_IF_NOT, LispNames.DELETE_IF_NOT ->
+				case LispNames.REMOVE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx);
+				case LispNames.REMOVE_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx);
+				case LispNames.REMOVE_IF_NOT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx);
-				case LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE ->
+				case LispNames.DELETE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons), ctx);
+				case LispNames.DELETE_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons), ctx);
+				case LispNames.DELETE_IF_NOT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIfNot(cons), ctx);
+				case LispNames.SUBSTITUTE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx);
+				case LispNames.NSUBSTITUTE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx);
 				case LispNames.REMOVE_DUPLICATES ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx);
 				case LispNames.NCONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx);
