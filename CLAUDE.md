@@ -107,6 +107,33 @@ java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar test.lisp -o test.wasm
 wasmtime --wasm gc test.wasm    # requires wasmtime 14+
 ```
 
+### Verifying the Native Image End-to-End (run locally before every push)
+
+`./mvnw test` (JVM) **skips `CiSpecE2eTest`** because `-Drontolisp.binary` is
+unset, so a stale `ci-spec.yaml` expectation passes the JVM run and only the
+CI `native-image` job catches it. To avoid that round trip, reproduce the CI
+job locally and run it yourself before pushing — always after editing
+`ci-spec.yaml`, and after any change that can shift cross-backend output (a new
+built-in/macro/special form, anything touching introspection like
+`list-functions`/`list-macros`/`list-special-forms`, or a runtime behavior
+change). Requires GraalVM `native-image` and `wasmtime` on `PATH` (build ~30s):
+
+```bash
+# 1. Build the native binary (same as the CI native-image job)
+./mvnw -V --no-transfer-progress -Pnative clean package -DskipTests
+
+# 2. Run the cross-backend E2E driver against the native binary
+#    (interpreter / JVM / WASM in one run; names the exact failing case)
+./mvnw -V --no-transfer-progress \
+  -Dtest=CiSpecE2eTest -DfailIfNoTests=false \
+  -Drontolisp.binary="$PWD/target/rontolisp" \
+  test
+```
+
+A failure prints `[case '<name>' on <BACKEND>` with the offending lines; fix
+the `ci-spec.yaml` `expected` (or the backend) and re-run step 2 only (the
+binary does not need rebuilding unless Java sources changed).
+
 ## Development Requirements
 
 - Java 25+
@@ -122,5 +149,8 @@ wasmtime --wasm gc test.wasm    # requires wasmtime 14+
 
 - Format: `./mvnw spring-javaformat:apply`
 - Test: `./mvnw test`
+- Native E2E: build the native image and run `CiSpecE2eTest` against it (see
+  "Verifying the Native Image End-to-End"). Required whenever `ci-spec.yaml` or
+  any cross-backend output changed — `./mvnw test` does not cover it.
 - Javadoc: `./mvnw javadoc:jar` - confirm 0 warnings/errors
 - Notify: `osascript -e 'display notification "<Message Body>" with title "<Message Title>"'`
