@@ -263,6 +263,10 @@ final class WasmExprCompiler {
 				case LispNames.ROUND -> WasmIntConvCompiler.compileRound(cons, ctx);
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
 				case LispNames.CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx);
+				case LispNames.ECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx);
+				case LispNames.CCASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx);
+				case LispNames.ERROR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandError(cons), ctx);
+				case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
 				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);
@@ -336,6 +340,7 @@ final class WasmExprCompiler {
 				case LispNames.PROG2 -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx);
 				case LispNames.PSETQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx);
 				case LispNames.TYPECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons), ctx);
+				case LispNames.ETYPECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons), ctx);
 				case LispNames.GCD -> {
 					if (isBinaryCall(cons)) {
 						WasmGcdCompiler.compile(cons, ctx);

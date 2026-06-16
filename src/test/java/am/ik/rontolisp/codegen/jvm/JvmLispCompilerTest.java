@@ -1523,6 +1523,38 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEcase() throws Exception {
+		assertThat(compileAndRun(
+				"(print (ecase 2 (1 \"one\") (2 \"two\") (3 \"three\"))) (print (ecase 'b ((a) \"A\") ((b c) \"BC\")))"))
+			.isEqualTo("\"two\"\n\"BC\"");
+		assertThatThrownBy(() -> compileAndRun("(print (ecase 9 (1 \"one\") (2 \"two\")))"))
+			.hasRootCauseMessage("ECASE: no clause matches 9");
+	}
+
+	@Test
+	void compileAndRunCcase() throws Exception {
+		assertThat(compileAndRun("(print (ccase 1 (1 \"one\") (2 \"two\")))")).isEqualTo("\"one\"");
+		assertThatThrownBy(() -> compileAndRun("(print (ccase 9 (1 \"one\")))"))
+			.hasRootCauseMessage("ECASE: no clause matches 9");
+	}
+
+	@Test
+	void compileAndRunEtypecase() throws Exception {
+		assertThat(compileAndRun(
+				"(print (etypecase 42 (string \"s\") (integer \"i\"))) (print (etypecase \"x\" (string \"s\") (integer \"i\")))"))
+			.isEqualTo("\"i\"\n\"s\"");
+		assertThatThrownBy(() -> compileAndRun("(print (etypecase 'sym (string \"s\") (integer \"i\")))"))
+			.hasRootCauseMessage("ETYPECASE: no clause matches sym");
+	}
+
+	@Test
+	void compileAndRunError() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("(error \"boom\")")).hasRootCauseMessage("boom");
+		assertThatThrownBy(() -> compileAndRun("(error \"bad value: ~a\" (+ 1 2))"))
+			.hasRootCauseMessage("bad value: 3");
+	}
+
+	@Test
 	void compileAndRunEvery() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -2266,7 +2298,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test

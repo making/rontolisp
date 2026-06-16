@@ -269,6 +269,8 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 |-------|--------|-------------|
 | `cond` | `(cond (test1 body1...) ...)` | Conditional with multiple clauses. Returns body of first truthy test |
 | `case` | `(case key (k1 body1...) ((k2 k3) body2...) (otherwise body...))` | Dispatch on a key compared with `eql`. Keys are unevaluated; a list key matches any element; `t`/`otherwise` is the default. Returns nil if nothing matches |
+| `ecase` | `(ecase key (k1 body1...) ((k2 k3) body2...))` | Exhaustive `case`: no default clause (`t`/`otherwise` are ordinary keys), and an unmatched key signals an `error` |
+| `ccase` | `(ccase key (k1 body1...) ...)` | Like `ecase`; an unmatched key signals an `error`. Without a restart system this is identical to `ecase` (not correctable) |
 | `and` | `(and expr1 expr2...)` | Short-circuit AND. Returns first nil or last value. `(and)` returns `t` |
 | `or` | `(or expr1 expr2...)` | Short-circuit OR. Returns first non-nil value or nil. `(or)` returns `nil` |
 | `when` | `(when condition body...)` | Evaluates body when condition is true, returns nil otherwise |
@@ -280,6 +282,8 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | Dispatch on the type of `x`. Supported type names: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom` (plus `t`/`otherwise`). Returns nil if nothing matches |
+| `etypecase` | `(etypecase x (integer body...) (string body...))` | Exhaustive `typecase`: no default clause, and an object whose type matches no clause signals an `error` |
+| `error` | `(error "bad value: ~a" x)` | Signal an error, aborting execution. The first argument must be a literal control string (same directives as `format`: `~a`, `~s`, `~%`). The interpreter and JVM throw an exception carrying the message; WASM traps. Like `format`, it is a macro with no function value (`#'error` is unsupported) |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
 | `push` | `(push item place)` | Prepend item to list at place. Returns the new list |
 | `pop` | `(pop place)` | Remove and return the first element from list at place |
@@ -540,7 +544,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **Edge cases that fail.** A zero-argument `(+)`/`(-)`/`(*)`/`(/)` fails at runtime (a trap in WASM, an exception in JVM). Unary `(- x)` and `(/ x)` negate/invert like the interpreter.
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
-- **`let*`, `do`, `do*`, `dolist`, `return`, `defvar`, `defparameter`, `defconstant`, `incf`, `decf`, `format`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `delete`, `delete-if`, `delete-if-not`, `substitute`, `nsubstitute`, `nconc`, `copy-list`, `nreverse`, `make-list`, `union`, `intersection`, `set-difference`, `adjoin`, `identity`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
+- **`let*`, `do`, `do*`, `dolist`, `return`, `defvar`, `defparameter`, `defconstant`, `incf`, `decf`, `format`, `error`, `ecase`, `etypecase`, `ccase`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `delete`, `delete-if`, `delete-if-not`, `substitute`, `nsubstitute`, `nconc`, `copy-list`, `nreverse`, `make-list`, `union`, `intersection`, `set-difference`, `adjoin`, `identity`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
 - **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
@@ -603,7 +607,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
+; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))

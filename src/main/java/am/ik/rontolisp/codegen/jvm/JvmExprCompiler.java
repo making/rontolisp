@@ -276,6 +276,13 @@ final class JvmExprCompiler {
 				case LispNames.ROUND -> JvmIntConvCompiler.compileRound(cons, ctx, className);
 				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
 				case LispNames.CASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx, className);
+				case LispNames.ECASE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx, className);
+				case LispNames.CCASE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx, className);
+				case LispNames.ERROR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandError(cons), ctx, className);
+				case LispNames.ERROR_INTERNAL -> JvmErrorCompiler.compile(cons, ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
@@ -390,6 +397,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx, className);
 				case LispNames.TYPECASE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons), ctx, className);
+				case LispNames.ETYPECASE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons), ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 				case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);

@@ -538,6 +538,37 @@ public final class LispNames {
 	/** The {@code otherwise} default-clause designator recognized by {@code case}. */
 	public static final String OTHERWISE = "otherwise";
 
+	/**
+	 * The {@code ecase} macro (exhaustive {@code case}; signals an error when no key
+	 * matches).
+	 */
+	public static final String ECASE = "ecase";
+
+	/**
+	 * The {@code etypecase} macro (exhaustive {@code typecase}; signals an error when no
+	 * type matches).
+	 */
+	public static final String ETYPECASE = "etypecase";
+
+	/**
+	 * The {@code ccase} macro. Without a restart system this behaves like {@code ecase}
+	 * (signals an error when no key matches).
+	 */
+	public static final String CCASE = "ccase";
+
+	/**
+	 * The {@code error} macro (signal an error). It builds the message with the
+	 * {@code format} machinery and delegates to {@link #ERROR_INTERNAL}. Like
+	 * {@code format} it has no function value (classified as a macro).
+	 */
+	public static final String ERROR = "error";
+
+	/**
+	 * Internal single-argument primitive that throws/traps with a pre-built message
+	 * string. Not part of the public API; produced by the {@code error} macro expansion.
+	 */
+	public static final String ERROR_INTERNAL = "%error";
+
 	/** The {@code and} macro. */
 	public static final String AND = "and";
 

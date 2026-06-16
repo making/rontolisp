@@ -302,6 +302,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCond(cons), env);
 				case LispNames.CASE:
 					return eval(LispMacroExpander.expandCase(cons), env);
+				case LispNames.ECASE:
+					return eval(LispMacroExpander.expandEcase(cons), env);
+				case LispNames.CCASE:
+					return eval(LispMacroExpander.expandCcase(cons), env);
+				case LispNames.ERROR:
+					return eval(LispMacroExpander.expandError(cons), env);
 				case LispNames.AND:
 					return eval(LispMacroExpander.expandAnd(cons), env);
 				case LispNames.OR:
@@ -374,6 +380,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandPsetq(cons), env);
 				case LispNames.TYPECASE:
 					return eval(LispMacroExpander.expandTypecase(cons), env);
+				case LispNames.ETYPECASE:
+					return eval(LispMacroExpander.expandEtypecase(cons), env);
 				case LispNames.LIST_STAR:
 					return eval(LispMacroExpander.expandListStar(cons), env);
 				case LispNames.ACONS:

@@ -1639,6 +1639,39 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalError() {
+		assertThatThrownBy(() -> eval("(error \"boom\")")).isInstanceOf(LispEvalException.class).hasMessage("boom");
+		assertThatThrownBy(() -> eval("(error \"bad value: ~a\" (+ 1 2))")).isInstanceOf(LispEvalException.class)
+			.hasMessage("bad value: 3");
+		assertThatThrownBy(() -> eval("(error \"got ~s instead\" \"x\")")).isInstanceOf(LispEvalException.class)
+			.hasMessage("got \"x\" instead");
+	}
+
+	@Test
+	void evalEcase() {
+		assertThat(eval("(ecase 2 (1 \"one\") (2 \"two\") (3 \"three\"))").print()).isEqualTo("\"two\"");
+		assertThat(eval("(ecase 'b ((a) \"A\") ((b c) \"BC\"))").print()).isEqualTo("\"BC\"");
+		assertThatThrownBy(() -> eval("(ecase 9 (1 \"one\") (2 \"two\"))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("ECASE");
+	}
+
+	@Test
+	void evalCcase() {
+		assertThat(eval("(ccase 1 (1 \"one\") (2 \"two\"))").print()).isEqualTo("\"one\"");
+		assertThatThrownBy(() -> eval("(ccase 9 (1 \"one\"))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("ECASE");
+	}
+
+	@Test
+	void evalEtypecase() {
+		assertThat(eval("(etypecase 42 (string \"s\") (integer \"i\"))").print()).isEqualTo("\"i\"");
+		assertThat(eval("(etypecase \"x\" (string \"s\") (integer \"i\"))").print()).isEqualTo("\"s\"");
+		assertThatThrownBy(() -> eval("(etypecase 'sym (string \"s\") (integer \"i\"))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("ETYPECASE");
+	}
+
+	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
@@ -2157,7 +2190,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -2177,7 +2210,7 @@ class LispEvaluatorTest {
 					"intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash", "list*",
 					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
 					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute")
-			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*")
+			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error")
 			.isSorted()
 			.hasSize(157);
 	}

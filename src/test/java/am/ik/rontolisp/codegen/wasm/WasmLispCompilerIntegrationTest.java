@@ -1447,6 +1447,48 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("\"i\"\n\"s\"\n\"?\"");
 	}
 
+	/**
+	 * Compiles and runs the program, asserting that it traps (non-zero exit). Used for
+	 * the error / exhaustive-case fall-through paths, which abort via
+	 * {@code unreachable}.
+	 */
+	private static void compileAndExpectTrap(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("expected a trap for: %s\nstdout: %s", lispCode, result.getStdout())
+			.isNotZero();
+	}
+
+	@Test
+	void ecaseForm() throws Exception {
+		assertThat(compileAndRun(
+				"(print (ecase 2 (1 \"one\") (2 \"two\") (3 \"three\"))) (print (ecase 'b ((a) \"A\") ((b c) \"BC\")))"))
+			.isEqualTo("\"two\"\n\"BC\"");
+		compileAndExpectTrap("(print (ecase 9 (1 \"one\") (2 \"two\")))");
+	}
+
+	@Test
+	void ccaseForm() throws Exception {
+		assertThat(compileAndRun("(print (ccase 1 (1 \"one\") (2 \"two\")))")).isEqualTo("\"one\"");
+		compileAndExpectTrap("(print (ccase 9 (1 \"one\")))");
+	}
+
+	@Test
+	void etypecaseForm() throws Exception {
+		assertThat(compileAndRun(
+				"(print (etypecase 42 (string \"s\") (integer \"i\"))) (print (etypecase \"x\" (string \"s\") (integer \"i\")))"))
+			.isEqualTo("\"i\"\n\"s\"");
+		compileAndExpectTrap("(print (etypecase 'sym (string \"s\") (integer \"i\")))");
+	}
+
+	@Test
+	void errorForm() throws Exception {
+		compileAndExpectTrap("(error \"boom\")");
+		compileAndExpectTrap("(error \"bad value: ~a\" (+ 1 2))");
+	}
+
 	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
@@ -2176,7 +2218,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
 	}
 
 	@Test

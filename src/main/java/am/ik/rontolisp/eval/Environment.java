@@ -1226,6 +1226,13 @@ public final class Environment implements Scope {
 			}
 			return new LispString(a.value() + b.value());
 		}));
+		// %error: internal single-argument primitive that signals an error with a
+		// pre-built message string. Produced by the error macro expansion.
+		env.defineFunction(LispNames.ERROR_INTERNAL, new LispFunction(LispNames.ERROR_INTERNAL, args -> {
+			requireArgCount(LispNames.ERROR_INTERNAL, args, 1);
+			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
+			throw new LispEvalException(message);
+		}));
 		// File streams opened by open/with-open-file: an integer handle indexes this
 		// table, matching the compiled backends (JVM: a static stream table; WASM: the
 		// WASI file descriptor).

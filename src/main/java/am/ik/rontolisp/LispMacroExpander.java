@@ -131,6 +131,81 @@ public final class LispMacroExpander {
 
 	private static final String CASE_VAR = "__case";
 
+	private static final String ECASE_VAR = "__ecase";
+
+	/**
+	 * Expands {@code (ecase keyform (keys body...) ...)} into the same {@code let}/cond
+	 * as {@code case}, but without any default clause: {@code t} and {@code otherwise}
+	 * are treated as ordinary keys, and a final {@code (error ...)} clause is appended so
+	 * an unmatched key signals an error (Common Lisp's exhaustive {@code ecase}).
+	 * @param cons the ecase expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEcase(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("ecase expects a keyform");
+		}
+		LispVal keyform = parts.get(1);
+		List<LispVal> clauses = parts.subList(2, parts.size());
+		LispSymbol keyVar = new LispSymbol(ECASE_VAR);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (LispVal clauseVal : clauses) {
+			if (!(clauseVal instanceof LispCons clause)) {
+				throw new IllegalArgumentException("ecase clause must be a list, got: " + clauseVal.print());
+			}
+			List<LispVal> clauseParts = clause.toList();
+			LispVal keys = clauseParts.get(0);
+			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
+			LispVal test;
+			// ecase does not treat t/otherwise specially: they are ordinary keys.
+			if (keys instanceof LispCons keyList) {
+				List<LispVal> orParts = new java.util.ArrayList<>();
+				orParts.add(new LispSymbol(LispNames.OR));
+				for (LispVal k : keyList.toList()) {
+					orParts.add(makeCaseEq(keyVar, k));
+				}
+				test = listToCons(orParts);
+			}
+			else {
+				test = makeCaseEq(keyVar, keys);
+			}
+			List<LispVal> condClause = new java.util.ArrayList<>();
+			condClause.add(test);
+			if (body.isEmpty()) {
+				condClause.add(LispNil.INSTANCE);
+			}
+			else {
+				condClause.addAll(body);
+			}
+			condParts.add(listToCons(condClause));
+		}
+		condParts.add(makeExhaustiveErrorClause(keyVar, "ECASE"));
+		return makeLet(ECASE_VAR, keyform, listToCons(condParts));
+	}
+
+	/**
+	 * Expands {@code (ccase keyform ...)}. Without a restart (store-value) mechanism,
+	 * {@code ccase} behaves exactly like {@code ecase}: an unmatched key signals an
+	 * error.
+	 * @param cons the ccase expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCcase(LispCons cons) {
+		return expandEcase(cons);
+	}
+
+	/**
+	 * Builds the {@code (t (error "..."))} fall-through clause shared by {@code ecase}
+	 * and {@code etypecase}: it reports the unmatched value bound to {@code var}.
+	 */
+	private static LispVal makeExhaustiveErrorClause(LispSymbol var, String label) {
+		LispVal errorCall = listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString(label + ": no clause matches ~s"), var));
+		return listToCons(List.of(LispTrue.INSTANCE, errorCall));
+	}
+
 	private static boolean isCaseDefaultKey(LispVal keys) {
 		return keys instanceof LispTrue || (keys instanceof LispSymbol sym && LispNames.OTHERWISE.equals(sym.name()));
 	}
@@ -2064,6 +2139,52 @@ public final class LispMacroExpander {
 		}
 	}
 
+	private static final String ERROR_ARG_VAR = "__error_arg";
+
+	/**
+	 * Expands {@code (error control args...)} into {@code (%error message)}, where
+	 * {@code message} is built with the same control-string machinery as
+	 * {@code (format nil control args...)} (so {@code ~a}/{@code ~s}/{@code ~%}
+	 * directives are supported). The control string must be a literal, mirroring
+	 * {@code format}; passing a condition object is not supported.
+	 * @param cons the error expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandError(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("error expects a control string");
+		}
+		if (!(parts.get(1) instanceof LispString control)) {
+			throw new UnsupportedOperationException(
+					"error requires a literal control string, got: " + parts.get(1).print());
+		}
+		List<LispVal> args = parts.subList(2, parts.size());
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispSymbol> argSyms = new java.util.ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			LispSymbol g = new LispSymbol(ERROR_ARG_VAR + i);
+			argSyms.add(g);
+			bindings.add(listToCons(List.of(g, args.get(i))));
+		}
+		List<LispVal> pieces = formatStringPieces(control.value(), argSyms);
+		// Fold the pieces into nested %string-concat calls (left-associative), as the
+		// format nil destination does.
+		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
+		for (int i = 1; i < pieces.size(); i++) {
+			message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), message, pieces.get(i)));
+		}
+		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), message));
+		if (bindings.isEmpty()) {
+			return errorCall;
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(listToCons(bindings));
+		letParts.add(errorCall);
+		return listToCons(letParts);
+	}
+
 	/**
 	 * Expands {@code (mod a b)} into a {@code rem}-based form whose result takes the sign
 	 * of the divisor (Common Lisp modulo), reusing the {@code rem}, {@code *}, {@code <}
@@ -2406,6 +2527,46 @@ public final class LispMacroExpander {
 			condParts.add(listToCons(condClause));
 		}
 		return makeLet(TYPECASE_VAR, keyform, listToCons(condParts));
+	}
+
+	private static final String ETYPECASE_VAR = "__etypecase";
+
+	/**
+	 * Expands {@code (etypecase keyform (type body...) ...)} like {@code typecase} but
+	 * appends a final {@code (error ...)} clause so an object whose type matches no
+	 * clause signals an error (Common Lisp's exhaustive {@code etypecase}).
+	 * @param cons the etypecase expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEtypecase(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("etypecase expects a keyform");
+		}
+		LispVal keyform = parts.get(1);
+		List<LispVal> clauses = parts.subList(2, parts.size());
+		LispSymbol var = new LispSymbol(ETYPECASE_VAR);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		for (LispVal clauseVal : clauses) {
+			if (!(clauseVal instanceof LispCons clause)) {
+				throw new IllegalArgumentException("etypecase clause must be a list, got: " + clauseVal.print());
+			}
+			List<LispVal> clauseParts = clause.toList();
+			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
+			LispVal test = makeTypecaseTest(var, clauseParts.get(0));
+			List<LispVal> condClause = new java.util.ArrayList<>();
+			condClause.add(test);
+			if (body.isEmpty()) {
+				condClause.add(LispNil.INSTANCE);
+			}
+			else {
+				condClause.addAll(body);
+			}
+			condParts.add(listToCons(condClause));
+		}
+		condParts.add(makeExhaustiveErrorClause(var, "ETYPECASE"));
+		return makeLet(ETYPECASE_VAR, keyform, listToCons(condParts));
 	}
 
 	private static LispVal makeTypecaseTest(LispSymbol var, LispVal typeSpec) {

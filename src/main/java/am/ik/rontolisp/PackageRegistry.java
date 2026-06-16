@@ -33,7 +33,8 @@ public final class PackageRegistry {
 			LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH, LispNames.POP,
 			LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
 			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.DO_STAR, LispNames.PROG2,
-			LispNames.PSETQ, LispNames.TYPECASE);
+			LispNames.PSETQ, LispNames.TYPECASE, LispNames.ECASE, LispNames.ETYPECASE, LispNames.CCASE,
+			LispNames.ERROR);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -80,7 +81,7 @@ public final class PackageRegistry {
 	 * introspection listings.
 	 */
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
-			LispNames.BLOCK_INTERNAL);
+			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

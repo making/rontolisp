@@ -1162,3 +1162,14 @@ cases:
     expected: |
       (1 0 3 0 1)
       (9 2 9 3)
+  - name: ecase-etypecase-exhaustive-dispatch
+    source: |
+      (print (ecase 2 (1 "one") (2 "two") (3 "three")))
+      (print (ecase 'b ((a) "A") ((b c) "BC")))
+      (print (etypecase 42 (string "s") (integer "i")))
+      (print (etypecase "x" (string "s") (integer "i")))
+    expected: |
+      "two"
+      "BC"
+      "i"
+      "s"
