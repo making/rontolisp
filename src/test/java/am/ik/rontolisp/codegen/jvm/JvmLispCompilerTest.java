@@ -740,6 +740,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunExponentFloatLiteral() throws Exception {
+		// Common Lisp exponent-marker float literals all compile to a double.
+		assertThat(compileAndRun("(print 1d0)")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (* 2 1d0))")).isEqualTo("2.0");
+		assertThat(compileAndRun("(print 1.5d3)")).isEqualTo("1500.0");
+	}
+
+	@Test
 	void compileAndRunPiConstant() throws Exception {
 		assertThat(compileAndRun("(print pi)")).isEqualTo("3.141592653589793");
 	}

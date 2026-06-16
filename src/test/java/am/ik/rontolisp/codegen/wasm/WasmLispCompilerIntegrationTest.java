@@ -750,6 +750,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void exponentFloatLiteral() throws Exception {
+		// Common Lisp exponent-marker float literals all compile to a double.
+		assertThat(compileAndRun("(print 1d0)")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (* 2 1d0))")).isEqualTo("2.0");
+	}
+
+	@Test
 	void doubleAddition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1.5 2.5))")).isEqualTo("4.0");
 	}

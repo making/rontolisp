@@ -373,6 +373,17 @@ cases:
       2.0
       6.0
       3.5
+  - name: exponent-marker-float-literals
+    source: |
+      (print 1d0)
+      (print 1e0)
+      (print 1.5d3)
+      (print (* 2 1d0))
+    expected: |
+      1.0
+      1.0
+      1500.0
+      2.0
   - name: double-comparison-verified-via-if
     source: |
       (print (if (= 1.0 1.0) 42 99))

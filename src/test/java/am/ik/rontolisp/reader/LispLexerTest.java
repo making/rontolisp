@@ -129,4 +129,38 @@ class LispLexerTest {
 		assertThat(tokens).containsExactly(new Token.SymbolToken("1,"));
 	}
 
+	@Test
+	void tokenizeDoubleFloatMarker() {
+		// "1d0" is the Common Lisp double-float literal for 1.0.
+		List<Token> tokens = new LispLexer("1d0").tokenize();
+		assertThat(tokens).containsExactly(new Token.DoubleToken(1.0));
+	}
+
+	@Test
+	void tokenizeExponentMarkers() {
+		// Every Common Lisp float marker (e/s/f/d/l) collapses to the same double.
+		assertThat(new LispLexer("1e0").tokenize()).containsExactly(new Token.DoubleToken(1.0));
+		assertThat(new LispLexer("1s0").tokenize()).containsExactly(new Token.DoubleToken(1.0));
+		assertThat(new LispLexer("1f0").tokenize()).containsExactly(new Token.DoubleToken(1.0));
+		assertThat(new LispLexer("1L0").tokenize()).containsExactly(new Token.DoubleToken(1.0));
+		assertThat(new LispLexer("1.5d3").tokenize()).containsExactly(new Token.DoubleToken(1500.0));
+		assertThat(new LispLexer("-2d-3").tokenize()).containsExactly(new Token.DoubleToken(-0.002));
+		assertThat(new LispLexer("6.02e23").tokenize()).containsExactly(new Token.DoubleToken(6.02e23));
+	}
+
+	@Test
+	void tokenizeExponentMarkerInExpression() {
+		List<Token> tokens = new LispLexer("(* 2 1d0)").tokenize();
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("*"), new Token.NumberToken(2),
+				new Token.DoubleToken(1.0), new Token.RightParen());
+	}
+
+	@Test
+	void tokenizeMarkerWithoutExponentDigitsIsSymbol() {
+		// A marker not followed by digits is not an exponent: the whole token is a
+		// symbol, so "1d" and "1d0x" stay symbols rather than becoming floats.
+		assertThat(new LispLexer("1d").tokenize()).containsExactly(new Token.SymbolToken("1d"));
+		assertThat(new LispLexer("1d0x").tokenize()).containsExactly(new Token.SymbolToken("1d0x"));
+	}
+
 }

@@ -91,25 +91,27 @@ public final class LispLexer {
 		// between two digits (e.g., "1,000" -> 1000). A comma not followed by a
 		// digit is not consumed, so token boundaries are otherwise unchanged.
 		consumeDigitsWithGrouping();
+		boolean isFloat = false;
+		// Fractional part: '.' followed by at least one digit (e.g., "1.5").
 		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.' && this.pos + 1 < this.input.length()
 				&& isDigit(this.input.charAt(this.pos + 1))) {
 			this.pos++; // consume '.'
 			while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
-			// If non-dot symbol character follows digits, treat entire token as symbol
-			if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
-					&& this.input.charAt(this.pos) != '.') {
-				while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
-					this.pos++;
-				}
-				return new Token.SymbolToken(this.input.substring(start, this.pos));
-			}
-			return new Token.DoubleToken(Double.parseDouble(stripGrouping(this.input.substring(start, this.pos))));
+			isFloat = true;
+		}
+		// Exponent part: a Common Lisp float marker e/s/f/d/l (case-insensitive)
+		// followed by an optional sign and at least one digit (e.g., "1d0",
+		// "1e0", "1.5f3", "-2d-3"). rontolisp has a single float type, so every
+		// marker collapses to the same LispDouble (the single/double distinction
+		// of Common Lisp is not preserved).
+		if (consumedExponent()) {
+			isFloat = true;
 		}
 		// Ratio literal: integer digits '/' integer digits (e.g., "1/3", "-1/3").
-		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '/' && this.pos + 1 < this.input.length()
-				&& isDigit(this.input.charAt(this.pos + 1))) {
+		if (!isFloat && this.pos < this.input.length() && this.input.charAt(this.pos) == '/'
+				&& this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
 			int slash = this.pos;
 			this.pos++; // consume '/'
 			consumeDigitsWithGrouping();
@@ -125,14 +127,18 @@ public final class LispLexer {
 			String denominator = stripGrouping(this.input.substring(slash + 1, this.pos));
 			return new Token.RatioToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
 		}
-		// If non-dot symbol character follows digits, treat entire token as symbol
-		// (e.g., "1+" -> Symbol("1+"), "1-" -> Symbol("1-"))
+		// If a non-dot symbol character follows, treat the entire token as a
+		// symbol (e.g., "1+" -> Symbol("1+"), "1d0x" -> Symbol("1d0x")).
 		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
 				&& this.input.charAt(this.pos) != '.') {
 			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
 			return new Token.SymbolToken(this.input.substring(start, this.pos));
+		}
+		if (isFloat) {
+			return new Token.DoubleToken(
+					Double.parseDouble(normalizeExponentMarker(stripGrouping(this.input.substring(start, this.pos)))));
 		}
 		String digits = stripGrouping(this.input.substring(start, this.pos));
 		try {
@@ -157,6 +163,45 @@ public final class LispLexer {
 				break;
 			}
 		}
+	}
+
+	// Consume an exponent suffix (marker + optional sign + digits) if a valid
+	// one starts at the current position, advancing past it and returning true.
+	// On no match, the position is left untouched so the marker can fall through
+	// to symbol handling (e.g. "1d" is the symbol "1d", not a float).
+	private boolean consumedExponent() {
+		if (this.pos >= this.input.length() || !isExponentMarker(this.input.charAt(this.pos))) {
+			return false;
+		}
+		int probe = this.pos + 1;
+		if (probe < this.input.length() && (this.input.charAt(probe) == '+' || this.input.charAt(probe) == '-')) {
+			probe++;
+		}
+		if (probe >= this.input.length() || !isDigit(this.input.charAt(probe))) {
+			return false;
+		}
+		while (probe < this.input.length() && isDigit(this.input.charAt(probe))) {
+			probe++;
+		}
+		this.pos = probe;
+		return true;
+	}
+
+	private static boolean isExponentMarker(char c) {
+		return c == 'e' || c == 'E' || c == 's' || c == 'S' || c == 'f' || c == 'F' || c == 'd' || c == 'D' || c == 'l'
+				|| c == 'L';
+	}
+
+	// Rewrite the Common Lisp exponent marker to 'e' so Double.parseDouble (which
+	// only accepts 'e'/'E' as an exponent marker) reads the literal. A valid float
+	// token holds at most one marker, so replacing every marker char is safe.
+	private static String normalizeExponentMarker(String number) {
+		StringBuilder sb = new StringBuilder(number.length());
+		for (int i = 0; i < number.length(); i++) {
+			char c = number.charAt(i);
+			sb.append(isExponentMarker(c) ? 'e' : c);
+		}
+		return sb.toString();
 	}
 
 	private static String stripGrouping(String number) {

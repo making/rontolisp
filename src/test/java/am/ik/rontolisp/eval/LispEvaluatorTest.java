@@ -79,6 +79,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalExponentFloatLiteral() {
+		// Common Lisp exponent-marker float literals (e/s/f/d/l) all read as a double.
+		assertThat(eval("1d0")).isEqualTo(new LispDouble(1.0));
+		assertThat(eval("1.5d3")).isEqualTo(new LispDouble(1500.0));
+		assertThat(eval("6.02e23")).isEqualTo(new LispDouble(6.02e23));
+		assertThat(eval("(* 2 1d0)")).isEqualTo(new LispDouble(2.0));
+	}
+
+	@Test
 	void evalPiConstant() {
 		assertThat(eval("pi")).isEqualTo(new LispDouble(Math.PI));
 	}

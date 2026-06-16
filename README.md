@@ -176,7 +176,7 @@ square
 |------|---------|-------------|
 | Integer | `42`, `-5`, `1,000` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM), 31-bit signed integer (WASM) |
 | Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
-| Double | `3.14`, `-0.5`, `3,000.50` | 64-bit floating-point number |
+| Double | `3.14`, `-0.5`, `3,000.50`, `1d0`, `6.02e23` | 64-bit floating-point number |
 | String | `"hello"` | String literal |
 | Symbol | `x`, `foo` | Identifier |
 | Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
@@ -192,6 +192,16 @@ integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to
 digits; it is stripped before parsing and applies to all three backends. This
 differs from Common Lisp, where `,` is the unquote character (not supported
 here).
+
+Float literals may carry a Common Lisp exponent marker -- a mantissa followed
+by one of `e`, `s`, `f`, `d`, `l` (case-insensitive), an optional sign, and an
+exponent, e.g. `1d0`, `1e0`, `1.5d3` (`1500.0`), `-2e-3`, `6.02e23`. This works
+in all three backends (it is a reader-level feature). **Unlike Common Lisp,
+rontolisp has a single floating-point type, so every marker reads as the same
+64-bit double** -- the single/short/long-float distinction (`1d0` vs `1e0` vs
+`1f0`) is not preserved, and there is no `*read-default-float-format*`. A marker
+that is not followed by exponent digits is not a float: `1d` and `1d0x` read as
+symbols (like `1+`), not numbers.
 
 In the **interpreter and the JVM compiler**, integer arithmetic never silently
 wraps: when a `long` operation (`+`, `-`, `*`, `/`, `1+`, `1-`, `abs`, ...)
