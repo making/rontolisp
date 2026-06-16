@@ -53,15 +53,13 @@ jobs:
       run: |
         set -e
         ./target/rontolisp -v
-        # Test interpreter mode
-        ./target/rontolisp src/test/resources/ci-test.lisp > /tmp/actual-interp.txt
-        diff src/test/resources/ci-test-expected.txt /tmp/actual-interp.txt
-        # Test JVM compilation mode
-        cd /tmp && $GITHUB_WORKSPACE/target/rontolisp $GITHUB_WORKSPACE/src/test/resources/ci-test.lisp -o Test.class && java Test > /tmp/actual-jvm.txt
-        diff $GITHUB_WORKSPACE/src/test/resources/ci-test-expected.txt /tmp/actual-jvm.txt
-        # Test WASM compilation mode
-        cd /tmp && $GITHUB_WORKSPACE/target/rontolisp $GITHUB_WORKSPACE/src/test/resources/ci-test.lisp -o test.wasm && wasmtime --wasm gc test.wasm > /tmp/actual-wasm.txt
-        diff $GITHUB_WORKSPACE/src/test/resources/ci-test-expected.txt /tmp/actual-wasm.txt
+        # Run the ci-spec.yaml cases through the native binary in all three
+        # backend modes (interpreter / JVM / WASM). The driver reports the exact
+        # failing case by name, so there is no positional expected file to keep in sync.
+        ./mvnw -V --no-transfer-progress \
+          -Dtest=CiSpecE2eTest -DfailIfNoTests=false \
+          -Drontolisp.binary="$PWD/target/rontolisp" \
+          test
     - name: Rename binary
       if: github.event_name != 'pull_request'
       run: mv target/rontolisp target/${{ matrix.artifact-name }}

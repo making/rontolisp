@@ -1,0 +1,1164 @@
+# Single source of truth for the native-binary E2E test.
+# Cases run IN ORDER, concatenated into one program per backend
+# (shared global state). Regenerate is manual; edit cases directly.
+cases:
+  - name: arithmetic
+    source: |
+      (print (+ 1 2))
+      (print (- 10 3))
+      (print (* 3 4))
+      (print (/ 10 3))
+      (print (mod 10 3))
+    expected: |
+      3
+      7
+      12
+      10/3
+      1
+  - name: nested-arithmetic
+    source: |
+      (print (+ (* 2 3) (- 10 4)))
+    expected: |
+      12
+  - name: comparison-operators-verified-via-if
+    source: |
+      (print (if (= 1 1) 42 99))
+      (print (if (< 1 2) 42 99))
+      (print (if (> 3 2) 42 99))
+      (print (if (<= 2 2) 42 99))
+      (print (if (>= 2 3) 42 99))
+    expected: |
+      42
+      42
+      42
+      42
+      99
+  - name: conditionals
+    source: |
+      (print (if t 1 2))
+      (print (if nil 1 2))
+    expected: |
+      1
+      2
+  - name: let-binding
+    source: |
+      (print (let ((x 10) (y 20)) (+ x y)))
+    expected: |
+      30
+  - name: progn
+    source: |
+      (print (progn 1 2 3))
+    expected: |
+      3
+  - name: setq
+    source: |
+      (print (progn (setq x 10) x))
+      (print (progn (setq a 10) (setq a 20) a))
+    expected: |
+      10
+      20
+  - name: defvar-idempotent-global-definition
+    source: |
+      (print (defvar *gv* 100))
+      (print *gv*)
+      (defvar *gv* 200)
+      (print *gv*)
+    expected: |
+      *gv*
+      100
+      100
+  - name: defun
+    source: |
+      (defun square (x) (* x x))
+      (print (square 5))
+    expected: |
+      25
+  - name: defun-with-no-arguments
+    source: |
+      (defun forty-two () 42)
+      (print (forty-two))
+    expected: |
+      42
+  - name: recursion-factorial
+    source: |
+      (defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+      (print (fact 5))
+    expected: |
+      120
+  - name: recursion-fibonacci
+    source: |
+      (defun fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))
+      (print (fib 10))
+    expected: |
+      55
+  - name: lambda-immediate-invocation
+    source: |
+      (print ((lambda (x) (* x x)) 5))
+    expected: |
+      25
+  - name: quote
+    source: |
+      (print '42)
+      (print '(1 2 3))
+      (print '(1 (2 3) 4))
+      (print (quote nil))
+      (print '(+ 1 2))
+    expected: |
+      42
+      (1 2 3)
+      (1 (2 3) 4)
+      nil
+      (+ 1 2)
+  - name: string-literals
+    source: |
+      (print "hello")
+      (let ((s "world")) (print s))
+    expected: |
+      "hello"
+      "world"
+  - name: list-car-cdr-cons
+    source: |
+      (print (car (cons 1 2)))
+      (print (cdr (cons 1 2)))
+      (print (car (list 1 2 3)))
+      (print (car (cdr (list 1 2 3))))
+    expected: |
+      1
+      2
+      1
+      2
+  - name: car-cdr-composition-functions
+    source: |
+      (print (cadr '(1 2 3)))
+      (print (caddr '(1 2 3)))
+      (print (caar '((1 2) 3)))
+      (print (cadddr '(1 2 3 4)))
+    expected: |
+      2
+      3
+      1
+      4
+  - name: higher-order-functions
+    source: |
+      (defun apply-twice (f x) (funcall f (funcall f x)))
+      (print (apply-twice #'square 3))
+    expected: |
+      81
+  - name: lambda-as-argument
+    source: |
+      (print (apply-twice (lambda (x) (+ x 10)) 5))
+    expected: |
+      25
+  - name: closure
+    source: |
+      (defun make-adder (n) (lambda (x) (+ x n)))
+      (setq add5 (make-adder 5))
+      (print (funcall add5 10))
+    expected: |
+      15
+  - name: closure-mutation-capture-by-reference
+    source: |
+      (defun make-counter () (let ((n 0)) (lambda () (setq n (+ n 1)) n)))
+      (setq counter (make-counter))
+      (funcall counter)
+      (funcall counter)
+      (print (funcall counter))
+    expected: |
+      3
+  - name: dynamic-function-selection
+    source: |
+      (setq f (if t #'square #'forty-two))
+      (print (funcall f 6))
+    expected: |
+      36
+  - name: funcall
+    source: |
+      (print (funcall #'square 7))
+    expected: |
+      49
+  - name: type-predicates
+    source: |
+      (print (if (null nil) 42 99))
+      (print (if (null 1) 42 99))
+      (print (if (atom 1) 42 99))
+      (print (if (atom '(1 2)) 42 99))
+      (print (if (numberp 42) 42 99))
+      (print (if (numberp 3.14) 42 99))
+      (print (if (integerp 42) 42 99))
+      (print (if (integerp 3.14) 42 99))
+      (print (if (floatp 3.14) 42 99))
+      (print (if (floatp 42) 42 99))
+      (print (if (symbolp 'foo) 42 99))
+      (print (if (symbolp 42) 42 99))
+      (print (if (stringp "hello") 42 99))
+      (print (if (stringp 42) 42 99))
+      (print (if (listp '(1 2)) 42 99))
+      (print (if (listp nil) 42 99))
+      (print (if (listp 42) 42 99))
+      (print (if (consp '(1 2)) 42 99))
+      (print (if (consp nil) 42 99))
+    expected: |
+      42
+      99
+      42
+      99
+      42
+      42
+      42
+      99
+      42
+      99
+      42
+      99
+      42
+      99
+      42
+      42
+      99
+      42
+      99
+  - name: when-macro
+    source: |
+      (print (when t 42))
+      (print (when nil 42))
+      (print (when t 1 2 3))
+      (print (when (= 1 1) 10))
+      (print (when (= 1 2) 10))
+    expected: |
+      42
+      nil
+      3
+      10
+      nil
+  - name: append
+    source: |
+      (print (append '(1 2) '(3 4)))
+      (print (append nil '(1 2)))
+      (print (append '(1 2) nil))
+      (print (append '(1) '(2) '(3)))
+    expected: |
+      (1 2 3 4)
+      (1 2)
+      (1 2)
+      (1 2 3)
+  - name: convenience-macros-1-1
+    source: |
+      (print (1+ 5))
+      (print (1- 5))
+    expected: |
+      6
+      4
+  - name: numeric-predicates-zerop-plusp-minusp
+    source: |
+      (print (if (zerop 0) 42 99))
+      (print (if (zerop 1) 42 99))
+      (print (if (plusp 1) 42 99))
+      (print (if (plusp 0) 42 99))
+      (print (if (minusp -1) 42 99))
+      (print (if (minusp 0) 42 99))
+    expected: |
+      42
+      99
+      42
+      99
+      42
+      99
+  - name: evenp-oddp
+    source: |
+      (print (if (evenp 4) 42 99))
+      (print (if (evenp 3) 42 99))
+      (print (if (oddp 3) 42 99))
+      (print (if (oddp 4) 42 99))
+    expected: |
+      42
+      99
+      42
+      99
+  - name: abs-min-max
+    source: |
+      (print (abs 5))
+      (print (abs -5))
+      (print (min 3 5))
+      (print (max 3 5))
+    expected: |
+      5
+      5
+      3
+      5
+  - name: unless
+    source: |
+      (print (unless nil 42))
+      (print (unless t 42))
+      (print (unless nil 1 2 3))
+    expected: |
+      42
+      nil
+      3
+  - name: while-and-dotimes
+    source: |
+      (print (let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s))
+      (print (dotimes (i 3)))
+      (print (let ((acc 1)) (dotimes (i 4 acc) (setq acc (* acc 2)))))
+      (print (let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s))
+    expected: |
+      10
+      nil
+      16
+      6
+  - name: prog1
+    source: |
+      (print (prog1 1 2 3))
+      (print (let ((x (list 1 2 3))) (prog1 (car x) (setq x (cdr x)))))
+      (print (prog1 99))
+    expected: |
+      1
+      1
+      99
+  - name: first-nth-nthcdr
+    source: |
+      (print (first '(1 2 3)))
+      (print (nth 0 '(1 2 3)))
+      (print (nth 2 '(1 2 3)))
+      (print (nthcdr 0 '(1 2 3)))
+      (print (nthcdr 2 '(1 2 3)))
+    expected: |
+      1
+      1
+      3
+      (1 2 3)
+      (3)
+  - name: second-third-fourth
+    source: |
+      (print (second '(1 2 3)))
+      (print (third '(1 2 3)))
+      (print (fourth '(1 2 3 4)))
+    expected: |
+      2
+      3
+      4
+  - name: rplaca-rplacd
+    source: |
+      (setq x (cons 1 2))
+      (rplaca x 10)
+      (print (car x))
+      (rplacd x 20)
+      (print (cdr x))
+    expected: |
+      10
+      20
+  - name: setf
+    source: |
+      (setq y (list 1 2 3))
+      (setf (car y) 10)
+      (print (car y))
+      (setf (nth 1 y) 20)
+      (print (nth 1 y))
+      (print (setf (second y) 30))
+    expected: |
+      10
+      20
+      30
+  - name: double-literals-and-arithmetic
+    source: |
+      (print 3.14)
+      (print (+ 1.5 2.5))
+      (print (+ 1 1.5))
+      (print (- 3.5 1.5))
+      (print (* 2.0 3.0))
+      (print (/ 7.0 2.0))
+    expected: |
+      3.14
+      4.0
+      2.5
+      2.0
+      6.0
+      3.5
+  - name: double-comparison-verified-via-if
+    source: |
+      (print (if (= 1.0 1.0) 42 99))
+      (print (if (< 1.0 2.0) 42 99))
+      (print (if (> 2.0 1.0) 42 99))
+      (print (if (<= 1.5 1.5) 42 99))
+      (print (if (>= 2.0 3.0) 42 99))
+    expected: |
+      42
+      42
+      42
+      42
+      99
+  - name: double-nested-arithmetic
+    source: |
+      (print (+ (* 2.0 3.0) (- 10.0 4.0)))
+    expected: |
+      12.0
+  - name: cond
+    source: |
+      (print (cond (nil 1) (t 2)))
+      (print (cond (nil 1) (nil 2) (t 3)))
+      (print (cond ((= 1 2) 10) ((= 1 1) 20) (t 30)))
+    expected: |
+      2
+      3
+      20
+  - name: case
+    source: |
+      (print (case 2 (1 'one) (2 'two) (3 'three)))
+      (print (case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
+      (print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
+      (print (case 5 (1 'a) (2 'b)))
+    expected: |
+      two
+      small
+      big
+      nil
+  - name: type-conversion-float
+    source: |
+      (print (float 42))
+      (print (float 3.14))
+      (print (float 0))
+    expected: |
+      42.0
+      3.14
+      0.0
+  - name: type-conversion-truncate-toward-zero
+    source: |
+      (print (truncate 3.7))
+      (print (truncate -3.7))
+      (print (truncate 42))
+    expected: |
+      3
+      -3
+      42
+  - name: type-conversion-floor-toward-negative
+    source: |
+      (print (floor 3.7))
+      (print (floor -3.7))
+      (print (floor 42))
+    expected: |
+      3
+      -4
+      42
+  - name: type-conversion-ceiling-toward-positive
+    source: |
+      (print (ceiling 3.2))
+      (print (ceiling -3.2))
+      (print (ceiling 42))
+    expected: |
+      4
+      -3
+      42
+  - name: type-conversion-round-banker-s-rounding
+    source: |
+      (print (round 3.5))
+      (print (round 2.5))
+      (print (round 3.7))
+      (print (round -3.7))
+      (print (round 42))
+    expected: |
+      4
+      2
+      4
+      -4
+      42
+  - name: eq-general-equality
+    source: |
+      (print (if (eq 1 1) 42 99))
+      (print (if (eq 1 2) 42 99))
+      (print (if (eq 'foo 'foo) 42 99))
+      (print (if (eq nil nil) 42 99))
+      (print (if (eq nil 1) 42 99))
+    expected: |
+      42
+      99
+      42
+      42
+      99
+  - name: push-pop
+    source: |
+      (setq stack (list 2 3))
+      (push 1 stack)
+      (print stack)
+      (print (pop stack))
+      (print stack)
+    expected: |
+      (1 2 3)
+      1
+      (2 3)
+  - name: remf
+    source: |
+      (setq plist (list 'a 1 'b 2 'c 3))
+      (remf plist 'b)
+      (print plist)
+      (setq plist2 (list 'x 10 'y 20))
+      (remf plist2 'x)
+      (print plist2)
+      (setq plist3 (list 'p 1 'q 2))
+      (print (if (remf plist3 'z) 42 99))
+    expected: |
+      (a 1 c 3)
+      (y 20)
+      99
+  - name: keyword-symbols
+    source: |
+      (print :foo)
+      (print (if (eq :foo :foo) 42 99))
+      (print (if (eq :foo :bar) 42 99))
+      (print (if (keywordp :foo) 42 99))
+      (print (if (keywordp 'foo) 42 99))
+      (print (if (symbolp :foo) 42 99))
+    expected: |
+      :foo
+      42
+      99
+      42
+      99
+      42
+  - name: mapcar
+    source: |
+      (print (mapcar (lambda (x) (* x x)) '(1 2 3)))
+      (print (mapcar (lambda (x) (+ x 10)) '(1 2 3)))
+      (print (mapcar #'square '(1 2 3)))
+      (print (mapcar (lambda (x) x) nil))
+    expected: |
+      (1 4 9)
+      (11 12 13)
+      (1 4 9)
+      nil
+  - name: reduce
+    source: |
+      (print (reduce (lambda (a b) (+ a b)) 0 '(1 2 3 4 5)))
+      (print (reduce (lambda (a b) (* a b)) 1 '(1 2 3 4 5)))
+      (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5)))
+      (print (reduce (lambda (acc x) (+ acc (* x x))) 0 '(1 2 3)))
+      (print (reduce (lambda (a b) (+ a b)) 0 nil))
+    expected: |
+      15
+      120
+      15
+      14
+      0
+  - name: built-in-operators-as-first-class-values
+    source: |
+      (print (reduce #'+ 0 '(1 2 3 4 5)))
+      (print (reduce #'* 1 '(1 2 3 4 5)))
+      (print (mapcar #'car '((1 2) (3 4) (5 6))))
+      (print (mapcar #'cdr '((1 2) (3 4) (5 6))))
+      (print (mapcar #'1+ '(1 2 3)))
+      (print (funcall #'+ 3 4))
+      (setq my-op #'+)
+      (print (funcall my-op 10 20))
+    expected: |
+      15
+      120
+      (1 3 5)
+      ((2) (4) (6))
+      (2 3 4)
+      7
+      30
+  - name: logical-operators-and-or-not
+    source: |
+      (print (if (and) 42 99))
+      (print (if (and t) 42 99))
+      (print (if (and nil) 42 99))
+      (print (if (and 1 2 3) 42 99))
+      (print (if (and 1 nil 3) 42 99))
+      (print (if (or) 42 99))
+      (print (if (or nil) 42 99))
+      (print (if (or t) 42 99))
+      (print (if (or nil nil 3) 42 99))
+      (print (if (or nil nil nil) 42 99))
+      (print (if (not nil) 42 99))
+      (print (if (not 1) 42 99))
+    expected: |
+      42
+      42
+      99
+      42
+      99
+      99
+      99
+      42
+      42
+      99
+      42
+      99
+  - name: prin1-princ-terpri
+    source: |
+      (prin1 42)
+      (terpri)
+      (prin1 "hello")
+      (terpri)
+      (princ 42)
+      (terpri)
+      (princ "hello")
+      (terpri)
+      (princ '(1 "hello" 3))
+      (terpri)
+      (prin1 1)
+      (princ 2)
+      (terpri)
+    expected: |
+      42
+      "hello"
+      42
+      hello
+      (1 hello 3)
+      12
+  - name: eval-interpreter-jvm-and-wasm-share-the
+    source: |
+      (print (eval '(+ 1 2)))
+      (print (eval '(* 6 7)))
+      (print (eval '(list 1 2 3)))
+      (print (eval '(let ((x 5)) (* x x))))
+      (print (eval '(if (= 1 1) 42 99)))
+      (print (eval '(cadr (list 10 20 30))))
+      (print (eval '(funcall (lambda (x) (+ x 1)) 41)))
+      (print (eval '(mapcar (lambda (x) (* x x)) (list 1 2 3))))
+      (print (eval '(let ((s 0)) (dotimes (i 5) (setq s (+ s i))) s)))
+      (print (eval '(let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s)))
+      (print (eval '(- 5)))
+      (print (eval '(/ 2)))
+    expected: |
+      3
+      42
+      (1 2 3)
+      25
+      42
+      20
+      42
+      (1 4 9)
+      10
+      6
+      -5
+      1/2
+  - name: numeric-literals-with-comma-grouping
+    source: |
+      (print (+ 1,000 100))
+      (print 1,234,567)
+      (print (* 2,000 3))
+      (print (+ 3,000.50 0.50))
+    expected: |
+      1100
+      1234567
+      6000
+      3001.0
+  - name: math-functions-supported-on-every
+    source: |
+      (print (sqrt 16))
+      (print (sqrt 6.25))
+      (print (isqrt 17))
+      (print (expt 2 10))
+      (print (gcd 48 36))
+      (print (lcm 4 6))
+      (print (signum -7))
+      (print (signum 3.5))
+      (print (mapcar #'sqrt (list 1 4 9)))
+    expected: |
+      4.0
+      2.5
+      4
+      1024
+      12
+      12
+      -1
+      1.0
+      (1.0 2.0 3.0)
+  - name: packages-cl-user-default-uses-cl-and-the
+    source: |
+      (print *package*)
+      (print (car (rontolisp:version)))
+      (in-package rontolisp)
+      (cl:print cl:*package*)
+      (cl:print (cl:car (version)))
+    expected: |
+      cl-user
+      :version
+      rontolisp
+      :version
+  - name: lisp-2-function-namespace-via-function
+    source: |
+      (cl:in-package cl-user)
+      (print (funcall #'car '(9 8)))
+      (print (funcall (function cdr) '(9 8)))
+      (print (funcall 'car '(7 8)))
+      (print (mapcar #'cadr '((1 2) (3 4))))
+      (print (funcall (symbol-function 'car) '(5 6)))
+      (setq op2 #'+)
+      (print (funcall op2 20 22))
+      (print (mapcar #'(lambda (x) (* x 2)) '(1 2 3)))
+      (let ((car 5))
+        (print (car (list car 2))))
+    expected: |
+      9
+      (8)
+      7
+      (2 4)
+      5
+      42
+      (2 4 6)
+      5
+  - name: let-dolist-incf-decf-and-sequence
+    source: |
+      (print (let* ((x 2) (y (* x 3))) (+ x y)))
+      (setq dolist-sum 0)
+      (dolist (e '(1 2 3 4)) (setq dolist-sum (+ dolist-sum e)))
+      (print dolist-sum)
+      (print (dolist (e '(1 2) 99)))
+      (setq counter-n 10)
+      (incf counter-n)
+      (print counter-n)
+      (incf counter-n 5)
+      (print counter-n)
+      (decf counter-n 6)
+      (print counter-n)
+      (setq incf-lst (list 1 2 3))
+      (incf (cadr incf-lst))
+      (print incf-lst)
+      (print (length '(1 2 3 4 5)))
+      (print (length nil))
+      (print (reverse '(1 2 3)))
+      (print (reverse nil))
+      (print (member 3 '(1 2 3 4)))
+      (print (member 9 '(1 2 3)))
+      (print (assoc 'b '((a 1) (b 2) (c 3))))
+      (print (assoc 'z '((a 1))))
+      (print (last '(1 2 3)))
+      (print (last nil))
+      (print (funcall #'length '(7 8 9)))
+      (print (mapcar #'reverse '((1 2) (3 4))))
+      (print (funcall #'member 2 '(1 2 3)))
+      (print (find 3 '(1 2 3 4)))
+      (print (find 9 '(1 2 3)))
+      (print (funcall #'find 2 '(1 2 3)))
+      (print (find-if #'evenp '(1 3 5 6 7)))
+      (print (find-if #'oddp '(2 4 6)))
+      (print (funcall #'find-if #'plusp '(-1 -2 3 4)))
+      (print (find-if-not #'evenp '(2 4 5 6)))
+      (print (find-if-not #'plusp '(1 2 3)))
+      (print (funcall #'find-if-not #'oddp '(1 3 4)))
+      (print (position 3 '(1 2 3 4)))
+      (print (position 9 '(1 2 3)))
+      (print (funcall #'position 2 '(1 2 3)))
+      (print (position-if #'evenp '(1 3 5 6 7)))
+      (print (position-if #'plusp '(-1 -2 -3)))
+      (print (funcall #'position-if #'oddp '(2 4 5)))
+      (print (count 2 '(1 2 3 2 2)))
+      (print (count 9 '(1 2 3)))
+      (print (funcall #'count 2 '(1 2 2)))
+      (print (count-if #'evenp '(1 2 3 4 5 6)))
+      (print (count-if #'oddp '(2 4 6)))
+      (print (funcall #'count-if #'evenp '(2 2 8 1)))
+      (print (member-if #'oddp '(2 4 5 6)))
+      (print (assoc-if #'oddp '((2 a) (3 b))))
+      (print (getf '(:a 1 :b 2) :b))
+      (print (getf '(:a 1) :x))
+      (print (remove-duplicates '(1 2 1 3)))
+      (print (butlast '(1 2 3)))
+      (print (nconc (list 1 2) (list 3 4)))
+    expected: |
+      8
+      10
+      99
+      11
+      16
+      10
+      (1 3 3)
+      5
+      0
+      (3 2 1)
+      nil
+      (3 4)
+      nil
+      (b 2)
+      nil
+      (3)
+      nil
+      3
+      ((2 1) (4 3))
+      (2 3)
+      3
+      nil
+      2
+      6
+      nil
+      3
+      5
+      nil
+      4
+      2
+      nil
+      1
+      3
+      nil
+      2
+      3
+      0
+      2
+      3
+      0
+      3
+      (5 6)
+      (3 b)
+      2
+      nil
+      (2 1 3)
+      (1 2)
+      (1 2 3 4)
+  - name: every-some-remove-remove-if
+    source: |
+      (print (every #'evenp '(2 4 6)))
+      (print (every #'evenp '(2 3 6)))
+      (print (some #'oddp '(2 4 5)))
+      (print (some #'oddp '(2 4 6)))
+      (print (remove 2 '(1 2 3 2 4)))
+      (print (remove-if #'evenp '(1 2 3 4 5)))
+      (print (remove-if-not #'evenp '(1 2 3 4 5)))
+      (print (funcall #'remove 9 '(1 2 3)))
+    expected: |
+      t
+      nil
+      t
+      nil
+      (1 3 4)
+      (1 3 5)
+      (2 4)
+      (1 2 3)
+  - name: mapcan-sort-apply
+    source: |
+      (print (mapcan (lambda (x) (list x x)) '(1 2 3)))
+      (print (mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4)))
+      (print (funcall #'mapcan (lambda (x) (list x)) '(1 2 3)))
+      (print (sort '(3 1 4 1 5 9 2 6) #'<))
+      (print (sort '(3 1 4) #'>))
+      (print (funcall #'sort '(2 3 1) #'<))
+      (print (apply #'+ '(1 2)))
+      (print (apply #'cons 1 '(2)))
+      (print (apply (lambda (a b) (+ a b)) '(3 4)))
+    expected: |
+      (1 1 2 2 3 3)
+      (2 4)
+      (1 2 3)
+      (1 1 2 3 4 5 6 9)
+      (4 3 1)
+      (1 2 3)
+      3
+      (1 . 2)
+      7
+  - name: rest-alias-for-cdr-also-a-setf-place
+    source: |
+      (print (rest '(1 2 3)))
+      (print (rest '(1)))
+      (setq rest-lst (list 1 2 3))
+      (setf (rest rest-lst) '(9))
+      (print rest-lst)
+    expected: |
+      (2 3)
+      nil
+      (1 9)
+  - name: rontolisp-package-introspection
+    source: |
+      (print (rontolisp:list-macros))
+      (print (rontolisp:list-special-forms))
+      (print (length (rontolisp:list-functions)))
+      (print (rontolisp:list-functions :rontolisp))
+      (defun ci-intro-fn (x) (+ x 1))
+      (print (car (member 'ci-intro-fn (rontolisp:list-functions :cl-user))))
+      (print (member 'car (rontolisp:list-functions :cl-user)))
+      (print (rontolisp:list-macros :cl-user))
+    expected: |
+      (and case cond decf do do* dolist dotimes format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
+      (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
+      157
+      (list-functions list-macros list-special-forms version)
+      ci-intro-fn
+      nil
+      nil
+  - name: first-rest-nth-as-first-class-function
+    source: |
+      (print (funcall #'first '(1 2 3)))
+      (print (mapcar #'second '((1 2) (3 4))))
+      (print (funcall #'nth 1 '(7 8 9)))
+    expected: |
+      1
+      (2 4)
+      8
+  - name: rationals-common-lisp-ratios
+    source: |
+      (print 1/3)
+      (print (/ 1 2))
+      (print (+ 1/2 1/3))
+      (print (+ 1/2 1/2))
+      (print (* 2/3 3))
+      (print (/ 1/2 1/3))
+      (print (/ 1 2.0))
+      (print (float 1/2))
+      (print (numerator 3/4))
+      (print (denominator 3/4))
+      (print (truncate 7/2))
+      (print (floor -7/2))
+      (print (ceiling 7/2))
+      (print (round 5/2))
+      (print (if (< 1/3 1/2) 1 0))
+      (print (expt 2 -1))
+      (print (list 1/2 2/3))
+    expected: |
+      1/3
+      1/2
+      5/6
+      1
+      2
+      3/2
+      0.5
+      0.5
+      3
+      4
+      3
+      -4
+      4
+      2
+      1
+      1/2
+      (1/2 2/3)
+  - name: common-lisp-fidelity-mod-rem-sign
+    source: |
+      (print (mod -13 4))
+      (print (rem -13 4))
+      (print (if (< 1 2 3 4) 1 0))
+      (print (min 5 2 8 1))
+      (print (max 5 2 8 1))
+      (print (gcd 24 36 60))
+      (print (lcm 2 3 4))
+      (print (length "hello"))
+    expected: |
+      3
+      -1
+      1
+      1
+      8
+      12
+      12
+      5
+  - name: format-destination-t-directives-a-s-d
+    source: |
+      (format t "Hello ~a, you are ~d!~%" 'world 42)
+      (format t "~s and ~a~%" "str" "str")
+      (format t "list=~a tilde=~~~%" (list 1 2 3))
+      (defun ci-greet (name) (format t "Hi, ~a!~%" name))
+      (ci-greet 'alice)
+    expected: |
+      Hello world, you are 42!
+      "str" and str
+      list=(1 2 3) tilde=~
+      Hi, alice!
+  - name: format-nil-princ-to-string-prin1-to
+    source: |
+      (princ (format nil "fmt-nil: ~a ~d ~s ~~~%" 'world 42 "str"))
+      (print (length (format nil "~a" 12345)))
+      (princ (concatenate 'string "foo" "bar"))
+      (terpri)
+      (princ (princ-to-string 3.14))
+      (terpri)
+      (princ (prin1-to-string "abc"))
+      (terpri)
+    expected: |
+      fmt-nil: world 42 "str" ~
+      5
+      foobar
+      3.14
+      "abc"
+  - name: string-operations-case-conversion-subseq
+    source: |
+      (princ (string-upcase "hello"))
+      (terpri)
+      (princ (string-downcase "HELLO"))
+      (terpri)
+      (princ (string-capitalize "hello world"))
+      (terpri)
+      (princ (subseq "hello world" 6))
+      (terpri)
+      (print (subseq '(1 2 3 4 5) 1 3))
+      (print (string= "abc" "abc"))
+      (print (string-equal "ABC" "abc"))
+      (princ (string-trim " " "  hi  "))
+      (terpri)
+    expected: |
+      HELLO
+      hello
+      Hello World
+      world
+      (2 3)
+      t
+      t
+      hi
+  - name: the-pi-constant-output-kept-backend
+    source: |
+      (print (truncate pi))
+      (print (floatp pi))
+    expected: |
+      3
+      t
+  - name: do-loop-and-return-non-local-exit-from
+    source: |
+      (print (do ((i 0 (+ i 1)) (s 0)) ((= i 5) s) (setq s (+ s i))))
+      (print (do ((i 0 (+ i 1)) (a 0 b) (b 1 (+ a b))) ((= i 10) a)))
+      (print (dolist (m '(2 3 5) t) (if (= m 3) (return))))
+      (print (dotimes (i 5 -1) (if (evenp i) (return i))))
+      (print (do ((i 0 (+ i 1))) ((> i 100) -1) (if (= i 4) (return i))))
+    expected: |
+      10
+      55
+      nil
+      0
+      4
+  - name: eql-type-aware-value-equality
+    source: |
+      (print (if (eql 3 3) 42 99))
+      (print (if (eql 3 3.0) 42 99))
+      (print (if (eql 'foo 'foo) 42 99))
+    expected: |
+      42
+      99
+      42
+  - name: eq-vs-eql-floats-ratios-are-eql-by-value
+    source: |
+      (print (if (eql 1.5 1.5) 42 99))
+      (print (if (eq 1.5 1.5) 42 99))
+      (print (if (eq 3 3) 42 99))
+      (print (member 1.0 (list 2.0 1.0)))
+    expected: |
+      42
+      99
+      42
+      (1.0)
+  - name: equal-structural-equality-cons-cells
+    source: |
+      (print (equal '(1 2 (3)) '(1 2 (3))))
+      (print (equal '(1 2) '(1 3)))
+      (print (equal "abc" "abc"))
+      (print (equal (list 1 2) (list 1 2)))
+      (print (if (eql (list 1 2) (list 1 2)) 42 99))
+    expected: |
+      t
+      nil
+      t
+      t
+      99
+  - name: mapc-apply-for-effect-return-the
+    source: |
+      (print (mapc #'print '(10 20)))
+      (print (mapc #'1+ '(1 2 3)))
+    expected: |
+      10
+      20
+      (10 20)
+      (1 2 3)
+  - name: list-utilities-and-set-operations
+    source: |
+      (print (identity 42))
+      (print (copy-list '(1 2 3)))
+      (print (nreverse '(1 2 3)))
+      (print (make-list 3))
+      (print (union '(1 2 3) '(2 3 4)))
+      (print (intersection '(1 2 3) '(2 3 4)))
+      (print (set-difference '(1 2 3) '(2)))
+      (print (adjoin 1 '(2 3)))
+      (print (adjoin 2 '(1 2 3)))
+    expected: |
+      42
+      (1 2 3)
+      (3 2 1)
+      (nil nil nil)
+      (4 1 2 3)
+      (3 2)
+      (3 1)
+      (1 2 3)
+      (1 2 3)
+  - name: bitwise-integer-operations-variadic
+    source: |
+      (print (logand 12 10))
+      (print (logior 12 10))
+      (print (logxor 12 10))
+      (print (lognot 5))
+      (print (ash 1 4))
+      (print (ash 255 -4))
+      (print (logand 12 10 6))
+      (print (logior 1 2 4 8))
+    expected: |
+      8
+      14
+      6
+      -6
+      16
+      15
+      0
+      15
+  - name: list-sequence-additions
+    source: |
+      (print (list* 1 2 '(3 4)))
+      (print (list* 1 2 3))
+      (print (acons 'a 1 nil))
+      (print (elt '(a b c) 1))
+      (print (endp nil))
+      (print (endp '(1)))
+      (print (rassoc 2 (list (cons 'a 1) (cons 'b 2))))
+      (print (revappend '(1 2 3) '(4 5)))
+      (print (nreconc '(1 2 3) '(4 5)))
+      (print (maplist #'identity '(1 2 3)))
+      (print (mapcon #'(lambda (x) (list (car x))) '(1 2 3)))
+      (print (notany #'evenp '(1 3 5)))
+      (print (notevery #'evenp '(2 4 6)))
+    expected: |
+      (1 2 3 4)
+      (1 2 . 3)
+      ((a . 1))
+      b
+      t
+      nil
+      (b . 2)
+      (3 2 1 4 5)
+      (3 2 1 4 5)
+      ((1 2 3) (2 3) (3))
+      (1 2 3)
+      t
+      nil
+  - name: control-macros-prog2-psetq-typecase
+    source: |
+      (print (prog2 1 2 3))
+      (print (let ((a 1) (b 2)) (psetq a b b a) (list a b)))
+      (print (typecase 42 (string "s") (integer "i") (t "?")))
+    expected: |
+      2
+      (2 1)
+      "i"
+  - name: defparameter-defconstant-unconditional
+    source: |
+      (defparameter *p* 1)
+      (defparameter *p* 2)
+      (print *p*)
+      (print (defconstant +c+ 9))
+      (print +c+)
+    expected: |
+      2
+      +c+
+      9
+  - name: do-sequential-bindings-and-steps
+    source: |
+      (print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))
+    expected: |
+      720
+  - name: delete-delete-if-delete-if-not-aliases
+    source: |
+      (print (delete 2 '(1 2 3 2 1)))
+      (print (delete-if #'evenp '(1 2 3 4 5)))
+      (print (delete-if-not #'oddp '(1 2 3 4 5)))
+    expected: |
+      (1 3 1)
+      (1 3 5)
+      (1 3 5)
+  - name: substitute-nsubstitute
+    source: |
+      (print (substitute 0 2 '(1 2 3 2 1)))
+      (print (nsubstitute 9 1 '(1 2 1 3)))
+    expected: |
+      (1 0 3 0 1)
+      (9 2 9 3)
