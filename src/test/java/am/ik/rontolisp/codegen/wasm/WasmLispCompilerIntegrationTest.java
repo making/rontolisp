@@ -14,6 +14,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * Integration tests that compile Lisp to WASM and run it with wasmtime inside a
@@ -2158,6 +2159,24 @@ class WasmLispCompilerIntegrationTest {
 	void evalPop() throws Exception {
 		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s))))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s) s)))")).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void expSoftwareApproximation() throws Exception {
+		// WASM has no native exp instruction; it is approximated in f64 (argument
+		// reduction + Taylor polynomial), so results match Math.exp closely but not
+		// bit-exactly. exp(0) is exactly 1.0.
+		assertThat(compileAndRun("(print (exp 0))")).isEqualTo("1.0");
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 1))"))).isCloseTo(Math.exp(1), within(1e-4));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp 2.0))"))).isCloseTo(Math.exp(2), within(1e-3));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp -1.0))"))).isCloseTo(Math.exp(-1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (exp -5.0))"))).isCloseTo(Math.exp(-5), within(1e-6));
+		// A sigmoid built on exp: 1/(1+exp(-x)). sigmoid(0) is exactly 0.5.
+		assertThat(compileAndRun("(defun sg (x) (/ 1.0 (+ 1.0 (exp (- 0 x))))) (print (sg 0.0))")).isEqualTo("0.5");
+		assertThat(Double.parseDouble(compileAndRun("(defun sg (x) (/ 1.0 (+ 1.0 (exp (- 0 x))))) (print (sg 2.0))")))
+			.isCloseTo(1.0 / (1.0 + Math.exp(-2.0)), within(1e-5));
+		// exp as a first-class value over an integer argument.
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'exp 1))"))).isCloseTo(Math.exp(1), within(1e-4));
 	}
 
 	@Test

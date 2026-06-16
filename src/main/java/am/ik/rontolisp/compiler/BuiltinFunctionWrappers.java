@@ -31,10 +31,12 @@ public final class BuiltinFunctionWrappers {
 	 * Built-in operators that the WASM backend cannot compile (transcendental functions
 	 * have no native WASM instruction). The WASM compiler passes these to
 	 * {@link #generate(Set, Set)} so that no wrapper defun referencing them is injected.
+	 * {@code exp} is omitted because the WASM backend emits a software approximation for
+	 * it (see {@code WasmExpCompiler}), so {@code #'exp} is supported.
 	 */
-	public static final Set<String> WASM_UNSUPPORTED = Set.of(LispNames.EXP, LispNames.LOG, LispNames.SIN,
-			LispNames.COS, LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH,
-			LispNames.COSH, LispNames.TANH);
+	public static final Set<String> WASM_UNSUPPORTED = Set.of(LispNames.LOG, LispNames.SIN, LispNames.COS,
+			LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
+			LispNames.TANH);
 
 	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the

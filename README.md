@@ -465,7 +465,7 @@ embedded `eval` runtime in compiled output (see
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`) |
-| `exp` | `(exp 0)` | `1.0` (interpreter/JVM only) |
+| `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM only) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |
 | `asin` `acos` `atan` | `(atan 0)` | `0.0` (interpreter/JVM only) |
@@ -569,7 +569,8 @@ Arithmetic and comparison operators work on both integers and doubles. When any 
 The math built-ins differ in how widely they are supported, because the WASM backend only has native instructions for a few operations:
 
 - **`sqrt`, `isqrt`, `gcd`, `lcm`, `signum`, `expt`** are supported on all three backends (interpreter, JVM, WASM) and through the compiled `eval`. `sqrt` uses the native `f64.sqrt` instruction.
-- **Transcendental functions** (`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are therefore **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
+- **`exp`** is supported on all three backends. The interpreter and JVM use `Math.exp`; WASM has no native transcendental instruction, so it emits a software approximation in f64 (argument reduction by repeated squaring plus a Taylor polynomial), accurate to roughly 1e-6 relative error. The WASM result is therefore close to but not bit-identical to `Math.exp` (`(exp 0)` is exactly `1.0`). This is enough to run, e.g., a sigmoid `(/ 1.0 (+ 1.0 (exp (- 0 x))))` compiled to WASM.
+- **The remaining transcendental functions** (`log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
 - **`expt`** keeps an exact rational result for an integer or ratio base raised to an integer exponent (with big-integer promotion in the interpreter and JVM); a negative exponent yields the reciprocal (`(expt 2 -1)` is `1/2`) and a float base/exponent uses `Math.pow` and returns a float. The WASM `expt`, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
 - **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
 - **`random`** is supported on all three backends. It returns a non-negative random number below the (positive) limit, of the same type as the limit (an integer limit yields an integer, a float limit a float). The integer and float paths are chosen from the literal shape of the argument, so use a float literal (`(random 1.0)`) when a float result is wanted. The interpreter and JVM draw from `Math.random()`; the WASM backend has no entropy source, so it uses a **deterministic** linear-congruential generator (`seed = (seed * 1103515245 + 12345) & 0x7fffffff`) seeded from a fixed value, producing a reproducible pseudo-random sequence. `random` is not available inside the compiled `eval`.
