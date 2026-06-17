@@ -172,6 +172,8 @@ public final class RontoLispCli {
 		this.out.println("  -v, --version      Show version");
 		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
 		this.out.println("                     Lets sources that define functions via load compile as-is");
+		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
+		this.out.println("                     Off by default so the REPL responds to each line");
 	}
 
 	static boolean isBalanced(String input) {
@@ -216,10 +218,23 @@ public final class RontoLispCli {
 	 * @param args the command-line arguments
 	 */
 	public static void main(String[] args) {
-		// Replace stdout with a block-buffered, non-auto-flushing stream. Flushing on
-		// every print/format call interleaves badly when the output is piped; buffering
-		// coalesces it into whole writes. A shutdown hook drains the buffer even on
-		// System.exit, and the REPL flushes before each prompt to stay interactive.
+		// By default stdout stays auto-flushing so each REPL input gets an immediate
+		// response. Opt in to a block-buffered, non-auto-flushing stream with
+		// --buffered-output: flushing on every print/format call interleaves badly when
+		// the output is piped, and buffering coalesces it into whole writes. A shutdown
+		// hook drains the buffer even on System.exit, and a final flush covers normal
+		// exit.
+		boolean buffered = false;
+		for (String arg : args) {
+			if ("--buffered-output".equals(arg)) {
+				buffered = true;
+				break;
+			}
+		}
+		if (!buffered) {
+			new RontoLispCli(System.in, System.out).run(args);
+			return;
+		}
 		PrintStream bufferedOut = new PrintStream(
 				new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 1 << 16), false,
 				StandardCharsets.UTF_8);
