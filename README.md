@@ -497,9 +497,9 @@ embedded `eval` runtime in compiled output (see
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). The interpreter and JVM draw from `Math.random`; WASM uses a deterministic LCG in Preview 1 mode and real `wasi:random` entropy in `--component` mode |
-| `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT (interpreter and JVM only; not in WASM, whose 31-bit integers cannot hold the value) |
-| `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (interpreter and JVM only) |
-| `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (interpreter and JVM only) |
+| `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT. The interpreter and JVM return an integer; WASM reads `wasi:clocks` (real host clock in Preview 1, `wasi:clocks` in `--component` mode) and returns a **float**, because its 31-bit integers cannot hold the value (so use it in comparisons/differences rather than printing the raw value) |
+| `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on the interpreter/JVM, float on WASM) |
+| `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on the interpreter/JVM, float on WASM) |
 | `getenv` | `(getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset (interpreter and JVM only) |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM only) |

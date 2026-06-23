@@ -92,8 +92,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// and the defined function indices below -- identical across modes.
 	static final int FUNC_RANDOM_GET = 4; // imported
 
+	// WASI clock and environment imported in both modes: Preview 1 binds the real
+	// wasi_snapshot_preview1 functions; component mode binds the adapter's
+	// implementations on top of wasi:clocks / wasi:cli-environment.
+	static final int FUNC_CLOCK_TIME_GET = 5; // imported
+
+	static final int FUNC_ENVIRON_SIZES_GET = 6; // imported
+
+	static final int FUNC_ENVIRON_GET = 7; // imported
+
 	/** Number of imported functions; defined functions are indexed from here. */
-	static final int IMPORT_FUNC_COUNT = 5;
+	static final int IMPORT_FUNC_COUNT = 8;
 
 	static final int FUNC_START = IMPORT_FUNC_COUNT;
 
@@ -273,6 +282,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// type index for _open: ((ref null eq) path, i32 mode) -> (ref null eq)
 	static final int TYPE_OPEN = TYPE_READ_LINE_FD + 1; // 29
 
+	// clock_time_get (i32 clock_id, i64 precision, i32 result_ptr) -> i32 errno
+	static final int TYPE_CLOCK_TIME_GET = TYPE_OPEN + 1; // 30
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
@@ -327,6 +339,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Scratch (8 bytes) where the adapter's random_get writes a wasi:random u64 in
 	// component mode.
 	static final int RANDOM_SCRATCH_ADDR = 120;
+
+	// Scratch (8 bytes) where clock_time_get writes the current time in nanoseconds.
+	static final int TIME_SCRATCH_ADDR = 128;
 
 	static final int RT_INTERN_BASE = 8192;
 
@@ -852,6 +867,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.REFNULL.code());
 					w.writeHeapType(Type.EQ.code());
 				});
+				// type 30: clock_time_get (i32, i64, i32) -> i32
+				types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32 }, new Type[] { Type.I32 });
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -863,7 +880,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					// _intern. Preview 1 binds the real host function; component mode
 					// binds
 					// the adapter's wasi:random-backed implementation.
-					.addImport("wasi_snapshot_preview1", "random_get", ExternalKind.FUNCTION, TYPE_INTERN);
+					.addImport("wasi_snapshot_preview1", "random_get", ExternalKind.FUNCTION, TYPE_INTERN)
+					// clock_time_get / environ_sizes_get / environ_get for time and
+					// getenv.
+					// Component mode binds adapter implementations over wasi:clocks /
+					// wasi:cli-environment; Preview 1 binds the real host functions.
+					.addImport("wasi_snapshot_preview1", "clock_time_get", ExternalKind.FUNCTION, TYPE_CLOCK_TIME_GET)
+					.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
+					.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the

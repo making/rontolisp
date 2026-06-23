@@ -74,6 +74,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentTimeFromWasiClocks() throws Exception {
+		// Component mode reads time from wasi:clocks; WASM returns it as a float (i31
+		// can't
+		// hold the magnitude). Compare/difference rather than print the raw value.
+		assertThat(compileAndRunComponent("(print (> (get-universal-time) 3786825600.0))")).isEqualTo("t");
+		assertThat(compileAndRunComponent("(print (floatp (get-internal-real-time)))")).isEqualTo("t");
+		assertThat(compileAndRunComponent(
+				"(let ((s (get-internal-run-time))) (print (>= (- (get-internal-run-time) s) 0.0)))"))
+			.isEqualTo("t");
+	}
+
+	@Test
+	void preview1TimeFromHostClock() throws Exception {
+		// Preview 1 mode binds the real wasi_snapshot_preview1 clock_time_get.
+		assertThat(compileAndRun("(print (> (get-universal-time) 3786825600.0))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (floatp (get-internal-real-time)))")).isEqualTo("t");
+	}
+
+	@Test
 	void componentRandomDrawsFromWasiRandom() throws Exception {
 		// Component mode draws entropy from wasi:random (unlike Preview 1's deterministic
 		// LCG), so only the range and type are asserted.

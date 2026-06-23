@@ -284,6 +284,24 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a {@code canon lower} of a component function into a core function,
+	 * supplying only the canonical memory option (required when the lowered function
+	 * returns a record indirectly through a caller-provided return pointer, e.g.
+	 * {@code wall-clock.now}).
+	 * @param funcIndex the component function index to lower
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLowerMemory(int funcIndex, int memoryIndex) {
+		return enc(w -> w.write(0x01)
+			.write(0x00)
+			.writeUnsignedLeb128(funcIndex)
+			.writeUnsignedLeb128(1) // one canonical option
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)); // memory
+	}
+
+	/**
 	 * Encode a {@code canon resource.drop} for the given resource type, producing a core
 	 * function that drops a handle of that resource.
 	 * @param typeIndex the component type index of the resource
