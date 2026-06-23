@@ -74,6 +74,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentRandomDrawsFromWasiRandom() throws Exception {
+		// Component mode draws entropy from wasi:random (unlike Preview 1's deterministic
+		// LCG), so only the range and type are asserted.
+		assertThat(compileAndRunComponent(
+				"(let ((r (random 100))) (if (and (>= r 0) (< r 100)) (print \"in\") (print \"oob\")))"))
+			.isEqualTo("\"in\"");
+		assertThat(compileAndRunComponent("(print (integerp (random 10)))")).isEqualTo("t");
+		assertThat(compileAndRunComponent(
+				"(let ((r (random 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print \"in\") (print \"oob\")))"))
+			.isEqualTo("\"in\"");
+	}
+
+	@Test
 	void addition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}
@@ -2332,7 +2345,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("158");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("162");
 	}
 
 	@Test

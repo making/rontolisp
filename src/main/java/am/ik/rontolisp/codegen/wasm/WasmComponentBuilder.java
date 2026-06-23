@@ -63,20 +63,24 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * The preview1-to-0.2 adapter core module: it imports the shared memory and the
-	 * lowered WASI functions ({@code get-stdout} / {@code write} / {@code drop}) and
-	 * exports {@code fd_write} (looping over the iovec and calling
-	 * {@code output-stream.blocking-write-and-flush}) plus stub
+	 * lowered WASI functions ({@code get-stdout} / {@code write} / {@code drop} /
+	 * {@code get-random-u64}) and exports {@code fd_write} (looping over the iovec and
+	 * calling {@code output-stream.blocking-write-and-flush}) and {@code random_get}
+	 * (filling the buffer from {@code wasi:random}), plus stub
 	 * {@code fd_read}/{@code path_open}/{@code fd_close}. The stream-error result area is
 	 * written at linear offset 256, which is outside the rontolisp fixed I/O layout.
 	 */
 	private static final byte[] ADAPTER_MODULE = fromHex(
-			"0061736d01000000012a066000017f60047f7f7f7f0060017f0060047f7f7f7f017f60097f7f7f7f7f7e7e7f7f017f60017f017f02"
-					+ "3104036d656d066d656d6f727902000101770a6765742d7374646f757400000177057772697465000101770464726f70000203050403"
-					+ "030405072d040866645f777269746500030766645f72656164000409706174685f6f70656e00050866645f636c6f736500060a6c0459"
-					+ "01067f1000210402400340200520024f0d01200120054180026c6a210920092802002106200941046a28020021072004200620074180"
-					+ "021001200820076a2108200541016a21050c000b0b200410022003200836020041000b05004180020b05004180020b040041000b0064"
-					+ "046e616d65011a03000a6765745f7374646f757401057772697465020464726f70023301030a000266640103696f760203636e740302"
-					+ "6e7704026f73050169060370747207036c656e0805746f74616c090462617365030c0103020004646f6e6501016c");
+			"0061736d010000000134086000017f60047f7f7f7f0060017f006000017e60047f7f7f7f017f60027f7f017f60097f7f7f7f7f7e7e7f"
+					+ "7f017f60017f017f024405036d656d066d656d6f727902000101770a6765742d7374646f757400000177057772697465000101770464"
+					+ "726f70000201770e6765742d72616e646f6d2d75363400030306050405040607073a050866645f777269746500040a72616e646f6d5f"
+					+ "67657400050766645f72656164000609706174685f6f70656e00070866645f636c6f736500080a9001055801067f1000210402400340"
+					+ "200520024f0d012001200541086c6a210920092802002106200941046a28020021072004200620074180021001200820076a2108200"
+					+ "541016a21050c000b0b200410022003200836020041000b2601017f02400340200220014f0d01200020026a1003370300200241086a"
+					+ "21020c000b0b41000b040041080b040041080b040041000b008801046e616d65012404000a6765745f7374646f7574010577726974"
+					+ "65020464726f70030872616e645f753634024202040a000266640103696f760203636e7403026e7704026f7305016906037074720703"
+					+ "6c656e0805746f74616c0904626173650503000362756601036c656e02016903170204020004646f6e6501016c05020004646f6e6501"
+					+ "016c");
 
 	/**
 	 * Assemble a runnable WASI 0.2 component around the given rontolisp core module.
@@ -87,8 +91,15 @@ public final class WasmComponentBuilder {
 	 */
 	public static byte[] build(byte[] coreModule) {
 		final ComponentWriter c = new ComponentWriter();
-		// Imported WASI interfaces: component types 0-4, component instances 0-2.
+		// Imported WASI interfaces: component types 0-4, component instances 0-2
+		// (wasi:io/error, wasi:io/streams, wasi:cli/stdout).
 		c.writeRaw(IMPORT_BLOCK);
+		// Component type 5: the wasi:random instance type (get-random-u64 () -> u64).
+		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter
+			.vec(List.of(ComponentWriter.instanceTypeWithFunc("get-random-u64", ComponentWriter.VT_U64))));
+		// Import wasi:random (component instance 3).
+		c.rawSection(ComponentWriter.SEC_IMPORT,
+				ComponentWriter.vec(List.of(ComponentWriter.importInstance("wasi:random/random@0.2.0", 5))));
 		// Core modules: 0 = shared memory, 1 = adapter, 2 = rontolisp.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE);
@@ -99,16 +110,20 @@ public final class WasmComponentBuilder {
 		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the imported WASI functions (component funcs 0 and 1).
+		// Alias the imported WASI functions: component funcs 0 = get-stdout, 1 = write,
+		// 2 = get-random-u64.
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasInstanceFunc(2, "get-stdout"),
-						ComponentWriter.aliasInstanceFunc(1, "[method]output-stream.blocking-write-and-flush"))));
-		// Lower them (core funcs 1, 2) and resource.drop output-stream (core func 3).
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0),
-				ComponentWriter.canonLower(1, 0, 0), ComponentWriter.canonResourceDrop(3))));
+						ComponentWriter.aliasInstanceFunc(1, "[method]output-stream.blocking-write-and-flush"),
+						ComponentWriter.aliasInstanceFunc(3, "get-random-u64"))));
+		// Lower them: core func 1 = get-stdout, 2 = write (memory/realloc), 3 =
+		// resource.drop output-stream, 4 = get-random-u64.
+		c.rawSection(ComponentWriter.SEC_CANON,
+				ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), ComponentWriter.canonLower(1, 0, 0),
+						ComponentWriter.canonResourceDrop(3), ComponentWriter.canonLower(2))));
 		// Group the lowered functions for the adapter's "w" import (core instance 1).
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
-			.of(ComponentWriter.coreInstanceFromFuncs(List.of("get-stdout", "write", "drop"), List.of(1, 2, 3)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
+			.coreInstanceFromFuncs(List.of("get-stdout", "write", "drop", "get-random-u64"), List.of(1, 2, 3, 4)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -116,18 +131,18 @@ public final class WasmComponentBuilder {
 		// wasi_snapshot_preview1 = adapter instance 2.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2)))));
-		// Alias rontolisp's run (core func 4).
+		// Alias rontolisp's run (core func 5).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Types: 5 = result<_,_>, 6 = func () -> result<_,_>.
+		// Types: 6 = result<_,_>, 7 = func () -> result<_,_>.
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter
-			.vec(List.of(ComponentWriter.definedResultVoid(), ComponentWriter.funcTypeResultType(5))));
-		// Lift run into component func 2 with type 6.
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(4, 6))));
-		// Component instance 3 exporting run, exported as the wasi:cli/run interface.
+			.vec(List.of(ComponentWriter.definedResultVoid(), ComponentWriter.funcTypeResultType(6))));
+		// Lift run into component func 3 with type 7.
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(5, 7))));
+		// Component instance 4 exporting run, exported as the wasi:cli/run interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 2))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 3))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.2.0", 3))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.2.0", 4))));
 		return c.toByteArray();
 	}
 

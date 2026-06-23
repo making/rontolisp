@@ -512,6 +512,35 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
 		}));
+		// get-universal-time: seconds since 1900-01-01 00:00:00 GMT (Common Lisp epoch).
+		// The interpreter and JVM backends read the real wall clock; the WASM backend
+		// reads
+		// wasi:clocks in component mode and a deterministic value in Preview 1 mode.
+		env.defineFunction(LispNames.GET_UNIVERSAL_TIME, new LispFunction(LispNames.GET_UNIVERSAL_TIME, args -> {
+			requireArgCount(LispNames.GET_UNIVERSAL_TIME, args, 0);
+			return new LispInteger(System.currentTimeMillis() / 1000L + 2208988800L);
+		}));
+		// get-internal-real-time: elapsed real time in internal units (milliseconds
+		// here).
+		env.defineFunction(LispNames.GET_INTERNAL_REAL_TIME,
+				new LispFunction(LispNames.GET_INTERNAL_REAL_TIME, args -> {
+					requireArgCount(LispNames.GET_INTERNAL_REAL_TIME, args, 0);
+					return new LispInteger(System.currentTimeMillis());
+				}));
+		// get-internal-run-time: consumed run time in internal units (milliseconds here).
+		env.defineFunction(LispNames.GET_INTERNAL_RUN_TIME, new LispFunction(LispNames.GET_INTERNAL_RUN_TIME, args -> {
+			requireArgCount(LispNames.GET_INTERNAL_RUN_TIME, args, 0);
+			return new LispInteger(System.nanoTime() / 1000000L);
+		}));
+		// getenv: the value of an environment variable as a string, or nil if unset.
+		env.defineFunction(LispNames.GETENV, new LispFunction(LispNames.GETENV, args -> {
+			requireArgCount(LispNames.GETENV, args, 1);
+			if (!(args.get(0) instanceof LispString name)) {
+				throw new LispEvalException("getenv expects a string, got: " + args.get(0).print());
+			}
+			String value = System.getenv(name.value());
+			return value == null ? LispNil.INSTANCE : new LispString(value);
+		}));
 		// isqrt: exact integer square root (floor of the real square root).
 		env.defineFunction(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {
 			requireArgCount(LispNames.ISQRT, args, 1);
