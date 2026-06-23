@@ -160,6 +160,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Math helper references for sqrt/exp/log/trig/expt/signum compilers.
 		Map<String, MethodrefConstant> mathOps = JvmMathFnCompiler.buildOps(cp, mathClass);
 
+		// System helper references for the time / getenv compilers.
+		Map<String, MethodrefConstant> systemOps = new java.util.LinkedHashMap<>();
+		systemOps.put("currentTimeMillis",
+				cp.addMethodref(systemClass, cp.addNameAndType(cp.addUtf8("currentTimeMillis"), cp.addUtf8("()J"))));
+		systemOps.put("nanoTime",
+				cp.addMethodref(systemClass, cp.addNameAndType(cp.addUtf8("nanoTime"), cp.addUtf8("()J"))));
+		systemOps.put("getenv", cp.addMethodref(systemClass,
+				cp.addNameAndType(cp.addUtf8("getenv"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"))));
+
 		// read-line helper
 		ClassConstant bufferedReaderClass = cp.addClass(cp.addUtf8("java/io/BufferedReader"));
 		ClassConstant inputStreamReaderClass = cp.addClass(cp.addUtf8("java/io/InputStreamReader"));
@@ -268,6 +277,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.cp(cp)
 			.numOps(numericRuntime.ops())
 			.mathOps(mathOps)
+			.systemOps(systemOps)
 			.systemOut(systemOut)
 			.printlnStr(printlnStr)
 			.lispToString(lispToStringMethod)
@@ -941,6 +951,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
 
+		Map<String, MethodrefConstant> systemOps = Map.of();
+
 		final List<Integer> code = new ArrayList<>();
 
 		Map<String, Integer> locals = new HashMap<>();
@@ -1021,6 +1033,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.nextFuncId = builder.nextFuncId;
 			this.numOps = builder.numOps;
 			this.mathOps = builder.mathOps;
+			this.systemOps = builder.systemOps;
 		}
 
 		static Builder builder() {
@@ -1112,6 +1125,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Map<String, MethodrefConstant> numOps = Map.of();
 
 			private Map<String, MethodrefConstant> mathOps = Map.of();
+
+			private Map<String, MethodrefConstant> systemOps = Map.of();
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
@@ -1323,6 +1338,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder systemOps(Map<String, MethodrefConstant> systemOps) {
+				this.systemOps = systemOps;
+				return this;
+			}
+
 			Ctx build() {
 				return new Ctx(this);
 			}
@@ -1335,6 +1355,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		MethodrefConstant mathOp(String key) {
 			return Objects.requireNonNull(this.mathOps.get(key), () -> "Unknown math helper: " + key);
+		}
+
+		MethodrefConstant systemOp(String key) {
+			return Objects.requireNonNull(this.systemOps.get(key), () -> "Unknown system helper: " + key);
 		}
 
 		void emit(int opcode) {

@@ -335,6 +335,9 @@ final class JvmExprCompiler {
 						LispNames.TANH ->
 					JvmMathFnCompiler.compile(cons, ctx, className, sym.name());
 				case LispNames.RANDOM -> JvmRandomCompiler.compile(cons, ctx, className);
+				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
+					JvmTimeCompiler.compile(cons, ctx, sym.name());
+				case LispNames.GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
 				case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
 				case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);
 				case LispNames.GCD -> {

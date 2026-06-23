@@ -153,7 +153,8 @@ Notes and current limitations of component mode:
 
 - Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc=y`).
 - Only `print` / stdout output is supported. Reading (`read`, `read-line`) and file I/O (`open`, `close`, `load`, `with-open-file`) are not yet available in component mode.
-- The compiled Lisp behaves identically to the Preview 1 output for the supported features.
+- `random` draws real entropy from the WASI 0.2 `wasi:random` interface (unlike the deterministic Preview 1 output), so `(random N)` differs each run.
+- The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
 
 ### Self-Hosted REPL
 
@@ -495,7 +496,11 @@ embedded `eval` runtime in compiled output (see
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
-| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`) |
+| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). The interpreter and JVM draw from `Math.random`; WASM uses a deterministic LCG in Preview 1 mode and real `wasi:random` entropy in `--component` mode |
+| `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT (interpreter and JVM only; not in WASM, whose 31-bit integers cannot hold the value) |
+| `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (interpreter and JVM only) |
+| `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (interpreter and JVM only) |
+| `getenv` | `(getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset (interpreter and JVM only) |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM only) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |
