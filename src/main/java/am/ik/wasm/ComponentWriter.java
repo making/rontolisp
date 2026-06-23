@@ -227,6 +227,22 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode an alias that projects a memory export out of a core instance into the core
+	 * memory index space.
+	 * @param coreInstanceIndex the core instance index
+	 * @param exportName the core memory export name
+	 * @return the encoded alias entry
+	 */
+	public static byte[] aliasCoreMemory(int coreInstanceIndex, String exportName) {
+		return enc(w -> {
+			w.write(0x00).write(0x02); // sort: core memory
+			w.write(0x01).writeUnsignedLeb128(coreInstanceIndex); // target: core instance
+																	// export
+			plainName(w, exportName);
+		});
+	}
+
+	/**
 	 * Encode a {@code canon lower} of a component function into a core function, with no
 	 * canonical options.
 	 * @param funcIndex the component function index to lower
@@ -234,6 +250,36 @@ public final class ComponentWriter {
 	 */
 	public static byte[] canonLower(int funcIndex) {
 		return enc(w -> w.write(0x01).write(0x00).writeUnsignedLeb128(funcIndex).writeUnsignedLeb128(0));
+	}
+
+	/**
+	 * Encode a {@code canon lower} of a component function into a core function,
+	 * supplying the canonical memory and reallocation function (required when the lowered
+	 * function has a list/string parameter or an indirect result).
+	 * @param funcIndex the component function index to lower
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLower(int funcIndex, int memoryIndex, int reallocFuncIndex) {
+		return enc(w -> w.write(0x01)
+			.write(0x00)
+			.writeUnsignedLeb128(funcIndex)
+			.writeUnsignedLeb128(2) // two canonical options
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex) // memory
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex)); // realloc
+	}
+
+	/**
+	 * Encode a {@code canon resource.drop} for the given resource type, producing a core
+	 * function that drops a handle of that resource.
+	 * @param typeIndex the component type index of the resource
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonResourceDrop(int typeIndex) {
+		return enc(w -> w.write(0x03).writeUnsignedLeb128(typeIndex));
 	}
 
 	/**
@@ -258,11 +304,24 @@ public final class ComponentWriter {
 	 * @return the encoded core instance entry
 	 */
 	public static byte[] coreInstanceFromFunc(String exportName, int coreFuncIndex) {
+		return coreInstanceFromFuncs(List.of(exportName), List.of(coreFuncIndex));
+	}
+
+	/**
+	 * Encode a core instance synthesized from one or more function exports.
+	 * @param exportNames the core function export names (in order)
+	 * @param coreFuncIndices the core function index exported under each name
+	 * @return the encoded core instance entry
+	 */
+	public static byte[] coreInstanceFromFuncs(List<String> exportNames, List<Integer> coreFuncIndices) {
 		return enc(w -> {
 			w.write(0x01); // from-exports
-			w.writeUnsignedLeb128(1); // one export
-			plainName(w, exportName);
-			w.write(0x00).writeUnsignedLeb128(coreFuncIndex); // core sort func, index
+			w.writeUnsignedLeb128(exportNames.size());
+			for (int i = 0; i < exportNames.size(); i++) {
+				plainName(w, exportNames.get(i));
+				w.write(0x00).writeUnsignedLeb128(coreFuncIndices.get(i)); // core sort
+																			// func, index
+			}
 		});
 	}
 

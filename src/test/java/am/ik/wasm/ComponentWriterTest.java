@@ -84,6 +84,30 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void canonLowerWithMemoryAndReallocOptions() {
+		// Lower component func 1 with memory 0 and realloc core func 0 (as used by the
+		// stdout write path). Bytes taken from a validated component.
+		assertThat(hex(ComponentWriter.canonLower(1, 0, 0))).isEqualTo("0100010203000400");
+	}
+
+	@Test
+	void canonResourceDropEncoding() {
+		assertThat(hex(ComponentWriter.canonResourceDrop(3))).isEqualTo("0303");
+	}
+
+	@Test
+	void aliasCoreMemoryEncoding() {
+		assertThat(hex(ComponentWriter.aliasCoreMemory(0, "memory"))).isEqualTo("00020100066d656d6f7279");
+	}
+
+	@Test
+	void coreInstanceFromMultipleFuncs() {
+		// {"a" = core func 2, "b" = core func 3}
+		assertThat(hex(ComponentWriter.coreInstanceFromFuncs(List.of("a", "b"), List.of(2, 3))))
+			.isEqualTo("0102" + "01610002" + "01620003");
+	}
+
+	@Test
 	void importsWasiInstanceLowersAndWiresCoreInstance() {
 		final byte[] core = coreModuleUsesRand();
 		final ComponentWriter c = new ComponentWriter();
