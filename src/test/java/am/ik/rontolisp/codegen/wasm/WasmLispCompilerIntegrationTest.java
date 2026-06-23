@@ -47,6 +47,32 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	private static String compileAndRunComponent(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentPrintsInteger() throws Exception {
+		assertThat(compileAndRunComponent("(print (+ 1 2))")).isEqualTo("3");
+	}
+
+	@Test
+	void componentPrintsString() throws Exception {
+		assertThat(compileAndRunComponent("(print \"hello\")")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void componentRunsDefunAndMultiplePrints() throws Exception {
+		assertThat(compileAndRunComponent("(defun sq (x) (* x x)) (print (sq 7)) (print (list 1 2 3))"))
+			.isEqualTo("49\n(1 2 3)");
+	}
+
 	@Test
 	void addition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");

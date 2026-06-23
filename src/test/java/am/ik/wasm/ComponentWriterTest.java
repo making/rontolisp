@@ -108,6 +108,17 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void commandRunExportEncoders() {
+		// result<_,_> defined type, func ()->result, instance from func, instance export
+		assertThat(hex(ComponentWriter.definedResultVoid())).isEqualTo("6a0000");
+		assertThat(hex(ComponentWriter.funcTypeResultType(5))).isEqualTo("40000005");
+		assertThat(hex(ComponentWriter.componentInstanceFromFunc("run", 2))).isEqualTo("0101000372756e0102");
+		// "wasi:cli/run@0.2.0" = 18 bytes (0x12)
+		assertThat(hex(ComponentWriter.exportInstance("wasi:cli/run@0.2.0", 3)))
+			.isEqualTo("0012" + "776173693a636c692f72756e40302e322e30" + "050300");
+	}
+
+	@Test
 	void importsWasiInstanceLowersAndWiresCoreInstance() {
 		final byte[] core = coreModuleUsesRand();
 		final ComponentWriter c = new ComponentWriter();

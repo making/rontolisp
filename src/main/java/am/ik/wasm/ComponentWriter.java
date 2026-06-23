@@ -99,6 +99,17 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Write raw, already-encoded bytes verbatim (e.g. a block of pre-built component
+	 * sections).
+	 * @param bytes the bytes to append
+	 * @return this instance for chaining
+	 */
+	public ComponentWriter writeRaw(byte[] bytes) {
+		this.writer.write((Object) bytes);
+		return this;
+	}
+
+	/**
 	 * Return the assembled component binary.
 	 * @return the component bytes
 	 */
@@ -358,6 +369,56 @@ public final class ComponentWriter {
 		return enc(w -> {
 			declName(w, exportName);
 			w.write(0x01).writeUnsignedLeb128(funcIndex); // sortidx: func
+			w.write(0x00); // no type ascription
+		});
+	}
+
+	/**
+	 * Encode the empty result type {@code result<_, _>} (no ok payload, no err payload).
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedResultVoid() {
+		return enc(w -> w.write(0x6a).write(0x00).write(0x00));
+	}
+
+	/**
+	 * Encode a component function type with no parameters whose single result is a
+	 * defined type referenced by index (e.g. {@code result<_, _>}).
+	 * @param resultTypeIndex the component type index of the result type
+	 * @return the encoded function type
+	 */
+	public static byte[] funcTypeResultType(int resultTypeIndex) {
+		// 0x40 functype, empty params, result-list 0x00 then the type index as a positive
+		// value type (signed LEB128 of the index)
+		return enc(w -> w.write(0x40).writeUnsignedLeb128(0).write(0x00).writeSignedLeb128(resultTypeIndex));
+	}
+
+	/**
+	 * Encode a component instance synthesized from a single function export.
+	 * @param exportName the function export name
+	 * @param funcIndex the component function index being exported
+	 * @return the encoded component instance entry
+	 */
+	public static byte[] componentInstanceFromFunc(String exportName, int funcIndex) {
+		return enc(w -> {
+			w.write(0x01); // from-exports
+			w.writeUnsignedLeb128(1); // one export
+			declName(w, exportName);
+			w.write(0x01).writeUnsignedLeb128(funcIndex); // sortidx: func
+		});
+	}
+
+	/**
+	 * Encode a component export of an instance (e.g. the {@code wasi:cli/run@0.2.0}
+	 * interface).
+	 * @param exportName the export name
+	 * @param instanceIndex the component instance index
+	 * @return the encoded export entry
+	 */
+	public static byte[] exportInstance(String exportName, int instanceIndex) {
+		return enc(w -> {
+			declName(w, exportName);
+			w.write(0x05).writeUnsignedLeb128(instanceIndex); // sortidx: instance
 			w.write(0x00); // no type ascription
 		});
 	}

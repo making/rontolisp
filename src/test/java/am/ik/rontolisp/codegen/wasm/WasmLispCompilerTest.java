@@ -15,6 +15,50 @@ class WasmLispCompilerTest {
 		return new WasmLispCompiler().compile(program);
 	}
 
+	private byte[] compileComponent(String lispCode) {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		return new WasmLispCompiler(false, true).compile(program);
+	}
+
+	@Test
+	void componentModeEmitsComponentPreamble() {
+		// Component preamble: magic "\0asm" then version 0x000d, layer 0x0001.
+		byte[] component = compileComponent("(print (+ 1 2))");
+		assertThat(component[0]).isEqualTo((byte) 0x00);
+		assertThat(component[1]).isEqualTo((byte) 'a');
+		assertThat(component[2]).isEqualTo((byte) 's');
+		assertThat(component[3]).isEqualTo((byte) 'm');
+		assertThat(component[4]).isEqualTo((byte) 0x0d);
+		assertThat(component[5]).isEqualTo((byte) 0x00);
+		assertThat(component[6]).isEqualTo((byte) 0x01);
+		assertThat(component[7]).isEqualTo((byte) 0x00);
+	}
+
+	@Test
+	void componentModeWrapsAndExceedsCoreModule() {
+		// The component embeds the core module plus the memory/adapter modules and
+		// wiring,
+		// so it is strictly larger than the Preview 1 core module for the same program.
+		assertThat(compileComponent("(print (+ 1 2))").length).isGreaterThan(compile("(print (+ 1 2))").length);
+	}
+
+	@Test
+	void componentModeDeclaresWasiCliRunExport() {
+		// The assembled component must export the wasi:cli/run interface so `wasmtime
+		// run`
+		// can drive it.
+		byte[] component = compileComponent("(print 1)");
+		assertThat(new String(component, java.nio.charset.StandardCharsets.ISO_8859_1)).contains("wasi:cli/run@0.2.0");
+	}
+
+	@Test
+	void defaultModeStillEmitsCoreModuleVersion1() {
+		// Regression: the default Preview 1 path keeps the core-module preamble.
+		byte[] core = compile("(print (+ 1 2))");
+		assertThat(core[4]).isEqualTo((byte) 0x01);
+		assertThat(core[5]).isEqualTo((byte) 0x00);
+	}
+
 	@Test
 	void wasmMagicNumber() {
 		byte[] wasm = compile("(print 1)");

@@ -134,6 +134,27 @@ The generated `.wasm` binary uses:
 
 Requires a wasm-GC capable runtime such as wasmtime 14+.
 
+### Compile to a WASI 0.2 component
+
+Add `--component` to emit a WASI 0.2 (Preview 2) **component** instead of a Preview 1 core module. The component prints through `wasi:cli/stdout` and is run with `wasmtime run`:
+
+```bash
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp --component -o hello.wasm
+wasmtime run -W gc=y hello.wasm
+```
+
+```
+3
+```
+
+The default output (without `--component`) stays a Preview 1 core module, so nothing changes for existing usage.
+
+Notes and current limitations of component mode:
+
+- Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc=y`).
+- Only `print` / stdout output is supported. Reading (`read`, `read-line`) and file I/O (`open`, `close`, `load`, `with-open-file`) are not yet available in component mode.
+- The compiled Lisp behaves identically to the Preview 1 output for the supported features.
+
 ### Self-Hosted REPL
 
 Because `read`, `eval` and `print` are available in every backend, a REPL can be written in RontoLisp itself and compiled to a standalone `.class` or `.wasm`:

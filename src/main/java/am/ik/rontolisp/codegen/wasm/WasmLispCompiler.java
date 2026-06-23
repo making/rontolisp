@@ -41,6 +41,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean dynamic;
 
+	private final boolean component;
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -55,7 +57,22 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * to be emitted.
 	 */
 	public WasmLispCompiler(boolean dynamic) {
+		this(dynamic, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component when {@code true}, the output is a WASI 0.2 (Preview 2)
+	 * <strong>component</strong> instead of a Preview 1 core module: the core module
+	 * imports its linear memory and exports a {@code run} entry, and is wrapped by
+	 * {@link WasmComponentBuilder} so it prints through {@code wasi:cli/stdout} and runs
+	 * with {@code wasmtime run}. Reading and file I/O are not yet available in component
+	 * mode.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component) {
 		this.dynamic = dynamic;
+		this.component = component;
 	}
 
 	// Function indices (imports come first)
@@ -450,6 +467,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmExprCompiler.compileExpr(expr, ctx);
 			startWriter.write(Instruction.DROP);
 		}
+		if (this.component) {
+			// _start returns i32 (0 = ok) so it can be lifted as wasi:cli/run `run`
+			startWriter.write(Instruction.I32_CONST);
+			startWriter.writeSignedLeb128(0);
+		}
 		startWriter.write(Instruction.END);
 
 		ByteArrayOutputStream finalStartBody = new ByteArrayOutputStream();
@@ -673,8 +695,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			.writeTypeSection(types -> {
 				// type 0: fd_write
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
-				// type 1: _start
-				types.addFunc(new Type[] {}, new Type[] {});
+				// type 1: _start -- in component mode it returns i32 (0 = ok) so it can
+				// be
+				// lifted as the wasi:cli/run `run` entry
+				types.addFunc(new Type[] {}, this.component ? new Type[] { Type.I32 } : new Type[] {});
 				// type 2: print_i32 / _print_i32_no_nl
 				types.addFunc(new Type[] { Type.I32 }, new Type[] {});
 				// types 3-7: struct types in rec group
@@ -814,11 +838,23 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 			})
 			// Import section
-			.writeImportSection(imports -> imports
-				.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
-				.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
-				.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
-				.addImport("wasi_snapshot_preview1", "fd_close", ExternalKind.FUNCTION, TYPE_LOOKUP))
+			.writeImportSection(imports -> {
+				imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
+					.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
+					.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
+					.addImport("wasi_snapshot_preview1", "fd_close", ExternalKind.FUNCTION, TYPE_LOOKUP);
+				if (this.component) {
+					// Import the linear memory from the shared canonical-memory module so
+					// the
+					// lowered WASI imports and this module share one memory.
+					imports.add(w -> {
+						w.write("mem".length(), "mem", "memory".length(), "memory");
+						w.write(ExternalKind.MEMORY);
+						w.write(0x00); // limits: min only
+						w.writeUnsignedLeb128(1); // min 1 page
+					});
+				}
+			})
 			// Function section
 			.writeFunction(fnDef -> {
 				fnDef.addFunction(TYPE_START) // _start
@@ -886,8 +922,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + lambda.paramNames.size());
 				}
 			})
-			// Memory section
-			.writeMemory(memories -> memories.addMemory(1))
+			// Memory section -- in component mode the memory is imported (above), so this
+			// section is empty
+			.writeMemory(memories -> {
+				if (!this.component) {
+					memories.addMemory(1);
+				}
+			})
 			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
 			// the Lisp-2 function namespace (GLOBAL_FENV), both (mut (ref null eq)) =
 			// null
@@ -913,9 +954,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				g.writeSignedLeb128(RANDOM_SEED_INIT);
 				g.write(Instruction.END);
 			}))
-			// Export section
-			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0)
-				.addExport("_start", ExternalKind.FUNCTION, FUNC_START))
+			// Export section -- component mode exports `run` (the i32-returning _start)
+			// for
+			// the lifted wasi:cli/run entry; the memory is imported, not exported
+			.writeExport(exports -> {
+				if (this.component) {
+					exports.addExport("run", ExternalKind.FUNCTION, FUNC_START);
+				}
+				else {
+					exports.addExport("memory", ExternalKind.MEMORY, 0)
+						.addExport("_start", ExternalKind.FUNCTION, FUNC_START);
+				}
+			})
 			// Code section
 			.writeCode(code -> {
 				code.addFunction(finalStartBody.toByteArray())
@@ -984,7 +1034,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					data.addActiveData(0, DATA_BASE_OFFSET, stringData);
 				}
 			});
-		return out.toByteArray();
+		byte[] coreModule = out.toByteArray();
+		return this.component ? WasmComponentBuilder.build(coreModule) : coreModule;
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args) {
