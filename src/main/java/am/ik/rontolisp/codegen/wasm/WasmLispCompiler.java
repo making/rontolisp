@@ -210,7 +210,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Structural equality (equal): recursively compares cons cells; always present.
 	static final int FUNC_EQUAL = FUNC_WRITE_LINE + 1;
 
-	static final int FUNC_DISPATCH_BASE = FUNC_EQUAL + 1;
+	// getenv: scans the WASI environ buffer for a variable; always present.
+	static final int FUNC_GETENV = FUNC_EQUAL + 1;
+
+	static final int FUNC_DISPATCH_BASE = FUNC_GETENV + 1;
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
@@ -342,6 +345,18 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// Scratch (8 bytes) where clock_time_get writes the current time in nanoseconds.
 	static final int TIME_SCRATCH_ADDR = 128;
+
+	// getenv scratch: environ count / buffer-size words (low free region), and the
+	// pointer
+	// array + "KEY=VALUE\0" buffer placed in page 3 (the canonical realloc heap is page
+	// 2).
+	static final int ENV_COUNT_ADDR = 136;
+
+	static final int ENV_BUFSIZE_ADDR = 140;
+
+	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
+
+	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
 
 	static final int RT_INTERN_BASE = 8192;
 
@@ -896,7 +911,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write("mem".length(), "mem", "memory".length(), "memory");
 						w.write(ExternalKind.MEMORY);
 						w.write(0x00); // limits: min only
-						w.writeUnsignedLeb128(1); // min 1 page
+						w.writeUnsignedLeb128(4); // min 4 pages
 					});
 				}
 			})
@@ -954,6 +969,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Structural equality runtime
 				fnDef.addFunction(TYPE_RAT_CMP); // _equal ((ref null eq), (ref null eq))
 													// -> i32
+				// getenv runtime
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _getenv ((ref null eq)) ->
+															// (ref null eq)
 				// Dispatch functions (arities 0-7)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -968,10 +986,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			})
 			// Memory section -- in component mode the memory is imported (above), so this
-			// section is empty
+			// section is empty. 4 pages so getenv can place the environ buffer in page 3
+			// (the canonical realloc heap is page 1+ in component mode).
 			.writeMemory(memories -> {
 				if (!this.component) {
-					memories.addMemory(1);
+					memories.addMemory(4);
 				}
 			})
 			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
@@ -1058,7 +1077,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmIoRuntimeBuilder.buildOpenBody())
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable))
-					.addFunction(WasmRuntimeBuilder.buildEqualBody());
+					.addFunction(WasmRuntimeBuilder.buildEqualBody())
+					.addFunction(WasmGetenvRuntimeBuilder.build());
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);

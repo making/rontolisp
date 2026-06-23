@@ -73,6 +73,25 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("49\n(1 2 3)");
 	}
 
+	private static String compileAndRunComponentWithEnv(String lispCode, String env) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--env", env,
+				"/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentGetenvFromWasiEnvironment() throws Exception {
+		// Component mode reads environment variables through wasi:cli/environment.
+		assertThat(compileAndRunComponentWithEnv("(print (getenv \"RLENV\"))", "RLENV=hello")).isEqualTo("\"hello\"");
+		assertThat(compileAndRunComponentWithEnv("(print (stringp (getenv \"RLENV\")))", "RLENV=hello")).isEqualTo("t");
+		assertThat(compileAndRunComponentWithEnv("(print (getenv \"RL_UNSET\"))", "RLENV=hello")).isEqualTo("nil");
+	}
+
 	@Test
 	void componentTimeFromWasiClocks() throws Exception {
 		// Component mode reads time from wasi:clocks; WASM returns it as a float (i31

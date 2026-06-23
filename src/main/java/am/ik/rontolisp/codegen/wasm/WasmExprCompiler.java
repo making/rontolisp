@@ -304,6 +304,7 @@ final class WasmExprCompiler {
 				case LispNames.RANDOM -> WasmRandomCompiler.compile(cons, ctx);
 				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
 					WasmTimeCompiler.compile(cons, ctx, sym.name());
+				case LispNames.GETENV -> WasmGetenvCompiler.compile(cons, ctx);
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.EXP -> WasmExpCompiler.compile(cons, ctx);
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);

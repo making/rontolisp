@@ -58,8 +58,9 @@ public final class WasmComponentBuilder {
 	 * {@code cabi_realloc}, shared by the canonical lowering and the main module.
 	 */
 	private static final byte[] MEM_MODULE = fromHex(
-			"0061736d0100000001090160047f7f7f7f017f0302010005030100010607017f014180080b071902066d656d6f727902000c636162"
-					+ "695f7265616c6c6f6300000a13011101017f23002104230020036a240020040b0014046e616d65020601000104017207050100026870");
+			"0061736d0100000001090160047f7f7f7f017f0302010005030100040608017f01418080040b071902066d656d6f727902000c636162695f"
+					+ "7265616c6c6f6300000a26012401017f2300200241016b6a200241016b417f7371240023002104230020036a240020040b0014046e616d65"
+					+ "020601000104017207050100026870");
 
 	/**
 	 * The preview1-to-0.2 adapter core module: it imports the shared memory and the
@@ -74,18 +75,26 @@ public final class WasmComponentBuilder {
 	 */
 	private static final byte[] ADAPTER_MODULE = fromHex(
 			"0061736d01000000013b096000017f60047f7f7f7f0060017f006000017e60047f7f7f7f017f60027f7f017f60037f7e7f017f60097f7f7f"
-					+ "7f7f7e7e7f7f017f60017f017f025e07036d656d066d656d6f727902000101770a6765742d7374646f757400000177057772697465000101"
-					+ "770464726f70000201770e6765742d72616e646f6d2d753634000301770877616c6c2d6e6f7700020177086d6f6e6f2d6e6f770003030908"
-					+ "0405060505040708076d080866645f777269746500060a72616e646f6d5f67657400070e636c6f636b5f74696d655f676574000811656e76"
-					+ "69726f6e5f73697a65735f67657400090b656e7669726f6e5f676574000a0766645f72656164000b09706174685f6f70656e000c0866645f"
-					+ "636c6f7365000d0ada01085801067f1000210402400340200520024f0d012001200541086c6a210920092802002106200941046a28020021"
-					+ "072004200620074180021001200820076a2108200541016a21050c000b0b200410022003200836020041000b2601017f0240034020022001"
-					+ "4f0d01200020026a1003370300200241086a21020c000b0b41000b3100200045044041800410042002418004290300428094ebdc037e4188"
-					+ "04280200ad7c37030005200210053703000b41000b1200200041003602002001410036020041000b040041000b040041080b040041080b04"
-					+ "0041000b00b301046e616d65013806000a6765745f7374646f757401057772697465020464726f70030872616e645f753634040877616c6c"
-					+ "5f6e6f7705086d6f6e6f5f6e6f77025903060a000266640103696f760203636e7403026e7704026f73050169060370747207036c656e0805"
-					+ "746f74616c0904626173650703000362756601036c656e02016908030005636c6b6964010470726563020672657370747203170206020004"
-					+ "646f6e6501016c07020004646f6e6501016c");
+					+ "7f7f7e7e7f7f017f60017f017f027208036d656d066d656d6f727902000401770a6765742d7374646f757400000177057772697465000101"
+					+ "770464726f70000201770e6765742d72616e646f6d2d753634000301770877616c6c2d6e6f7700020177086d6f6e6f2d6e6f77000301770f"
+					+ "6765742d656e7669726f6e6d656e7400020309080405060505040708076d080866645f777269746500070a72616e646f6d5f67657400080e"
+					+ "636c6f636b5f74696d655f676574000911656e7669726f6e5f73697a65735f676574000a0b656e7669726f6e5f676574000b0766645f7265"
+					+ "6164000c09706174685f6f70656e000d0866645f636c6f7365000e0a9004085801067f1000210402400340200520024f0d01200120054108"
+					+ "6c6a210920092802002106200941046a28020021072004200620074180021001200820076a2108200541016a21050c000b0b200410022003"
+					+ "200836020041000b2601017f02400340200220014f0d01200020026a1003370300200241086a21020c000b0b41000b310020004504404180"
+					+ "0410042002418004290300428094ebdc037e418804280200ad7c37030005200210053703000b41000b6201057f41d804100641d804280200"
+					+ "210241dc04280200210302400340200420034f0d012002200441106c6a21062005200641046a2802002006410c6a2802006a41026a6a2105"
+					+ "200441016a21040c000b0b200020033602002001200536020041000be901010a7f41d804100641d804280200210241dc0428020021032001"
+					+ "210502400340200420034f0d012002200441106c6a210620062802002107200641046a2802002108200641086a28020021092006410c6a28"
+					+ "0200210a2000200441046c6a20053602004100210b02400340200b20084f0d0120052007200b6a2d00003a0000200541016a2105200b4101"
+					+ "6a210b0c000b0b2005413d3a0000200541016a21054100210b02400340200b200a4f0d0120052009200b6a2d00003a0000200541016a2105"
+					+ "200b41016a210b0c000b0b200541003a0000200541016a2105200441016a21040c000b0b41000b040041080b040041080b040041000b00b6"
+					+ "02046e616d65014407000a6765745f7374646f757401057772697465020464726f70030872616e645f753634040877616c6c5f6e6f770508"
+					+ "6d6f6e6f5f6e6f77060a676574656e7669726f6e02b10105070a000266640103696f760203636e7403026e7704026f730501690603707472"
+					+ "07036c656e0805746f74616c0904626173650803000362756601036c656e02016909030005636c6b69640104707265630206726573707472"
+					+ "0a0700026370010262700204626173650305636f756e740401690502737a0601650b0c000270700104627566700204626173650305636f75"
+					+ "6e7404016905036f757406016507026b7008026b6c090276700a02766c0b016a03350407020004646f6e6501016c08020004646f6e650101"
+					+ "6c0a0200016401016c0b0600016401016c02026b6403016b04027664050176");
 
 	/**
 	 * The {@code wasi:clocks/wall-clock} instance type (its {@code now} returns a
@@ -101,6 +110,13 @@ public final class WasmComponentBuilder {
 	 */
 	private static final byte[] MONOTONIC_CLOCK_TYPE = fromHex(
 			"42040177040007696e7374616e7403000001400000010400036e6f770102");
+
+	/**
+	 * The {@code wasi:cli/environment} instance type (its {@code get-environment} returns
+	 * a {@code list<tuple<string, string>>}).
+	 */
+	private static final byte[] ENVIRONMENT_TYPE = fromHex(
+			"4204016f027373017000014000000104000f6765742d656e7669726f6e6d656e740102");
 
 	/**
 	 * Assemble a runnable WASI 0.2 component around the given rontolisp core module.
@@ -127,6 +143,10 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(List.of(MONOTONIC_CLOCK_TYPE)));
 		c.rawSection(ComponentWriter.SEC_IMPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.importInstance("wasi:clocks/monotonic-clock@0.2.0", 7))));
+		// Component type 8 + instance 6: wasi:cli/environment (get-environment).
+		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(List.of(ENVIRONMENT_TYPE)));
+		c.rawSection(ComponentWriter.SEC_IMPORT,
+				ComponentWriter.vec(List.of(ComponentWriter.importInstance("wasi:cli/environment@0.2.0", 8))));
 		// Core modules: 0 = shared memory, 1 = adapter, 2 = rontolisp.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE);
@@ -138,25 +158,30 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
 		// Alias imported WASI functions: component funcs 0 = get-stdout, 1 = write,
-		// 2 = get-random-u64, 3 = wall-clock.now, 4 = monotonic-clock.now.
+		// 2 = get-random-u64, 3 = wall-clock.now, 4 = monotonic-clock.now,
+		// 5 = get-environment.
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasInstanceFunc(2, "get-stdout"),
 						ComponentWriter.aliasInstanceFunc(1, "[method]output-stream.blocking-write-and-flush"),
 						ComponentWriter.aliasInstanceFunc(3, "get-random-u64"),
-						ComponentWriter.aliasInstanceFunc(4, "now"), ComponentWriter.aliasInstanceFunc(5, "now"))));
+						ComponentWriter.aliasInstanceFunc(4, "now"), ComponentWriter.aliasInstanceFunc(5, "now"),
+						ComponentWriter.aliasInstanceFunc(6, "get-environment"))));
 		// Lower them: core func 1 = get-stdout, 2 = write (memory/realloc), 3 =
 		// resource.drop output-stream, 4 = get-random-u64, 5 = wall-clock.now (memory,
 		// for
-		// the record return), 6 = monotonic-clock.now.
+		// the record return), 6 = monotonic-clock.now, 7 = get-environment
+		// (memory/realloc,
+		// for the list return).
 		c.rawSection(ComponentWriter.SEC_CANON,
 				ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), ComponentWriter.canonLower(1, 0, 0),
 						ComponentWriter.canonResourceDrop(3), ComponentWriter.canonLower(2),
-						ComponentWriter.canonLowerMemory(3, 0), ComponentWriter.canonLower(4))));
+						ComponentWriter.canonLowerMemory(3, 0), ComponentWriter.canonLower(4),
+						ComponentWriter.canonLower(5, 0, 0))));
 		// Group the lowered functions for the adapter's "w" import (core instance 1).
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-						List.of("get-stdout", "write", "drop", "get-random-u64", "wall-now", "mono-now"),
-						List.of(1, 2, 3, 4, 5, 6)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
+					List.of("get-stdout", "write", "drop", "get-random-u64", "wall-now", "mono-now", "get-environment"),
+					List.of(1, 2, 3, 4, 5, 6, 7)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -164,18 +189,18 @@ public final class WasmComponentBuilder {
 		// wasi_snapshot_preview1 = adapter instance 2.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2)))));
-		// Alias rontolisp's run (core func 7).
+		// Alias rontolisp's run (core func 8).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Types: 8 = result<_,_>, 9 = func () -> result<_,_>.
+		// Types: 9 = result<_,_>, 10 = func () -> result<_,_>.
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter
-			.vec(List.of(ComponentWriter.definedResultVoid(), ComponentWriter.funcTypeResultType(8))));
-		// Lift run into component func 5 with type 9.
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(7, 9))));
-		// Component instance 6 exporting run, exported as the wasi:cli/run interface.
+			.vec(List.of(ComponentWriter.definedResultVoid(), ComponentWriter.funcTypeResultType(9))));
+		// Lift run into component func 6 with type 10.
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(8, 10))));
+		// Component instance 7 exporting run, exported as the wasi:cli/run interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 5))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 6))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.2.0", 6))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.2.0", 7))));
 		return c.toByteArray();
 	}
 
