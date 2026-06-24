@@ -27,18 +27,24 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 /**
  * End-to-end test that runs the whole {@code ci-spec.yaml} program through the rontolisp
- * native binary in all three backend modes (interpreter, JVM, WASM) and compares the
- * output of each case.
+ * native binary in all four backend modes (interpreter, JVM, WASM Preview 1, and WASM as
+ * a WASI 0.2 component) and compares the output of each case.
  * <p>
  * The cases share global state, so they are concatenated into a single program and each
  * backend is compiled/run once. The output is sliced back per case using each case's
  * declared expected-line count, so a failure names the exact case (and its source) rather
  * than only a line number.
  * <p>
+ * The {@code WASM_COMPONENT} backend compiles with {@code --component} and runs the
+ * resulting WASI 0.2 component with {@code wasmtime run -W gc=y}. The
+ * {@code ci-spec.yaml} cases are deterministic and do no file I/O / random / time /
+ * getenv, so the component's output is identical to the Preview 1 WASM backend and is
+ * checked against the same {@code expected} lines.
+ * <p>
  * Runs only when {@code -Drontolisp.binary=<path>} points at a built native binary;
  * otherwise the whole factory is skipped (the regular {@code mvn test} job runs on the
- * JVM before the native binary exists). The WASM backend is additionally skipped when
- * {@code wasmtime} is not on the {@code PATH}.
+ * JVM before the native binary exists). The two WASM backends are additionally skipped
+ * when {@code wasmtime} is not on the {@code PATH}.
  */
 class CiSpecE2eTest {
 
@@ -46,7 +52,7 @@ class CiSpecE2eTest {
 
 	enum Backend {
 
-		INTERPRETER, JVM, WASM
+		INTERPRETER, JVM, WASM, WASM_COMPONENT
 
 	}
 
@@ -57,6 +63,11 @@ class CiSpecE2eTest {
 			String text = null;
 			if (this.expectedByBackend != null) {
 				text = this.expectedByBackend.get(backend.name().toLowerCase());
+				// A WASI 0.2 component mirrors the Preview 1 WASM backend's output, so
+				// reuse a "wasm" override when no component-specific one is declared.
+				if (text == null && backend == Backend.WASM_COMPONENT) {
+					text = this.expectedByBackend.get(Backend.WASM.name().toLowerCase());
+				}
 			}
 			if (text == null) {
 				text = this.expected;
@@ -89,7 +100,7 @@ class CiSpecE2eTest {
 	}
 
 	private static DynamicContainer backendNode(Backend backend, Path bin, Path program, Spec spec) {
-		if (backend == Backend.WASM && !onPath("wasmtime")) {
+		if ((backend == Backend.WASM || backend == Backend.WASM_COMPONENT) && !onPath("wasmtime")) {
 			return dynamicContainer(backend.name(),
 					Stream.of(dynamicTest("(skipped)", () -> abort("wasmtime not on PATH"))));
 		}
@@ -135,6 +146,10 @@ class CiSpecE2eTest {
 			case WASM -> {
 				exec(List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
 				yield exec(List.of("wasmtime", "--wasm", "gc", "test.wasm"));
+			}
+			case WASM_COMPONENT -> {
+				exec(List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
+				yield exec(List.of("wasmtime", "run", "-W", "gc=y", "test.component.wasm"));
 			}
 		};
 	}
