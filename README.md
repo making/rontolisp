@@ -120,7 +120,7 @@ The generated `.class` file targets Java 6 (class version 50) and depends only o
 
 ```bash
 java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o hello.wasm
-wasmtime --wasm gc hello.wasm
+wasmtime run -W gc hello.wasm
 ```
 
 ```
@@ -136,16 +136,18 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 ### Compile to a WASI 0.2 component
 
-Add `--component` to emit a WASI 0.2 (Preview 2) **component** instead of a Preview 1 core module. The component prints through `wasi:cli/stdout` and is run with `wasmtime run`:
+Add `--component` to emit a WASI 0.2 (Preview 2) **component** instead of a Preview 1 core module. The component prints through `wasi:cli/stdout`:
 
 ```bash
 java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y hello.wasm
+wasmtime run -W gc hello.wasm
 ```
 
 ```
 3
 ```
+
+The wasmtime invocation does **not** select the output kind. `wasmtime run` is wasmtime's default subcommand and auto-detects a core module vs a component, so the same `wasmtime run -W gc` command runs the Preview 1 `hello.wasm` from the previous section just as well. Only the `--component` compile flag decides whether a Preview 1 core module or a WASI 0.2 component is produced. (The practical difference shows up on a component-only runtime such as jco or Spin, which runs the component but not the Preview 1 core module.)
 
 The default output (without `--component`) stays a Preview 1 core module, so nothing changes for existing usage.
 
@@ -159,15 +161,13 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y --dir . fileio.wasm
+wasmtime run -W gc --dir . fileio.wasm
 # "hello"
 ```
 
-The default output (without `--component`) stays a Preview 1 core module, so nothing changes for existing usage.
-
 Notes and current limitations of component mode:
 
-- Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc=y`).
+- Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc`).
 - `print`/stdout, stdin (`read`, 0-argument `read-line`, over `wasi:cli/stdin`), and file I/O (`open`, `close`, `write-line`, stream `read-line`, `load`, `with-open-file`) all work. File access requires `--dir` (paths resolve against the first preopened directory).
 - `random` draws real entropy from the WASI 0.2 `wasi:random` interface (unlike the deterministic Preview 1 output), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks`, and `getenv` reads `wasi:cli/environment`.
 - The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
@@ -192,7 +192,7 @@ java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp               # int
 java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp -o repl.class
 java repl                                                                  # REPL on the JVM
 java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp -o repl.wasm
-wasmtime --wasm gc repl.wasm                                               # REPL on WASM
+wasmtime run -W gc repl.wasm                                               # REPL on WASM
 ```
 
 ```
@@ -555,7 +555,7 @@ optional divisor and no second remainder value). These remain on the to-do list.
 
 `read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
 
-`load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime --wasm gc --dir . prog.wasm`).
+`load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime run -W gc --dir . prog.wasm`).
 
 `with-open-file`/`open`/`close`/`write-line` and the stream-taking `read-line` work in all three backends. A stream value is an opaque handle (interpreter/JVM: an index into a stream table; WASM: the WASI file descriptor), so streams can be stored in variables and passed to functions, but they are only valid within the producing run. `open` supports the `:input` and `:output` directions only ( `:output` creates or truncates), and the direction must be a literal keyword so the compilers can pick the file mode statically. Like `load`, the WASM `open` resolves paths relative to the first preopened directory, so run with `--dir`.
 
