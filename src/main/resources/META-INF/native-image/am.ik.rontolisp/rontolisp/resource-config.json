@@ -1,0 +1,18 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.WasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.bin"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.WasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.wasm"
+      }
+    ]
+  }
+}

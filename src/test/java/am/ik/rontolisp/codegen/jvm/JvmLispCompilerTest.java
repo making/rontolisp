@@ -916,6 +916,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTimeFunctions() throws Exception {
+		// get-universal-time is seconds since 1900; well past 2020 (> 3.78e9).
+		assertThat(compileAndRun("(print (> (get-universal-time) 3786825600))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (integerp (get-internal-real-time)))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (integerp (get-internal-run-time)))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunGetenv() throws Exception {
+		// PATH is set in the test environment; an unset variable yields nil.
+		assertThat(compileAndRun("(print (stringp (getenv \"PATH\")))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\"))")).isEqualTo("nil");
+	}
+
+	@Test
 	void compileAndRunSignum() throws Exception {
 		assertThat(compileAndRun("(print (signum -5))")).isEqualTo("-1");
 		assertThat(compileAndRun("(print (signum 0))")).isEqualTo("0");
@@ -2367,12 +2382,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("158");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("162");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("158");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("162");
 	}
 
 	@Test

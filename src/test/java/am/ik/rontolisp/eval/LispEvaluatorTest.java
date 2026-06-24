@@ -867,6 +867,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTimeFunctions() {
+		// get-universal-time is seconds since 1900; well past 2020 (> 3.7e9).
+		LispVal ut = eval("(get-universal-time)");
+		assertThat(ut).isInstanceOf(LispInteger.class);
+		assertThat(((LispInteger) ut).value()).isGreaterThan(3_786_825_600L);
+		assertThat(eval("(integerp (get-internal-real-time))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(integerp (get-internal-run-time))")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalGetenv() {
+		// An unset variable returns nil; a set one returns its value as a string. PATH is
+		// present in every CI/dev environment.
+		assertThat(eval("(getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(stringp (getenv \"PATH\"))")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
 	void evalIsqrt() {
 		assertThat(eval("(isqrt 16)")).isEqualTo(new LispInteger(4));
 		assertThat(eval("(isqrt 17)")).isEqualTo(new LispInteger(4));
@@ -2263,9 +2281,9 @@ class LispEvaluatorTest {
 					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
 					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error")
-			.contains("random")
+			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.isSorted()
-			.hasSize(158);
+			.hasSize(162);
 	}
 
 	@Test

@@ -62,10 +62,29 @@ final class WasmRandomCompiler {
 		}
 	}
 
-	// Emits seed = (seed * mult + inc) & mask, stores it back into GLOBAL_SEED, and
-	// leaves
-	// the updated value on the stack as an i32.
+	// Leaves a non-negative random i32 in [0, 2^31) on the stack. In component mode this
+	// is
+	// drawn from wasi:random via the adapter's random_get (real entropy); otherwise it
+	// advances the deterministic LCG over GLOBAL_SEED.
 	private static void emitAdvanceSeed(WasmLispCompiler.Ctx ctx) {
+		if (ctx.component) {
+			// random_get(RANDOM_SCRATCH_ADDR, 8) fills 8 bytes; drop the errno.
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(8);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+			ctx.writer.write(Instruction.DROP);
+			// Load the low 32 bits and mask to [0, 2^31) to match the LCG output range.
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(LCG_MASK);
+			ctx.writer.write(Instruction.I32_AND);
+			return;
+		}
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_SEED);
 		ctx.writer.write(Instruction.I32_CONST);

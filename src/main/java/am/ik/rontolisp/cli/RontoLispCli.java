@@ -68,7 +68,7 @@ public final class RontoLispCli {
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
-			compileToFile(source, outputFile, options.contains("--dynamic"));
+			compileToFile(source, outputFile, options.contains("--dynamic"), options.contains("--component"));
 		}
 		else {
 			interpret(source);
@@ -142,11 +142,11 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void compileToFile(String source, String outputFile, boolean dynamic) {
+	private void compileToFile(String source, String outputFile, boolean dynamic, boolean component) {
 		List<LispVal> program = LispReader.readAllFromString(source);
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
-			bytes = new WasmLispCompiler(dynamic).compile(program);
+			bytes = new WasmLispCompiler(dynamic, component).compile(program);
 		}
 		else {
 			String className = outputFile.replace(".class", "");
@@ -172,6 +172,8 @@ public final class RontoLispCli {
 		this.out.println("  -v, --version      Show version");
 		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
 		this.out.println("                     Lets sources that define functions via load compile as-is");
+		this.out.println("  --component        Emit a WASI 0.2 component (run with: wasmtime run)");
+		this.out.println("                     WASM only; print works, reading/file I/O not yet supported");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 	}

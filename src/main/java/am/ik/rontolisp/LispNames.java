@@ -85,6 +85,18 @@ public final class LispNames {
 	/** The {@code random} built-in function. */
 	public static final String RANDOM = "random";
 
+	/** The {@code get-universal-time} built-in function. */
+	public static final String GET_UNIVERSAL_TIME = "get-universal-time";
+
+	/** The {@code get-internal-real-time} built-in function. */
+	public static final String GET_INTERNAL_REAL_TIME = "get-internal-real-time";
+
+	/** The {@code get-internal-run-time} built-in function. */
+	public static final String GET_INTERNAL_RUN_TIME = "get-internal-run-time";
+
+	/** The {@code getenv} built-in function. */
+	public static final String GETENV = "getenv";
+
 	/** The {@code sin} built-in function. */
 	public static final String SIN = "sin";
 

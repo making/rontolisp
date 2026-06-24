@@ -134,6 +134,44 @@ The generated `.wasm` binary uses:
 
 Requires a wasm-GC capable runtime such as wasmtime 14+.
 
+### Compile to a WASI 0.2 component
+
+Add `--component` to emit a WASI 0.2 (Preview 2) **component** instead of a Preview 1 core module. The component prints through `wasi:cli/stdout` and is run with `wasmtime run`:
+
+```bash
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp --component -o hello.wasm
+wasmtime run -W gc=y hello.wasm
+```
+
+```
+3
+```
+
+The default output (without `--component`) stays a Preview 1 core module, so nothing changes for existing usage.
+
+File I/O works in component mode too — it is implemented over `wasi:filesystem` + `wasi:io/streams`. As in Preview 1, file access needs `--dir`:
+
+```bash
+cat > fileio.lisp <<'EOF'
+(with-open-file (out "greeting.txt" :direction :output)
+  (write-line "hello" out))
+(with-open-file (in "greeting.txt")
+  (print (read-line in)))
+EOF
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fileio.lisp --component -o fileio.wasm
+wasmtime run -W gc=y --dir . fileio.wasm
+# "hello"
+```
+
+The default output (without `--component`) stays a Preview 1 core module, so nothing changes for existing usage.
+
+Notes and current limitations of component mode:
+
+- Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc=y`).
+- `print`/stdout, stdin (`read`, 0-argument `read-line`, over `wasi:cli/stdin`), and file I/O (`open`, `close`, `write-line`, stream `read-line`, `load`, `with-open-file`) all work. File access requires `--dir` (paths resolve against the first preopened directory).
+- `random` draws real entropy from the WASI 0.2 `wasi:random` interface (unlike the deterministic Preview 1 output), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks`, and `getenv` reads `wasi:cli/environment`.
+- The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
+
 ### Self-Hosted REPL
 
 Because `read`, `eval` and `print` are available in every backend, a REPL can be written in RontoLisp itself and compiled to a standalone `.class` or `.wasm`:
@@ -474,7 +512,11 @@ embedded `eval` runtime in compiled output (see
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951` (always a float) |
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
-| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`) |
+| `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). The interpreter and JVM draw from `Math.random`; WASM uses a deterministic LCG in Preview 1 mode and real `wasi:random` entropy in `--component` mode |
+| `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT. The interpreter and JVM return an integer; WASM reads `wasi:clocks` (real host clock in Preview 1, `wasi:clocks` in `--component` mode) and returns a **float**, because its 31-bit integers cannot hold the value (so use it in comparisons/differences rather than printing the raw value) |
+| `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on the interpreter/JVM, float on WASM) |
+| `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on the interpreter/JVM, float on WASM) |
+| `getenv` | `(getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. All three backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM only) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM only) |

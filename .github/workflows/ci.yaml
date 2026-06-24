@@ -53,9 +53,10 @@ jobs:
       run: |
         set -e
         ./target/rontolisp -v
-        # Run the ci-spec.yaml cases through the native binary in all three
-        # backend modes (interpreter / JVM / WASM). The driver reports the exact
-        # failing case by name, so there is no positional expected file to keep in sync.
+        # Run the ci-spec.yaml cases through the native binary in all four
+        # backend modes (interpreter / JVM / WASM Preview 1 / WASM as a WASI 0.2
+        # component). The driver reports the exact failing case by name, so there
+        # is no positional expected file to keep in sync.
         ./mvnw -V --no-transfer-progress \
           -Dtest=CiSpecE2eTest -DfailIfNoTests=false \
           -Drontolisp.binary="$PWD/target/rontolisp" \
