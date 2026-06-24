@@ -96,6 +96,30 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void aliasInstanceTypeEncoding() {
+		// Project the "output-stream" type export out of imported instance 1 (used to
+		// obtain
+		// the resource type for canon resource.drop). "output-stream" = 13 bytes (0x0d).
+		assertThat(hex(ComponentWriter.aliasInstanceType(1, "output-stream")))
+			.isEqualTo("0300010d" + "6f75747075742d73747265616d");
+	}
+
+	@Test
+	void canonLowerMemoryUtf8Encoding() {
+		// Lower component func 7 with memory 0 and UTF-8 string encoding (as used by
+		// descriptor.open-at). Bytes match wasm-tools' lowering.
+		assertThat(hex(ComponentWriter.canonLowerMemoryUtf8(7, 0))).isEqualTo("01000702030000");
+	}
+
+	@Test
+	void canonLowerMemoryReallocUtf8Encoding() {
+		// Lower component func 6 with memory 0, realloc core func 0, and UTF-8 (as used
+		// by
+		// get-environment / get-directories).
+		assertThat(hex(ComponentWriter.canonLowerMemoryReallocUtf8(6, 0, 0))).isEqualTo("010006030300040000");
+	}
+
+	@Test
 	void aliasCoreMemoryEncoding() {
 		assertThat(hex(ComponentWriter.aliasCoreMemory(0, "memory"))).isEqualTo("00020100066d656d6f7279");
 	}

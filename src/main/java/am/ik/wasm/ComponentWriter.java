@@ -222,6 +222,22 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode an alias that projects a type export out of an imported component instance
+	 * into the component type index space (used to obtain a resource type for
+	 * {@code canon resource.drop}).
+	 * @param instanceIndex the component instance index
+	 * @param exportName the type export name (e.g. {@code "output-stream"})
+	 * @return the encoded alias entry
+	 */
+	public static byte[] aliasInstanceType(int instanceIndex, String exportName) {
+		return enc(w -> {
+			w.write(0x03); // sort: type
+			w.write(0x00).writeUnsignedLeb128(instanceIndex); // target: instance export
+			plainName(w, exportName);
+		});
+	}
+
+	/**
 	 * Encode an alias that projects a function export out of a core instance into the
 	 * core function index space.
 	 * @param coreInstanceIndex the core instance index
@@ -299,6 +315,46 @@ public final class ComponentWriter {
 			.writeUnsignedLeb128(1) // one canonical option
 			.write(0x03)
 			.writeUnsignedLeb128(memoryIndex)); // memory
+	}
+
+	/**
+	 * Encode a {@code canon lower} with the canonical memory and UTF-8 string-encoding
+	 * options (required when the lowered function has a {@code string} parameter, e.g.
+	 * {@code descriptor.open-at}).
+	 * @param funcIndex the component function index to lower
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLowerMemoryUtf8(int funcIndex, int memoryIndex) {
+		return enc(w -> w.write(0x01)
+			.write(0x00)
+			.writeUnsignedLeb128(funcIndex)
+			.writeUnsignedLeb128(2) // two canonical options: memory, string-encoding
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex) // memory
+			.write(0x00)); // string-encoding utf8
+	}
+
+	/**
+	 * Encode a {@code canon lower} with the canonical memory, reallocation and UTF-8
+	 * string-encoding options (required when the lowered function returns lists of
+	 * strings, e.g. {@code get-environment} / {@code preopens.get-directories}).
+	 * @param funcIndex the component function index to lower
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLowerMemoryReallocUtf8(int funcIndex, int memoryIndex, int reallocFuncIndex) {
+		return enc(w -> w.write(0x01)
+			.write(0x00)
+			.writeUnsignedLeb128(funcIndex)
+			.writeUnsignedLeb128(3) // three canonical options: memory, realloc,
+									// string-encoding
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex) // memory
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex) // realloc
+			.write(0x00)); // string-encoding utf8
 	}
 
 	/**

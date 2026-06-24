@@ -1,6 +1,6 @@
 (module
   (type (;0;) (func (param i32 i32 i32 i32) (result i32)))
-  (memory (;0;) 4)
+  (memory (;0;) 6)
   (global $hp (;0;) (mut i32) i32.const 65536)
   (export "memory" (memory 0))
   (export "cabi_realloc" (func 0))

@@ -124,6 +124,91 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("\"in\"");
 	}
 
+	private static String compileAndRunComponentWithDir(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime run -W gc=y --dir . test.component.wasm");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentFileWriteThenRead() throws Exception {
+		// Component mode does file I/O over wasi:filesystem + wasi:io/streams (the
+		// adapter
+		// maps the preview1 path_open/fd_read/fd_write/fd_close onto WASI 0.2).
+		String code = """
+				(with-open-file (out "cfile.txt" :direction :output)
+				  (write-line "hello" out)
+				  (write-line "world" out))
+				(with-open-file (in "cfile.txt")
+				  (print (read-line in))
+				  (print (read-line in))
+				  (print (read-line in)))
+				""";
+		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("\"hello\"\n\"world\"\nnil");
+	}
+
+	@Test
+	void componentReadLinesInLoop() throws Exception {
+		String code = """
+				(with-open-file (out "cloop.txt" :direction :output)
+				  (write-line "a" out)
+				  (write-line "b" out)
+				  (write-line "c" out))
+				(with-open-file (in "cloop.txt")
+				  (setq line (read-line in))
+				  (while line
+				    (princ line)
+				    (setq line (read-line in))))
+				""";
+		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("abc");
+	}
+
+	@Test
+	void componentLoadFromFile() throws Exception {
+		// load reads and evaluates a file; the defined function is resolved via the eval
+		// runtime, so the program is compiled in --dynamic mode.
+		List<LispVal> program = LispReader.readAllFromString("(load \"clib.lisp\")\n(print (sq 9))");
+		byte[] componentBytes = new WasmLispCompiler(true, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(
+				Transferable.of("(defun sq (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				"/tmp/clib.lisp");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime run -W gc=y --dir . test.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("81");
+	}
+
+	private static String compileAndRunComponentWithStdin(String lispCode, String stdin) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				"/tmp/stdin.txt");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime run -W gc=y /tmp/test.component.wasm < /tmp/stdin.txt");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentReadLineFromStdin() throws Exception {
+		// Component mode reads stdin through wasi:cli/stdin + wasi:io/streams.
+		assertThat(compileAndRunComponentWithStdin("(print (read-line))", "hello-stdin\n"))
+			.isEqualTo("\"hello-stdin\"");
+	}
+
+	@Test
+	void componentReadExprFromStdin() throws Exception {
+		assertThat(compileAndRunComponentWithStdin("(print (+ 1 (read)))", "41\n")).isEqualTo("42");
+	}
+
 	@Test
 	void addition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
