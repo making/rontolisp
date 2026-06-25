@@ -12,8 +12,13 @@
 # instance/type indices and per-function canonical options) and re-run the tests. Appending
 # an interface LAST in uni.wit keeps existing indices stable.
 #
-# NOTE: the rontolisp:fetch HTTP variant has not yet been ported to WASI 0.3 / async
-# wasi:http; that is tracked separately. Only the base variant is regenerated here.
+# The rontolisp:fetch HTTP variant is also regenerated here (import-block-http.bin /
+# mem-http.wasm / adapter-http.wasm), from uni-http.wit (world uni-http) + core-http.wat.
+# It keeps the base I/O on WASI 0.3 but adds the WASI 0.2 wasi:http + wasi:io machinery
+# (async wasi:http@0.3 does not exist upstream yet; see ../../TODO.md). The 0.2 deps live
+# alongside the 0.3 ones in deps/ under version-suffixed directories (cli-0.2, clocks-0.2,
+# io-0.2, random-0.2, http). After regenerating, re-derive the WasmComponentBuilder.buildHttp
+# wiring constants from `wasm-tools dump`.
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=../main/resources/am/ik/rontolisp/codegen/wasm/component
@@ -45,17 +50,28 @@ PY
 }
 
 echo "== core modules =="
-wasm-tools parse mem.wat     -o "$OUT/mem.wasm"
-wasm-tools parse adapter.wat -o "$OUT/adapter.wasm"
+wasm-tools parse mem.wat          -o "$OUT/mem.wasm"
+wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
+wasm-tools parse mem-http.wat     -o "$OUT/mem-http.wasm"
+wasm-tools parse adapter-http.wat -o "$OUT/adapter-http.wasm"
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
+wasm-tools validate "$OUT/mem-http.wasm"
+wasm-tools validate "$OUT/adapter-http.wasm"
 
-echo "== unified import block =="
+echo "== unified import block (base) =="
 wasm-tools parse core.wat -o core.wasm
 wasm-tools component embed . core.wasm -o embedded.wasm --world uni
 wasm-tools component new embedded.wasm -o uni.wasm
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni.wasm
 slice_import_block uni.wasm "$OUT/import-block.bin"
 
-rm -f core.wasm embedded.wasm uni.wasm
+echo "== unified import block (http variant) =="
+wasm-tools parse core-http.wat -o core-http.wasm
+wasm-tools component embed . core-http.wasm -o embedded-http.wasm --world uni-http
+wasm-tools component new embedded-http.wasm -o uni-http.wasm
+wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-http.wasm
+slice_import_block uni-http.wasm "$OUT/import-block-http.bin"
+
+rm -f core.wasm embedded.wasm uni.wasm core-http.wasm embedded-http.wasm uni-http.wasm
 echo "== done =="

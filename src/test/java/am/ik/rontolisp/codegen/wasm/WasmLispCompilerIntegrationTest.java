@@ -2524,7 +2524,6 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	@org.junit.jupiter.api.Disabled("rontolisp:fetch not yet ported to WASI 0.3 (async wasi:http); component build throws")
 	void componentFetchUnreachableReturnsNil() throws Exception {
 		// A fetch component requires wasi:http (so it must be run with -S http=y) and
 		// must
@@ -2543,7 +2542,6 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	@org.junit.jupiter.api.Disabled("rontolisp:fetch not yet ported to WASI 0.3 (async wasi:http); component build throws")
 	void componentFetchRequiresHttpFlag() throws Exception {
 		// Without -S http=y the wasi:http imports are unsatisfied, so a fetch component
 		// fails to instantiate -- confirming non-fetch components (which do not import
@@ -2558,7 +2556,6 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	@org.junit.jupiter.api.Disabled("rontolisp:fetch not yet ported to WASI 0.3 (async wasi:http); component build throws")
 	@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "RONTOLISP_HTTP_E2E", matches = "1")
 	void componentFetchOverHttp(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
 		// Full success-path E2E against a local HTTP server, run with the host's wasmtime

@@ -41,7 +41,6 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	@org.junit.jupiter.api.Disabled("rontolisp:fetch not yet ported to WASI 0.3 (async wasi:http); component build throws")
 	void fetchWithSupportedMethodsAndBodyCompilesInComponentMode() {
 		// literal GET (any case), the other supported methods, a request :body, and a
 		// runtime-computed options value all compile

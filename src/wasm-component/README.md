@@ -121,9 +121,30 @@ wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-mo
 wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . prog.wasm
 ```
 
-## Not yet ported
+## HTTP variant (`rontolisp:fetch`) — hybrid
 
-The `rontolisp:fetch` HTTP variant has not been ported to WASI 0.3 / async
-`wasi:http@0.3.0`; `WasmComponentBuilder.build` throws for a fetch program, and the P2 http
-blob sources were removed. Porting it back means adding a `wasi:http@0.3.0` import-block
-variant and an adapter that drives the async outgoing-handler over `stream`/`future`.
+A `fetch` program compiles to a **hybrid** component: the base I/O stays WASI 0.3, but
+fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream
+yet — the wasi-http repo's `v0.3.0-rc` tags and `main` are still `wasi:http@0.2.x`, and
+wasmtime 46 hosts only `wasi:http@0.2`; see `../../TODO.md`). The parallel blob set is:
+
+```
+src/wasm-component/
+  uni-http.wit  core-http.wat  mem-http.wat  adapter-http.wat   (http sources)
+  deps/cli-0.2  deps/clocks-0.2  deps/io-0.2  deps/random-0.2  deps/http   (0.2 deps)
+
+src/main/resources/.../component/
+  import-block-http.bin  mem-http.wasm  adapter-http.wasm
+```
+
+`uni-http.wit` (world `uni-http`) is the base 0.3 surface plus the 0.2 http interfaces; the
+0.2 deps live alongside the 0.3 ones in `deps/` under version-suffixed directories.
+`regen.sh` regenerates both variants. `WasmComponentBuilder.buildHttp` wires the http
+variant (next free component type index 25; 31 lowered WASI funcs + 10 resource drops + the
+0.3 stream/future built-ins; `run` lifted async as in the base). `adapter-http.wat` is
+`adapter.wat` plus a `fetch` export driving the outgoing request over `wasi:http@0.2` /
+`pollable.block`. Run a fetch component with `-S http=y` in addition to the async flags.
+
+When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-http.wat`
+over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http.wit`, regenerate, and
+re-derive the `buildHttp` constants — the rontolisp core's `http.fetch` seam stays unchanged.

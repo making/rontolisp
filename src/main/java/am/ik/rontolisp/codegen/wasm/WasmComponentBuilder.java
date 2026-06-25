@@ -80,6 +80,31 @@ public final class WasmComponentBuilder {
 	 */
 	private static final byte[] ADAPTER_MODULE = resource("adapter.wasm");
 
+	/**
+	 * The HTTP variant of the import block: the base WASI 0.3 interfaces PLUS the WASI
+	 * 0.2 HTTP machinery for {@code rontolisp:fetch} ({@code wasi:io/poll},
+	 * {@code wasi:io/error}, {@code wasi:io/streams}, {@code wasi:http/types},
+	 * {@code wasi:http/outgoing-handler}). fetch stays on {@code wasi:http@0.2} because
+	 * an async {@code wasi:http@0.3} does not exist upstream yet (see {@code TODO.md}).
+	 * It declares component import instances 0-13 and component types 0-24, so the next
+	 * free component type index is 25. Source: {@code src/wasm-component/uni-http.wit} +
+	 * {@code core-http.wat}.
+	 */
+	private static final byte[] IMPORT_BLOCK_HTTP = resource("import-block-http.bin");
+
+	/**
+	 * The shared memory module for the HTTP variant (16 pages, for the fetch
+	 * response-header / body scratch). Source: {@code src/wasm-component/mem-http.wat}.
+	 */
+	private static final byte[] MEM_MODULE_HTTP = resource("mem-http.wasm");
+
+	/**
+	 * The HTTP variant of the adapter: like {@link #ADAPTER_MODULE} but with an extra
+	 * {@code fetch} export driving an outgoing request over {@code wasi:http@0.2} +
+	 * {@code wasi:io@0.2}. Source: {@code src/wasm-component/adapter-http.wat}.
+	 */
+	private static final byte[] ADAPTER_MODULE_HTTP = resource("adapter-http.wasm");
+
 	// Component import-instance indices (from import-block.bin; see IMPORT_BLOCK).
 	private static final int INST_CLI_TYPES = 0;
 
@@ -141,10 +166,15 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	public static byte[] build(byte[] coreModule, boolean usesHttp) {
-		if (usesHttp) {
-			throw new UnsupportedOperationException(
-					"rontolisp:fetch is not yet supported in WASI 0.3 (Preview 3) component mode");
-		}
+		return usesHttp ? buildHttp(coreModule) : buildBase(coreModule);
+	}
+
+	/**
+	 * Assemble the base WASI 0.3 component (no {@code rontolisp:fetch}).
+	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @return the WASI 0.3 component binary
+	 */
+	private static byte[] buildBase(byte[] coreModule) {
 		final ComponentWriter c = new ComponentWriter();
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
 		// 0-11.
@@ -253,6 +283,282 @@ public final class WasmComponentBuilder {
 				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 10))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 9))));
+		return c.toByteArray();
+	}
+
+	// HTTP-variant component import-instance indices (from import-block-http.bin). The
+	// base
+	// WASI 0.3 instances 0-8 keep the same order as buildBase; the WASI 0.2 HTTP
+	// instances
+	// are appended at 9-13.
+	private static final int H_INST_CLI_TYPES = 0;
+
+	private static final int H_INST_STDOUT = 1;
+
+	private static final int H_INST_STDIN = 2;
+
+	private static final int H_INST_ENVIRON = 3;
+
+	private static final int H_INST_SYS_CLOCK = 4;
+
+	private static final int H_INST_MONO_CLOCK = 5;
+
+	private static final int H_INST_FS_TYPES = 6;
+
+	private static final int H_INST_FS_PREOPENS = 7;
+
+	private static final int H_INST_RANDOM = 8;
+
+	private static final int H_INST_IO_POLL = 9;
+
+	// instance 10 = wasi:io/error (no functions aliased)
+	private static final int H_INST_IO_STREAMS = 11;
+
+	private static final int H_INST_HTTP_TYPES = 12;
+
+	private static final int H_INST_HTTP_HANDLER = 13;
+
+	// First free component type index after import-block-http.bin (types 0-24 used).
+	// Aliased resource/enum types (component types 25-36).
+	private static final int H_T_CLI_ERRCODE = 25;
+
+	private static final int H_T_FS_ERRCODE = 26;
+
+	private static final int H_T_DESCRIPTOR = 27;
+
+	private static final int H_T_OUTPUT_STREAM = 28;
+
+	private static final int H_T_INPUT_STREAM = 29;
+
+	private static final int H_T_POLLABLE = 30;
+
+	private static final int H_T_FIELDS = 31;
+
+	private static final int H_T_OUT_REQ = 32;
+
+	private static final int H_T_OUT_BODY = 33;
+
+	private static final int H_T_FUT_RESP = 34;
+
+	private static final int H_T_IN_RESP = 35;
+
+	private static final int H_T_IN_BODY = 36;
+
+	// Defined async value/function types (component types 37-43).
+	private static final int H_T_STREAM = 37;
+
+	private static final int H_T_CLI_RESULT = 38;
+
+	private static final int H_T_CLI_FUTURE = 39;
+
+	private static final int H_T_FS_RESULT = 40;
+
+	private static final int H_T_FS_FUTURE = 41;
+
+	private static final int H_T_RUN_RESULT = 42;
+
+	private static final int H_T_RUN_FUNC = 43;
+
+	/**
+	 * Assemble the HTTP-variant component for a {@code rontolisp:fetch} program. It is
+	 * the base WASI 0.3 component plus the WASI 0.2 HTTP / io machinery: the base I/O
+	 * still flows through the 0.3 {@code stream}/{@code future} built-ins, while fetch
+	 * drives an outgoing request over {@code wasi:http@0.2} + {@code wasi:io@0.2}
+	 * (synchronous {@code pollable.block}) in {@code adapter-http.wat}. async
+	 * {@code wasi:http@0.3} does not exist upstream yet; see {@code TODO.md}.
+	 *
+	 * <p>
+	 * All wiring constants (instance indices, the next-free type index 25, the 31 lowered
+	 * functions and their canonical options) were derived from {@code wasm-tools dump} of
+	 * a reference generated by {@code regen.sh} from {@code uni-http.wit} +
+	 * {@code core-http.wat}.
+	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @return the WASI 0.3 (+ 0.2 http) component binary
+	 */
+	private static byte[] buildHttp(byte[] coreModule) {
+		final ComponentWriter c = new ComponentWriter();
+		// Base WASI 0.3 + WASI 0.2 http import instances 0-13, component types 0-24.
+		c.writeRaw(IMPORT_BLOCK_HTTP);
+		// Core modules: 0 = shared 16-page memory, 1 = http adapter, 2 = rontolisp.
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE_HTTP);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE_HTTP);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
+		// Instantiate the shared memory module (core instance 0).
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
+		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
+			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
+		// Alias the resource/enum types to drop or reference (component types 25-36).
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
+				// 25 cli error-code, 26 fs error-code, 27 descriptor
+				ComponentWriter.aliasInstanceType(H_INST_CLI_TYPES, "error-code"),
+				ComponentWriter.aliasInstanceType(H_INST_FS_TYPES, "error-code"),
+				ComponentWriter.aliasInstanceType(H_INST_FS_TYPES, "descriptor"),
+				// 28 output-stream, 29 input-stream, 30 pollable
+				ComponentWriter.aliasInstanceType(H_INST_IO_STREAMS, "output-stream"),
+				ComponentWriter.aliasInstanceType(H_INST_IO_STREAMS, "input-stream"),
+				ComponentWriter.aliasInstanceType(H_INST_IO_POLL, "pollable"),
+				// 31-36 http resources
+				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "fields"),
+				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "outgoing-request"),
+				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "outgoing-body"),
+				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "future-incoming-response"),
+				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "incoming-response"),
+				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "incoming-body"))));
+		// Alias the WASI functions to lower (component funcs 0-30): 0-9 base WASI 0.3,
+		// 10-30 the WASI 0.2 http / io machinery.
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
+				// base 0-9 (same set/order as buildBase)
+				ComponentWriter.aliasInstanceFunc(H_INST_STDOUT, "write-via-stream"),
+				ComponentWriter.aliasInstanceFunc(H_INST_STDIN, "read-via-stream"),
+				ComponentWriter.aliasInstanceFunc(H_INST_ENVIRON, "get-environment"),
+				ComponentWriter.aliasInstanceFunc(H_INST_SYS_CLOCK, "now"),
+				ComponentWriter.aliasInstanceFunc(H_INST_MONO_CLOCK, "now"),
+				ComponentWriter.aliasInstanceFunc(H_INST_FS_TYPES, "[method]descriptor.read-via-stream"),
+				ComponentWriter.aliasInstanceFunc(H_INST_FS_TYPES, "[method]descriptor.append-via-stream"),
+				ComponentWriter.aliasInstanceFunc(H_INST_FS_TYPES, "[method]descriptor.open-at"),
+				ComponentWriter.aliasInstanceFunc(H_INST_FS_PREOPENS, "get-directories"),
+				ComponentWriter.aliasInstanceFunc(H_INST_RANDOM, "get-random-u64"),
+				// http 10-30
+				ComponentWriter.aliasInstanceFunc(H_INST_IO_POLL, "[method]pollable.block"),
+				ComponentWriter.aliasInstanceFunc(H_INST_IO_STREAMS, "[method]output-stream.blocking-write-and-flush"),
+				ComponentWriter.aliasInstanceFunc(H_INST_IO_STREAMS, "[method]input-stream.blocking-read"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[constructor]fields"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]fields.append"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]fields.entries"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[constructor]outgoing-request"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]outgoing-request.set-method"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]outgoing-request.set-scheme"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]outgoing-request.set-authority"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]outgoing-request.set-path-with-query"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]outgoing-request.body"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]outgoing-body.write"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[static]outgoing-body.finish"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]future-incoming-response.subscribe"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]future-incoming-response.get"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-response.status"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-response.headers"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-response.consume"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-body.stream"),
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_HANDLER, "handle"))));
+		// Define the async value/function types (component types 37-43).
+		c.rawSection(ComponentWriter.SEC_TYPE,
+				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 37
+						ComponentWriter.definedResultErr(H_T_CLI_ERRCODE), // 38
+						ComponentWriter.definedFuture(H_T_CLI_RESULT), // 39
+						ComponentWriter.definedResultErr(H_T_FS_ERRCODE), // 40
+						ComponentWriter.definedFuture(H_T_FS_RESULT), // 41
+						ComponentWriter.definedResultVoid(), // 42
+						ComponentWriter.asyncFuncTypeResultType(H_T_RUN_RESULT)))); // 43
+		// Lower the 31 WASI funcs (core funcs 1-31), drop the 10 resources (32-41), then
+		// the
+		// async built-ins: stream (42-46), futures (47-50). Canonical options match what
+		// wasm-tools chose for each function (memory 0, realloc = core func 0). core func
+		// 0
+		// = cabi_realloc.
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(
+				// base lowered 1-10 (same options as buildBase)
+				ComponentWriter.canonLower(0), // 1 write-via-stream
+				ComponentWriter.canonLowerMemory(1, 0), // 2 stdin read-via-stream
+				ComponentWriter.canonLowerMemoryReallocUtf8(2, 0, 0), // 3 get-environment
+				ComponentWriter.canonLowerMemory(3, 0), // 4 system-clock.now
+				ComponentWriter.canonLower(4), // 5 monotonic.now
+				ComponentWriter.canonLowerMemory(5, 0), // 6 descriptor.read-via-stream
+				ComponentWriter.canonLower(6), // 7 descriptor.append-via-stream
+				ComponentWriter.canonLowerMemoryReallocUtf8(7, 0, 0), // 8 open-at
+				ComponentWriter.canonLowerMemoryReallocUtf8(8, 0, 0), // 9 get-directories
+				ComponentWriter.canonLower(9), // 10 get-random-u64
+				// http lowered 11-31
+				ComponentWriter.canonLower(10), // 11 pollable.block
+				ComponentWriter.canonLowerMemory(11, 0), // 12
+															// output-stream.blocking-write-and-flush
+				ComponentWriter.canonLower(12, 0, 0), // 13 input-stream.blocking-read
+														// (mem+realloc)
+				ComponentWriter.canonLower(13), // 14 fields constructor
+				ComponentWriter.canonLowerMemoryUtf8(14, 0), // 15 fields.append
+				ComponentWriter.canonLowerMemoryReallocUtf8(15, 0, 0), // 16
+																		// fields.entries
+				ComponentWriter.canonLower(16), // 17 outgoing-request constructor
+				ComponentWriter.canonLowerMemoryUtf8(17, 0), // 18 set-method
+				ComponentWriter.canonLowerMemoryUtf8(18, 0), // 19 set-scheme
+				ComponentWriter.canonLowerMemoryUtf8(19, 0), // 20 set-authority
+				ComponentWriter.canonLowerMemoryUtf8(20, 0), // 21 set-path-with-query
+				ComponentWriter.canonLowerMemory(21, 0), // 22 outgoing-request.body
+				ComponentWriter.canonLowerMemory(22, 0), // 23 outgoing-body.write
+				ComponentWriter.canonLowerMemoryReallocUtf8(23, 0, 0), // 24
+																		// outgoing-body.finish
+				ComponentWriter.canonLower(24), // 25 future.subscribe
+				ComponentWriter.canonLowerMemoryReallocUtf8(25, 0, 0), // 26 future.get
+				ComponentWriter.canonLower(26), // 27 incoming-response.status
+				ComponentWriter.canonLower(27), // 28 incoming-response.headers
+				ComponentWriter.canonLowerMemory(28, 0), // 29 incoming-response.consume
+				ComponentWriter.canonLowerMemory(29, 0), // 30 incoming-body.stream
+				ComponentWriter.canonLowerMemoryReallocUtf8(30, 0, 0), // 31 handle
+				// resource drops 32-41
+				ComponentWriter.canonResourceDrop(H_T_DESCRIPTOR), // 32
+				ComponentWriter.canonResourceDrop(H_T_OUTPUT_STREAM), // 33
+				ComponentWriter.canonResourceDrop(H_T_INPUT_STREAM), // 34
+				ComponentWriter.canonResourceDrop(H_T_POLLABLE), // 35
+				ComponentWriter.canonResourceDrop(H_T_FIELDS), // 36
+				ComponentWriter.canonResourceDrop(H_T_OUT_REQ), // 37
+				ComponentWriter.canonResourceDrop(H_T_OUT_BODY), // 38
+				ComponentWriter.canonResourceDrop(H_T_FUT_RESP), // 39
+				ComponentWriter.canonResourceDrop(H_T_IN_RESP), // 40
+				ComponentWriter.canonResourceDrop(H_T_IN_BODY), // 41
+				// stream built-ins 42-46
+				ComponentWriter.canonStreamNew(H_T_STREAM), // 42
+				ComponentWriter.canonStreamRead(H_T_STREAM, 0), // 43
+				ComponentWriter.canonStreamWrite(H_T_STREAM, 0), // 44
+				ComponentWriter.canonStreamDropReadable(H_T_STREAM), // 45
+				ComponentWriter.canonStreamDropWritable(H_T_STREAM), // 46
+				// future built-ins 47-50
+				ComponentWriter.canonFutureRead(H_T_CLI_FUTURE, 0), // 47 future-read-cli
+				ComponentWriter.canonFutureDropReadable(H_T_CLI_FUTURE), // 48
+																			// future-drop-cli
+				ComponentWriter.canonFutureRead(H_T_FS_FUTURE, 0, 0), // 49 future-read-fs
+																		// (mem+realloc)
+				ComponentWriter.canonFutureDropReadable(H_T_FS_FUTURE)))); // 50
+																			// future-drop-fs
+		// Group the 50 lowered/built-in core funcs (1-50) for the adapter's "w" import
+		// (core
+		// instance 1). Names match adapter-http.wat's imports.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(List.of("stdout-write", "stdin-read",
+						"get-environment", "sys-now", "mono-now", "file-read", "file-append", "open-at",
+						"get-directories", "get-random-u64", "poll-block", "io-write", "io-read", "fields-new",
+						"fields-append", "fields-entries", "req-new", "set-method", "set-scheme", "set-authority",
+						"set-path", "req-body", "body-write", "body-finish", "future-subscribe", "future-get",
+						"resp-status", "resp-headers", "resp-consume", "body-stream", "handle", "drop-desc", "drop-out",
+						"drop-in", "drop-pollable", "drop-fields", "drop-req", "drop-outgoing-body", "drop-future",
+						"drop-resp", "drop-body", "stream-new", "stream-read", "stream-write", "stream-drop-r",
+						"stream-drop-w", "future-read-cli", "future-drop-cli", "future-read-fs", "future-drop-fs"),
+						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+								25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+								47, 48, 49, 50)))));
+		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
+		// Instantiate rontolisp (core instance 3): mem = instance 0, and both
+		// wasi_snapshot_preview1 AND http satisfied by the adapter instance 2 (which
+		// exports
+		// the eight preview1 functions plus fetch).
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
+			.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1", "http"), List.of(0, 2, 2)))));
+		// Alias rontolisp's run (core func 51 = cabi_realloc + 50 lowered/built-in
+		// funcs).
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
+		// Lift run (core func 51) into component func 31 with the async function type 43.
+		// Component func 31 follows the 31 aliased WASI funcs (0-30).
+		c.rawSection(ComponentWriter.SEC_CANON,
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(51, H_T_RUN_FUNC))));
+		// Component instance 14 (after import instances 0-13) exporting run, exported as
+		// the
+		// wasi:cli/run@0.3.0 interface.
+		c.rawSection(ComponentWriter.SEC_INSTANCE,
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 31))));
+		c.rawSection(ComponentWriter.SEC_EXPORT,
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 14))));
 		return c.toByteArray();
 	}
 
