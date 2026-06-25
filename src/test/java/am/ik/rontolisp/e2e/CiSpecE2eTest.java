@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 /**
  * End-to-end test that runs the whole {@code ci-spec.yaml} program through the rontolisp
  * native binary in all four backend modes (interpreter, JVM, WASM Preview 1, and WASM as
- * a WASI 0.2 component) and compares the output of each case.
+ * a WASI 0.3 component) and compares the output of each case.
  * <p>
  * The cases share global state, so they are concatenated into a single program and each
  * backend is compiled/run once. The output is sliced back per case using each case's
@@ -36,8 +36,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * than only a line number.
  * <p>
  * The {@code WASM_COMPONENT} backend compiles with {@code --component} and runs the
- * resulting WASI 0.2 component with {@code wasmtime run -W gc=y}. The
- * {@code ci-spec.yaml} cases are deterministic and do no file I/O / random / time /
+ * resulting WASI 0.3 (Preview 3) component with {@code wasmtime run -W gc=y} plus the
+ * component-model async features ({@code component-model-async},
+ * {@code component-model-async-stackful}, {@code component-model-more-async-builtins}).
+ * The {@code ci-spec.yaml} cases are deterministic and do no file I/O / random / time /
  * getenv, so the component's output is identical to the Preview 1 WASM backend and is
  * checked against the same {@code expected} lines.
  * <p>
@@ -63,7 +65,7 @@ class CiSpecE2eTest {
 			String text = null;
 			if (this.expectedByBackend != null) {
 				text = this.expectedByBackend.get(backend.name().toLowerCase());
-				// A WASI 0.2 component mirrors the Preview 1 WASM backend's output, so
+				// A WASI 0.3 component mirrors the Preview 1 WASM backend's output, so
 				// reuse a "wasm" override when no component-specific one is declared.
 				if (text == null && backend == Backend.WASM_COMPONENT) {
 					text = this.expectedByBackend.get(Backend.WASM.name().toLowerCase());
@@ -149,7 +151,9 @@ class CiSpecE2eTest {
 			}
 			case WASM_COMPONENT -> {
 				exec(List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
-				yield exec(List.of("wasmtime", "run", "-W", "gc=y", "test.component.wasm"));
+				yield exec(List.of("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y", "-W",
+						"component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
+						"test.component.wasm"));
 			}
 		};
 	}

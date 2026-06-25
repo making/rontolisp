@@ -59,6 +59,11 @@ public final class ComponentWriter {
 	/** Primitive value type code for {@code bool}. */
 	public static final int VT_BOOL = 0x7f;
 
+	/**
+	 * Primitive value type code for {@code u8} (the element type of {@code stream<u8>}).
+	 */
+	public static final int VT_U8 = 0x7d;
+
 	/** Primitive value type code for {@code s32}. */
 	public static final int VT_S32 = 0x7a;
 
@@ -495,6 +500,212 @@ public final class ComponentWriter {
 			w.write(0x05).writeUnsignedLeb128(instanceIndex); // sortidx: instance
 			w.write(0x00); // no type ascription
 		});
+	}
+
+	// --- async canonical ABI (WASI 0.3 / Preview 3) ---------------------------------
+	//
+	// In WASI 0.3 the wasi:io package is gone and I/O is expressed with the built-in
+	// component-model types stream<u8> / future<T>, driven by the async canonical
+	// built-ins below. All opcodes and option encodings here are golden values captured
+	// from `wasm-tools dump` of a component validated with
+	// `wasm-tools validate -f component-model -f cm-async -f cm-async-stackful
+	// -f cm-more-async-builtins` and executed with the matching `wasmtime run -W` flags;
+	// they are pinned by ComponentWriterTest. These primitives are intentionally general
+	// (not tied to the preview1 adapter) so they can be reused for future language-level
+	// async (future/stream as rontolisp values).
+
+	/**
+	 * Encode the defined value type {@code stream<elem>} (component type tag
+	 * {@code 0x66}).
+	 * @param elemValType the element primitive value type code (e.g. {@link #VT_U8})
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedStream(int elemValType) {
+		return enc(w -> w.write(0x66).write(0x01).writeSignedLeb128(elemValType - 0x80));
+	}
+
+	/**
+	 * Encode the defined value type {@code future<T>} where {@code T} is a defined type
+	 * referenced by index (component type tag {@code 0x65}).
+	 * @param payloadTypeIndex the component type index of the future payload type
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedFuture(int payloadTypeIndex) {
+		return enc(w -> w.write(0x65).write(0x01).writeUnsignedLeb128(payloadTypeIndex));
+	}
+
+	/**
+	 * Encode the defined value type {@code result<_, errType>} (no ok payload, an error
+	 * payload referenced by index), as used by the WASI 0.3 stream/future error channel.
+	 * @param errTypeIndex the component type index of the error type (e.g. an
+	 * {@code error-code} enum)
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedResultErr(int errTypeIndex) {
+		return enc(w -> w.write(0x6a).write(0x00).write(0x01).writeUnsignedLeb128(errTypeIndex));
+	}
+
+	/**
+	 * Encode an <strong>async</strong> component function type with no parameters whose
+	 * single result is a defined type referenced by index (component func type tag
+	 * {@code 0x43}). Lifting a core function with the ordinary {@link #canonLift} against
+	 * this type produces a stackful async export (no callback), so straight-line core
+	 * code can call blocking stream/future built-ins which suspend cooperatively.
+	 * @param resultTypeIndex the component type index of the result type (e.g.
+	 * {@code result<_, _>})
+	 * @return the encoded async function type
+	 */
+	public static byte[] asyncFuncTypeResultType(int resultTypeIndex) {
+		return enc(w -> w.write(0x43).writeUnsignedLeb128(0).write(0x00).writeSignedLeb128(resultTypeIndex));
+	}
+
+	// Canonical built-in option list carrying only the canonical memory (the shape every
+	// memory-bearing stream/future built-in uses): count 1, option tag 0x03, memory
+	// index.
+	private static void memoryOption(WasmWriter w, int memoryIndex) {
+		w.writeUnsignedLeb128(1).write(0x03).writeUnsignedLeb128(memoryIndex);
+	}
+
+	/**
+	 * Encode {@code canon stream.new} (opcode {@code 0x0e}) for the given stream type,
+	 * producing a core function {@code () -> i64} that returns a packed
+	 * {@code (readable << 0) | (writable << 32)} handle pair.
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamNew(int streamTypeIndex) {
+		return enc(w -> w.write(0x0e).writeUnsignedLeb128(streamTypeIndex));
+	}
+
+	/**
+	 * Encode {@code canon stream.read} (opcode {@code 0x0f}) for the given stream type,
+	 * producing a core function {@code (handle, ptr, count) -> i32} (the synchronous
+	 * variant blocks cooperatively under a stackful async task).
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @param memoryIndex the core memory index the bytes are read into
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamRead(int streamTypeIndex, int memoryIndex) {
+		return enc(w -> {
+			w.write(0x0f).writeUnsignedLeb128(streamTypeIndex);
+			memoryOption(w, memoryIndex);
+		});
+	}
+
+	/**
+	 * Encode {@code canon stream.write} (opcode {@code 0x10}) for the given stream type,
+	 * producing a core function {@code (handle, ptr, count) -> i32} (the synchronous
+	 * variant blocks cooperatively under a stackful async task).
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @param memoryIndex the core memory index the bytes are written from
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamWrite(int streamTypeIndex, int memoryIndex) {
+		return enc(w -> {
+			w.write(0x10).writeUnsignedLeb128(streamTypeIndex);
+			memoryOption(w, memoryIndex);
+		});
+	}
+
+	/**
+	 * Encode {@code canon stream.drop-readable} (opcode {@code 0x13}) for the given
+	 * stream type, producing a core function {@code (handle) -> ()}.
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamDropReadable(int streamTypeIndex) {
+		return enc(w -> w.write(0x13).writeUnsignedLeb128(streamTypeIndex));
+	}
+
+	/**
+	 * Encode {@code canon stream.drop-writable} (opcode {@code 0x14}) for the given
+	 * stream type, producing a core function {@code (handle) -> ()}. Dropping the
+	 * writable end signals end-of-stream to the reader.
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamDropWritable(int streamTypeIndex) {
+		return enc(w -> w.write(0x14).writeUnsignedLeb128(streamTypeIndex));
+	}
+
+	/**
+	 * Encode {@code canon future.new} (opcode {@code 0x15}) for the given future type,
+	 * producing a core function {@code () -> i64} that returns a packed readable/writable
+	 * handle pair.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureNew(int futureTypeIndex) {
+		return enc(w -> w.write(0x15).writeUnsignedLeb128(futureTypeIndex));
+	}
+
+	/**
+	 * Encode {@code canon future.read} (opcode {@code 0x16}) for the given future type,
+	 * producing a core function {@code (handle, ptr) -> i32} (the synchronous variant
+	 * blocks cooperatively until the future resolves).
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is read into
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureRead(int futureTypeIndex, int memoryIndex) {
+		return enc(w -> {
+			w.write(0x16).writeUnsignedLeb128(futureTypeIndex);
+			memoryOption(w, memoryIndex);
+		});
+	}
+
+	/**
+	 * Encode {@code canon future.read} (opcode {@code 0x16}) with both the canonical
+	 * memory and reallocation options, required when the future payload can carry a
+	 * variable-length value (e.g. a {@code result<_, error-code>} whose error case bears
+	 * a {@code string}, as {@code wasi:filesystem}'s {@code error-code} does).
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is read into
+	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureRead(int futureTypeIndex, int memoryIndex, int reallocFuncIndex) {
+		return enc(w -> w.write(0x16)
+			.writeUnsignedLeb128(futureTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex));
+	}
+
+	/**
+	 * Encode {@code canon future.write} (opcode {@code 0x17}) for the given future type,
+	 * producing a core function {@code (handle, ptr) -> i32}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is written from
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureWrite(int futureTypeIndex, int memoryIndex) {
+		return enc(w -> {
+			w.write(0x17).writeUnsignedLeb128(futureTypeIndex);
+			memoryOption(w, memoryIndex);
+		});
+	}
+
+	/**
+	 * Encode {@code canon future.drop-readable} (opcode {@code 0x1a}) for the given
+	 * future type, producing a core function {@code (handle) -> ()}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureDropReadable(int futureTypeIndex) {
+		return enc(w -> w.write(0x1a).writeUnsignedLeb128(futureTypeIndex));
+	}
+
+	/**
+	 * Encode {@code canon future.drop-writable} (opcode {@code 0x1b}) for the given
+	 * future type, producing a core function {@code (handle) -> ()}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureDropWritable(int futureTypeIndex) {
+		return enc(w -> w.write(0x1b).writeUnsignedLeb128(futureTypeIndex));
 	}
 
 }

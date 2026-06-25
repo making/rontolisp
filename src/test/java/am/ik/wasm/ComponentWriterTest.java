@@ -173,4 +173,47 @@ class ComponentWriterTest {
 					+ "060100000100010b0901000372756e010100");
 	}
 
+	// --- async canonical ABI (WASI 0.3 / Preview 3) ---------------------------------
+	// Golden bytes captured from `wasm-tools dump` of components validated with
+	// `wasm-tools validate -f component-model -f cm-async -f cm-async-stackful
+	// -f cm-more-async-builtins` and executed with `wasmtime run -W
+	// component-model-async=y -W component-model-async-stackful=y
+	// -W component-model-more-async-builtins=y -W gc=y` (printed "hello from wasi 0.3").
+
+	@Test
+	void definedStreamFutureResultTypeEncodings() {
+		// stream<u8> = 66 01 7d ; future<type 4> = 65 01 04 ; result<_, type 1> = 6a 00
+		// 01 01
+		assertThat(hex(ComponentWriter.definedStream(ComponentWriter.VT_U8))).isEqualTo("66017d");
+		assertThat(hex(ComponentWriter.definedFuture(4))).isEqualTo("650104");
+		assertThat(hex(ComponentWriter.definedResultErr(1))).isEqualTo("6a000101");
+	}
+
+	@Test
+	void asyncFuncTypeEncoding() {
+		// async func () -> (result type 6) = 43 00 00 06 (vs the non-async 0x40 form)
+		assertThat(hex(ComponentWriter.asyncFuncTypeResultType(6))).isEqualTo("43000006");
+	}
+
+	@Test
+	void canonStreamBuiltinEncodings() {
+		assertThat(hex(ComponentWriter.canonStreamNew(3))).isEqualTo("0e03");
+		// stream.read ty 0, options [Memory(1)] = 0f 00 (count) 01 (tag) 03 (mem) 01
+		assertThat(hex(ComponentWriter.canonStreamRead(0, 1))).isEqualTo("0f00010301");
+		assertThat(hex(ComponentWriter.canonStreamWrite(3, 0))).isEqualTo("1003010300");
+		assertThat(hex(ComponentWriter.canonStreamDropReadable(0))).isEqualTo("1300");
+		assertThat(hex(ComponentWriter.canonStreamDropWritable(3))).isEqualTo("1403");
+	}
+
+	@Test
+	void canonFutureBuiltinEncodings() {
+		assertThat(hex(ComponentWriter.canonFutureNew(2))).isEqualTo("1502");
+		assertThat(hex(ComponentWriter.canonFutureRead(5, 1))).isEqualTo("1605010301");
+		// future.read ty 5, options [Memory(0), Realloc(0)] = 16 05 02 03 00 04 00
+		assertThat(hex(ComponentWriter.canonFutureRead(5, 0, 0))).isEqualTo("16050203000400");
+		assertThat(hex(ComponentWriter.canonFutureWrite(2, 0))).isEqualTo("1702010300");
+		assertThat(hex(ComponentWriter.canonFutureDropReadable(5))).isEqualTo("1a05");
+		assertThat(hex(ComponentWriter.canonFutureDropWritable(2))).isEqualTo("1b02");
+	}
+
 }
