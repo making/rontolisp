@@ -416,6 +416,7 @@ class ReadmeExamplesTest {
 		void memberFn() {
 			assertThat(eval("(member 2 '(1 2 3))").print()).isEqualTo("(2 3)");
 			assertThat(eval("(member 9 '(1 2 3))")).isSameAs(LispNil.INSTANCE);
+			assertThat(eval("(member '(a d) '((a b) (a d)) :test 'equal)").print()).isEqualTo("((a d))");
 		}
 
 		@Test

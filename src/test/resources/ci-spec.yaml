@@ -755,6 +755,8 @@ cases:
       (print (reverse nil))
       (print (member 3 '(1 2 3 4)))
       (print (member 9 '(1 2 3)))
+      (print (member '(a d) '((a b) (a c) (a d) (a e)) :test 'equal))
+      (print (member '(a d) '((a b) (a c) (a d) (a e))))
       (print (assoc 'b '((a 1) (b 2) (c 3))))
       (print (assoc 'z '((a 1))))
       (print (last '(1 2 3)))
@@ -803,6 +805,8 @@ cases:
       (3 2 1)
       nil
       (3 4)
+      nil
+      ((a d) (a e))
       nil
       (b 2)
       nil

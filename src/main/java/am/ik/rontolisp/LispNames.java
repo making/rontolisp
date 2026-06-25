@@ -829,6 +829,11 @@ public final class LispNames {
 	/** The {@code :initial-value} keyword recognized by {@code reduce}. */
 	public static final String INITIAL_VALUE_KEYWORD = ":initial-value";
 
+	/**
+	 * The {@code :test} keyword recognized by {@code member} (the equality predicate).
+	 */
+	public static final String TEST_KEYWORD = ":test";
+
 	/** The {@code :input} keyword (open a file for reading). */
 	public static final String INPUT_KEYWORD = ":input";
 

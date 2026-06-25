@@ -165,6 +165,25 @@ public final class LispEvaluator {
 			}
 			return memberIfValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.MEMBER, new LispFunction(LispNames.MEMBER, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.MEMBER + " expects at least 2 arguments, got " + args.size());
+			}
+			// (member item list) compares with eql; (member item list :test fn) applies
+			// fn
+			// as (funcall fn item element). The default eql designator keeps the historic
+			// behavior of the eql-based scan.
+			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			LispVal item = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (isTruthy(apply(test, List.of(item, cell.car()), this.globalEnv))) {
+					return cell;
+				}
+				cur = cell.cdr();
+			}
+			return LispNil.INSTANCE;
+		}));
 		this.globalEnv.defineFunction(LispNames.ASSOC_IF, new LispFunction(LispNames.ASSOC_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.ASSOC_IF + " expects 2 arguments, got " + args.size());
@@ -891,6 +910,18 @@ public final class LispEvaluator {
 			return result;
 		}
 		throw new LispEvalException("Not a function: " + function.print());
+	}
+
+	// Scans a keyword/value argument tail starting at the given index for the named
+	// keyword, returning the value following the first match, or the fallback when
+	// absent.
+	private static LispVal keywordArg(List<LispVal> args, int start, String keyword, LispVal fallback) {
+		for (int i = start; i + 1 < args.size(); i += 2) {
+			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return args.get(i + 1);
+			}
+		}
+		return fallback;
 	}
 
 	private List<LispSymbol> extractParams(LispVal paramList) {

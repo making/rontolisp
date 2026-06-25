@@ -2,6 +2,8 @@ package am.ik.rontolisp;
 
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Macro expander for cond, and, and or forms. Expands into primitive special forms (if,
  * let, progn) that are handled by the evaluator and compilers.
@@ -1177,23 +1179,42 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (member item lst) into a let/while scan returning the tail whose car is
-	 * {@code eql} to the item, or nil.
+	 * {@code eql} to the item, or nil. With a {@code :test} keyword
+	 * ({@code (member item lst :test fn)}) the equality predicate is {@code fn} applied
+	 * as {@code (funcall fn item element)} instead of {@code eql}; the test designator is
+	 * inlined so a literal {@code 'name}/{@code #'name} resolves through the compilers'
+	 * function-designator normalization.
 	 * @param cons the member expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMember(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
 		LispSymbol item = new LispSymbol("__member_item");
 		LispSymbol cur = new LispSymbol("__member_cur");
 		// (do ((__member_item item) (__member_cur lst (cdr __member_cur)))
 		// ((atom __member_cur) nil)
-		// (if (eq __member_item (car __member_cur)) (return __member_cur)))
+		// (if (eql __member_item (car __member_cur)) (return __member_cur)))
+		// With :test fn, the match becomes (funcall fn __member_item (car __member_cur)).
 		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
+		LispVal element = callOf(LispNames.CAR, cur);
+		LispVal match = (testForm == null) ? listToCons(List.of(new LispSymbol(LispNames.EQL), item, element))
+				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, item, element));
 		LispVal body = makeIf(match, makeReturn(cur), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	// Scans a keyword/value argument tail starting at the given index for the named
+	// keyword, returning the form following the first match, or null when absent.
+	private static @Nullable LispVal keywordValue(List<LispVal> parts, int start, String keyword) {
+		for (int i = start; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return parts.get(i + 1);
+			}
+		}
+		return null;
 	}
 
 	/**

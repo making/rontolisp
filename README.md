@@ -452,7 +452,7 @@ embedded `eval` runtime in compiled output (see
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
 | `length` | `(length '(1 2 3))`, `(length "abc")` | `3`, `3` (lists and strings; `0` for nil) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
-| `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil) |
+| `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil; an optional `:test` keyword takes a function designator, e.g. `(member '(a d) '((a b) (a d)) :test 'equal)` -> `((a d))`) |
 | `find` | `(find 2 '(1 2 3))` | `2` (first element `eql` to the item, or nil) |
 | `find-if` | `(find-if #'evenp '(1 3 6 7))` | `6` (first element satisfying the predicate, or nil) |
 | `find-if-not` | `(find-if-not #'evenp '(2 4 5 6))` | `5` (first element failing the predicate, or nil) |

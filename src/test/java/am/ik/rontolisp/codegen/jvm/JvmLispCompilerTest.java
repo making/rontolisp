@@ -1393,6 +1393,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMemberWithTest() throws Exception {
+		assertThat(compileAndRun("(print (member '(a d) '((a b) (a c) (a d) (a e)) :test 'equal)) "
+				+ "(print (member '(a d) '((a b) (a c) (a d) (a e))))"))
+			.isEqualTo("((a d) (a e))\nnil");
+	}
+
+	@Test
 	void compileAndRunFind() throws Exception {
 		assertThat(compileAndRun(
 				"(print (find 3 '(1 2 3 4))) (print (find 9 '(1 2 3))) (print (funcall #'find 2 '(1 2 3)))"))

@@ -1452,6 +1452,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMemberWithTest() {
+		assertThat(eval("(member '(a d) '((a b) (a c) (a d) (a e)) :test 'equal)").print()).isEqualTo("((a d) (a e))");
+		assertThat(eval("(member '(a d) '((a b) (a c) (a d) (a e)))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(member 3 '(1 2 3 4) :test #'equal)").print()).isEqualTo("(3 4)");
+		assertThat(eval("(member 9 '(1 2 3) :test 'equal)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalFind() {
 		assertThat(eval("(find 3 '(1 2 3 4))").print()).isEqualTo("3");
 		assertThat(eval("(find 'b '(a b c))").print()).isEqualTo("b");

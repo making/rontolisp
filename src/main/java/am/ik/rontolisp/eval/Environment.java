@@ -861,18 +861,8 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
-		env.defineFunction(LispNames.MEMBER, new LispFunction(LispNames.MEMBER, args -> {
-			requireArgCount(LispNames.MEMBER, args, 2);
-			LispVal item = args.get(0);
-			LispVal cur = args.get(1);
-			while (cur instanceof LispCons cell) {
-				if (isEq(item, cell.car())) {
-					return cell;
-				}
-				cur = cell.cdr();
-			}
-			return LispNil.INSTANCE;
-		}));
+		// member is registered in LispEvaluator so the optional :test keyword designator
+		// can be applied through the evaluator (it may name a user function or lambda).
 		env.defineFunction(LispNames.FIND, new LispFunction(LispNames.FIND, args -> {
 			requireArgCount(LispNames.FIND, args, 2);
 			LispVal item = args.get(0);
