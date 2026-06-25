@@ -20,7 +20,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up GraalVM 25
       uses: graalvm/setup-graalvm@v1
       with:
@@ -36,7 +36,7 @@ jobs:
         include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up GraalVM 25
       uses: graalvm/setup-graalvm@v1
       with:
@@ -77,7 +77,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up GraalVM 25
       uses: graalvm/setup-graalvm@v1
       with:
@@ -123,7 +123,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Import Secrets
       id: secrets
       uses: hashicorp/vault-action@v4.0.0
