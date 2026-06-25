@@ -152,6 +152,11 @@ binary does not need rebuilding unless Java sources changed).
 
 - Format: `./mvnw spring-javaformat:apply`
 - Test: `./mvnw test`
+- Web profile compile: `./mvnw -Pweb compile`. Required whenever `src/web/java`
+  changed (e.g. the `Target_*` substitutions or `web/` `@JS` classes), or when a
+  signature it overrides changed (e.g. `HttpSupport.request`). `src/web/java` is
+  added to the sources only under the `web` profile, so the default `./mvnw test`
+  does NOT compile it — a break there only surfaces in the web-playground CI job.
 - Native E2E: build the native image and run `CiSpecE2eTest` against it (see
   "Verifying the Native Image End-to-End"). Required whenever `ci-spec.yaml` or
   any cross-backend output changed — `./mvnw test` does not cover it.
