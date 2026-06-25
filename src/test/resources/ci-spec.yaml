@@ -57,6 +57,19 @@ cases:
     expected: |
       10
       20
+  - name: setq-multiple
+    source: |
+      (print (setq sa 2 sb -4 sc -6))
+      (print sa)
+      (print sb)
+      (print sc)
+      (print (let ((p 0) (q 0)) (setq p 1 q (+ p 10)) (list p q)))
+    expected: |
+      -6
+      2
+      -4
+      -6
+      (1 11)
   - name: defvar-idempotent-global-definition
     source: |
       (print (defvar *gv* 100))

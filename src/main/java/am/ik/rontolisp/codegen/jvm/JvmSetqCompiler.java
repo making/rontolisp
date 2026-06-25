@@ -17,8 +17,27 @@ final class JvmSetqCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		String name = ((LispSymbol) parts.get(1)).name();
-		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+		if ((parts.size() - 1) % 2 != 0) {
+			throw new IllegalArgumentException("setq requires an even number of arguments");
+		}
+		if (parts.size() == 1) {
+			// (setq) -> nil
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
+		int pairCount = (parts.size() - 1) / 2;
+		for (int p = 0; p < pairCount; p++) {
+			compilePair(((LispSymbol) parts.get(1 + 2 * p)).name(), parts.get(2 + 2 * p), ctx, className);
+			if (p < pairCount - 1) {
+				// Discard the intermediate value; only the last pair's value is the
+				// result
+				ctx.emit(Opcode.POP);
+			}
+		}
+	}
+
+	private static void compilePair(String name, LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(valueExpr, ctx, className);
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {
 			int tempSlot = ctx.allocTemp();

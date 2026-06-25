@@ -17,13 +17,32 @@ final class WasmSetqCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
-		String name = ((LispSymbol) parts.get(1)).name();
+		if ((parts.size() - 1) % 2 != 0) {
+			throw new IllegalArgumentException("setq requires an even number of arguments");
+		}
+		if (parts.size() == 1) {
+			// (setq) -> nil
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+			return;
+		}
+		int pairCount = (parts.size() - 1) / 2;
+		for (int p = 0; p < pairCount; p++) {
+			compilePair(((LispSymbol) parts.get(1 + 2 * p)).name(), parts.get(2 + 2 * p), ctx);
+			if (p < pairCount - 1) {
+				// Discard the intermediate value; only the last pair's value is the
+				// result
+				ctx.writer.write(Instruction.DROP);
+			}
+		}
+	}
 
+	private static void compilePair(String name, LispVal valueExpr, WasmLispCompiler.Ctx ctx) {
 		// Check if variable is a boxed local
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {
 			// Write to cell: compile value, save to temp, then set cell
-			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeSignedLeb128(tmpSlot);
@@ -49,7 +68,7 @@ final class WasmSetqCompiler {
 		Integer captureIdx = ctx.captures.get(name);
 		if (captureIdx != null) {
 			// Write to captured cell
-			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeSignedLeb128(tmpSlot);
@@ -69,7 +88,7 @@ final class WasmSetqCompiler {
 		}
 
 		// Plain local (not boxed)
-		WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		WasmExprCompiler.compileExpr(valueExpr, ctx);
 		if (slot == null) {
 			slot = ctx.allocLocal(name);
 		}

@@ -540,9 +540,15 @@ public final class LispEvaluator {
 
 	private LispVal evalSetq(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol name = (LispSymbol) parts.get(1);
-		LispVal value = eval(parts.get(2), env);
-		env.set(name.name(), value);
+		if ((parts.size() - 1) % 2 != 0) {
+			throw new IllegalArgumentException("setq requires an even number of arguments");
+		}
+		LispVal value = LispNil.INSTANCE;
+		for (int i = 1; i < parts.size(); i += 2) {
+			LispSymbol name = (LispSymbol) parts.get(i);
+			value = eval(parts.get(i + 1), env);
+			env.set(name.name(), value);
+		}
 		return value;
 	}
 

@@ -296,7 +296,7 @@ parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 | `let` | `(let ((x 1) (y 2)) body...)` | Local variable bindings |
 | `lambda` | `(lambda (params...) body...)` | Anonymous function |
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
-| `setq` | `(setq name value)` | Assign a value to a variable |
+| `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`), which evaluates to `value` (or nil) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
