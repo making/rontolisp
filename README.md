@@ -170,47 +170,8 @@ Notes and current limitations of component mode:
 - Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc`).
 - `print`/stdout, stdin (`read`, 0-argument `read-line`, over `wasi:cli/stdin`), and file I/O (`open`, `close`, `write-line`, stream `read-line`, `load`, `with-open-file`) all work. File access requires `--dir` (paths resolve against the first preopened directory).
 - `random` draws real entropy from the WASI 0.2 `wasi:random` interface (unlike the deterministic Preview 1 output), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks`, and `getenv` reads `wasi:cli/environment`.
-- Outgoing HTTP (`rontolisp:fetch`) works over `wasi:http`; run with `wasmtime run -W gc -S http=y`. It is component-only — using `fetch` without `--component` is a compile error. See [HTTP requests](#http-requests-rontolispfetch).
+- Outgoing HTTP (`rontolisp:fetch`) works over `wasi:http`; run with `wasmtime run -W gc -S http`. It is component-only — using `fetch` without `--component` is a compile error. See [HTTP requests](#http-requests-rontolispfetch).
 - The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
-
-### HTTP requests (`rontolisp:fetch`)
-
-`rontolisp:fetch` performs an outgoing HTTP request, modeled on the JavaScript `fetch` API. It is not a Common Lisp standard function, so it lives in the `rontolisp` package.
-
-```lisp
-;; GET, no options
-(rontolisp:fetch "http://example.com/")
-
-;; GET with request headers (an alist of (name . value) string pairs)
-(rontolisp:fetch "http://example.com/api"
-                 (list :headers (list (cons "Accept" "application/json"))))
-```
-
-The optional second argument is an options property list. Recognized keys:
-
-- `:method` — the HTTP method as a string (default `"GET"`). Only GET is currently supported; any other method is an error.
-- `:headers` — request headers, an alist of `(name . value)` string pairs.
-
-The result is a property list `(:status <integer> :body <string> :headers <alist>)`, where `:headers` is an alist of `(name . value)` response-header pairs:
-
-```lisp
-(let ((res (rontolisp:fetch "http://example.com/")))
-  (print (getf res :status))    ; => 200
-  (print (getf res :body))      ; => "<html>...</html>"
-  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
-```
-
-Backend support:
-
-- **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`.
-- **WASM**: component mode only (`--component`), over `wasi:http`. Run with `wasmtime run -W gc -S http=y`. Using `fetch` in Preview 1 mode (without `--component`) is a compile error, because there is no host `wasi:http` for a core module.
-
-Current limitations:
-
-- Only the GET method. A non-GET `:method` is an error: the interpreter and JVM reject it at runtime; the WASM backend rejects a statically-known non-GET `:method` at compile time (a method computed at runtime cannot be checked there and is treated as GET).
-- No request body.
-- A failed request (for example a refused connection) raises an error in the interpreter and JVM, and returns `nil` in WASM.
-- In WASM, the response body is capped (about 576 KiB) and very large programs may exhaust the shared linear memory the response buffers reuse.
 
 ### Self-Hosted REPL
 
@@ -722,6 +683,49 @@ The classification follows the function namespace: a name is listed as a functio
 - Like `version`, these functions are not supported inside the compiled runtime `eval`/`load`.
 
 Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, `list-functions`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
+
+### `rontolisp` Package Extensions
+
+The `rontolisp` package holds implementation-specific symbols that are **not part of Common Lisp**. They must be referenced with the `rontolisp:` qualifier (or used unqualified after `(in-package rontolisp)`). Besides the introspection helpers already covered under [Packages](#packages) (`version`, `list-functions`, `list-macros`, `list-special-forms`), the package provides outgoing HTTP support.
+
+#### HTTP requests (`rontolisp:fetch`)
+
+`rontolisp:fetch` performs an outgoing HTTP request, modeled on the JavaScript `fetch` API.
+
+```lisp
+;; GET, no options
+(rontolisp:fetch "http://example.com/")
+
+;; GET with request headers (an alist of (name . value) string pairs)
+(rontolisp:fetch "http://example.com/api"
+                 (list :headers (list (cons "Accept" "application/json"))))
+```
+
+The optional second argument is an options property list. Recognized keys:
+
+- `:method` — the HTTP method as a string (default `"GET"`). Only GET is currently supported; any other method is an error.
+- `:headers` — request headers, an alist of `(name . value)` string pairs.
+
+The result is a property list `(:status <integer> :body <string> :headers <alist>)`, where `:headers` is an alist of `(name . value)` response-header pairs:
+
+```lisp
+(let ((res (rontolisp:fetch "http://example.com/")))
+  (print (getf res :status))    ; => 200
+  (print (getf res :body))      ; => "<html>...</html>"
+  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
+```
+
+Backend support:
+
+- **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`.
+- **WASM**: component mode only (`--component`), over `wasi:http`. Run with `wasmtime run -W gc -S http`. Using `fetch` in Preview 1 mode (without `--component`) is a compile error, because there is no host `wasi:http` for a core module.
+
+Current limitations:
+
+- Only the GET method. A non-GET `:method` is an error: the interpreter and JVM reject it at runtime; the WASM backend rejects a statically-known non-GET `:method` at compile time (a method computed at runtime cannot be checked there and is treated as GET).
+- No request body.
+- A failed request (for example a refused connection) raises an error in the interpreter and JVM, and returns `nil` in WASM.
+- In WASM, the response body is capped (about 576 KiB) and very large programs may exhaust the shared linear memory the response buffers reuse.
 
 ### Function Namespace and First-Class Functions
 
