@@ -7,6 +7,7 @@ import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class WasmLispCompilerTest {
 
@@ -18,6 +19,31 @@ class WasmLispCompilerTest {
 	private byte[] compileComponent(String lispCode) {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		return new WasmLispCompiler(false, true).compile(program);
+	}
+
+	@Test
+	void fetchInPreview1ModeIsCompileError() {
+		assertThatThrownBy(() -> compile("(rontolisp:fetch \"http://x/\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+	}
+
+	@Test
+	void fetchWithLiteralNonGetMethodIsCompileError() {
+		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"POST\"))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("GET");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" '(:method \"DELETE\"))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("GET");
+	}
+
+	@Test
+	void fetchWithGetMethodCompilesInComponentMode() {
+		// literal GET (any case) and a runtime-computed options value both compile
+		assertThat(compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"get\"))")).isNotEmpty();
+		assertThat(compileComponent("(let ((opts (list :method \"POST\"))) (rontolisp:fetch \"http://x/\" opts))"))
+			.isNotEmpty();
 	}
 
 	@Test

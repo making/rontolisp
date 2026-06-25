@@ -208,6 +208,97 @@ public final class Environment implements Scope {
 		registerIntrospection(env, LispNames.LIST_FUNCTIONS);
 		registerIntrospection(env, LispNames.LIST_MACROS);
 		registerIntrospection(env, LispNames.LIST_SPECIAL_FORMS);
+		// fetch performs an outgoing HTTP request, JavaScript fetch-style. It belongs to
+		// the rontolisp package (it is not a Common Lisp standard function). The optional
+		// second argument is an options property list (:method, :headers); only the GET
+		// method is currently supported. The result is the property list
+		// (:status <int> :body <string> :headers <alist>), where :headers is an alist of
+		// (name . value) string pairs.
+		String fetchName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
+		env.defineFunction(fetchName, new LispFunction(fetchName, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.FETCH + " expects 1 or 2 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString url)) {
+				throw new LispEvalException(LispNames.FETCH + " expects a string URL, got: " + args.get(0).print());
+			}
+			LispVal options = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
+			String method = fetchMethod(options);
+			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
+			HttpSupport.HttpResult result;
+			try {
+				result = HttpSupport.request(method, url.value(), requestHeaders);
+			}
+			catch (RuntimeException ex) {
+				throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), "fetch failed"));
+			}
+			return fetchList(new LispSymbol(":status"), new LispInteger(result.status()), new LispSymbol(":body"),
+					new LispString(result.body()), new LispSymbol(":headers"), buildHeaderAlist(result.headers()));
+		}));
+	}
+
+	private static LispVal fetchList(LispVal... elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			result = new LispCons(elements[i], result);
+		}
+		return result;
+	}
+
+	// Returns the value of key in a property list (k1 v1 k2 v2 ...), or nil if absent.
+	private static LispVal plistGet(LispVal plist, String key) {
+		LispVal current = plist;
+		while (current instanceof LispCons cons && cons.cdr() instanceof LispCons valueCell) {
+			if (cons.car() instanceof LispSymbol sym && sym.name().equals(key)) {
+				return valueCell.car();
+			}
+			current = valueCell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Resolves the :method option (default GET). Only GET is currently supported.
+	private static String fetchMethod(LispVal options) {
+		LispVal methodVal = plistGet(options, ":method");
+		String method;
+		if (methodVal instanceof LispNil) {
+			method = "GET";
+		}
+		else if (methodVal instanceof LispString str) {
+			method = str.value();
+		}
+		else {
+			throw new LispEvalException(LispNames.FETCH + " :method must be a string, got: " + methodVal.print());
+		}
+		if (!method.equalsIgnoreCase("GET")) {
+			throw new LispEvalException(
+					LispNames.FETCH + ": only the GET method is currently supported, got: " + method);
+		}
+		return method;
+	}
+
+	private static List<HttpSupport.Header> parseHeaderAlist(LispVal headers) {
+		List<HttpSupport.Header> result = new ArrayList<>();
+		LispVal current = headers;
+		while (current instanceof LispCons cons) {
+			if (!(cons.car() instanceof LispCons pair) || !(pair.car() instanceof LispString name)
+					|| !(pair.cdr() instanceof LispString value)) {
+				throw new LispEvalException(
+						LispNames.FETCH + " :headers must be an alist of (name . value) string pairs");
+			}
+			result.add(new HttpSupport.Header(name.value(), value.value()));
+			current = cons.cdr();
+		}
+		return result;
+	}
+
+	private static LispVal buildHeaderAlist(List<HttpSupport.Header> headers) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = headers.size() - 1; i >= 0; i--) {
+			HttpSupport.Header header = headers.get(i);
+			result = new LispCons(new LispCons(new LispString(header.name()), new LispString(header.value())), result);
+		}
+		return result;
 	}
 
 	private static void registerIntrospection(Environment env, String member) {

@@ -105,6 +105,20 @@ One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
 - `read` (stdin) is unavailable in the WASM sandbox; the REPL covers the
   interpreter's evaluation features. See the project README "Compiled `eval`
   limitations" for the compiled backends.
+- `rontolisp:fetch` (HTTP) works in the browser, but through a different transport.
+  `java.net.http` cannot be compiled by Web Image (it needs the TLS/security stack
+  and host sockets), so a Web Image substitution
+  (`src/web/java/.../eval/Target_HttpSupport.java`) routes `fetch` to a
+  **synchronous `XMLHttpRequest`** (`src/web/java/.../web/BrowserHttp.java`). A
+  synchronous XHR is used rather than the browser `fetch()` API because the
+  interpreter's `fetch` is a synchronous call and a WASM guest cannot `await` a
+  Promise without JS Promise Integration. Consequences: requests are subject to
+  the browser **same-origin policy / CORS** (cross-origin targets must send
+  `Access-Control-Allow-Origin`, and only "simple" response headers appear in
+  `:headers` unless the server sets `Access-Control-Expose-Headers`); a blocked or
+  failed request surfaces as a REPL error. (Compiling a `fetch` program to JVM
+  still works; compiling to WASM needs `--component`, which the playground does
+  not emit.)
 - `load` works against uploaded files: pick (or drag-and-drop) `.lisp` files
   with the **load files** control, then `(load "name.lisp")` resolves them from
   an in-memory map. The browser has no real filesystem, so the playground

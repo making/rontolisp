@@ -100,6 +100,10 @@ final class JvmExprCompiler {
 					JvmIntrospectionCompiler.compile(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.FETCH.equals(qn.member())) {
+					JvmFetchCompiler.compile(cons, ctx, className);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {
