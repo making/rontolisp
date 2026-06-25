@@ -441,8 +441,8 @@ embedded `eval` runtime in compiled output (see
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
-| `car` | `(car (cons 1 2))` | `1` |
-| `cdr` | `(cdr (cons 1 2))` | `2` |
+| `car` | `(car (cons 1 2))` | `1` (`(car nil)` is `nil`) |
+| `cdr` | `(cdr (cons 1 2))` | `2` (`(cdr nil)` is `nil`) |
 | `caar`..`cddddr` | `(cadr '(1 2 3))` | `2` (compositions of `car`/`cdr`, 2-4 levels) |
 | `first` | `(first '(1 2 3))` | `1` (same as `car`) |
 | `rest` | `(rest '(1 2 3))` | `(2 3)` (same as `cdr`) |

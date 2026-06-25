@@ -625,6 +625,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalCarCdrOfNil() {
+		assertThat(eval("(car nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(cdr nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(car '())")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(cdr '())")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalCons() {
 		assertThat(eval("(car (cons 1 2))")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(cdr (cons 1 2))")).isEqualTo(new LispInteger(2));

@@ -1664,12 +1664,18 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.car();
 			}
+			if (args.get(0) instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
 			throw new LispEvalException("car expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.CDR, new LispFunction(LispNames.CDR, args -> {
 			requireArgCount(LispNames.CDR, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.cdr();
+			}
+			if (args.get(0) instanceof LispNil) {
+				return LispNil.INSTANCE;
 			}
 			throw new LispEvalException("cdr expects a cons cell, got: " + args.get(0).print());
 		}));

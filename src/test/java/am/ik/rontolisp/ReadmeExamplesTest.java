@@ -392,6 +392,8 @@ class ReadmeExamplesTest {
 		void cons() {
 			assertThat(eval("(car (cons 1 2))")).isEqualTo(new LispInteger(1));
 			assertThat(eval("(cdr (cons 1 2))")).isEqualTo(new LispInteger(2));
+			assertThat(eval("(car nil)")).isEqualTo(LispNil.INSTANCE);
+			assertThat(eval("(cdr nil)")).isEqualTo(LispNil.INSTANCE);
 		}
 
 		@Test

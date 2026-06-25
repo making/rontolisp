@@ -776,6 +776,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void carCdrOfNil() throws Exception {
+		assertThat(compileAndRun("(print (car nil))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (cdr nil))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (car '()))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (cdr '()))")).isEqualTo("nil");
+	}
+
+	@Test
 	void higherOrderFunction() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))

@@ -17,10 +17,16 @@ final class JvmCarCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		// (car nil) => nil: leave the null on the stack instead of indexing it.
+		ctx.emit(Opcode.DUP);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.objectArrayClass.index());
 		ctx.emit(Opcode.ICONST_0);
 		ctx.emit(Opcode.AALOAD);
+		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 	}
 
 }

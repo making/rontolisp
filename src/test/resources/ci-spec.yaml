@@ -127,6 +127,17 @@ cases:
       2
       1
       2
+  - name: car-cdr-of-nil
+    source: |
+      (print (car nil))
+      (print (cdr nil))
+      (print (car '()))
+      (print (cdr '()))
+    expected: |
+      nil
+      nil
+      nil
+      nil
   - name: car-cdr-composition-functions
     source: |
       (print (cadr '(1 2 3)))
