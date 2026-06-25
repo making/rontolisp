@@ -24,12 +24,15 @@ final class Target_HttpSupport {
 
 
 	@Substitute
-	static HttpSupport.HttpResult request(String method, String url, List<HttpSupport.Header> requestHeaders) {
+	static HttpSupport.HttpResult request(String method, String url, List<HttpSupport.Header> requestHeaders,
+			String body) {
 		StringBuilder encoded = new StringBuilder();
 		for (HttpSupport.Header header : requestHeaders) {
 			encoded.append(header.name()).append('\n').append(header.value()).append('\n');
 		}
-		String raw = BrowserHttp.request(JSString.of(method), JSString.of(url), JSString.of(encoded.toString()))
+		String raw = BrowserHttp
+			.request(JSString.of(method), JSString.of(url), JSString.of(encoded.toString()),
+					JSString.of(body == null ? "" : body), JSString.of(body == null ? "0" : "1"))
 			.asString();
 		String[] parts = raw.split("\u0001", 3);
 		if (parts.length >= 1 && "ERR".equals(parts[0])) {

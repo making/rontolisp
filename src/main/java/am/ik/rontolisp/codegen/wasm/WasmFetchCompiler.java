@@ -22,9 +22,13 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * fetch is component-only: in Preview 1 mode it raises a compile error (there is no host
- * {@code wasi:http}). Only GET is supported; a statically-known non-GET {@code :method}
- * is rejected at compile time (a method computed at runtime cannot be checked and is
- * treated as GET). A failed request (e.g. a refused connection) returns {@code nil}.
+ * {@code wasi:http}). The supported methods are GET, HEAD, POST, PUT, DELETE, OPTIONS and
+ * PATCH; the method is resolved <strong>statically</strong> from a literal
+ * {@code :method} (a statically-unknown method, e.g. one computed at runtime, is treated
+ * as GET, and a statically-known unsupported method is rejected at compile time). The
+ * {@code :body} value (a request body string) <em>is</em> resolved at runtime: it is read
+ * out of the options property list and its bytes are passed straight to the adapter. A
+ * failed request (e.g. a refused connection) returns {@code nil}.
  */
 final class WasmFetchCompiler {
 
@@ -40,20 +44,19 @@ final class WasmFetchCompiler {
 		if (args.size() < 2 || args.size() > 3) {
 			throw new UnsupportedOperationException("fetch expects 1 or 2 arguments, got " + (args.size() - 1));
 		}
-		// The WASM backend always issues a GET, so reject a statically-known non-GET
-		// :method at compile time (matching the interpreter/JVM, which reject it at
-		// runtime). A method computed at runtime cannot be checked and is treated as GET.
-		String literalMethod = staticMethod(args.size() == 3 ? args.get(2) : null);
-		if (literalMethod != null && !literalMethod.equalsIgnoreCase("GET")) {
-			throw new UnsupportedOperationException(
-					"fetch: only the GET method is currently supported, got: " + literalMethod);
-		}
+		// Resolve the method discriminant statically (matching the interpreter/JVM, which
+		// validate at runtime). A method computed at runtime cannot be checked and is
+		// treated as GET; a statically-known unsupported method is rejected here.
+		int methodDisc = methodDiscriminant(staticMethod(args.size() == 3 ? args.get(2) : null));
 		final WasmWriter w = ctx.writer;
 		int urlTmp = ctx.allocTemp();
+		int optTmp = ctx.allocTemp();
+		int reqBodyTmp = ctx.allocTemp();
 		int statusTmp = ctx.allocTemp();
 		int bodyTmp = ctx.allocTemp();
 		int hdrTmp = ctx.allocTemp();
 		int accTmp = ctx.allocTemp();
+		int bodyOff = ctx.stringTable.addString(":body").offset();
 		int headersOff = ctx.stringTable.addString(":headers").offset();
 		WasmLispCompiler.StringTable.StringEntry statusSym = ctx.stringTable.addString(":status");
 		WasmLispCompiler.StringTable.StringEntry bodySym = ctx.stringTable.addString(":body");
@@ -62,10 +65,25 @@ final class WasmFetchCompiler {
 		// Evaluate the URL string and stash the struct so we can read offset and length.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		setLocal(w, urlTmp);
+		// Evaluate the options plist once (or nil) and stash it for the :body / :headers
+		// lookups.
+		if (args.size() == 3) {
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+		}
+		else {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
+		setLocal(w, optTmp);
+		// reqBody = _fetch_plist_get(options, :body) -- a string struct or nil.
+		getLocal(w, optTmp);
+		i32(w, bodyOff);
+		call(w, WasmLispCompiler.FUNC_FETCH_PLIST_GET);
+		setLocal(w, reqBodyTmp);
 
-		// http.fetch(method=0, urlPtr, urlLen, REQ_HDR_BUF, reqHdrLen, status, rhdrPtr,
-		// rhdrLen, bodyPtr, bodyLen)
-		i32(w, 0); // method GET
+		// http.fetch(method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, REQ_HDR_BUF,
+		// reqHdrLen, status, rhdrPtr, rhdrLen, bodyPtr, bodyLen)
+		i32(w, methodDisc);
 		getLocal(w, urlTmp);
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
@@ -76,15 +94,13 @@ final class WasmFetchCompiler {
 		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB); // urlLen = length - 2 (strip quotes)
+		// reqBodyPtr / reqBodyLen: nil body -> (0, 0), otherwise (offset+1, length-2) to
+		// strip the rontolisp string's surrounding quotes.
+		emitStrPtr(w, reqBodyTmp);
+		emitStrLen(w, reqBodyTmp);
 		i32(w, WasmLispCompiler.REQ_HDR_BUF);
 		// reqHdrLen = _fetch_ser_headers(_fetch_plist_get(options, :headers))
-		if (args.size() == 3) {
-			WasmExprCompiler.compileExpr(args.get(2), ctx);
-		}
-		else {
-			w.write(Instruction.REF_NULL);
-			w.writeHeapType(Type.EQ.code());
-		}
+		getLocal(w, optTmp);
 		i32(w, headersOff);
 		call(w, WasmLispCompiler.FUNC_FETCH_PLIST_GET);
 		call(w, WasmLispCompiler.FUNC_FETCH_SER_HDRS);
@@ -141,6 +157,59 @@ final class WasmFetchCompiler {
 		w.write(Instruction.ELSE);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END);
+	}
+
+	// The WASI http method variant discriminants for the methods rontolisp supports
+	// (connect=5 and trace=7 are intentionally omitted). A null/unknown literal method
+	// means GET; an unsupported literal method is a compile error.
+	private static int methodDiscriminant(@Nullable String method) {
+		if (method == null) {
+			return 0; // GET (also the default for a runtime-computed method)
+		}
+		return switch (method.toUpperCase(java.util.Locale.ROOT)) {
+			case "GET" -> 0;
+			case "HEAD" -> 1;
+			case "POST" -> 2;
+			case "PUT" -> 3;
+			case "DELETE" -> 4;
+			case "OPTIONS" -> 6;
+			case "PATCH" -> 8;
+			default -> throw new UnsupportedOperationException("fetch: unsupported method: " + method
+					+ " (supported: GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH)");
+		};
+	}
+
+	// Pushes the raw byte pointer of the rontolisp string in (ref null eq) local slot,
+	// stripping the opening quote: nil -> 0, otherwise string.offset + 1.
+	private static void emitStrPtr(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x7F); // result i32
+		i32(w, 0);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the byte length of the rontolisp string in (ref null eq) local slot,
+	// dropping
+	// the surrounding quotes: nil -> 0, otherwise string.length - 2.
+	private static void emitStrLen(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x7F); // result i32
+		i32(w, 0);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
 		w.write(Instruction.END);
 	}
 

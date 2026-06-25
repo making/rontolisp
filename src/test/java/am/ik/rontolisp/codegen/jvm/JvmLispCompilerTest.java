@@ -2459,7 +2459,30 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunFetchRejectsNonGetMethod() throws Exception {
+	void compileAndRunFetchSendsMethodAndBody() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/post", exchange -> {
+			String received = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+			byte[] body = (exchange.getRequestMethod() + ":" + received).getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			assertThat(compileAndRun("(print (getf (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/post\" (list :method \"post\" :body \"hello\")) :body))"))
+				.isEqualTo("\"POST:hello\"");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void compileAndRunFetchRejectsUnsupportedMethod() throws Exception {
 		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
 			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/x", exchange -> {
@@ -2469,9 +2492,9 @@ class JvmLispCompilerTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			assertThatThrownBy(() -> compileAndRun(
-					"(rontolisp:fetch \"http://127.0.0.1:" + port + "/x\" (list :method \"POST\"))"))
-				.hasStackTraceContaining("GET");
+			assertThatThrownBy(
+					() -> compileAndRun("(rontolisp:fetch \"http://127.0.0.1:" + port + "/x\" (list :method \"FOO\"))"))
+				.hasStackTraceContaining("unsupported method");
 		}
 		finally {
 			server.stop(0);

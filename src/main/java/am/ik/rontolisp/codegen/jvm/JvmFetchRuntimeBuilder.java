@@ -23,9 +23,11 @@ import am.ik.jvm.Opcode;
  *
  * <p>
  * The optional {@code options} argument is a property list; {@code :method} (default
- * {@code "GET"}, only GET is currently supported) and {@code :headers} (a request-header
- * alist) are recognized. The method is only emitted when the program actually uses
- * {@code rontolisp:fetch}. {@code HttpClient.send} declares checked
+ * {@code "GET"}; one of GET/HEAD/POST/PUT/DELETE/OPTIONS/PATCH, matched
+ * case-insensitively and sent in canonical upper case), {@code :headers} (a
+ * request-header alist) and {@code :body} (a request body string) are recognized. The
+ * method is only emitted when the program actually uses {@code rontolisp:fetch}.
+ * {@code HttpClient.send} declares checked
  * {@code IOException}/{@code InterruptedException}, but the JVM does not enforce checked
  * exceptions at the bytecode level, so the call needs no exception table; an exception
  * simply propagates.
@@ -87,6 +89,18 @@ final class JvmFetchRuntimeBuilder {
 		MethodrefConstant ofString = cp.addMethodref(bodyHandlersClass,
 				cp.addNameAndType(cp.addUtf8("ofString"), cp.addUtf8("()Ljava/net/http/HttpResponse$BodyHandler;")));
 
+		// Request body publishers and the Builder.method(name, publisher) accessor, used
+		// to
+		// set the request method and (optional) body.
+		MethodrefConstant builderMethod = cp
+			.addInterfaceMethodref(builderClass, cp.addNameAndType(cp.addUtf8("method"), cp.addUtf8(
+					"(Ljava/lang/String;Ljava/net/http/HttpRequest$BodyPublisher;)Ljava/net/http/HttpRequest$Builder;")));
+		ClassConstant bodyPublishersClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest$BodyPublishers"));
+		MethodrefConstant publisherOfString = cp.addMethodref(bodyPublishersClass, cp.addNameAndType(
+				cp.addUtf8("ofString"), cp.addUtf8("(Ljava/lang/String;)Ljava/net/http/HttpRequest$BodyPublisher;")));
+		MethodrefConstant publisherNoBody = cp.addMethodref(bodyPublishersClass,
+				cp.addNameAndType(cp.addUtf8("noBody"), cp.addUtf8("()Ljava/net/http/HttpRequest$BodyPublisher;")));
+
 		ClassConstant httpResponseClass = cp.addClass(cp.addUtf8("java/net/http/HttpResponse"));
 		MethodrefConstant statusCode = cp.addInterfaceMethodref(httpResponseClass,
 				cp.addNameAndType(cp.addUtf8("statusCode"), cp.addUtf8("()I")));
@@ -135,39 +149,80 @@ final class JvmFetchRuntimeBuilder {
 		ConstantPool.StringConstant statusKey = cp.addString(":status");
 		ConstantPool.StringConstant bodyKey = cp.addString(":body");
 		ConstantPool.StringConstant headersResultKey = cp.addString(":headers");
-		ConstantPool.StringConstant getMethod = cp.addString("GET");
-		ConstantPool.StringConstant onlyGetMsg = cp.addString("fetch: only the GET method is currently supported");
+		ConstantPool.StringConstant unsupportedMsg = cp.addString("fetch: unsupported method");
+		// The supported HTTP methods, in canonical (upper-case) form. The request is sent
+		// with the canonical spelling regardless of the case the caller used.
+		String[] methods = { "GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH" };
+		ConstantPool.StringConstant[] methodConsts = new ConstantPool.StringConstant[methods.length];
+		for (int i = 0; i < methods.length; i++) {
+			methodConsts[i] = cp.addString(methods[i]);
+		}
 
 		// Local slots: 0 url, 1 options, 2 builder, 3 cursor, 4 response,
 		// 5 response-header alist, 6 iterator, 7 entry, 8 pair, 9 request headers,
 		// 10 method value, 11 plist cursor, 12 status (Long), 13 result accumulator,
-		// 14 body (quoted String).
+		// 14 body (quoted String), 15 request-body value, 16 canonical method (String),
+		// 17 method scratch (unquoted String), 18 body publisher.
 		Asm a = new Asm();
 
-		// --- options parsing: method (slot 10) and request headers (slot 9) ---
+		// --- options parsing: method (10), request headers (9), request body (15) ---
 		emitPlistGet(a, methodKey, 11, 10, objectArrayClass, stringClass, stringEquals);
 		emitPlistGet(a, headersKey, 11, 9, objectArrayClass, stringClass, stringEquals);
+		emitPlistGet(a, bodyKey, 11, 15, objectArrayClass, stringClass, stringEquals);
 
-		// --- validate method: nil defaults to GET, otherwise must equal "GET" ---
-		int methodOk = a.label();
+		// --- resolve the canonical method into slot 16: nil defaults to GET, otherwise
+		// it
+		// must match one of the supported methods (case-insensitively). ---
+		int methodDone = a.label();
 		a.aload(10);
-		a.branch(Opcode.IFNULL, methodOk);
+		int methodGiven = a.label();
+		a.branch(Opcode.IFNONNULL, methodGiven);
+		a.ldc(methodConsts[0].index()); // "GET"
+		a.astore(16);
+		a.branch(Opcode.GOTO, methodDone);
+		a.bind(methodGiven);
 		a.aload(10);
-		a.checkcast(stringClass);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [methodStr]
-		a.ldc(getMethod.index());
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringEqualsIgnoreCase.index()); // [bool]
-		a.branch(Opcode.IFNE, methodOk);
-		// throw new RuntimeException("fetch: only the GET method is currently supported")
+		a.astore(17);
+		for (ConstantPool.StringConstant m : methodConsts) {
+			int next = a.label();
+			a.aload(17);
+			a.ldc(m.index());
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(stringEqualsIgnoreCase.index()); // [bool]
+			a.branch(Opcode.IFEQ, next);
+			a.ldc(m.index());
+			a.astore(16);
+			a.branch(Opcode.GOTO, methodDone);
+			a.bind(next);
+		}
+		// none matched: throw new RuntimeException("fetch: unsupported method")
 		a.op(Opcode.NEW);
 		a.u2(runtimeExceptionClass.index());
 		a.op(Opcode.DUP);
-		a.ldc(onlyGetMsg.index());
+		a.ldc(unsupportedMsg.index());
 		a.op(Opcode.INVOKESPECIAL);
 		a.u2(runtimeExceptionInit.index());
 		a.op(Opcode.ATHROW);
-		a.bind(methodOk);
+		a.bind(methodDone);
+
+		// --- resolve the request-body publisher into slot 18: nil -> noBody(), otherwise
+		// ofString(stripQuotes(body)). ---
+		int bodyDone = a.label();
+		a.aload(15);
+		int bodyGiven = a.label();
+		a.branch(Opcode.IFNONNULL, bodyGiven);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(publisherNoBody.index()); // [publisher]
+		a.astore(18);
+		a.branch(Opcode.GOTO, bodyDone);
+		a.bind(bodyGiven);
+		a.aload(15);
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [bodyStr]
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(publisherOfString.index()); // [publisher]
+		a.astore(18);
+		a.bind(bodyDone);
 
 		// builder = HttpRequest.newBuilder(URI.create(stripQuotes(url)))
 		stripQuotes(a, 0, stringClass, stringLength, stringSubstring); // [name]
@@ -216,6 +271,16 @@ final class JvmFetchRuntimeBuilder {
 		a.astore(3);
 		a.branch(Opcode.GOTO, hLoop);
 		a.bind(hEnd);
+
+		// builder.method(canonicalMethod, publisher)
+		a.aload(2); // [builder]
+		a.aload(16); // [builder, method]
+		a.aload(18); // [builder, method, publisher]
+		a.op(Opcode.INVOKEINTERFACE);
+		a.u2(builderMethod.index());
+		a.op(3); // count: this + 2 args
+		a.op(0);
+		a.op(Opcode.POP); // discard returned builder
 
 		// response = HttpClient.newHttpClient().send(builder.build(),
 		// BodyHandlers.ofString())
@@ -346,7 +411,7 @@ final class JvmFetchRuntimeBuilder {
 		Utf8Constant descUtf8 = cp.addUtf8(METHOD_DESC);
 		// The header-pair construction nests Object[2] allocations a few deep; 12 leaves
 		// headroom.
-		return new FetchMethod(nameUtf8, descUtf8, 12, 16, code);
+		return new FetchMethod(nameUtf8, descUtf8, 12, 20, code);
 	}
 
 	/**

@@ -937,9 +937,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 30: clock_time_get (i32, i64, i32) -> i32
 				types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32 }, new Type[] { Type.I32 });
-				// type 31 (TYPE_FETCH): fetch (10x i32) -> i32 errno
+				// type 31 (TYPE_FETCH): fetch (12x i32) -> i32 errno. The 12 params are
+				// method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, reqHdrPtr, reqHdrLen,
+				// statusPtr, rhdrPtrOut, rhdrLenOut, bodyPtrOut, bodyLenOut.
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32,
-						Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+						Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 			})
 			// Import section
 			.writeImportSection(imports -> {

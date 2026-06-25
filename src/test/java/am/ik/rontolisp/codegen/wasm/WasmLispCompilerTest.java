@@ -29,20 +29,26 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void fetchWithLiteralNonGetMethodIsCompileError() {
-		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"POST\"))"))
+	void fetchWithLiteralUnsupportedMethodIsCompileError() {
+		// A method outside the supported set is rejected at compile time (only literal
+		// methods are checked; a runtime-computed one is treated as GET).
+		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"CONNECT\"))"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("GET");
-		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" '(:method \"DELETE\"))"))
+			.hasMessageContaining("unsupported method");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" '(:method \"FOO\"))"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("GET");
+			.hasMessageContaining("unsupported method");
 	}
 
 	@Test
-	void fetchWithGetMethodCompilesInComponentMode() {
-		// literal GET (any case) and a runtime-computed options value both compile
+	void fetchWithSupportedMethodsAndBodyCompilesInComponentMode() {
+		// literal GET (any case), the other supported methods, a request :body, and a
+		// runtime-computed options value all compile
 		assertThat(compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"get\"))")).isNotEmpty();
-		assertThat(compileComponent("(let ((opts (list :method \"POST\"))) (rontolisp:fetch \"http://x/\" opts))"))
+		assertThat(compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"POST\" :body \"data\"))"))
+			.isNotEmpty();
+		assertThat(compileComponent("(rontolisp:fetch \"http://x/\" '(:method \"DELETE\"))")).isNotEmpty();
+		assertThat(compileComponent("(let ((opts (list :method \"PUT\"))) (rontolisp:fetch \"http://x/\" opts))"))
 			.isNotEmpty();
 	}
 

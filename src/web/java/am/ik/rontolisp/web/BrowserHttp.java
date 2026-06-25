@@ -26,9 +26,11 @@ public final class BrowserHttp {
 	 * @param method the HTTP method
 	 * @param url the request URL
 	 * @param reqHeaders request headers as alternating {@code name\nvalue\n...} lines
+	 * @param body the request body (used only when {@code hasBody} is {@code "1"})
+	 * @param hasBody {@code "1"} when a request body is present, {@code "0"} otherwise
 	 * @return {@code statusheadersbody}, or {@code ERRmessage} on failure
 	 */
-	@JS(args = { "method", "url", "reqHeaders" },
+	@JS(args = { "method", "url", "reqHeaders", "body", "hasBody" },
 			value = """
 					try {
 					  var xhr = new XMLHttpRequest();
@@ -37,12 +39,13 @@ public final class BrowserHttp {
 					  for (var i = 0; i + 1 < hs.length; i += 2) {
 					    if (hs[i].length > 0) { try { xhr.setRequestHeader(hs[i], hs[i + 1]); } catch (e) {} }
 					  }
-					  xhr.send(null);
+					  xhr.send(hasBody === '1' ? body : null);
 					  return '' + xhr.status + '\\u0001' + xhr.getAllResponseHeaders() + '\\u0001' + xhr.responseText;
 					} catch (e) {
 					  return 'ERR\\u0001' + ((e && e.message) ? e.message : 'request failed');
 					}
 					""")
-	public static native JSString request(JSString method, JSString url, JSString reqHeaders);
+	public static native JSString request(JSString method, JSString url, JSString reqHeaders, JSString body,
+			JSString hasBody);
 
 }

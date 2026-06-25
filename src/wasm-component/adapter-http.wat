@@ -66,6 +66,13 @@
   (import "w" "drop-future" (func $drop_future (param i32)))
   (import "w" "drop-resp" (func $drop_resp (param i32)))
   (import "w" "drop-body" (func $drop_body (param i32)))
+  ;; --- request body (rontolisp:fetch :body) ---
+  ;; req-body/body-write return result<own<...>> into a return pointer; body-finish takes
+  ;; the body, an option<trailers> (disc, handle) and a result return pointer.
+  (import "w" "req-body" (func $req_body (param i32 i32)))
+  (import "w" "body-write" (func $body_write (param i32 i32)))
+  (import "w" "body-finish" (func $body_finish (param i32 i32 i32 i32)))
+  (import "w" "drop-outgoing-body" (func $drop_outgoing_body (param i32)))
 
   ;; Return the first preopened directory descriptor (cached).
   (func $ensure_preopen (result i32)
@@ -278,16 +285,20 @@
         (br $l)))
     (i32.const 0))
 
-  ;; fetch(method, url_ptr, url_len, rhdr_ptr, rhdr_len, st_ptr, rhdr_out, rhdr_len_out,
-  ;;       body_out, body_len_out) -> errno. Performs an outgoing GET over wasi:http and
-  ;; writes the status, a serialized response-header buffer (at 0x60000) and the response
-  ;; body bytes (at 0x70000) back through the out pointers. method is reserved (0 = GET).
-  ;; Request headers arrive as a count-prefixed buffer:
+  ;; fetch(method, url_ptr, url_len, req_body_ptr, req_body_len, rhdr_ptr, rhdr_len, st_ptr,
+  ;;       rhdr_out, rhdr_len_out, body_out, body_len_out) -> errno. Performs an outgoing
+  ;; request over wasi:http and writes the status, a serialized response-header buffer (at
+  ;; 0x60000) and the response body bytes (at 0x70000) back through the out pointers. method
+  ;; is the WASI http method variant discriminant (0=get,1=head,2=post,3=put,4=delete,
+  ;; 6=options,8=patch). When req_body_len > 0 the req_body_ptr..+len bytes (read straight
+  ;; from the shared memory) are streamed as the request body. Request headers arrive as a
+  ;; count-prefixed buffer:
   ;;   count:u32, then per header { name_len:u32, name bytes, value_len:u32, value bytes }.
   ;; The response-header buffer uses the same layout. Canonical result scratch lives above
   ;; the fd table in page 5; the header/body output buffers use pages 6 and 7+.
   (func $fetch
     (param $method i32) (param $url_ptr i32) (param $url_len i32)
+    (param $req_body_ptr i32) (param $req_body_len i32)
     (param $rhdr_ptr i32) (param $rhdr_len i32)
     (param $st_ptr i32) (param $rhdr_out i32) (param $rhdr_len_out i32)
     (param $body_out i32) (param $body_len_out i32) (result i32)
@@ -298,6 +309,7 @@
     (local $p i32) (local $cnt i32) (local $k i32) (local $nl i32) (local $vl i32) (local $np i32) (local $vp i32)
     (local $ep i32) (local $ecnt i32) (local $hp i32) (local $e i32)
     (local $out i32) (local $total i32) (local $src i32) (local $n i32) (local $j i32)
+    (local $obody i32) (local $bstream i32) (local $bi i32) (local $chunk i32)
 
     ;; --- parse URL: find "://" ---
     (local.set $colon (i32.const -1))
@@ -350,11 +362,19 @@
       (local.set $k (i32.add (local.get $k) (i32.const 1)))
       (br $h)))
     (local.set $req (call $req_new (local.get $fields)))
-    (drop (call $set_method (local.get $req) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (drop (call $set_method (local.get $req) (local.get $method) (i32.const 0) (i32.const 0)))
     (drop (call $set_scheme (local.get $req) (i32.const 1) (local.get $isHttps) (i32.const 0) (i32.const 0)))
     (drop (call $set_authority (local.get $req) (i32.const 1)
       (i32.add (local.get $url_ptr) (local.get $authStart)) (local.get $authLen)))
     (drop (call $set_path (local.get $req) (i32.const 1) (local.get $pathStart) (local.get $pathLen)))
+
+    ;; Obtain the outgoing-body BEFORE handle consumes the request (if a body was given).
+    ;; req-body -> result<own<outgoing-body>>: disc@0x508A0, handle@0x508A4.
+    (if (i32.gt_u (local.get $req_body_len) (i32.const 0))
+      (then
+        (call $req_body (local.get $req) (i32.const 0x508A0))
+        (if (i32.load8_u (i32.const 0x508A0)) (then (return (i32.const 8))))
+        (local.set $obody (i32.load (i32.const 0x508A4)))))
 
     ;; --- handle + await ---
     ;; handle -> result<future-incoming-response, error-code>. error-code is 8-byte
@@ -363,6 +383,30 @@
     (call $handle (local.get $req) (i32.const 0) (i32.const 0) (i32.const 0x50800))
     (if (i32.load8_u (i32.const 0x50800)) (then (return (i32.const 2))))
     (local.set $future (i32.load (i32.const 0x50808)))
+
+    ;; Stream the request body (if any), then finish it, before awaiting the response.
+    (if (i32.gt_u (local.get $req_body_len) (i32.const 0))
+      (then
+        ;; stream = outgoing-body.write(obody) -> result<own<output-stream>>: handle@0x508B4
+        (call $body_write (local.get $obody) (i32.const 0x508B0))
+        (if (i32.load8_u (i32.const 0x508B0)) (then (return (i32.const 9))))
+        (local.set $bstream (i32.load (i32.const 0x508B4)))
+        ;; write in <=4096-byte chunks (blocking-write-and-flush's per-call limit)
+        (local.set $bi (i32.const 0))
+        (block $wd (loop $wl
+          (br_if $wd (i32.ge_u (local.get $bi) (local.get $req_body_len)))
+          (local.set $chunk (i32.sub (local.get $req_body_len) (local.get $bi)))
+          (if (i32.gt_u (local.get $chunk) (i32.const 4096)) (then (local.set $chunk (i32.const 4096))))
+          (call $write (local.get $bstream)
+            (i32.add (local.get $req_body_ptr) (local.get $bi)) (local.get $chunk) (i32.const 0x508C0))
+          (if (i32.load8_u (i32.const 0x508C0)) (then (return (i32.const 10))))
+          (local.set $bi (i32.add (local.get $bi) (local.get $chunk)))
+          (br $wl)))
+        ;; the output-stream is a child of the outgoing-body: drop it before finish
+        (call $drop_out (local.get $bstream))
+        ;; finish(obody, none) -- trailers option = none (disc 0, handle 0); result ignored
+        (call $body_finish (local.get $obody) (i32.const 0) (i32.const 0) (i32.const 0x508D0))))
+
     (local.set $poll (call $future_subscribe (local.get $future)))
     (call $poll_block (local.get $poll))
     (call $drop_pollable (local.get $poll))

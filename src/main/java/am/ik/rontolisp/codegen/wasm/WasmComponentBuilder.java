@@ -92,8 +92,8 @@ public final class WasmComponentBuilder {
 	 * indices shift relative to the base block: 0 io/error, 1 io/poll, 2 io/streams, 3
 	 * cli/stdout, 4 random, 5 wall-clock, 6 monotonic-clock, 7 environment, 8
 	 * filesystem/types, 9 filesystem/preopens, 10 cli/stdin, 11 http/types, 12
-	 * http/outgoing-handler. The block defines component types 0-24, so the next free
-	 * component type index is 25. This variant is only used when the program calls
+	 * http/outgoing-handler. The block defines component types 0-25, so the next free
+	 * component type index is 26. This variant is only used when the program calls
 	 * {@code fetch}; a component that imports {@code wasi:http} requires
 	 * {@code wasmtime run -S http=y}, so non-fetch programs keep using the base block.
 	 */
@@ -228,9 +228,9 @@ public final class WasmComponentBuilder {
 
 	// The HTTP variant: like buildBase but with wasi:io/poll + wasi:http added. The poll
 	// instance shifts every base component-instance index by one (see IMPORT_BLOCK_HTTP),
-	// and 22 extra lowered functions (16 http calls + 6 resource drops) are appended
+	// and 26 extra lowered functions (19 http calls + 7 resource drops) are appended
 	// after
-	// the base 15, so the rontolisp core's run becomes core func 38. All index math is
+	// the base 15, so the rontolisp core's run becomes core func 42. All index math is
 	// re-derived from `wasm-tools dump` of the regenerated http reference component.
 	private static byte[] buildHttp(byte[] coreModule) {
 		final ComponentWriter c = new ComponentWriter();
@@ -261,7 +261,7 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceFunc(8, "[method]descriptor.write-via-stream"),
 				ComponentWriter.aliasInstanceFunc(9, "get-directories"),
 				ComponentWriter.aliasInstanceFunc(10, "get-stdin"),
-				// http funcs 12-27
+				// http funcs 12-30
 				ComponentWriter.aliasInstanceFunc(1, "[method]pollable.block"),
 				ComponentWriter.aliasInstanceFunc(11, "[constructor]fields"),
 				ComponentWriter.aliasInstanceFunc(11, "[method]fields.append"),
@@ -278,7 +278,13 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceFunc(11, "[method]incoming-response.headers"),
 				ComponentWriter.aliasInstanceFunc(11, "[method]incoming-response.consume"),
 				ComponentWriter.aliasInstanceFunc(11, "[method]incoming-body.stream"),
-				// resource types to drop: component types 25-33
+				// http funcs 28-30: request body (outgoing-request.body /
+				// outgoing-body.write
+				// / outgoing-body.finish)
+				ComponentWriter.aliasInstanceFunc(11, "[method]outgoing-request.body"),
+				ComponentWriter.aliasInstanceFunc(11, "[method]outgoing-body.write"),
+				ComponentWriter.aliasInstanceFunc(11, "[static]outgoing-body.finish"),
+				// resource types to drop: component types 26-35
 				ComponentWriter.aliasInstanceType(2, "output-stream"),
 				ComponentWriter.aliasInstanceType(2, "input-stream"),
 				ComponentWriter.aliasInstanceType(8, "descriptor"), ComponentWriter.aliasInstanceType(1, "pollable"),
@@ -286,17 +292,18 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceType(11, "outgoing-request"),
 				ComponentWriter.aliasInstanceType(11, "future-incoming-response"),
 				ComponentWriter.aliasInstanceType(11, "incoming-response"),
-				ComponentWriter.aliasInstanceType(11, "incoming-body"))));
-		// Lower to core funcs 1-37 (core func 0 = cabi_realloc). Canonical options mirror
+				ComponentWriter.aliasInstanceType(11, "incoming-body"),
+				ComponentWriter.aliasInstanceType(11, "outgoing-body"))));
+		// Lower to core funcs 1-41 (core func 0 = cabi_realloc). Canonical options mirror
 		// what wasm-tools chooses for each WIT function (confirmed against the
 		// reference).
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), // 1
 																											// get-stdout
 				ComponentWriter.canonLowerMemory(1, 0), // 2 write
 				ComponentWriter.canonLower(2, 0, 0), // 3 read
-				ComponentWriter.canonResourceDrop(25), // 4 drop output-stream
-				ComponentWriter.canonResourceDrop(26), // 5 drop input-stream
-				ComponentWriter.canonResourceDrop(27), // 6 drop descriptor
+				ComponentWriter.canonResourceDrop(26), // 4 drop output-stream
+				ComponentWriter.canonResourceDrop(27), // 5 drop input-stream
+				ComponentWriter.canonResourceDrop(28), // 6 drop descriptor
 				ComponentWriter.canonLower(3), // 7 get-random-u64
 				ComponentWriter.canonLowerMemory(4, 0), // 8 wall-clock.now
 				ComponentWriter.canonLower(5), // 9 monotonic-clock.now
@@ -325,25 +332,30 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonLower(25), // 29 incoming-response.headers
 				ComponentWriter.canonLowerMemory(26, 0), // 30 incoming-response.consume
 				ComponentWriter.canonLowerMemory(27, 0), // 31 incoming-body.stream
-				ComponentWriter.canonResourceDrop(28), // 32 drop pollable
-				ComponentWriter.canonResourceDrop(29), // 33 drop fields
-				ComponentWriter.canonResourceDrop(30), // 34 drop outgoing-request
-				ComponentWriter.canonResourceDrop(31), // 35 drop future-incoming-response
-				ComponentWriter.canonResourceDrop(32), // 36 drop incoming-response
-				ComponentWriter.canonResourceDrop(33)))); // 37 drop incoming-body
+				ComponentWriter.canonResourceDrop(29), // 32 drop pollable
+				ComponentWriter.canonResourceDrop(30), // 33 drop fields
+				ComponentWriter.canonResourceDrop(31), // 34 drop outgoing-request
+				ComponentWriter.canonResourceDrop(32), // 35 drop future-incoming-response
+				ComponentWriter.canonResourceDrop(33), // 36 drop incoming-response
+				ComponentWriter.canonResourceDrop(34), // 37 drop incoming-body
+				ComponentWriter.canonLowerMemory(28, 0), // 38 outgoing-request.body
+				ComponentWriter.canonLowerMemory(29, 0), // 39 outgoing-body.write
+				ComponentWriter.canonLowerMemoryReallocUtf8(30, 0, 0), // 40
+																		// outgoing-body.finish
+				ComponentWriter.canonResourceDrop(35)))); // 41 drop outgoing-body
 		// Group the lowered functions for the http adapter's "w" import (core instance
 		// 1).
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-						List.of("get-stdout", "write", "read", "drop-out", "drop-in", "drop-desc", "get-random-u64",
-								"wall-now", "mono-now", "get-environment", "open-at", "read-via-stream",
-								"write-via-stream", "get-directories", "get-stdin", "poll-block", "fields-new",
-								"fields-append", "fields-entries", "req-new", "set-method", "set-scheme",
-								"set-authority", "set-path", "handle", "future-subscribe", "future-get", "resp-status",
-								"resp-headers", "resp-consume", "body-stream", "drop-pollable", "drop-fields",
-								"drop-req", "drop-future", "drop-resp", "drop-body"),
-						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-								25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
+					List.of("get-stdout", "write", "read", "drop-out", "drop-in", "drop-desc", "get-random-u64",
+							"wall-now", "mono-now", "get-environment", "open-at", "read-via-stream", "write-via-stream",
+							"get-directories", "get-stdin", "poll-block", "fields-new", "fields-append",
+							"fields-entries", "req-new", "set-method", "set-scheme", "set-authority", "set-path",
+							"handle", "future-subscribe", "future-get", "resp-status", "resp-headers", "resp-consume",
+							"body-stream", "drop-pollable", "drop-fields", "drop-req", "drop-future", "drop-resp",
+							"drop-body", "req-body", "body-write", "body-finish", "drop-outgoing-body"),
+					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+							26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -352,19 +364,18 @@ public final class WasmComponentBuilder {
 		// and http both satisfied by the adapter instance 2 (it exports fetch too).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
 			.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1", "http"), List.of(0, 2, 2)))));
-		// Alias rontolisp's run (core func 38 = cabi_realloc + 37 lowered funcs).
+		// Alias rontolisp's run (core func 42 = cabi_realloc + 41 lowered funcs).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Types: 34 = result<_,_>, 35 = func () -> result<_,_> (component types 0-24 from
-		// the
-		// import block, 25-33 from the resource-type aliases above).
+		// Types: 36 = result<_,_>, 37 = func () -> result<_,_> (component types 0-25 from
+		// the import block, 26-35 from the resource-type aliases above).
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter
-			.vec(List.of(ComponentWriter.definedResultVoid(), ComponentWriter.funcTypeResultType(34))));
-		// Lift run (core func 38) into component func 28 (after the 28 aliased funcs
-		// 0-27).
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(38, 35))));
+			.vec(List.of(ComponentWriter.definedResultVoid(), ComponentWriter.funcTypeResultType(36))));
+		// Lift run (core func 42) into component func 31 (after the 31 aliased funcs
+		// 0-30).
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(42, 37))));
 		// Component instance 13 (after import instances 0-12) exporting run.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 28))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 31))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.2.0", 13))));
 		return c.toByteArray();

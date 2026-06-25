@@ -210,8 +210,9 @@ public final class Environment implements Scope {
 		registerIntrospection(env, LispNames.LIST_SPECIAL_FORMS);
 		// fetch performs an outgoing HTTP request, JavaScript fetch-style. It belongs to
 		// the rontolisp package (it is not a Common Lisp standard function). The optional
-		// second argument is an options property list (:method, :headers); only the GET
-		// method is currently supported. The result is the property list
+		// second argument is an options property list (:method, :headers, :body). The
+		// supported methods are GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH; :body is
+		// the request body string (e.g. for POST/PUT). The result is the property list
 		// (:status <int> :body <string> :headers <alist>), where :headers is an alist of
 		// (name . value) string pairs.
 		String fetchName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
@@ -225,9 +226,10 @@ public final class Environment implements Scope {
 			LispVal options = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
+			String body = fetchBody(options);
 			HttpSupport.HttpResult result;
 			try {
-				result = HttpSupport.request(method, url.value(), requestHeaders);
+				result = HttpSupport.request(method, url.value(), requestHeaders, body);
 			}
 			catch (RuntimeException ex) {
 				throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), "fetch failed"));
@@ -257,12 +259,17 @@ public final class Environment implements Scope {
 		return LispNil.INSTANCE;
 	}
 
-	// Resolves the :method option (default GET). Only GET is currently supported.
+	// The HTTP methods rontolisp:fetch supports, in canonical (upper-case) form.
+	private static final List<String> SUPPORTED_METHODS = List.of("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS",
+			"PATCH");
+
+	// Resolves the :method option (default GET), normalizing it to upper case. Only the
+	// methods in SUPPORTED_METHODS are accepted.
 	private static String fetchMethod(LispVal options) {
 		LispVal methodVal = plistGet(options, ":method");
 		String method;
 		if (methodVal instanceof LispNil) {
-			method = "GET";
+			return "GET";
 		}
 		else if (methodVal instanceof LispString str) {
 			method = str.value();
@@ -270,11 +277,24 @@ public final class Environment implements Scope {
 		else {
 			throw new LispEvalException(LispNames.FETCH + " :method must be a string, got: " + methodVal.print());
 		}
-		if (!method.equalsIgnoreCase("GET")) {
-			throw new LispEvalException(
-					LispNames.FETCH + ": only the GET method is currently supported, got: " + method);
+		String canonical = method.toUpperCase(Locale.ROOT);
+		if (!SUPPORTED_METHODS.contains(canonical)) {
+			throw new LispEvalException(LispNames.FETCH + ": unsupported method: " + method + " (supported: "
+					+ String.join(", ", SUPPORTED_METHODS) + ")");
 		}
-		return method;
+		return canonical;
+	}
+
+	// Resolves the :body option (default none). Must be a string when present.
+	private static @Nullable String fetchBody(LispVal options) {
+		LispVal bodyVal = plistGet(options, ":body");
+		if (bodyVal instanceof LispNil) {
+			return null;
+		}
+		if (bodyVal instanceof LispString str) {
+			return str.value();
+		}
+		throw new LispEvalException(LispNames.FETCH + " :body must be a string, got: " + bodyVal.print());
 	}
 
 	private static List<HttpSupport.Header> parseHeaderAlist(LispVal headers) {

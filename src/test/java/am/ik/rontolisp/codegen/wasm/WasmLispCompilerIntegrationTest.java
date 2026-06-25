@@ -2554,12 +2554,26 @@ class WasmLispCompilerIntegrationTest {
 			exchange.getResponseBody().write(body);
 			exchange.close();
 		});
+		// Echoes "<method>:<request-body>" so the test can verify the method and body are
+		// sent.
+		server.createContext("/echo", exchange -> {
+			String received = new String(exchange.getRequestBody().readAllBytes(),
+					java.nio.charset.StandardCharsets.UTF_8);
+			byte[] body = (exchange.getRequestMethod() + ":" + received)
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
 		server.start();
 		try {
-			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/hello";
+			String base = "http://127.0.0.1:" + server.getAddress().getPort();
+			String url = base + "/hello";
+			String echo = base + "/echo";
 			String program = "(let ((r (rontolisp:fetch \"" + url + "\")))" + " (print (getf r :status))"
 					+ " (print (getf r :body)) (print (getf r :headers)))" + " (print (getf (rontolisp:fetch \"" + url
-					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) :body))";
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) :body))"
+					+ " (print (getf (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"hi\")) :body))";
 			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
@@ -2571,7 +2585,8 @@ class WasmLispCompilerIntegrationTest {
 			assertThat(out).contains("200")
 				.contains("\"hello-from-fetch\"")
 				.contains("x-test")
-				.contains("\"got-header\"");
+				.contains("\"got-header\"")
+				.contains("\"POST:hi\"");
 		}
 		finally {
 			server.stop(0);

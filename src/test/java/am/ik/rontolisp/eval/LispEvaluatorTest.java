@@ -2455,9 +2455,32 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void fetchRejectsNonGetMethod() {
-		assertThatThrownBy(() -> eval("(rontolisp:fetch \"http://127.0.0.1:1/x\" (list :method \"POST\"))"))
-			.hasMessageContaining("GET");
+	void fetchSendsMethodAndBody() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/post", exchange -> {
+			String received = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+			byte[] body = (exchange.getRequestMethod() + ":" + received).getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			LispVal result = eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/post\" (list :method \"POST\" :body \"hello\")) :body)");
+			assertThat(result).isEqualTo(new LispString("POST:hello"));
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void fetchRejectsUnsupportedMethod() {
+		assertThatThrownBy(() -> eval("(rontolisp:fetch \"http://127.0.0.1:1/x\" (list :method \"FOO\"))"))
+			.hasMessageContaining("unsupported method");
 	}
 
 	@Test

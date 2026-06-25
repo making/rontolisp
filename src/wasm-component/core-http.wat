@@ -36,6 +36,13 @@
   (import "wasi:http/types@0.2.0" "[method]incoming-response.headers" (func (param i32) (result i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-response.consume" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-body.stream" (func (param i32 i32)))
+  ;; Request body support (rontolisp:fetch :body). outgoing-request.body and
+  ;; outgoing-body.write return result<own<...>> via a return pointer; outgoing-body.finish
+  ;; is a static method taking the body plus an option<trailers> and a result return ptr.
+  (import "wasi:http/types@0.2.0" "[method]outgoing-request.body" (func (param i32 i32)))
+  (import "wasi:http/types@0.2.0" "[method]outgoing-body.write" (func (param i32 i32)))
+  (import "wasi:http/types@0.2.0" "[static]outgoing-body.finish" (func (param i32 i32 i32 i32)))
+  (import "wasi:http/types@0.2.0" "[resource-drop]outgoing-body" (func (param i32)))
   (import "wasi:http/outgoing-handler@0.2.0" "handle" (func (param i32 i32 i32 i32)))
   (memory (export "memory") 16)
   (global $hp (mut i32) (i32.const 65536))

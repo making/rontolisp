@@ -8,12 +8,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Performs outgoing HTTP requests for the interpreter backend, using the JDK
  * {@link HttpClient}. The result is a backend-neutral {@link HttpResult} that the
- * interpreter converts into Lisp values. The {@code method} parameter is threaded through
- * so future HTTP methods (POST, etc.) can reuse this entry point; the {@code rontolisp}
- * package currently only exposes GET.
+ * interpreter converts into Lisp values. The {@code method} and {@code body} parameters
+ * carry the request method and optional request body (e.g. for POST/PUT).
  */
 final class HttpSupport {
 
@@ -32,15 +33,17 @@ final class HttpSupport {
 
 	/**
 	 * Sends an HTTP request and reads the full response body as a string.
-	 * @param method the HTTP method (e.g. {@code "GET"})
+	 * @param method the HTTP method (e.g. {@code "GET"}, {@code "POST"})
 	 * @param url the request URL
 	 * @param requestHeaders the request headers to set
+	 * @param body the request body, or {@code null} for no body
 	 * @return the response status, body and headers
 	 */
-	static HttpResult request(String method, String url, List<Header> requestHeaders) {
+	static HttpResult request(String method, String url, List<Header> requestHeaders, @Nullable String body) {
 		try (HttpClient client = HttpClient.newHttpClient()) {
-			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-				.method(method, HttpRequest.BodyPublishers.noBody());
+			HttpRequest.BodyPublisher publisher = (body == null) ? HttpRequest.BodyPublishers.noBody()
+					: HttpRequest.BodyPublishers.ofString(body);
+			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
 			for (Header header : requestHeaders) {
 				builder.header(header.name(), header.value());
 			}
