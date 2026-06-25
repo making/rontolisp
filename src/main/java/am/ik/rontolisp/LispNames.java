@@ -857,6 +857,15 @@ public final class LispNames {
 	 */
 	public static final String LIST_SPECIAL_FORMS = "list-special-forms";
 
+	/**
+	 * The {@code fetch} function provided by the {@code rontolisp} package. Performs an
+	 * outgoing HTTP request (JavaScript {@code fetch}-style) and returns a property list
+	 * {@code (:status <int> :body <string> :headers <alist>)}. The optional second
+	 * argument is an options property list ({@code :method}, {@code :headers}); only the
+	 * GET method is currently supported.
+	 */
+	public static final String FETCH = "fetch";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";
 

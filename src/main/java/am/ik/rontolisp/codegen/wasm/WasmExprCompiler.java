@@ -113,6 +113,10 @@ final class WasmExprCompiler {
 					WasmIntrospectionCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
+				if (LispNames.FETCH.equals(qn.member())) {
+					WasmFetchCompiler.compile(cons, ctx);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {

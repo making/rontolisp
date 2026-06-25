@@ -2485,7 +2485,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(list-functions list-macros list-special-forms version)");
+			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -2503,6 +2503,79 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (mapcar #'rest '((1 2) (3 4))))")).isEqualTo("((2) (4))");
 		assertThat(compileAndRun("(print (funcall #'nth 1 '(1 2 3)))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (mapcar #'second '((1 2) (3 4))))")).isEqualTo("(2 4)");
+	}
+
+	@Test
+	void componentFetchUnreachableReturnsNil() throws Exception {
+		// A fetch component requires wasi:http (so it must be run with -S http=y) and
+		// must
+		// handle a failed request without trapping. Fetching an unreachable port
+		// exercises
+		// the full request/poll/response path; the connection error is detected and fetch
+		// returns nil (deterministic, no server).
+		String program = "(print (rontolisp:fetch \"http://127.0.0.1:1/nope\"))";
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-err.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-S", "http=y",
+				"/tmp/fetch-err.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("nil");
+	}
+
+	@Test
+	void componentFetchRequiresHttpFlag() throws Exception {
+		// Without -S http=y the wasi:http imports are unsatisfied, so a fetch component
+		// fails to instantiate -- confirming non-fetch components (which do not import
+		// wasi:http) keep running without the flag.
+		String program = "(print (rontolisp:fetch \"http://127.0.0.1:1/nope\"))";
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-noflag.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y",
+				"/tmp/fetch-noflag.component.wasm");
+		assertThat(result.getExitCode()).isNotZero();
+	}
+
+	@Test
+	@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "RONTOLISP_HTTP_E2E", matches = "1")
+	void componentFetchOverHttp(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+		// Full success-path E2E against a local HTTP server, run with the host's wasmtime
+		// (must be on PATH). Opt-in (RONTOLISP_HTTP_E2E=1) and uses local wasmtime rather
+		// than the container because reaching a host server from the container needs
+		// host-port bridging that is environment-sensitive.
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/hello", exchange -> {
+			byte[] body = "hello-from-fetch".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			if ("abc".equals(exchange.getRequestHeaders().getFirst("X-Custom"))) {
+				body = "got-header".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			}
+			exchange.getResponseHeaders().add("X-Test", "ok");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/hello";
+			String program = "(let ((r (rontolisp:fetch \"" + url + "\")))" + " (print (getf r :status))"
+					+ " (print (getf r :body)) (print (getf r :headers)))" + " (print (getf (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) :body))";
+			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
+			java.nio.file.Files.write(wasm, componentBytes);
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-S", "http=y", wasm.toString())
+				.redirectErrorStream(true)
+				.start();
+			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+			p.waitFor();
+			assertThat(out).contains("200")
+				.contains("\"hello-from-fetch\"")
+				.contains("x-test")
+				.contains("\"got-header\"");
+		}
+		finally {
+			server.stop(0);
+		}
 	}
 
 }

@@ -1,0 +1,25 @@
+package local:uni;
+
+// The unified WASI 0.2 import surface for rontolisp's component output. The interface
+// order fixes the component instance indices that WasmComponentBuilder.build assumes, so
+// it must not change; new interfaces are appended LAST (stdin was added last).
+world uni-http {
+  import wasi:io/error@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:random/random@0.2.0;
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:clocks/monotonic-clock@0.2.0;
+  import wasi:cli/environment@0.2.0;
+  import wasi:filesystem/types@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  // Appended for outgoing HTTP (rontolisp:fetch). http/types + http/outgoing-handler
+  // provide the request/response machinery. Calling pollable.block also materializes a
+  // wasi:io/poll instance; because wasm-tools orders imports by dependency, that poll
+  // instance is inserted right after wasi:io/error (instance 1), shifting every
+  // subsequent component instance index by one -- WasmComponentBuilder accounts for this.
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  export run: func() -> result;
+}

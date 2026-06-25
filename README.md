@@ -170,7 +170,47 @@ Notes and current limitations of component mode:
 - Requires a runtime with both the component model and wasm-GC enabled (wasmtime 24+; pass `-W gc`).
 - `print`/stdout, stdin (`read`, 0-argument `read-line`, over `wasi:cli/stdin`), and file I/O (`open`, `close`, `write-line`, stream `read-line`, `load`, `with-open-file`) all work. File access requires `--dir` (paths resolve against the first preopened directory).
 - `random` draws real entropy from the WASI 0.2 `wasi:random` interface (unlike the deterministic Preview 1 output), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks`, and `getenv` reads `wasi:cli/environment`.
+- Outgoing HTTP (`rontolisp:fetch`) works over `wasi:http`; run with `wasmtime run -W gc -S http=y`. It is component-only — using `fetch` without `--component` is a compile error. See [HTTP requests](#http-requests-rontolispfetch).
 - The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
+
+### HTTP requests (`rontolisp:fetch`)
+
+`rontolisp:fetch` performs an outgoing HTTP request, modeled on the JavaScript `fetch` API. It is not a Common Lisp standard function, so it lives in the `rontolisp` package.
+
+```lisp
+;; GET, no options
+(rontolisp:fetch "http://example.com/")
+
+;; GET with request headers (an alist of (name . value) string pairs)
+(rontolisp:fetch "http://example.com/api"
+                 (list :headers (list (cons "Accept" "application/json"))))
+```
+
+The optional second argument is an options property list. Recognized keys:
+
+- `:method` — the HTTP method as a string (default `"GET"`). Only GET is currently supported; any other method is an error.
+- `:headers` — request headers, an alist of `(name . value)` string pairs.
+
+The result is a property list `(:status <integer> :body <string> :headers <alist>)`, where `:headers` is an alist of `(name . value)` response-header pairs:
+
+```lisp
+(let ((res (rontolisp:fetch "http://example.com/")))
+  (print (getf res :status))    ; => 200
+  (print (getf res :body))      ; => "<html>...</html>"
+  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
+```
+
+Backend support:
+
+- **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`.
+- **WASM**: component mode only (`--component`), over `wasi:http`. Run with `wasmtime run -W gc -S http=y`. Using `fetch` in Preview 1 mode (without `--component`) is a compile error, because there is no host `wasi:http` for a core module.
+
+Current limitations:
+
+- Only the GET method. A non-GET `:method` is an error: the interpreter and JVM reject it at runtime; the WASM backend rejects a statically-known non-GET `:method` at compile time (a method computed at runtime cannot be checked there and is treated as GET).
+- No request body.
+- A failed request (for example a refused connection) raises an error in the interpreter and JVM, and returns `nil` in WASM.
+- In WASM, the response body is capped (about 576 KiB) and very large programs may exhaust the shared linear memory the response buffers reuse.
 
 ### Self-Hosted REPL
 
@@ -598,7 +638,7 @@ The compiled `eval` (WASM and JVM) differs from the interpreter only in these ca
 - **No big-integer promotion.** Arithmetic inside the runtime `eval` interpreter uses fixed-width integers and wraps on overflow, even on the JVM where compiled code itself promotes to big integers.
 - **An unbound variable evaluates to the symbol itself.** The interpreter signals `The variable x is unbound`; the runtime `eval` has no error channel and returns the symbol instead. An undefined function in call position returns `nil`.
 - **`let*`, `do`, `do*`, `dolist`, `return`, `defvar`, `defparameter`, `defconstant`, `incf`, `decf`, `format`, `error`, `ecase`, `etypecase`, `ccase`, `concatenate`, `with-open-file` and the file-stream functions (`open`, `close`, `write-line`) are not supported.** These forms are expanded or handled at compile time only; the runtime `eval` interpreter does not recognize them. The sequence functions (`length`, `reverse`, `member`, `member-if`, `find`, `find-if`, `position`, `count`, `assoc`, `assoc-if`, `getf`, `last`, `butlast`, `remove`, `remove-if`, `remove-if-not`, `remove-duplicates`, `delete`, `delete-if`, `delete-if-not`, `substitute`, `nsubstitute`, `nconc`, `copy-list`, `nreverse`, `make-list`, `union`, `intersection`, `set-difference`, `adjoin`, `identity`, `mapcan`, `sort`, `every`, `some`) and `princ-to-string`/`prin1-to-string` work, since they resolve through the compiled function registry.
-- **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros` and `rontolisp:list-special-forms` are resolved to compile-time constants; the runtime `eval`/`load` does not recognize them.
+- **The `rontolisp` package functions are not supported.** `rontolisp:version`, `rontolisp:list-functions`, `rontolisp:list-macros`, `rontolisp:list-special-forms` and `rontolisp:fetch` are compiled directly (constants or inline calls); the runtime `eval`/`load` does not recognize them.
 
 These differences come from the design: the runtime `eval` resolves operators by name against a compile-time registry of the functions that were actually compiled into the output, and built-in functions are shared with the compiled code.
 
@@ -671,7 +711,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (list-functions list-macros list-special-forms version)
+; => (fetch list-functions list-macros list-special-forms version)
 ```
 
 The classification follows the function namespace: a name is listed as a function exactly when it is usable as a function value via `#'name` (so `first`, `length`, `1+`, ... are functions even though they compile via inline expansion), and `list-macros`/`list-special-forms` list the operators that have no function value. Notes:

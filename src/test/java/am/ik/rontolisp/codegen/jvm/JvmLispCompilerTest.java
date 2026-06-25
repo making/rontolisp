@@ -2409,7 +2409,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(list-functions list-macros list-special-forms version)");
+			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -2426,6 +2426,61 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (mapcar #'rest '((1 2) (3 4))))")).isEqualTo("((2) (4))");
 		assertThat(compileAndRun("(print (funcall #'nth 1 '(1 2 3)))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (mapcar #'second '((1 2) (3 4))))")).isEqualTo("(2 4)");
+	}
+
+	@Test
+	void compileAndRunFetchReturnsStatusBodyAndHeaders() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/echo", exchange -> {
+			String received = exchange.getRequestHeaders().getFirst("X-Custom");
+			byte[] body = ("got:" + received).getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("X-Test", "ok");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			String url = "http://127.0.0.1:" + port + "/echo";
+			assertThat(compileAndRun("(print (getf (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) " + ":status))"))
+				.isEqualTo("200");
+			assertThat(compileAndRun("(print (getf (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) " + ":body))"))
+				.isEqualTo("\"got:abc\"");
+			String headers = compileAndRun("(print (getf (rontolisp:fetch \"" + url + "\") :headers))");
+			assertThat(headers).contains("x-test");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void compileAndRunFetchRejectsNonGetMethod() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/x", exchange -> {
+			exchange.sendResponseHeaders(200, 0);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			assertThatThrownBy(() -> compileAndRun(
+					"(rontolisp:fetch \"http://127.0.0.1:" + port + "/x\" (list :method \"POST\"))"))
+				.hasStackTraceContaining("GET");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void compileFetchRejectsWrongArgCount() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:fetch)")).isInstanceOf(UnsupportedOperationException.class);
 	}
 
 }

@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -191,6 +192,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant readLineHelperMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(readLineHelperName, readLineHelperDesc));
 
+		// fetch helper: emitted only when the program uses rontolisp:fetch.
+		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
+		boolean usesFetch = programUsesSymbol(program, fetchQualified);
+		MethodrefConstant fetchHelperMethod = usesFetch
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_NAME),
+						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
+				: null;
+
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
@@ -314,6 +323,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.mathRint(mathRint)
 			.objectEquals(objectEquals)
 			.readLineHelper(readLineHelperMethod)
+			.fetchHelper(fetchHelperMethod)
 			.dynamic(this.dynamic)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames));
@@ -541,6 +551,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant streamCountFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
 		Utf8Constant streamCountFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
 
+		// http-get runtime helper body (only when the program uses rontolisp:http-get).
+		final JvmFetchRuntimeBuilder.@Nullable FetchMethod fetchMethodBody = usesFetch
+				? JvmFetchRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
+						stringLength, stringSubstring, stringConcat)
+				: null;
+
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
 		Utf8Constant codeUtf8 = cp.addUtf8("Code");
@@ -675,6 +691,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(im.maxStack())
 									.writeU2(im.maxLocals())
 									.writeCode((Object[]) im.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (fetchMethodBody != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fetchMethodBody.name(),
+							fetchMethodBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(fetchMethodBody.maxStack())
+									.writeU2(fetchMethodBody.maxLocals())
+									.writeCode((Object[]) fetchMethodBody.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -947,6 +974,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final MethodrefConstant readLineHelper;
 
+		final @Nullable MethodrefConstant fetchHelper;
+
 		Map<String, MethodrefConstant> numOps = Map.of();
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
@@ -1027,6 +1056,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mathRint = Objects.requireNonNull(builder.mathRint);
 			this.objectEquals = Objects.requireNonNull(builder.objectEquals);
 			this.readLineHelper = Objects.requireNonNull(builder.readLineHelper);
+			this.fetchHelper = builder.fetchHelper;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -1107,6 +1137,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant objectEquals;
 
 			private @Nullable MethodrefConstant readLineHelper;
+
+			private @Nullable MethodrefConstant fetchHelper;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -1290,6 +1322,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder readLineHelper(MethodrefConstant readLineHelper) {
 				this.readLineHelper = readLineHelper;
+				return this;
+			}
+
+			Builder fetchHelper(@Nullable MethodrefConstant fetchHelper) {
+				this.fetchHelper = fetchHelper;
 				return this;
 			}
 

@@ -16,8 +16,8 @@ public final class PackageIntrospection {
 	/**
 	 * The functions owned by the {@code rontolisp} package, sorted alphabetically.
 	 */
-	public static final List<String> RONTOLISP_FUNCTION_NAMES = List.of(LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
-			LispNames.LIST_SPECIAL_FORMS, LispNames.VERSION);
+	public static final List<String> RONTOLISP_FUNCTION_NAMES = List.of(LispNames.FETCH, LispNames.LIST_FUNCTIONS,
+			LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.VERSION);
 
 	/**
 	 * Filters a collection of function-namespace names down to the user-defined

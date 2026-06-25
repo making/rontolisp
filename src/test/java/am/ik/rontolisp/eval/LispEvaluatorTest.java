@@ -2314,7 +2314,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print())
-			.isEqualTo("(list-functions list-macros list-special-forms version)");
+			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
 	}
 
 	@Test
@@ -2349,7 +2349,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print())
-			.isEqualTo("(list-functions list-macros list-special-forms version)");
+			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
 	}
 
 	@Test
@@ -2401,6 +2401,68 @@ class LispEvaluatorTest {
 	void inPackageUnknownPackageThrows() {
 		assertThatThrownBy(() -> eval("(in-package foo)")).isInstanceOf(am.ik.rontolisp.LispPackageException.class)
 			.hasMessageContaining("No such package: foo");
+	}
+
+	@Test
+	void fetchReturnsStatusBodyAndResponseHeaders() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/hello", exchange -> {
+			byte[] body = "hello world".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("X-Test", "ok");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			// result is the plist (:status 200 :body "hello world" :headers (...))
+			assertThat(eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\") :status)"))
+				.isEqualTo(new LispInteger(200));
+			assertThat(eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\") :body)"))
+				.isEqualTo(new LispString("hello world"));
+			LispVal headers = eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\") :headers)");
+			// the JDK HttpClient normalizes response header names to lower case
+			assertThat(headers.print()).contains("x-test").contains("ok");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void fetchSendsRequestHeaders() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/echo", exchange -> {
+			String received = exchange.getRequestHeaders().getFirst("X-Custom");
+			byte[] body = ("got:" + received).getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			LispVal result = eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/echo\" (list :headers (list (cons \"X-Custom\" \"abc\")))) :body)");
+			assertThat(result).isEqualTo(new LispString("got:abc"));
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void fetchRejectsNonGetMethod() {
+		assertThatThrownBy(() -> eval("(rontolisp:fetch \"http://127.0.0.1:1/x\" (list :method \"POST\"))"))
+			.hasMessageContaining("GET");
+	}
+
+	@Test
+	void fetchRejectsWrongArgCount() {
+		assertThatThrownBy(() -> eval("(rontolisp:fetch)")).hasMessageContaining("fetch");
 	}
 
 }

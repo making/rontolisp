@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -101,10 +102,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_ENVIRON_GET = 7; // imported
 
-	/** Number of imported functions; defined functions are indexed from here. */
+	/** Number of preview1-style imported functions (fd_write..environ_get). */
 	static final int IMPORT_FUNC_COUNT = 8;
 
-	static final int FUNC_START = IMPORT_FUNC_COUNT;
+	// Function index 8 is reserved for rontolisp:fetch in BOTH modes so the
+	// defined-function
+	// indices stay identical across modes: in component mode it is the imported
+	// http.fetch;
+	// in Preview 1 mode it is an unused trap stub (fetch raises a compile error there).
+	// This
+	// keeps FUNC_START at 9 uniformly, so all the static FUNC_* constants below are
+	// stable.
+	static final int FUNC_FETCH = IMPORT_FUNC_COUNT; // 8
+
+	static final int FUNC_START = FUNC_FETCH + 1; // 9
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -217,8 +228,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// Dispatch functions occupy the next 8 indices (arities 0..7)
-	static final int FUNC_USER_BASE = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1;
+	// fetch runtime helpers (always emitted, just after the dispatch functions): build a
+	// heap string from raw bytes, look up a plist key by interned offset, serialize a
+	// request-header alist to REQ_HDR_BUF, and rebuild a response-header alist from the
+	// adapter's serialized buffer. Only the fetch compiler references them.
+	static final int FUNC_FETCH_STR = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1;
+
+	static final int FUNC_FETCH_PLIST_GET = FUNC_FETCH_STR + 1;
+
+	static final int FUNC_FETCH_SER_HDRS = FUNC_FETCH_PLIST_GET + 1;
+
+	static final int FUNC_FETCH_DESER_HDRS = FUNC_FETCH_SER_HDRS + 1;
+
+	// User defuns start after the dispatch functions and the four fetch helpers.
+	static final int FUNC_USER_BASE = FUNC_FETCH_DESER_HDRS + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -287,6 +310,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// clock_time_get (i32 clock_id, i64 precision, i32 result_ptr) -> i32 errno
 	static final int TYPE_CLOCK_TIME_GET = TYPE_OPEN + 1; // 30
+
+	// fetch (10x i32) -> i32 errno: the adapter's http.fetch import / Preview 1 stub
+	// type.
+	static final int TYPE_FETCH = TYPE_CLOCK_TIME_GET + 1; // 31
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -358,6 +385,23 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
 
+	// fetch scratch + request-header buffer in page 4 (0x40000), between the rontolisp
+	// data/heap (pages 0-3) and the adapter scratch (page 5+). The adapter writes the
+	// status and the addresses/lengths of the response-header and body buffers (which it
+	// places in its own pages 6/7) through these out-pointers; REQ_HDR_BUF holds the
+	// serialized request headers the adapter reads. Component mode only.
+	static final int FETCH_STATUS_ADDR = 0x40000;
+
+	static final int FETCH_RHDR_PTR_ADDR = 0x40004;
+
+	static final int FETCH_RHDR_LEN_ADDR = 0x40008;
+
+	static final int FETCH_BODY_PTR_ADDR = 0x4000C;
+
+	static final int FETCH_BODY_LEN_ADDR = 0x40010;
+
+	static final int REQ_HDR_BUF = 0x40100;
+
 	static final int RT_INTERN_BASE = 8192;
 
 	static final int READ_LINE_BUF = 16384;
@@ -380,6 +424,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.APPLY);
+		// rontolisp:fetch is component-only. In component mode it is the http.fetch
+		// import
+		// (function index FUNC_FETCH); the component wrapper then imports wasi:http. In
+		// Preview 1 mode index FUNC_FETCH is an unused trap stub and fetch raises a
+		// compile
+		// error (WasmFetchCompiler), so the import/wasi:http are never emitted.
+		boolean usesFetch = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
+		boolean emitHttpImport = this.component && usesFetch;
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -884,6 +937,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 30: clock_time_get (i32, i64, i32) -> i32
 				types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32 }, new Type[] { Type.I32 });
+				// type 31 (TYPE_FETCH): fetch (10x i32) -> i32 errno
+				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32,
+						Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -903,6 +959,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addImport("wasi_snapshot_preview1", "clock_time_get", ExternalKind.FUNCTION, TYPE_CLOCK_TIME_GET)
 					.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
 					.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
+				// 9th function import (index FUNC_FETCH) when the program calls fetch in
+				// component mode: the adapter's exported http.fetch. In Preview 1 mode
+				// (or a
+				// component without fetch) index 8 is a defined trap stub instead.
+				if (emitHttpImport) {
+					imports.addImport("http", "fetch", ExternalKind.FUNCTION, TYPE_FETCH);
+				}
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the
@@ -917,6 +980,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Function section
 			.writeFunction(fnDef -> {
+				// Reserve function index FUNC_FETCH (8): in component+fetch it is the
+				// http.fetch import (emitted above); otherwise a defined trap stub so the
+				// following defined-function indices line up with the FUNC_* constants.
+				if (!emitHttpImport) {
+					fnDef.addFunction(TYPE_FETCH); // index 8: unused fetch trap stub
+				}
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
 					.addFunction(TYPE_WRITE_STR) // _write_str
@@ -976,6 +1045,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
 				}
+				// fetch runtime helpers (FUNC_FETCH_STR..FUNC_FETCH_DESER_HDRS)
+				fnDef.addFunction(TYPE_RAT_NEW); // _fetch_str (i32, i32) -> (ref null eq)
+				fnDef.addFunction(TYPE_OPEN); // _fetch_plist_get ((ref null eq), i32) ->
+												// (ref null eq)
+				fnDef.addFunction(TYPE_RAT_GET); // _fetch_ser_headers ((ref null eq)) ->
+													// i32
+				fnDef.addFunction(TYPE_READ_LINE_FD); // _fetch_deser_headers (i32) ->
+														// (ref null eq)
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1032,6 +1109,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Code section
 			.writeCode(code -> {
+				// fetch trap stub at function index FUNC_FETCH (only when it is not the
+				// http.fetch import): no locals, unreachable, end. It is never called.
+				if (!emitHttpImport) {
+					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
+				}
 				code.addFunction(finalStartBody.toByteArray())
 					.addFunction(printI32Body)
 					.addFunction(writeStrBody)
@@ -1083,6 +1165,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
 				}
+				// fetch runtime helper bodies (FUNC_FETCH_STR..FUNC_FETCH_DESER_HDRS)
+				code.addFunction(WasmFetchRuntimeBuilder.buildStr());
+				code.addFunction(WasmFetchRuntimeBuilder.buildPlistGet());
+				code.addFunction(WasmFetchRuntimeBuilder.buildSerHeaders());
+				code.addFunction(WasmFetchRuntimeBuilder.buildDeserHeaders());
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -1100,7 +1187,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			});
 		byte[] coreModule = out.toByteArray();
-		return this.component ? WasmComponentBuilder.build(coreModule) : coreModule;
+		return this.component ? WasmComponentBuilder.build(coreModule, emitHttpImport) : coreModule;
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args) {

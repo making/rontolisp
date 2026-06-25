@@ -89,6 +89,18 @@ public final class ConstantPool {
 	}
 
 	/**
+	 * Add an interface method reference constant (tag 11), used by
+	 * {@code invokeinterface}.
+	 * @param clazz the interface class constant
+	 * @param nameAndType the name-and-type constant
+	 * @return the interface method reference constant entry
+	 */
+	public MethodrefConstant addInterfaceMethodref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
+		return new MethodrefConstant(
+				this.add(ConstantType.INTERFACE_METHODREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
+	}
+
+	/**
 	 * Add a string constant from a UTF-8 constant.
 	 * @param utf8 the UTF-8 constant for the string value
 	 * @return the string constant entry
