@@ -131,7 +131,7 @@ wasmtime 46 hosts only `wasi:http@0.2`; see `../../TODO.md`). The parallel blob 
 ```
 src/wasm-component/
   uni-http.wit  core-http.wat  mem-http.wat  adapter-http.wat   (http sources)
-  deps/cli-0.2  deps/clocks-0.2  deps/io-0.2  deps/random-0.2  deps/http   (0.2 deps)
+  deps/clocks-0.2  deps/io-0.2  deps/http   (0.2 deps; http's proxy world is trimmed)
 
 src/main/resources/.../component/
   import-block-http.bin  mem-http.wasm  adapter-http.wasm

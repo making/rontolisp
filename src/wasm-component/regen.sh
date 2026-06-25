@@ -16,8 +16,8 @@
 # mem-http.wasm / adapter-http.wasm), from uni-http.wit (world uni-http) + core-http.wat.
 # It keeps the base I/O on WASI 0.3 but adds the WASI 0.2 wasi:http + wasi:io machinery
 # (async wasi:http@0.3 does not exist upstream yet; see ../../TODO.md). The 0.2 deps live
-# alongside the 0.3 ones in deps/ under version-suffixed directories (cli-0.2, clocks-0.2,
-# io-0.2, random-0.2, http). After regenerating, re-derive the WasmComponentBuilder.buildHttp
+# alongside the 0.3 ones in deps/ under version-suffixed directories (clocks-0.2, io-0.2,
+# http). After regenerating, re-derive the WasmComponentBuilder.buildHttp
 # wiring constants from `wasm-tools dump`.
 set -euo pipefail
 cd "$(dirname "$0")"

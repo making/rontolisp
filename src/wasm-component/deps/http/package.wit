@@ -1,0 +1,10 @@
+// Package header for the vendored wasi:http@0.2.0 dependency.
+//
+// rontolisp's fetch only uses `wasi:http/types` (types.wit) and
+// `wasi:http/outgoing-handler` (handler.wit). Upstream's `proxy.wit` (which
+// also carried this `package` header) declared the `proxy` world; that world
+// imports wasi:cli@0.2 / wasi:random@0.2 / wasi:clocks@0.2, none of which fetch
+// needs, so it was dropped along with the now-orphaned deps/cli-0.2 and
+// deps/random-0.2 vendored packages. types.wit still pulls in deps/io-0.2 and
+// deps/clocks-0.2.
+package wasi:http@0.2.0;
