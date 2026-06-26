@@ -88,7 +88,11 @@
       time</em> to WebAssembly (WASI Preview 1) with rontolisp. This page
       provides a tiny WASI shim in JavaScript, instantiates each
       <code>.wasm</code> module, runs its <code>_start</code>, and shows whatever
-      it printed to stdout. No server, no framework.
+      it printed to stdout. No server, no framework. All the Lisp sources and the
+      shim live in
+      <a href="https://github.com/making/rontolisp/tree/develop/examples/wasm-browser"
+        >examples/wasm-browser</a
+      >.
     </p>
     <p class="lead">
       Want to write Lisp and compile it to WASM <em>in the browser</em>, then run
@@ -102,6 +106,10 @@
     <p>
       <code>hello.wasm</code> computes Fibonacci numbers and some exact rational
       arithmetic, printing the result. Click to run it in your browser.
+      Source:
+      <a href="https://github.com/making/rontolisp/blob/develop/examples/wasm-browser/hello.lisp"
+        >hello.lisp</a
+      >.
     </p>
     <div class="row">
       <button id="run-hello">Run hello.wasm</button>
@@ -112,7 +120,10 @@
     <p>
       <code>greet.wasm</code> reads one line from <em>stdin</em>. The shim feeds
       the text below as stdin, so this shows how to send data from the browser
-      into a WASM program.
+      into a WASM program. Source:
+      <a href="https://github.com/making/rontolisp/blob/develop/examples/wasm-browser/greet.lisp"
+        >greet.lisp</a
+      >.
     </p>
     <div class="row" style="flex-direction: column; align-items: stretch">
       <textarea id="stdin" rows="1" placeholder="type a name..."></textarea>
@@ -121,6 +132,23 @@
       </div>
     </div>
     <pre class="term" id="out-greet">(output appears here)</pre>
+
+    <h2>3. Real randomness from the host</h2>
+    <p>
+      <code>dice.wasm</code> rolls five dice with <code>random</code>. On WASI
+      Preview 1 <code>random</code> draws real entropy from the host's
+      <code>random_get</code> (the shim backs it with
+      <code>crypto.getRandomValues</code>), so click <em>Roll again</em> and the
+      result changes every time -- it is not a fixed pseudo-random sequence.
+      Source:
+      <a href="https://github.com/making/rontolisp/blob/develop/examples/wasm-browser/dice.lisp"
+        >dice.lisp</a
+      >.
+    </p>
+    <div class="row">
+      <button id="run-dice">Roll dice.wasm</button>
+    </div>
+    <pre class="term" id="out-dice">(output appears here)</pre>
 
     <script type="module">
       import { runWasm } from "./wasi-shim.js";
@@ -151,6 +179,12 @@
       document.getElementById("run-greet").addEventListener("click", () => {
         const stdin = document.getElementById("stdin").value + "\n";
         run("run-greet", "out-greet", "./greet.wasm", { stdin });
+      });
+
+      const diceBtn = document.getElementById("run-dice");
+      diceBtn.addEventListener("click", async () => {
+        await run("run-dice", "out-dice", "./dice.wasm");
+        diceBtn.textContent = "Roll again";
       });
     </script>
   </body>

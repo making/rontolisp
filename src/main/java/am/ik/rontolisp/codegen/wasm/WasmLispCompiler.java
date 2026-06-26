@@ -345,15 +345,6 @@ public final class WasmLispCompiler implements LispCompiler {
 	// from the variable environment above.
 	static final int GLOBAL_FENV = 1;
 
-	// Global (wasm global section) index holding the mutable i32 seed for the random
-	// number generator. WASM has no entropy source, so random is a deterministic
-	// linear-congruential generator seeded from this fixed value (see
-	// WasmRandomCompiler).
-	static final int GLOBAL_SEED = 2;
-
-	// Initial seed for GLOBAL_SEED (the classic glibc LCG starting value).
-	static final int RANDOM_SEED_INIT = 12345;
-
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
 
@@ -393,8 +384,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// emit a newline. Zero-initialized linear memory means we start at a line start.
 	static final int LINE_START_ADDR = 116;
 
-	// Scratch (8 bytes) where the adapter's random_get writes a wasi:random u64 in
-	// component mode.
+	// Scratch (8 bytes) where random_get writes its entropy bytes (Preview 1: the host's
+	// wasi_snapshot_preview1 random_get; component: the adapter's wasi:random-backed
+	// one).
 	static final int RANDOM_SCRATCH_ADDR = 120;
 
 	// Scratch (8 bytes) where clock_time_get writes the current time in nanoseconds.
@@ -1173,13 +1165,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				g.write(am.ik.wasm.Mutability.VAR.code());
 				g.write(Instruction.REF_NULL);
 				g.writeHeapType(Type.EQ.code());
-				g.write(Instruction.END);
-			}).add(g -> {
-				// GLOBAL_SEED: a mutable i32 random seed (deterministic LCG state).
-				g.write(Type.I32.code());
-				g.write(am.ik.wasm.Mutability.VAR.code());
-				g.write(Instruction.I32_CONST);
-				g.writeSignedLeb128(RANDOM_SEED_INIT);
 				g.write(Instruction.END);
 			}))
 			// Export section -- component mode exports `run` (the i32-returning _start)

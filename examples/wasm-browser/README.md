@@ -17,10 +17,11 @@ the `web/` playground is at the site root).
 
 | File            | Purpose                                                            |
 | --------------- | ----------------------------------------------------------------- |
-| `index.html`    | The demo page: two buttons that run the WASM modules and show stdout. |
+| `index.html`    | The demo page: buttons that run the WASM modules and show stdout. |
 | `wasi-shim.js`  | A tiny, dependency-free WASI Preview 1 shim (the glue code).       |
 | `hello.lisp` / `hello.wasm` | A self-contained program (Fibonacci + rational math). |
 | `greet.lisp` / `greet.wasm` | Reads a line from stdin and greets — shows input.     |
+| `dice.lisp` / `dice.wasm`   | Rolls dice with `random` — different result every run. |
 | `build.sh`      | Recompiles the `.lisp` files to `.wasm`.                          |
 
 The `.wasm` files are checked in, so you can run the demo without building
@@ -90,8 +91,10 @@ python3 -m http.server 8000
 # then open http://localhost:8000/
 ```
 
-Click **Run hello.wasm** to run the self-contained program, and **Run
-greet.wasm** to feed the textarea contents to the program as stdin.
+Click **Run hello.wasm** to run the self-contained program, **Run greet.wasm**
+to feed the textarea contents to the program as stdin, and **Roll dice.wasm**
+(then **Roll again**) to see `random` produce a fresh result each run from the
+host's `random_get`.
 
 ## Browser requirements
 

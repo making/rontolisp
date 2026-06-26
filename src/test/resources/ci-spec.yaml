@@ -1268,9 +1268,10 @@ cases:
       "i"
       "s"
 
-  # random draws differ per backend (interpreter/JVM use Math.random; WASM uses a
-  # deterministic LCG), so the output is only asserted on deterministic properties:
-  # (random 1) is always 0, the result type follows the limit, and bounds always hold.
+  # random draws differ per backend and per run (interpreter/JVM use Math.random;
+  # WASM draws real entropy from the WASI random_get host function), so the output
+  # is only asserted on deterministic properties: (random 1) is always 0, the
+  # result type follows the limit, and bounds always hold.
   - name: random-deterministic-properties
     source: |
       (print (random 1))

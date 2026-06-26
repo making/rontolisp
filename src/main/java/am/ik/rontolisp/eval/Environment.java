@@ -658,8 +658,8 @@ public final class Environment implements Scope {
 		defineUnaryDouble(env, LispNames.TANH, Math::tanh);
 		// random: a non-negative random number below the (positive) limit, of the same
 		// type as the limit (integer -> integer, float -> float). The interpreter and the
-		// JVM backend draw from Math.random(); the WASM backend uses a deterministic
-		// linear-congruential generator instead (it has no entropy source).
+		// JVM backend draw from Math.random(); the WASM backend draws real entropy from
+		// the WASI random_get host function.
 		env.defineFunction(LispNames.RANDOM, new LispFunction(LispNames.RANDOM, args -> {
 			requireArgCount(LispNames.RANDOM, args, 1);
 			LispVal limit = args.get(0);

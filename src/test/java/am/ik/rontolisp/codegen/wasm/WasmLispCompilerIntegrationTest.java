@@ -2479,9 +2479,18 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(
 				"(let ((r (random 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print \"in\") (print \"oob\")))"))
 			.isEqualTo("\"in\"");
-		// The WASM backend uses a deterministic LCG seeded from a fixed value, so the
-		// sequence is reproducible from a fresh module (seed 12345).
-		assertThat(compileAndRun("(dotimes (i 3) (print (random 1000)))")).isEqualTo("606\n775\n924");
+	}
+
+	@Test
+	void preview1RandomDrawsFromHostEntropy() throws Exception {
+		// Preview 1 mode binds the real wasi_snapshot_preview1 random_get, so the
+		// sequence
+		// is NOT reproducible across fresh runs. Two runs of a five-sample program over a
+		// large range collide with negligible probability (~5^2 / 10^9), so distinct
+		// output confirms real entropy is used (regression: it used to be a deterministic
+		// LCG that ignored random_get).
+		String program = "(dotimes (i 5) (print (random 1000000000)))";
+		assertThat(compileAndRun(program)).isNotEqualTo(compileAndRun(program));
 	}
 
 	@Test
