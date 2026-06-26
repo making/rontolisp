@@ -31,7 +31,6 @@ its shape for the others.
 
 ## Why it matters
 
-Unblocks string-keyed alists (a lighter alternative to
-[05-hash-tables](05-hash-tables.md)) and a large class of ordinary CL list code,
-including the deferred word-frequency example
-([03-text-analysis-example-blocked](03-text-analysis-example-blocked.md)).
+Unblocks string-keyed alists (a lighter alternative to hash tables, which have
+since landed -- see [03-text-analysis-example-blocked](03-text-analysis-example-blocked.md))
+and a large class of ordinary CL list code.

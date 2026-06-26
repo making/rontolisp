@@ -264,6 +264,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.LOAD))) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
 		}
+		// Hash-table wrappers reference helpers (JvmHashRuntimeBuilder) emitted only when
+		// the program uses a hash table; gate the whole group together.
+		if (!programUsesAnyHashOp(program)) {
+			wrapperExcludes.addAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
+		}
 		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
@@ -545,6 +550,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
 
+		// Build the hash-table runtime helpers, only when the program uses hash tables.
+		boolean usesHashTables = programUsesAnyHashOp(program);
+		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
+				thisClass, objectClass, objectArrayClass, longValueOf, lispToStringMethod) : List.of();
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
@@ -768,6 +778,16 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
+				for (JvmHashRuntimeBuilder.HashMethod hm : hashMethods) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(hm.maxStack())
+									.writeU2(hm.maxLocals())
+									.writeCode((Object[]) hm.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -864,6 +884,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	// True when the program references any hash-table operator (including (setf (gethash
+	// ...)) which contains gethash). Gates both the runtime helpers and the first-class
+	// wrappers so they stay emitted together.
+	private static boolean programUsesAnyHashOp(List<LispVal> program) {
+		return programUsesSymbol(program, LispNames.MAKE_HASH_TABLE) || programUsesSymbol(program, LispNames.GETHASH)
+				|| programUsesSymbol(program, LispNames.REMHASH) || programUsesSymbol(program, LispNames.CLRHASH)
+				|| programUsesSymbol(program, LispNames.HASH_TABLE_COUNT)
+				|| programUsesSymbol(program, LispNames.HASH_TABLE_P) || programUsesSymbol(program, LispNames.MAPHASH);
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {

@@ -907,7 +907,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
-      177
+      184
       (fetch list-functions list-macros list-special-forms version)
       ci-intro-fn
       nil
@@ -1369,3 +1369,55 @@ cases:
       (+ 1 2)
       (#\A #\B #\C)
       a
+  - name: mod-large-operands-floored
+    source: |
+      (print (mod 843749 65537))
+      (print (list (mod -13 4) (mod 13 -4) (mod -13 -4) (mod 13 4)))
+    expected: |
+      57305
+      (3 -3 -1 1)
+  - name: hash-tables-cross-backend
+    source: |
+      (defparameter *htbl* (make-hash-table :test 'equal))
+      (setf (gethash "a" *htbl*) 1)
+      (setf (gethash "b" *htbl*) 2)
+      (setf (gethash (list 1 2) *htbl*) 3)
+      (print (list (gethash "a" *htbl*) (gethash "b" *htbl*)
+                   (gethash (list 1 2) *htbl*) (gethash "z" *htbl* 0)))
+      (incf (gethash "a" *htbl*) 10)
+      (print (gethash "a" *htbl*))
+      (print (hash-table-count *htbl*))
+      (print (list (hash-table-p *htbl*) (hash-table-p 5) (consp *htbl*)))
+      (remhash "b" *htbl*)
+      (print (list (hash-table-count *htbl*) (gethash "b" *htbl* 'gone)))
+      (defun ht-total (h)
+        (let ((s 0)) (maphash (lambda (k v) (setq s (+ s v))) h) s))
+      (print (ht-total *htbl*))
+      (clrhash *htbl*)
+      (print (hash-table-count *htbl*))
+    expected: |
+      (1 2 3 0)
+      11
+      3
+      (t nil nil)
+      (2 gone)
+      14
+      0
+
+  - name: hash-table-functions-first-class
+    source: |
+      (defun ci-ht-fc ()
+        (let ((h (funcall #'make-hash-table)))
+          (setf (gethash "a" h) 1)
+          (setf (gethash "b" h) 2)
+          (print (funcall #'gethash "a" h))
+          (print (mapcar #'hash-table-p (list h 7)))
+          (print (funcall #'hash-table-count h))
+          (funcall #'remhash "a" h)
+          (print (funcall #'hash-table-count h))))
+      (ci-ht-fc)
+    expected: |
+      1
+      (t nil)
+      2
+      1

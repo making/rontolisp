@@ -25,6 +25,7 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -187,8 +188,68 @@ public final class Environment implements Scope {
 		registerStringOps(env);
 		registerCharacters(env);
 		registerTypeConversion(env);
+		registerHashTables(env);
 		registerPackages(env);
 		return env;
+	}
+
+	private static void registerHashTables(Environment env) {
+		env.defineFunction(LispNames.MAKE_HASH_TABLE, new LispFunction(LispNames.MAKE_HASH_TABLE, args -> {
+			// Accepts :test (eql/equal) and ignores other keywords such as :size. Lookup
+			// is
+			// always structural, so :test is informational only (see LispHashTable).
+			boolean equalTest = false;
+			for (int i = 0; i + 1 < args.size(); i += 2) {
+				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
+					String testName = switch (args.get(i + 1)) {
+						case LispSymbol s -> s.name();
+						case LispFunction f -> f.name();
+						default -> "";
+					};
+					equalTest = "equal".equals(testName) || "equalp".equals(testName);
+				}
+			}
+			return new LispHashTable(equalTest);
+		}));
+		env.defineFunction(LispNames.GETHASH, new LispFunction(LispNames.GETHASH, args -> {
+			if (args.size() != 2 && args.size() != 3) {
+				throw new LispEvalException(LispNames.GETHASH + " expects 2 or 3 arguments, got " + args.size());
+			}
+			LispHashTable table = requireHashTable(LispNames.GETHASH, args.get(1));
+			LispVal dflt = (args.size() == 3) ? args.get(2) : LispNil.INSTANCE;
+			return table.get(args.get(0), dflt);
+		}));
+		env.defineFunction(LispNames.PUTHASH, new LispFunction(LispNames.PUTHASH, args -> {
+			requireArgCount(LispNames.PUTHASH, args, 3);
+			LispHashTable table = requireHashTable(LispNames.PUTHASH, args.get(1));
+			return table.put(args.get(0), args.get(2));
+		}));
+		env.defineFunction(LispNames.REMHASH, new LispFunction(LispNames.REMHASH, args -> {
+			requireArgCount(LispNames.REMHASH, args, 2);
+			LispHashTable table = requireHashTable(LispNames.REMHASH, args.get(1));
+			return table.remove(args.get(0)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.CLRHASH, new LispFunction(LispNames.CLRHASH, args -> {
+			requireArgCount(LispNames.CLRHASH, args, 1);
+			LispHashTable table = requireHashTable(LispNames.CLRHASH, args.get(0));
+			table.clear();
+			return table;
+		}));
+		env.defineFunction(LispNames.HASH_TABLE_COUNT, new LispFunction(LispNames.HASH_TABLE_COUNT, args -> {
+			requireArgCount(LispNames.HASH_TABLE_COUNT, args, 1);
+			return new LispInteger(requireHashTable(LispNames.HASH_TABLE_COUNT, args.get(0)).count());
+		}));
+		env.defineFunction(LispNames.HASH_TABLE_P, new LispFunction(LispNames.HASH_TABLE_P, args -> {
+			requireArgCount(LispNames.HASH_TABLE_P, args, 1);
+			return (args.get(0) instanceof LispHashTable) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private static LispHashTable requireHashTable(String fn, LispVal val) {
+		if (val instanceof LispHashTable table) {
+			return table;
+		}
+		throw new LispEvalException(fn + " expects a hash table, got " + val.print());
 	}
 
 	private static void registerPackages(Environment env) {

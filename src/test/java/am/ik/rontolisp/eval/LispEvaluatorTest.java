@@ -2401,8 +2401,10 @@ class LispEvaluatorTest {
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
 					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
+			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
+			.doesNotContain("%puthash")
 			.isSorted()
-			.hasSize(177);
+			.hasSize(184);
 	}
 
 	@Test
@@ -2713,6 +2715,89 @@ class LispEvaluatorTest {
 				  (list (read in) (read in) (read in)))
 				""".formatted(file, file));
 		assertThat(result.print()).isEqualTo("((10 20 30) 99 nil)");
+	}
+
+	@Test
+	void hashTablePutAndGet() {
+		LispVal result = evalMulti("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(list (gethash "a" *h*) (gethash "b" *h*) (gethash "c" *h*))
+				""");
+		assertThat(result.print()).isEqualTo("(1 2 nil)");
+	}
+
+	@Test
+	void hashTableGetWithDefault() {
+		assertThat(eval("(gethash 'x (make-hash-table) 42)")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void hashTableListKeysWithEqual() {
+		LispVal result = evalMulti("""
+				(defparameter *q* (make-hash-table :test 'equal))
+				(setf (gethash (list 0 1 2) *q*) 1.5)
+				(gethash (list 0 1 2) *q* 0.0)
+				""");
+		assertThat(result).isEqualTo(new LispDouble(1.5));
+	}
+
+	@Test
+	void hashTableIncf() {
+		LispVal result = evalMulti("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(dolist (w (list "a" "b" "a" "a" "b"))
+				  (incf (gethash w *h* 0)))
+				(list (gethash "a" *h*) (gethash "b" *h*))
+				""");
+		assertThat(result.print()).isEqualTo("(3 2)");
+	}
+
+	@Test
+	void hashTableCountAndRemhash() {
+		LispVal result = evalMulti("""
+				(defparameter *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'a)
+				(setf (gethash 2 *h*) 'b)
+				(remhash 1 *h*)
+				(list (hash-table-count *h*) (gethash 1 *h*) (gethash 2 *h*))
+				""");
+		assertThat(result.print()).isEqualTo("(1 nil b)");
+	}
+
+	@Test
+	void hashTableMaphashSumsValues() {
+		LispVal result = evalMulti("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 10)
+				(setf (gethash "b" *h*) 20)
+				(setf (gethash "c" *h*) 30)
+				(defparameter *sum* 0)
+				(maphash (lambda (k v) (setq *sum* (+ *sum* v))) *h*)
+				*sum*
+				""");
+		assertThat(result).isEqualTo(new LispInteger(60));
+	}
+
+	@Test
+	void hashTablePredicate() {
+		assertThat(eval("(hash-table-p (make-hash-table))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(hash-table-p (list 1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(consp (make-hash-table))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void hashTableFunctionsAsFirstClassValues() {
+		LispVal result = evalMulti("""
+				(defparameter *h* (funcall #'make-hash-table))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(list (funcall #'gethash "a" *h*)
+				      (mapcar #'hash-table-p (list *h* 5))
+				      (funcall #'hash-table-count *h*))
+				""");
+		assertThat(result.print()).isEqualTo("(1 (t nil) 2)");
 	}
 
 }

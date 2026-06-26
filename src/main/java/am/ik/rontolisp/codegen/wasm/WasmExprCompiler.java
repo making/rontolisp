@@ -260,6 +260,14 @@ final class WasmExprCompiler {
 				case LispNames.EQL -> WasmEqGeneralCompiler.compileEql(cons, ctx);
 				case LispNames.EQUAL -> WasmEqualCompiler.compile(cons, ctx);
 				case LispNames.REMF_TAIL -> WasmRemfTailCompiler.compile(cons, ctx);
+				case LispNames.MAKE_HASH_TABLE -> WasmHashTableCompiler.compileMake(cons, ctx);
+				case LispNames.GETHASH -> WasmHashTableCompiler.compileGet(cons, ctx);
+				case LispNames.PUTHASH -> WasmHashTableCompiler.compilePut(cons, ctx);
+				case LispNames.REMHASH -> WasmHashTableCompiler.compileRem(cons, ctx);
+				case LispNames.CLRHASH -> WasmHashTableCompiler.compileClr(cons, ctx);
+				case LispNames.HASH_TABLE_COUNT -> WasmHashTableCompiler.compileCount(cons, ctx);
+				case LispNames.HASH_TABLE_P -> WasmHashTableCompiler.compileP(cons, ctx);
+				case LispNames.MAPHASH -> WasmHashTableCompiler.compileMaphash(cons, ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);

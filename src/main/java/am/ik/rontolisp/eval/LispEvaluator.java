@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
@@ -107,6 +108,18 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.MAPC + " expects 2 arguments, got " + args.size());
 			}
 			return mapForEffect(args.get(0), args.get(1));
+		}));
+		this.globalEnv.defineFunction(LispNames.MAPHASH, new LispFunction(LispNames.MAPHASH, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.MAPHASH + " expects 2 arguments, got " + args.size());
+			}
+			if (!(args.get(1) instanceof LispHashTable table)) {
+				throw new LispEvalException(LispNames.MAPHASH + " expects a hash table, got " + args.get(1).print());
+			}
+			for (LispHashTable.Entry entry : new ArrayList<>(table.entries())) {
+				apply(args.get(0), List.of(entry.key(), entry.value()), this.globalEnv);
+			}
+			return LispNil.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
 			// (reduce fn list) or (reduce fn list :initial-value init)
@@ -291,6 +304,7 @@ public final class LispEvaluator {
 			case LispTrue t -> t;
 			case LispFunction f -> f;
 			case LispLambda l -> l;
+			case LispHashTable h -> h;
 			case LispSymbol sym -> sym.isKeyword() ? sym : env.lookup(sym.name());
 			case LispCons cons -> evalCons(cons, env);
 		};

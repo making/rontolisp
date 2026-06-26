@@ -26,11 +26,14 @@ needs only `with-open-file` / `read-line` / `length` / `format nil`.
   [08-character-parsing-parity-followups](08-character-parsing-parity-followups.md)).
   A standard `split` is still absent, but tokenizing by indexing with `char` +
   the character predicates is now idiomatic.
-- **Frequency counting needs hash tables (or string-keyed alists).** `assoc`
-  ignores `:test`, so a string key never matches (`eql` on distinct strings),
-  and there are no hash tables at all. See
-  [05-hash-tables](05-hash-tables.md) and
-  [06-sequence-test-key-keywords](06-sequence-test-key-keywords.md).
+- **Frequency counting needs hash tables (or string-keyed alists).** RESOLVED:
+  hash tables landed on all three backends (`make-hash-table`, `gethash`,
+  `(setf (gethash ...))`, `remhash`, `clrhash`, `hash-table-count`,
+  `hash-table-p`, `maphash`), with structural (`equal`) keys -- so `(incf
+  (gethash word counts 0))` works. The word-frequency example is now unblocked;
+  string-keyed `assoc :test` (see
+  [06-sequence-test-key-keywords](06-sequence-test-key-keywords.md)) remains a
+  separate, lighter-weight alternative.
 - **Numeric columns (CSV-style aggregation) need string->number parsing.**
   RESOLVED: `parse-integer`, `read-from-string` and `(read stream)` landed;
   `examples/parse-numbers.lisp` demonstrates numeric-column aggregation.

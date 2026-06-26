@@ -2524,7 +2524,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("177");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("184");
 	}
 
 	@Test
@@ -2719,6 +2719,80 @@ class WasmLispCompilerIntegrationTest {
 	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
 		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(a b c)");
+	}
+
+	@Test
+	void compileModWithLargeOperandsFlooredCorrectly() throws Exception {
+		// Regression: mod's floored-sign correction must not overflow the i31 range. For
+		// large operands (* r b) wraps negative and used to spuriously add the divisor,
+		// leaving a result still larger than the divisor.
+		assertThat(compileAndRun("(print (mod 843749 65537))")).isEqualTo("57305");
+		assertThat(compileAndRun("(print (list (mod -13 4) (mod 13 -4) (mod -13 -4) (mod 13 4)))"))
+			.isEqualTo("(3 -3 -1 1)");
+	}
+
+	@Test
+	void compileHashTablePutGetAndDefault() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(print (list (gethash "a" *h*) (gethash "b" *h*) (gethash "c" *h*)))
+				(print (gethash 'x (make-hash-table) 42))
+				""")).isEqualTo("(1 2 nil)\n42");
+	}
+
+	@Test
+	void compileHashTableListKeysIncfCountAndPredicate() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *q* (make-hash-table :test 'equal))
+				(setf (gethash (list 0 1 2) *q*) 7)
+				(print (gethash (list 0 1 2) *q* 0))
+				(defparameter *h* (make-hash-table :test 'equal))
+				(dolist (w (list "a" "b" "a" "a" "b")) (incf (gethash w *h* 0)))
+				(print (list (gethash "a" *h*) (gethash "b" *h*)))
+				(print (list (hash-table-count *h*) (hash-table-p *h*) (hash-table-p 5) (consp *h*)))
+				""")).isEqualTo("7\n(3 2)\n(2 t nil nil)");
+	}
+
+	@Test
+	void compileHashTableMaphashRemhashAndClrhash() throws Exception {
+		assertThat(compileAndRun("""
+				(defun sum-values (h)
+				  (let ((acc 0))
+				    (maphash (lambda (k v) (setq acc (+ acc v))) h)
+				    acc))
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 10)
+				(setf (gethash "b" *h*) 20)
+				(setf (gethash "c" *h*) 30)
+				(print (sum-values *h*))
+				(remhash "b" *h*)
+				(print (list (hash-table-count *h*) (gethash "b" *h* 'gone)))
+				(clrhash *h*)
+				(print (hash-table-count *h*))
+				""")).isEqualTo("60\n(2 gone)\n0");
+	}
+
+	@Test
+	void compileHashTableFunctionsAsFirstClassValues() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(print (list (funcall #'gethash "a" *h*)
+				             (mapcar #'hash-table-p (list *h* 5))
+				             (funcall #'hash-table-count *h*)))
+				""")).isEqualTo("(1 (t nil) 2)");
+	}
+
+	@Test
+	void compileMakeHashTableAsFirstClassValue() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (funcall #'make-hash-table)))
+				  (setf (gethash 1 h) 'x)
+				  (print (gethash 1 h)))
+				""")).isEqualTo("x");
 	}
 
 }

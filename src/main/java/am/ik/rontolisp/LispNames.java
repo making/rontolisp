@@ -457,6 +457,38 @@ public final class LispNames {
 	/** The {@code %remf-tail} built-in function. */
 	public static final String REMF_TAIL = "%remf-tail";
 
+	// Hash tables
+
+	/** The {@code make-hash-table} built-in function. */
+	public static final String MAKE_HASH_TABLE = "make-hash-table";
+
+	/** The {@code gethash} built-in function. */
+	public static final String GETHASH = "gethash";
+
+	/**
+	 * The {@code %puthash} internal built-in function. The target of the {@code gethash}
+	 * {@code setf} place: {@code (%puthash key table value)} stores and returns the
+	 * value.
+	 */
+	public static final String PUTHASH = "%puthash";
+
+	/** The {@code remhash} built-in function. */
+	public static final String REMHASH = "remhash";
+
+	/** The {@code clrhash} built-in function. */
+	public static final String CLRHASH = "clrhash";
+
+	/** The {@code hash-table-count} built-in function. */
+	public static final String HASH_TABLE_COUNT = "hash-table-count";
+
+	/** The {@code hash-table-p} predicate. */
+	public static final String HASH_TABLE_P = "hash-table-p";
+
+	/**
+	 * The {@code maphash} built-in function (apply a function to each key/value pair).
+	 */
+	public static final String MAPHASH = "maphash";
+
 	// Higher-order functions
 
 	/** The {@code mapcar} built-in function. */

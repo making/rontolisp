@@ -134,6 +134,10 @@ The generated `.wasm` binary uses:
 
 Requires a wasm-GC capable runtime such as wasmtime 14+.
 
+On the WASM backend a function (`defun` or `lambda`) may take at most **seven
+parameters**; a larger arity is a compile error (the interpreter and JVM backends have no
+such limit). Bundle the extra arguments into a list to stay within it.
+
 ### Compile to a WASI 0.3 component
 
 Add `--component` to emit a WASI 0.3 (Preview 3) **component** instead of a Preview 1 core module. The component prints through `wasi:cli/stdout@0.3.0`:
@@ -589,6 +593,14 @@ compiled output (see [Compiled `eval` limitations](#compiled-eval-limitations)).
 | `notevery` | `(notevery #'evenp '(2 4 5))` | `t` if the predicate is nil for some element, else `nil` (the complement of `every`) |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
 | `identity` | `(identity 42)` | `42` (return the argument unchanged) |
+| `make-hash-table` | `(make-hash-table)`, `(make-hash-table :test 'equal)` | Create an empty hash table. `:test` is accepted but informational (see the note below); other keywords such as `:size` are ignored |
+| `gethash` | `(gethash key table)`, `(gethash key table default)` | Return the value stored under `key`, or `default` (nil if omitted) when absent |
+| `(setf (gethash key table) v)` | `(setf (gethash "a" h) 1)` | Store `v` under `key`; works with `incf`/`decf`/`push` on the place |
+| `remhash` | `(remhash key table)` | Remove the entry for `key`; returns `t` if one was removed, else `nil` |
+| `clrhash` | `(clrhash table)` | Remove all entries; returns the table |
+| `hash-table-count` | `(hash-table-count table)` | The number of entries |
+| `hash-table-p` | `(hash-table-p x)` | `t` if `x` is a hash table, else `nil` |
+| `maphash` | `(maphash (lambda (k v) ...) table)` | Call the function on each key/value pair for effect; returns nil |
 
 **Deviations from Common Lisp.** Some functions accept fewer arguments than the Common
 Lisp standard: `log` takes only one argument (no base: `(log x base)` is unsupported),
@@ -599,6 +611,26 @@ a list, `getf` takes no `&optional default`, `nconc` concatenates exactly two li
 unsupported (use `remf` to delete a property). The rounding functions
 `truncate`/`floor`/`ceiling`/`round` accept a single argument and return one value (no
 optional divisor and no second remainder value). These remain on the to-do list.
+
+**Hash tables.** `make-hash-table`, `gethash`, `(setf (gethash ...))`, `remhash`,
+`clrhash`, `hash-table-count`, `hash-table-p` and `maphash` work in all three backends.
+Keys are compared structurally (as if by `equal`): a list key like `(list r c)` matches an
+equal list, and numbers, symbols, characters and strings match by value. `:test` is
+accepted for familiarity but does not change this — an `eql` table also matches
+structurally-equal aggregate keys. Iteration order (`maphash`) is not guaranteed across
+backends, so portable code should not depend on it. They are also usable as first-class
+function values (`#'gethash`, `#'remhash`, `#'clrhash`, `#'hash-table-count`,
+`#'hash-table-p`, `#'maphash`, and `#'make-hash-table` in its no-argument form) on all
+three backends -- passed via fixed-arity wrappers, so `gethash`'s optional default and
+`make-hash-table`'s keyword arguments are not available through the function value. A
+typical use -- counting with `incf` on the place:
+
+```lisp
+(let ((counts (make-hash-table :test 'equal)))
+  (dolist (w '("a" "b" "a"))
+    (incf (gethash w counts 0)))
+  (gethash "a" counts)) ; => 2
+```
 
 `read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
 
@@ -715,7 +747,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 177
+; => 184
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

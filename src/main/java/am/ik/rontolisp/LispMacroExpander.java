@@ -840,6 +840,12 @@ public final class LispMacroExpander {
 			return switch (accessor) {
 				case LispNames.CAR, LispNames.FIRST -> expandSetfWithRplaca(placeParts.get(1), value);
 				case LispNames.CDR, LispNames.REST -> expandSetfWithRplacd(placeParts.get(1), value);
+				case LispNames.GETHASH ->
+					// (setf (gethash key table [default]) val) -> (%puthash key table
+					// val).
+					// The optional default in the place is only used by gethash in read
+					// position, so it is dropped here.
+					listToCons(List.of(new LispSymbol(LispNames.PUTHASH), placeParts.get(1), placeParts.get(2), value));
 				case LispNames.NTH -> {
 					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
 					// __setf) __setf)
@@ -2855,7 +2861,14 @@ public final class LispMacroExpander {
 		LispVal remExpr = listToCons(List.of(new LispSymbol(LispNames.REM), av, bv));
 		LispVal bindings = listToCons(List.of(listToCons(List.of(av, parts.get(1))),
 				listToCons(List.of(bv, parts.get(2))), listToCons(List.of(rv, remExpr))));
-		LispVal product = listToCons(List.of(new LispSymbol(LispNames.MUL), rv, bv));
+		// mod differs from rem only when the remainder and divisor have opposite signs
+		// (then add the divisor). The sign comparison multiplies the signums rather than
+		// (* r b) directly, which would overflow the WASM i31 range for large operands
+		// and
+		// spuriously trigger the correction.
+		LispVal sgnR = listToCons(List.of(new LispSymbol(LispNames.SIGNUM), rv));
+		LispVal sgnB = listToCons(List.of(new LispSymbol(LispNames.SIGNUM), bv));
+		LispVal product = listToCons(List.of(new LispSymbol(LispNames.MUL), sgnR, sgnB));
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), product, new LispInteger(0)));
 		LispVal corrected = listToCons(List.of(new LispSymbol(LispNames.ADD), rv, bv));
 		LispVal body = makeIf(test, corrected, rv);

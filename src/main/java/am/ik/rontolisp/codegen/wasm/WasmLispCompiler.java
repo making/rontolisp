@@ -478,6 +478,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!usesRead) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
 		}
+		// Hash-table wrappers compile inline hash code (and register maphash's arity-2
+		// dispatch); only inject them when the program uses a hash table, gating the
+		// whole
+		// group together for symmetry with the JVM backend.
+		if (!programUsesAnyHashOp(program)) {
+			wrapperExcludes.addAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
+		}
 		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
@@ -492,6 +499,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			DefunDecl defun = defuns.get(i);
 			int funcId = nextFuncId[0]++;
 			int arity = defun.paramNames.size();
+			if (arity > MAX_CALLABLE_ARITY) {
+				throw new UnsupportedOperationException("Cannot compile function '" + defun.name
+						+ "': the WASM backend " + "supports at most " + MAX_CALLABLE_ARITY + " parameters, got "
+						+ arity + " (bundle the extra arguments into a list)");
+			}
 			functions.put(defun.name,
 					new WasmFunctionInfo(defun.name, arity, funcId, TYPE_CALLABLE_BASE + arity, FUNC_USER_BASE + i));
 		}
@@ -616,6 +628,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		int lambdaIdx = 0;
 		while (lambdaIdx < lambdaDecls.size()) {
 			LambdaInfo lambda = lambdaDecls.get(lambdaIdx);
+			if (lambda.paramNames().size() > MAX_CALLABLE_ARITY) {
+				throw new UnsupportedOperationException("Cannot compile lambda: the WASM backend supports at most "
+						+ MAX_CALLABLE_ARITY + " parameters, got " + lambda.paramNames().size()
+						+ " (bundle the extra arguments into a list)");
+			}
 			ByteArrayOutputStream lambdaBody = new ByteArrayOutputStream();
 			WasmWriter lambdaWriter = new WasmWriter(lambdaBody);
 			Ctx lambdaCtx = ctxBuilder.writer(lambdaWriter).bodyStream(lambdaBody).build();
@@ -1268,6 +1285,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	// True when the program references any hash-table operator (including (setf (gethash
+	// ...)) which contains gethash). Gates the first-class hash wrappers.
+	private static boolean programUsesAnyHashOp(List<LispVal> program) {
+		return programUsesSymbol(program, LispNames.MAKE_HASH_TABLE) || programUsesSymbol(program, LispNames.GETHASH)
+				|| programUsesSymbol(program, LispNames.REMHASH) || programUsesSymbol(program, LispNames.CLRHASH)
+				|| programUsesSymbol(program, LispNames.HASH_TABLE_COUNT)
+				|| programUsesSymbol(program, LispNames.HASH_TABLE_P) || programUsesSymbol(program, LispNames.MAPHASH);
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {
