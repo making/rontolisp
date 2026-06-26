@@ -5,31 +5,15 @@
 ;;;; hash table keyed by (row col action) with the standard `equal` test, which
 ;;;; is the idiomatic Common Lisp representation for a sparse Q-table.
 ;;;;
-;;;; The run is fully deterministic on every backend: randomness comes from a
-;;;; small self-contained LCG (not the built-in `random`, whose source differs
-;;;; between the interpreter/JVM and WASM), and floating-point updates use only
-;;;; +, -, *, / so the interpreter, JVM and WASM all print the same result.
-;;;;
-;;;; To stay within rontolisp's compilers, mutable state (the Q-table and the
-;;;; RNG seed) is threaded through as arguments rather than held in globals that
-;;;; functions assign to; the hash table is mutated in place via `setf gethash`.
-
-;;; ---------------------------------------------------------------------------
-;;; Deterministic RNG: a ZX-Spectrum-style LCG whose state is a one-element list
-;;; so it can be mutated in place. All intermediate values stay well within the
-;;; WASM i31 integer range (max product 75 * 65536).
-;;; ---------------------------------------------------------------------------
-
-(defun rng-next (rng)                       ; -> integer in [0, 65537)
-  (let ((s (mod (+ (* (car rng) 75) 74) 65537)))
-    (setf (car rng) s)
-    s))
-
-(defun rng-float (rng)                      ; -> float in [0, 1)
-  (/ (float (rng-next rng)) 65537.0))
-
-(defun rng-below (rng n)                    ; -> integer in [0, n)
-  (mod (rng-next rng) n))
+;;;; Exploration uses the built-in `random`, the idiomatic Common Lisp choice for
+;;;; reinforcement learning.  Because `random` is not seedable and draws from a
+;;;; different source per backend (`Math.random` on the interpreter/JVM, a
+;;;; deterministic LCG on WASM Preview 1, real entropy on a WASM component), this
+;;;; program prints a different learned path on each run and each backend.  The
+;;;; algorithm still converges to a valid shortest-ish route every time; only the
+;;;; exact path and value count vary.  (For a fully deterministic, bit-identical
+;;;; cross-backend run, swap `random` for a self-contained LCG threaded through
+;;;; as state -- earlier revisions of this file did exactly that.)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Maze: a list of equal-length strings.  # is a wall, S the start, G the goal,
@@ -90,9 +74,9 @@
       (setq a (+ a 1)))
     ba))
 
-(defun choose-action (q rng r c epsilon)    ; epsilon-greedy
-  (if (< (rng-float rng) epsilon)
-      (rng-below rng 4)
+(defun choose-action (q r c epsilon)        ; epsilon-greedy
+  (if (< (random 1.0) epsilon)
+      (random 4)
       (best-action q r c)))
 
 ;;; ---------------------------------------------------------------------------
@@ -111,12 +95,12 @@
 ;;; Q(s,a) <- Q(s,a) + alpha * (reward + gamma * max_a' Q(s',a') - Q(s,a))
 ;;; ---------------------------------------------------------------------------
 
-(defun run-episode (maze q rng start goal hp)
+(defun run-episode (maze q start goal hp)
   (let ((r (first start)) (c (second start)) (steps 0) (done nil)
         (alpha (hp-alpha hp)) (gamma (hp-gamma hp))
         (epsilon (hp-epsilon hp)) (max-steps (hp-max-steps hp)))
     (while (and (< steps max-steps) (not done))
-      (let* ((a (choose-action q rng r c epsilon))
+      (let* ((a (choose-action q r c epsilon))
              (nxt (move r c a))
              (nr (first nxt))
              (nc (second nxt)))
@@ -136,10 +120,10 @@
           (when at-goal (setq done t)))))
     steps))
 
-(defun train (maze q rng start goal hp episodes)
+(defun train (maze q start goal hp episodes)
   (let ((e 0))
     (while (< e episodes)
-      (run-episode maze q rng start goal hp)
+      (run-episode maze q start goal hp)
       (setq e (+ e 1)))))
 
 ;;; ---------------------------------------------------------------------------
@@ -200,7 +184,6 @@
         "#########"))
 
 (defparameter *q* (make-hash-table :test 'equal))
-(defparameter *rng* (list 1))               ; LCG seed
 (defparameter *start* (find-cell *maze* #\S))
 (defparameter *goal* (find-cell *maze* #\G))
 (defparameter *hp* (list 0.5 0.9 0.2 300))  ; alpha gamma epsilon max-steps
@@ -208,7 +191,7 @@
 (format t "Maze ~a x ~a, training tabular Q-learning...~%"
         (maze-rows *maze*) (maze-cols *maze*))
 
-(train *maze* *q* *rng* *start* *goal* *hp* 500)
+(train *maze* *q* *start* *goal* *hp* 500)
 
 (defparameter *path* (greedy-path *maze* *q* *start* *goal* 100))
 

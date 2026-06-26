@@ -20,7 +20,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`parse-numbers.lisp`](parse-numbers.lisp) | Numeric-column parsing and character classification: `parse-integer`, `char`, `alpha-char-p`, `digit-char-p` over file lines |
 | [`nn.lisp`](nn.lisp) | Feed-forward neural network learning XOR via backpropagation |
 | [`mlp.lisp`](mlp.lisp) | Generalized multi-layer perceptron for 2-D circle classification |
-| [`maze-rl.lisp`](maze-rl.lisp) | Tabular Q-learning that solves a grid maze: a hash-table Q-table keyed by `(row col action)`, a self-contained LCG for reproducible exploration, and an ASCII rendering of the learned path |
+| [`maze-rl.lisp`](maze-rl.lisp) | Tabular Q-learning that solves a grid maze: a hash-table Q-table keyed by `(row col action)`, idiomatic `random`-based epsilon-greedy exploration, and an ASCII rendering of the learned path. **Non-deterministic:** because `random` is unseeded and per-backend, the exact path and value count differ on each run and backend (the algorithm always converges to a valid route) |
 
 ## Running
 

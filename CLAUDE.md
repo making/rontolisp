@@ -92,12 +92,31 @@ Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`
 1. **LispEvaluator.java**: `evalCons()` case (special forms receive unevaluated arguments).
 2. **JVM / WASM**: Create `Jvm/Wasm<Form>Compiler.java`, wire into `Jvm/WasmExprCompiler.compileCons()`.
 
-### Verifying WASM Output Manually
+### Verifying Output Manually (all four backends)
+
+A program is "verified" only when it has been run on **all four** backends:
+interpreter, JVM, WASM Preview 1, and WASM component (`--component`). Don't stop
+at three — the component path uses a different I/O adapter (and, for `random` /
+time, a different entropy/clock source), so it can diverge from Preview 1.
 
 ```bash
+JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 echo '(print (+ 1 2))' > test.lisp
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar test.lisp -o test.wasm
-wasmtime --wasm gc test.wasm    # requires wasmtime 14+
+
+# 1. Interpreter
+java -jar $JAR test.lisp
+
+# 2. JVM (class is named after the output file, so keep it path-free)
+java -jar $JAR test.lisp -o Prog.class && java Prog
+
+# 3. WASM Preview 1 (requires wasmtime 14+)
+java -jar $JAR test.lisp -o test.wasm && wasmtime run -W gc test.wasm
+
+# 4. WASM component / WASI 0.3 (requires wasmtime 46+)
+java -jar $JAR test.lisp -o test-comp.wasm --component && \
+  wasmtime run -W gc=y -W component-model-async=y \
+    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
+    test-comp.wasm
 ```
 
 ### Verifying the Native Image End-to-End (run locally before every push)
