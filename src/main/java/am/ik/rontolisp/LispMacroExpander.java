@@ -2154,11 +2154,12 @@ public final class LispMacroExpander {
 	 * output, return nil) or {@code nil} (return the formatted string). Supported
 	 * directives: {@code ~a}/{@code ~A} (princ), {@code ~s}/{@code ~S} (prin1),
 	 * {@code ~d}/{@code ~D} (decimal, with {@code :} comma grouping and {@code @} sign),
-	 * {@code ~f}/{@code ~F} (fixed-decimal float), {@code ~$} (monetary), {@code ~%}
-	 * (newline), {@code ~&} (fresh-line) and {@code ~~} (a literal tilde). Directives
-	 * accept prefix parameters (numbers, {@code 'c}, {@code v}, {@code #}) and the
-	 * {@code :}/{@code @} modifiers; value directives that need padding/grouping/rounding
-	 * expand into the {@code %fmt-*} runtime helpers.
+	 * {@code ~f}/{@code ~F} (fixed-decimal float), {@code ~e}/{@code ~E} (exponential
+	 * float), {@code ~$} (monetary), {@code ~%} (newline), {@code ~&} (fresh-line) and
+	 * {@code ~~} (a literal tilde). Directives accept prefix parameters (numbers,
+	 * {@code 'c}, {@code v}, {@code #}) and the {@code :}/{@code @} modifiers; value
+	 * directives that need padding/grouping/rounding expand into the {@code %fmt-*}
+	 * runtime helpers.
 	 *
 	 * <pre>
 	 * (format t "Hello ~a!~%" name) ->
@@ -2391,6 +2392,20 @@ public final class LispMacroExpander {
 				}
 				ops.add(new FmtString(base));
 			}
+			case 'e' -> {
+				flushFmtLiteral(lit, ops);
+				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
+				boolean dGiven = fmtHasParam(params, 1);
+				int places = dGiven ? fmtIntParam(params, 1, directive) : DEFAULT_EXP_PLACES;
+				if (places < 0) {
+					throw new IllegalArgumentException("format: ~e precision must be non-negative");
+				}
+				LispVal base = decimalExpExpr(arg, places, !dGiven, at);
+				if (fmtHasParam(params, 0)) {
+					base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 5, ' '), true);
+				}
+				ops.add(new FmtString(base));
+			}
 			case '$' -> {
 				flushFmtLiteral(lit, ops);
 				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
@@ -2524,6 +2539,127 @@ public final class LispMacroExpander {
 			r *= 10;
 		}
 		return r;
+	}
+
+	/**
+	 * The number of fractional digits used by {@code ~e} when the {@code d} parameter is
+	 * omitted (matching C's {@code printf("%e")} default). Kept small enough that the
+	 * scaled mantissa fits in a WASM {@code i31}, so the directive renders identically on
+	 * all three backends.
+	 */
+	private static final int DEFAULT_EXP_PLACES = 6;
+
+	/**
+	 * Builds the string-valued expansion of an exponential-notation float ({@code ~e}).
+	 * The magnitude is normalized to a mantissa in {@code [1, 10)} by a runtime
+	 * divide/multiply loop that tracks the decimal exponent, rounded to {@code places}
+	 * fractional digits via integer scaling (so the digit string is built purely from
+	 * integer arithmetic and renders identically on every backend, unlike a direct
+	 * {@code princ-to-string} of a float), and assembled as
+	 * {@code [sign]d.ddd...e[+/-]xx}. A mantissa that rounds up to {@code 10.0} bumps the
+	 * exponent and renormalizes to {@code 1.0}. When {@code strip} is true (the {@code d}
+	 * parameter was omitted) trailing fractional zeros are dropped down to a single
+	 * digit. On the WASM backend the scaled mantissa must fit in an {@code i31}, so
+	 * {@code places} is effectively limited to about 8.
+	 */
+	private static LispVal decimalExpExpr(LispVal arg, int places, boolean strip, boolean plus) {
+		long pd = pow10(places);
+		long pd1 = pow10(places + 1L);
+		LispSymbol v = new LispSymbol("__ev");
+		LispSymbol neg = new LispSymbol("__eneg");
+		LispSymbol a = new LispSymbol("__ea");
+		LispSymbol ee = new LispSymbol("__ee");
+		LispSymbol sc = new LispSymbol("__esc");
+		LispSymbol ovf = new LispSymbol("__eovf");
+		LispSymbol sc2 = new LispSymbol("__esc2");
+		LispSymbol eef = new LispSymbol("__eef");
+		LispSymbol s = new LispSymbol("__es");
+		LispSymbol ip = new LispSymbol("__eip");
+		LispSymbol fr = new LispSymbol("__efr");
+
+		// Outer let* bindings: coerce to float, capture sign, take magnitude, exponent =
+		// 0.
+		LispVal vInit = fmtCall(LispNames.MUL, arg, new LispDouble(1.0));
+		LispVal negInit = fmtCall(LispNames.LT, v, new LispDouble(0.0));
+		LispVal aInit = makeIf(neg, fmtCall(LispNames.SUB, new LispDouble(0.0), v), v);
+		// Normalize the mantissa into [1, 10), tracking the decimal exponent in ee.
+		LispVal up = fmtCall(LispNames.WHILE, fmtCall(LispNames.GE, a, new LispDouble(10.0)),
+				fmtCall(LispNames.SETQ, a, fmtCall(LispNames.DIV, a, new LispDouble(10.0))),
+				fmtCall(LispNames.SETQ, ee, fmtCall(LispNames.ADD, ee, new LispInteger(1))));
+		LispVal down = fmtCall(LispNames.WHILE, fmtCall(LispNames.LT, a, new LispDouble(1.0)),
+				fmtCall(LispNames.SETQ, a, fmtCall(LispNames.MUL, a, new LispDouble(10.0))),
+				fmtCall(LispNames.SETQ, ee, fmtCall(LispNames.SUB, ee, new LispInteger(1))));
+		// Inner let*: round to (places+1) significant digits, renormalize on overflow.
+		LispVal scInit = fmtCall(LispNames.ROUND, fmtCall(LispNames.MUL, a, new LispDouble((double) pd)));
+		LispVal ovfInit = fmtCall(LispNames.GE, sc, new LispInteger(pd1));
+		LispVal sc2Init = makeIf(ovf, new LispInteger(pd), sc);
+		LispVal eefInit = makeIf(ovf, fmtCall(LispNames.ADD, ee, new LispInteger(1)), ee);
+		LispVal sInit = fmtCall(LispNames.PRINC_TO_STRING, sc2);
+		LispVal ipInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(1));
+		LispVal frInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(1));
+		// Exponent suffix: always-signed, magnitude printed as an integer.
+		LispVal eneg = fmtCall(LispNames.LT, eef, new LispInteger(0));
+		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
+		LispVal eabs = fmtCall(LispNames.PRINC_TO_STRING,
+				makeIf(eneg, fmtCall(LispNames.SUB, new LispInteger(0), eef), eef));
+		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
+		LispVal frFinal = strip ? stripTrailingZeros(fr) : fr;
+		LispVal mant = (places == 0) ? ip : fmtConcat(ip, new LispString("."), frFinal);
+		LispVal body = fmtConcat(sign, mant, new LispString("e"), esign, eabs);
+		List<LispVal> innerBindings = List.of(listToCons(List.of(sc, scInit)), listToCons(List.of(ovf, ovfInit)),
+				listToCons(List.of(sc2, sc2Init)), listToCons(List.of(eef, eefInit)), listToCons(List.of(s, sInit)),
+				listToCons(List.of(ip, ipInit)), listToCons(List.of(fr, frInit)));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(innerBindings), body));
+		LispVal normal = listToCons(List.of(new LispSymbol(LispNames.PROGN), up, down, innerLet));
+		// Zero needs no normalization (it would loop forever), so short-circuit it.
+		String zeroMant = (places == 0) ? "0" : (strip ? "0.0" : "0." + "0".repeat(places));
+		LispVal zero = new LispString((plus ? "+" : "") + zeroMant + "e+0");
+		LispVal outerBody = makeIf(fmtCall(LispNames.EQ, a, new LispDouble(0.0)), zero, normal);
+		List<LispVal> outerBindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(neg, negInit)),
+				listToCons(List.of(a, aInit)), listToCons(List.of(ee, new LispInteger(0))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(outerBindings), outerBody));
+	}
+
+	/**
+	 * Builds
+	 * {@code (let ((g frExpr)) (while (and (> (length g) 1) (string= last "0")) ...)
+	 * g)}, trimming trailing {@code 0} characters from a fractional-digit string down to
+	 * a single remaining digit. Pure-Lisp so all three backends share it.
+	 */
+	private static LispVal stripTrailingZeros(LispVal frExpr) {
+		LispSymbol g = new LispSymbol("__eg");
+		LispVal last = fmtCall(LispNames.SUBSEQ, g,
+				fmtCall(LispNames.SUB, fmtCall(LispNames.LENGTH, g), new LispInteger(1)));
+		LispVal cond = fmtCall(LispNames.AND, fmtCall(LispNames.GT, fmtCall(LispNames.LENGTH, g), new LispInteger(1)),
+				fmtCall(LispNames.STRING_EQ, last, new LispString("0")));
+		LispVal trimmed = fmtCall(LispNames.SUBSEQ, g, new LispInteger(0),
+				fmtCall(LispNames.SUB, fmtCall(LispNames.LENGTH, g), new LispInteger(1)));
+		LispVal loop = fmtCall(LispNames.WHILE, cond, fmtCall(LispNames.SETQ, g, trimmed));
+		LispVal binding = listToCons(List.of(listToCons(List.of(g, frExpr))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), binding, loop, g));
+	}
+
+	/**
+	 * Folds {@code parts} into a right-nested chain of binary {@code %string-concat}
+	 * calls.
+	 */
+	private static LispVal fmtConcat(LispVal... parts) {
+		LispVal r = parts[parts.length - 1];
+		for (int k = parts.length - 2; k >= 0; k--) {
+			r = fmtCall(LispNames.STRING_CONCAT, parts[k], r);
+		}
+		return r;
+	}
+
+	/**
+	 * Resolves a compile-time integer prefix parameter, rejecting a runtime {@code v}.
+	 */
+	private static int fmtIntParam(List<LispVal> params, int idx, char directive) {
+		if (params.get(idx) instanceof LispInteger li) {
+			return (int) li.value();
+		}
+		throw new UnsupportedOperationException(
+				"format: runtime (v) parameter not supported for directive ~" + directive);
 	}
 
 	/** The literal single-character pad string for a pad-character parameter. */

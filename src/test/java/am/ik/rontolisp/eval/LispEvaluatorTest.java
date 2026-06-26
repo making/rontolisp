@@ -522,6 +522,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFormatExponentialDirective() {
+		assertThat(eval("(format nil \"~e\" pi)")).isEqualTo(new LispString("3.141593e+0"));
+		assertThat(eval("(format nil \"~,4e\" pi)")).isEqualTo(new LispString("3.1416e+0"));
+		assertThat(eval("(format nil \"~e\" 1234.5)")).isEqualTo(new LispString("1.2345e+3"));
+		assertThat(eval("(format nil \"~e\" 100.0)")).isEqualTo(new LispString("1.0e+2"));
+		assertThat(eval("(format nil \"~e\" 0.5)")).isEqualTo(new LispString("5.0e-1"));
+		assertThat(eval("(format nil \"~e\" 0.0)")).isEqualTo(new LispString("0.0e+0"));
+		assertThat(eval("(format nil \"~,2e\" 9.999)")).isEqualTo(new LispString("1.00e+1"));
+		assertThat(eval("(format nil \"~e\" -1234.5)")).isEqualTo(new LispString("-1.2345e+3"));
+		assertThat(eval("(format nil \"~,2e\" 0.00031415)")).isEqualTo(new LispString("3.14e-4"));
+		assertThat(eval("(format nil \"~@e\" 42.0)")).isEqualTo(new LispString("+4.2e+1"));
+	}
+
+	@Test
 	void evalFormatDecimalModifiers() {
 		assertThat(eval("(format nil \"~d\" 1000000)")).isEqualTo(new LispString("1000000"));
 		assertThat(eval("(format nil \"~:d\" 1000000)")).isEqualTo(new LispString("1,000,000"));

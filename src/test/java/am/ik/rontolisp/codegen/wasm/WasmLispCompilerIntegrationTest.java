@@ -638,6 +638,12 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void formatExponential() throws Exception {
+		assertThat(compileAndRun("(format t \"~e ~,4e ~e ~,2e ~e\" pi pi 1234.5 9.999 0.0)"))
+			.isEqualTo("3.141593e+0 3.1416e+0 1.2345e+3 1.00e+1 0.0e+0");
+	}
+
+	@Test
 	void formatInsideDefun() throws Exception {
 		assertThat(compileAndRun("(defun greet (name) (format t \"Hi, ~a!~%\" name)) (greet 'alice) (greet \"bob\")"))
 			.isEqualTo("Hi, alice!\nHi, bob!");

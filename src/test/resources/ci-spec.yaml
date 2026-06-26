@@ -1018,6 +1018,15 @@ cases:
       3.14|3.14159|3.14|3.142
       done
       fresh
+  - name: format-directive-exponential
+    source: |
+      (defun ci-fmt-exp ()
+        (format t "~e|~,4e|~e|~,2e|~e~%" pi pi 1234.5 9.999 0.0)
+        (format t "~e|~@e~%" -1234.5 42.0))
+      (ci-fmt-exp)
+    expected: |
+      3.141593e+0|3.1416e+0|1.2345e+3|1.00e+1|0.0e+0
+      -1.2345e+3|+4.2e+1
   - name: string-operations-case-conversion-subseq
     source: |
       (princ (string-upcase "hello"))
