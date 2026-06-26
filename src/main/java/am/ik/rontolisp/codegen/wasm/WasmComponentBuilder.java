@@ -85,10 +85,10 @@ public final class WasmComponentBuilder {
 	 * 0.2 HTTP machinery for {@code rontolisp:fetch} ({@code wasi:io/poll},
 	 * {@code wasi:io/error}, {@code wasi:io/streams}, {@code wasi:http/types},
 	 * {@code wasi:http/outgoing-handler}). fetch stays on {@code wasi:http@0.2} because
-	 * an async {@code wasi:http@0.3} does not exist upstream yet (see {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}).
-	 * It declares component import instances 0-13 and component types 0-24, so the next
-	 * free component type index is 25. Source: {@code src/wasm-component/uni-http.wit} +
-	 * {@code core-http.wat}.
+	 * an async {@code wasi:http@0.3} does not exist upstream yet (see
+	 * {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}). It declares component import
+	 * instances 0-13 and component types 0-24, so the next free component type index is
+	 * 25. Source: {@code src/wasm-component/uni-http.wit} + {@code core-http.wat}.
 	 */
 	private static final byte[] IMPORT_BLOCK_HTTP = resource("import-block-http.bin");
 
@@ -365,7 +365,8 @@ public final class WasmComponentBuilder {
 	 * still flows through the 0.3 {@code stream}/{@code future} built-ins, while fetch
 	 * drives an outgoing request over {@code wasi:http@0.2} + {@code wasi:io@0.2}
 	 * (synchronous {@code pollable.block}) in {@code adapter-http.wat}. async
-	 * {@code wasi:http@0.3} does not exist upstream yet; see {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}.
+	 * {@code wasi:http@0.3} does not exist upstream yet; see
+	 * {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}.
 	 *
 	 * <p>
 	 * All wiring constants (instance indices, the next-free type index 25, the 31 lowered
