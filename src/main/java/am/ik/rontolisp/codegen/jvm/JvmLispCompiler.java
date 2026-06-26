@@ -252,7 +252,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			userDefinedNames.add(defun.name);
 		}
-		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames)) {
+		// parse-integer / read-from-string wrappers reference runtime helpers that are
+		// emitted only when the program itself uses the operator (_parseInt; the reader
+		// runtime). Exclude each wrapper unless the program references the symbol, so the
+		// wrapper and its helper stay gated together.
+		Set<String> wrapperExcludes = new HashSet<>();
+		if (!programUsesSymbol(program, LispNames.PARSE_INTEGER)) {
+			wrapperExcludes.add(LispNames.PARSE_INTEGER);
+		}
+		if (!(programUsesSymbol(program, LispNames.READ) || programUsesSymbol(program, LispNames.READ_FROM_STRING)
+				|| programUsesSymbol(program, LispNames.LOAD))) {
+			wrapperExcludes.add(LispNames.READ_FROM_STRING);
+		}
+		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
 

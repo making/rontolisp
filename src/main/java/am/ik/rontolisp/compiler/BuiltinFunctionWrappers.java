@@ -192,10 +192,12 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE), unary(LispNames.CHARACTERP),
 			unary(LispNames.ALPHA_CHAR_P), unary(LispNames.DIGIT_CHAR_P), binary(LispNames.CHAR_EQ),
 			binary(LispNames.CHAR_LT), binary(LispNames.CHAR_LE),
-			// (parse-integer / read-from-string are not given wrappers: on the compiled
-			// backends their bodies pull in runtime helpers emitted only when the program
-			// itself uses them, so #'parse-integer / #'read-from-string stay
-			// interpreter-only first-class values.)
+			// parse-integer / read-from-string: their compiled bodies pull in runtime
+			// helpers emitted only when the program uses the operator, so each backend
+			// excludes these wrappers (via excludedNames) unless the program references
+			// the
+			// symbol -- keeping the wrapper and its helper gated together.
+			unary(LispNames.PARSE_INTEGER), unary(LispNames.READ_FROM_STRING),
 			// terpri: 0-arity
 			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
 			// fresh-line: 0-arity

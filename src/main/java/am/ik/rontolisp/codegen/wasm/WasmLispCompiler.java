@@ -465,8 +465,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			userDefinedNames.add(defun.name);
 		}
-		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames,
-				BuiltinFunctionWrappers.WASM_UNSUPPORTED)) {
+		// parse-integer is inlined on WASM (no helper), but read-from-string pulls in the
+		// reader runtime (FUNC_READ_EXPR), emitted only when usesRead. Exclude each
+		// wrapper
+		// unless the program references the symbol so the wrapper and its helper stay
+		// gated
+		// together (parse-integer gated for symmetry with the JVM backend).
+		Set<String> wrapperExcludes = new HashSet<>(BuiltinFunctionWrappers.WASM_UNSUPPORTED);
+		if (!programUsesSymbol(program, LispNames.PARSE_INTEGER)) {
+			wrapperExcludes.add(LispNames.PARSE_INTEGER);
+		}
+		if (!usesRead) {
+			wrapperExcludes.add(LispNames.READ_FROM_STRING);
+		}
+		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
 

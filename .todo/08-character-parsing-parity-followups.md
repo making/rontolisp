@@ -29,16 +29,7 @@ priority -- pick up if exact parity becomes important.
    `Character.isLetter` (full Unicode). The WASM backend byte-indexes strings, so
    broad Unicode support would be a larger change (UTF-8 decoding).
 
-4. **`#'parse-integer` / `#'read-from-string` are interpreter-only first-class
-   values.** No `BuiltinFunctionWrappers` entries were added for them, because
-   their compiled bodies pull in runtime helpers (`_parseInt` /
-   `_readFromString` / `FUNC_READ_EXPR`) that are emitted only when the program
-   itself uses the operator. A wrapper would force those helpers into every
-   program. To support `#'parse-integer` etc. on the compiled backends, make the
-   `usesParseInteger` / `usesRead` gating also scan injected wrappers (or always
-   emit the helpers), then add the wrapper entries.
-
-5. **Runtime `read`/`read-from-string` of `#\` character literals is out of
+4. **Runtime `read`/`read-from-string` of `#\` character literals is out of
    scope on both compilers.** The hand-written WASM reader and the JVM runtime
    reader do not parse `#\name`; only `#\` literals written directly in source
    (compiled via the AST) are supported. Extending the runtime readers to emit a

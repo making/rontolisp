@@ -2622,4 +2622,10 @@ class JvmLispCompilerTest {
 			.isEqualTo("(+ 1 2)\n42");
 	}
 
+	@Test
+	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(a b c)");
+	}
+
 }
