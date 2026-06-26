@@ -2,7 +2,7 @@
 
 **Status:** intentionally out of scope for the current `format` work.
 
-The `format` macro now covers the "Basic Formatting" directives: `~a`/`~s`
+The `format` macro now covers the ["Basic Formatting" directives](https://gigamonkeys.com/book/a-few-format-recipes.html#basic-formatting): `~a`/`~s`
 (padding, `:` for nil), `~d` (`:` comma grouping, `@` sign, padding), `~f`, `~$`,
 `~%`, `~&`, `~~`, prefix parameters (number / `'c` / `v` / `#`) and the `:`/`@`
 modifiers. See the README "format" section for the supported set and limitations.
