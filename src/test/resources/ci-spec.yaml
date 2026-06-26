@@ -1374,6 +1374,15 @@ cases:
       (+ 1 2)
       (#\A #\B #\C)
       a
+  - name: read-float-literals
+    source: |
+      (print (read-from-string "1.5"))
+      (print (floatp (read-from-string "2.0")))
+      (print (+ (read-from-string "-2.5") (read-from-string "0.5")))
+    expected: |
+      1.5
+      t
+      -2.0
   - name: mod-large-operands-floored
     source: |
       (print (mod 843749 65537))

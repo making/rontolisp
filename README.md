@@ -689,7 +689,8 @@ In every backend `read` parses one S-expression from a line of stdin: blank and 
 
 The WASM reader has a hand-written parser and is narrower:
 
-- **Integers are 31-bit.** Numeric tokens are parsed to `i31` and wrap on overflow; there is no big-integer or floating-point parsing (a token containing `.` is read as a symbol).
+- **Integers are 31-bit.** Integer tokens are parsed to `i31` and wrap on overflow; there is no big-integer parsing.
+- **Floats are read.** A decimal token (optional leading `-`, digits, one `.`, e.g. `1.0`, `-2.5`, `.5`, `5.`) parses to an `f64`-backed float, matching how float literals compile. There is no exponent (`1e3`) or grouping-comma support in the reader, and a token with two dots or any non-digit (e.g. `1.2.3`, `foo.bar`) stays a symbol.
 - **Symbol interning is runtime-backed.** Symbols that appear in the compiled program resolve to the same offset the compiled `eval` uses; symbols seen only at runtime (e.g. a lambda parameter inside a loaded file) are interned in a runtime table so repeated occurrences stay consistent.
 - **`load` requires a preopened directory.** It opens the file via WASI `path_open` relative to the first preopened directory (fd 3), so run with `--dir`.
 

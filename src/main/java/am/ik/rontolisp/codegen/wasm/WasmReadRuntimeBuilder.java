@@ -21,8 +21,9 @@ import am.ik.wasm.WasmWriter;
  * eval runtime compares against.
  *
  * <p>
- * Numeric support is limited to signed 31-bit integers (no floats or big integers),
- * matching the documented compiled-eval limitations.
+ * Integers are signed 31-bit (no big integers). Decimal floats (optional leading
+ * {@code -}, digits and one {@code .}) parse to a {@code TYPE_FLOAT} struct; there is no
+ * exponent support, matching the documented compiled-eval limitations.
  */
 final class WasmReadRuntimeBuilder {
 
@@ -348,15 +349,18 @@ final class WasmReadRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
-		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11
-		w.write(2);
+		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12 ; f64 locals: FVAL=13,
+		// FPLACE=14
+		w.write(3);
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(10);
+		w.write(11);
 		w.write(Type.I32);
+		w.write(2);
+		w.write(Type.F64);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
-				VALID = 11;
+				VALID = 11, SAWDOT = 12, FVAL = 13, FPLACE = 14;
 
 		emitSkipWs(w);
 		// if cursor >= end: return null
@@ -496,6 +500,9 @@ final class WasmReadRuntimeBuilder {
 
 		// classify: integer?
 		emitTryInteger(w, BYTE, START, LEN, POS, NEG, ACC, VALID, ESC);
+
+		// classify: float? (a token with a '.' falls through the integer parser)
+		emitTryFloat(w, BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, FVAL, FPLACE);
 
 		// symbol: off = _intern(start, len)
 		getLocal(w, START);
@@ -642,6 +649,159 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 		getLocal(w, ACC);
 		i31New(w);
+		w.write(Instruction.RETURN);
+		end(w);
+	}
+
+	/**
+	 * Emits the float classifier/parser for the token at {@code [START, START+LEN)}. A
+	 * decimal float is an optional leading {@code -}, digits, exactly one {@code .}, and
+	 * at least one digit (e.g. {@code 1.0}, {@code -2.5}, {@code .5}, {@code 5.}). On a
+	 * match, builds a {@link WasmLispCompiler#TYPE_FLOAT} struct and returns from the
+	 * function; otherwise falls through. Integer tokens never reach here because the
+	 * integer parser already returned for them, and a token with a {@code .} fails the
+	 * integer parser (so it falls through to this classifier). No exponent support.
+	 */
+	private static void emitTryFloat(WasmWriter w, int BYTE, int START, int LEN, int POS, int NEG, int VALID,
+			int SAWDIGIT, int SAWDOT, int FVAL, int FPLACE) {
+		// POS = START ; VALID = 1 ; SAWDIGIT = 0 ; SAWDOT = 0 ; NEG = 0
+		// FVAL = 0.0 ; FPLACE = 1.0 (fractional place, multiplied by 0.1 per frac digit)
+		getLocal(w, START);
+		setLocal(w, POS);
+		i32(w, 1);
+		setLocal(w, VALID);
+		i32(w, 0);
+		setLocal(w, SAWDIGIT);
+		i32(w, 0);
+		setLocal(w, SAWDOT);
+		i32(w, 0);
+		setLocal(w, NEG);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		setLocal(w, FVAL);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(1.0);
+		setLocal(w, FPLACE);
+		// if len > 1 and byte[START]=='-': NEG=1; POS++
+		getLocal(w, LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		getLocal(w, START);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, '-');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		i32(w, 1);
+		setLocal(w, NEG);
+		getLocal(w, POS);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, POS);
+		end(w);
+		end(w);
+		// loop over [POS, START+LEN)
+		block(w);
+		loop(w);
+		getLocal(w, POS);
+		getLocal(w, START);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 1);
+		// b = mem[POS]
+		getLocal(w, POS);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, BYTE);
+		// if b == '.'
+		getLocal(w, BYTE);
+		i32(w, '.');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		// a second '.' invalidates the token
+		getLocal(w, SAWDOT);
+		ifVoid(w);
+		i32(w, 0);
+		setLocal(w, VALID);
+		end(w);
+		i32(w, 1);
+		setLocal(w, SAWDOT);
+		w.write(Instruction.ELSE);
+		// if b < '0'
+		getLocal(w, BYTE);
+		i32(w, '0');
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		i32(w, 0);
+		setLocal(w, VALID);
+		w.write(Instruction.ELSE);
+		// if b > '9'
+		getLocal(w, BYTE);
+		i32(w, '9');
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		i32(w, 0);
+		setLocal(w, VALID);
+		w.write(Instruction.ELSE);
+		// digit
+		i32(w, 1);
+		setLocal(w, SAWDIGIT);
+		getLocal(w, SAWDOT);
+		ifVoid(w);
+		// fractional digit: FPLACE *= 0.1 ; FVAL += digit * FPLACE
+		getLocal(w, FPLACE);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.1);
+		w.write(Instruction.F64_MUL);
+		setLocal(w, FPLACE);
+		getLocal(w, FVAL);
+		getLocal(w, BYTE);
+		i32(w, '0');
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		getLocal(w, FPLACE);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		setLocal(w, FVAL);
+		w.write(Instruction.ELSE);
+		// integer-part digit: FVAL = FVAL * 10 + digit
+		getLocal(w, FVAL);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(10.0);
+		w.write(Instruction.F64_MUL);
+		getLocal(w, BYTE);
+		i32(w, '0');
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_ADD);
+		setLocal(w, FVAL);
+		end(w);
+		end(w);
+		end(w);
+		end(w);
+		// POS++
+		getLocal(w, POS);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, POS);
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+		// if VALID and SAWDIGIT and SAWDOT: return TYPE_FLOAT(neg ? -FVAL : FVAL)
+		getLocal(w, VALID);
+		getLocal(w, SAWDIGIT);
+		w.write(Instruction.I32_AND);
+		getLocal(w, SAWDOT);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, NEG);
+		ifVoid(w);
+		getLocal(w, FVAL);
+		w.write(Instruction.F64_NEG);
+		setLocal(w, FVAL);
+		end(w);
+		getLocal(w, FVAL);
+		structNew(w, WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.RETURN);
 		end(w);
 	}

@@ -2751,6 +2751,36 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileReadFloatLiterals() throws Exception {
+		// Regression: the WASM runtime reader parsed only integers, so a float token such
+		// as "1.0" was interned as a symbol. floatp returned nil and any arithmetic on
+		// the
+		// "read" value trapped with a cast failure (e.g. feeding `(render -2.5 1.0 ...)`
+		// to
+		// the `(print (eval (read)))` driver used by the browser playground).
+		assertThat(compileAndRun("(print (read-from-string \"1.5\"))")).isEqualTo("1.5");
+		assertThat(compileAndRun("(print (floatp (read-from-string \"1.0\")))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (= 1.2 (read-from-string \"1.2\")))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (+ (read-from-string \"-2.5\") (read-from-string \"1.0\")))"))
+			.isEqualTo("-1.5");
+		assertThat(compileAndRun("(print (read-from-string \".5\"))")).isEqualTo("0.5");
+		assertThat(compileAndRun("(print (read-from-string \"5.\"))")).isEqualTo("5.0");
+		// A token with two dots or non-numeric characters stays a symbol.
+		assertThat(compileAndRun("(print (symbolp (read-from-string \"1.2.3\")))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (symbolp (read-from-string \"foo.bar\")))")).isEqualTo("t");
+		// Integers are unaffected.
+		assertThat(compileAndRun("(print (integerp (read-from-string \"30\")))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileEvalReadFloatArithmetic() throws Exception {
+		// The browser "compile & run WASM" playground appends `(print (eval (read)))` and
+		// feeds a call expression on stdin; float arguments must round-trip through read.
+		assertThat(compileAndRunWithStdinFile("(print (eval (read)))", "(+ 1.0 2.0)\n")).isEqualTo("3.0");
+		assertThat(compileAndRunWithStdinFile("(print (eval (read)))", "(< -1.2 1.2)\n")).isEqualTo("t");
+	}
+
+	@Test
 	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
 		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(a b c)");

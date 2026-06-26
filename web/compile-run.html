@@ -389,6 +389,10 @@ wasi.start(instance);</pre>
 				src: ';; multiple definitions are fine; call any of them\n(defun sum (xs)\n  (reduce #\'+ xs))\n(defun squares (n)\n  (mapcar #\'(lambda (x) (* x x)) (range n)))\n(defun range (n)\n  (let ((acc nil))\n    (dotimes (i n) (push i acc))\n    (reverse acc)))',
 				fn: "sum", args: "(squares 5)",
 			},
+			"mandelbrot (float args)": {
+				src: ';; ASCII Mandelbrot set -- float arithmetic round-trips through read\n(defun escape-time (cx cy max-iter)\n  (let ((x 0.0) (y 0.0) (i 0))\n    (while (and (< i max-iter) (<= (+ (* x x) (* y y)) 4.0))\n      (let ((xt (+ (- (* x x) (* y y)) cx)))\n        (setq y (+ (* 2.0 (* x y)) cy))\n        (setq x xt))\n      (setq i (+ i 1)))\n    i))\n(defun shade (i max-iter)\n  (cond ((>= i max-iter) "#")\n        ((>= i 10) "+")\n        ((>= i 5) ".")\n        (t " ")))\n(defun render (x0 x1 y0 y1 cols rows max-iter)\n  (let ((dx (/ (- x1 x0) cols))\n        (dy (/ (- y1 y0) rows)))\n    (dotimes (r rows)\n      (let ((cy (+ y0 (* dy r))))\n        (dotimes (c cols)\n          (princ (shade (escape-time (+ x0 (* dx c)) cy max-iter) max-iter)))\n        (terpri)))))',
+				fn: "render", args: "-2.5 1.0 -1.2 1.2 70 30 30",
+			},
 		};
 
 		const $ = (id) => document.getElementById(id);
