@@ -224,6 +224,9 @@
 		user-select: none;
 	}
 	footer summary:hover { text-decoration: underline; }
+	footer .repo { margin: 10px 0 0; }
+	footer .repo a { color: var(--accent); text-decoration: none; }
+	footer .repo a:hover { text-decoration: underline; }
 	footer details p { margin: 8px 0 0; }
 	footer code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); color: var(--fg); }
 
@@ -346,6 +349,9 @@ wasi.start(instance);</pre>
 			<p>Requires a browser with WebAssembly GC
 			(Chrome/Edge&nbsp;119+, Firefox&nbsp;120+, Safari&nbsp;18.2+).</p>
 		</details>
+		<p class="repo">
+			<a href="https://github.com/making/rontolisp" target="_blank" rel="noopener">github.com/making/rontolisp</a>
+		</p>
 	</footer>
 
 	<script src="rontoplayground.js"></script>

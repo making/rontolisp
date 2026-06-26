@@ -63,6 +63,20 @@
 	#status.ready { color: var(--accent-2); }
 	#status.error { color: var(--err); }
 
+	footer {
+		padding: 8px 20px;
+		border-top: 1px solid var(--border);
+		color: var(--muted);
+		font-size: 12px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	footer a { color: var(--accent); text-decoration: none; }
+	footer a:hover { text-decoration: underline; }
+
 	main {
 		flex: 1;
 		display: flex;
@@ -320,6 +334,12 @@
 			</div>
 		</section>
 	</main>
+
+	<footer>
+		<span>rontolisp playground &mdash; runs entirely in your browser via WebAssembly</span>
+		<span>&middot;</span>
+		<a href="https://github.com/making/rontolisp" target="_blank" rel="noopener">github.com/making/rontolisp</a>
+	</footer>
 
 	<script src="rontoplayground.js"></script>
 	<script>
