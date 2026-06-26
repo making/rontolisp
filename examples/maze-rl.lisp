@@ -172,34 +172,42 @@
 ;;; Run
 ;;; ---------------------------------------------------------------------------
 
+;; A 21x21 perfect maze (recursive backtracking, seed 20260626) with the goal at
+;; the farthest reachable cell from S, so the unique solution is 132 steps long.
 (defparameter *maze*
-  (list "###############"
-        "#S..#.....#...#"
-        "###.#.###.#.#.#"
-        "#...#...#...#.#"
-        "#.#####.#####.#"
-        "#.....#.....#.#"
-        "#####.#.###.#.#"
-        "#...#.#.#.#.#.#"
-        "#.#.#.#.#.#.#.#"
-        "#.#...#...#...#"
-        "#.#########.###"
-        "#...........#G#"
-        "###########.#.#"
-        "#.............#"
-        "###############"))
+  (list "#####################"
+        "#S#...#.....#.......#"
+        "#.#.#.###.###.###.#.#"
+        "#...#...#.....#G#.#.#"
+        "#######.###.###.#.###"
+        "#.....#...#.#...#...#"
+        "#.#######.#.#.#.###.#"
+        "#.#...#...#...#.#...#"
+        "#.#.#.#.#########.#.#"
+        "#...#...#...#.....#.#"
+        "#.#######.#.#.#######"
+        "#...#.....#.#.......#"
+        "###.#####.#.#.#####.#"
+        "#...#.....#.#...#.#.#"
+        "#.###.#####.###.#.#.#"
+        "#.....#.....#.....#.#"
+        "#######.###########.#"
+        "#.#...#.............#"
+        "#.#.#.#############.#"
+        "#...#...............#"
+        "#####################"))
 
 (defparameter *q* (make-hash-table :test 'equal))
 (defparameter *start* (find-cell *maze* #\S))
 (defparameter *goal* (find-cell *maze* #\G))
-(defparameter *hp* (list 0.5 0.95 0.2 800))  ; alpha gamma epsilon max-steps
+(defparameter *hp* (list 0.5 0.97 0.2 2000))  ; alpha gamma epsilon max-steps
 
 (format t "Maze ~a x ~a, training tabular Q-learning...~%"
         (maze-rows *maze*) (maze-cols *maze*))
 
-(train *maze* *q* *start* *goal* *hp* 4000)
+(train *maze* *q* *start* *goal* *hp* 8000)
 
-(defparameter *path* (greedy-path *maze* *q* *start* *goal* 100))
+(defparameter *path* (greedy-path *maze* *q* *start* *goal* 400))
 
 (format t "Learned ~a state-action values~%" (hash-table-count *q*))
 (format t "Greedy path length: ~a steps~%" (- (length *path*) 1))

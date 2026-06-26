@@ -169,6 +169,279 @@ final class WasmRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the _hash helper (structural hash). Takes one (ref null eq) arg (local 0),
+	 * returns an i32 hash that agrees with {@link #buildEqualBody _equal}: equal values
+	 * hash equal. It walks conses recursively and folds i31 integers, character codes,
+	 * interned string/symbol offsets, float bit patterns and ratio components into the
+	 * result. Value types not recognised by {@code _equal}'s eql base case (e.g.
+	 * closures, which {@code equal} compares by identity) hash to a constant 0, which is
+	 * correct (they simply collide into one bucket).
+	 */
+	static byte[] buildHashBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// one i64 local (index 1) used to fold a float's 64-bit pattern into i32
+		w.write(1); // 1 local group
+		w.write(1); // 1 local
+		w.write(Type.I64);
+
+		// if v is null -> 0
+		getLocal(w, 0);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.ELSE);
+
+		// i31 integer -> its signed value
+		refTest(w, 0, Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+
+		// cons -> hash(car) * 31 + hash(cdr) + 1
+		refTest(w, 0, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		consField(w, 0, 0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_HASH);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(31);
+		w.write(Instruction.I32_MUL);
+		consField(w, 0, 1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_HASH);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.ELSE);
+
+		// character -> code point
+		refTest(w, 0, WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		charField(w, 0);
+		w.write(Instruction.ELSE);
+
+		// symbol or string -> interned data offset
+		refTest(w, 0, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		stringOffset(w, 0);
+		w.write(Instruction.ELSE);
+
+		// float -> fold the 64-bit pattern's halves
+		refTest(w, 0, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		floatField(w, 0);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1);
+		getLocal(w, 1);
+		w.write(Instruction.I32_WRAP_I64);
+		getLocal(w, 1);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(32);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_XOR);
+		w.write(Instruction.ELSE);
+
+		// ratio -> numerator * 31 + denominator
+		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(31);
+		w.write(Instruction.I32_MUL);
+		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.ELSE);
+
+		// anything else (e.g. a closure) -> 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+
+		w.write(Instruction.END); // end ratio if
+		w.write(Instruction.END); // end float if
+		w.write(Instruction.END); // end string if
+		w.write(Instruction.END); // end char if
+		w.write(Instruction.END); // end cons if
+		w.write(Instruction.END); // end i31 if
+		w.write(Instruction.END); // end null if
+
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _hash_resize helper. Takes the table's header cons (local 0 =
+	 * {@code (count . buckets)}), doubles the bucket array and rehashes every entry into
+	 * it, then stores the new array back into the header's cdr. Returns nothing.
+	 */
+	static byte[] buildHashResizeBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// locals: 4 x (ref null eq) [1=oldArr 2=newArr 3=cur 4=entry], 3 x i32 [5=i
+		// 6=newCap 7=j]
+		w.write(2); // 2 local groups
+		w.writeUnsignedLeb128(4);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.writeUnsignedLeb128(3);
+		w.write(Type.I32);
+
+		int oldArr = 1, newArr = 2, cur = 3, entry = 4, i = 5, newCap = 6, j = 7;
+
+		// oldArr = header.cdr
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		setLocal(w, oldArr);
+
+		// newCap = len(oldArr) * 2
+		getLocal(w, oldArr);
+		castBuckets(w);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_MUL);
+		setLocal(w, newCap);
+
+		// newArr = array.new buckets (null, newCap)
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		getLocal(w, newCap);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		setLocal(w, newArr);
+
+		// i = 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, i);
+
+		w.write(Instruction.BLOCK, 0x40); // $outer
+		w.write(Instruction.LOOP, 0x40); // $o
+		// if i >= len(oldArr) break $outer
+		getLocal(w, i);
+		getLocal(w, oldArr);
+		castBuckets(w);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		// cur = oldArr[i]
+		getLocal(w, oldArr);
+		castBuckets(w);
+		getLocal(w, i);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		setLocal(w, cur);
+
+		w.write(Instruction.BLOCK, 0x40); // $inner
+		w.write(Instruction.LOOP, 0x40); // $in
+		// if cur not cons break $inner
+		getLocal(w, cur);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		// entry = car(cur)
+		getLocal(w, cur);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		setLocal(w, entry);
+		// j = (hash(car(entry)) & 0x7fffffff) % newCap
+		getLocal(w, entry);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_HASH);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x7fffffff);
+		w.write(Instruction.I32_AND);
+		getLocal(w, newCap);
+		w.write(Instruction.I32_REM_U);
+		setLocal(w, j);
+		// newArr[j] = cons(entry, newArr[j])
+		getLocal(w, newArr);
+		castBuckets(w);
+		getLocal(w, j);
+		getLocal(w, entry);
+		getLocal(w, newArr);
+		castBuckets(w);
+		getLocal(w, j);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		// cur = cdr(cur)
+		getLocal(w, cur);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		setLocal(w, cur);
+		w.write(Instruction.BR, 0); // loop $in
+		w.write(Instruction.END); // end loop $in
+		w.write(Instruction.END); // end block $inner
+		// i = i + 1
+		getLocal(w, i);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, i);
+		w.write(Instruction.BR, 0); // loop $o
+		w.write(Instruction.END); // end loop $o
+		w.write(Instruction.END); // end block $outer
+
+		// header.cdr = newArr
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		getLocal(w, newArr);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
+	private static void setLocal(WasmWriter w, int idx) {
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(idx);
+	}
+
+	private static void castBuckets(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
 	private static void charField(WasmWriter w, int local) {
 		getLocal(w, local);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);

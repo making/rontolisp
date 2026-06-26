@@ -240,8 +240,19 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FETCH_DESER_HDRS = FUNC_FETCH_SER_HDRS + 1;
 
-	// User defuns start after the dispatch functions and the four fetch helpers.
-	static final int FUNC_USER_BASE = FUNC_FETCH_DESER_HDRS + 1;
+	// Structural hash (agrees with _equal): walks conses and folds i31 ints / interned
+	// string offsets / char codes / float bits / ratio components into an i32. Always
+	// present; only the hash-table compiler references it. Equal keys hash equal.
+	static final int FUNC_HASH = FUNC_FETCH_DESER_HDRS + 1;
+
+	// Rehash helper: grows a hash table's bucket array (doubling capacity) and
+	// redistributes its entries. Always present; called by puthash when the load factor
+	// is exceeded.
+	static final int FUNC_HASH_RESIZE = FUNC_HASH + 1;
+
+	// User defuns start after the dispatch functions, the four fetch helpers, and the two
+	// hash-table runtime helpers.
+	static final int FUNC_USER_BASE = FUNC_HASH_RESIZE + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -319,6 +330,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// from
 	// an i31 integer so characterp and the accessors can dispatch on it via ref.test.
 	static final int TYPE_CHAR = TYPE_FETCH + 1; // 32
+
+	// Hash-table bucket array: array (mut (ref null eq)). Each slot holds a bucket alist
+	// (a cons chain of (key . value) entries) or null. Implicitly a subtype of eq, so a
+	// bucket array can be stored in a cons/cell field and compared with ref.eq.
+	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 33
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -986,6 +1002,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// type 32 (TYPE_CHAR): character struct {i32 code}
 				types.addRecGroup(
 						rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))));
+				// type 33 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
+				// buckets. Encoded as a bare array comptype (sugar for sub final),
+				// implicitly
+				// a subtype of eq so it stores in cons/cell fields and supports ref.eq.
+				types.add(w -> {
+					w.write(Type.ARRAY_TYPE);
+					w.writeRefType(true, Type.EQ.code());
+					w.write(am.ik.wasm.Mutability.VAR);
+				});
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -1099,6 +1124,9 @@ public final class WasmLispCompiler implements LispCompiler {
 													// i32
 				fnDef.addFunction(TYPE_READ_LINE_FD); // _fetch_deser_headers (i32) ->
 														// (ref null eq)
+				// Hash-table runtime helpers
+				fnDef.addFunction(TYPE_RAT_GET); // _hash ((ref null eq)) -> i32
+				fnDef.addFunction(TYPE_PRINT_VAL); // _hash_resize ((ref null eq)) -> ()
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1216,6 +1244,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFetchRuntimeBuilder.buildPlistGet());
 				code.addFunction(WasmFetchRuntimeBuilder.buildSerHeaders());
 				code.addFunction(WasmFetchRuntimeBuilder.buildDeserHeaders());
+				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
+				code.addFunction(WasmRuntimeBuilder.buildHashBody());
+				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody());
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
