@@ -505,6 +505,92 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFormatDollarDirective() {
+		assertThat(eval("(format nil \"~$\" 3.14159)")).isEqualTo(new LispString("3.14"));
+		assertThat(eval("(format nil \"~5$\" 3.14159)")).isEqualTo(new LispString("3.14159"));
+		assertThat(eval("(format nil \"~v$\" 3 3.14159)")).isEqualTo(new LispString("3.142"));
+		assertThat(eval("(format nil \"~#$\" 3.14159)")).isEqualTo(new LispString("3.1"));
+	}
+
+	@Test
+	void evalFormatFixedDirective() {
+		assertThat(eval("(format nil \"~,5f\" 3.14159)")).isEqualTo(new LispString("3.14159"));
+		assertThat(eval("(format nil \"~,2f\" 3.14159)")).isEqualTo(new LispString("3.14"));
+		assertThat(eval("(format nil \"~,1f\" 2.5)")).isEqualTo(new LispString("2.5"));
+		assertThat(eval("(format nil \"~,0f\" 2.7)")).isEqualTo(new LispString("3"));
+		assertThat(eval("(format nil \"~,2f\" -1.5)")).isEqualTo(new LispString("-1.50"));
+	}
+
+	@Test
+	void evalFormatDecimalModifiers() {
+		assertThat(eval("(format nil \"~d\" 1000000)")).isEqualTo(new LispString("1000000"));
+		assertThat(eval("(format nil \"~:d\" 1000000)")).isEqualTo(new LispString("1,000,000"));
+		assertThat(eval("(format nil \"~@d\" 1000000)")).isEqualTo(new LispString("+1000000"));
+		assertThat(eval("(format nil \"~:@d\" 1000000)")).isEqualTo(new LispString("+1,000,000"));
+		assertThat(eval("(format nil \"~:d\" -1234567)")).isEqualTo(new LispString("-1,234,567"));
+	}
+
+	@Test
+	void evalFormatPadding() {
+		assertThat(eval("(format nil \"~10a|\" \"foo\")")).isEqualTo(new LispString("foo       |"));
+		assertThat(eval("(format nil \"~10@a|\" \"foo\")")).isEqualTo(new LispString("       foo|"));
+		assertThat(eval("(format nil \"~5d|\" 42)")).isEqualTo(new LispString("   42|"));
+		assertThat(eval("(format nil \"~5,'0d|\" 42)")).isEqualTo(new LispString("00042|"));
+	}
+
+	@Test
+	void evalFormatDecimalEdges() {
+		// Negative value with a minimum width pads the whole number on the left.
+		assertThat(eval("(format nil \"[~6d]\" -42)")).isEqualTo(new LispString("[   -42]"));
+		// A custom comma character and interval (4th param) for ~:d.
+		assertThat(eval("(format nil \"~,,'.:d\" 1234567)")).isEqualTo(new LispString("1.234.567"));
+		assertThat(eval("(format nil \"~,,,4:d\" 1234567)")).isEqualTo(new LispString("123,4567"));
+		// Bignum grouping (interpreter/JVM; WASM is limited to i31 integers).
+		assertThat(eval("(format nil \"~:d\" 100000000000000000000)"))
+			.isEqualTo(new LispString("100,000,000,000,000,000,000"));
+	}
+
+	@Test
+	void evalFormatRuntimeWidthAndDollarEdges() {
+		// A v parameter supplies the field width at run time.
+		assertThat(eval("(format nil \"[~va]\" 8 \"hi\")")).isEqualTo(new LispString("[hi      ]"));
+		// ~$ width (3rd param) and pad character (4th param).
+		assertThat(eval("(format nil \"[~,,8,'*$]\" 3.5)")).isEqualTo(new LispString("[****3.50]"));
+		// ~$ minimum integer digits (2nd param).
+		assertThat(eval("(format nil \"~,3$\" 3.14159)")).isEqualTo(new LispString("003.14"));
+		// ~f width (1st param) and decimals (2nd param).
+		assertThat(eval("(format nil \"[~6,2f]\" 3.1)")).isEqualTo(new LispString("[  3.10]"));
+	}
+
+	@Test
+	void evalFormatColonAestheticNil() {
+		assertThat(eval("(format nil \"~:a\" nil)")).isEqualTo(new LispString("()"));
+		assertThat(eval("(format nil \"~a\" nil)")).isEqualTo(new LispString("nil"));
+	}
+
+	@Test
+	void evalFormatNewlineAndTildeCounts() {
+		assertThat(eval("(format nil \"a~3%b\")")).isEqualTo(new LispString("a\n\n\nb"));
+		assertThat(eval("(format nil \"~3~\")")).isEqualTo(new LispString("~~~"));
+	}
+
+	@Test
+	void evalFormatFreshLine() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(progn (princ \"x\") (fresh-line) (fresh-line) (princ \"y\"))"));
+		assertThat(baos.toString()).isEqualTo("x\ny");
+	}
+
+	@Test
+	void evalFormatFreshLineDirective() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(progn (format t \"a\") (format t \"~&b~&c\"))"));
+		assertThat(baos.toString()).isEqualTo("a\nb\nc");
+	}
+
+	@Test
 	void evalFormatUnsupportedDestination() {
 		assertThatThrownBy(() -> eval("(format 'foo \"~a\" 1)")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("destination");
@@ -2295,11 +2381,11 @@ class LispEvaluatorTest {
 					"butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list", "union",
 					"intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash", "list*",
 					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
-					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute")
-			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error")
+					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
+			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.isSorted()
-			.hasSize(162);
+			.hasSize(163);
 	}
 
 	@Test

@@ -907,7 +907,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
-      162
+      163
       (fetch list-functions list-macros list-special-forms version)
       ci-intro-fn
       nil
@@ -1005,6 +1005,19 @@ cases:
       foobar
       3.14
       "abc"
+  - name: format-directives-padding-grouping-fixed
+    source: |
+      (format t "~:d|~@d|~:@d~%" 1234567 42 1234567)
+      (format t "~10a|~10@a|~5,'0d~%" "foo" "foo" 42)
+      (format t "~$|~5$|~,2f|~v$~%" 3.14159 3.14159 3.14159 3 3.14159)
+      (princ "done")
+      (format t "~&fresh~%")
+    expected: |
+      1,234,567|+42|+1,234,567
+      foo       |       foo|00042
+      3.14|3.14159|3.14|3.142
+      done
+      fresh
   - name: string-operations-case-conversion-subseq
     source: |
       (princ (string-upcase "hello"))

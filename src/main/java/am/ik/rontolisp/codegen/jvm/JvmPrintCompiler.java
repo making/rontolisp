@@ -23,6 +23,7 @@ final class JvmPrintCompiler {
 		ctx.emitU2(ctx.lispToString.index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(ctx.printlnStr.index());
+		JvmFreshLineCompiler.emitSetLineStart(ctx, className);
 		ctx.emit(Opcode.ACONST_NULL);
 	}
 

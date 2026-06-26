@@ -1332,51 +1332,44 @@ public final class Environment implements Scope {
 
 	private static void registerIO(Environment env, PrintStream out, InputStream in) {
 		BufferedReader stdinReader = new BufferedReader(new InputStreamReader(in));
+		// Tracks whether standard output is at the beginning of a line, so fresh-line
+		// (~&) can emit a newline only when needed.
+		boolean[] atLineStart = { true };
+		java.util.function.Consumer<String> emit = text -> {
+			if (text.isEmpty()) {
+				return;
+			}
+			out.print(text);
+			atLineStart[0] = text.charAt(text.length() - 1) == '\n';
+		};
 		env.defineFunction(LispNames.PRINT, new LispFunction(LispNames.PRINT, args -> {
 			requireArgCount(LispNames.PRINT, args, 1);
 			LispVal val = args.get(0);
-			if (val instanceof LispInteger i) {
-				out.println(i.value());
-			}
-			else if (val instanceof LispDouble d) {
-				out.println(Double.toString(d.value()));
-			}
-			else {
-				out.println(val.print());
-			}
+			emit.accept(printString(val) + "\n");
 			return val;
 		}));
 		env.defineFunction(LispNames.PRIN1, new LispFunction(LispNames.PRIN1, args -> {
 			requireArgCount(LispNames.PRIN1, args, 1);
 			LispVal val = args.get(0);
-			if (val instanceof LispInteger i) {
-				out.print(i.value());
-			}
-			else if (val instanceof LispDouble d) {
-				out.print(Double.toString(d.value()));
-			}
-			else {
-				out.print(val.print());
-			}
+			emit.accept(printString(val));
 			return val;
 		}));
 		env.defineFunction(LispNames.PRINC, new LispFunction(LispNames.PRINC, args -> {
 			requireArgCount(LispNames.PRINC, args, 1);
 			LispVal val = args.get(0);
-			if (val instanceof LispInteger i) {
-				out.print(i.value());
-			}
-			else if (val instanceof LispDouble d) {
-				out.print(Double.toString(d.value()));
-			}
-			else {
-				out.print(val.display());
-			}
+			emit.accept(displayString(val));
 			return val;
 		}));
 		env.defineFunction(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
 			requireArgCount(LispNames.TERPRI, args, 0);
-			out.println();
+			emit.accept("\n");
+			return LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
+			requireArgCount(LispNames.FRESH_LINE, args, 0);
+			if (!atLineStart[0]) {
+				emit.accept("\n");
+			}
 			return LispNil.INSTANCE;
 		}));
 		// princ-to-string / prin1-to-string: the string that princ / prin1 would print.

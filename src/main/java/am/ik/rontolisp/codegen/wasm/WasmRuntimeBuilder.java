@@ -861,6 +861,30 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
 
+		// Track whether stdout ended at a line start: LINE_START = (last byte != '\n').
+		// Only stdout writes (this non-capture path) update the flag; capture mode
+		// (string
+		// building for format nil) returns earlier and leaves it untouched.
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.LINE_START_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(10);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
+
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

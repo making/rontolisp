@@ -492,6 +492,39 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFormatDollarAndFixed() throws Exception {
+		assertThat(compileAndRun("(format t \"~$ ~5$ ~,2f ~v$\" 3.14159 3.14159 3.14159 3 3.14159)"))
+			.isEqualTo("3.14 3.14159 3.14 3.142");
+	}
+
+	@Test
+	void compileAndRunFormatDecimalModifiers() throws Exception {
+		assertThat(compileAndRun("(format t \"~:d ~@d ~:@d\" 1000000 1000000 1000000)"))
+			.isEqualTo("1,000,000 +1000000 +1,000,000");
+	}
+
+	@Test
+	void compileAndRunFormatPadding() throws Exception {
+		assertThat(compileAndRun("(format t \"~10a|~10@a|~5,'0d|\" \"foo\" \"foo\" 42)"))
+			.isEqualTo("foo       |       foo|00042|");
+	}
+
+	@Test
+	void compileAndRunFormatFreshLine() throws Exception {
+		assertThat(compileAndRun("(format t \"a\") (format t \"~&b~&c~%\") (fresh-line) (princ \"d\")"))
+			.isEqualTo("a\nb\nc\nd");
+	}
+
+	@Test
+	void compileAndRunFormatEdges() throws Exception {
+		// Negative-width padding, a custom comma character, a runtime (v) width and
+		// bignum
+		// grouping all run through the same expansion on the JVM backend.
+		assertThat(compileAndRun("(format t \"[~6d][~,,'.:d][~va][~:d]\" -42 1234567 8 \"hi\" 100000000000000000000)"))
+			.isEqualTo("[   -42][1.234.567][hi      ][100,000,000,000,000,000,000]");
+	}
+
+	@Test
 	void compileAndRunPrincToString() throws Exception {
 		assertThat(compileAndRun("(print (princ-to-string 42)) (princ (princ-to-string 'sym))"))
 			.isEqualTo("\"42\"\nsym");
@@ -2397,12 +2430,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("162");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("163");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("162");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("163");
 	}
 
 	@Test

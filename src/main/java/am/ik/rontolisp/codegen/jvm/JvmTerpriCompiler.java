@@ -16,6 +16,7 @@ final class JvmTerpriCompiler {
 		ctx.emitU2(ctx.systemOut.index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(ctx.printlnVoid.index());
+		JvmFreshLineCompiler.emitSetLineStart(ctx, className);
 		ctx.emit(Opcode.ACONST_NULL);
 	}
 

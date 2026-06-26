@@ -662,6 +662,38 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void formatDollarAndFixed() throws Exception {
+		assertThat(compileAndRun("(format t \"~$ ~5$ ~,2f ~v$\" 3.14159 3.14159 3.14159 3 3.14159)"))
+			.isEqualTo("3.14 3.14159 3.14 3.142");
+	}
+
+	@Test
+	void formatDecimalModifiers() throws Exception {
+		assertThat(compileAndRun("(format t \"~:d ~@d ~:@d\" 1000000 1000000 1000000)"))
+			.isEqualTo("1,000,000 +1000000 +1,000,000");
+	}
+
+	@Test
+	void formatPadding() throws Exception {
+		assertThat(compileAndRun("(format t \"~10a|~10@a|~5,'0d|\" \"foo\" \"foo\" 42)"))
+			.isEqualTo("foo       |       foo|00042|");
+	}
+
+	@Test
+	void formatFreshLine() throws Exception {
+		assertThat(compileAndRun("(format t \"a\") (format t \"~&b~&c~%\") (fresh-line) (princ \"d\")"))
+			.isEqualTo("a\nb\nc\nd");
+	}
+
+	@Test
+	void formatEdges() throws Exception {
+		// Negative-width padding, a custom comma character and a runtime (v) width
+		// (integers stay within the i31 range the WASM backend supports).
+		assertThat(compileAndRun("(format t \"[~6d][~,,'.:d][~va]\" -42 1234567 8 \"hi\")"))
+			.isEqualTo("[   -42][1.234.567][hi      ]");
+	}
+
+	@Test
 	void princToString() throws Exception {
 		assertThat(compileAndRun("(print (princ-to-string 42)) (princ (princ-to-string 'sym))"))
 			.isEqualTo("\"42\"\nsym");
@@ -2486,7 +2518,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("162");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("163");
 	}
 
 	@Test

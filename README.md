@@ -364,17 +364,31 @@ left to right before any output.
 
 | Directive | Meaning |
 |-----------|---------|
-| `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes) |
-| `~s`, `~S` | Standard: prints the argument like `prin1` (readable, strings quoted) |
-| `~d`, `~D` | Decimal: prints an integer argument like `princ` |
-| `~%` | Newline (`terpri` for destination `t`, a newline character for `nil`) |
+| `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes). With `:`, nil prints as `()` |
+| `~s`, `~S` | Standard: prints the argument like `prin1` (readable, strings quoted). With `:`, nil prints as `()` |
+| `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
+| `~f`, `~F` | Fixed-format floating point. `~,Df` prints `D` digits after the decimal point (rounded); with `@`, a leading `+` |
+| `~$` | Monetary: `~D$` prints `D` digits after the decimal point (default 2); with `@`, a leading `+` |
+| `~%` | Newline (one, or the count given by a prefix parameter) |
+| `~&` | Fresh line: a newline only if not already at the start of a line |
 | `~~` | A literal `~` |
+
+Directives accept prefix parameters (written after the `~`, comma-separated) and the
+`:`/`@` modifiers. A parameter is a decimal number, a character (`'c`), `v` (consume an
+argument and use its value), or `#` (the number of remaining arguments). Field directives
+(`~a`/`~s`/`~d`/`~f`/`~$`) take a leading minimum-width parameter; text shorter than the
+width is padded (with the pad-character parameter, space by default). `~a`/`~s` pad on the
+right (left with `@`); numbers pad on the left.
 
 ```lisp
 (format t "Hello ~a, you are ~d years old.~%" 'world 42)
 ;; Hello world, you are 42 years old.
-(format t "~s and ~a~%" "str" "str")
-;; "str" and str
+(format t "~:d and ~@d~%" 1000000 42)
+;; 1,000,000 and +42
+(format t "~,2f and ~$~%" 3.14159 3.14159)
+;; 3.14 and 3.14
+(format t "~10a|~5,'0d|~%" "foo" 42)
+;; foo       |00042|
 (format nil "list=~a" (list 1 2 3))
 ;; => "list=(1 2 3)"
 (princ (format nil "Hello ~a!" 'world))
@@ -382,10 +396,21 @@ left to right before any output.
 ```
 
 Limitations: other destinations (streams, strings with fill pointers) are not supported,
-the control string cannot be a runtime value, and the remaining directives (`~c`, `~f`,
-`~{`, ...) are not implemented. Like the other macros, `format` is not recognized by the
-embedded `eval` runtime in compiled output (see
-[Compiled `eval` limitations](#compiled-eval-limitations)).
+the control string cannot be a runtime value, and the remaining directives (`~c`, `~e`,
+`~{`, ...) are not implemented. Further notes:
+
+- A `~f` without a digit count (no `~,D`) falls back to each backend's native float
+  printing, so its exact form is backend-specific; supply a digit count for portable
+  output.
+- The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count there
+  is not supported). `~&` decides whether to emit a newline from the actual output column
+  for destination `t`, but from the surrounding literal text (a static approximation) for
+  destination `nil`.
+- On the WASM backend integers are limited to the i31 range, so `~:d` grouping of very
+  large (bignum) integers works only in the interpreter and the JVM backend.
+
+Like the other macros, `format` is not recognized by the embedded `eval` runtime in
+compiled output (see [Compiled `eval` limitations](#compiled-eval-limitations)).
 
 ### Built-in Functions
 
@@ -409,6 +434,7 @@ embedded `eval` runtime in compiled output (see
 | `prin1` | `(prin1 42)` | Like `print` but without newline |
 | `princ` | `(princ "hello")` | Prints without quotes and without newline |
 | `terpri` | `(terpri)` | Prints a newline only |
+| `fresh-line` | `(fresh-line)` | Prints a newline only if standard output is not already at the start of a line. Returns nil |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- the string `princ` would print |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- the string `prin1` would print (readable form) |
 | `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (only the `'string` result type is supported; the compilers require the literal `'string`) |
@@ -669,7 +695,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 157
+; => 163
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

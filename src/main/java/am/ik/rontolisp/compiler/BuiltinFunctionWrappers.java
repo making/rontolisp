@@ -189,6 +189,8 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM), binary(LispNames.STRING_RIGHT_TRIM),
 			// terpri: 0-arity
 			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
+			// fresh-line: 0-arity
+			new WrapperDef(LispNames.FRESH_LINE, List.of(), List.of(call(LispNames.FRESH_LINE))),
 			// read-line: 0-arity
 			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))));
 

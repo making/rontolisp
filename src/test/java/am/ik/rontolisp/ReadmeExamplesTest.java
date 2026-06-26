@@ -940,6 +940,9 @@ class ReadmeExamplesTest {
 			assertThat(evalAndCaptureOutput("(format t \"Hello ~a, you are ~d years old.~%\" 'world 42)"))
 				.isEqualTo("Hello world, you are 42 years old.");
 			assertThat(evalAndCaptureOutput("(format t \"~s and ~a~%\" \"str\" \"str\")")).isEqualTo("\"str\" and str");
+			assertThat(evalAndCaptureOutput("(format t \"~:d and ~@d~%\" 1000000 42)")).isEqualTo("1,000,000 and +42");
+			assertThat(evalAndCaptureOutput("(format t \"~,2f and ~$~%\" 3.14159 3.14159)")).isEqualTo("3.14 and 3.14");
+			assertThat(evalAndCaptureOutput("(format t \"~10a|~5,'0d|~%\" \"foo\" 42)")).isEqualTo("foo       |00042|");
 			assertThat(eval("(format nil \"list=~a\" (list 1 2 3))")).isEqualTo(new LispString("list=(1 2 3)"));
 			assertThat(evalAndCaptureOutput("(princ (format nil \"Hello ~a!\" 'world))")).isEqualTo("Hello world!");
 		}
@@ -1040,7 +1043,7 @@ class ReadmeExamplesTest {
 			assertThat(output.lines().toList()).containsExactly(
 					"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)",
 					"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)",
-					"162", "(square)", "(fetch list-functions list-macros list-special-forms version)");
+					"163", "(square)", "(fetch list-functions list-macros list-special-forms version)");
 		}
 
 	}

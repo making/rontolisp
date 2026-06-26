@@ -756,6 +756,9 @@ public final class LispNames {
 	/** The {@code terpri} built-in function. */
 	public static final String TERPRI = "terpri";
 
+	/** The {@code fresh-line} built-in function (newline only if not at line start). */
+	public static final String FRESH_LINE = "fresh-line";
+
 	/** The {@code princ-to-string} built-in function. */
 	public static final String PRINC_TO_STRING = "princ-to-string";
 

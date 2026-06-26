@@ -366,6 +366,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Scratch for path_open's output file descriptor (for open).
 	static final int OPEN_FD_ADDR = 112;
 
+	// Tracks whether stdout is at the start of a line (0 = at line start, 1 = mid-line),
+	// updated by _write_str on every stdout write so fresh-line (~&) can decide whether
+	// to
+	// emit a newline. Zero-initialized linear memory means we start at a line start.
+	static final int LINE_START_ADDR = 116;
+
 	// Scratch (8 bytes) where the adapter's random_get writes a wasi:random u64 in
 	// component mode.
 	static final int RANDOM_SCRATCH_ADDR = 120;
