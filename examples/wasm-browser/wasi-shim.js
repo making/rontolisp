@@ -160,22 +160,18 @@ export class WasiExit extends Error {
 }
 
 /**
- * Fetch, instantiate and run a rontolisp-compiled `.wasm` command module,
- * returning whatever it wrote to stdout/stderr.
+ * Instantiate and run an already-loaded rontolisp-compiled `.wasm` command
+ * module (a `BufferSource`: `ArrayBuffer` or typed array), returning whatever
+ * it wrote to stdout/stderr. Use this when the bytes are already in memory —
+ * e.g. compiled in the browser by the playground's `rontoCompileWasm`, with no
+ * `.wasm` file to fetch.
  *
- * @param {string} url            URL of the .wasm file
- * @param {Object} [opts]         same options as createWasi()
+ * @param {BufferSource} wasmBytes  the module bytes
+ * @param {Object} [opts]           same options as createWasi()
  * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
  */
-export async function runWasm(url, opts = {}) {
+export async function runWasmModule(wasmBytes, opts = {}) {
   const wasi = createWasi(opts);
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`failed to fetch ${url}: ${response.status}`);
-  }
-  // instantiateStreaming needs the correct application/wasm MIME type; fall
-  // back to ArrayBuffer instantiation when the server doesn't send it.
-  const wasmBytes = await response.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(wasmBytes, wasi.imports);
 
   wasi.setMemory(instance.exports.memory);
@@ -192,4 +188,23 @@ export async function runWasm(url, opts = {}) {
     stderr: wasi.getStderr(),
     exitCode,
   };
+}
+
+/**
+ * Fetch, instantiate and run a rontolisp-compiled `.wasm` command module,
+ * returning whatever it wrote to stdout/stderr.
+ *
+ * @param {string} url            URL of the .wasm file
+ * @param {Object} [opts]         same options as createWasi()
+ * @returns {Promise<{ stdout: string, stderr: string, exitCode: number }>}
+ */
+export async function runWasm(url, opts = {}) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`failed to fetch ${url}: ${response.status}`);
+  }
+  // instantiateStreaming needs the correct application/wasm MIME type; fall
+  // back to ArrayBuffer instantiation when the server doesn't send it.
+  const wasmBytes = await response.arrayBuffer();
+  return runWasmModule(wasmBytes, opts);
 }

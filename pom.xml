@@ -411,6 +411,7 @@ public final class Version {
 											</fileset>
 											<fileset dir="${project.basedir}/web">
 												<include name="index.html"/>
+												<include name="compile-run.html"/>
 											</fileset>
 										</copy>
 										<!-- Stage the standalone "run user WASM in the browser" example as a

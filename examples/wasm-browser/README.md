@@ -60,7 +60,20 @@ const res = await runWasm("./greet.wasm", { stdin: "Ada\n" });
 
 // Passing input via environment variables:
 const res2 = await runWasm("./prog.wasm", { env: { NAME: "Ada" } });
+
+// If you already have the module bytes in memory (e.g. compiled in the
+// browser, with no file to fetch), skip the fetch with runWasmModule:
+const res3 = await runWasmModule(wasmBytes, { stdin: "Ada\n" });
 ```
+
+`runWasm(url)` is just `fetch` + `runWasmModule(bytes)`. The root
+[`web/` playground](../../web)'s `compile-run.html` page uses `runWasmModule`
+to run a module it compiled in the browser a moment earlier (its
+`rontoCompileWasm` returns the bytes directly), so compile-to-WASM and
+run-the-WASM both happen client-side. It compiles the definitions once with a
+`(print (eval (read)))` driver, then for each call passes the call expression
+(e.g. `(fib 20)`) as **stdin** — reusing this same `runWasmModule(bytes, { stdin })`
+entry point — without recompiling.
 
 Because the module's only outward interface is stdout (and optionally stdin /
 env / exit code), "calling it from JavaScript" means *running it and reading

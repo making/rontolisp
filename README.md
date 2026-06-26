@@ -8,7 +8,7 @@ A minimal Common Lisp subset implemented in Java. It supports three execution mo
 
 No external runtime dependencies for core libraries. The JVM and WASM bytecode generators are written from scratch without ASM or other code generation libraries. The CLI uses JLine for interactive REPL features (history, line editing).
 
-**Try it in your browser: [https://making.github.io/rontolisp/](https://making.github.io/rontolisp/)** -- a playground where rontolisp itself runs as WebAssembly. Evaluate expressions in the REPL, and compile your source to downloadable `.class` and `.wasm` files, entirely client-side. See [`web/README.md`](web/README.md) for how it is built and deployed.
+**Try it in your browser: [https://making.github.io/rontolisp/](https://making.github.io/rontolisp/)** -- a playground where rontolisp itself runs as WebAssembly. Evaluate expressions in the REPL, and compile your source to downloadable `.class` and `.wasm` files, entirely client-side. A companion page, [compile & run](https://making.github.io/rontolisp/compile-run.html), works in two phases: it compiles a set of Lisp definitions to a WASM module in the browser, then lets you call any function from that module with arguments you supply (the call runs in the browser's own WebAssembly runtime, reusing the compiled module without recompiling) -- no download, no server. See [`web/README.md`](web/README.md) for how it is built and deployed.
 
 
 ## Requirements

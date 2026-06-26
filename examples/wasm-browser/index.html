@@ -84,11 +84,18 @@
   <body>
     <h1>Running rontolisp WASM in plain HTML + JavaScript</h1>
     <p class="lead">
-      The two programs below were written in Lisp and compiled to WebAssembly
-      (WASI Preview 1) with rontolisp. This page provides a tiny WASI shim in
-      JavaScript, instantiates each <code>.wasm</code> module, runs its
-      <code>_start</code>, and shows whatever it printed to stdout. No server,
-      no framework.
+      The two programs below were written in Lisp and compiled <em>ahead of
+      time</em> to WebAssembly (WASI Preview 1) with rontolisp. This page
+      provides a tiny WASI shim in JavaScript, instantiates each
+      <code>.wasm</code> module, runs its <code>_start</code>, and shows whatever
+      it printed to stdout. No server, no framework.
+    </p>
+    <p class="lead">
+      Want to write Lisp and compile it to WASM <em>in the browser</em>, then run
+      the result here? See the
+      <a href="../">playground</a> and its
+      <a href="../compile-run.html">compile&nbsp;&amp;&nbsp;run</a> page (these
+      links work on the published site).
     </p>
 
     <h2>1. Run a self-contained program</h2>

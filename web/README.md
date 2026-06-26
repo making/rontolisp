@@ -17,6 +17,41 @@ It offers:
 - **Compile to WASM** — compile the source to a `.wasm` module and download it.
   The downloaded file runs on a real wasm runtime (`wasmtime --wasm gc output.wasm`).
 
+A companion page, **`compile-run.html`** ("compile & run WASM in the browser"),
+closes the loop in **two phases**, both client-side:
+
+1. **Compile & Load** — compile a set of Lisp definitions to a `.wasm` module
+   (same `rontoCompileWasm`) and keep it. A tiny driver, `(print (eval (read)))`,
+   is appended so the module can apply a call read from stdin.
+2. **Execute** — enter a function name and arguments; the page builds a call
+   expression (e.g. `(fib 20)`), feeds it to the kept module on stdin, and
+   **runs it in your browser's own WebAssembly runtime** through the WASI shim
+   from [`examples/wasm-browser/`](../examples/wasm-browser) (`runWasmModule`),
+   showing the printed result. The module is compiled once and reused, so
+   changing the arguments and calling again does **not** recompile.
+
+Because the call is passed as Lisp source through the module's built-in
+`read`/`eval`, the value-representation barrier (Lisp values are WASM GC
+references, not JS numbers) is sidestepped: arguments are ordinary Lisp
+(literals, `(list 1 2 3)`, nested calls), subject to the compiled `eval`'s
+limits. So the user program is both compiled to WASM and executed entirely in
+the browser, with no download and no server.
+
+**Download .wasm** saves the loaded module (`loaded.wasm`, definitions plus the
+`(print (eval (read)))` driver). The page includes a "Run the downloaded
+`loaded.wasm` outside the browser" section: because the driver reads the call
+from stdin, you run it by piping a call expression in. The same module works on
+either runtime:
+
+```bash
+# wasmtime (needs WebAssembly GC: -W gc)
+echo '(fib 20)' | wasmtime run -W gc loaded.wasm
+
+# Node.js 22+ — save run.mjs (node:wasi over the eight preview1 imports),
+# then pipe a call to it
+echo '(fib 20)' | node run.mjs loaded.wasm
+```
+
 The source and REPL panes are resized by dragging the divider between them,
 the REPL input area is resized by dragging the bar above it (both positions
 are remembered in `localStorage`), and the sample selector loads
@@ -38,6 +73,24 @@ RontoPlayground.java   (@JS bootstrap that exports 3 functions to JS)
    v
 LispEvaluator / JvmLispCompiler / WasmLispCompiler   (the existing core)
 ```
+
+`compile-run.html` reuses the same `rontoplayground.js` runtime but adds the
+in-browser execution step:
+
+```
+compile-run.html
+   |  Phase 1 (once):  globalThis.rontoCompileWasm(definitions + "(print (eval (read)))")
+   |                     -> Base64 .wasm bytes (client-side), kept in memory
+   |  Phase 2 (per call): runWasmModule(bytes, { stdin: "(fib 20)\n" })
+   v                        (./wasm-browser/wasi-shim.js)
+browser WebAssembly runtime  -> the module's read+eval applies the call,
+                                 print writes the result -> shown on the page
+```
+
+The WASI shim is the same file the standalone `wasm-browser/` example serves; it
+gained a `runWasmModule(bytes, opts)` entry point (the existing `runWasm(url)` is
+now `fetch` + `runWasmModule`) so a module already in memory needs no `.wasm`
+file to fetch.
 
 `src/web/java/am/ik/rontolisp/web/RontoPlayground.java` depends on the
 GraalVM-only `org.graalvm.webimage.api` module, so it is kept in a separate

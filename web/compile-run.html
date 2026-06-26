@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rontolisp &mdash; compile to WASM and run in the browser</title>
+<style>
+	:root {
+		--bg: #1a1b26;
+		--panel: #1f2335;
+		--panel-2: #24283b;
+		--border: #2f334d;
+		--fg: #c0caf5;
+		--muted: #565f89;
+		--accent: #7aa2f7;
+		--accent-2: #9ece6a;
+		--accent-3: #e0af68;
+		--err: #f7768e;
+		--mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--fg);
+		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+	}
+
+	header {
+		padding: 12px 20px;
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		align-items: baseline;
+		gap: 14px;
+		flex-wrap: wrap;
+	}
+
+	header h1 {
+		font-size: 18px;
+		margin: 0;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+	}
+
+	header h1 .paren { color: var(--accent); }
+
+	header .sub { color: var(--muted); font-size: 13px; }
+	header .sub a { color: var(--accent); text-decoration: none; }
+	header .sub a:hover { text-decoration: underline; }
+
+	#status {
+		margin-left: auto;
+		font-size: 12px;
+		font-family: var(--mono);
+		padding: 4px 10px;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		color: var(--accent-3);
+	}
+
+	#status.ready { color: var(--accent-2); }
+	#status.error { color: var(--err); }
+
+	main {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		padding: 18px 20px;
+		max-width: 960px;
+		width: 100%;
+		margin: 0 auto;
+	}
+
+	p.lead { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0; }
+	p.lead code, footer code {
+		background: var(--panel-2);
+		padding: 1px 5px;
+		border-radius: 4px;
+		font-family: var(--mono);
+		color: var(--fg);
+	}
+
+	.phase {
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		background: var(--panel);
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.phase.disabled { opacity: 0.5; }
+
+	.phase-title {
+		font-size: 12px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--accent);
+		font-weight: 600;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.phase-title .num {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px; height: 20px;
+		border-radius: 50%;
+		background: var(--accent);
+		color: var(--bg);
+		font-size: 12px;
+	}
+	.phase-title .spacer { flex: 1; }
+	.phase-title label { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+	textarea, input[type="text"] {
+		width: 100%;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		outline: none;
+		background: var(--panel-2);
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 14px;
+		padding: 10px 12px;
+		tab-size: 2;
+	}
+	textarea { resize: vertical; line-height: 1.6; }
+	textarea:focus, input[type="text"]:focus { border-color: var(--accent); }
+	#source { min-height: 200px; }
+
+	.exec-row {
+		display: flex;
+		gap: 10px;
+		flex-wrap: wrap;
+		align-items: flex-end;
+	}
+	.exec-field { display: flex; flex-direction: column; gap: 5px; }
+	.exec-field.fn { flex: 0 0 180px; }
+	.exec-field.args { flex: 1 1 240px; }
+	.exec-field label {
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--muted);
+	}
+
+	.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+	button {
+		background: var(--panel-2);
+		color: var(--fg);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		padding: 9px 16px;
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: border-color 0.12s, background 0.12s;
+		white-space: nowrap;
+	}
+	button:hover:not(:disabled) { border-color: var(--accent); }
+	button:disabled { opacity: 0.45; cursor: not-allowed; }
+	button.primary { background: var(--accent); color: #1a1b26; border-color: var(--accent); }
+
+	select {
+		background: var(--panel-2);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--fg);
+		font-size: 12px;
+		padding: 4px 8px;
+		outline: none;
+	}
+
+	.note {
+		font-family: var(--mono);
+		font-size: 12px;
+		color: var(--muted);
+		min-height: 1em;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	.note.ok { color: var(--accent-2); }
+	.note.err { color: var(--err); }
+
+	#call-preview { color: var(--accent-3); }
+
+	pre.term {
+		background: var(--panel-2);
+		color: var(--fg);
+		border: 1px solid var(--border);
+		padding: 14px;
+		border-radius: 8px;
+		overflow-x: auto;
+		white-space: pre-wrap;
+		word-break: break-word;
+		min-height: 2.5rem;
+		margin: 0;
+		font-family: var(--mono);
+		font-size: 13px;
+		line-height: 1.55;
+	}
+	pre.term .stderr { color: var(--err); }
+	pre.term .placeholder { color: var(--muted); }
+
+	footer {
+		padding: 14px 20px;
+		border-top: 1px solid var(--border);
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.6;
+	}
+	footer summary {
+		cursor: pointer;
+		color: var(--accent);
+		user-select: none;
+	}
+	footer summary:hover { text-decoration: underline; }
+	footer details p { margin: 8px 0 0; }
+	footer code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); color: var(--fg); }
+
+	details.run-help { font-size: 13px; color: var(--muted); }
+	details.run-help summary {
+		cursor: pointer;
+		color: var(--accent);
+		user-select: none;
+		padding: 2px 0;
+	}
+	details.run-help summary:hover { text-decoration: underline; }
+	details.run-help .body { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+	details.run-help p { margin: 4px 0 0; line-height: 1.5; }
+	details.run-help code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); color: var(--fg); }
+	details.run-help pre {
+		margin: 0;
+		background: var(--panel-2);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		padding: 10px 12px;
+		overflow-x: auto;
+		font-family: var(--mono);
+		font-size: 12.5px;
+		line-height: 1.5;
+		color: var(--fg);
+		white-space: pre;
+	}
+	details.run-help pre .run-call { color: var(--accent-3); }
+</style>
+</head>
+<body>
+	<header>
+		<h1><span class="paren">(</span>rontolisp<span class="paren">)</span></h1>
+		<span class="sub">compile to WASM &amp; run in the browser
+			&middot; <a href="./index.html">&larr; interpreter / compiler playground</a>
+			&middot; <a href="./wasm-browser/">prebuilt WASM demo &rarr;</a></span>
+		<span id="status">loading runtime&hellip;</span>
+	</header>
+
+	<main>
+		<p class="lead">
+			Two phases, both running <em>entirely in your browser</em>: first
+			<strong>compile &amp; load</strong> a set of Lisp definitions into a
+			WebAssembly module, then <strong>execute</strong> &mdash; call any function
+			from that module with arguments you supply. The module is compiled once by
+			rontolisp's own WASM backend and kept; each call re-runs it in your
+			browser's WebAssembly runtime <em>without recompiling</em>. Nothing is sent
+			to a server.
+		</p>
+
+		<!-- Phase 1: compile + load -->
+		<section class="phase" id="phase-load">
+			<div class="phase-title">
+				<span class="num">1</span> compile &amp; load definitions
+				<span class="spacer"></span>
+				<label for="samples">sample</label>
+				<select id="samples"><option value="">&mdash;</option></select>
+			</div>
+			<textarea id="source" spellcheck="false">(defun fib (n)
+  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))</textarea>
+			<div class="toolbar">
+				<button class="primary" id="btn-load" disabled>Compile &amp; Load</button>
+				<button id="btn-download" disabled>Download .wasm</button>
+			</div>
+			<div class="note" id="load-note"></div>
+			<details class="run-help">
+				<summary>Run the downloaded <code>loaded.wasm</code> outside the browser (wasmtime / Node.js)</summary>
+				<div class="body">
+					<p>The file bundles your definitions with a <code>(print (eval (read)))</code> driver,
+						so you run it by piping a call expression to its stdin. Replace
+						<code class="run-call">(fib 20)</code> with any call.</p>
+					<p><strong>wasmtime</strong> (needs WebAssembly GC, <code>-W gc</code>; wasmtime 14+):</p>
+					<pre>echo '<span class="run-call">(fib 20)</span>' | wasmtime run -W gc loaded.wasm</pre>
+					<p><strong>Node.js 22+</strong> — save this as <code>run.mjs</code>:</p>
+					<pre>import { readFile } from "node:fs/promises";
+import { WASI } from "node:wasi";
+
+const wasi = new WASI({ version: "preview1", returnOnExit: true });
+const { instance } = await WebAssembly.instantiate(
+  await readFile(process.argv[2]), wasi.getImportObject());
+wasi.start(instance);</pre>
+					<p>then pipe a call to it:</p>
+					<pre>echo '<span class="run-call">(fib 20)</span>' | node run.mjs loaded.wasm</pre>
+				</div>
+			</details>
+		</section>
+
+		<!-- Phase 2: execute -->
+		<section class="phase disabled" id="phase-exec">
+			<div class="phase-title"><span class="num">2</span> execute &mdash; call a function</div>
+			<div class="exec-row">
+				<div class="exec-field fn">
+					<label for="fn-name">function</label>
+					<input type="text" id="fn-name" placeholder="fib" value="fib" disabled>
+				</div>
+				<div class="exec-field args">
+					<label for="fn-args">arguments (space-separated Lisp values)</label>
+					<input type="text" id="fn-args" placeholder="20" value="20" disabled>
+				</div>
+				<button class="primary" id="btn-exec" disabled>Execute</button>
+			</div>
+			<div class="note">call: <span id="call-preview">(fib 20)</span></div>
+			<pre class="term" id="output"><span class="placeholder">(call result appears here)</span></pre>
+		</section>
+	</main>
+
+	<footer>
+		<details>
+			<summary>How it works &amp; browser requirements</summary>
+			<p>The definitions are compiled together with a tiny driver
+			&mdash; <code>(print (eval (read)))</code> &mdash; into one WASI module that
+			exports <code>memory</code> and <code>_start</code>. To call a function, the
+			page feeds the call expression you build (e.g. <code>(fib 20)</code>) to the
+			module on <em>stdin</em>; the module's built-in <code>read</code> parses it
+			and <code>eval</code> applies it against the loaded definitions, printing the
+			result. The eight <code>wasi_snapshot_preview1</code> imports are serviced by
+			<code>wasm-browser/wasi-shim.js</code>. Arguments are ordinary Lisp source,
+			so literals, lists (<code>(list 1 2 3)</code>) and nested calls all work,
+			within the compiled <code>eval</code>'s limits.</p>
+			<p>Requires a browser with WebAssembly GC
+			(Chrome/Edge&nbsp;119+, Firefox&nbsp;120+, Safari&nbsp;18.2+).</p>
+		</details>
+	</footer>
+
+	<script src="rontoplayground.js"></script>
+	<script type="module">
+		import { runWasmModule } from "./wasm-browser/wasi-shim.js";
+
+		// The driver appended at compile time: read one form from stdin (the call
+		// expression the user builds in phase 2), eval it against the loaded
+		// definitions, and print the result.
+		const DRIVER = "\n(print (eval (read)))\n";
+
+		// Each sample is { src, fn, args } so selecting it also pre-fills a call.
+		const SAMPLES = {
+			"fibonacci": {
+				src: '(defun fib (n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))',
+				fn: "fib", args: "20",
+			},
+			"factorial": {
+				src: '(defun fact (n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))',
+				fn: "fact", args: "20",
+			},
+			"gcd": {
+				src: '(defun my-gcd (a b)\n  (if (= b 0) a (my-gcd b (mod a b))))',
+				fn: "my-gcd", args: "48 36",
+			},
+			"ackermann": {
+				src: '(defun ack (m n)\n  (cond ((= m 0) (+ n 1))\n        ((= n 0) (ack (- m 1) 1))\n        (t (ack (- m 1) (ack m (- n 1))))))',
+				fn: "ack", args: "2 3",
+			},
+			"greet (string arg)": {
+				src: '(defun greet (name)\n  (format nil "Hello, ~a!" name))',
+				fn: "greet", args: '"rontolisp"',
+			},
+			"sum (list arg)": {
+				src: ';; multiple definitions are fine; call any of them\n(defun sum (xs)\n  (reduce #\'+ xs))\n(defun squares (n)\n  (mapcar #\'(lambda (x) (* x x)) (range n)))\n(defun range (n)\n  (let ((acc nil))\n    (dotimes (i n) (push i acc))\n    (reverse acc)))',
+				fn: "sum", args: "(squares 5)",
+			},
+		};
+
+		const $ = (id) => document.getElementById(id);
+		const statusEl = $("status");
+		const loadNote = $("load-note");
+		const outEl = $("output");
+
+		// --- sample dropdown ---
+		const samplesSel = $("samples");
+		for (const name of Object.keys(SAMPLES)) {
+			const opt = document.createElement("option");
+			opt.value = name; opt.textContent = name;
+			samplesSel.appendChild(opt);
+		}
+		function applySample(name) {
+			const s = SAMPLES[name];
+			if (!s) return;
+			$("source").value = s.src;
+			$("fn-name").value = s.fn;
+			$("fn-args").value = s.args;
+			invalidateLoad("source changed — Compile & Load to run it");
+			updateCallPreview();
+		}
+		samplesSel.addEventListener("change", () => { if (samplesSel.value) applySample(samplesSel.value); });
+
+		function setNote(el, msg, kind) { el.textContent = msg; el.className = "note" + (kind ? " " + kind : ""); }
+
+		// --- the loaded module (phase 1 output) ---
+		let loadedWasm = null;
+
+		function setExecEnabled(on) {
+			$("phase-exec").classList.toggle("disabled", !on);
+			$("fn-name").disabled = !on;
+			$("fn-args").disabled = !on;
+			$("btn-exec").disabled = !on;
+		}
+
+		// Called whenever the source no longer matches the loaded module.
+		function invalidateLoad(reason) {
+			loadedWasm = null;
+			$("btn-download").disabled = true;
+			setExecEnabled(false);
+			if (reason) setNote(loadNote, reason, "");
+		}
+
+		// --- phase 1: compile the definitions (+ driver) to a wasm module ---
+		function compileAndLoad() {
+			const src = $("source").value;
+			const btn = $("btn-load");
+			btn.disabled = true;
+			setNote(loadNote, "compiling to WASM in the browser...", "");
+			try {
+				const res = globalThis.rontoCompileWasm(src + DRIVER);
+				if (res.startsWith("ERROR:")) {
+					invalidateLoad();
+					setNote(loadNote, res.slice(6).trim(), "err");
+					return;
+				}
+				loadedWasm = base64ToBytes(res);
+				$("btn-download").disabled = false;
+				setExecEnabled(true);
+				setNote(loadNote, `loaded — compiled ${loadedWasm.length} bytes. Now call a function below.`, "ok");
+				updateCallPreview();
+			}
+			catch (e) {
+				invalidateLoad();
+				setNote(loadNote, "Error: " + (e && e.message ? e.message : e), "err");
+			}
+			finally {
+				btn.disabled = false;
+			}
+		}
+
+		// --- phase 2: build a call expression and run the loaded module ---
+		function buildCall() {
+			const fn = $("fn-name").value.trim();
+			if (!fn) return null;
+			const args = $("fn-args").value.trim();
+			return args ? `(${fn} ${args})` : `(${fn})`;
+		}
+
+		function updateCallPreview() {
+			const call = buildCall();
+			$("call-preview").textContent = call || "(enter a function name)";
+			// keep the download-and-run instructions showing the current call
+			for (const el of document.querySelectorAll(".run-call")) el.textContent = call || "(fib 20)";
+		}
+
+		async function execute() {
+			if (!loadedWasm) return;
+			const call = buildCall();
+			if (!call) { setNote(loadNote, "enter a function name to call", "err"); return; }
+			const btn = $("btn-exec");
+			btn.disabled = true;
+			outEl.textContent = "running " + call + " ...";
+			try {
+				// Feed the call expression to the module's (read) via stdin; (eval ...)
+				// applies it and (print ...) writes the result to stdout.
+				const { stdout, stderr } = await runWasmModule(loadedWasm, { stdin: call + "\n" });
+				showOutput(stdout, stderr);
+			}
+			catch (e) {
+				showOutput("", (e && e.message ? e.message : String(e)));
+			}
+			finally {
+				btn.disabled = false;
+			}
+		}
+
+		function showOutput(stdout, stderr) {
+			outEl.textContent = "";
+			if (!stdout && !stderr) {
+				const span = document.createElement("span");
+				span.className = "placeholder";
+				span.textContent = "(no output)";
+				outEl.appendChild(span);
+				return;
+			}
+			if (stdout) outEl.appendChild(document.createTextNode(stdout));
+			if (stderr) {
+				const span = document.createElement("span");
+				span.className = "stderr";
+				span.textContent = (stdout ? "\n" : "") + "[stderr]\n" + stderr;
+				outEl.appendChild(span);
+			}
+		}
+
+		// --- helpers ---
+		function base64ToBytes(b64) {
+			const bin = atob(b64);
+			const bytes = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			return bytes;
+		}
+
+		function downloadWasm() {
+			if (!loadedWasm) return;
+			const blob = new Blob([loadedWasm], { type: "application/wasm" });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url; a.download = "loaded.wasm";
+			document.body.appendChild(a); a.click(); a.remove();
+			URL.revokeObjectURL(url);
+		}
+
+		// --- wire up after the GraalVM runtime (which provides rontoCompileWasm) is ready ---
+		GraalVM.run([]).then(() => {
+			statusEl.textContent = "runtime ready";
+			statusEl.className = "ready";
+			$("btn-load").disabled = false;
+
+			applySample("fibonacci");
+			samplesSel.value = "fibonacci";
+
+			$("btn-load").addEventListener("click", compileAndLoad);
+			$("btn-download").addEventListener("click", downloadWasm);
+			$("btn-exec").addEventListener("click", execute);
+
+			// editing the source invalidates the loaded module
+			$("source").addEventListener("input", () => invalidateLoad("source changed — Compile & Load to run it"));
+			// keep the call preview in sync, and Enter in either field executes
+			for (const id of ["fn-name", "fn-args"]) {
+				$(id).addEventListener("input", updateCallPreview);
+				$(id).addEventListener("keydown", (ev) => {
+					if (ev.key === "Enter" && !$("btn-exec").disabled) { ev.preventDefault(); execute(); }
+				});
+			}
+		}).catch((e) => {
+			statusEl.textContent = "runtime failed";
+			statusEl.className = "error";
+			setNote(loadNote, "Failed to start the WebAssembly runtime. A recent browser with "
+				+ "WebAssembly GC and exception handling is required.\n\n" + e, "err");
+		});
+	</script>
+</body>
+</html>
