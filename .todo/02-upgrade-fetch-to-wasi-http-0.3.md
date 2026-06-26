@@ -1,36 +1,8 @@
-# TODO
-
-## Advanced `format` directives (deferred scope)
-
-**Status:** intentionally out of scope for the current `format` work.
-
-The `format` macro now covers the "Basic Formatting" directives: `~a`/`~s`
-(padding, `:` for nil), `~d` (`:` comma grouping, `@` sign, padding), `~f`, `~$`,
-`~%`, `~&`, `~~`, prefix parameters (number / `'c` / `v` / `#`) and the `:`/`@`
-modifiers. See the README "format" section for the supported set and limitations.
-
-Not yet implemented (a possible future task):
-
-- Iteration `~{ ... ~}` (and `~@{`), and the loop-escape `~^`.
-- Conditional `~[ ... ~]` (and `~:[`, `~@[`), and case conversion `~( ... ~)`.
-- `~c` (character), `~r` (radix / cardinal-ordinal English), `~o`/`~x`/`~b`
-  (octal / hex / binary), `~e`/`~g` (scientific / general float).
-- Column control: `~t` (tabulate), `~<...~>` (justification), `~*` (argument
-  jump).
-- A runtime `v` count for `~%`/`~&`/`~~`, and accurate column tracking for `~&`
-  with destination `nil` (currently a static approximation — see README).
-
-These are independent of the existing expansion (`LispMacroExpander` parses the
-control string into pure-Lisp forms built only from primitives the three backends
-already share — `subseq`/`length`/`%string-concat`/`while`/`round`/`expt`/...),
-so each can be added directive-by-directive without new runtime helpers, except
-where genuine runtime state is required (as `~&` needed an output-column flag).
-
-## Upgrade `rontolisp:fetch` from wasi:http@0.2 to async wasi:http@0.3
+# Upgrade `rontolisp:fetch` from wasi:http@0.2 to async wasi:http@0.3
 
 **Status:** blocked on upstream. Tracked here so the hybrid arrangement is not forgotten.
 
-### Why it is on 0.2 today
+## Why it is on 0.2 today
 
 The `--component` output is a native WASI 0.3 (Preview 3) component for every
 interface area **except HTTP**. `rontolisp:fetch` in component mode is a
@@ -51,7 +23,7 @@ This is because **async `wasi:http@0.3` does not exist upstream yet**:
 So there is no async http ABI to target and no host to run it. Verified
 2026-06-25.
 
-### Why this is a clean, isolated stopgap (not a dead end)
+## Why this is a clean, isolated stopgap (not a dead end)
 
 The rontolisp **core never sees a WASI http version**: it imports a single
 bespoke `http.fetch(12 x i32)` seam (`WasmFetchRuntimeBuilder` /
@@ -63,7 +35,7 @@ layer we already rewrote when migrating the base I/O from 0.2 to 0.3.
 When async `wasi:http@0.3` ships upstream, the `wasi:io@0.2` "island" disappears
 entirely and the component becomes uniformly 0.3.
 
-### What to do when upstream ships async wasi:http@0.3
+## What to do when upstream ships async wasi:http@0.3
 
 1. Vendor the async `wasi:http@0.3.0` WIT (+ any deps it pulls) under
    `src/wasm-component/deps/http`, and update `uni-http.wit`.

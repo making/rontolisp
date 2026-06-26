@@ -172,7 +172,7 @@ Notes and current limitations of component mode:
 - Requires a runtime with WASI 0.3 component-model async support: **wasmtime 46+** (pass `-W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y`).
 - `print`/stdout, stdin (`read`, 0-argument `read-line`, over `wasi:cli/stdin@0.3.0`), and file I/O (`open`, `close`, `write-line`, stream `read-line`, `load`, `with-open-file`) all work. File access requires `--dir` (paths resolve against the first preopened directory).
 - `random` draws real entropy from `wasi:random@0.3.0` (unlike the deterministic Preview 1 output), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `getenv` reads `wasi:cli/environment@0.3.0`.
-- Outgoing HTTP (`rontolisp:fetch`) works in component mode, but is a **hybrid**: the base I/O stays WASI 0.3 while fetch itself imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet — see `TODO.md`). Run a fetch component with `-S http=y` in addition to the async flags. Non-fetch components do not import `wasi:http`, so they do not need `-S http`.
+- Outgoing HTTP (`rontolisp:fetch`) works in component mode, but is a **hybrid**: the base I/O stays WASI 0.3 while fetch itself imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet — see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). Run a fetch component with `-S http=y` in addition to the async flags. Non-fetch components do not import `wasi:http`, so they do not need `-S http`.
 - The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
 
 ### Self-Hosted REPL
@@ -753,7 +753,7 @@ The result is a property list `(:status <integer> :body <string> :headers <alist
 Backend support:
 
 - **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`.
-- **WASM**: component-only, and a **hybrid** — the base I/O is WASI 0.3 but fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet; see `TODO.md`). Compile with `--component` and run with `-S http=y` plus the async flags. It remains a compile error in Preview 1 (core-module) mode, which has no host `wasi:http`.
+- **WASM**: component-only, and a **hybrid** — the base I/O is WASI 0.3 but fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet; see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). Compile with `--component` and run with `-S http=y` plus the async flags. It remains a compile error in Preview 1 (core-module) mode, which has no host `wasi:http`.
 
 Current limitations:
 

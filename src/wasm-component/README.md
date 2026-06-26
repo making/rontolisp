@@ -126,7 +126,7 @@ wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackfu
 A `fetch` program compiles to a **hybrid** component: the base I/O stays WASI 0.3, but
 fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream
 yet — the wasi-http repo's `v0.3.0-rc` tags and `main` are still `wasi:http@0.2.x`, and
-wasmtime 46 hosts only `wasi:http@0.2`; see `../../TODO.md`). The parallel blob set is:
+wasmtime 46 hosts only `wasi:http@0.2`; see `../../.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). The parallel blob set is:
 
 ```
 src/wasm-component/
