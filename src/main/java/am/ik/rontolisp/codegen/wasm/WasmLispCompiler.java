@@ -433,7 +433,18 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int READ_LINE_BUF = 16384;
 
-	private static final int DATA_BASE_OFFSET = 128;
+	// The interned-string data segment must start ABOVE every fixed scratch address
+	// below,
+	// or the host/adapter writes for getenv (ENV_COUNT_ADDR=136 .. ENV_BUFSIZE_ADDR=143)
+	// and
+	// the time built-ins (TIME_SCRATCH_ADDR=128 .. 135) would clobber shared string bytes
+	// (notably the newline at the old base+9). The highest scratch word ends at 143, so
+	// 256
+	// gives headroom; the next fixed region (RT_INTERN_BASE=8192) is far above realistic
+	// string-segment sizes. Shifting this base does not move any function/import index,
+	// so
+	// the --component blobs are unaffected (see CLAUDE.md index-stability invariant).
+	private static final int DATA_BASE_OFFSET = 256;
 
 	@Override
 	public byte[] compile(List<LispVal> program) {

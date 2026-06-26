@@ -843,16 +843,21 @@ cases:
       (2 1 3)
       (1 2)
       (1 2 3 4)
+  # Wrapped in a defun (rather than bare top-level prints) so its body compiles into its own
+  # JVM method; the cross-backend driver concatenates every case into one program and the JVM
+  # caps a single method at 64 KiB, which the bare top-level forms were near.
   - name: every-some-remove-remove-if
     source: |
-      (print (every #'evenp '(2 4 6)))
-      (print (every #'evenp '(2 3 6)))
-      (print (some #'oddp '(2 4 5)))
-      (print (some #'oddp '(2 4 6)))
-      (print (remove 2 '(1 2 3 2 4)))
-      (print (remove-if #'evenp '(1 2 3 4 5)))
-      (print (remove-if-not #'evenp '(1 2 3 4 5)))
-      (print (funcall #'remove 9 '(1 2 3)))
+      (defun ci-every-some ()
+        (print (every #'evenp '(2 4 6)))
+        (print (every #'evenp '(2 3 6)))
+        (print (some #'oddp '(2 4 5)))
+        (print (some #'oddp '(2 4 6)))
+        (print (remove 2 '(1 2 3 2 4)))
+        (print (remove-if #'evenp '(1 2 3 4 5)))
+        (print (remove-if-not #'evenp '(1 2 3 4 5)))
+        (print (funcall #'remove 9 '(1 2 3))))
+      (ci-every-some)
     expected: |
       t
       nil
@@ -1421,3 +1426,17 @@ cases:
       (t nil)
       2
       1
+
+  # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
+  # interned-string data segment on the WASM backends. An unset variable keeps the output
+  # deterministic across backends; the bug corrupted the shared newline byte so any newline
+  # printed after a getenv came out as NUL. The component backend reuses this expected value.
+  - name: getenv-does-not-corrupt-newline
+    source: |
+      (defun ci-getenv-newline ()
+        (getenv "RONTOLISP_NO_SUCH_VAR")
+        (format t "alpha~%beta~%"))
+      (ci-getenv-newline)
+    expected: |
+      alpha
+      beta

@@ -47,6 +47,18 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// Preview 1 variant that passes an environment variable and returns the raw
+	// (untrimmed)
+	// stdout, so callers can assert on exact bytes (e.g. that a newline stays 0x0a).
+	private static String compileAndRunRawWithEnv(String lispCode, String env) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--env", env, "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout();
+	}
+
 	private static String compileAndRunComponent(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
@@ -93,6 +105,29 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponentWithEnv("(print (getenv \"RLENV\"))", "RLENV=hello")).isEqualTo("\"hello\"");
 		assertThat(compileAndRunComponentWithEnv("(print (stringp (getenv \"RLENV\")))", "RLENV=hello")).isEqualTo("t");
 		assertThat(compileAndRunComponentWithEnv("(print (getenv \"RL_UNSET\"))", "RLENV=hello")).isEqualTo("nil");
+	}
+
+	@Test
+	void preview1GetenvDoesNotCorruptNewline() throws Exception {
+		// Regression for .todo/13: getenv calls environ_sizes_get with scratch addresses
+		// (ENV_COUNT_ADDR=136 ..) that must NOT overlap the interned-string data segment.
+		// When they did (DATA_BASE_OFFSET=128), the host's count write at 136..139
+		// clobbered
+		// the shared newline byte at offset 137, so every newline after a getenv printed
+		// as a
+		// NUL (0x00) instead of 0x0a. Assert the raw bytes keep real newlines.
+		assertThat(compileAndRunRawWithEnv("(getenv \"RLENV\") (format t \"X~%Y~%\")", "RLENV=hello"))
+			.isEqualTo("X\nY\n");
+	}
+
+	@Test
+	void preview1TimeDoesNotCorruptNilLiteral() throws Exception {
+		// Companion regression for .todo/13: clock_time_get writes 8 bytes at
+		// TIME_SCRATCH_ADDR=128, which overlapped the data segment's leading "nil"
+		// literal
+		// when DATA_BASE_OFFSET=128. Reading the clock then printing nil must still print
+		// nil.
+		assertThat(compileAndRunRawWithEnv("(get-internal-real-time) (print nil)", "RLENV=hello")).isEqualTo("nil\n");
 	}
 
 	@Test
