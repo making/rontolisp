@@ -94,6 +94,32 @@ final class WasmSetqCompiler {
 		}
 		ctx.writer.write(Instruction.TEE_LOCAL);
 		ctx.writer.writeSignedLeb128(slot);
+		mirrorTopLevelGlobal(name, slot, ctx);
+	}
+
+	/**
+	 * Mirrors a top-level global variable binding into the embedded {@code eval}
+	 * runtime's global environment ({@code GLOBAL_ENV}), so an eval'd expression can
+	 * resolve a variable that compiled code defined via {@code setq}/{@code defvar} (the
+	 * compiled value otherwise lives only in a {@code _start} local the interpreter
+	 * cannot see). No-op unless the program uses {@code eval} and this is the top-level
+	 * context. Reads the assigned value back from {@code slot}; the value already on the
+	 * stack (left there by the {@code local.tee}) is preserved as the form's result.
+	 */
+	static void mirrorTopLevelGlobal(String name, int slot, WasmLispCompiler.Ctx ctx) {
+		if (!ctx.topLevel || !ctx.usesEval) {
+			return;
+		}
+		// _store(place, value, GLOBAL_ENV) -> value ; drop the returned value (the result
+		// already sits below it on the stack).
+		WasmEmitHelper.compileStringLiteral(name, ctx); // symbol place
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		ctx.writer.write(Instruction.DROP);
 	}
 
 }

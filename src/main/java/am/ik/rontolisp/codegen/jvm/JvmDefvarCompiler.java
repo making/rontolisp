@@ -27,6 +27,14 @@ final class JvmDefvarCompiler {
 		LispSymbol name = (LispSymbol) parts.get(1);
 		if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
 			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+			// Mirror the binding into the eval runtime's global env (no-op unless eval is
+			// used at top level); _store returns the value, which we discard here because
+			// the local slot keeps the compiled copy.
+			if (ctx.topLevel && ctx.evalStoreRef != null) {
+				ctx.emit(Opcode.DUP);
+				JvmSetqCompiler.mirrorTopLevelGlobal(name.name(), ctx);
+				ctx.emit(Opcode.POP);
+			}
 			int slot = ctx.allocLocal(name.name());
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slot);

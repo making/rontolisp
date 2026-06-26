@@ -617,6 +617,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
+		ctx.topLevel = true;
+		ctx.usesEval = usesEval;
 
 		// Initialize heap pointer for read-line buffer
 		startWriter.write(Instruction.I32_CONST);
@@ -1426,6 +1428,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		boolean component = false;
+
+		/**
+		 * True for the single context that compiles top-level forms (the {@code _start}
+		 * body), false for defun/lambda bodies. When {@link #usesEval} is also set, a
+		 * top-level global variable binding is mirrored into the eval runtime's global
+		 * environment ({@code GLOBAL_ENV}) so an eval'd expression can resolve it.
+		 */
+		boolean topLevel = false;
+
+		/** True when the program uses the embedded {@code eval} runtime. */
+		boolean usesEval = false;
 
 		Set<String> userDefunNames = Set.of();
 

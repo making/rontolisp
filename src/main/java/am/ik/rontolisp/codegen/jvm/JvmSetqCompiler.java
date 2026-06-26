@@ -79,7 +79,28 @@ final class JvmSetqCompiler {
 			}
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slot);
+			mirrorTopLevelGlobal(name, ctx);
 		}
+	}
+
+	/**
+	 * Mirrors a top-level global variable binding into the embedded {@code eval}
+	 * runtime's global environment, so an eval'd expression can resolve a variable that
+	 * compiled code defined via {@code setq}/{@code defvar} (the compiled value otherwise
+	 * lives only in a {@code main()} local the interpreter cannot see). No-op unless the
+	 * program uses {@code eval} and this is the top-level context. Expects the assigned
+	 * value on the stack and leaves it there (the {@code _store} call returns it).
+	 */
+	static void mirrorTopLevelGlobal(String name, JvmLispCompiler.Ctx ctx) {
+		if (!ctx.topLevel || ctx.evalStoreRef == null) {
+			return;
+		}
+		// stack: value -> _store(name, value, null) -> value
+		JvmEmitHelper.compileStringLiteral(name, ctx);
+		ctx.emit(Opcode.SWAP);
+		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.evalStoreRef.index());
 	}
 
 }

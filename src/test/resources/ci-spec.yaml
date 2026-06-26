@@ -666,6 +666,16 @@ cases:
       6
       -5
       1/2
+  - name: eval-resolves-top-level-global-bindings
+    source: |
+      (defun ct-make-adder (n) (lambda (x) (+ x n)))
+      (setq ct-add10 (ct-make-adder 10))
+      (defvar *ct-g* 99)
+      (print (eval '*ct-g*))
+      (print (eval '(funcall ct-add10 100)))
+    expected: |
+      99
+      110
   - name: numeric-literals-with-comma-grouping
     source: |
       (print (+ 1,000 100))

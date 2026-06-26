@@ -2021,6 +2021,29 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileEvalResolvesTopLevelGlobalVariable() throws Exception {
+		// A top-level setq/defvar global must be visible to the embedded eval runtime
+		// (its value is mirrored into the runtime's global environment).
+		assertThat(compileAndRun("(setq foo 42) (print (eval (quote foo)))")).isEqualTo("42");
+		assertThat(compileAndRun("(defvar *g* 99) (print (eval (quote *g*)))")).isEqualTo("99");
+		assertThat(compileAndRun("(defparameter *p* 7) (print (eval (quote *p*)))")).isEqualTo("7");
+		// A closure stored in a top-level global, then funcall'd through eval.
+		assertThat(compileAndRun(
+				"(defun make-adder (n) (lambda (x) (+ x n))) (setq add10 (make-adder 10)) (print (eval (quote (funcall add10 100))))"))
+			.isEqualTo("110");
+	}
+
+	@Test
+	void compileEvalResolvesGlobalClosureViaReadFuncall() throws Exception {
+		// The exact playground scenario: define a closure global, then funcall it from
+		// an expression read at runtime.
+		assertThat(compileAndRunWithStdin(
+				"(defun make-adder (n) (lambda (x) (+ x n))) (setq add10 (make-adder 10)) (print (eval (read)))",
+				"(funcall add10 100)\n"))
+			.isEqualTo("110");
+	}
+
+	@Test
 	void compileAndRunReadEof() throws Exception {
 		assertThat(compileAndRunWithStdin("(print (null (read)))", "")).isEqualTo("t");
 	}

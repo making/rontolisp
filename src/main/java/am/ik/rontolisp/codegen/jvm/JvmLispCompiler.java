@@ -391,6 +391,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Pass 2b: Compile top-level expressions as main() body
 		Ctx mainCtx = ctxBuilder.build();
+		mainCtx.topLevel = true;
+		// When eval is present, top-level global variable bindings (setq/defvar/...) are
+		// mirrored into the eval runtime's global environment via _store, so an eval'd
+		// expression can resolve them (the compiled value lives in a main() local that
+		// the
+		// runtime interpreter cannot reach).
+		if (usesEval) {
+			mainCtx.evalStoreRef = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_store"),
+					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
+		}
 		for (LispVal expr : topLevelExprs) {
 			JvmExprCompiler.compileExpr(expr, mainCtx, this.className);
 			mainCtx.emit(Opcode.POP);
@@ -1109,6 +1119,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		int maxStack = 64;
 
 		boolean dynamic = false;
+
+		/**
+		 * True for the single context that compiles top-level forms (the {@code main}
+		 * body), false for defun/lambda bodies. When the embedded {@code eval} runtime is
+		 * present, a top-level global variable binding is mirrored into the runtime's
+		 * global environment so {@code eval} can resolve it (see {@link #evalStoreRef}).
+		 */
+		boolean topLevel = false;
+
+		/**
+		 * The {@code _store(place, value, env)} methodref, set only when the program uses
+		 * {@code eval}. Used to mirror top-level global variable bindings into the eval
+		 * runtime's global environment; null otherwise.
+		 */
+		@Nullable MethodrefConstant evalStoreRef;
 
 		String className = "";
 
