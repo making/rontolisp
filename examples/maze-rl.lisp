@@ -7,8 +7,8 @@
 ;;;;
 ;;;; Exploration uses the built-in `random`, the idiomatic Common Lisp choice for
 ;;;; reinforcement learning.  Because `random` is not seedable and draws from a
-;;;; different source per backend (`Math.random` on the interpreter/JVM, a
-;;;; deterministic LCG on WASM Preview 1, real entropy on a WASM component), this
+;;;; different source per backend (`Math.random` on the interpreter/JVM, the WASI
+;;;; `random_get` host function on WASM, real entropy in every mode), this
 ;;;; program prints a different learned path on each run and each backend.  The
 ;;;; algorithm still converges to a valid shortest-ish route every time; only the
 ;;;; exact path and value count vary.  (For a fully deterministic, bit-identical

@@ -151,8 +151,9 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void componentRandomDrawsFromWasiRandom() throws Exception {
-		// Component mode draws entropy from wasi:random (unlike Preview 1's deterministic
-		// LCG), so only the range and type are asserted.
+		// Component mode draws entropy from wasi:random (Preview 1 uses the host's
+		// random_get); both are non-reproducible, so only the range and type are
+		// asserted.
 		assertThat(compileAndRunComponent(
 				"(let ((r (random 100))) (if (and (>= r 0) (< r 100)) (print \"in\") (print \"oob\")))"))
 			.isEqualTo("\"in\"");

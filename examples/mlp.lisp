@@ -8,7 +8,7 @@
 ;;; ---------------------------------------------------------------------------
 ;;; Randomness via the built-in random.  random returns a value in [0, limit)
 ;;; of the limit's type; on the interpreter/JVM it draws from Math.random(),
-;;; on WASM from a deterministic LCG (so WASM runs are reproducible).
+;;; on WASM from the WASI random_get host function (so every run differs).
 ;;; ---------------------------------------------------------------------------
 
 (defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)

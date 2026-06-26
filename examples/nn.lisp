@@ -4,8 +4,8 @@
 
 ;;; --- random weights via the built-in random ---
 ;;; random returns a value in [0, limit) of the limit's type. On the interpreter
-;;; and JVM backends it draws from Math.random(); on WASM it uses a deterministic
-;;; linear-congruential generator (so WASM runs are reproducible).
+;;; and JVM backends it draws from Math.random(); on WASM it draws real entropy
+;;; from the WASI random_get host function (so every run differs).
 (defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)
 
 ;;; --- vector / matrix helpers ---
