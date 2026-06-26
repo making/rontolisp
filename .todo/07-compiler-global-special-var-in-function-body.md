@@ -2,6 +2,16 @@
 
 **Status:** not implemented in the JVM/WASM compilers (works in the interpreter).
 
+**Do this together with `.todo/13-unify-top-level-globals-into-shared-eval-env.md`.**
+Both are symptoms of the same root cause -- top-level globals are compiled to a
+`main`/`_start` local instead of a shared global store. The unified
+single-global-store design in TODO 13 subsumes this one (a function-body global
+reference simply becomes the same env read as everywhere else). Implementing 07
+standalone would add a throwaway "fall back to `_genv` for function-body refs"
+patch that TODO 13 then rips out, and would leave reads/writes split across two
+stores depending on context. Land them as one change; close this TODO when 13
+lands. See the "What to implement" steps and the perf trade-off in TODO 13.
+
 ## Symptom
 
 A `defparameter`/`defvar` global referenced (or `setq`-assigned) at top level
