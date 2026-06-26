@@ -413,7 +413,14 @@ public final class Version {
 												<include name="index.html"/>
 											</fileset>
 										</copy>
-										<echo message="Web playground staged in ${web.dist}"/>
+										<!-- Stage the standalone "run user WASM in the browser" example as a
+											 subpath of the same Pages site (/wasm-browser/). Its .wasm files
+											 are checked in, so no compilation is needed here; the example's
+											 index.html uses relative URLs and works under any subpath. -->
+										<copy todir="${web.dist}/wasm-browser">
+											<fileset dir="${project.basedir}/examples/wasm-browser"/>
+										</copy>
+										<echo message="Web playground staged in ${web.dist} (example at ${web.dist}/wasm-browser)"/>
 										<echo message="Serve it: cd web/dist &amp;&amp; jwebserver -p 8000"/>
 									</target>
 								</configuration>

@@ -12,6 +12,7 @@ on:
     - develop
     paths:
     - web/**
+    - examples/wasm-browser/**
     - src/**
     - pom.xml
     - .github/workflows/pages.yaml
