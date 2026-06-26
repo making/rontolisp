@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.function.DoubleUnaryOperator;
 
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
@@ -184,6 +185,7 @@ public final class Environment implements Scope {
 		registerListOps(env);
 		registerSequenceOps(env);
 		registerStringOps(env);
+		registerCharacters(env);
 		registerTypeConversion(env);
 		registerPackages(env);
 		return env;
@@ -1505,15 +1507,27 @@ public final class Environment implements Scope {
 			}
 		}));
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
-			requireArgCount(LispNames.READ, args, 0);
 			try {
-				// Drain buffered output so any prompt is visible before we block on
-				// stdin.
-				out.flush();
-				// Keep reading lines until one contains a datum (blank and
-				// comment-only lines are skipped) or stdin is exhausted (EOF -> nil).
+				// (read) reads from stdin; (read stream) reads from an open input
+				// stream. Both skip blank and comment-only lines and return one datum
+				// per call, or nil at end of input.
+				BufferedReader reader;
+				if (args.isEmpty()) {
+					// Drain buffered output so any prompt is visible before we block on
+					// stdin.
+					out.flush();
+					reader = stdinReader;
+				}
+				else {
+					requireArgCount(LispNames.READ, args, 1);
+					if (!(args.get(0) instanceof LispInteger handle)
+							|| !(streams.get(handle.value()) instanceof BufferedReader streamReader)) {
+						throw new LispEvalException(LispNames.READ + " expects an input stream");
+					}
+					reader = streamReader;
+				}
 				String line;
-				while ((line = stdinReader.readLine()) != null) {
+				while ((line = reader.readLine()) != null) {
 					line = line.trim();
 					if (line.isEmpty() || line.startsWith(";")) {
 						continue;
@@ -1526,6 +1540,158 @@ public final class Environment implements Scope {
 				throw new UncheckedIOException(ex);
 			}
 		}));
+		// read-from-string: parse the first datum from a string (the optional
+		// eof-error-p/eof-value and :start/:end keywords of Common Lisp are not
+		// supported).
+		env.defineFunction(LispNames.READ_FROM_STRING, new LispFunction(LispNames.READ_FROM_STRING, args -> {
+			requireMinArgCount(LispNames.READ_FROM_STRING, args, 1);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.READ_FROM_STRING + " expects a string");
+			}
+			return LispReader.readFromString(str.value());
+		}));
+		// parse-integer: parse an integer from a string, with the common :radix,
+		// :junk-allowed, :start and :end keywords.
+		env.defineFunction(LispNames.PARSE_INTEGER, new LispFunction(LispNames.PARSE_INTEGER, args -> {
+			requireMinArgCount(LispNames.PARSE_INTEGER, args, 1);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.PARSE_INTEGER + " expects a string");
+			}
+			int radix = 10;
+			boolean junkAllowed = false;
+			int start = 0;
+			int end = str.value().length();
+			for (int i = 1; i + 1 < args.size(); i += 2) {
+				String key = (args.get(i) instanceof LispSymbol kw) ? kw.name() : "";
+				LispVal value = args.get(i + 1);
+				switch (key) {
+					case LispNames.RADIX_KEYWORD -> radix = (int) asLong(value);
+					case LispNames.JUNK_ALLOWED_KEYWORD -> junkAllowed = !(value instanceof LispNil);
+					case LispNames.START_KEYWORD -> start = (int) asLong(value);
+					case LispNames.END_KEYWORD -> end = (int) asLong(value);
+					default -> throw new LispEvalException(LispNames.PARSE_INTEGER + ": unsupported keyword " + key);
+				}
+			}
+			return parseInteger(str.value(), start, end, radix, junkAllowed);
+		}));
+	}
+
+	// Shared parse-integer logic: trims whitespace, accepts an optional sign, and
+	// accumulates digits in the given radix. With junkAllowed, stops at the first
+	// non-digit and returns nil when no digits were seen; otherwise signals on junk.
+	private static LispVal parseInteger(String s, int start, int end, int radix, boolean junkAllowed) {
+		int i = start;
+		while (i < end && Character.isWhitespace(s.charAt(i))) {
+			i++;
+		}
+		int sign = 1;
+		if (i < end && (s.charAt(i) == '+' || s.charAt(i) == '-')) {
+			sign = s.charAt(i) == '-' ? -1 : 1;
+			i++;
+		}
+		java.math.BigInteger acc = java.math.BigInteger.ZERO;
+		java.math.BigInteger base = java.math.BigInteger.valueOf(radix);
+		boolean sawDigit = false;
+		while (i < end) {
+			int digit = Character.digit(s.charAt(i), radix);
+			if (digit < 0) {
+				break;
+			}
+			acc = acc.multiply(base).add(java.math.BigInteger.valueOf(digit));
+			sawDigit = true;
+			i++;
+		}
+		if (!junkAllowed) {
+			while (i < end && Character.isWhitespace(s.charAt(i))) {
+				i++;
+			}
+			if (i != end) {
+				throw new LispEvalException(LispNames.PARSE_INTEGER + ": junk in string \"" + s + "\"");
+			}
+		}
+		if (!sawDigit) {
+			if (junkAllowed) {
+				return LispNil.INSTANCE;
+			}
+			throw new LispEvalException(LispNames.PARSE_INTEGER + ": no integer in string \"" + s + "\"");
+		}
+		return normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign)));
+	}
+
+	private static void registerCharacters(Environment env) {
+		env.defineFunction(LispNames.CHAR, new LispFunction(LispNames.CHAR, args -> charRef(LispNames.CHAR, args)));
+		env.defineFunction(LispNames.SCHAR, new LispFunction(LispNames.SCHAR, args -> charRef(LispNames.SCHAR, args)));
+		env.defineFunction(LispNames.CHAR_CODE, new LispFunction(LispNames.CHAR_CODE, args -> {
+			requireArgCount(LispNames.CHAR_CODE, args, 1);
+			return new LispInteger(requireChar(LispNames.CHAR_CODE, args.get(0)).codePoint());
+		}));
+		env.defineFunction(LispNames.CODE_CHAR, new LispFunction(LispNames.CODE_CHAR, args -> {
+			requireArgCount(LispNames.CODE_CHAR, args, 1);
+			return new LispChar((int) asLong(args.get(0)));
+		}));
+		env.defineFunction(LispNames.CHAR_EQ,
+				new LispFunction(LispNames.CHAR_EQ, args -> charCompareChain(LispNames.CHAR_EQ, args, 0, 0)));
+		env.defineFunction(LispNames.CHAR_LT,
+				new LispFunction(LispNames.CHAR_LT, args -> charCompareChain(LispNames.CHAR_LT, args, -1, -1)));
+		env.defineFunction(LispNames.CHAR_LE,
+				new LispFunction(LispNames.CHAR_LE, args -> charCompareChain(LispNames.CHAR_LE, args, -1, 0)));
+		env.defineFunction(LispNames.CHAR_UPCASE, new LispFunction(LispNames.CHAR_UPCASE, args -> {
+			requireArgCount(LispNames.CHAR_UPCASE, args, 1);
+			return new LispChar(Character.toUpperCase(requireChar(LispNames.CHAR_UPCASE, args.get(0)).codePoint()));
+		}));
+		env.defineFunction(LispNames.CHAR_DOWNCASE, new LispFunction(LispNames.CHAR_DOWNCASE, args -> {
+			requireArgCount(LispNames.CHAR_DOWNCASE, args, 1);
+			return new LispChar(Character.toLowerCase(requireChar(LispNames.CHAR_DOWNCASE, args.get(0)).codePoint()));
+		}));
+		env.defineFunction(LispNames.CHARACTERP, new LispFunction(LispNames.CHARACTERP, args -> {
+			requireArgCount(LispNames.CHARACTERP, args, 1);
+			return args.get(0) instanceof LispChar ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.ALPHA_CHAR_P, new LispFunction(LispNames.ALPHA_CHAR_P, args -> {
+			requireArgCount(LispNames.ALPHA_CHAR_P, args, 1);
+			return Character.isLetter(requireChar(LispNames.ALPHA_CHAR_P, args.get(0)).codePoint()) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.DIGIT_CHAR_P, new LispFunction(LispNames.DIGIT_CHAR_P, args -> {
+			requireMinArgCount(LispNames.DIGIT_CHAR_P, args, 1);
+			int radix = args.size() > 1 ? (int) asLong(args.get(1)) : 10;
+			int weight = Character.digit(requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint(), radix);
+			return weight < 0 ? LispNil.INSTANCE : new LispInteger(weight);
+		}));
+	}
+
+	private static LispVal charRef(String name, java.util.List<LispVal> args) {
+		requireArgCount(name, args, 2);
+		String s = requireString(name, args.get(0));
+		int index = requireIndex(name, args.get(1));
+		if (index < 0 || index >= s.length()) {
+			throw new LispEvalException(
+					name + ": index " + index + " out of bounds for string of length " + s.length());
+		}
+		return new LispChar(s.charAt(index));
+	}
+
+	private static LispChar requireChar(String name, LispVal val) {
+		if (val instanceof LispChar c) {
+			return c;
+		}
+		throw new LispEvalException(name + " expects a character, got: " + val.print());
+	}
+
+	// Variadic character comparison, mirroring compareChain for numbers: true when
+	// every adjacent pair's code-point comparison falls within [low, high].
+	private static LispVal charCompareChain(String name, java.util.List<LispVal> args, int low, int high) {
+		requireMinArgCount(name, args, 1);
+		for (int i = 0; i + 1 < args.size(); i++) {
+			int a = requireChar(name, args.get(i)).codePoint();
+			int b = requireChar(name, args.get(i + 1)).codePoint();
+			int cmp = Integer.compare(a, b);
+			int normalized = cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
+			if (normalized < low || normalized > high) {
+				return LispNil.INSTANCE;
+			}
+		}
+		return LispTrue.INSTANCE;
 	}
 
 	private static void registerPredicates(Environment env) {

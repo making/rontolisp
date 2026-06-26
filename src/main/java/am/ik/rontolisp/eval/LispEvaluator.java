@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
@@ -285,6 +286,7 @@ public final class LispEvaluator {
 			case LispRatio r -> r;
 			case LispDouble d -> d;
 			case LispString s -> s;
+			case LispChar c -> c;
 			case LispNil n -> n;
 			case LispTrue t -> t;
 			case LispFunction f -> f;

@@ -19,20 +19,21 @@ needs only `with-open-file` / `read-line` / `length` / `format nil`.
 
 ## Blockers (each tracked as its own function-implementation todo)
 
-- **Tokenization needs a character type / string indexing.** No `char`,
-  `schar`, `char-code`, `code-char`, `#\Space` literals, nor a standard split.
-  Today you can only pull one-character substrings via `subseq` and compare with
-  `string=`, which is not how CL code is written. See
-  [04-character-type-and-string-parsing](04-character-type-and-string-parsing.md).
+- **Tokenization needs a character type / string indexing.** RESOLVED: `char`,
+  `schar`, `char-code`, `code-char`, `#\Space` literals and the character
+  predicates landed (the character/parsing work, formerly tracked here as
+  `04`, is done; remaining parity polish is in
+  [08-character-parsing-parity-followups](08-character-parsing-parity-followups.md)).
+  A standard `split` is still absent, but tokenizing by indexing with `char` +
+  the character predicates is now idiomatic.
 - **Frequency counting needs hash tables (or string-keyed alists).** `assoc`
   ignores `:test`, so a string key never matches (`eql` on distinct strings),
   and there are no hash tables at all. See
   [05-hash-tables](05-hash-tables.md) and
   [06-sequence-test-key-keywords](06-sequence-test-key-keywords.md).
-- **Numeric columns (CSV-style aggregation) need string->number parsing.** No
-  `parse-integer` / `read-from-string`, and `read` takes no stream argument, so
-  values read from a file cannot be turned into numbers. See
-  [04-character-type-and-string-parsing](04-character-type-and-string-parsing.md).
+- **Numeric columns (CSV-style aggregation) need string->number parsing.**
+  RESOLVED: `parse-integer`, `read-from-string` and `(read stream)` landed;
+  `examples/parse-numbers.lisp` demonstrates numeric-column aggregation.
 
 ## Definition of done
 

@@ -87,6 +87,8 @@ final class JvmReadRuntimeBuilder {
 
 	private final MethodrefConstant sbToString;
 
+	private final MethodrefConstant readLineStream;
+
 	private final MethodrefConstant readSkipWs;
 
 	private final MethodrefConstant readExpr;
@@ -151,6 +153,7 @@ final class JvmReadRuntimeBuilder {
 		this.sbToString = cp.addMethodref(this.stringBuilderClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 
+		this.readLineStream = methodref("_readLineStream", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		this.readSkipWs = methodref("_readSkipWs", "()V");
 		this.readExpr = methodref("_readExpr", "()Ljava/lang/Object;");
 		this.readList = methodref("_readList", "()Ljava/lang/Object;");
@@ -203,6 +206,10 @@ final class JvmReadRuntimeBuilder {
 		ms.add(new ReadMethod(this.cp.addUtf8("_classify"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Object;"),
 				4, 7, buildClassify()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_read"), this.cp.addUtf8("()Ljava/lang/Object;"), 4, 1, buildRead()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readStream"), this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"),
+				4, 2, buildReadStream()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readFromString"),
+				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), 4, 2, buildReadFromString()));
 		if (this.emitLoad) {
 			ms.add(new ReadMethod(this.cp.addUtf8("_load"), this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"),
 					4, 3, buildLoad()));
@@ -739,6 +746,72 @@ final class JvmReadRuntimeBuilder {
 		a.areturn();
 		a.bind(rnull);
 		a.areturn(); // null already on stack
+		return a.finish();
+	}
+
+	// _readStream(Object handle): like _read but reads lines from an open input stream
+	// via _readLineStream(handle); returns one datum per call, or null at end of stream.
+	private List<Integer> buildReadStream() {
+		JvmAsm a = new JvmAsm();
+		int loop = a.label();
+		int rnull = a.label();
+		a.bind(loop);
+		a.aload(0); // handle
+		a.invokestatic(this.readLineStream);
+		a.dup();
+		a.branch(Opcode.IFNULL, rnull);
+		a.checkcast(this.stringClass);
+		a.astore(1);
+		// raw = s.substring(1, s.length()-1)
+		a.aload(1);
+		a.iconst(1);
+		a.aload(1);
+		a.invokevirtual(this.stringLength);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.invokevirtual(this.stringSubstring);
+		a.putstatic(this.readSrc);
+		a.iconst(0);
+		a.putstatic(this.readPos);
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, loop);
+		a.invokestatic(this.readExpr);
+		a.areturn();
+		a.bind(rnull);
+		a.areturn(); // null already on stack
+		return a.finish();
+	}
+
+	// _readFromString(Object strObj): parse the first datum from a string (the quotes of
+	// the runtime string representation are stripped first); returns null when empty.
+	private List<Integer> buildReadFromString() {
+		JvmAsm a = new JvmAsm();
+		int retNull = a.label();
+		a.aload(0);
+		a.checkcast(this.stringClass);
+		a.astore(1);
+		// raw = s.substring(1, s.length()-1)
+		a.aload(1);
+		a.iconst(1);
+		a.aload(1);
+		a.invokevirtual(this.stringLength);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.invokevirtual(this.stringSubstring);
+		a.putstatic(this.readSrc);
+		a.iconst(0);
+		a.putstatic(this.readPos);
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, retNull);
+		a.invokestatic(this.readExpr);
+		a.areturn();
+		a.bind(retNull);
+		a.aconstNull();
+		a.areturn();
 		return a.finish();
 	}
 

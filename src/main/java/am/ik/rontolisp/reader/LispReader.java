@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -69,6 +70,7 @@ public final class LispReader {
 			case Token.RatioToken r -> readRatio(r);
 			case Token.DoubleToken d -> new LispDouble(d.value());
 			case Token.StringToken s -> new LispString(s.value());
+			case Token.CharToken ch -> new LispChar(ch.codePoint());
 			case Token.SymbolToken sym -> readSymbol(sym);
 			case Token.LeftParen ignored -> readList();
 			case Token.Quote ignored -> readQuote();

@@ -112,6 +112,31 @@ final class JvmEmitHelper {
 		return ctx.cp.addClass(ctx.cp.addUtf8("java/math/BigInteger"));
 	}
 
+	/**
+	 * The {@code java/lang/Character} class constant (the char runtime representation).
+	 */
+	static ConstantPool.ClassConstant characterClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Character"));
+	}
+
+	/** A {@code java.lang.Character} method reference. */
+	static ConstantPool.MethodrefConstant characterMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
+		return ctx.cp.addMethodref(characterClass(ctx),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	}
+
+	/**
+	 * Compiles a character literal to its runtime representation, a boxed
+	 * {@code java.lang.Character}. The code point is narrowed to a 16-bit char (the JVM
+	 * char range), matching the BMP coverage of the other backends.
+	 */
+	static void compileCharLiteral(int codePoint, JvmLispCompiler.Ctx ctx) {
+		emitIntConst(ctx, codePoint & 0xFFFF);
+		ctx.emit(Opcode.I2C);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(characterMethod(ctx, "valueOf", "(C)Ljava/lang/Character;").index());
+	}
+
 	/** A {@code java.math.BigInteger} instance-method reference. */
 	static ConstantPool.MethodrefConstant bigIntegerMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
 		return ctx.cp.addMethodref(bigIntegerClass(ctx),

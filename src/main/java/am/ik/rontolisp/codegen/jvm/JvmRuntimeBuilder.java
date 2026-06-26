@@ -153,7 +153,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
 			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
-			ConstantPool.StringConstant slashStr) {
+			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
+			MethodrefConstant charPrin1Method) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -206,9 +207,26 @@ final class JvmRuntimeBuilder {
 		emitU2(code, stringClass.index());
 		code.add(Opcode.ARETURN);
 
+		// if (val instanceof Character) return _charPrin1(((Character)val).charValue());
+		patchBranch(code, ifNotStringPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, characterClass.index());
+		int ifNotCharPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, characterClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, charValue.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, charPrin1Method.index());
+		code.add(Opcode.ARETURN);
+
 		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]
 		// check: a ratio is also an Object[])
-		patchBranch(code, ifNotStringPos, code.size());
+		patchBranch(code, ifNotCharPos, code.size());
 		int ifNotRatioPos = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
 
 		// if (val instanceof Object[])
@@ -257,6 +275,41 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ARETURN);
 
 		return code;
+	}
+
+	/**
+	 * Builds {@code _charPrin1(char) -> String}: the readable {@code #\name} form of a
+	 * character (a standard name for the common non-graphic characters, otherwise the
+	 * bare glyph). Used by {@code _lispToString} (prin1) to print a {@code Character}.
+	 */
+	static List<Integer> buildCharPrin1Body(ConstantPool cp, MethodrefConstant stringConcat,
+			MethodrefConstant stringValueOfChar) {
+		JvmAsm a = new JvmAsm();
+		emitCharNameCase(a, cp, ' ', "#\\Space");
+		emitCharNameCase(a, cp, '\n', "#\\Newline");
+		emitCharNameCase(a, cp, '\t', "#\\Tab");
+		emitCharNameCase(a, cp, '\r', "#\\Return");
+		emitCharNameCase(a, cp, '\f', "#\\Page");
+		emitCharNameCase(a, cp, '\b', "#\\Backspace");
+		emitCharNameCase(a, cp, 0, "#\\Nul");
+		emitCharNameCase(a, cp, 127, "#\\Rubout");
+		// default: "#\".concat(String.valueOf(c))
+		a.ldcString(cp.addString("#\\"));
+		a.iload(0);
+		a.invokestatic(stringValueOfChar);
+		a.invokevirtual(stringConcat);
+		a.areturn();
+		return a.finish();
+	}
+
+	private static void emitCharNameCase(JvmAsm a, ConstantPool cp, int ch, String result) {
+		int next = a.label();
+		a.iload(0);
+		a.iconst(ch);
+		a.branch(Opcode.IF_ICMPNE, next);
+		a.ldcString(cp.addString(result));
+		a.areturn();
+		a.bind(next);
 	}
 
 	// Emits the ratio branch of _lispToString/_lispToDisplayString: if the value in
@@ -402,7 +455,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant consToDisplayStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
-			ConstantPool.StringConstant slashStr) {
+			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
+			MethodrefConstant stringValueOfChar) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -479,9 +533,27 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
 
+		// if (val instanceof Character) return
+		// String.valueOf(((Character)val).charValue());
+		patchBranch(code, ifNotStringPos, code.size());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, characterClass.index());
+		int ifNotCharPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, characterClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, charValue.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, stringValueOfChar.index());
+		code.add(Opcode.ARETURN);
+
 		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]
 		// check: a ratio is also an Object[])
-		patchBranch(code, ifNotStringPos, code.size());
+		patchBranch(code, ifNotCharPos, code.size());
 		int ifNotRatioPos = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
 
 		// if (val instanceof Object[])

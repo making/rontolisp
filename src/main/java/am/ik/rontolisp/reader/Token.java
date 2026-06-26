@@ -71,6 +71,14 @@ public sealed interface Token {
 	record StringToken(String value) implements Token {
 	}
 
+	/**
+	 * Character literal token (e.g., {@code #\a}, {@code #\Space}).
+	 *
+	 * @param codePoint the Unicode code point of the character
+	 */
+	record CharToken(int codePoint) implements Token {
+	}
+
 	/** Dot ({@code .}) token. */
 	record Dot() implements Token {
 	}

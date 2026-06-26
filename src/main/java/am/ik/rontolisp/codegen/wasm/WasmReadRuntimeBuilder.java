@@ -851,20 +851,21 @@ final class WasmReadRuntimeBuilder {
 	static byte[] buildReadBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// ref local: V=0 ; i32 locals: OFF=1, LEN=2
+		// param: FD=0 (i32) ; ref local: V=1 ; i32 locals: OFF=2, LEN=3
 		w.write(2);
 		w.write(1);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
-		final int V = 0, OFF = 1, LEN = 2;
+		final int FD = 0, V = 1, OFF = 2, LEN = 3;
 
 		// Keep reading lines until one contains a datum (blank and comment-only lines
-		// are skipped) or stdin is exhausted (EOF -> nil).
+		// are skipped) or the stream is exhausted (EOF -> nil). FD is 0 (stdin) for
+		// (read); for (read stream) it is the stream's WASI file descriptor.
 		block(w);
 		loop(w);
-		i32(w, 0); // fd = 0 (stdin)
+		getLocal(w, FD); // fd
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
 		setLocal(w, V);

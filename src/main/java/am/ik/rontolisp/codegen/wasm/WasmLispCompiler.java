@@ -315,6 +315,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// type.
 	static final int TYPE_FETCH = TYPE_CLOCK_TIME_GET + 1; // 31
 
+	// Character struct {i32 code}: the runtime representation of a character, distinct
+	// from
+	// an i31 integer so characterp and the accessors can dispatch on it via ref.test.
+	static final int TYPE_CHAR = TYPE_FETCH + 1; // 32
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
@@ -426,7 +431,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
-		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
+		boolean usesRead = programUsesSymbol(program, LispNames.READ)
+				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
 		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.APPLY);
@@ -948,6 +954,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// statusPtr, rhdrPtrOut, rhdrLenOut, bodyPtrOut, bodyLenOut.
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32,
 						Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				// type 32 (TYPE_CHAR): character struct {i32 code}
+				types.addRecGroup(
+						rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))));
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -1013,7 +1022,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_INTERN); // _intern (off, len) -> canonicalOff
 				fnDef.addFunction(TYPE_READ_LINE); // _read_expr () -> value
 				fnDef.addFunction(TYPE_READ_LINE); // _read_list () -> value
-				fnDef.addFunction(TYPE_READ_LINE); // _read () -> value
+				fnDef.addFunction(TYPE_READ_LINE_FD); // _read (i32 fd) -> value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _load (path) -> value
 				// Rational runtime
 				fnDef.addFunction(TYPE_RAT_NEW); // _rat_new
@@ -1490,6 +1499,26 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry slash;
 
+		// Character printing: the "#\" prefix and the standard names for the non-graphic
+		// characters that prin1 spells out (see WasmRuntimeBuilder.emitPrintChar).
+		final StringEntry charPrefix;
+
+		final StringEntry charSpace;
+
+		final StringEntry charNewline;
+
+		final StringEntry charTab;
+
+		final StringEntry charReturn;
+
+		final StringEntry charPage;
+
+		final StringEntry charBackspace;
+
+		final StringEntry charNul;
+
+		final StringEntry charRubout;
+
 		StringTable(int baseOffset) {
 			this.nextOffset = baseOffset;
 			this.nil = addString("nil");
@@ -1502,6 +1531,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.minus = addString("-");
 			this.period = addString(".");
 			this.slash = addString("/");
+			this.charPrefix = addString("#\\");
+			this.charSpace = addString("Space");
+			this.charNewline = addString("Newline");
+			this.charTab = addString("Tab");
+			this.charReturn = addString("Return");
+			this.charPage = addString("Page");
+			this.charBackspace = addString("Backspace");
+			this.charNul = addString("Nul");
+			this.charRubout = addString("Rubout");
 		}
 
 		StringEntry addString(String s) {

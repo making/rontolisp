@@ -806,6 +806,73 @@ public final class LispNames {
 	/** The {@code read} built-in function (interpreter only). */
 	public static final String READ = "read";
 
+	/** The {@code read-from-string} built-in function (parse one form from a string). */
+	public static final String READ_FROM_STRING = "read-from-string";
+
+	/** The {@code parse-integer} built-in function (parse an integer from a string). */
+	public static final String PARSE_INTEGER = "parse-integer";
+
+	// Characters
+
+	/** The {@code char} built-in function (the character at an index of a string). */
+	public static final String CHAR = "char";
+
+	/** The {@code schar} built-in function (a synonym for {@code char}). */
+	public static final String SCHAR = "schar";
+
+	/** The {@code char-code} built-in function (the code point of a character). */
+	public static final String CHAR_CODE = "char-code";
+
+	/**
+	 * The {@code code-char} built-in function (the character with a given code point).
+	 */
+	public static final String CODE_CHAR = "code-char";
+
+	/** The {@code char=} built-in function (character equality). */
+	public static final String CHAR_EQ = "char=";
+
+	/** The {@code char<} built-in function (character less-than by code point). */
+	public static final String CHAR_LT = "char<";
+
+	/**
+	 * The {@code char<=} built-in function (character less-than-or-equal by code point).
+	 */
+	public static final String CHAR_LE = "char<=";
+
+	/** The {@code char-upcase} built-in function (the uppercase form of a character). */
+	public static final String CHAR_UPCASE = "char-upcase";
+
+	/**
+	 * The {@code char-downcase} built-in function (the lowercase form of a character).
+	 */
+	public static final String CHAR_DOWNCASE = "char-downcase";
+
+	/** The {@code characterp} built-in function (true if the argument is a character). */
+	public static final String CHARACTERP = "characterp";
+
+	/**
+	 * The {@code alpha-char-p} built-in function (true if the character is alphabetic).
+	 */
+	public static final String ALPHA_CHAR_P = "alpha-char-p";
+
+	/**
+	 * The {@code digit-char-p} built-in function (the weight of a digit character in the
+	 * given radix, or nil).
+	 */
+	public static final String DIGIT_CHAR_P = "digit-char-p";
+
+	/** The {@code :radix} keyword recognized by {@code parse-integer}. */
+	public static final String RADIX_KEYWORD = ":radix";
+
+	/** The {@code :junk-allowed} keyword recognized by {@code parse-integer}. */
+	public static final String JUNK_ALLOWED_KEYWORD = ":junk-allowed";
+
+	/** The {@code :start} keyword recognized by {@code parse-integer}. */
+	public static final String START_KEYWORD = ":start";
+
+	/** The {@code :end} keyword recognized by {@code parse-integer}. */
+	public static final String END_KEYWORD = ":end";
+
 	/** The {@code eval} built-in function (interpreter only). */
 	public static final String EVAL = "eval";
 

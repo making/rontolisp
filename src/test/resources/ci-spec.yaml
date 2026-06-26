@@ -907,7 +907,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
-      163
+      177
       (fetch list-functions list-macros list-special-forms version)
       ci-intro-fn
       nil
@@ -1314,3 +1314,58 @@ cases:
     expected: |
       1.0
       0.5
+
+  # Character type and accessors, plus string/number parsing. Every value below is
+  # deterministic and identical across the interpreter, JVM and WASM backends.
+  - name: characters-and-parsing-cross-backend
+    source: |
+      (print (char-code #\A))
+      (print (code-char 66))
+      (print (char "hello" 1))
+      (print (characterp #\a))
+      (print (characterp 5))
+      (print (char= #\a #\a))
+      (print (char< #\a #\b #\c))
+      (print (char<= #\a #\a #\b))
+      (print (char-upcase #\a))
+      (print (char-downcase #\Z))
+      (print (alpha-char-p #\x))
+      (print (alpha-char-p #\5))
+      (print (digit-char-p #\7))
+      (print (digit-char-p #\f 16))
+      (print (digit-char-p #\9 8))
+      (print (eql #\a #\a))
+      (print (equal (list #\a #\b) (list #\a #\b)))
+      (print (parse-integer "42"))
+      (print (parse-integer "  -13  "))
+      (print (parse-integer "ff" :radix 16))
+      (print (parse-integer "12abc" :junk-allowed t))
+      (print (read-from-string "(+ 1 2)"))
+      (print (mapcar #'char-upcase (list #\a #\b #\c)))
+      (princ #\a)
+      (terpri)
+    expected: |
+      65
+      #\B
+      #\e
+      t
+      nil
+      t
+      t
+      t
+      #\A
+      #\z
+      t
+      nil
+      7
+      15
+      nil
+      t
+      t
+      42
+      -13
+      255
+      12
+      (+ 1 2)
+      (#\A #\B #\C)
+      a

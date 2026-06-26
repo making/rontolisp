@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -35,6 +36,7 @@ final class JvmExprCompiler {
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileTrue(ctx);
 			case LispString s -> JvmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
 			case LispSymbol sym -> {
 				if (sym.isKeyword()) {
 					JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
@@ -144,6 +146,19 @@ final class JvmExprCompiler {
 				case LispNames.STRING_DOWNCASE -> JvmStringUpcaseCompiler.compileDowncase(cons, ctx, className);
 				case LispNames.STRING_CAPITALIZE -> JvmStringCapitalizeCompiler.compile(cons, ctx, className);
 				case LispNames.SUBSEQ -> JvmSubseqCompiler.compile(cons, ctx, className);
+				case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);
+				case LispNames.CHAR_CODE -> JvmCharCompiler.compileCharCode(cons, ctx, className);
+				case LispNames.CODE_CHAR -> JvmCharCompiler.compileCodeChar(cons, ctx, className);
+				case LispNames.CHAR_UPCASE -> JvmCharCompiler.compileUpcase(cons, ctx, className);
+				case LispNames.CHAR_DOWNCASE -> JvmCharCompiler.compileDowncase(cons, ctx, className);
+				case LispNames.CHARACTERP -> JvmCharCompiler.compileCharacterp(cons, ctx, className);
+				case LispNames.ALPHA_CHAR_P -> JvmCharCompiler.compileAlphaCharP(cons, ctx, className);
+				case LispNames.DIGIT_CHAR_P -> JvmCharCompiler.compileDigitCharP(cons, ctx, className);
+				case LispNames.CHAR_EQ -> JvmCharCompiler.compileEq(cons, ctx, className);
+				case LispNames.CHAR_LT -> JvmCharCompiler.compileLt(cons, ctx, className);
+				case LispNames.CHAR_LE -> JvmCharCompiler.compileLe(cons, ctx, className);
+				case LispNames.PARSE_INTEGER -> JvmParseIntegerCompiler.compile(cons, ctx, className);
+				case LispNames.READ_FROM_STRING -> JvmReadFromStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_EQ -> JvmStringEqCompiler.compileEq(cons, ctx, className);
 				case LispNames.STRING_EQUAL -> JvmStringEqCompiler.compileEqual(cons, ctx, className);
 				case LispNames.STRING_TRIM -> JvmStringTrimCompiler.compileTrim(cons, ctx, className);

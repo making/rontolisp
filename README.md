@@ -219,6 +219,7 @@ square
 | Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
 | Double | `3.14`, `-0.5`, `3,000.50`, `1d0`, `6.02e23` | 64-bit floating-point number |
 | String | `"hello"` | String literal |
+| Character | `#\a`, `#\Space`, `#\Newline` | Character literal (`#\` plus a glyph or a standard name: `Space`, `Newline`, `Tab`, `Return`, `Page`, `Backspace`, `Nul`, `Rubout`). The WASM backend indexes strings by byte, so non-ASCII characters are out of scope there |
 | Symbol | `x`, `foo` | Identifier |
 | Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
 | Nil | `nil` | False / empty list |
@@ -458,7 +459,17 @@ compiled output (see [Compiled `eval` limitations](#compiled-eval-limitations)).
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)` | Open a file and return a stream. The direction must be the literal `:input` (default, read) or `:output` (create/truncate, write) |
 | `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
-| `read` | `(read)` | Read one S-expression from stdin (all three backends). `nil` on EOF |
+| `read` | `(read)`, `(read stream)` | Read one S-expression from stdin (or from an input stream opened by `open`/`with-open-file`) (all three backends). `nil` on EOF |
+| `read-from-string` | `(read-from-string "(+ 1 2)")` | Parse one datum from a string (all three backends). The optional `eof-error-p`/`eof-value` and `:start`/`:end` arguments are not supported |
+| `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | Parse an integer from a string. Supports `:radix` and `:junk-allowed` on all backends; `:start`/`:end` are interpreter-only. Without `:junk-allowed`, trailing non-whitespace is an error |
+| `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index |
+| `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
+| `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |
+| `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t` (variadic comparison by code point) |
+| `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A` (ASCII case folding in the WASM backend) |
+| `characterp` | `(characterp #\a)` | `t` |
+| `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil` (ASCII letters in the WASM backend) |
+| `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
 | `null` | `(null nil)` | `t` |
@@ -650,6 +661,8 @@ The WASM reader has a hand-written parser and is narrower:
 - **Symbol interning is runtime-backed.** Symbols that appear in the compiled program resolve to the same offset the compiled `eval` uses; symbols seen only at runtime (e.g. a lambda parameter inside a loaded file) are interned in a runtime table so repeated occurrences stay consistent.
 - **`load` requires a preopened directory.** It opens the file via WASI `path_open` relative to the first preopened directory (fd 3), so run with `--dir`.
 
+`read-from-string` reuses the same runtime reader, so on the compiled backends it parses the same value kinds as `read` (and `#\` character literals parsed at runtime are out of scope on both compilers — character literals written directly in source are compiled fully). `parse-integer` is independent of the reader and works on all three backends; its `:start`/`:end` keywords are interpreter-only, and on the compiled backends the keyword names must be literal.
+
 Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
 
 #### Math function backend support
@@ -702,7 +715,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 163
+; => 177
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

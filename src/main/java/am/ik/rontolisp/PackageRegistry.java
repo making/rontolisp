@@ -73,7 +73,10 @@ public final class PackageRegistry {
 			LispNames.MAPLIST, LispNames.MAPCON, LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE,
 			LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE,
 			LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-			LispNames.GETENV);
+			LispNames.GETENV, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR,
+			LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE,
+			LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P,
+			LispNames.DIGIT_CHAR_P);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

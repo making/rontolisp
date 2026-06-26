@@ -120,6 +120,17 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.ELSE);
 
 		// else (ref.eq already false): eql base case for value types.
+		// both characters -> code points equal
+		refTest(w, 0, WasmLispCompiler.TYPE_CHAR);
+		refTest(w, 1, WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		charField(w, 0);
+		charField(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.ELSE);
+
 		// both floats -> f64 fields equal
 		refTest(w, 0, WasmLispCompiler.TYPE_FLOAT);
 		refTest(w, 1, WasmLispCompiler.TYPE_FLOAT);
@@ -150,11 +161,21 @@ final class WasmRuntimeBuilder {
 		emitStringOffsetEq(w);
 		w.write(Instruction.END); // end ratio if
 		w.write(Instruction.END); // end float if
+		w.write(Instruction.END); // end char if
 		w.write(Instruction.END); // end both-cons if
 		w.write(Instruction.END); // end ref.eq if
 
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	private static void charField(WasmWriter w, int local) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeSignedLeb128(0);
 	}
 
 	// 1 if both locals are TYPE_STRING structs with the same data offset, else 0.
@@ -1065,6 +1086,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check character struct -> #\name
+		emitPrintChar(w, st, true);
+
 		// Check string struct
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
@@ -1271,6 +1295,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check character struct -> bare glyph
+		emitPrintChar(w, st, false);
+
 		// Check string struct - strip quotes if leading '"'
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
@@ -1439,6 +1466,81 @@ final class WasmRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Emits the character branch shared by _print_val (readable = true, prints the
+	// #\name form) and _princ_val (readable = false, prints the bare glyph). The value is
+	// in param 0; i32 local slot 2 (declared in both bodies) is reused for the code
+	// point.
+	private static void emitPrintChar(WasmWriter w, WasmLispCompiler.StringTable st, boolean readable) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.IF, 0x40);
+		// code = char.code -> slot 2
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+		if (readable) {
+			// "#\" prefix, then the standard name (for the non-graphic characters) or the
+			// bare glyph.
+			writeStr(w, st.charPrefix);
+			int[][] names = { { ' ', 0 }, { '\n', 1 }, { '\t', 2 }, { '\r', 3 }, { '\f', 4 }, { '\b', 5 }, { 0, 6 },
+					{ 127, 7 } };
+			WasmLispCompiler.StringTable.StringEntry[] entries = { st.charSpace, st.charNewline, st.charTab,
+					st.charReturn, st.charPage, st.charBackspace, st.charNul, st.charRubout };
+			for (int[] n : names) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeSignedLeb128(2);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(n[0]);
+				w.write(Instruction.I32_EQ);
+				w.write(Instruction.IF, 0x40);
+				writeStr(w, entries[n[1]]);
+				w.write(Instruction.ELSE);
+			}
+			emitGlyph(w);
+			for (int i = 0; i < names.length; i++) {
+				w.write(Instruction.END);
+			}
+		}
+		else {
+			emitGlyph(w);
+		}
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	// Writes the single byte in i32 local slot 2 to stdout (via the print scratch
+	// buffer).
+	private static void emitGlyph(WasmWriter w) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+	}
+
+	private static void writeStr(WasmWriter w, WasmLispCompiler.StringTable.StringEntry entry) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(entry.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(entry.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 	}
 
 	// Emits the ratio branch shared by _print_val and _princ_val: if the value in

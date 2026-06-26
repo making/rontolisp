@@ -1,13 +1,17 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.List;
+
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code read} built-in. Invokes the {@code _read} runtime helper, which
- * parses one S-expression from a line of stdin into the runtime value representation.
+ * Compiles the {@code read} built-in. Without an argument it invokes the {@code _read}
+ * runtime helper, which parses one S-expression from a line of stdin; with a
+ * stream-handle argument it parses one datum from that open input stream via
+ * {@code _readStream}.
  */
 final class JvmReadCompiler {
 
@@ -15,10 +19,20 @@ final class JvmReadCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8("_read");
-		Utf8Constant descUtf8 = ctx.cp.addUtf8("()Ljava/lang/Object;");
-		MethodrefConstant readRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
+		List<LispVal> parts = cons.toList();
+		MethodrefConstant readRef;
+		if (parts.size() == 1) {
+			readRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+					ctx.cp.addNameAndType(ctx.cp.addUtf8("_read"), ctx.cp.addUtf8("()Ljava/lang/Object;")));
+		}
+		else if (parts.size() == 2) {
+			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+			readRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
+					ctx.cp.addUtf8("_readStream"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
+		}
+		else {
+			throw new UnsupportedOperationException("read expects 0 or 1 arguments, got " + (parts.size() - 1));
+		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(readRef.index());
 	}

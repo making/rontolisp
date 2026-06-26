@@ -54,6 +54,12 @@ final class WasmExprCompiler {
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
 			case LispString s -> WasmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case am.ik.rontolisp.LispChar c -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(c.codePoint());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+			}
 			case LispSymbol sym -> {
 				if (sym.isKeyword()) {
 					WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
@@ -154,6 +160,19 @@ final class WasmExprCompiler {
 				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler.compileDowncase(cons, ctx);
 				case LispNames.STRING_CAPITALIZE -> WasmStringCapitalizeCompiler.compile(cons, ctx);
 				case LispNames.SUBSEQ -> WasmSubseqCompiler.compile(cons, ctx);
+				case LispNames.CHAR, LispNames.SCHAR -> WasmCharCompiler.compileChar(cons, ctx);
+				case LispNames.CHAR_CODE -> WasmCharCompiler.compileCharCode(cons, ctx);
+				case LispNames.CODE_CHAR -> WasmCharCompiler.compileCodeChar(cons, ctx);
+				case LispNames.CHARACTERP -> WasmCharCompiler.compileCharacterp(cons, ctx);
+				case LispNames.CHAR_UPCASE -> WasmCharCompiler.compileUpcase(cons, ctx);
+				case LispNames.CHAR_DOWNCASE -> WasmCharCompiler.compileDowncase(cons, ctx);
+				case LispNames.ALPHA_CHAR_P -> WasmCharCompiler.compileAlphaCharP(cons, ctx);
+				case LispNames.DIGIT_CHAR_P -> WasmCharCompiler.compileDigitCharP(cons, ctx);
+				case LispNames.CHAR_EQ -> WasmCharCompiler.compileEq(cons, ctx);
+				case LispNames.CHAR_LT -> WasmCharCompiler.compileLt(cons, ctx);
+				case LispNames.CHAR_LE -> WasmCharCompiler.compileLe(cons, ctx);
+				case LispNames.PARSE_INTEGER -> WasmParseIntegerCompiler.compile(cons, ctx);
+				case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);
 				case LispNames.STRING_EQ -> WasmStringEqCompiler.compileEq(cons, ctx);
 				case LispNames.STRING_EQUAL -> WasmStringEqCompiler.compileEqual(cons, ctx);
 				case LispNames.STRING_TRIM -> WasmStringTrimCompiler.compileTrim(cons, ctx);

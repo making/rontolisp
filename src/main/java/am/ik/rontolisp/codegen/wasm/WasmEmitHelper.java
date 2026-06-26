@@ -221,6 +221,34 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.ELSE);
+		// Both characters: compare code points (char structs are value objects)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.ELSE);
 		// Both floats: compare f64 fields (float structs are value objects)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(aSlot);
@@ -285,6 +313,7 @@ final class WasmEmitHelper {
 		emitStringEqOrZero(ctx, aSlot, bSlot);
 		ctx.writer.write(Instruction.END); // end ratio if
 		ctx.writer.write(Instruction.END); // end float if
+		ctx.writer.write(Instruction.END); // end char if
 		ctx.writer.write(Instruction.END); // end ref.eq if
 	}
 

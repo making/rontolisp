@@ -2436,12 +2436,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("163");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("177");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("163");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("177");
 	}
 
 	@Test
@@ -2558,6 +2558,68 @@ class JvmLispCompilerTest {
 	@Test
 	void compileFetchRejectsWrongArgCount() {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:fetch)")).isInstanceOf(UnsupportedOperationException.class);
+	}
+
+	// Characters and string/number parsing
+
+	@Test
+	void compileCharAccessors() throws Exception {
+		assertThat(compileAndRun("(print (char-code #\\A)) (print (code-char 66)) (print (char \"hello\" 1))"))
+			.isEqualTo("65\n#\\B\n#\\e");
+	}
+
+	@Test
+	void compileCharCaseAndPredicates() throws Exception {
+		assertThat(compileAndRun("""
+				(print (char-upcase #\\a))
+				(print (char-downcase #\\Z))
+				(print (characterp #\\a))
+				(print (characterp 5))
+				(print (alpha-char-p #\\x))
+				(print (alpha-char-p #\\5))
+				(print (digit-char-p #\\7))
+				(print (digit-char-p #\\f 16))
+				(print (digit-char-p #\\9 8))
+				""")).isEqualTo("#\\A\n#\\z\nt\nnil\nt\nnil\n7\n15\nnil");
+	}
+
+	@Test
+	void compileCharComparisonsVariadic() throws Exception {
+		assertThat(compileAndRun(
+				"(print (char= #\\a #\\a)) (print (char< #\\a #\\b #\\c)) (print (char<= #\\a #\\a #\\b)) (print (char< #\\b #\\a))"))
+			.isEqualTo("t\nt\nt\nnil");
+	}
+
+	@Test
+	void compileCharEqualityAndFirstClass() throws Exception {
+		assertThat(compileAndRun("""
+				(print (eql #\\a #\\a))
+				(print (equal (list #\\a #\\b) (list #\\a #\\b)))
+				(print (mapcar #'char-upcase (list #\\a #\\b #\\c)))
+				""")).isEqualTo("t\nt\n(#\\A #\\B #\\C)");
+	}
+
+	@Test
+	void compileCharPrinting() throws Exception {
+		assertThat(compileAndRun("(prin1 #\\a) (prin1 #\\Space) (prin1 #\\Newline) (princ #\\!)"))
+			.isEqualTo("#\\a#\\Space#\\Newline!");
+	}
+
+	@Test
+	void compileParseInteger() throws Exception {
+		assertThat(compileAndRun("""
+				(print (parse-integer "42"))
+				(print (parse-integer "  -13  "))
+				(print (parse-integer "ff" :radix 16))
+				(print (parse-integer "12abc" :junk-allowed t))
+				(print (parse-integer "xyz" :junk-allowed t))
+				""")).isEqualTo("42\n-13\n255\n12\nnil");
+	}
+
+	@Test
+	void compileReadFromString() throws Exception {
+		assertThat(compileAndRun("(print (read-from-string \"(+ 1 2)\")) (print (read-from-string \"42\"))"))
+			.isEqualTo("(+ 1 2)\n42");
 	}
 
 }

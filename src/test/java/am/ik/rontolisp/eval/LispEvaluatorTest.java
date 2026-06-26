@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
@@ -2398,8 +2399,10 @@ class LispEvaluatorTest {
 					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
+			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
+					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
 			.isSorted()
-			.hasSize(163);
+			.hasSize(177);
 	}
 
 	@Test
@@ -2602,6 +2605,114 @@ class LispEvaluatorTest {
 	@Test
 	void fetchRejectsWrongArgCount() {
 		assertThatThrownBy(() -> eval("(rontolisp:fetch)")).hasMessageContaining("fetch");
+	}
+
+	// Characters and string/number parsing
+
+	private String capture(String input) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(input)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString();
+	}
+
+	@Test
+	void evalCharLiteralCodeRoundTrip() {
+		assertThat(eval("#\\a")).isEqualTo(new LispChar('a'));
+		assertThat(eval("(char-code #\\A)")).isEqualTo(new LispInteger(65));
+		assertThat(eval("(code-char 66)")).isEqualTo(new LispChar('B'));
+	}
+
+	@Test
+	void evalCharNamedLiterals() {
+		assertThat(eval("(char-code #\\Space)")).isEqualTo(new LispInteger(32));
+		assertThat(eval("(char-code #\\Newline)")).isEqualTo(new LispInteger(10));
+		assertThat(eval("(char-code #\\Tab)")).isEqualTo(new LispInteger(9));
+		assertThat(eval("(char-code #\\()")).isEqualTo(new LispInteger('('));
+	}
+
+	@Test
+	void evalCharIndexingAndCaseFolding() {
+		assertThat(eval("(char \"hello\" 1)")).isEqualTo(new LispChar('e'));
+		assertThat(eval("(schar \"hello\" 0)")).isEqualTo(new LispChar('h'));
+		assertThat(eval("(char-upcase #\\a)")).isEqualTo(new LispChar('A'));
+		assertThat(eval("(char-downcase #\\Z)")).isEqualTo(new LispChar('z'));
+	}
+
+	@Test
+	void evalCharComparisons() {
+		assertThat(eval("(char= #\\a #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char= #\\a #\\b)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(char< #\\a #\\b #\\c)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char<= #\\a #\\a #\\b)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char< #\\b #\\a)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalCharPredicates() {
+		assertThat(eval("(characterp #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(characterp 5)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(alpha-char-p #\\x)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(alpha-char-p #\\5)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(digit-char-p #\\7)")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(digit-char-p #\\f 16)")).isEqualTo(new LispInteger(15));
+		assertThat(eval("(digit-char-p #\\9 8)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalCharEquality() {
+		assertThat(eval("(eql #\\a #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(eql #\\a #\\b)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(equal (list #\\a #\\b) (list #\\a #\\b))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalCharPrinting() {
+		// prin1 prints the readable #\name form; princ prints the bare glyph.
+		assertThat(capture("(prin1 #\\a)")).isEqualTo("#\\a");
+		assertThat(capture("(prin1 #\\Space)")).isEqualTo("#\\Space");
+		assertThat(capture("(prin1 #\\Newline)")).isEqualTo("#\\Newline");
+		assertThat(capture("(princ #\\a)")).isEqualTo("a");
+		assertThat(capture("(princ #\\Space)")).isEqualTo(" ");
+	}
+
+	@Test
+	void evalParseInteger() {
+		assertThat(eval("(parse-integer \"42\")")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(parse-integer \"  -13  \")")).isEqualTo(new LispInteger(-13));
+		assertThat(eval("(parse-integer \"ff\" :radix 16)")).isEqualTo(new LispInteger(255));
+		assertThat(eval("(parse-integer \"12abc\" :junk-allowed t)")).isEqualTo(new LispInteger(12));
+		assertThat(eval("(parse-integer \"xyz\" :junk-allowed t)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(parse-integer \"x9x\" :start 1 :end 2)")).isEqualTo(new LispInteger(9));
+	}
+
+	@Test
+	void evalParseIntegerRejectsJunkByDefault() {
+		assertThatThrownBy(() -> eval("(parse-integer \"12abc\")")).hasMessageContaining("parse-integer");
+		assertThatThrownBy(() -> eval("(parse-integer \"\")")).hasMessageContaining("parse-integer");
+	}
+
+	@Test
+	void evalReadFromString() {
+		assertThat(eval("(read-from-string \"(+ 1 2)\")")).isEqualTo(new LispCons(new LispSymbol("+"),
+				new LispCons(new LispInteger(1), new LispCons(new LispInteger(2), LispNil.INSTANCE))));
+		assertThat(eval("(read-from-string \"42\")")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(read-from-string \"foo\")")).isEqualTo(new LispSymbol("foo"));
+	}
+
+	@Test
+	void readStreamRoundTrip(@TempDir Path tempDir) {
+		String file = tempDir.resolve("data.txt").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line (prin1-to-string (list 10 20 30)) out)
+				  (write-line (prin1-to-string 99) out))
+				(with-open-file (in "%s")
+				  (list (read in) (read in) (read in)))
+				""".formatted(file, file));
+		assertThat(result.print()).isEqualTo("((10 20 30) 99 nil)");
 	}
 
 }

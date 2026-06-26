@@ -51,6 +51,9 @@ public final class LispLexer {
 				tokens.add(new Token.FunctionQuote());
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
+				tokens.add(readChar());
+			}
 			else if (c == '.') {
 				if (this.pos + 1 < this.input.length() && !isSymbolChar(this.input.charAt(this.pos + 1))) {
 					tokens.add(new Token.Dot());
@@ -206,6 +209,46 @@ public final class LispLexer {
 
 	private static String stripGrouping(String number) {
 		return number.indexOf(',') < 0 ? number : number.replace(",", "");
+	}
+
+	// Reads a #\ character literal: a single character (#\a, #\(, #\Space-the-glyph)
+	// or, when the first character is a letter and more letters follow, a character
+	// name (#\Space, #\Newline, ...). The first character after #\ is always taken
+	// literally even if it is whitespace or a delimiter.
+	private Token.CharToken readChar() {
+		this.pos += 2; // skip "#\"
+		if (this.pos >= this.input.length()) {
+			throw new LispReadException("Unexpected end of input after #\\");
+		}
+		int start = this.pos;
+		char first = this.input.charAt(this.pos);
+		this.pos++;
+		// A multi-character name only follows an alphabetic first character.
+		if (Character.isLetter(first)) {
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+		}
+		String token = this.input.substring(start, this.pos);
+		if (token.length() == 1) {
+			return new Token.CharToken(first);
+		}
+		return new Token.CharToken(charByName(token));
+	}
+
+	private static int charByName(String name) {
+		return switch (name.toLowerCase(java.util.Locale.ROOT)) {
+			case "space" -> ' ';
+			case "newline", "linefeed", "lf" -> '\n';
+			case "tab" -> '\t';
+			case "return", "cr" -> '\r';
+			case "page" -> '\f';
+			case "backspace" -> '\b';
+			case "nul", "null" -> 0;
+			case "rubout", "delete", "del" -> 127;
+			case "escape", "altmode", "esc" -> 27;
+			default -> throw new LispReadException("Unknown character name: #\\" + name);
+		};
 	}
 
 	private Token.SymbolToken readSymbol() {

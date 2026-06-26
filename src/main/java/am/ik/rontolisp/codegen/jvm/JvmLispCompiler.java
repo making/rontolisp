@@ -138,6 +138,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
 		MethodrefConstant objectEquals = cp.addMethodref(objectClass,
 				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		// Character runtime representation references (used by _lispToString /
+		// _lispToDisplayString to print the #\name form and the bare glyph,
+		// respectively).
+		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
+		MethodrefConstant charValue = cp.addMethodref(characterClass,
+				cp.addNameAndType(cp.addUtf8("charValue"), cp.addUtf8("()C")));
+		MethodrefConstant stringValueOfChar = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(C)Ljava/lang/String;")));
+		Utf8Constant charPrin1Name = cp.addUtf8("_charPrin1");
+		Utf8Constant charPrin1Desc = cp.addUtf8("(C)Ljava/lang/String;");
+		MethodrefConstant charPrin1Method = cp.addMethodref(thisClass, cp.addNameAndType(charPrin1Name, charPrin1Desc));
 		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
 		MethodrefConstant mathAbsLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
@@ -265,7 +276,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
-		boolean usesRead = programUsesSymbol(program, LispNames.READ) || usesLoad;
+		boolean usesRead = programUsesSymbol(program, LispNames.READ)
+				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
 
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
 		// every arity up to the maximum callable must have a dispatch method. The apply
@@ -524,13 +536,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
-				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr);
+				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
-				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr);
+				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
+				characterClass, charValue, stringValueOfChar);
+		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
 				dotStr, ratioArrayClass);
@@ -562,6 +576,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmFetchRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
 						stringLength, stringSubstring, stringConcat)
 				: null;
+
+		// parse-integer runtime helper, emitted only when the program uses parse-integer.
+		boolean usesParseInteger = programUsesSymbol(program, LispNames.PARSE_INTEGER);
+		final JvmParseIntegerRuntimeBuilder.@Nullable ParseIntMethod parseIntMethodBody = usesParseInteger
+				? JvmParseIntegerRuntimeBuilder.build(cp, stringClass, longClass, longValueOf) : null;
 
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
@@ -716,6 +735,17 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
+				if (parseIntMethodBody != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, parseIntMethodBody.name(),
+							parseIntMethodBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(parseIntMethodBody.maxStack())
+									.writeU2(parseIntMethodBody.maxLocals())
+									.writeCode((Object[]) parseIntMethodBody.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -752,6 +782,14 @@ public final class JvmLispCompiler implements LispCompiler {
 							attr.writeU2(3)
 								.writeU2(5)
 								.writeCode((Object[]) ctdsCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(3)
+								.writeU2(1)
+								.writeCode((Object[]) charPrin1Code.toArray(new Integer[0]))
 								.writeU2(0)
 								.writeU2(0);
 						})));
@@ -889,8 +927,20 @@ public final class JvmLispCompiler implements LispCompiler {
 			default -> name;
 		};
 		// Package-qualified names (e.g. rontolisp:foo) cannot contain ':' in a JVM method
-		// name; map it so user-defined symbols of non-default packages compile.
-		return mangled.indexOf(':') >= 0 ? mangled.replace(":", "$colon") : mangled;
+		// name; map it so user-defined symbols of non-default packages compile. The same
+		// applies to any residual '<'/'>' the exact-match switch above did not consume
+		// (e.g. the char</char<= wrapper names), which the JVM reserves for
+		// <init>/<clinit>.
+		if (mangled.indexOf(':') >= 0) {
+			mangled = mangled.replace(":", "$colon");
+		}
+		if (mangled.indexOf('<') >= 0) {
+			mangled = mangled.replace("<", "$lt");
+		}
+		if (mangled.indexOf('>') >= 0) {
+			mangled = mangled.replace(">", "$gt");
+		}
+		return mangled;
 	}
 
 	record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
