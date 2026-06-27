@@ -658,6 +658,12 @@ public final class LispNames {
 	public static final String PROG1 = "prog1";
 
 	/**
+	 * The {@code time} macro (evaluate a form, print the elapsed real time to standard
+	 * output, and return the form's value).
+	 */
+	public static final String TIME = "time";
+
+	/**
 	 * The {@code prog2} macro (evaluate the forms in order and return the value of the
 	 * second).
 	 */

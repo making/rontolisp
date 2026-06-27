@@ -1041,7 +1041,7 @@ class ReadmeExamplesTest {
 					(print (rontolisp:list-functions :rontolisp))
 					""");
 			assertThat(output.lines().toList()).containsExactly(
-					"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)",
+					"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)",
 					"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)",
 					"186", "(square)", "(fetch list-functions list-macros list-special-forms version)");
 		}

@@ -77,6 +77,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void timeReportsElapsedAndReturnsValue() throws Exception {
+		// On WASM get-internal-real-time is a float, so the elapsed reads as float ms.
+		String output = compileAndRun("(print (time (+ 1 2)))");
+		assertThat(output).contains("; Elapsed real time: ").contains(" ms").endsWith("3");
+	}
+
+	@Test
+	void componentTimeReportsElapsedAndReturnsValue() throws Exception {
+		String output = compileAndRunComponent("(print (time (+ 1 2)))");
+		assertThat(output).contains("; Elapsed real time: ").contains(" ms").endsWith("3");
+	}
+
+	@Test
 	void componentPrintsString() throws Exception {
 		assertThat(compileAndRunComponent("(print \"hello\")")).isEqualTo("\"hello\"");
 	}
@@ -2558,7 +2571,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
 	}
 
 	@Test

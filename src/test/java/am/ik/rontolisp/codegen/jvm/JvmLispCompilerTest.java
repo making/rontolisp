@@ -81,6 +81,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTime() throws Exception {
+		// time prints the elapsed real time and returns the form's value (here printed).
+		String output = compileAndRun("(print (time (+ 1 2)))");
+		assertThat(output).contains("; Elapsed real time: ").contains(" ms").endsWith("3");
+	}
+
+	@Test
 	void compileAndRunDoStar() throws Exception {
 		assertThat(compileAndRun("(print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))")).isEqualTo("720");
 	}
@@ -2448,7 +2455,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
 	}
 
 	@Test

@@ -400,6 +400,54 @@ public final class LispMacroExpander {
 
 	private static final String PROG1_RESULT_VAR = "__prog1_result";
 
+	private static final String TIME_START_VAR = "__time_start";
+
+	private static final String TIME_RESULT_VAR = "__time_result";
+
+	/**
+	 * Expands (time form) into a let/progn that records the real time before and after
+	 * evaluating {@code form}, prints the elapsed milliseconds to standard output, and
+	 * returns the form's value.
+	 *
+	 * <pre>
+	 * (time form) ->
+	 * (let ((__time_start (get-internal-real-time)))
+	 *   (let ((__time_result form))
+	 *     (progn
+	 *       (princ "; Elapsed real time: ")
+	 *       (princ (- (get-internal-real-time) __time_start))
+	 *       (princ " ms")
+	 *       (terpri)
+	 *       __time_result)))
+	 * </pre>
+	 *
+	 * The elapsed value is an integer of milliseconds on the interpreter and JVM backends
+	 * and a float of milliseconds on WASM (where {@code get-internal-real-time} returns a
+	 * float).
+	 * @param cons the time expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandTime(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal form = parts.get(1);
+		LispSymbol startSym = new LispSymbol(TIME_START_VAR);
+		LispSymbol resultSym = new LispSymbol(TIME_RESULT_VAR);
+		// (- (get-internal-real-time) __time_start)
+		LispVal nowCall = listToCons(List.of(new LispSymbol(LispNames.GET_INTERNAL_REAL_TIME)));
+		LispVal elapsed = listToCons(List.of(new LispSymbol(LispNames.SUB), nowCall, startSym));
+		// (progn (princ ...) (princ elapsed) (princ " ms") (terpri) __time_result)
+		LispVal report = makeProgn(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.PRINC), new LispString("; Elapsed real time: "))),
+						listToCons(List.of(new LispSymbol(LispNames.PRINC), elapsed)),
+						listToCons(List.of(new LispSymbol(LispNames.PRINC), new LispString(" ms"))),
+						listToCons(List.of(new LispSymbol(LispNames.TERPRI))), resultSym));
+		// (let ((__time_result form)) report)
+		LispVal inner = makeLet(TIME_RESULT_VAR, form, report);
+		// (let ((__time_start (get-internal-real-time))) inner)
+		LispVal startCall = listToCons(List.of(new LispSymbol(LispNames.GET_INTERNAL_REAL_TIME)));
+		return makeLet(TIME_START_VAR, startCall, inner);
+	}
+
 	/**
 	 * Expands (do ((var init [step])...) (end-test result...) body...) into a let/while
 	 * loop wrapped in a {@code %block} so that {@code return} exits it.

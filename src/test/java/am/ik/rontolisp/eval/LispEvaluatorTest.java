@@ -390,6 +390,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTimeReturnsValueAndReportsElapsed() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(time (+ 1 2))"));
+		// time returns the form's value...
+		assertThat(result).isEqualTo(new LispInteger(3));
+		// ...and prints the elapsed real time to standard output.
+		assertThat(baos.toString()).contains("; Elapsed real time: ").contains(" ms");
+	}
+
+	@Test
 	void evalPrin1() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
@@ -2377,7 +2388,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
 	}
 
 	@Test

@@ -367,6 +367,8 @@ public final class LispEvaluator {
 					throw new LispReturnSignal(evalReturnValue(cons, env));
 				case LispNames.PROG1:
 					return eval(LispMacroExpander.expandProg1(cons), env);
+				case LispNames.TIME:
+					return eval(LispMacroExpander.expandTime(cons), env);
 				case LispNames.UNLESS:
 					return eval(LispMacroExpander.expandUnless(cons), env);
 				case LispNames.ONE_PLUS:

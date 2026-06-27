@@ -336,6 +336,7 @@ with `#'name`, `(function name)` or `(symbol-function 'name)`. See
 | `do*` | `(do* ((var init step?)...) (end-test result...) body...)` | Like `do` but bindings and steps are sequential (`let*`-style): each init/step form sees the variables already updated this iteration |
 | `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
 | `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
+| `time` | `(time form)` | Evaluate `form`, print the elapsed real time to standard output (`; Elapsed real time: N ms`), and return the form's value. `N` is an integer of milliseconds on the interpreter/JVM and a float of milliseconds on WASM |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | Dispatch on the type of `x`. Supported type names: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom` (plus `t`/`otherwise`). Returns nil if nothing matches |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | Exhaustive `typecase`: no default clause, and an object whose type matches no clause signals an `error` |
@@ -777,7 +778,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
+; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
