@@ -69,6 +69,7 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispCons cons -> compileCons(cons, ctx);
+			case am.ik.rontolisp.LispArray array -> WasmQuoteCompiler.compileLiteralArray(array, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}

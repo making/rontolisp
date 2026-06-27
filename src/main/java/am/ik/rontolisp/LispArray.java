@@ -38,6 +38,14 @@ public final class LispArray implements LispVal {
 	}
 
 	/**
+	 * Returns the flat row-major backing store.
+	 * @return the backing data (length = product of dimensions)
+	 */
+	public LispVal[] data() {
+		return this.data;
+	}
+
+	/**
 	 * Returns the element at the given subscripts.
 	 * @param subscripts the indices (one per dimension)
 	 * @return the stored element
@@ -72,7 +80,52 @@ public final class LispArray implements LispVal {
 
 	@Override
 	public String print() {
-		return "#<ARRAY>";
+		return render(LispVal::print);
+	}
+
+	@Override
+	public String display() {
+		return render(LispVal::display);
+	}
+
+	// Renders the readable vector/array syntax: a rank-1 array as #(e1 e2 ...) and a
+	// rank-2 array as #2A((row) (row) ...). Each element is rendered with the supplied
+	// function (print for prin1, display for princ), so princ propagates to the elements
+	// the way Common Lisp's *print-escape* does.
+	private String render(java.util.function.Function<LispVal, String> renderElement) {
+		StringBuilder sb = new StringBuilder();
+		if (this.dimensions.length == 1) {
+			sb.append("#(");
+			for (int i = 0; i < this.data.length; i++) {
+				if (i > 0) {
+					sb.append(' ');
+				}
+				sb.append(renderElement.apply(elementOrNil(i)));
+			}
+			return sb.append(')').toString();
+		}
+		int rows = this.dimensions[0];
+		int cols = this.dimensions[1];
+		sb.append("#2A(");
+		for (int i = 0; i < rows; i++) {
+			if (i > 0) {
+				sb.append(' ');
+			}
+			sb.append('(');
+			for (int j = 0; j < cols; j++) {
+				if (j > 0) {
+					sb.append(' ');
+				}
+				sb.append(renderElement.apply(elementOrNil(i * cols + j)));
+			}
+			sb.append(')');
+		}
+		return sb.append(')').toString();
+	}
+
+	private LispVal elementOrNil(int flat) {
+		LispVal element = this.data[flat];
+		return element == null ? LispNil.INSTANCE : element;
 	}
 
 }

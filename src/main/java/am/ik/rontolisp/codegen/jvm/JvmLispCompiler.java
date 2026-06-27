@@ -565,22 +565,45 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
 				thisClass, objectClass, objectArrayClass, longValueOf, lispToStringMethod) : List.of();
 
-		// Build the array runtime helpers, only when the program uses arrays.
+		// Build the array runtime helpers, only when the program uses arrays. Includes
+		// the
+		// two array-printing helpers (_arrayToString / _arrayToDisplayString) so a
+		// literal
+		// or make-array result prints as #(...) / #2A(...).
 		boolean usesArrays = programUsesAnyArrayOp(program);
-		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods = usesArrays
-				? JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass) : List.of();
+		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
+		if (usesArrays) {
+			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
+					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass));
+			built
+				.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod));
+			arrayMethods = built;
+		}
+		else {
+			arrayMethods = List.of();
+		}
+		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
+		MethodrefConstant arrayToStringMethod = usesArrays
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING),
+						cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING_DESC)))
+				: null;
+		MethodrefConstant arrayToDisplayStringMethod = usesArrays
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.TO_DISPLAY_STRING),
+						cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING_DESC)))
+				: null;
 
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
-				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method);
+				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
+				arrayListClassForPrint, arrayToStringMethod);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
-				characterClass, charValue, stringValueOfChar);
+				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -923,7 +946,30 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private static boolean programUsesAnyArrayOp(List<LispVal> program) {
 		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.AREF)
-				|| programUsesSymbol(program, LispNames.ASET);
+				|| programUsesSymbol(program, LispNames.ASET) || programContainsArrayLiteral(program);
+	}
+
+	// True when a self-evaluating array literal (#(...)) appears anywhere in the program,
+	// so the array runtime helpers (used to print it) are emitted even without an
+	// explicit
+	// make-array/aref call.
+	private static boolean programContainsArrayLiteral(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (containsArrayLiteral(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean containsArrayLiteral(LispVal val) {
+		if (val instanceof am.ik.rontolisp.LispArray) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
+		}
+		return false;
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {

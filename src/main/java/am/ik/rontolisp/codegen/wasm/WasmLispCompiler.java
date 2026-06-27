@@ -1571,6 +1571,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry funcStr;
 
+		// Vector/array literal printing: the "#(" prefix for rank-1 and "#2A(" for
+		// rank-2.
+		final StringEntry vecPrefix;
+
+		final StringEntry vec2Prefix;
+
 		final StringEntry minus;
 
 		final StringEntry period;
@@ -1606,6 +1612,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dot = addString(" . ");
 			this.newline = addString("\n");
 			this.funcStr = addString("#<function>");
+			this.vecPrefix = addString("#(");
+			this.vec2Prefix = addString("#2A(");
 			this.minus = addString("-");
 			this.period = addString(".");
 			this.slash = addString("/");

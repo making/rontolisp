@@ -47,6 +47,12 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String ASET2_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String TO_STRING = "_arrayToString";
+
+	static final String TO_DISPLAY_STRING = "_arrayToDisplayString";
+
+	static final String TO_STRING_DESC = "(Ljava/lang/Object;)Ljava/lang/String;";
+
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 	}
@@ -212,6 +218,167 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), 4, 5, s2.finish()));
 
 		return methods;
+	}
+
+	/**
+	 * Builds the two array-printing helpers ({@code _arrayToString} for prin1 and
+	 * {@code _arrayToDisplayString} for princ). Each renders a rank-1 array as
+	 * {@code #(...)} and a rank-2 array as {@code #2A((row) ...)}, calling back into the
+	 * element formatter ({@code _lispToString} / {@code _lispToDisplayString}) for each
+	 * element. They are gated alongside the other array helpers.
+	 * @param cp the constant pool
+	 * @param lispToString the prin1 element formatter ({@code _lispToString})
+	 * @param lispToDisplayString the princ element formatter
+	 * ({@code _lispToDisplayString})
+	 * @return the two helper methods
+	 */
+	static List<ArrayMethod> buildToStringMethods(ConstantPool cp, MethodrefConstant lispToString,
+			MethodrefConstant lispToDisplayString) {
+		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
+		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+		MethodrefConstant alGet = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
+		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+		MethodrefConstant longIntValue = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
+		MethodrefConstant sbInit = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant sbAppend = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbToString = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+
+		List<ArrayMethod> methods = new ArrayList<>();
+		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 4, 6,
+				buildToString(cp, arrayListClass, longClass, sbClass, alGet, alSize, longIntValue, sbInit, sbAppend,
+						sbToString, lispToString)));
+		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 4, 6,
+				buildToString(cp, arrayListClass, longClass, sbClass, alGet, alSize, longIntValue, sbInit, sbAppend,
+						sbToString, lispToDisplayString)));
+		return methods;
+	}
+
+	// Emits one array-printing helper. Locals: 0=arr, 1=list, 2=sb, 3=n (size), 4=cols
+	// (slot-0 column count; 0 => rank 1), 5=k (element index 0..n-2).
+	private static List<Integer> buildToString(ConstantPool cp, ClassConstant arrayListClass, ClassConstant longClass,
+			ClassConstant sbClass, MethodrefConstant alGet, MethodrefConstant alSize, MethodrefConstant longIntValue,
+			MethodrefConstant sbInit, MethodrefConstant sbAppend, MethodrefConstant sbToString,
+			MethodrefConstant elementFormat) {
+		int arr = 0, list = 1, sb = 2, n = 3, cols = 4, k = 5;
+		JvmAsm a = new JvmAsm();
+		// list = (ArrayList) arr
+		a.aload(arr);
+		a.checkcast(arrayListClass);
+		a.astore(list);
+		// n = list.size()
+		a.aload(list);
+		a.invokevirtual(alSize);
+		a.istore(n);
+		// cols = ((Long) list.get(0)).intValue()
+		a.aload(list);
+		a.iconst(0);
+		a.invokevirtual(alGet);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(cols);
+		// sb = new StringBuilder(cols == 0 ? "#(" : "#2A(")
+		a.anew(sbClass);
+		a.dup();
+		int rank2Prefix = a.label();
+		int afterPrefix = a.label();
+		a.iload(cols);
+		a.branch(Opcode.IFNE, rank2Prefix);
+		a.ldcString(cp.addString("#("));
+		a.branch(Opcode.GOTO, afterPrefix);
+		a.bind(rank2Prefix);
+		a.ldcString(cp.addString("#2A("));
+		a.bind(afterPrefix);
+		a.invokespecial(sbInit);
+		a.astore(sb);
+		// k = 0
+		a.iconst(0);
+		a.istore(k);
+		int loop = a.label();
+		int end = a.label();
+		a.bind(loop);
+		// if (k + 1 >= n) goto end
+		a.iload(k);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.iload(n);
+		a.branch(Opcode.IF_ICMPGE, end);
+		// separators / open paren
+		int sepDone = a.label();
+		a.iload(cols);
+		int rank2Sep = a.label();
+		a.branch(Opcode.IFNE, rank2Sep);
+		// rank 1: if (k != 0) sb.append(" ")
+		a.iload(k);
+		a.branch(Opcode.IFEQ, sepDone);
+		appendStr(a, sb, sbAppend, cp.addString(" "));
+		a.branch(Opcode.GOTO, sepDone);
+		// rank 2: if (k % cols == 0) { if (k != 0) sb.append(" "); sb.append("("); } else
+		// sb.append(" ")
+		a.bind(rank2Sep);
+		a.iload(k);
+		a.iload(cols);
+		a.op(Opcode.IREM);
+		int rowMiddle = a.label();
+		a.branch(Opcode.IFNE, rowMiddle);
+		a.iload(k);
+		int skipRowSpace = a.label();
+		a.branch(Opcode.IFEQ, skipRowSpace);
+		appendStr(a, sb, sbAppend, cp.addString(" "));
+		a.bind(skipRowSpace);
+		appendStr(a, sb, sbAppend, cp.addString("("));
+		a.branch(Opcode.GOTO, sepDone);
+		a.bind(rowMiddle);
+		appendStr(a, sb, sbAppend, cp.addString(" "));
+		a.bind(sepDone);
+		// sb.append(elementFormat(list.get(k + 1)))
+		a.aload(sb);
+		a.aload(list);
+		a.iload(k);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.invokevirtual(alGet);
+		a.invokestatic(elementFormat);
+		a.invokevirtual(sbAppend);
+		a.pop();
+		// rank 2 row close: if (cols != 0 && k % cols == cols - 1) sb.append(")")
+		a.iload(cols);
+		int noClose = a.label();
+		a.branch(Opcode.IFEQ, noClose);
+		a.iload(k);
+		a.iload(cols);
+		a.op(Opcode.IREM);
+		a.iload(cols);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.branch(Opcode.IF_ICMPNE, noClose);
+		appendStr(a, sb, sbAppend, cp.addString(")"));
+		a.bind(noClose);
+		// k++; loop
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(end);
+		// sb.append(")"); return sb.toString()
+		appendStr(a, sb, sbAppend, cp.addString(")"));
+		a.aload(sb);
+		a.invokevirtual(sbToString);
+		a.areturn();
+		return a.finish();
+	}
+
+	// sb.append(str); discard the returned StringBuilder.
+	private static void appendStr(JvmAsm a, int sbSlot, MethodrefConstant sbAppend,
+			am.ik.jvm.ConstantPool.StringConstant str) {
+		a.aload(sbSlot);
+		a.ldcString(str);
+		a.invokevirtual(sbAppend);
+		a.pop();
 	}
 
 	// Pushes the rank-2 flat index 1 + i*cols + j, where arr is in slot 0, i in slot 1,

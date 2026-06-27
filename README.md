@@ -651,6 +651,17 @@ loops:
   (aref m 1 2)) ; => 10
 ```
 
+The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose elements
+are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. Arrays print in the same
+readable syntax across all backends: a rank-1 array as `#(...)` and a rank-2 array as
+`#2A((row) ...)`, with `prin1` quoting string elements and `princ` not:
+
+```lisp
+(print #(1 2 3))                          ; #(1 2 3)
+(princ #(a "b"))                          ; #(a b)
+(make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
+```
+
 `read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
 
 `load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime run -W gc --dir . prog.wasm`).

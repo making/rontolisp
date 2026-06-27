@@ -2,6 +2,7 @@ package am.ik.rontolisp.reader;
 
 import java.util.List;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -103,6 +104,32 @@ class LispReaderTest {
 	@Test
 	void readThrowsOnUnmatchedParen() {
 		assertThatThrownBy(() -> LispReader.readFromString("(+ 1")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void readVectorLiteral() {
+		LispVal result = LispReader.readFromString("#(1 2 3)");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(3);
+		assertThat(array.print()).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
+	void readEmptyVectorLiteral() {
+		LispVal result = LispReader.readFromString("#()");
+		assertThat(result).isInstanceOf(LispArray.class);
+		assertThat(((LispArray) result).dimensions()).containsExactly(0);
+	}
+
+	@Test
+	void readVectorLiteralWithMixedElements() {
+		LispVal result = LispReader.readFromString("#(a \"b\" 3)");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.aref(0)).isEqualTo(new LispSymbol("a"));
+		assertThat(array.aref(1)).isEqualTo(new LispString("b"));
+		assertThat(array.aref(2)).isEqualTo(new LispInteger(3));
 	}
 
 	@Test

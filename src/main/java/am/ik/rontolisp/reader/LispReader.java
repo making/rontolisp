@@ -3,6 +3,7 @@ package am.ik.rontolisp.reader;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -73,6 +74,7 @@ public final class LispReader {
 			case Token.CharToken ch -> new LispChar(ch.codePoint());
 			case Token.SymbolToken sym -> readSymbol(sym);
 			case Token.LeftParen ignored -> readList();
+			case Token.VectorOpen ignored -> readVector();
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.RightParen ignored -> throw new LispReadException("Unexpected ')'");
@@ -127,6 +129,21 @@ public final class LispReader {
 			result = new LispCons(elements.get(i), result);
 		}
 		return result;
+	}
+
+	// Reads a rank-1 vector literal #(e1 e2 ... en) into a self-evaluating LispArray.
+	// The elements are read as ordinary data (not evaluated), matching Common Lisp.
+	private LispVal readVector() {
+		List<LispVal> elements = new ArrayList<>();
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			elements.add(readExpr());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw new LispReadException("Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		LispVal[] data = elements.toArray(new LispVal[0]);
+		return new LispArray(new int[] { data.length }, data);
 	}
 
 	private LispVal readQuote() {

@@ -3,6 +3,9 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.ConstantPool.ClassConstant;
+import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -27,6 +30,17 @@ final class JvmQuoteCompiler {
 		compileQuotedVal(quoted, ctx, className);
 	}
 
+	/**
+	 * Emits the construction of a self-evaluating array literal ({@code #(...)}). Shared
+	 * by the {@code quote} path and the bare-literal path in {@link JvmExprCompiler}.
+	 * @param array the literal array
+	 * @param ctx the compilation context
+	 * @param className the enclosing class name
+	 */
+	static void compileLiteralArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
+		compileQuotedArray(array, ctx, className);
+	}
+
 	private static void compileQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
 		switch (val) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
@@ -38,8 +52,43 @@ final class JvmQuoteCompiler {
 			case LispString s -> JvmEmitHelper.compileStringLiteral(s.print(), ctx);
 			case LispSymbol sym -> JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx, className);
+			case LispArray array -> compileQuotedArray(array, ctx, className);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
+	}
+
+	// Builds the runtime array representation (a java.util.ArrayList whose slot 0 is the
+	// column count and slots 1.. are the row-major elements), matching
+	// JvmArrayRuntimeBuilder. The list reference is kept on the stack and DUPed for each
+	// add, so the operand stack stays shallow regardless of the element count.
+	private static void compileQuotedArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
+		int[] dims = array.dimensions();
+		long cols = dims.length >= 2 ? dims[dims.length - 1] : 0;
+		ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
+		MethodrefConstant alInit = ctx.cp.addMethodref(arrayListClass,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
+		MethodrefConstant alAdd = ctx.cp.addMethodref(arrayListClass,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("add"), ctx.cp.addUtf8("(Ljava/lang/Object;)Z")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(arrayListClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(alInit.index());
+		addElement(ctx, alAdd, () -> JvmEmitHelper.compileLong(cols, ctx));
+		for (LispVal element : array.data()) {
+			LispVal value = (element == null) ? LispNil.INSTANCE : element;
+			addElement(ctx, alAdd, () -> compileQuotedVal(value, ctx, className));
+		}
+	}
+
+	// Assumes the ArrayList is on top of the stack; appends one element (pushed by
+	// pushValue) and leaves the list on the stack.
+	private static void addElement(JvmLispCompiler.Ctx ctx, MethodrefConstant alAdd, Runnable pushValue) {
+		ctx.emit(Opcode.DUP);
+		pushValue.run();
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(alAdd.index());
+		ctx.emit(Opcode.POP);
 	}
 
 	private static void compileQuotedCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

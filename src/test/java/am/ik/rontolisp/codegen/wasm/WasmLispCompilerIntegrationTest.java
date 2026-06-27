@@ -2951,4 +2951,44 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("15");
 	}
 
+	@Test
+	void compileVectorLiteralPrintsAsHashParen() throws Exception {
+		assertThat(compileAndRun("(print #(1 2 3))")).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
+	void compileVectorLiteralIsAReadableArray() throws Exception {
+		assertThat(compileAndRun("(print (aref #(10 20 30) 1))")).isEqualTo("20");
+	}
+
+	@Test
+	void compileVectorLiteralPrin1QuotesStringsPrincDoesNot() throws Exception {
+		assertThat(compileAndRun("(prin1 #(a \"b\")) (terpri) (princ #(a \"b\"))")).isEqualTo("#(a \"b\")\n#(a b)");
+	}
+
+	@Test
+	void compileNestedVectorLiteral() throws Exception {
+		assertThat(compileAndRun("(print #(#(1 2) #(3 4)))")).isEqualTo("#(#(1 2) #(3 4))");
+	}
+
+	@Test
+	void compileMakeArrayResultPrintsAsHashParen() throws Exception {
+		assertThat(compileAndRun("(print (make-array 3 :initial-element 7))")).isEqualTo("#(7 7 7)");
+	}
+
+	@Test
+	void compileTwoDimensionalArrayPrintsAsHash2A() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 0))
+				(setf (aref *m* 0 0) 1)
+				(setf (aref *m* 1 2) 9)
+				(print *m*)
+				""")).isEqualTo("#2A((1 0 0) (0 0 9))");
+	}
+
+	@Test
+	void compileEmptyVectorLiteral() throws Exception {
+		assertThat(compileAndRun("(print #())")).isEqualTo("#()");
+	}
+
 }

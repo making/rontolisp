@@ -2860,4 +2860,35 @@ class LispEvaluatorTest {
 		assertThat(eval("(equal (make-array 3) (make-array 3))")).isEqualTo(LispNil.INSTANCE);
 	}
 
+	@Test
+	void vectorLiteralSelfEvaluatesToReadableArray() {
+		LispVal result = eval("#(1 2 3)");
+		assertThat(result.print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(aref #(10 20 30) 1)").print()).isEqualTo("20");
+	}
+
+	@Test
+	void vectorLiteralPrin1QuotesStringsPrincDoesNot() {
+		LispVal vec = eval("#(a \"b\")");
+		assertThat(vec.print()).isEqualTo("#(a \"b\")");
+		assertThat(vec.display()).isEqualTo("#(a b)");
+	}
+
+	@Test
+	void nestedAndEmptyVectorLiterals() {
+		assertThat(eval("#(#(1 2) #(3 4))").print()).isEqualTo("#(#(1 2) #(3 4))");
+		assertThat(eval("#()").print()).isEqualTo("#()");
+	}
+
+	@Test
+	void twoDimensionalArrayPrintsAsHash2A() {
+		LispVal result = evalMulti("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 0))
+				(setf (aref *m* 0 0) 1)
+				(setf (aref *m* 1 2) 9)
+				*m*
+				""");
+		assertThat(result.print()).isEqualTo("#2A((1 0 0) (0 0 9))");
+	}
+
 }

@@ -54,6 +54,10 @@ public final class LispLexer {
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
 				tokens.add(readChar());
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '(') {
+				tokens.add(new Token.VectorOpen());
+				this.pos += 2;
+			}
 			else if (c == '.') {
 				if (this.pos + 1 < this.input.length() && !isSymbolChar(this.input.charAt(this.pos + 1))) {
 					tokens.add(new Token.Dot());

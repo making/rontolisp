@@ -21,6 +21,10 @@ public sealed interface Token {
 	record FunctionQuote() implements Token {
 	}
 
+	/** Vector literal open ({@code #(}) token; closed by a {@link RightParen}. */
+	record VectorOpen() implements Token {
+	}
+
 	/**
 	 * Integer number token.
 	 *

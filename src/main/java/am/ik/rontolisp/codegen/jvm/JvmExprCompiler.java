@@ -46,6 +46,7 @@ final class JvmExprCompiler {
 				}
 			}
 			case LispCons cons -> compileCons(cons, ctx, className);
+			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}

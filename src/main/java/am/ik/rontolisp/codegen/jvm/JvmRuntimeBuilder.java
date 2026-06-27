@@ -154,7 +154,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
-			MethodrefConstant charPrin1Method) {
+			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -166,6 +167,9 @@ final class JvmRuntimeBuilder {
 
 		// if (val instanceof Long) return ((Long)val).toString();
 		patchBranch(code, ifNonnullPos, code.size());
+		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
+		// used)
+		emitArrayBranch(code, arrayListClass, arrayToStringMethod);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -456,7 +460,8 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
-			MethodrefConstant stringValueOfChar) {
+			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -468,6 +473,8 @@ final class JvmRuntimeBuilder {
 
 		// if (val instanceof Long) return ((Long)val).toString();
 		patchBranch(code, ifNonnullPos, code.size());
+		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
+		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -722,6 +729,28 @@ final class JvmRuntimeBuilder {
 		byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
 		code.add((int) bytes[0]);
 		code.add((int) bytes[1]);
+	}
+
+	// Emits "if (val instanceof ArrayList) return arrayToString(val);" at the current
+	// position, used by both the prin1 and princ string builders. A no-op when arrays are
+	// not used (both args null), keeping the branch out of array-free programs.
+	private static void emitArrayBranch(List<Integer> code,
+			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod) {
+		if (arrayListClass == null || arrayToStringMethod == null) {
+			return;
+		}
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, arrayListClass.index());
+		int ifNotArrayPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, arrayToStringMethod.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifNotArrayPos, code.size());
 	}
 
 	static void emitLdc(List<Integer> code, int cpIndex) {

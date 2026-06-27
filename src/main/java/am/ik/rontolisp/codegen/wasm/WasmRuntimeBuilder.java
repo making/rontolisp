@@ -1301,11 +1301,20 @@ final class WasmRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		w.write(2);
+		// Locals: slot 1 = (ref null eq) cons cursor, slot 2 = i32 cons first-flag (both
+		// used by the list printer); slots 3-4 = (ref null eq) array dims/data, slots 5-7
+		// =
+		// i32 array index/cols/length (used by the array printer).
+		w.write(4);
 		w.write(1);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
 		w.write(1);
+		w.write(Type.I32);
+		w.write(2);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(3);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1401,6 +1410,9 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+
+		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1507,14 +1519,20 @@ final class WasmRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 
 		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
-		// (length)
-		w.write(3);
+		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-8 = i32 (array
+		// index/cols/length).
+		w.write(5);
 		w.write(1);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
 		w.write(1);
 		w.write(Type.I32);
 		w.write(1);
+		w.write(Type.I32);
+		w.write(2);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(3);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1644,6 +1662,9 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+
+		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1807,6 +1828,7 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 	}
 
+	// Writes the string-table entry (offset/length) to stdout via _write_str.
 	private static void writeStr(WasmWriter w, WasmLispCompiler.StringTable.StringEntry entry) {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(entry.offset());
@@ -1814,6 +1836,179 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(entry.length());
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+	}
+
+	private static void getBucketsLocal(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		castBuckets(w);
+	}
+
+	// Pushes the header cons (cell.field0) of the TYPE_CELL value in param 0.
+	private static void cellHeader(WasmWriter w) {
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeSignedLeb128(0);
+	}
+
+	// Emits the array branch shared by _print_val and _princ_val: if param 0 is a
+	// TYPE_CELL
+	// box whose header car is a TYPE_HASH_BUCKETS array (i.e. an array, not a hash
+	// table),
+	// prints it as #(...) (rank 1) or #2A((row) ...) (rank 2) and returns. elementFunc is
+	// the per-element printer (FUNC_PRINT_VAL for prin1, FUNC_PRINC_VAL for princ).
+	// Slots:
+	// dims/data = (ref null eq) locals; idx/cols/len = i32 locals.
+	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
+			int dataSlot, int idxSlot, int colsSlot, int lenSlot) {
+		// if (param0 is TYPE_CELL)
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF, 0x40);
+
+		// header car as the array-vs-hash-table discriminator
+		cellHeader(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.IF, 0x40);
+
+		// dims = header.car, data = header.cdr
+		cellHeader(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		setLocal(w, dimsSlot);
+		cellHeader(w);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		setLocal(w, dataSlot);
+
+		// cols = (len(dims) == 1) ? 0 : i31get(dims[1])
+		getBucketsLocal(w, dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, colsSlot);
+		w.write(Instruction.ELSE);
+		getBucketsLocal(w, dimsSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, colsSlot);
+		w.write(Instruction.END);
+
+		// len = len(data)
+		getBucketsLocal(w, dataSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		setLocal(w, lenSlot);
+
+		// prefix: "#(" for rank 1 (cols == 0), "#2A(" for rank 2
+		getLocal(w, colsSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.vecPrefix);
+		w.write(Instruction.ELSE);
+		writeStr(w, st.vec2Prefix);
+		w.write(Instruction.END);
+
+		// idx = 0
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, idxSlot);
+
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		// if idx >= len break
+		getLocal(w, idxSlot);
+		getLocal(w, lenSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+
+		// separators / row-open paren
+		getLocal(w, colsSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		// rank 1: a space before every element except the first
+		getLocal(w, idxSlot);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.space);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// rank 2: at a row start emit (space then) "(", otherwise a space
+		getLocal(w, idxSlot);
+		getLocal(w, colsSlot);
+		w.write(Instruction.I32_REM_S);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, idxSlot);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.space);
+		w.write(Instruction.END);
+		writeStr(w, st.lparen);
+		w.write(Instruction.ELSE);
+		writeStr(w, st.space);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+
+		// element: elementFunc(data[idx])
+		getBucketsLocal(w, dataSlot);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(elementFunc);
+
+		// rank 2 row close: at the last column emit ")"
+		getLocal(w, colsSlot);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, idxSlot);
+		getLocal(w, colsSlot);
+		w.write(Instruction.I32_REM_S);
+		getLocal(w, colsSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.rparen);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+
+		// idx++
+		getLocal(w, idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+
+		writeStr(w, st.rparen);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // is-array if
+		w.write(Instruction.END); // is-cell if
 	}
 
 	// Emits the ratio branch shared by _print_val and _princ_val: if the value in
