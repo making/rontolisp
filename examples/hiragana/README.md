@@ -78,6 +78,38 @@ examples/hiragana/regen-glyphs.sh   # glyphgen/GlyphGen.java を実行して字�
 Mincho ProN）が入った JDK が必要です。フォントを増減するときは `GlyphGen.java` の `FONTS` を
 編集します。
 
+## 実データ (Kuzushiji-49) で学習する — (B) 経路
+
+既定の `gen.sh` は**合成フォント字形**で学習します。代わりに**実データ
+(Kuzushiji-49, 49 クラス)** で学習した重みを焼き込むこともできます。鍵は、推論側
+（`infer.lisp` → `infer.wasm`）が **`weights.lisp` 1 ファイルにしか依存しない**ことです。
+`gen.sh --weights-from FILE` はその `weights.lisp` を外部生成物に差し替え、rontolisp 側の
+学習を丸ごとスキップします（推論は無改造）。
+
+> **コミット済み（GitHub Pages のライブ）モデルはこの (B) Kuzushiji-49 ビルドです。**
+> 合成 (A) 46 クラス版に戻すには、引数なしの `gen.sh` を実行すれば `infer.wasm` /
+> `weights.lisp` / `infer.lisp` が再生成されます。
+
+rontolisp はバイナリ (`.npz`) を読めず、この規模の学習も非現実的なので、**学習だけ外部
+(NumPy)** で行い、完成した重み（Lisp ソース）を渡します。手順とライセンス（CC BY-SA 4.0）は
+[`tools/k49/README.md`](tools/k49/README.md) を参照。
+
+```bash
+python3 examples/hiragana/tools/k49/train_k49.py                 # 実データ学習 -> weights-k49.lisp
+examples/hiragana/gen.sh --weights-from examples/hiragana/weights-k49.lisp  # 焼き込み -> infer.wasm
+```
+
+- `weights-k49.lisp` は `*weights*` に加え **49 クラスの `*labels*`** を定義します。
+  `infer-main.lisp` は `defvar` で 46 を既定束縛しますが、連結で先に来るこの定義が
+  冪等性により 49 を上書きします（既定パスは `*labels*` を出さないので 46 のまま）。
+- ブラウザ表示用に `glyphs.js` の `KANA` へ K49 固有の 3 クラス
+  （ゐ=wi・ゑ=we・繰り返し記号 ゝ=iter）を追加済みです。参考字形サムネイルは合成 46 のまま。
+- ネットは 576-20-49 に保つので JVM 焼き込み上限を満たし、**4 バックエンドすべてで一致**します。
+- **精度の正直な但し書き**: 焼き込み上限のため隠れ層 20 と小さく、K49 は崩し字
+  （現代の手書き入力とは分布が異なる）なので balanced accuracy は小 MLP の上限
+  （概ね 0.5 前後）にとどまります。`--hidden` を増やせば上がりますが WASM/インタプリタ専用に
+  なり JVM 推論は外れます（焼き込み上限）。本質的な改善には CNN が必要で、それはこのデモの枠外です。
+
 ## ブラウザで動かす
 
 `fetch` で `.wasm` を読むため `http://` で配信してください。
@@ -123,7 +155,8 @@ java -jar $JAR examples/hiragana/infer.lisp -o /tmp/infer.wasm && wasmtime run -
 | `glyphs.js`                    | ブラウザ表示用の参考字形 `GLYPHS`/`KANA`/`ORDER`（生成物）    |
 | `train-main.lisp`              | オフライン学習本体（データ拡張・SGD・重みのシリアライズ）      |
 | `infer-main.lisp`              | 推論本体（stdin から読み、forward、クラスを出力）            |
-| `gen.sh`                       | 学習 → `infer.wasm` 生成のパイプライン                       |
+| `gen.sh`                       | 学習 → `infer.wasm` 生成のパイプライン（`--weights-from` で (B) 経路） |
+| `tools/k49/`                   | 実データ (Kuzushiji-49) 外部学習ツール（(B) 経路・ビルド対象外） |
 | `index.html`                   | canvas で描いて認識するブラウザページ                       |
 | `wasi-shim.js`                 | WASI Preview1 シム（`../wasm-browser/` と同一のコピー）       |
 | `samples/*.txt`                | ブラウザなし確認用の平坦化ビットマップ（全 46 クラス・生成物） |

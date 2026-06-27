@@ -13,7 +13,15 @@
 ;; print romaji (ASCII) rather than the kana character so nothing multibyte
 ;; crosses the WASM string boundary; the browser maps the romaji back to かな
 ;; for display.
-(defparameter *labels*
+;;
+;; This is a `defvar` (not `defparameter`) ON PURPOSE: it binds the 46-class
+;; default ONLY when *labels* is not already bound.  An alternate weights file
+;; (e.g. the real-data Kuzushiji-49 build, see gen.sh --weights-from) is
+;; concatenated BEFORE this file and may define its own 49-class *labels* with
+;; `defparameter`; defvar is idempotent, so that larger label set wins and this
+;; default is skipped.  The default synthetic path supplies no *labels*, so the
+;; 46 below take effect unchanged.
+(defvar *labels*
   (list "a" "i" "u" "e" "o" "ka" "ki" "ku" "ke" "ko" "sa" "shi" "su" "se" "so"
         "ta" "chi" "tsu" "te" "to" "na" "ni" "nu" "ne" "no" "ha" "hi" "fu" "he"
         "ho" "ma" "mi" "mu" "me" "mo" "ya" "yu" "yo" "ra" "ri" "ru" "re" "ro"

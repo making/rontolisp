@@ -2,7 +2,8 @@
 # Train the hiragana recognizer offline and bake the learned weights into a
 # WASM inference module for the browser demo.
 #
-#   examples/hiragana/gen.sh            # train (JVM) + build infer.wasm
+#   examples/hiragana/gen.sh                         # (A) train (JVM) + build infer.wasm
+#   examples/hiragana/gen.sh --weights-from FILE.lisp # (B) bake a prebuilt weights file
 #
 # Pipeline:
 #   1. train.lisp  = common.lisp + prototypes.lisp + train-main.lisp
@@ -10,10 +11,30 @@
 #      (defparameter *weights* ...) form, with ';;' progress comments).
 #   2. infer.lisp  = common.lisp + weights.lisp + infer-main.lisp
 #      compiled to infer.wasm (WASI Preview 1, WASM GC).
+#
+# The inference half (step 2) only depends on weights.lisp -- it does not care
+# HOW the weights were produced.  --weights-from swaps in an externally trained
+# weights file (e.g. the real-data Kuzushiji-49 build from tools/k49/, which
+# also defines a 49-class *labels*) and SKIPS the rontolisp training in step 1.
+# The default (no flag) is unchanged: the self-contained synthetic trainer.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
+
+weights_from=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --weights-from)
+      weights_from="${2:?--weights-from needs a path}"; shift 2 ;;
+    --weights-from=*)
+      weights_from="${1#*=}"; shift ;;
+    -h|--help)
+      grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)
+      echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 
 jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
 if [[ ! -f "$jar" ]]; then
@@ -22,19 +43,34 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "[1/4] assembling train.lisp"
-cat "$here/common.lisp" "$here/prototypes.lisp" "$here/train-main.lisp" \
-  > "$here/train.lisp"
+if [[ -n "$weights_from" ]]; then
+  # (B) Use externally trained weights.  Skip rontolisp training entirely.
+  if [[ ! -f "$weights_from" ]]; then
+    echo "--weights-from file not found: $weights_from" >&2
+    exit 1
+  fi
+  if ! grep -q 'defparameter \*weights\*' "$weights_from"; then
+    echo "refusing: $weights_from does not define (defparameter *weights* ...)" >&2
+    exit 1
+  fi
+  echo "[1-2/4] using prebuilt weights: $weights_from (skipping rontolisp training)"
+  cp "$weights_from" "$here/weights.lisp"
+else
+  # (A) Self-contained synthetic trainer (default).
+  echo "[1/4] assembling train.lisp"
+  cat "$here/common.lisp" "$here/prototypes.lisp" "$here/train-main.lisp" \
+    > "$here/train.lisp"
 
-echo "[2/4] training (this runs SGD; progress prints as ';;' comments)"
-# Train on the JVM (compile then run) -- much faster than the interpreter.
-# The compiled class is named after the -o file, so it must be path-free:
-# compile and run from inside this directory.
-( cd "$here" \
-    && java -jar "$jar" train.lisp -o Train.class \
-    && java Train > weights.lisp \
-    && rm -f Train.class )
-grep '^;;' "$here/weights.lisp" || true   # echo the progress comments
+  echo "[2/4] training (this runs SGD; progress prints as ';;' comments)"
+  # Train on the JVM (compile then run) -- much faster than the interpreter.
+  # The compiled class is named after the -o file, so it must be path-free:
+  # compile and run from inside this directory.
+  ( cd "$here" \
+      && java -jar "$jar" train.lisp -o Train.class \
+      && java Train > weights.lisp \
+      && rm -f Train.class )
+  grep '^;;' "$here/weights.lisp" || true   # echo the progress comments
+fi
 
 echo "[3/4] assembling infer.lisp"
 cat "$here/common.lisp" "$here/weights.lisp" "$here/infer-main.lisp" \
