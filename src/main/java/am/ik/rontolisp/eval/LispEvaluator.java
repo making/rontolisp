@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispInteger;
@@ -305,6 +306,7 @@ public final class LispEvaluator {
 			case LispFunction f -> f;
 			case LispLambda l -> l;
 			case LispHashTable h -> h;
+			case LispArray a -> a;
 			case LispSymbol sym -> sym.isKeyword() ? sym : env.lookup(sym.name());
 			case LispCons cons -> evalCons(cons, env);
 		};

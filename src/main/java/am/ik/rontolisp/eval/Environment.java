@@ -20,6 +20,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.DoubleUnaryOperator;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -189,6 +190,7 @@ public final class Environment implements Scope {
 		registerCharacters(env);
 		registerTypeConversion(env);
 		registerHashTables(env);
+		registerArrays(env);
 		registerPackages(env);
 		return env;
 	}
@@ -243,6 +245,84 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.HASH_TABLE_P, args, 1);
 			return (args.get(0) instanceof LispHashTable) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+	}
+
+	private static void registerArrays(Environment env) {
+		env.defineFunction(LispNames.MAKE_ARRAY, new LispFunction(LispNames.MAKE_ARRAY, args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(LispNames.MAKE_ARRAY + " expects at least 1 argument");
+			}
+			LispVal init = LispNil.INSTANCE;
+			for (int i = 1; i + 1 < args.size(); i += 2) {
+				if (args.get(i) instanceof LispSymbol kw && LispNames.INITIAL_ELEMENT_KEYWORD.equals(kw.name())) {
+					init = args.get(i + 1);
+				}
+			}
+			int[] dims = parseDimensions(args.get(0));
+			int total = 1;
+			for (int d : dims) {
+				total *= d;
+			}
+			LispVal[] data = new LispVal[total];
+			for (int i = 0; i < total; i++) {
+				data[i] = init;
+			}
+			return new LispArray(dims, data);
+		}));
+		env.defineFunction(LispNames.AREF, new LispFunction(LispNames.AREF, args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(LispNames.AREF + " expects an array and subscripts");
+			}
+			LispArray array = requireArray(LispNames.AREF, args.get(0));
+			int[] subs = new int[args.size() - 1];
+			for (int i = 1; i < args.size(); i++) {
+				subs[i - 1] = (int) asLong(args.get(i));
+			}
+			return array.aref(subs);
+		}));
+		env.defineFunction(LispNames.ASET, new LispFunction(LispNames.ASET, args -> {
+			// (%aset array subscript... value)
+			if (args.size() < 3) {
+				throw new LispEvalException(LispNames.ASET + " expects an array, subscripts and a value");
+			}
+			LispArray array = requireArray(LispNames.ASET, args.get(0));
+			LispVal value = args.get(args.size() - 1);
+			int[] subs = new int[args.size() - 2];
+			for (int i = 1; i < args.size() - 1; i++) {
+				subs[i - 1] = (int) asLong(args.get(i));
+			}
+			array.aset(value, subs);
+			return value;
+		}));
+	}
+
+	// Parses a make-array dimensions argument (an integer for rank 1, or a list of 1 or 2
+	// integers) into a dimension-size array. Only rank 1 and 2 are supported.
+	private static int[] parseDimensions(LispVal dimsVal) {
+		if (dimsVal instanceof LispInteger n) {
+			return new int[] { (int) n.value() };
+		}
+		if (dimsVal instanceof LispCons || dimsVal instanceof LispNil) {
+			List<LispVal> list = (dimsVal instanceof LispCons cons) ? cons.toList() : List.of();
+			if (list.isEmpty() || list.size() > 2) {
+				throw new LispEvalException(
+						LispNames.MAKE_ARRAY + " supports rank 1 and 2 only, got rank " + list.size());
+			}
+			int[] dims = new int[list.size()];
+			for (int i = 0; i < list.size(); i++) {
+				dims[i] = (int) asLong(list.get(i));
+			}
+			return dims;
+		}
+		throw new LispEvalException(
+				LispNames.MAKE_ARRAY + " expects an integer or list of dimensions, got " + dimsVal.print());
+	}
+
+	private static LispArray requireArray(String fn, LispVal val) {
+		if (val instanceof LispArray array) {
+			return array;
+		}
+		throw new LispEvalException(fn + " expects an array, got " + val.print());
 	}
 
 	private static LispHashTable requireHashTable(String fn, LispVal val) {

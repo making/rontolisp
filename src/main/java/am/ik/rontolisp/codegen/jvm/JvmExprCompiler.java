@@ -279,6 +279,9 @@ final class JvmExprCompiler {
 				case LispNames.HASH_TABLE_COUNT -> JvmHashTableCompiler.compileCount(cons, ctx, className);
 				case LispNames.HASH_TABLE_P -> JvmHashTableCompiler.compileP(cons, ctx, className);
 				case LispNames.MAPHASH -> JvmHashTableCompiler.compileMaphash(cons, ctx, className);
+				case LispNames.MAKE_ARRAY -> JvmArrayCompiler.compileMake(cons, ctx, className);
+				case LispNames.AREF -> JvmArrayCompiler.compileAref(cons, ctx, className);
+				case LispNames.ASET -> JvmArrayCompiler.compileAset(cons, ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
 				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);

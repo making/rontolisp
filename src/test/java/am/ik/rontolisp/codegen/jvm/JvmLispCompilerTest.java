@@ -2459,12 +2459,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("184");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("186");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("184");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("186");
 	}
 
 	@Test
@@ -2731,6 +2731,57 @@ class JvmLispCompilerTest {
 				  (setf (gethash 1 h) 'x)
 				  (print (gethash 1 h)))
 				""")).isEqualTo("x");
+	}
+
+	@Test
+	void compileMakeArrayVectorRefAndSet() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :initial-element 0))
+				(setf (aref *v* 0) 10)
+				(setf (aref *v* 4) 40)
+				(incf (aref *v* 0) 5)
+				(print (list (aref *v* 0) (aref *v* 1) (aref *v* 4)))
+				""")).isEqualTo("(15 0 40)");
+	}
+
+	@Test
+	void compileMakeArrayTwoDimensional() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 7))
+				(setf (aref *m* 0 0) 1)
+				(setf (aref *m* 1 2) 99)
+				(print (list (aref *m* 0 0) (aref *m* 0 1) (aref *m* 1 2)))
+				""")).isEqualTo("(1 7 99)");
+	}
+
+	@Test
+	void compileMakeArraySingleElementListIsRankOne() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *w* (make-array (list 3) :initial-element 2))
+				(setf (aref *w* 1) 8)
+				(print (list (aref *w* 0) (aref *w* 1) (aref *w* 2)))
+				""")).isEqualTo("(2 8 2)");
+	}
+
+	@Test
+	void compileArrayCapturedInClosure() throws Exception {
+		// Each bump is sequenced through a top-level defparameter so the result does not
+		// depend on argument evaluation order within a single call form.
+		assertThat(compileAndRun("""
+				(defun make-counter (vec)
+				  (lambda (i) (setf (aref vec i) (+ 1 (aref vec i))) (aref vec i)))
+				(defparameter *c* (make-array 2 :initial-element 0))
+				(defparameter *bump* (make-counter *c*))
+				(defparameter *a* (funcall *bump* 0))
+				(defparameter *b* (funcall *bump* 0))
+				(defparameter *d* (funcall *bump* 1))
+				(print (list *a* *b* *d*))
+				""")).isEqualTo("(1 2 1)");
+	}
+
+	@Test
+	void compileArrayDefaultInitialElementIsNil() throws Exception {
+		assertThat(compileAndRun("(print (aref (make-array 3) 2))")).isEqualTo("nil");
 	}
 
 }

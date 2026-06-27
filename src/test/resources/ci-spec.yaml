@@ -922,7 +922,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf typecase unless when with-open-file)
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
-      184
+      186
       (fetch list-functions list-macros list-special-forms version)
       ci-intro-fn
       nil
@@ -1446,6 +1446,37 @@ cases:
       (t nil)
       2
       1
+
+  - name: arrays-cross-backend
+    source: |
+      (defun ci-mat-sum (m rows cols)
+        (let ((s 0))
+          (dotimes (i rows)
+            (dotimes (j cols)
+              (incf s (aref m i j))))
+          s))
+      (defun ci-arrays ()
+        (let ((vec (make-array 5 :initial-element 0)))
+          (setf (aref vec 0) 10)
+          (setf (aref vec 4) 40)
+          (incf (aref vec 0) 5)
+          (print (list (aref vec 0) (aref vec 1) (aref vec 4)))
+          (let ((mat (make-array (list 2 3) :initial-element 7)))
+            (setf (aref mat 0 0) 1)
+            (setf (aref mat 1 2) 99)
+            (print (list (aref mat 0 0) (aref mat 0 1) (aref mat 1 2)))
+            (let ((vec2 (make-array (list 3) :initial-element 2)))
+              (setf (aref vec2 1) 8)
+              (print (list (aref vec2 0) (aref vec2 1) (aref vec2 2))))
+            (print (ci-mat-sum mat 2 3))
+            (print (list (consp vec) (aref (make-array 2) 1))))))
+      (ci-arrays)
+    expected: |
+      (15 0 40)
+      (1 7 99)
+      (2 8 2)
+      128
+      (nil nil)
 
   # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output

@@ -565,6 +565,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
 				thisClass, objectClass, objectArrayClass, longValueOf, lispToStringMethod) : List.of();
 
+		// Build the array runtime helpers, only when the program uses arrays.
+		boolean usesArrays = programUsesAnyArrayOp(program);
+		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods = usesArrays
+				? JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass) : List.of();
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
@@ -798,6 +803,16 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
+				for (JvmArrayRuntimeBuilder.ArrayMethod am : arrayMethods) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(am.maxStack())
+									.writeU2(am.maxLocals())
+									.writeCode((Object[]) am.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -904,6 +919,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.REMHASH) || programUsesSymbol(program, LispNames.CLRHASH)
 				|| programUsesSymbol(program, LispNames.HASH_TABLE_COUNT)
 				|| programUsesSymbol(program, LispNames.HASH_TABLE_P) || programUsesSymbol(program, LispNames.MAPHASH);
+	}
+
+	private static boolean programUsesAnyArrayOp(List<LispVal> program) {
+		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.AREF)
+				|| programUsesSymbol(program, LispNames.ASET);
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {

@@ -4,7 +4,7 @@ package am.ik.rontolisp;
  * Base type for all Lisp values.
  */
 public sealed interface LispVal permits LispInteger, LispBigInteger, LispRatio, LispDouble, LispSymbol, LispString,
-		LispChar, LispCons, LispNil, LispTrue, LispFunction, LispLambda, LispHashTable {
+		LispChar, LispCons, LispNil, LispTrue, LispFunction, LispLambda, LispHashTable, LispArray {
 
 	/**
 	 * Return the printed representation of this value.

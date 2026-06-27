@@ -268,6 +268,9 @@ final class WasmExprCompiler {
 				case LispNames.HASH_TABLE_COUNT -> WasmHashTableCompiler.compileCount(cons, ctx);
 				case LispNames.HASH_TABLE_P -> WasmHashTableCompiler.compileP(cons, ctx);
 				case LispNames.MAPHASH -> WasmHashTableCompiler.compileMaphash(cons, ctx);
+				case LispNames.MAKE_ARRAY -> WasmArrayCompiler.compileMake(cons, ctx);
+				case LispNames.AREF -> WasmArrayCompiler.compileAref(cons, ctx);
+				case LispNames.ASET -> WasmArrayCompiler.compileAset(cons, ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);

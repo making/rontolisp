@@ -489,6 +489,27 @@ public final class LispNames {
 	 */
 	public static final String MAPHASH = "maphash";
 
+	// Arrays
+
+	/**
+	 * The {@code make-array} built-in function. Supports arrays of rank 1 and 2 and the
+	 * {@code :initial-element} keyword.
+	 */
+	public static final String MAKE_ARRAY = "make-array";
+
+	/** The {@code aref} built-in function (array element access). */
+	public static final String AREF = "aref";
+
+	/**
+	 * The {@code %aset} internal built-in function. The target of the {@code aref}
+	 * {@code setf} place: {@code (%aset array subscript... value)} stores and returns the
+	 * value.
+	 */
+	public static final String ASET = "%aset";
+
+	/** The {@code :initial-element} keyword accepted by {@code make-array}. */
+	public static final String INITIAL_ELEMENT_KEYWORD = ":initial-element";
+
 	// Higher-order functions
 
 	/** The {@code mapcar} built-in function. */

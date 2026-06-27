@@ -601,6 +601,9 @@ compiled output (see [Compiled `eval` limitations](#compiled-eval-limitations)).
 | `hash-table-count` | `(hash-table-count table)` | The number of entries |
 | `hash-table-p` | `(hash-table-p x)` | `t` if `x` is a hash table, else `nil` |
 | `maphash` | `(maphash (lambda (k v) ...) table)` | Call the function on each key/value pair for effect; returns nil |
+| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | Create an array of rank 1 or 2; `:initial-element` sets every cell (nil if omitted) |
+| `aref` | `(aref a i)`, `(aref a i j)` | Return the element at the given subscripts |
+| `(setf (aref a i j) v)` | `(setf (aref a 0 0) 1)` | Store `v` at the subscripts; works with `incf`/`decf`/`push` on the place |
 
 **Deviations from Common Lisp.** Some functions accept fewer arguments than the Common
 Lisp standard: `log` takes only one argument (no base: `(log x base)` is unsupported),
@@ -630,6 +633,22 @@ typical use -- counting with `incf` on the place:
   (dolist (w '("a" "b" "a"))
     (incf (gethash w counts 0)))
   (gethash "a" counts)) ; => 2
+```
+
+**Arrays.** `make-array`, `aref` and `(setf (aref ...))` work in all three backends.
+Only arrays of **rank 1 (vectors) and rank 2** are supported; the dimensions argument is
+an integer (rank 1) or a list of one or two integers, and `:initial-element` sets every
+cell (defaulting to nil). Elements are stored row-major with O(1) access, and arrays are
+compared by identity (`eq`), so two distinct arrays are never `equal`. Unlike the hash-table
+operators, the array operators are not exposed as first-class function values, so `#'aref`
+and `#'make-array` are not available (call them directly). A 2-D array indexed in nested
+loops:
+
+```lisp
+(let ((m (make-array (list 2 3) :initial-element 0)))
+  (setf (aref m 1 2) 9)
+  (incf (aref m 1 2))
+  (aref m 1 2)) ; => 10
 ```
 
 `read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](#compiled-readload-limitations)). Use `read-line` to read raw strings instead.
@@ -749,7 +768,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 184
+; => 186
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

@@ -2402,9 +2402,10 @@ class LispEvaluatorTest {
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
 					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
 			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
-			.doesNotContain("%puthash")
+			.contains("make-array", "aref")
+			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(184);
+			.hasSize(186);
 	}
 
 	@Test
@@ -2798,6 +2799,65 @@ class LispEvaluatorTest {
 				      (funcall #'hash-table-count *h*))
 				""");
 		assertThat(result.print()).isEqualTo("(1 (t nil) 2)");
+	}
+
+	@Test
+	void makeArrayVectorRefAndSet() {
+		LispVal result = evalMulti("""
+				(defparameter *v* (make-array 5 :initial-element 0))
+				(setf (aref *v* 0) 10)
+				(setf (aref *v* 4) 40)
+				(incf (aref *v* 0) 5)
+				(list (aref *v* 0) (aref *v* 1) (aref *v* 4))
+				""");
+		assertThat(result.print()).isEqualTo("(15 0 40)");
+	}
+
+	@Test
+	void makeArrayTwoDimensional() {
+		LispVal result = evalMulti("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 7))
+				(setf (aref *m* 0 0) 1)
+				(setf (aref *m* 1 2) 99)
+				(list (aref *m* 0 0) (aref *m* 0 1) (aref *m* 1 2))
+				""");
+		assertThat(result.print()).isEqualTo("(1 7 99)");
+	}
+
+	@Test
+	void makeArraySingleElementListIsRankOne() {
+		LispVal result = evalMulti("""
+				(defparameter *w* (make-array (list 3) :initial-element 2))
+				(setf (aref *w* 1) 8)
+				(list (aref *w* 0) (aref *w* 1) (aref *w* 2))
+				""");
+		assertThat(result.print()).isEqualTo("(2 8 2)");
+	}
+
+	@Test
+	void makeArrayDefaultInitialElementIsNil() {
+		assertThat(eval("(aref (make-array 3) 2)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void arrayCapturedInClosure() {
+		LispVal result = evalMulti("""
+				(defun make-counter (vec)
+				  (lambda (i) (setf (aref vec i) (+ 1 (aref vec i))) (aref vec i)))
+				(defparameter *c* (make-array 2 :initial-element 0))
+				(defparameter *bump* (make-counter *c*))
+				(defparameter *a* (funcall *bump* 0))
+				(defparameter *b* (funcall *bump* 0))
+				(defparameter *d* (funcall *bump* 1))
+				(list *a* *b* *d*)
+				""");
+		assertThat(result.print()).isEqualTo("(1 2 1)");
+	}
+
+	@Test
+	void arrayIsNotConsAndNotEqual() {
+		assertThat(eval("(consp (make-array 3))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(equal (make-array 3) (make-array 3))")).isEqualTo(LispNil.INSTANCE);
 	}
 
 }

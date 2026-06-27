@@ -846,6 +846,16 @@ public final class LispMacroExpander {
 					// The optional default in the place is only used by gethash in read
 					// position, so it is dropped here.
 					listToCons(List.of(new LispSymbol(LispNames.PUTHASH), placeParts.get(1), placeParts.get(2), value));
+				case LispNames.AREF -> {
+					// (setf (aref array sub...) val) -> (%aset array sub... val)
+					List<LispVal> asetParts = new java.util.ArrayList<>();
+					asetParts.add(new LispSymbol(LispNames.ASET));
+					for (int i = 1; i < placeParts.size(); i++) {
+						asetParts.add(placeParts.get(i));
+					}
+					asetParts.add(value);
+					yield listToCons(asetParts);
+				}
 				case LispNames.NTH -> {
 					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
 					// __setf) __setf)
