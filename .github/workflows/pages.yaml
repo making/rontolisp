@@ -13,6 +13,7 @@ on:
     paths:
     - web/**
     - examples/wasm-browser/**
+    - examples/hiragana/**
     - src/**
     - pom.xml
     - .github/workflows/pages.yaml

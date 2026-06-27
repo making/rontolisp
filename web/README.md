@@ -150,6 +150,17 @@ All asset references are relative, so it works under the project subpath:
 
 > https://making.github.io/rontolisp/
 
+The `package` phase also stages two checked-in examples as subpaths of the same
+site (no compilation needed — their `.wasm` files are committed and their
+`index.html` uses relative URLs):
+
+- `/wasm-browser/` — prebuilt WASM run in plain HTML/JS
+  (from [`examples/wasm-browser/`](../examples/wasm-browser)).
+- `/hiragana/` — handwritten-hiragana recognition demo
+  (from [`examples/hiragana/`](../examples/hiragana); only the four runtime files
+  the browser loads — `index.html`, `wasi-shim.js`, `glyphs.js`, `infer.wasm` —
+  are staged; the offline training artifacts are excluded).
+
 One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
 "GitHub Actions"**.
 

@@ -421,7 +421,21 @@ public final class Version {
 										<copy todir="${web.dist}/wasm-browser">
 											<fileset dir="${project.basedir}/examples/wasm-browser"/>
 										</copy>
-										<echo message="Web playground staged in ${web.dist} (example at ${web.dist}/wasm-browser)"/>
+										<!-- Stage the handwritten-hiragana recognition demo as another
+											 subpath (/hiragana/). Only the four runtime files the browser
+											 loads are copied; the offline training artifacts (train.lisp,
+											 weights.lisp, prototypes.lisp, infer.lisp, glyphgen/, samples/)
+											 are excluded to keep the Pages payload small. The demo's
+											 index.html uses relative URLs and works under any subpath. -->
+										<copy todir="${web.dist}/hiragana">
+											<fileset dir="${project.basedir}/examples/hiragana">
+												<include name="index.html"/>
+												<include name="wasi-shim.js"/>
+												<include name="glyphs.js"/>
+												<include name="infer.wasm"/>
+											</fileset>
+										</copy>
+										<echo message="Web playground staged in ${web.dist} (examples at ${web.dist}/wasm-browser and ${web.dist}/hiragana)"/>
 										<echo message="Serve it: cd web/dist &amp;&amp; jwebserver -p 8000"/>
 									</target>
 								</configuration>
