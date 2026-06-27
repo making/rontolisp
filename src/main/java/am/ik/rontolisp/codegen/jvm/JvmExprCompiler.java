@@ -79,6 +79,13 @@ final class JvmExprCompiler {
 			ctx.emit(Opcode.ICONST_0);
 			ctx.emit(Opcode.AALOAD);
 		}
+		else if (ctx.globals.contains(name)) {
+			// A top-level global variable: read from its dedicated static field. Works
+			// from any method body (main, defun, lambda), so a function can reference a
+			// defvar/defparameter global.
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
 		}

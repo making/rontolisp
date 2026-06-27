@@ -97,6 +97,15 @@ final class WasmExprCompiler {
 			WasmEmitHelper.emitLoadCapture(ctx, captureIdx);
 			return;
 		}
+		// A top-level global variable: read from its module-level wasm global. Works from
+		// any function body, so a defun/lambda can reference a defvar/defparameter
+		// global.
+		Integer globalIndex = ctx.globalIndices.get(name);
+		if (globalIndex != null) {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(globalIndex);
+			return;
+		}
 		if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileVarRef(name, ctx);
 			return;

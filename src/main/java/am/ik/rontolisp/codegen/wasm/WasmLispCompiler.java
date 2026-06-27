@@ -23,6 +23,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
@@ -508,6 +509,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			defuns.add(extractSetqLambda(wrapper));
 		}
 
+		// Collect top-level global variables and give each its own module-level wasm
+		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).
+		// A reference compiles to global.get from any function body, so a defun/lambda
+		// can read a defvar/defparameter global. Indices follow declaration order.
+		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		Map<String, Integer> globalIndices = new HashMap<>();
+		int nextGlobalIndex = GLOBAL_FENV + 1;
+		for (String g : globals) {
+			globalIndices.put(g, nextGlobalIndex++);
+		}
+		int globalCount = globals.size();
+
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
 
@@ -550,7 +563,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.component(this.component)
-			.userDefunNames(Set.copyOf(userDefinedNames));
+			.userDefunNames(Set.copyOf(userDefinedNames))
+			.globals(globals)
+			.globalIndices(globalIndices);
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
@@ -1152,21 +1167,35 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
 			// the Lisp-2 function namespace (GLOBAL_FENV), both (mut (ref null eq)) =
 			// null
-			.writeGlobal(globals -> globals.add(g -> {
-				g.write(Type.REFNULL.code());
-				g.writeHeapType(Type.EQ.code());
-				g.write(am.ik.wasm.Mutability.VAR.code());
-				g.write(Instruction.REF_NULL);
-				g.writeHeapType(Type.EQ.code());
-				g.write(Instruction.END);
-			}).add(g -> {
-				g.write(Type.REFNULL.code());
-				g.writeHeapType(Type.EQ.code());
-				g.write(am.ik.wasm.Mutability.VAR.code());
-				g.write(Instruction.REF_NULL);
-				g.writeHeapType(Type.EQ.code());
-				g.write(Instruction.END);
-			}))
+			.writeGlobal(gs -> {
+				gs.add(g -> {
+					g.write(Type.REFNULL.code());
+					g.writeHeapType(Type.EQ.code());
+					g.write(am.ik.wasm.Mutability.VAR.code());
+					g.write(Instruction.REF_NULL);
+					g.writeHeapType(Type.EQ.code());
+					g.write(Instruction.END);
+				}).add(g -> {
+					g.write(Type.REFNULL.code());
+					g.writeHeapType(Type.EQ.code());
+					g.write(am.ik.wasm.Mutability.VAR.code());
+					g.write(Instruction.REF_NULL);
+					g.writeHeapType(Type.EQ.code());
+					g.write(Instruction.END);
+				});
+				// One (mut (ref null eq)) = null per top-level global variable (indices
+				// 2+).
+				for (int i = 0; i < globalCount; i++) {
+					gs.add(g -> {
+						g.write(Type.REFNULL.code());
+						g.writeHeapType(Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
+			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
 			// the lifted wasi:cli/run entry; the memory is imported, not exported
@@ -1428,6 +1457,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * Names of top-level global variables; each has a wasm global in
+		 * {@link #globalIndices}.
+		 */
+		Set<String> globals = Set.of();
+
+		/**
+		 * Maps a top-level global variable name to its module-level wasm global index.
+		 */
+		Map<String, Integer> globalIndices = Map.of();
+
+		/**
+		 * Top-level globals already initialized by a defvar/defparameter in this
+		 * compilation, for defvar's compile-time idempotence. Only the top-level context
+		 * mutates it.
+		 */
+		final Set<String> definedGlobals = new HashSet<>();
+
+		/**
 		 * The number of currently-open WASM control structures (block/loop/if) that
 		 * lexically enclose the form being compiled. Tracked by the {@code if}, {@code
 		 * while} and {@code %block} compilers so that {@code return} can compute the
@@ -1453,6 +1500,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.component = builder.component;
 			this.userDefunNames = builder.userDefunNames;
+			this.globals = builder.globals;
+			this.globalIndices = builder.globalIndices;
 		}
 
 		static Builder builder() {
@@ -1480,6 +1529,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean component = false;
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> globals = Set.of();
+
+			private Map<String, Integer> globalIndices = Map.of();
 
 			Builder writer(WasmWriter writer) {
 				this.writer = writer;
@@ -1528,6 +1581,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder globals(Set<String> globals) {
+				this.globals = globals;
+				return this;
+			}
+
+			Builder globalIndices(Map<String, Integer> globalIndices) {
+				this.globalIndices = globalIndices;
 				return this;
 			}
 

@@ -25,7 +25,26 @@ final class JvmDefvarCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean force) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
-		if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
+		if (ctx.globals.contains(name.name())) {
+			// A top-level global: store into its dedicated static field. defvar binds
+			// only
+			// if not already bound (idempotent); defparameter/defconstant (force) always
+			// rebind. definedGlobals tracks compile-time "already bound".
+			if (parts.size() > 2 && (force || !ctx.definedGlobals.contains(name.name()))) {
+				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.PUTSTATIC);
+				ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())).index());
+				// Mirror into the eval runtime's global env (no-op unless eval is used at
+				// top level); leaves the stack as it was (the DUP'd copy is consumed by
+				// the
+				// mirror's _store, which returns it, then we pop it).
+				JvmSetqCompiler.mirrorTopLevelGlobal(name.name(), ctx);
+				ctx.emit(Opcode.POP);
+				ctx.definedGlobals.add(name.name());
+			}
+		}
+		else if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
 			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 			// Mirror the binding into the eval runtime's global env (no-op unless eval is
 			// used at top level); _store returns the value, which we discard here because

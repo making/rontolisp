@@ -87,6 +87,24 @@ final class WasmSetqCompiler {
 			return;
 		}
 
+		// A top-level global variable (not shadowed by a lexical here): store into its
+		// module-level wasm global. Works from any function body, so a defun/lambda can
+		// assign a global. The eval mirror still runs at top level (no-op elsewhere).
+		Integer globalIndex = ctx.globalIndices.get(name);
+		if (slot == null && globalIndex != null) {
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
+			int tmpSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(globalIndex);
+			mirrorTopLevelGlobal(name, tmpSlot, ctx);
+			// Leave the assigned value on the stack as the form's result.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(tmpSlot);
+			return;
+		}
+
 		// Plain local (not boxed)
 		WasmExprCompiler.compileExpr(valueExpr, ctx);
 		if (slot == null) {

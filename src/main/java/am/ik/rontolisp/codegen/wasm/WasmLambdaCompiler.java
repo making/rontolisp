@@ -46,7 +46,7 @@ final class WasmLambdaCompiler {
 			boundVars.addAll(ctx.captures.keySet());
 		}
 		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, new HashSet<>(paramNames),
-				ctx.functions.keySet());
+				ctx.functions.keySet(), ctx.globals);
 
 		int funcId = ctx.nextFuncId[0]++;
 		String methodName = "_lambda_" + funcId;

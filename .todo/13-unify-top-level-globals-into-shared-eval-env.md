@@ -1,19 +1,34 @@
 # Compiler: fully-CL global environment (bidirectional eval <-> compiled sharing)
 
-**Status:** partial -- top-level global bindings are mirrored one-way into the
-eval runtime's global environment (commit 94978ff). Full CL semantics (a single
-shared, bidirectional global environment) is not implemented.
+**Status:** partial. Two of the three gaps are now closed:
+(1) top-level global bindings are mirrored one-way into the eval runtime's global
+environment (commit 94978ff); (2) a global read/assigned from inside a
+`defun`/`lambda` body now compiles -- each top-level global has a dedicated
+backing store (JVM static field / WASM module-level global), see the now-closed
+`.todo/07`. The **remaining** gap is full CL semantics: a single shared,
+**bidirectional** global environment, so an `eval` write to a global is visible to
+compiled reads (and vice versa). Today compiled code reads/writes its dedicated
+backing store while `eval` reads/writes `_genv`/`GLOBAL_ENV`; the mirror is
+compiled->eval only, so the two can still drift (see the example below).
 
-**Do this together with `.todo/07-compiler-global-special-var-in-function-body.md`.**
-07 (a global read/assigned from inside a `defun`/`lambda` body does not compile)
-is the same root cause -- top-level globals live in a `main`/`_start` local, not
-a shared store. The unified design below solves both in one change: once every
-global read/write (top level, function body, and eval) goes through one store,
-the function-body case is just an ordinary env read and the one-way mirror is
-removed. Doing them together avoids a throwaway intermediate patch, a transient
-two-store inconsistency, and a second round of cross-backend verification (the
-perf trade-off and benchmark are shared too). Land as one PR; close 07 when this
-lands.
+NOTE: the chosen fix for `.todo/07` deliberately took the fast dedicated-store
+path rather than routing every global access through `_genv`/`GLOBAL_ENV`, to
+avoid the per-access alist-walk perf cost on hot `defparameter` reads
+(`examples/nn.lisp`/`mlp.lisp`). Closing the bidirectional gap therefore means
+either making the dedicated store the single shared store that `eval` also uses,
+or write-through in both directions -- not simply "route everything through the
+eval env".
+
+The former `.todo/07` (a global read/assigned from inside a `defun`/`lambda`
+body did not compile) is DONE and removed: each top-level global now has a
+dedicated backing store (JVM static field / WASM module-level global), collected
+by `compiler.GlobalVarCollector`, so a function-body reference is an ordinary
+`getstatic`/`global.get`. What remains here is making that store (or the eval
+env) the SINGLE shared, bidirectional store so `eval` writes and compiled writes
+are mutually visible. The "What to implement" steps below are written against the
+old all-in-`_genv` framing; re-read them in light of the dedicated-store fix
+already in place (the realistic path now is write-through in both directions, or
+making the dedicated store the backing the eval env also reads).
 
 ## Background
 

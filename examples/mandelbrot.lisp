@@ -2,8 +2,9 @@
 ;;;; Renders the Mandelbrot set to the terminal using only floating-point
 ;;;; arithmetic and nested loops -- no transcendental functions -- so it runs
 ;;;; identically on all three backends (interpreter / JVM / WASM). The iteration
-;;;; cap is threaded through as an argument because the JVM/WASM compilers cannot
-;;;; yet read a global special variable from inside a function body.
+;;;; cap is threaded through as an argument, which is also idiomatic CL; the
+;;;; JVM/WASM compilers can equally read a global special variable from inside a
+;;;; function body.
 ;;;;
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/mandelbrot.lisp

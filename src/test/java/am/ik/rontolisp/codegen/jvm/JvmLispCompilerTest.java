@@ -81,6 +81,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGlobalReadInsideFunction() throws Exception {
+		// A defparameter global referenced inside a defun body must resolve (previously
+		// failed to compile: "Cannot compile symbol reference: *k*").
+		assertThat(compileAndRun("(defparameter *k* 3) (defun f (x) (* x *k*)) (print (f 5))")).isEqualTo("15");
+	}
+
+	@Test
+	void compileAndRunGlobalAssignInsideFunctionVisibleAtTopLevel() throws Exception {
+		// setq of a global inside a function mutates the shared backing store, so a
+		// top-level read sees the update.
+		assertThat(compileAndRun(
+				"(defvar *acc* 0) (defun bump () (setq *acc* (+ *acc* 1))) (bump) (bump) (bump) (print *acc*)"))
+			.isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunGlobalReadInsideLambda() throws Exception {
+		// A global referenced from a lambda nested in a defun (it must be resolved from
+		// its static field, not captured as a free variable).
+		assertThat(compileAndRun(
+				"(defparameter *base* 10) (defun adders (xs) (mapcar (lambda (x) (+ x *base*)) xs)) (print (adders '(1 2 3)))"))
+			.isEqualTo("(11 12 13)");
+	}
+
+	@Test
 	void compileAndRunTime() throws Exception {
 		// time prints the elapsed real time and returns the form's value (here printed).
 		String output = compileAndRun("(print (time (+ 1 2)))");

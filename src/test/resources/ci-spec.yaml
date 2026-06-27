@@ -1530,3 +1530,25 @@ cases:
     expected: |
       alpha
       beta
+
+  # Regression for .todo/07 + .todo/13: a top-level global special variable
+  # (defvar/defparameter) must be readable and assignable from inside a defun/lambda
+  # body, not just at top level. Each global gets its own backing store (a JVM static
+  # field / a WASM module-level global), so the reference resolves from any function.
+  - name: global-special-var-in-function-body
+    source: |
+      (defparameter *ci-k* 3)
+      (defun ci-scale (x) (* x *ci-k*))
+      (print (ci-scale 5))
+      (defvar *ci-acc* 0)
+      (defun ci-bump () (setq *ci-acc* (+ *ci-acc* 1)))
+      (ci-bump)
+      (ci-bump)
+      (print *ci-acc*)
+      (defparameter *ci-base* 10)
+      (defun ci-adders (xs) (mapcar (lambda (x) (+ x *ci-base*)) xs))
+      (print (ci-adders '(1 2 3)))
+    expected: |
+      15
+      2
+      (11 12 13)

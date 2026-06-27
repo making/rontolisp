@@ -30,7 +30,8 @@ final class JvmLambdaCompiler {
 		List<String> paramNames = JvmLispCompiler.extractParamNames(parts.get(1));
 		List<LispVal> bodyExprs = parts.subList(2, parts.size());
 		Set<String> boundVars = new HashSet<>(paramNames);
-		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, boundVars, ctx.functions.keySet());
+		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, boundVars, ctx.functions.keySet(),
+				ctx.globals);
 		int funcId = ctx.nextFuncId[0]++;
 		String methodName = "_lambda_" + funcId;
 		ctx.lambdaDecls

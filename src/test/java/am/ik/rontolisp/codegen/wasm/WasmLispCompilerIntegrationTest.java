@@ -292,6 +292,27 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void globalReadInsideFunction() throws Exception {
+		// A defparameter global referenced inside a defun body must resolve (previously
+		// failed to compile: "Cannot compile symbol: *k*").
+		assertThat(compileAndRun("(defparameter *k* 3) (defun f (x) (* x *k*)) (print (f 5))")).isEqualTo("15");
+	}
+
+	@Test
+	void globalAssignInsideFunctionVisibleAtTopLevel() throws Exception {
+		assertThat(compileAndRun(
+				"(defvar *acc* 0) (defun bump () (setq *acc* (+ *acc* 1))) (bump) (bump) (bump) (print *acc*)"))
+			.isEqualTo("3");
+	}
+
+	@Test
+	void globalReadInsideLambda() throws Exception {
+		assertThat(compileAndRun(
+				"(defparameter *base* 10) (defun adders (xs) (mapcar (lambda (x) (+ x *base*)) xs)) (print (adders '(1 2 3)))"))
+			.isEqualTo("(11 12 13)");
+	}
+
+	@Test
 	void doStar() throws Exception {
 		assertThat(compileAndRun("(print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))")).isEqualTo("720");
 	}

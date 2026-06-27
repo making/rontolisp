@@ -25,7 +25,27 @@ final class WasmDefvarCompiler {
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean force) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
-		if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
+		Integer globalIndex = ctx.globalIndices.get(name.name());
+		if (globalIndex != null) {
+			// A top-level global: store into its module-level wasm global. defvar binds
+			// only if not already bound (idempotent); defparameter/defconstant (force)
+			// always rebind. definedGlobals tracks compile-time "already bound".
+			if (parts.size() > 2 && (force || !ctx.definedGlobals.contains(name.name()))) {
+				WasmExprCompiler.compileExpr(parts.get(2), ctx);
+				int tmpSlot = ctx.allocTemp();
+				ctx.writer.write(Instruction.TEE_LOCAL);
+				ctx.writer.writeSignedLeb128(tmpSlot);
+				ctx.writer.write(Instruction.SET_GLOBAL);
+				ctx.writer.writeUnsignedLeb128(globalIndex);
+				// Mirror into the eval runtime's global env (no-op unless eval is used at
+				// top level); stack stays clean (SET_GLOBAL consumed the value, the
+				// mirror
+				// drops the _store return).
+				WasmSetqCompiler.mirrorTopLevelGlobal(name.name(), tmpSlot, ctx);
+				ctx.definedGlobals.add(name.name());
+			}
+		}
+		else if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
 			WasmExprCompiler.compileExpr(parts.get(2), ctx);
 			int slot = ctx.allocLocal(name.name());
 			ctx.writer.write(Instruction.SET_LOCAL);

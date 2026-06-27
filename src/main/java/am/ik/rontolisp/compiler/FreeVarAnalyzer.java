@@ -38,9 +38,25 @@ public final class FreeVarAnalyzer {
 	 */
 	public static LinkedHashSet<String> findFreeVars(List<LispVal> body, Set<String> boundVars,
 			Set<String> knownFunctions) {
+		return findFreeVars(body, boundVars, knownFunctions, Set.of());
+	}
+
+	/**
+	 * Finds free variables, excluding top-level global variable names. A global is
+	 * resolved directly from its backing store (a JVM static field / a WASM module-level
+	 * global), so it must not be treated as a free variable that a nested lambda would
+	 * try to capture from the enclosing scope.
+	 * @param body the expressions to analyze
+	 * @param boundVars variables bound in the current scope (params, let bindings)
+	 * @param knownFunctions names of defined functions
+	 * @param globals names of top-level global variables (excluded from the result)
+	 * @return ordered set of free variable names
+	 */
+	public static LinkedHashSet<String> findFreeVars(List<LispVal> body, Set<String> boundVars,
+			Set<String> knownFunctions, Set<String> globals) {
 		LinkedHashSet<String> freeVars = new LinkedHashSet<>();
 		for (LispVal expr : body) {
-			collectFreeVars(expr, boundVars, knownFunctions, freeVars);
+			collectFreeVars(expr, boundVars, knownFunctions, globals, freeVars);
 		}
 		return freeVars;
 	}
@@ -63,12 +79,12 @@ public final class FreeVarAnalyzer {
 	}
 
 	private static void collectFreeVars(LispVal expr, Set<String> boundVars, Set<String> knownFunctions,
-			LinkedHashSet<String> freeVars) {
+			Set<String> globals, LinkedHashSet<String> freeVars) {
 		switch (expr) {
 			case LispSymbol sym -> {
 				String name = sym.name();
 				if (!sym.isKeyword() && !SPECIAL_NAMES.contains(name) && !boundVars.contains(name)
-						&& !knownFunctions.contains(name)) {
+						&& !knownFunctions.contains(name) && !globals.contains(name)) {
 					freeVars.add(name);
 				}
 			}
@@ -84,7 +100,7 @@ public final class FreeVarAnalyzer {
 							Set<String> innerBound = new HashSet<>(boundVars);
 							innerBound.addAll(extractParamNames(parts.get(1)));
 							for (int i = 2; i < parts.size(); i++) {
-								collectFreeVars(parts.get(i), innerBound, knownFunctions, freeVars);
+								collectFreeVars(parts.get(i), innerBound, knownFunctions, globals, freeVars);
 							}
 						}
 						case LispNames.LET -> {
@@ -96,39 +112,39 @@ public final class FreeVarAnalyzer {
 									LispCons pair = (LispCons) binding;
 									List<LispVal> pairList = pair.toList();
 									// The init expression is evaluated in outer scope
-									collectFreeVars(pairList.get(1), boundVars, knownFunctions, freeVars);
+									collectFreeVars(pairList.get(1), boundVars, knownFunctions, globals, freeVars);
 									innerBound.add(((LispSymbol) pairList.get(0)).name());
 								}
 							}
 							for (int i = 2; i < parts.size(); i++) {
-								collectFreeVars(parts.get(i), innerBound, knownFunctions, freeVars);
+								collectFreeVars(parts.get(i), innerBound, knownFunctions, globals, freeVars);
 							}
 						}
 						case LispNames.DEFUN -> {
 							// defun body is handled separately; skip
 						}
-						case LispNames.LET_STAR ->
-							collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars, knownFunctions, freeVars);
-						case LispNames.DOLIST ->
-							collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars, knownFunctions, freeVars);
-						case LispNames.DO ->
-							collectFreeVars(LispMacroExpander.expandDo(cons), boundVars, knownFunctions, freeVars);
+						case LispNames.LET_STAR -> collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars,
+								knownFunctions, globals, freeVars);
+						case LispNames.DOLIST -> collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars,
+								knownFunctions, globals, freeVars);
+						case LispNames.DO -> collectFreeVars(LispMacroExpander.expandDo(cons), boundVars,
+								knownFunctions, globals, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
 							List<LispVal> parts = cons.toList();
 							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
-								collectFreeVars(parts.get(1), boundVars, knownFunctions, freeVars);
+								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, freeVars);
 							}
 						}
 						case LispNames.SETQ -> {
 							List<LispVal> parts = cons.toList();
 							String name = ((LispSymbol) parts.get(1)).name();
 							if (!SPECIAL_NAMES.contains(name) && !boundVars.contains(name)
-									&& !knownFunctions.contains(name)) {
+									&& !knownFunctions.contains(name) && !globals.contains(name)) {
 								freeVars.add(name);
 							}
-							collectFreeVars(parts.get(2), boundVars, knownFunctions, freeVars);
+							collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, freeVars);
 						}
 						case LispNames.DEFVAR -> {
 							// defvar names a global variable, not a lexical reference;
@@ -136,7 +152,7 @@ public final class FreeVarAnalyzer {
 							// the optional init form can reference variables.
 							List<LispVal> parts = cons.toList();
 							if (parts.size() > 2) {
-								collectFreeVars(parts.get(2), boundVars, knownFunctions, freeVars);
+								collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, freeVars);
 							}
 						}
 						default -> {
@@ -145,7 +161,7 @@ public final class FreeVarAnalyzer {
 							// subexpressions can reference variables
 							List<LispVal> parts = cons.toList();
 							for (int i = 1; i < parts.size(); i++) {
-								collectFreeVars(parts.get(i), boundVars, knownFunctions, freeVars);
+								collectFreeVars(parts.get(i), boundVars, knownFunctions, globals, freeVars);
 							}
 						}
 					}
@@ -154,7 +170,7 @@ public final class FreeVarAnalyzer {
 					// Non-symbol head (e.g., ((lambda ...) args))
 					List<LispVal> parts = cons.toList();
 					for (LispVal part : parts) {
-						collectFreeVars(part, boundVars, knownFunctions, freeVars);
+						collectFreeVars(part, boundVars, knownFunctions, globals, freeVars);
 					}
 				}
 			}

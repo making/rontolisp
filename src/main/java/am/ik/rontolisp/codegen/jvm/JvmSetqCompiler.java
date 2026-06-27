@@ -72,6 +72,16 @@ final class JvmSetqCompiler {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(tempSlot);
 		}
+		else if (slot == null && ctx.globals.contains(name)) {
+			// A top-level global variable (not shadowed by a lexical here): store into
+			// its
+			// dedicated static field. Works from any method body, so a defun/lambda can
+			// assign a global. The eval mirror still runs at top level (no-op elsewhere).
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+			mirrorTopLevelGlobal(name, ctx);
+		}
 		else {
 			ctx.emit(Opcode.DUP);
 			if (slot == null) {

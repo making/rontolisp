@@ -23,6 +23,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 
 import am.ik.jvm.AccessFlag;
@@ -273,6 +274,20 @@ public final class JvmLispCompiler implements LispCompiler {
 			defuns.add(extractSetqLambda(wrapper));
 		}
 
+		// Collect top-level global variables and give each a dedicated static field.
+		// A reference compiles to getstatic from any method body, so a global is
+		// readable/assignable from a defun/lambda (not just from main). Field names are
+		// prefixed to avoid colliding with runtime helper fields (e.g. _genv).
+		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		Map<String, FieldrefConstant> globalFields = new HashMap<>();
+		List<Utf8Constant> globalFieldNameUtfs = new ArrayList<>();
+		Utf8Constant globalFieldDescUtf = cp.addUtf8("Ljava/lang/Object;");
+		for (String g : globals) {
+			Utf8Constant fieldNameUtf = cp.addUtf8("_g$" + mangleMethodName(g));
+			globalFieldNameUtfs.add(fieldNameUtf);
+			globalFields.put(g, cp.addFieldref(thisClass, cp.addNameAndType(fieldNameUtf, globalFieldDescUtf)));
+		}
+
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
 		Map<String, FunctionInfo> functions = new HashMap<>();
@@ -355,7 +370,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			.fetchHelper(fetchHelperMethod)
 			.dynamic(this.dynamic)
 			.className(this.className)
-			.userDefunNames(Set.copyOf(userDefinedNames));
+			.userDefunNames(Set.copyOf(userDefinedNames))
+			.globals(globals)
+			.globalFields(globalFields);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -687,6 +704,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(colFieldName)
 					.writeU2(colFieldDesc)
 					.writeU2(0));
+				// One static Object field per top-level global variable (default null =
+				// nil); written by setq/defvar, read by getstatic from any method body.
+				for (Utf8Constant gfName : globalFieldNameUtfs) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(gfName)
+						.writeU2(globalFieldDescUtf)
+						.writeU2(0));
+				}
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
@@ -1226,6 +1251,27 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * Names of top-level global variables (defvar/defparameter/defconstant and
+		 * top-level setq/setf places). Each has a dedicated static field in
+		 * {@link #globalFields}; a reference compiles to a {@code getstatic} from any
+		 * method body, so a defun/lambda can read a global. Shared across every context.
+		 */
+		Set<String> globals = Set.of();
+
+		/**
+		 * Maps a global variable name to its backing {@code private static Object} field.
+		 */
+		Map<String, FieldrefConstant> globalFields = Map.of();
+
+		/**
+		 * Top-level globals already initialized by a {@code defvar}/{@code defparameter}
+		 * in this compilation, used to implement {@code defvar}'s "bind only if not
+		 * already bound" idempotence at compile time. Per-context (only the top-level
+		 * context mutates it).
+		 */
+		final Set<String> definedGlobals = new HashSet<>();
+
+		/**
 		 * Stack of active {@code %block} return boundaries. The innermost block is on
 		 * top; a {@code return} stores its value into the block's slot and jumps to its
 		 * exit.
@@ -1236,6 +1282,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
+			this.globals = builder.globals;
+			this.globalFields = builder.globalFields;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
@@ -1366,6 +1414,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> globals = Set.of();
+
+			private Map<String, FieldrefConstant> globalFields = Map.of();
 
 			private Map<String, MethodrefConstant> numOps = Map.of();
 
@@ -1575,6 +1627,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder globals(Set<String> globals) {
+				this.globals = globals;
+				return this;
+			}
+
+			Builder globalFields(Map<String, FieldrefConstant> globalFields) {
+				this.globalFields = globalFields;
 				return this;
 			}
 
