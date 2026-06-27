@@ -23,6 +23,16 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`mlp.lisp`](mlp.lisp) | Generalized multi-layer perceptron for 2-D circle classification, built on the same array-based vector/matrix representation as `nn.lisp` |
 | [`maze-rl.lisp`](maze-rl.lisp) | Tabular Q-learning that solves a grid maze: a hash-table Q-table keyed by `(row col action)`, idiomatic `random`-based epsilon-greedy exploration, and an ASCII rendering of the learned path. **Non-deterministic:** because `random` is unseeded and per-backend, the exact path and value count differ on each run and backend (the algorithm always converges to a valid route) |
 
+## Browser demos (compile to WASM, run in a page)
+
+These are directories rather than single files: a Lisp program is compiled to
+`.wasm` and driven from plain HTML/JavaScript via a tiny WASI shim.
+
+| Directory | What it demonstrates |
+| --- | --- |
+| [`wasm-browser/`](wasm-browser) | Running a rontolisp-compiled `.wasm` in the browser from plain HTML + JavaScript, including feeding stdin from the page |
+| [`hiragana/`](hiragana) | A 5-class handwritten-hiragana recognizer: a small MLP trained offline in Lisp, baked into an inference `.wasm`, and driven from a `<canvas>` you draw on |
+
 ## Running
 
 Each example can be run by the interpreter, compiled to a JVM `.class`, or

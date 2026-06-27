@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rontolisp ひらがな認識 (WASM + canvas)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --bg: #fafafa;
+        --accent: #2d6cdf;
+        --term-bg: #1e1e2e;
+        --term-fg: #cdd6f4;
+      }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 760px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: var(--fg);
+        background: var(--bg);
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.5rem;
+      }
+      p.lead {
+        color: #555;
+      }
+      .pane {
+        display: flex;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      #pad {
+        border: 2px solid #888;
+        border-radius: 8px;
+        background: #fff;
+        touch-action: none;
+        cursor: crosshair;
+      }
+      .controls {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        font-size: 0.95rem;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #888;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .result {
+        flex: 1 1 220px;
+      }
+      .pred {
+        font-size: 4rem;
+        line-height: 1;
+        margin: 0.25rem 0;
+        min-height: 4rem;
+      }
+      .scores {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.85rem;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 2px 0;
+      }
+      .bar .kana {
+        width: 1.4rem;
+        font-family: system-ui, sans-serif;
+        font-size: 1rem;
+      }
+      .bar .track {
+        flex: 1;
+        height: 0.7rem;
+        background: #00000018;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .bar .fill {
+        height: 100%;
+        background: var(--accent);
+      }
+      .bar .num {
+        width: 3rem;
+        text-align: right;
+      }
+      .refs {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+      }
+      .ref {
+        text-align: center;
+        font-size: 0.8rem;
+        color: #666;
+      }
+      .ref canvas {
+        display: block;
+        image-rendering: pixelated;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fff;
+      }
+      code {
+        background: #00000010;
+        padding: 0.1rem 0.3rem;
+        border-radius: 4px;
+      }
+      pre.err {
+        color: #c0392b;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>手書きひらがな認識 — Lisp で学習し、WASM で推論</h1>
+    <p class="lead">
+      5 クラス（あ・い・う・え・お）の小さな多層パーセプトロンを rontolisp で書き、
+      <em>オフラインで学習</em>した重みを焼き込んで WebAssembly
+      (<code>infer.wasm</code>) にコンパイルしました。下のマスに字を書いて「認識」を
+      押すと、ブラウザが描画を 16×16 に縮小して WASM に渡し、予測クラスを返します。
+      下段の参考字形に近い形で書くとよく当たります。
+    </p>
+
+    <div class="pane">
+      <div>
+        <canvas id="pad" width="280" height="280"></canvas>
+        <div class="controls">
+          <button id="recognize">認識</button>
+          <button id="clear" class="secondary">クリア</button>
+        </div>
+      </div>
+      <div class="result">
+        <div>予測:</div>
+        <div class="pred" id="pred">―</div>
+        <div class="scores" id="scores"></div>
+      </div>
+    </div>
+
+    <pre class="err" id="err"></pre>
+
+    <h2 style="font-size: 1.1rem">参考字形（この形に寄せて書いてください）</h2>
+    <div class="refs" id="refs"></div>
+
+    <script type="module">
+      import { runWasmModule } from "./wasi-shim.js";
+
+      // ----- the five reference glyphs (must match prototypes.lisp) ----------
+      // Rendered from a real font at 16x16 and binarized; identical to the
+      // bitmaps the network was trained on.
+      const GLYPHS = {
+        a: [
+          "................", ".....##.........", ".....##....##...", "..###########...",
+          ".....##.........", ".....##..##.....", ".....#######....", "....###..#.##...",
+          "...####.##..##..", "..##.##.#....##.", ".##...###....##.", ".##...##....##..",
+          ".##..###....##..", "..######.####...", "........###.....", "................",
+        ],
+        i: [
+          "................", ".#..............", ".##.............", ".##.......##....",
+          ".##........##...", ".##.........#...", ".##.........##..", ".##.........##..",
+          ".##..........##.", ".##...##.....##.", ".##...##.....##.", "..##..##.....##.",
+          "..#####.........", "...###..........", "....#...........", "................",
+        ],
+        u: [
+          "................", "....#####.......", ".....########...", "................",
+          "................", "....########....", "..#######.###...", "............##..",
+          "............##..", "............##..", "............##..", "...........##...",
+          ".........###....", ".....######.....", ".....###........", "................",
+        ],
+        e: [
+          "................", "....####........", "....########....", "................",
+          "................", "..#########.....", "..###....##.....", "........##......",
+          "......###.......", ".....####.......", "....######......", "...###...#......",
+          "..##.....#......", ".##......######.", ".#........####..", "................",
+        ],
+        o: [
+          "................", ".....#..........", ".....#.....#....", ".....#....###...",
+          ".#########..##..", "..####.......##.", ".....#..........", ".....#...#......",
+          "....#########...", "...###......##..", "..##.#......##..", ".##..#......##..",
+          ".##..#..#...##..", ".#####..#####...", "..####...###....", "................",
+        ],
+      };
+      const KANA = { a: "あ", i: "い", u: "う", e: "え", o: "お" };
+      const ORDER = ["a", "i", "u", "e", "o"];
+      const GRID = 16;
+
+      // ----- draw the reference thumbnails -----------------------------------
+      const refs = document.getElementById("refs");
+      for (const key of ORDER) {
+        const wrap = document.createElement("div");
+        wrap.className = "ref";
+        const c = document.createElement("canvas");
+        c.width = GRID;
+        c.height = GRID;
+        c.style.width = "60px";
+        c.style.height = "60px";
+        const cx = c.getContext("2d");
+        const img = cx.createImageData(GRID, GRID);
+        GLYPHS[key].forEach((row, y) => {
+          for (let x = 0; x < GRID; x++) {
+            const on = row[x] === "#";
+            const i = (y * GRID + x) * 4;
+            img.data[i] = img.data[i + 1] = img.data[i + 2] = on ? 30 : 255;
+            img.data[i + 3] = 255;
+          }
+        });
+        cx.putImageData(img, 0, 0);
+        wrap.appendChild(c);
+        const cap = document.createElement("div");
+        cap.textContent = KANA[key];
+        wrap.appendChild(cap);
+        refs.appendChild(wrap);
+      }
+
+      // ----- drawing pad -----------------------------------------------------
+      const pad = document.getElementById("pad");
+      const ctx = pad.getContext("2d", { willReadFrequently: true });
+      function clearPad() {
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, pad.width, pad.height);
+        ctx.lineWidth = 20;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "#111";
+      }
+      clearPad();
+
+      let drawing = false;
+      let last = null;
+      function pos(e) {
+        const r = pad.getBoundingClientRect();
+        const p = e.touches ? e.touches[0] : e;
+        return { x: p.clientX - r.left, y: p.clientY - r.top };
+      }
+      function start(e) {
+        drawing = true;
+        last = pos(e);
+        e.preventDefault();
+      }
+      function move(e) {
+        if (!drawing) return;
+        const p = pos(e);
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        last = p;
+        e.preventDefault();
+      }
+      function end() {
+        drawing = false;
+      }
+      pad.addEventListener("pointerdown", start);
+      pad.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", end);
+
+      document.getElementById("clear").addEventListener("click", () => {
+        clearPad();
+        document.getElementById("pred").textContent = "―";
+        document.getElementById("scores").textContent = "";
+      });
+
+      // ----- preprocess: crop ink bbox, center+scale into a 16x16 grid -------
+      // Mirrors the training data: binary, centred, roughly filling the grid.
+      function toBitmap() {
+        const src = ctx.getImageData(0, 0, pad.width, pad.height);
+        const W = pad.width, H = pad.height;
+        const ink = (x, y) => 1 - src.data[(y * W + x) * 4] / 255; // black=1
+        let minx = W, miny = H, maxx = -1, maxy = -1;
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            if (ink(x, y) > 0.3) {
+              if (x < minx) minx = x;
+              if (x > maxx) maxx = x;
+              if (y < miny) miny = y;
+              if (y > maxy) maxy = y;
+            }
+          }
+        }
+        const cells = new Float32Array(GRID * GRID); // all 0 if nothing drawn
+        if (maxx < 0) return cells;
+        // Scale the ink bbox to fit a (GRID-2) box centred in the grid (1px
+        // margin), preserving aspect ratio -- mirroring how the reference
+        // glyphs were rendered, so a drawn stroke lines up with the templates.
+        const bw = maxx - minx + 1, bh = maxy - miny + 1;
+        const fit = GRID - 2, scale = fit / Math.max(bw, bh);
+        const ox = (GRID - bw * scale) / 2, oy = (GRID - bh * scale) / 2;
+        // For each high-res ink pixel, accumulate into its target cell.
+        const acc = new Float32Array(GRID * GRID);
+        const cnt = new Float32Array(GRID * GRID);
+        for (let y = miny; y <= maxy; y++) {
+          for (let x = minx; x <= maxx; x++) {
+            const gx = Math.floor((x - minx) * scale + ox);
+            const gy = Math.floor((y - miny) * scale + oy);
+            if (gx < 0 || gx >= GRID || gy < 0 || gy >= GRID) continue;
+            const idx = gy * GRID + gx;
+            acc[idx] += ink(x, y);
+            cnt[idx] += 1;
+          }
+        }
+        for (let i = 0; i < cells.length; i++) {
+          // Binarize to match the 0/1 training glyphs.
+          cells[i] = cnt[i] > 0 && acc[i] / cnt[i] > 0.35 ? 1 : 0;
+        }
+        return cells;
+      }
+
+      // ----- run inference ---------------------------------------------------
+      let wasmBytes = null;
+      async function loadWasm() {
+        if (wasmBytes) return wasmBytes;
+        const r = await fetch("./infer.wasm");
+        if (!r.ok) throw new Error(`failed to fetch infer.wasm: ${r.status}`);
+        wasmBytes = await r.arrayBuffer();
+        return wasmBytes;
+      }
+
+      function renderResult(stdout) {
+        // stdout lines: "pred <i> <romaji>" then "score <romaji> <value>"
+        const lines = stdout.trim().split("\n");
+        let pred = null;
+        const scores = {};
+        for (const line of lines) {
+          const t = line.trim().split(/\s+/);
+          if (t[0] === "pred") pred = t[2];
+          else if (t[0] === "score") scores[t[1]] = parseFloat(t[2]);
+        }
+        document.getElementById("pred").textContent = pred ? KANA[pred] : "?";
+        const box = document.getElementById("scores");
+        box.innerHTML = "";
+        for (const key of ORDER) {
+          const v = scores[key] ?? 0;
+          const bar = document.createElement("div");
+          bar.className = "bar";
+          bar.innerHTML =
+            `<span class="kana">${KANA[key]}</span>` +
+            `<span class="track"><span class="fill" style="width:${Math.round(
+              Math.max(0, Math.min(1, v)) * 100,
+            )}%"></span></span>` +
+            `<span class="num">${v.toFixed(3)}</span>`;
+          box.appendChild(bar);
+        }
+      }
+
+      document.getElementById("recognize").addEventListener("click", async () => {
+        const btn = document.getElementById("recognize");
+        const err = document.getElementById("err");
+        err.textContent = "";
+        btn.disabled = true;
+        try {
+          const cells = toBitmap();
+          const stdin = "(" + Array.from(cells, (v) => v.toFixed(1)).join(" ") + ")\n";
+          const bytes = await loadWasm();
+          const { stdout, stderr } = await runWasmModule(bytes, { stdin });
+          if (stderr) console.warn("stderr:", stderr);
+          renderResult(stdout);
+        } catch (e) {
+          err.textContent =
+            "Error: " + e.message + "\n\n" +
+            "WebAssembly GC が必要です (Chrome 119+, Firefox 120+, Safari 18.2+)。" +
+            "また file:// ではなく http:// で配信してください。";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

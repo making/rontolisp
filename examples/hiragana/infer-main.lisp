@@ -1,0 +1,39 @@
+;;;; infer-main.lisp -- the inference program.  gen.sh concatenates
+;;;; common.lisp + weights.lisp + this file into infer.lisp and compiles it to
+;;;; WASM (and it also runs on the interpreter / JVM unchanged).
+;;;;
+;;;; It reads ONE flattened 16x16 image from stdin as a Lisp list of 256 values
+;;;; in [0, 1] -- e.g. "(0.0 0.0 1.0 ... 0.0)" -- runs the baked-in network
+;;;; forward, and prints the predicted class.  Only this stdin list passes
+;;;; through the runtime reader, so the browser side must send plain decimals
+;;;; (no exponents), which is all it ever produces.
+
+;; Class index -> romaji label.  Keep in sync with *romaji* / class order in
+;; prototypes.lisp.  We print romaji (ASCII) rather than the kana character so
+;; nothing multibyte crosses the WASM string boundary; the browser maps the
+;; romaji back to あいうえお for display.
+(defparameter *labels* (list "a" "i" "u" "e" "o"))
+
+;; Rebuild the network (list of (W b)) from the baked-in *weights* literal,
+;; each entry (rows cols flat-W flat-b).
+(defun build-net (spec)
+  (if (null spec)
+      nil
+      (let* ((layer (first spec))
+             (rows (first layer))
+             (cols (second layer))
+             (wflat (third layer))
+             (bflat (fourth layer)))
+        (cons (list (mat-from-flat rows cols wflat) (list->vector bflat))
+              (build-net (rest spec))))))
+
+(defparameter *net* (build-net *weights*))
+
+(let* ((image (read))                    ; (v0 v1 ... v143)
+       (x (list->vector image))
+       (out (predict *net* x))
+       (pred (argmax out)))
+  ;; One machine-readable line the browser parses, then the per-class scores.
+  (format t "pred ~a ~a~%" pred (nth pred *labels*))
+  (dotimes (i (length out))
+    (format t "score ~a ~a~%" (nth i *labels*) (aref out i))))
