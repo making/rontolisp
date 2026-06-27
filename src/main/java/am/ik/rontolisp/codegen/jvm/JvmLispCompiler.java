@@ -642,6 +642,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmParseIntegerRuntimeBuilder.@Nullable ParseIntMethod parseIntMethodBody = usesParseInteger
 				? JvmParseIntegerRuntimeBuilder.build(cp, stringClass, longClass, longValueOf) : null;
 
+		// length runtime helper. Emitted unconditionally (it is small and lives in its
+		// own
+		// method): length is also generated internally by other compilers (e.g. format
+		// padding), so a source-symbol gate would miss those call sites. The whole
+		// computation lives in one method so each call site is a single invokestatic,
+		// keeping main within the JVM's 64 KB per-method limit.
+		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
+				objectArrayClass, stringClass, longValueOf);
+
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
 		Utf8Constant codeUtf8 = cp.addUtf8("Code");
@@ -802,6 +811,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(parseIntMethodBody.maxStack())
 									.writeU2(parseIntMethodBody.maxLocals())
 									.writeCode((Object[]) parseIntMethodBody.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				{
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lengthMethodBody.name(),
+							lengthMethodBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(lengthMethodBody.maxStack())
+									.writeU2(lengthMethodBody.maxLocals())
+									.writeCode((Object[]) lengthMethodBody.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

@@ -1,6 +1,12 @@
 ;;;; Feed-forward neural network in rontolisp
 ;;;; Learns the XOR function via backpropagation + gradient descent.
 ;;;; Topology: 2 inputs -> 4 hidden (sigmoid) -> 1 output (sigmoid).
+;;;;
+;;;; Vectors are rank-1 arrays and weight matrices are rank-2 arrays, so the
+;;;; math is plain indexed arithmetic with O(1) aref access and in-place weight
+;;;; updates -- close to how a real network is written. (length v) gives a
+;;;; vector's size, so layer shapes are read off the bias/input vectors rather
+;;;; than tracked separately.
 
 ;;; --- random weights via the built-in random ---
 ;;; random returns a value in [0, limit) of the limit's type. On the interpreter
@@ -8,38 +14,33 @@
 ;;; from the WASI random_get host function (so every run differs).
 (defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)
 
-;;; --- vector / matrix helpers ---
-(defun build-list (n fn)
-  (let ((acc nil) (i 0))
-    (while (< i n)
-      (setq acc (cons (funcall fn) acc))
-      (setq i (+ i 1)))
-    (reverse acc)))
-(defun map2 (fn a b)
-  (if (null a) nil
-      (cons (funcall fn (car a) (car b)) (map2 fn (cdr a) (cdr b)))))
-(defun dot (a b) (reduce #'+ (map2 #'* a b) :initial-value 0))
-(defun vec+ (a b) (map2 #'+ a b))
-(defun vec- (a b) (map2 #'- a b))
-(defun vec-scale (s v) (mapcar (lambda (x) (* s x)) v))
-(defun hadamard (a b) (map2 #'* a b))
-(defun mat-vec (m v) (mapcar (lambda (row) (dot row v)) m))
-(defun transpose (m)
-  (if (null (car m)) nil
-      (cons (mapcar #'car m) (transpose (mapcar #'cdr m)))))
-(defun mat-vec-T (m v) (mat-vec (transpose m) v))
-(defun outer (a b) (mapcar (lambda (ai) (vec-scale ai b)) a))
-(defun mat- (m1 m2) (map2 #'vec- m1 m2))
-(defun mat-scale (s m) (mapcar (lambda (row) (vec-scale s row)) m))
+;;; --- array helpers ---
+(defun random-vector (n)
+  (let ((v (make-array n :initial-element 0.0)))
+    (dotimes (i n) (setf (aref v i) (random-weight)))
+    v))
+(defun random-matrix (rows cols)
+  (let ((m (make-array (list rows cols) :initial-element 0.0)))
+    (dotimes (i rows)
+      (dotimes (j cols) (setf (aref m i j) (random-weight))))
+    m))
 
 ;;; --- activation ---
-(defun sigmoid (x) (/ 1.0 (+ 1.0 (exp (- 0 x)))))
-(defun vec-sigmoid (v) (mapcar #'sigmoid v))
-(defun dsigmoid-from-a (v) (mapcar (lambda (a) (* a (- 1.0 a))) v))
+(defun sigmoid (x) (/ 1.0 (+ 1.0 (exp (- 0.0 x)))))
+
+;;; One layer: a = sigmoid(W x + b). The output length is (length b) and the
+;;; input length is (length x), so no dimensions need to be passed around.
+(defun layer-forward (w b x)
+  (let* ((rows (length b))
+         (cols (length x))
+         (a (make-array rows :initial-element 0.0)))
+    (dotimes (i rows)
+      (let ((s (aref b i)))
+        (dotimes (j cols) (incf s (* (aref w i j) (aref x j))))
+        (setf (aref a i) (sigmoid s))))
+    a))
 
 ;;; --- network = (W1 b1 W2 b2) ---
-(defun random-vector (n) (build-list n #'random-weight))
-(defun random-matrix (rows cols) (build-list rows (lambda () (random-vector cols))))
 (defun init-net (n-in n-hid n-out)
   (list (random-matrix n-hid n-in) (random-vector n-hid)
         (random-matrix n-out n-hid) (random-vector n-out)))
@@ -49,45 +50,66 @@
 (defun net-b2 (net) (fourth net))
 
 (defun forward-output (net x)
-  (let* ((a1 (vec-sigmoid (vec+ (mat-vec (net-w1 net) x) (net-b1 net)))))
-    (vec-sigmoid (vec+ (mat-vec (net-w2 net) a1) (net-b2 net)))))
+  (layer-forward (net-w2 net) (net-b2 net)
+                 (layer-forward (net-w1 net) (net-b1 net) x)))
 
-;;; --- one backprop / SGD step over a single example ---
+;;; --- one backprop / SGD step over a single example (updates net in place) ---
 (defun train-example (net x y lr)
-  (let* ((w1 (net-w1 net)) (b1 (net-b1 net)) (w2 (net-w2 net)) (b2 (net-b2 net))
-         (a1 (vec-sigmoid (vec+ (mat-vec w1 x) b1)))
-         (a2 (vec-sigmoid (vec+ (mat-vec w2 a1) b2)))
-         (d2 (hadamard (vec- a2 y) (dsigmoid-from-a a2)))
-         (d1 (hadamard (mat-vec-T w2 d2) (dsigmoid-from-a a1)))
-         (w2n (mat- w2 (mat-scale lr (outer d2 a1))))
-         (b2n (vec- b2 (vec-scale lr d2)))
-         (w1n (mat- w1 (mat-scale lr (outer d1 x))))
-         (b1n (vec- b1 (vec-scale lr d1))))
-    (list w1n b1n w2n b2n)))
+  (let* ((w1 (net-w1 net)) (b1 (net-b1 net))
+         (w2 (net-w2 net)) (b2 (net-b2 net))
+         (n-in (length x)) (n-hid (length b1)) (n-out (length b2))
+         (a1 (layer-forward w1 b1 x))
+         (a2 (layer-forward w2 b2 a1))
+         (d2 (make-array n-out :initial-element 0.0))
+         (d1 (make-array n-hid :initial-element 0.0)))
+    ;; output delta: (a2 - y) * a2 * (1 - a2)
+    (dotimes (i n-out)
+      (setf (aref d2 i)
+            (* (- (aref a2 i) (aref y i)) (aref a2 i) (- 1.0 (aref a2 i)))))
+    ;; hidden delta: (W2^T d2) * a1 * (1 - a1)  -- computed before W2 changes
+    (dotimes (j n-hid)
+      (let ((s 0.0))
+        (dotimes (i n-out) (incf s (* (aref w2 i j) (aref d2 i))))
+        (setf (aref d1 j) (* s (aref a1 j) (- 1.0 (aref a1 j))))))
+    ;; descend: W -= lr * delta (outer) input, b -= lr * delta
+    (dotimes (i n-out)
+      (dotimes (j n-hid) (decf (aref w2 i j) (* lr (aref d2 i) (aref a1 j))))
+      (decf (aref b2 i) (* lr (aref d2 i))))
+    (dotimes (j n-hid)
+      (dotimes (k n-in) (decf (aref w1 j k) (* lr (aref d1 j) (aref x k))))
+      (decf (aref b1 j) (* lr (aref d1 j))))
+    net))
 
 ;;; --- loss + training loop ---
 (defun example-loss (net ex)
-  (let* ((yhat (forward-output net (first ex)))
-         (diff (vec- yhat (second ex))))
-    (* 0.5 (dot diff diff))))
+  (let* ((a (forward-output net (first ex)))
+         (y (second ex))
+         (s 0.0))
+    (dotimes (i (length a))
+      (let ((d (- (aref a i) (aref y i)))) (incf s (* d d))))
+    (* 0.5 s)))
 (defun total-loss (net data)
-  (reduce #'+ (mapcar (lambda (ex) (example-loss net ex)) data) :initial-value 0))
+  (let ((s 0.0))
+    (dolist (ex data) (incf s (example-loss net ex)))
+    s))
 (defun train (net data epochs lr)
   (let ((e 0))
     (while (< e epochs)
       (dolist (ex data)
-        (setq net (train-example net (first ex) (second ex) lr)))
+        (train-example net (first ex) (second ex) lr))
       (when (zerop (mod e 1000))
         (format t "epoch ~a  loss ~a~%" e (total-loss net data)))
       (setq e (+ e 1))))
   net)
 
 ;;; --- run: learn XOR ---
+;;; Inputs and targets are vector literals (#(...)) read directly as rank-1
+;;; arrays. They are never mutated -- only the network's weights change.
 (defparameter *xor-data*
-  (list (list (list 0.0 0.0) (list 0.0))
-        (list (list 0.0 1.0) (list 1.0))
-        (list (list 1.0 0.0) (list 1.0))
-        (list (list 1.0 1.0) (list 0.0))))
+  (list (list #(0.0 0.0) #(0.0))
+        (list #(0.0 1.0) #(1.0))
+        (list #(1.0 0.0) #(1.0))
+        (list #(1.0 1.0) #(0.0))))
 
 (defparameter *net* (init-net 2 4 1))
 (format t "Training XOR (2-4-1 network)...~%")
@@ -96,5 +118,7 @@
 (format t "~%Predictions after training:~%")
 (dolist (ex *xor-data*)
   (let ((x (first ex)))
-    (format t "  ~a -> ~a  (target ~a)~%"
-            x (first (forward-output *net* x)) (first (second ex)))))
+    (format t "  ~a ~a -> ~a  (target ~a)~%"
+            (aref x 0) (aref x 1)
+            (aref (forward-output *net* x) 0)
+            (aref (second ex) 0))))

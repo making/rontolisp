@@ -2881,6 +2881,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void lengthOfVectorReturnsElementCount() {
+		assertThat(eval("(length (make-array 5 :initial-element 0))")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(length #(10 20 30))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(length #())")).isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void lengthOfTwoDimensionalArrayIsAnError() {
+		assertThatThrownBy(() -> eval("(length (make-array (list 2 3) :initial-element 0))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("length");
+	}
+
+	@Test
 	void twoDimensionalArrayPrintsAsHash2A() {
 		LispVal result = evalMulti("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

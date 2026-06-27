@@ -9,10 +9,13 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code length} built-in. A string returns its character count (the stored
- * byte length minus the two surrounding quotes); any other argument is treated as a list
- * and its cons cells are counted (Common Lisp sequences). A symbol (which shares the
- * string struct representation but lacks the leading quote) is not a sequence and yields
- * zero, matching the interpreter.
+ * byte length minus the two surrounding quotes); a vector (rank-1 array) returns its
+ * element count; any other argument is treated as a list and its cons cells are counted
+ * (Common Lisp sequences). A symbol (which shares the string struct representation but
+ * lacks the leading quote) is not a sequence and yields zero, matching the interpreter; a
+ * hash table likewise yields zero. A rank-2 array is not a sequence and traps. An array
+ * and a hash table are both {@code TYPE_CELL} boxes; the header's car distinguishes them
+ * (a bucket array for an array, an i31 count for a hash table).
  */
 final class WasmLengthCompiler {
 
@@ -70,6 +73,74 @@ final class WasmLengthCompiler {
 		ctx.writer.write(Instruction.END);
 
 		ctx.writer.write(Instruction.ELSE);
+		// An array and a hash table are both TYPE_CELL boxes holding a header cons. They
+		// are
+		// told apart by the header's car: an array's car is the dims bucket array, a hash
+		// table's car is an i31 count.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// dims = car(header) where header = cell.field0
+		int dimsSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeSignedLeb128(0); // header cons
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeSignedLeb128(0); // car
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(dimsSlot);
+		// if (car is a bucket array) it is an array
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(dimsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// array: a vector (rank 1) has dims length 1; otherwise it is not a sequence.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(dimsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// rank 1: return dims[0] (already an i31).
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(dimsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.ELSE);
+		// rank 2+: not a sequence.
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		// hash table: not a sequence -> 0 (matching the interpreter/JVM list
+		// fallthrough).
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
 		// List case: count cons cells until the value is no longer a cons.
 		int countSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.I32_CONST);
@@ -111,7 +182,8 @@ final class WasmLengthCompiler {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(countSlot);
 
-		ctx.writer.write(Instruction.END); // outer if
+		ctx.writer.write(Instruction.END); // array/hash-table-vs-list if
+		ctx.writer.write(Instruction.END); // outer if (string)
 	}
 
 }

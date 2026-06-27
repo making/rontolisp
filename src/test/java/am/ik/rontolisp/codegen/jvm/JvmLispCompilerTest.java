@@ -2824,4 +2824,11 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print #())")).isEqualTo("#()");
 	}
 
+	@Test
+	void compileLengthOfVectorReturnsElementCount() throws Exception {
+		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (length #(10 20 30)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (length #()))")).isEqualTo("0");
+	}
+
 }

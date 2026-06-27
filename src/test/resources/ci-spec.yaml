@@ -1502,6 +1502,21 @@ cases:
       #(7 7 7)
       #2A((1 0 0) (0 0 9))
 
+  # length is a sequence operation: it returns the element count of a vector (rank-1
+  # array) just as for a list or string. A rank-2 array is not a sequence, so length
+  # signals an error on it (not covered here, since the cases share one program).
+  - name: length-of-vector-cross-backend
+    source: |
+      (defun ci-vector-length ()
+        (print (length (make-array 5 :initial-element 0)))
+        (print (length #(10 20 30)))
+        (print (length #())))
+      (ci-vector-length)
+    expected: |
+      5
+      3
+      0
+
   # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

@@ -982,9 +982,17 @@ public final class Environment implements Scope {
 	private static void registerSequenceOps(Environment env) {
 		env.defineFunction(LispNames.LENGTH, new LispFunction(LispNames.LENGTH, args -> {
 			requireArgCount(LispNames.LENGTH, args, 1);
-			// length applies to strings as well as lists (Common Lisp sequences).
+			// length applies to strings and vectors as well as lists (Common Lisp
+			// sequences). A rank-2 array is not a sequence, so it is an error.
 			if (args.get(0) instanceof LispString str) {
 				return new LispInteger(str.value().length());
+			}
+			if (args.get(0) instanceof LispArray array) {
+				if (array.dimensions().length != 1) {
+					throw new LispEvalException(LispNames.LENGTH + ": argument is not a sequence (rank-"
+							+ array.dimensions().length + " array)");
+				}
+				return new LispInteger(array.dimensions()[0]);
 			}
 			long count = 0;
 			LispVal cur = args.get(0);

@@ -500,7 +500,7 @@ compiled output (see [Compiled `eval` limitations](#compiled-eval-limitations)).
 | `second` `third` `fourth` | `(second '(1 2 3))` | `2` |
 | `list` | `(list 1 2 3)` | `(1 2 3)` |
 | `nthcdr` | `(nthcdr 2 '(1 2 3))` | `(3)` (skip first n elements) |
-| `length` | `(length '(1 2 3))`, `(length "abc")` | `3`, `3` (lists and strings; `0` for nil) |
+| `length` | `(length '(1 2 3))`, `(length "abc")`, `(length #(1 2 3))` | `3`, `3`, `3` (lists, strings and vectors; `0` for nil) |
 | `reverse` | `(reverse '(1 2 3))` | `(3 2 1)` |
 | `member` | `(member 2 '(1 2 3))` | `(2 3)` (tail whose car is `eql` to the item, or nil; an optional `:test` keyword takes a function designator, e.g. `(member '(a d) '((a b) (a d)) :test 'equal)` -> `((a d))`) |
 | `find` | `(find 2 '(1 2 3))` | `2` (first element `eql` to the item, or nil) |
@@ -639,7 +639,9 @@ typical use -- counting with `incf` on the place:
 Only arrays of **rank 1 (vectors) and rank 2** are supported; the dimensions argument is
 an integer (rank 1) or a list of one or two integers, and `:initial-element` sets every
 cell (defaulting to nil). Elements are stored row-major with O(1) access, and arrays are
-compared by identity (`eq`), so two distinct arrays are never `equal`. Unlike the hash-table
+compared by identity (`eq`), so two distinct arrays are never `equal`. `length` returns the
+element count of a vector (rank-1 array); a rank-2 array is not a sequence, so `length`
+signals an error on it. Unlike the hash-table
 operators, the array operators are not exposed as first-class function values, so `#'aref`
 and `#'make-array` are not available (call them directly). A 2-D array indexed in nested
 loops:
