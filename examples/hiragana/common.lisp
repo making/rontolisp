@@ -3,8 +3,8 @@
 ;;;; This file is concatenated FIRST into both train.lisp (offline, runs on the
 ;;;; interpreter/JVM) and infer.lisp (compiled to WASM and run in the browser),
 ;;;; so it must only use forms supported by all backends: make-array / aref /
-;;;; setf / dotimes / dolist / exp.  The image is a 16x16 grid flattened
-;;;; row-major into a length-256 vector of values in [0, 1].
+;;;; setf / dotimes / dolist / exp.  The image is a 24x24 grid flattened
+;;;; row-major into a length-576 vector of values in [0, 1].
 
 ;;; A network is a list of layers; each layer is (W b) where W is an
 ;;; out x in rank-2 array and b is an out-length rank-1 vector.  The forward

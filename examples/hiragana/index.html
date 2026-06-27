@@ -133,11 +133,11 @@
   <body>
     <h1>手書きひらがな認識 — Lisp で学習し、WASM で推論</h1>
     <p class="lead">
-      5 クラス（あ・い・う・え・お）の小さな多層パーセプトロンを rontolisp で書き、
+      全 46 文字（五十音 あ〜ん）の小さな多層パーセプトロンを rontolisp で書き、
       <em>オフラインで学習</em>した重みを焼き込んで WebAssembly
-      (<code>infer.wasm</code>) にコンパイルしました。下のマスに字を書いて「認識」を
-      押すと、ブラウザが描画を 16×16 に縮小して WASM に渡し、予測クラスを返します。
-      下段の参考字形に近い形で書くとよく当たります。
+      (<code>infer.wasm</code>) にコンパイルしました。下のマスに字を書くと、ブラウザが
+      描画を 24×24 に縮小して WASM に渡し、<em>書くそばからリアルタイムで</em>予測します。
+      下段の参考字形に近い形で書くとよく当たります（似た字形は混同しやすいです）。
     </p>
 
     <div class="pane">
@@ -162,45 +162,10 @@
 
     <script type="module">
       import { runWasmModule } from "./wasi-shim.js";
-
-      // ----- the five reference glyphs (must match prototypes.lisp) ----------
-      // Rendered from a real font at 16x16 and binarized; identical to the
-      // bitmaps the network was trained on.
-      const GLYPHS = {
-        a: [
-          "................", ".....##.........", ".....##....##...", "..###########...",
-          ".....##.........", ".....##..##.....", ".....#######....", "....###..#.##...",
-          "...####.##..##..", "..##.##.#....##.", ".##...###....##.", ".##...##....##..",
-          ".##..###....##..", "..######.####...", "........###.....", "................",
-        ],
-        i: [
-          "................", ".#..............", ".##.............", ".##.......##....",
-          ".##........##...", ".##.........#...", ".##.........##..", ".##.........##..",
-          ".##..........##.", ".##...##.....##.", ".##...##.....##.", "..##..##.....##.",
-          "..#####.........", "...###..........", "....#...........", "................",
-        ],
-        u: [
-          "................", "....#####.......", ".....########...", "................",
-          "................", "....########....", "..#######.###...", "............##..",
-          "............##..", "............##..", "............##..", "...........##...",
-          ".........###....", ".....######.....", ".....###........", "................",
-        ],
-        e: [
-          "................", "....####........", "....########....", "................",
-          "................", "..#########.....", "..###....##.....", "........##......",
-          "......###.......", ".....####.......", "....######......", "...###...#......",
-          "..##.....#......", ".##......######.", ".#........####..", "................",
-        ],
-        o: [
-          "................", ".....#..........", ".....#.....#....", ".....#....###...",
-          ".#########..##..", "..####.......##.", ".....#..........", ".....#...#......",
-          "....#########...", "...###......##..", "..##.#......##..", ".##..#......##..",
-          ".##..#..#...##..", ".#####..#####...", "..####...###....", "................",
-        ],
-      };
-      const KANA = { a: "あ", i: "い", u: "う", e: "え", o: "お" };
-      const ORDER = ["a", "i", "u", "e", "o"];
-      const GRID = 16;
+      // The reference glyphs (and GRID) come from the same generator that produced
+      // the trained templates -- see glyphgen/GlyphGen.java -- so the page and the
+      // network never drift apart.
+      import { GLYPHS, KANA, ORDER, GRID } from "./glyphs.js";
 
       // ----- draw the reference thumbnails -----------------------------------
       const refs = document.getElementById("refs");
@@ -210,8 +175,8 @@
         const c = document.createElement("canvas");
         c.width = GRID;
         c.height = GRID;
-        c.style.width = "60px";
-        c.style.height = "60px";
+        c.style.width = "44px";
+        c.style.height = "44px";
         const cx = c.getContext("2d");
         const img = cx.createImageData(GRID, GRID);
         GLYPHS[key].forEach((row, y) => {
@@ -264,21 +229,26 @@
         ctx.stroke();
         last = p;
         e.preventDefault();
+        scheduleRecognize(180); // live update while the stroke is in progress
       }
       function end() {
+        if (!drawing) return;
         drawing = false;
+        scheduleRecognize(60); // re-run promptly when the pen lifts
       }
       pad.addEventListener("pointerdown", start);
       pad.addEventListener("pointermove", move);
       window.addEventListener("pointerup", end);
 
       document.getElementById("clear").addEventListener("click", () => {
+        clearTimeout(debTimer);
         clearPad();
         document.getElementById("pred").textContent = "―";
         document.getElementById("scores").textContent = "";
+        document.getElementById("err").textContent = "";
       });
 
-      // ----- preprocess: crop ink bbox, center+scale into a 16x16 grid -------
+      // ----- preprocess: crop ink bbox, center+scale into a 24x24 grid -------
       // Mirrors the training data: binary, centred, roughly filling the grid.
       function toBitmap() {
         const src = ctx.getImageData(0, 0, pad.width, pad.height);
@@ -346,8 +316,11 @@
         document.getElementById("pred").textContent = pred ? KANA[pred] : "?";
         const box = document.getElementById("scores");
         box.innerHTML = "";
-        for (const key of ORDER) {
-          const v = scores[key] ?? 0;
+        // 46 classes is too many to list -- show the top 8 by score.
+        const top = ORDER.map((key) => [key, scores[key] ?? 0])
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8);
+        for (const [key, v] of top) {
           const bar = document.createElement("div");
           bar.className = "bar";
           bar.innerHTML =
@@ -360,27 +333,56 @@
         }
       }
 
-      document.getElementById("recognize").addEventListener("click", async () => {
-        const btn = document.getElementById("recognize");
+      // ----- recognition, run live as you draw -------------------------------
+      // A fresh WASM instance per call is cheap, but drawing fires many events,
+      // so we debounce (scheduleRecognize) and serialize: while one run is in
+      // flight, a new request just sets a "pending" flag and re-runs at the end.
+      let debTimer = null;
+      let inflight = false;
+      let pending = false;
+
+      async function recognize() {
+        if (inflight) {
+          pending = true;
+          return;
+        }
+        inflight = true;
         const err = document.getElementById("err");
-        err.textContent = "";
-        btn.disabled = true;
         try {
           const cells = toBitmap();
+          // Nothing drawn yet -> don't show a (meaningless) prediction.
+          if (!cells.some((v) => v > 0)) {
+            document.getElementById("pred").textContent = "―";
+            document.getElementById("scores").textContent = "";
+            return;
+          }
           const stdin = "(" + Array.from(cells, (v) => v.toFixed(1)).join(" ") + ")\n";
           const bytes = await loadWasm();
           const { stdout, stderr } = await runWasmModule(bytes, { stdin });
           if (stderr) console.warn("stderr:", stderr);
           renderResult(stdout);
+          err.textContent = "";
         } catch (e) {
           err.textContent =
             "Error: " + e.message + "\n\n" +
             "WebAssembly GC が必要です (Chrome 119+, Firefox 120+, Safari 18.2+)。" +
             "また file:// ではなく http:// で配信してください。";
         } finally {
-          btn.disabled = false;
+          inflight = false;
+          if (pending) {
+            pending = false;
+            recognize(); // coalesce the latest request
+          }
         }
-      });
+      }
+
+      function scheduleRecognize(delay = 150) {
+        clearTimeout(debTimer);
+        debTimer = setTimeout(recognize, delay);
+      }
+
+      // The button stays as a manual trigger; drawing recognizes automatically.
+      document.getElementById("recognize").addEventListener("click", recognize);
     </script>
   </body>
 </html>

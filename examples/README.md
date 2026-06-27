@@ -31,7 +31,7 @@ These are directories rather than single files: a Lisp program is compiled to
 | Directory | What it demonstrates |
 | --- | --- |
 | [`wasm-browser/`](wasm-browser) | Running a rontolisp-compiled `.wasm` in the browser from plain HTML + JavaScript, including feeding stdin from the page |
-| [`hiragana/`](hiragana) | A 5-class handwritten-hiragana recognizer: a small MLP trained offline in Lisp, baked into an inference `.wasm`, and driven from a `<canvas>` you draw on |
+| [`hiragana/`](hiragana) | A 46-class handwritten-hiragana recognizer (the full gojuon): a small MLP trained offline in Lisp, baked into an inference `.wasm`, and driven from a `<canvas>` you draw on |
 
 ## Running
 
