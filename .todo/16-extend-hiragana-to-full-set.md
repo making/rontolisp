@@ -41,6 +41,9 @@ units run on the interpreter/WASM but break the JVM path. Documented in
 - Non-rigid / elastic warp (local stroke displacement). Rigid affine doesn't cover
   a glyph whose strokes slant independently or sit far apart (e.g. a very loose に
   with a hooked radical and two disconnected diagonal right strokes still misses).
+  NOTE: elastic + aspect-scale augmentation was tried and reverted -- it does not
+  fix structurally-off freehand. See `.todo/18-handwriting-generalization-ceiling.md`
+  for the experiment, the reverted code, and why real data is the real fix.
 - Bigger hidden layer for smoother decision boundaries -- blocked by the JVM
   constant ceiling at 24x24 (see above); today it would mean dropping the JVM
   infer path. Lifting the ceiling itself is tracked in
