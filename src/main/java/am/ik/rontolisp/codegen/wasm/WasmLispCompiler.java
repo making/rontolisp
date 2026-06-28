@@ -45,6 +45,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean component;
 
+	private final boolean noWasi;
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -73,8 +75,27 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * mode.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component) {
+		this(dynamic, component, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi when {@code true} (Preview 1 only; ignored in component mode), the
+	 * output module imports <strong>no</strong> {@code wasi_snapshot_preview1} functions,
+	 * so a host can instantiate it with no import object (a "reactor"/library module).
+	 * The eight WASI import slots (function indices 0-7) are filled with internal
+	 * {@code unreachable} trap stubs so every fixed {@code FUNC_*} index stays valid.
+	 * Only pure-compute {@code (wasm:export ...)} functions work; any I/O
+	 * (print/read/open/getenv/time/random) traps.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
 		this.dynamic = dynamic;
 		this.component = component;
+		// no-wasi is a Preview 1-only mode; a component has its own (lowered) import
+		// story.
+		this.noWasi = noWasi && !component;
 	}
 
 	// Function indices (imports come first). Defined functions are indexed relative to
@@ -1120,22 +1141,31 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Import section
 			.writeImportSection(imports -> {
-				imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
-					.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
-					.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
-					.addImport("wasi_snapshot_preview1", "fd_close", ExternalKind.FUNCTION, TYPE_LOOKUP)
-					// random_get(buf, len) -> errno: (i32, i32) -> i32, same shape as
-					// _intern. Preview 1 binds the real host function; component mode
-					// binds
-					// the adapter's wasi:random-backed implementation.
-					.addImport("wasi_snapshot_preview1", "random_get", ExternalKind.FUNCTION, TYPE_INTERN)
-					// clock_time_get / environ_sizes_get / environ_get for time and
-					// getenv.
-					// Component mode binds adapter implementations over wasi:clocks /
-					// wasi:cli-environment; Preview 1 binds the real host functions.
-					.addImport("wasi_snapshot_preview1", "clock_time_get", ExternalKind.FUNCTION, TYPE_CLOCK_TIME_GET)
-					.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
-					.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
+				// No-wasi (reactor) mode: emit no wasi_snapshot_preview1 imports so the
+				// module instantiates with no import object. Function indices 0-7 are
+				// filled
+				// with internal trap stubs in the function/code sections below, keeping
+				// every
+				// FUNC_* constant valid.
+				if (!this.noWasi) {
+					imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
+						.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
+						.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
+						.addImport("wasi_snapshot_preview1", "fd_close", ExternalKind.FUNCTION, TYPE_LOOKUP)
+						// random_get(buf, len) -> errno: (i32, i32) -> i32, same shape as
+						// _intern. Preview 1 binds the real host function; component mode
+						// binds
+						// the adapter's wasi:random-backed implementation.
+						.addImport("wasi_snapshot_preview1", "random_get", ExternalKind.FUNCTION, TYPE_INTERN)
+						// clock_time_get / environ_sizes_get / environ_get for time and
+						// getenv.
+						// Component mode binds adapter implementations over wasi:clocks /
+						// wasi:cli-environment; Preview 1 binds the real host functions.
+						.addImport("wasi_snapshot_preview1", "clock_time_get", ExternalKind.FUNCTION,
+								TYPE_CLOCK_TIME_GET)
+						.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
+						.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
+				}
 				// 9th function import (index FUNC_FETCH) when the program calls fetch in
 				// component mode: the adapter's exported http.fetch. In Preview 1 mode
 				// (or a
@@ -1157,6 +1187,22 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Function section
 			.writeFunction(fnDef -> {
+				// No-wasi mode: the eight wasi imports were omitted, so define eight trap
+				// stubs at function indices 0-7 with the SAME type indices the imports
+				// used
+				// (fd_write, fd_read, path_open, fd_close, random_get, clock_time_get,
+				// environ_sizes_get, environ_get). This keeps every FUNC_* constant
+				// valid.
+				if (this.noWasi) {
+					fnDef.addFunction(TYPE_FD_WRITE) // 0: fd_write
+						.addFunction(TYPE_FD_WRITE) // 1: fd_read
+						.addFunction(TYPE_PATH_OPEN) // 2: path_open
+						.addFunction(TYPE_LOOKUP) // 3: fd_close
+						.addFunction(TYPE_INTERN) // 4: random_get
+						.addFunction(TYPE_CLOCK_TIME_GET) // 5: clock_time_get
+						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
+						.addFunction(TYPE_INTERN); // 7: environ_get
+				}
 				// Reserve function index FUNC_FETCH (8): in component+fetch it is the
 				// http.fetch import (emitted above); otherwise a defined trap stub so the
 				// following defined-function indices line up with the FUNC_* constants.
@@ -1318,6 +1364,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Code section
 			.writeCode(code -> {
+				// No-wasi mode: bodies for the eight trap stubs at indices 0-7. Each is
+				// `unreachable; end` (no locals); unreachable is stack-polymorphic so one
+				// shape satisfies every WASI signature. Calling one (i.e. any I/O) traps.
+				if (this.noWasi) {
+					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
+						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
+					}
+				}
 				// fetch trap stub at function index FUNC_FETCH (only when it is not the
 				// http.fetch import): no locals, unreachable, end. It is never called.
 				if (!emitHttpImport) {

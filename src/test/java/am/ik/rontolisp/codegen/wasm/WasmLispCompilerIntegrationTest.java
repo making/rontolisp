@@ -119,6 +119,53 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(program)).isEqualTo("\"ok\"");
 	}
 
+	// Compiles in --no-wasi (reactor) mode -- the module has no wasi_snapshot_preview1
+	// imports -- and invokes a scalar export. wasmtime instantiates it with no WASI
+	// provided.
+	private static String compileNoWasiAndInvoke(String lispCode, String function, String... args) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		List<String> command = new java.util.ArrayList<>(
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "/tmp/test.wasm"));
+		command.addAll(List.of(args));
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode())
+			.as("exit code for no-wasi invoke %s: %s\nstderr: %s", function, lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void noWasiModuleInstantiatesWithoutWasiAndInvokesScalarExport() throws Exception {
+		// Reactor mode: the module imports no WASI functions, so a host instantiates it
+		// with
+		// no import object. A pure-compute export is still callable.
+		String program = """
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(wasm:export 'fact :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoWasiAndInvoke(program, "fact", "5")).isEqualTo("120");
+		assertThat(compileNoWasiAndInvoke(program, "fact", "10")).isEqualTo("3628800");
+	}
+
+	@Test
+	void noWasiModuleTrapsWhenItAttemptsIo() throws Exception {
+		// I/O is unsupported in no-wasi mode: the omitted fd_write becomes a trap stub,
+		// so an
+		// export that prints traps (non-zero exit) -- the documented contract.
+		String program = """
+				(defun shout (n) (print n))
+				(wasm:export 'shout :params '(:int))
+				""";
+		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "shout", "-W", "gc",
+				"/tmp/test.wasm", "7");
+		assertThat(result.getExitCode()).isNotZero();
+		assertThat(result.getStderr()).contains("unreachable");
+	}
+
 	@Test
 	void exportUnknownFunctionFailsToCompile() {
 		assertThatThrownBy(() -> compileAndInvoke("(wasm:export 'nope :params '(:int) :returns :int)", "nope"))

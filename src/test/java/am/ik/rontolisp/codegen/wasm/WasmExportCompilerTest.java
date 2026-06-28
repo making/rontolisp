@@ -130,6 +130,33 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void noWasiModeOmitsWasiImports() {
+		// Reactor mode: no wasi_snapshot_preview1 imports, but the export wrapper stays.
+		List<LispVal> program = LispReader.readAllFromString("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(wasm:export 'fact :params '(:int) :returns :int)");
+		byte[] bytes = new WasmLispCompiler(false, false, true).compile(program);
+		assertThat(containsAscii(bytes, "wasi_snapshot_preview1")).isFalse();
+		assertThat(containsAscii(bytes, "fact")).isTrue();
+	}
+
+	@Test
+	void defaultModeKeepsWasiImports() {
+		byte[] bytes = compile("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(wasm:export 'fact :params '(:int) :returns :int)");
+		assertThat(containsAscii(bytes, "wasi_snapshot_preview1")).isTrue();
+	}
+
+	@Test
+	void noWasiIsIgnoredInComponentMode() {
+		// Component mode has its own (lowered) import story; no-wasi must not apply.
+		List<LispVal> program = LispReader.readAllFromString("(print (+ 1 2))");
+		byte[] component = new WasmLispCompiler(false, true, true).compile(program);
+		// The component wraps a core module that still imports the preview1-style
+		// functions.
+		assertThat(containsAscii(component, "wasi_snapshot_preview1")).isTrue();
+	}
+
+	@Test
 	void componentModeIgnoresExportDirective() {
 		// In component mode no wrapper/allocator is emitted (the directive is a no-op).
 		List<LispVal> program = LispReader

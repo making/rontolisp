@@ -204,9 +204,33 @@ Limitations:
   arity, and functions that take or return function values are out of scope.
 - The exported name is the bare Lisp name (`fact`); how arguments are written depends on
   the host (`wasmtime --invoke fact module.wasm 5`, `instance.exports.fact(5)`, ...).
-- Instantiating the module still needs the eight `wasi_snapshot_preview1` imports
-  satisfied; `wasmtime run` provides them automatically, and a browser host can supply
-  no-op stubs for a pure-compute function.
+- By default, instantiating the module still needs the eight `wasi_snapshot_preview1`
+  imports satisfied; `wasmtime run` provides them automatically, and a browser host can
+  supply no-op stubs for a pure-compute function. Add `--no-wasi` (below) to drop them.
+
+#### No-WASI (reactor) mode (`--no-wasi`)
+
+Add `--no-wasi` to emit a Preview 1 module that imports **no** WASI functions, so a host
+can instantiate it with no import object at all — a "reactor"/library module whose only
+surface is the exported Lisp functions:
+
+```bash
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fact.lisp --no-wasi -o fact.wasm
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
+```
+
+```js
+// No import object needed.
+const { instance } = await WebAssembly.instantiate(bytes);
+instance.exports.fact(5);                         // => 120
+// :string / :sexpr still round-trip through the exported memory + __ronto_alloc.
+```
+
+The eight WASI import slots are filled with internal trap stubs so every function index
+stays fixed (no other codegen changes). This mode is for **pure-compute** exports only:
+any I/O (`print`/`read`/`open`/`getenv`/time/`random`, including a top-level form that
+prints) hits a stub and **traps**. It is Preview 1 only — `--no-wasi` is ignored under
+`--component`.
 
 ### Compile to a WASI 0.3 component
 
