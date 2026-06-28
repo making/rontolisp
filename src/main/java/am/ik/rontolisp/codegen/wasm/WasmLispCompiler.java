@@ -470,14 +470,31 @@ public final class WasmLispCompiler implements LispCompiler {
 		// binds a variable to a closure like any other setq.
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
+		// (wasm:export ...) directives: collected here and turned into host-callable
+		// export
+		// wrappers below. They produce no code in the _start body (Preview 1 only;
+		// ignored
+		// in component mode).
+		List<WasmExportCompiler.Decl> exportDecls = new ArrayList<>();
 		for (LispVal expr : program) {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
 				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
 			}
+			else if (WasmExportCompiler.isExportForm(expr)) {
+				exportDecls.add(WasmExportCompiler.parse((LispCons) expr));
+			}
 			else {
 				topLevelExprs.add(expr);
 			}
+		}
+		// A :sexpr export parameter parses host-provided text with the embedded reader,
+		// so
+		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
+		boolean exportNeedsReader = (!this.component)
+				&& exportDecls.stream().anyMatch(d -> d.paramTypes().contains(WasmExportCompiler.T_SEXPR));
+		if (exportNeedsReader) {
+			usesRead = true;
 		}
 
 		// Inject built-in function wrappers (user defuns take priority)
@@ -731,6 +748,68 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Build dispatch function bodies
 		int numDefuns = defuns.size();
 		int numLambdas = lambdaDecls.size();
+
+		// Build host-callable export wrappers (Preview 1 only; ignored in component
+		// mode).
+		// Each (wasm:export ...) directive becomes a thin wrapper function appended after
+		// all user defuns and lambdas, exported under its Lisp name with a host-friendly
+		// numeric / memory signature. Indices: wrapper function indices follow the
+		// lambdas;
+		// wrapper type indices follow TYPE_HASH_BUCKETS (the last fixed type).
+		List<ExportPlan> exportPlans = new ArrayList<>();
+		List<byte[]> exportBodies = new ArrayList<>();
+		// Memory-backed exports (:string/:sexpr) need two appended helper functions: the
+		// host-facing bump allocator __ronto_alloc and the _str_from_mem string builder.
+		// They precede the wrappers so the fixed FUNC_* constants are unaffected.
+		boolean exportUsesMemory = (!this.component) && exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
+		// Any exported function may be invoked by a host without running _start, so the
+		// linear-memory heap pointer (normally seeded at the top of _start) must be
+		// initialized at instantiation whenever exports are present, even for scalar-only
+		// exports whose body allocates internally (e.g. via princ-to-string).
+		boolean exportsPresent = (!this.component) && !exportDecls.isEmpty();
+		int exportHelperBase = FUNC_USER_BASE + numDefuns + numLambdas;
+		int allocFuncIndex = exportUsesMemory ? exportHelperBase : -1;
+		int strFromMemFuncIndex = exportUsesMemory ? exportHelperBase + 1 : -1;
+		if (!this.component && !exportDecls.isEmpty()) {
+			int wrapperFuncIndex = exportHelperBase + (exportUsesMemory ? 2 : 0);
+			int wrapperTypeIndex = TYPE_HASH_BUCKETS + 1;
+			for (WasmExportCompiler.Decl decl : exportDecls) {
+				WasmFunctionInfo target = functions.get(decl.name());
+				if (target == null || !userDefinedNames.contains(decl.name())) {
+					throw new UnsupportedOperationException(
+							"wasm:export names an unknown function (must be a top-level defun): " + decl.name());
+				}
+				if (decl.paramTypes().size() != target.paramCount()) {
+					throw new UnsupportedOperationException(
+							"wasm:export arity mismatch for '" + decl.name() + "': declared " + decl.paramTypes().size()
+									+ " params, but the function takes " + target.paramCount());
+				}
+				ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+				WasmWriter bodyWriter = new WasmWriter(bodyStream);
+				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
+				int paramSlots = WasmExportCompiler.paramSlotCount(decl);
+				wrapperCtx.nextLocal = paramSlots;
+				WasmExportCompiler.emitBody(wrapperCtx, decl, target.funcIndex(), strFromMemFuncIndex);
+				// Prepend the local declarations (extra (ref null eq) locals beyond
+				// params).
+				ByteArrayOutputStream finalBody = new ByteArrayOutputStream();
+				WasmWriter finalWriter = new WasmWriter(finalBody);
+				int extraLocals = wrapperCtx.nextLocal - paramSlots;
+				if (extraLocals > 0) {
+					finalWriter.write(1);
+					finalWriter.writeUnsignedLeb128(extraLocals);
+					finalWriter.write(Type.REFNULL.code());
+					finalWriter.writeHeapType(Type.EQ.code());
+				}
+				else {
+					finalWriter.write(0);
+				}
+				finalWriter.write((Object) bodyStream.toByteArray());
+				exportBodies.add(finalBody.toByteArray());
+				exportPlans.add(new ExportPlan(decl, target.funcIndex(), wrapperTypeIndex++, wrapperFuncIndex++));
+			}
+		}
+
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
@@ -1031,6 +1110,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.writeRefType(true, Type.EQ.code());
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
+				// Export wrapper signatures (host-callable), appended after the last
+				// fixed
+				// type (TYPE_HASH_BUCKETS). One per (wasm:export ...) directive.
+				for (ExportPlan p : exportPlans) {
+					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
+							WasmExportCompiler.resultWasmTypes(p.decl()));
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -1155,6 +1241,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (LambdaInfo lambda : lambdaDecls) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + lambda.paramNames.size());
 				}
+				// Memory-export helpers: __ronto_alloc ((i32)->i32, reuses TYPE_LOOKUP)
+				// and
+				// _str_from_mem ((i32,i32)->(ref null eq), reuses TYPE_RAT_NEW).
+				if (exportUsesMemory) {
+					fnDef.addFunction(TYPE_LOOKUP);
+					fnDef.addFunction(TYPE_RAT_NEW);
+				}
+				// Export wrapper functions (host-callable), one per (wasm:export ...).
+				for (ExportPlan p : exportPlans) {
+					fnDef.addFunction(p.typeIndex());
+				}
 			})
 			// Memory section -- in component mode the memory is imported (above), so this
 			// section is empty. 4 pages so getenv can place the environ buffer in page 3
@@ -1206,6 +1303,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				else {
 					exports.addExport("memory", ExternalKind.MEMORY, 0)
 						.addExport("_start", ExternalKind.FUNCTION, FUNC_START);
+					// The host-facing bump allocator, when any memory-typed export is
+					// present
+					// (a host calls it to reserve a scratch buffer for string/sexpr
+					// inputs).
+					if (exportUsesMemory) {
+						exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, allocFuncIndex);
+					}
+					// Host-callable Lisp functions requested via (wasm:export ...).
+					for (ExportPlan p : exportPlans) {
+						exports.addExport(p.decl().name(), ExternalKind.FUNCTION, p.funcIndex());
+					}
 				}
 			})
 			// Code section
@@ -1282,9 +1390,32 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (byte[] body : lambdaFunctionBodies) {
 					code.addFunction(body);
 				}
+				// Memory-export helper bodies (must precede the wrapper bodies to match
+				// the
+				// function-section order).
+				if (exportUsesMemory) {
+					code.addFunction(WasmExportRuntimeBuilder.buildAllocBody());
+					code.addFunction(WasmExportRuntimeBuilder.buildStrFromMemBody());
+				}
+				// Export wrapper bodies (host-callable), one per (wasm:export ...).
+				for (byte[] body : exportBodies) {
+					code.addFunction(body);
+				}
 			})
 			// Data section
 			.writeDataSection(data -> {
+				// Exports are called by a host without running _start, so the
+				// linear-memory
+				// heap pointer (normally initialized at the top of _start) must be seeded
+				// at
+				// instantiation. Write READ_LINE_BUF as a little-endian i32 at
+				// HEAP_PTR_ADDR.
+				// Harmless for the _start path (it stores the same value).
+				if (exportsPresent) {
+					int heapBase = READ_LINE_BUF;
+					data.addActiveData(0, HEAP_PTR_ADDR, new byte[] { (byte) heapBase, (byte) (heapBase >> 8),
+							(byte) (heapBase >> 16), (byte) (heapBase >> 24) });
+				}
 				byte[] stringData = stringTable.toByteArray();
 				if (stringData.length > 0) {
 					data.addActiveData(0, DATA_BASE_OFFSET, stringData);
@@ -1404,6 +1535,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
+	}
+
+	/**
+	 * A planned host-callable export wrapper: the parsed directive plus the resolved
+	 * target function index and the wrapper's own type and function indices.
+	 *
+	 * @param decl the parsed wasm:export directive
+	 * @param targetFuncIndex the WASM function index of the exported defun
+	 * @param typeIndex the wrapper's function type index
+	 * @param funcIndex the wrapper's own function index
+	 */
+	record ExportPlan(WasmExportCompiler.Decl decl, int targetFuncIndex, int typeIndex, int funcIndex) {
 	}
 
 	record WasmFunctionInfo(String name, int paramCount, int funcId, int typeIndex, int funcIndex) {

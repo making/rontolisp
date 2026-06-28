@@ -351,6 +351,14 @@ public final class Environment implements Scope {
 		registerIntrospection(env, LispNames.LIST_FUNCTIONS);
 		registerIntrospection(env, LispNames.LIST_MACROS);
 		registerIntrospection(env, LispNames.LIST_SPECIAL_FORMS);
+		// wasm:export marks a function for direct WASM export (see the WASM compiler). It
+		// is
+		// a compile-time directive for that backend only; on the interpreter (and the JVM
+		// backend) it is a no-op that simply returns the named symbol, so the same source
+		// runs unchanged on every backend.
+		String exportName = PackageRegistry.qualify(LispNames.WASM_PKG, LispNames.EXPORT);
+		env.defineFunction(exportName,
+				new LispFunction(exportName, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
 		// fetch performs an outgoing HTTP request, JavaScript fetch-style. It belongs to
 		// the rontolisp package (it is not a Common Lisp standard function). The optional
 		// second argument is an options property list (:method, :headers, :body). The

@@ -59,6 +59,79 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout();
 	}
 
+	// Compiles a program that uses (wasm:export ...) and invokes one of the exported Lisp
+	// functions directly via `wasmtime --invoke <fn> ... <args>` (scalar arguments only).
+	private static String compileAndInvoke(String lispCode, String function, String... args) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		List<String> command = new java.util.ArrayList<>(
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "/tmp/test.wasm"));
+		command.addAll(List.of(args));
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode())
+			.as("exit code for invoke %s: %s\nstderr: %s", function, lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void exportScalarFunctionsCallableViaInvoke() throws Exception {
+		String program = """
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(defun half (x) (/ x 2.0))
+				(defun evenp2 (n) (= (mod n 2) 0))
+				(wasm:export 'fact :params '(:int) :returns :int)
+				(wasm:export 'half :params '(:float) :returns :float)
+				(wasm:export 'evenp2 :params '(:int) :returns :bool)
+				""";
+		assertThat(compileAndInvoke(program, "fact", "5")).isEqualTo("120");
+		assertThat(compileAndInvoke(program, "fact", "10")).isEqualTo("3628800");
+		assertThat(compileAndInvoke(program, "half", "7.0")).isEqualTo("3.5");
+		assertThat(compileAndInvoke(program, "evenp2", "4")).isEqualTo("1");
+		assertThat(compileAndInvoke(program, "evenp2", "5")).isEqualTo("0");
+	}
+
+	@Test
+	void exportVoidFunctionRunsForItsSideEffect() throws Exception {
+		// An omitted :returns makes a side-effecting export with no WASM result; invoking
+		// it
+		// runs the body (here printing) and returns nothing.
+		String program = """
+				(defun shout-square (n) (print (* n n)))
+				(wasm:export 'shout-square :params '(:int))
+				""";
+		assertThat(compileAndInvoke(program, "shout-square", "6")).isEqualTo("36");
+	}
+
+	@Test
+	void exportMemoryTypesProduceInstantiableModule() throws Exception {
+		// :string/:sexpr need a memory-writing host (round-trip verified out of band);
+		// here
+		// we confirm the module with the bump allocator instantiates and its _start runs.
+		String program = """
+				(defun shout (s) (string-upcase s))
+				(defun rev (lst) (reverse lst))
+				(wasm:export 'shout :params '(:string) :returns :string)
+				(wasm:export 'rev :params '(:sexpr) :returns :sexpr)
+				(print "ok")
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("\"ok\"");
+	}
+
+	@Test
+	void exportUnknownFunctionFailsToCompile() {
+		assertThatThrownBy(() -> compileAndInvoke("(wasm:export 'nope :params '(:int) :returns :int)", "nope"))
+			.hasMessageContaining("unknown function");
+	}
+
+	@Test
+	void exportArityMismatchFailsToCompile() {
+		assertThatThrownBy(
+				() -> compileAndInvoke("(defun f (a b) (+ a b)) (wasm:export 'f :params '(:int) :returns :int)", "f"))
+			.hasMessageContaining("arity mismatch");
+	}
+
 	private static String compileAndRunComponent(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);

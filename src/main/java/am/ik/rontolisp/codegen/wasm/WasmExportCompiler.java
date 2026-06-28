@@ -1,0 +1,402 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Parses and compiles {@code (wasm:export 'name :params '(...) :returns ...)} directives
+ * into host-callable export wrapper functions.
+ *
+ * <p>
+ * The directive declares the WASM-boundary types of an existing top-level {@code defun}
+ * so the compiler can generate a thin wrapper with a host-friendly numeric / memory
+ * signature. The wrapper boxes each argument into the internal {@code (ref null eq)}
+ * representation, supplies the unused closure environment ({@code ref.null eq}), calls
+ * the real function, and unboxes the result. Without such a wrapper a {@code defun}
+ * cannot be invoked from a host (e.g. {@code wasmtime --invoke} or JavaScript), because
+ * every argument and result is a GC reference the host cannot construct.
+ *
+ * <p>
+ * Supported type designators and their boundary representations:
+ * <ul>
+ * <li>{@code :int} -- {@code i32} (boxed as {@code i31ref}; 31-bit signed range)</li>
+ * <li>{@code :float} -- {@code f64} (boxed as a float struct)</li>
+ * <li>{@code :bool} -- {@code i32} (0 = nil, non-zero = the symbol {@code t})</li>
+ * <li>{@code :string} -- {@code (ptr,len)} bytes in linear memory</li>
+ * <li>{@code :sexpr} -- {@code (ptr,len)} s-expression text in linear memory</li>
+ * </ul>
+ *
+ * <p>
+ * Scalar designators ({@code :int}/{@code :float}/{@code :bool}) yield a pure numeric
+ * signature callable straight from {@code wasmtime --invoke}. The memory-backed
+ * {@code :string} / {@code :sexpr} designators pass {@code (ptr,len)} through linear
+ * memory and need a host that can read/write it (e.g. JavaScript), using the exported
+ * {@code __ronto_alloc} bump allocator to reserve input buffers.
+ */
+final class WasmExportCompiler {
+
+	static final String T_INT = ":int";
+
+	static final String T_FLOAT = ":float";
+
+	static final String T_BOOL = ":bool";
+
+	static final String T_STRING = ":string";
+
+	static final String T_SEXPR = ":sexpr";
+
+	/**
+	 * Internal sentinel for a void result: the wrapper discards the Lisp return value and
+	 * has no WASM result. Selected when {@code :returns} is omitted, or given as
+	 * {@code nil}, {@code '()} or {@code :void}.
+	 */
+	static final String T_VOID = ":void";
+
+	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_FLOAT, T_BOOL, T_STRING, T_SEXPR);
+
+	private WasmExportCompiler() {
+	}
+
+	/**
+	 * A parsed {@code wasm:export} directive.
+	 *
+	 * @param name the exported function name (an existing top-level defun)
+	 * @param paramTypes the declared parameter type designators, in order
+	 * @param returnType the declared return type designator
+	 */
+	record Decl(String name, List<String> paramTypes, String returnType) {
+	}
+
+	/**
+	 * Returns whether the given form is a {@code (wasm:export ...)} directive.
+	 * @param form the top-level form
+	 * @return {@code true} if it is a wasm:export directive
+	 */
+	static boolean isExportForm(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym) {
+			var qn = am.ik.rontolisp.PackageRegistry.splitQualified(sym.name());
+			return qn != null && LispNames.WASM_PKG.equals(qn.pkg()) && LispNames.EXPORT.equals(qn.member());
+		}
+		return false;
+	}
+
+	/**
+	 * Parses a {@code (wasm:export 'name :params '(...) :returns ...)} directive (in the
+	 * canonical post-resolution shape
+	 * {@code (wasm:export (quote name) :params (quote (...))
+	 * :returns :type)}).
+	 * @param form the directive form
+	 * @return the parsed declaration
+	 * @throws UnsupportedOperationException if the directive is malformed or names an
+	 * unknown type designator
+	 */
+	static Decl parse(LispCons form) {
+		List<LispVal> items = form.toList();
+		if (items.size() < 2) {
+			throw new UnsupportedOperationException("Malformed wasm:export: " + form.print());
+		}
+		String name = quotedSymbolName(items.get(1));
+		List<String> params = null;
+		String returns = null;
+		int i = 2;
+		while (i < items.size()) {
+			String keyword = keywordName(items.get(i), form);
+			if (i + 1 >= items.size()) {
+				throw new UnsupportedOperationException("Missing value for " + keyword + " in " + form.print());
+			}
+			LispVal value = items.get(i + 1);
+			switch (keyword) {
+				case ":params" -> params = quotedTypeList(value, form);
+				case ":returns" -> returns = returnDesignator(value, form);
+				default -> throw new UnsupportedOperationException(
+						"Unknown wasm:export option " + keyword + " in " + form.print());
+			}
+			i += 2;
+		}
+		// Omitted :returns (like nil / '() / :void) means a void result.
+		return new Decl(name, params == null ? List.of() : params, returns == null ? T_VOID : returns);
+	}
+
+	/** Returns the number of WASM parameter slots a declaration occupies. */
+	static int paramSlotCount(Decl decl) {
+		int slots = 0;
+		for (String t : decl.paramTypes()) {
+			slots += slotsForType(t);
+		}
+		return slots;
+	}
+
+	/**
+	 * Returns whether any declared type is memory-backed
+	 * ({@code :string}/{@code :sexpr}).
+	 */
+	static boolean usesMemory(Decl decl) {
+		if (isMemoryType(decl.returnType())) {
+			return true;
+		}
+		for (String t : decl.paramTypes()) {
+			if (isMemoryType(t)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Returns the WASM parameter types for the wrapper signature. */
+	static Type[] paramWasmTypes(Decl decl) {
+		List<Type> types = new ArrayList<>();
+		for (String t : decl.paramTypes()) {
+			appendWasmTypes(types, t);
+		}
+		return types.toArray(new Type[0]);
+	}
+
+	/**
+	 * Returns the WASM result types for the wrapper signature (empty for a void result).
+	 */
+	static Type[] resultWasmTypes(Decl decl) {
+		if (T_VOID.equals(decl.returnType())) {
+			return new Type[0];
+		}
+		List<Type> types = new ArrayList<>();
+		appendWasmTypes(types, decl.returnType());
+		return types.toArray(new Type[0]);
+	}
+
+	/**
+	 * Emits the wrapper body (terminated by {@code end}) into {@code ctx.writer}. The
+	 * body boxes each parameter, calls the target function and unboxes the result.
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 * @param decl the parsed declaration
+	 * @param targetFuncIndex the WASM function index of the exported defun
+	 * @param strFromMemFuncIndex the function index of the {@code _str_from_mem} helper
+	 * (or {@code -1} if no {@code :string} parameter is present)
+	 */
+	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex) {
+		// env (defuns ignore it)
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// Box each parameter from its wasm slot(s) into the internal (ref null eq) value.
+		int slot = 0;
+		for (String t : decl.paramTypes()) {
+			emitBoxParam(ctx, t, slot, strFromMemFuncIndex);
+			slot += slotsForType(t);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(targetFuncIndex);
+		emitUnboxResult(ctx, decl.returnType());
+		ctx.writer.write(Instruction.END);
+	}
+
+	private static void emitBoxParam(WasmLispCompiler.Ctx ctx, String type, int slot, int strFromMemFuncIndex) {
+		switch (type) {
+			case T_INT -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			case T_FLOAT -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			}
+			case T_BOOL -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				WasmEmitHelper.emitBoolFromI32(ctx);
+			}
+			case T_STRING -> {
+				// (ptr,len) -> a Lisp string copied out of linear memory.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot + 1);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(strFromMemFuncIndex);
+			}
+			case T_SEXPR -> {
+				// (ptr,len) of s-expression text -> parse via the embedded reader.
+				storeWord(ctx, WasmLispCompiler.READ_CURSOR_ADDR, slot, false);
+				storeWord(ctx, WasmLispCompiler.READ_END_ADDR, slot, true);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+			}
+			default -> throw new UnsupportedOperationException("Unknown wasm:export type: " + type);
+		}
+	}
+
+	private static void emitUnboxResult(WasmLispCompiler.Ctx ctx, String type) {
+		switch (type) {
+			case T_INT -> WasmEmitHelper.castI31GetS(ctx);
+			case T_FLOAT -> {
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeSignedLeb128(0);
+			}
+			case T_BOOL -> {
+				// nil -> 0, anything else -> 1
+				ctx.writer.write(Instruction.REF_IS_NULL);
+				ctx.writer.write(Instruction.I32_EQZ);
+			}
+			case T_STRING -> emitStringResult(ctx);
+			case T_SEXPR -> {
+				// Serialize any value to readable s-expression text, then return its
+				// bytes.
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+				emitStringResult(ctx);
+			}
+			case T_VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
+																// value
+			default -> throw new UnsupportedOperationException("Unknown wasm:export type: " + type);
+		}
+	}
+
+	// Returns a Lisp string value (a TYPE_STRING on the stack) to the host as two i32
+	// results (content pointer, content length), stripping the internal surrounding
+	// quotes.
+	private static void emitStringResult(WasmLispCompiler.Ctx ctx) {
+		int tmp = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmp);
+		// pointer = offset + 1 (skip the leading quote)
+		emitStringField(ctx, tmp, 0);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_ADD);
+		// length = stored length - 2 (strip both quotes)
+		emitStringField(ctx, tmp, 1);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(2);
+		ctx.writer.write(Instruction.I32_SUB);
+	}
+
+	private static void emitStringField(WasmLispCompiler.Ctx ctx, int slot, int field) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeSignedLeb128(field);
+	}
+
+	// Stores ptr (addEnd=false) or ptr+len (addEnd=true) for the s-expression parameter
+	// at
+	// the given slot pair into a fixed reader-control word in linear memory.
+	private static void storeWord(WasmLispCompiler.Ctx ctx, int address, int slot, boolean addEnd) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(address);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		if (addEnd) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(slot + 1);
+			ctx.writer.write(Instruction.I32_ADD);
+		}
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+	}
+
+	private static int slotsForType(String type) {
+		return isMemoryType(type) ? 2 : 1;
+	}
+
+	private static boolean isMemoryType(String type) {
+		return T_STRING.equals(type) || T_SEXPR.equals(type);
+	}
+
+	private static void appendWasmTypes(List<Type> types, String type) {
+		switch (type) {
+			case T_INT, T_BOOL -> types.add(Type.I32);
+			case T_FLOAT -> types.add(Type.F64);
+			case T_STRING, T_SEXPR -> {
+				types.add(Type.I32);
+				types.add(Type.I32);
+			}
+			default -> throw new UnsupportedOperationException("Unknown wasm:export type: " + type);
+		}
+	}
+
+	private static String quotedSymbolName(LispVal value) {
+		// (quote name) -> name
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		if (value instanceof LispSymbol sym) {
+			return sym.name();
+		}
+		throw new UnsupportedOperationException("wasm:export expects a quoted function name, got: " + value.print());
+	}
+
+	private static String keywordName(LispVal value, LispCons form) {
+		if (value instanceof LispSymbol sym && sym.isKeyword()) {
+			return sym.name();
+		}
+		throw new UnsupportedOperationException(
+				"Expected a keyword option in " + form.print() + ", got: " + value.print());
+	}
+
+	private static String typeDesignator(LispVal value, LispCons form) {
+		if (value instanceof LispSymbol sym && sym.isKeyword() && KNOWN_TYPES.contains(sym.name())) {
+			return sym.name();
+		}
+		throw new UnsupportedOperationException("Unknown wasm:export type designator " + value.print() + " in "
+				+ form.print() + " (expected one of " + KNOWN_TYPES + ")");
+	}
+
+	// A return designator is a known scalar/memory type, or a void marker: :void, nil,
+	// '()
+	// or (quote nil) -> the wrapper has no result and discards the Lisp return value.
+	private static String returnDesignator(LispVal value, LispCons form) {
+		if (isVoidMarker(value)) {
+			return T_VOID;
+		}
+		if (value instanceof LispSymbol sym && sym.isKeyword() && T_VOID.equals(sym.name())) {
+			return T_VOID;
+		}
+		return typeDesignator(value, form);
+	}
+
+	// nil, '() and (quote nil) all read as a quoted-or-bare LispNil; treat them as void.
+	private static boolean isVoidMarker(LispVal value) {
+		if (value instanceof am.ik.rontolisp.LispNil) {
+			return true;
+		}
+		return value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof am.ik.rontolisp.LispNil;
+	}
+
+	private static List<String> quotedTypeList(LispVal value, LispCons form) {
+		// Bare nil (an omitted / empty parameter list) -> no parameters.
+		if (value instanceof am.ik.rontolisp.LispNil) {
+			return List.of();
+		}
+		// (quote (:t1 :t2 ...)) -> [:t1, :t2, ...]
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest) {
+			List<String> result = new ArrayList<>();
+			if (rest.car() instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					result.add(typeDesignator(element, form));
+				}
+			}
+			else if (!(rest.car() instanceof am.ik.rontolisp.LispNil)) {
+				throw new UnsupportedOperationException("wasm:export :params expects a list in " + form.print());
+			}
+			return result;
+		}
+		throw new UnsupportedOperationException("wasm:export :params expects a quoted list in " + form.print());
+	}
+
+}

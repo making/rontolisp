@@ -2376,6 +2376,15 @@ class LispEvaluatorTest {
 			.hasMessageContaining("The function version is undefined");
 	}
 
+	@Test
+	void wasmExportIsNoOpReturningTheNamedSymbol() {
+		// The directive returns the named symbol and does not affect normal evaluation.
+		assertThat(evalMulti("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(wasm:export 'fact :params '(:int) :returns :int)" + "(fact 5)"))
+			.isEqualTo(new LispInteger(120));
+		assertThat(eval("(wasm:export 'fact :params '(:int) :returns :int)")).isEqualTo(new LispSymbol("fact"));
+	}
+
 	private static java.util.List<String> symbolNames(LispVal val) {
 		java.util.List<String> names = new java.util.ArrayList<>();
 		while (val instanceof LispCons cons) {

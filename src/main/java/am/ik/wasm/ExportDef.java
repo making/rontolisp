@@ -17,8 +17,12 @@ public class ExportDef extends CountingDef<ExportDef> {
 	 * @return this instance for chaining
 	 */
 	public ExportDef addExport(String exportName, ExternalKind externalKind, int signatureIndex) {
-		return this.add(export -> export.write(exportName.length(), exportName, //
-				externalKind, signatureIndex));
+		// The name length and the exported index are WASM u32 LEB128 fields; encode them
+		// as
+		// such so indices >= 128 (e.g. a function index past the first 127) are valid.
+		return this.add(export -> export.writeUnsignedLeb128(exportName.length())
+			.write(exportName, externalKind)
+			.writeUnsignedLeb128(signatureIndex));
 	}
 
 }

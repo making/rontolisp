@@ -116,6 +116,13 @@ final class JvmExprCompiler {
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
+			if (qn != null && LispNames.WASM_PKG.equals(qn.pkg()) && LispNames.EXPORT.equals(qn.member())) {
+				// wasm:export marks a function for direct WASM export; the JVM backend
+				// has no
+				// notion of it, so it is a no-op that yields nil.
+				ctx.emit(Opcode.ACONST_NULL);
+				return;
+			}
 			switch (sym.name()) {
 				case LispNames.ADD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);
