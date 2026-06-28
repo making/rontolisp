@@ -19,14 +19,6 @@ sections:
         title: Compile to JVM Bytecode
       - file: compiling/wasm.md
         title: Compile to WASM
-      - file: compiling/wasm-export.md
-        title: Exporting Lisp Functions
-      - file: compiling/no-wasi.md
-        title: No-WASI (Reactor) Mode
-      - file: compiling/optimize.md
-        title: Optimize (Tree Shaking)
-      - file: compiling/component.md
-        title: WASI 0.3 Component
       - file: compiling/dynamic.md
         title: Dynamic (Late Binding)
       - file: compiling/self-hosted-repl.md
