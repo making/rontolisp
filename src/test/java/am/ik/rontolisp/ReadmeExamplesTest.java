@@ -142,13 +142,14 @@ class ReadmeExamplesTest {
 			assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 		}
 
-		// "Exporting Lisp functions (wasm:export)" section: the directive is a no-op on
+		// "Exporting Lisp functions (rontolisp:wasm-export)" section: the directive is a
+		// no-op on
 		// the
 		// JVM backend, so the same source still compiles and runs the marked function.
 		@Test
 		void wasmExportDirectiveIsNoOpOnJvm() throws Exception {
 			assertThat(compileAndRun("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
-					+ "(wasm:export 'fact :params '(:int) :returns :int)" + "(print (fact 5))"))
+					+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)" + "(print (fact 5))"))
 				.isEqualTo("120");
 		}
 

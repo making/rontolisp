@@ -11,8 +11,8 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Parses and compiles {@code (wasm:export 'name :params '(...) :returns ...)} directives
- * into host-callable export wrapper functions.
+ * Parses and compiles {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)}
+ * directives into host-callable export wrapper functions.
  *
  * <p>
  * The directive declares the WASM-boundary types of an existing top-level {@code defun}
@@ -65,7 +65,7 @@ final class WasmExportCompiler {
 	}
 
 	/**
-	 * A parsed {@code wasm:export} directive.
+	 * A parsed {@code rontolisp:wasm-export} directive.
 	 *
 	 * @param name the exported function name (an existing top-level defun)
 	 * @param paramTypes the declared parameter type designators, in order
@@ -75,22 +75,22 @@ final class WasmExportCompiler {
 	}
 
 	/**
-	 * Returns whether the given form is a {@code (wasm:export ...)} directive.
+	 * Returns whether the given form is a {@code (rontolisp:wasm-export ...)} directive.
 	 * @param form the top-level form
-	 * @return {@code true} if it is a wasm:export directive
+	 * @return {@code true} if it is a rontolisp:wasm-export directive
 	 */
 	static boolean isExportForm(LispVal form) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym) {
 			var qn = am.ik.rontolisp.PackageRegistry.splitQualified(sym.name());
-			return qn != null && LispNames.WASM_PKG.equals(qn.pkg()) && LispNames.EXPORT.equals(qn.member());
+			return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.WASM_EXPORT.equals(qn.member());
 		}
 		return false;
 	}
 
 	/**
-	 * Parses a {@code (wasm:export 'name :params '(...) :returns ...)} directive (in the
-	 * canonical post-resolution shape
-	 * {@code (wasm:export (quote name) :params (quote (...))
+	 * Parses a {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)}
+	 * directive (in the canonical post-resolution shape
+	 * {@code (rontolisp:wasm-export (quote name) :params (quote (...))
 	 * :returns :type)}).
 	 * @param form the directive form
 	 * @return the parsed declaration
@@ -100,7 +100,7 @@ final class WasmExportCompiler {
 	static Decl parse(LispCons form) {
 		List<LispVal> items = form.toList();
 		if (items.size() < 2) {
-			throw new UnsupportedOperationException("Malformed wasm:export: " + form.print());
+			throw new UnsupportedOperationException("Malformed rontolisp:wasm-export: " + form.print());
 		}
 		String name = quotedSymbolName(items.get(1));
 		List<String> params = null;
@@ -116,7 +116,7 @@ final class WasmExportCompiler {
 				case ":params" -> params = quotedTypeList(value, form);
 				case ":returns" -> returns = returnDesignator(value, form);
 				default -> throw new UnsupportedOperationException(
-						"Unknown wasm:export option " + keyword + " in " + form.print());
+						"Unknown rontolisp:wasm-export option " + keyword + " in " + form.print());
 			}
 			i += 2;
 		}
@@ -229,7 +229,7 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 			}
-			default -> throw new UnsupportedOperationException("Unknown wasm:export type: " + type);
+			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type: " + type);
 		}
 	}
 
@@ -258,7 +258,7 @@ final class WasmExportCompiler {
 			}
 			case T_VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
 																// value
-			default -> throw new UnsupportedOperationException("Unknown wasm:export type: " + type);
+			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type: " + type);
 		}
 	}
 
@@ -323,7 +323,7 @@ final class WasmExportCompiler {
 				types.add(Type.I32);
 				types.add(Type.I32);
 			}
-			default -> throw new UnsupportedOperationException("Unknown wasm:export type: " + type);
+			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type: " + type);
 		}
 	}
 
@@ -336,7 +336,8 @@ final class WasmExportCompiler {
 		if (value instanceof LispSymbol sym) {
 			return sym.name();
 		}
-		throw new UnsupportedOperationException("wasm:export expects a quoted function name, got: " + value.print());
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export expects a quoted function name, got: " + value.print());
 	}
 
 	private static String keywordName(LispVal value, LispCons form) {
@@ -351,8 +352,8 @@ final class WasmExportCompiler {
 		if (value instanceof LispSymbol sym && sym.isKeyword() && KNOWN_TYPES.contains(sym.name())) {
 			return sym.name();
 		}
-		throw new UnsupportedOperationException("Unknown wasm:export type designator " + value.print() + " in "
-				+ form.print() + " (expected one of " + KNOWN_TYPES + ")");
+		throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type designator " + value.print()
+				+ " in " + form.print() + " (expected one of " + KNOWN_TYPES + ")");
 	}
 
 	// A return designator is a known scalar/memory type, or a void marker: :void, nil,
@@ -392,11 +393,13 @@ final class WasmExportCompiler {
 				}
 			}
 			else if (!(rest.car() instanceof am.ik.rontolisp.LispNil)) {
-				throw new UnsupportedOperationException("wasm:export :params expects a list in " + form.print());
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-export :params expects a list in " + form.print());
 			}
 			return result;
 		}
-		throw new UnsupportedOperationException("wasm:export :params expects a quoted list in " + form.print());
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export :params expects a quoted list in " + form.print());
 	}
 
 }

@@ -138,16 +138,16 @@ On the WASM backend a function (`defun` or `lambda`) may take at most **seven
 parameters**; a larger arity is a compile error (the interpreter and JVM backends have no
 such limit). Bundle the extra arguments into a list to stay within it.
 
-#### Exporting Lisp functions (`wasm:export`)
+#### Exporting Lisp functions (`rontolisp:wasm-export`)
 
 By default a compiled module only exposes the WASI `_start` entry point. To make an
 individual Lisp function callable directly from a host (`wasmtime --invoke`, JavaScript,
-or another module), mark it with the `wasm:export` directive from the `wasm` package,
+or another module), mark it with the `rontolisp:wasm-export` directive,
 declaring the WASM-boundary types of its parameters and result:
 
 ```lisp
 (defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
-(wasm:export 'fact :params '(:int) :returns :int)
+(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
 ```
 
 ```bash
@@ -175,7 +175,7 @@ result. Likewise an omitted, `nil` or `'()` `:params` means no arguments.
 
 ```lisp
 (defun log-it (n) (print n))
-(wasm:export 'log-it :params '(:int))           ; (i32) -> () , prints n
+(rontolisp:wasm-export 'log-it :params '(:int))           ; (i32) -> () , prints n
 ```
 
 Functions whose parameters and result are all scalar (`:int`/`:float`/`:bool`) get a plain
@@ -191,7 +191,7 @@ const ex = instance.exports, mem = ex.memory;
 const b = new TextEncoder().encode('("a" "b" "c")');
 const ptr = ex.__ronto_alloc(b.length);
 new Uint8Array(mem.buffer, ptr, b.length).set(b);
-const [rptr, rlen] = ex.rev(ptr, b.length);          // (wasm:export 'rev :params '(:sexpr) :returns :sexpr)
+const [rptr, rlen] = ex.rev(ptr, b.length);          // (rontolisp:wasm-export 'rev :params '(:sexpr) :returns :sexpr)
 new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b" "a")
 ```
 

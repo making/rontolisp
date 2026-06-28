@@ -8,9 +8,9 @@ import am.ik.wasm.WasmWriter;
 
 /**
  * Builds the runtime helper functions that support the memory-backed
- * ({@code :string}/{@code :sexpr}) {@code wasm:export} marshalling: a host-facing bump
- * allocator and a "linear-memory bytes to Lisp string" constructor. Emitted only when a
- * program declares at least one memory-typed export.
+ * ({@code :string}/{@code :sexpr}) {@code rontolisp:wasm-export} marshalling: a
+ * host-facing bump allocator and a "linear-memory bytes to Lisp string" constructor.
+ * Emitted only when a program declares at least one memory-typed export.
  */
 final class WasmExportRuntimeBuilder {
 

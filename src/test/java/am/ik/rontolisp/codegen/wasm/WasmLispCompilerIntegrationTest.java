@@ -59,7 +59,8 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout();
 	}
 
-	// Compiles a program that uses (wasm:export ...) and invokes one of the exported Lisp
+	// Compiles a program that uses (rontolisp:wasm-export ...) and invokes one of the
+	// exported Lisp
 	// functions directly via `wasmtime --invoke <fn> ... <args>` (scalar arguments only).
 	private static String compileAndInvoke(String lispCode, String function, String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
@@ -81,9 +82,9 @@ class WasmLispCompilerIntegrationTest {
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 				(defun half (x) (/ x 2.0))
 				(defun evenp2 (n) (= (mod n 2) 0))
-				(wasm:export 'fact :params '(:int) :returns :int)
-				(wasm:export 'half :params '(:float) :returns :float)
-				(wasm:export 'evenp2 :params '(:int) :returns :bool)
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'half :params '(:float) :returns :float)
+				(rontolisp:wasm-export 'evenp2 :params '(:int) :returns :bool)
 				""";
 		assertThat(compileAndInvoke(program, "fact", "5")).isEqualTo("120");
 		assertThat(compileAndInvoke(program, "fact", "10")).isEqualTo("3628800");
@@ -99,7 +100,7 @@ class WasmLispCompilerIntegrationTest {
 		// runs the body (here printing) and returns nothing.
 		String program = """
 				(defun shout-square (n) (print (* n n)))
-				(wasm:export 'shout-square :params '(:int))
+				(rontolisp:wasm-export 'shout-square :params '(:int))
 				""";
 		assertThat(compileAndInvoke(program, "shout-square", "6")).isEqualTo("36");
 	}
@@ -112,8 +113,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = """
 				(defun shout (s) (string-upcase s))
 				(defun rev (lst) (reverse lst))
-				(wasm:export 'shout :params '(:string) :returns :string)
-				(wasm:export 'rev :params '(:sexpr) :returns :sexpr)
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				(rontolisp:wasm-export 'rev :params '(:sexpr) :returns :sexpr)
 				(print "ok")
 				""";
 		assertThat(compileAndRun(program)).isEqualTo("\"ok\"");
@@ -143,7 +144,7 @@ class WasmLispCompilerIntegrationTest {
 		// no import object. A pure-compute export is still callable.
 		String program = """
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
-				(wasm:export 'fact :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
 				""";
 		assertThat(compileNoWasiAndInvoke(program, "fact", "5")).isEqualTo("120");
 		assertThat(compileNoWasiAndInvoke(program, "fact", "10")).isEqualTo("3628800");
@@ -156,7 +157,7 @@ class WasmLispCompilerIntegrationTest {
 		// export that prints traps (non-zero exit) -- the documented contract.
 		String program = """
 				(defun shout (n) (print n))
-				(wasm:export 'shout :params '(:int))
+				(rontolisp:wasm-export 'shout :params '(:int))
 				""";
 		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
@@ -168,14 +169,15 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void exportUnknownFunctionFailsToCompile() {
-		assertThatThrownBy(() -> compileAndInvoke("(wasm:export 'nope :params '(:int) :returns :int)", "nope"))
+		assertThatThrownBy(
+				() -> compileAndInvoke("(rontolisp:wasm-export 'nope :params '(:int) :returns :int)", "nope"))
 			.hasMessageContaining("unknown function");
 	}
 
 	@Test
 	void exportArityMismatchFailsToCompile() {
-		assertThatThrownBy(
-				() -> compileAndInvoke("(defun f (a b) (+ a b)) (wasm:export 'f :params '(:int) :returns :int)", "f"))
+		assertThatThrownBy(() -> compileAndInvoke(
+				"(defun f (a b) (+ a b)) (rontolisp:wasm-export 'f :params '(:int) :returns :int)", "f"))
 			.hasMessageContaining("arity mismatch");
 	}
 

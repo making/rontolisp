@@ -48,8 +48,8 @@ class PackageResolverTest {
 
 	@Test
 	void wasmExportQualifiedIsKeptWithQuotedDatumAndKeywords() {
-		assertThat(resolve("(wasm:export 'fact :params '(:int) :returns :int)"))
-			.isEqualTo("(wasm:export (quote fact) :params (quote (:int)) :returns :int)");
+		assertThat(resolve("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)"))
+			.isEqualTo("(rontolisp:wasm-export (quote fact) :params (quote (:int)) :returns :int)");
 	}
 
 	@Test

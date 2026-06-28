@@ -1010,14 +1010,11 @@ public final class LispNames {
 	public static final String RONTOLISP_PKG = "rontolisp";
 
 	/**
-	 * The {@code export} function provided by the {@code wasm} package. Used as
-	 * {@code (wasm:export 'name :params '(...) :returns ...)} to mark a function for
-	 * direct WASM export. A no-op on the interpreter and the JVM backend.
+	 * The {@code wasm-export} directive provided by the {@code rontolisp} package. Used
+	 * as {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)} to mark a
+	 * function for direct WASM export. A no-op on the interpreter and the JVM backend.
 	 */
-	public static final String EXPORT = "export";
-
-	/** The {@code wasm} package name (does not use {@code cl}). */
-	public static final String WASM_PKG = "wasm";
+	public static final String WASM_EXPORT = "wasm-export";
 
 	private LispNames() {
 	}

@@ -87,7 +87,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * so a host can instantiate it with no import object (a "reactor"/library module).
 	 * The eight WASI import slots (function indices 0-7) are filled with internal
 	 * {@code unreachable} trap stubs so every fixed {@code FUNC_*} index stays valid.
-	 * Only pure-compute {@code (wasm:export ...)} functions work; any I/O
+	 * Only pure-compute {@code (rontolisp:wasm-export ...)} functions work; any I/O
 	 * (print/read/open/getenv/time/random) traps.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
@@ -491,7 +491,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// binds a variable to a closure like any other setq.
 		List<DefunDecl> defuns = new ArrayList<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
-		// (wasm:export ...) directives: collected here and turned into host-callable
+		// (rontolisp:wasm-export ...) directives: collected here and turned into
+		// host-callable
 		// export
 		// wrappers below. They produce no code in the _start body (Preview 1 only;
 		// ignored
@@ -772,7 +773,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// Build host-callable export wrappers (Preview 1 only; ignored in component
 		// mode).
-		// Each (wasm:export ...) directive becomes a thin wrapper function appended after
+		// Each (rontolisp:wasm-export ...) directive becomes a thin wrapper function
+		// appended after
 		// all user defuns and lambdas, exported under its Lisp name with a host-friendly
 		// numeric / memory signature. Indices: wrapper function indices follow the
 		// lambdas;
@@ -798,12 +800,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmFunctionInfo target = functions.get(decl.name());
 				if (target == null || !userDefinedNames.contains(decl.name())) {
 					throw new UnsupportedOperationException(
-							"wasm:export names an unknown function (must be a top-level defun): " + decl.name());
+							"rontolisp:wasm-export names an unknown function (must be a top-level defun): "
+									+ decl.name());
 				}
 				if (decl.paramTypes().size() != target.paramCount()) {
-					throw new UnsupportedOperationException(
-							"wasm:export arity mismatch for '" + decl.name() + "': declared " + decl.paramTypes().size()
-									+ " params, but the function takes " + target.paramCount());
+					throw new UnsupportedOperationException("rontolisp:wasm-export arity mismatch for '" + decl.name()
+							+ "': declared " + decl.paramTypes().size() + " params, but the function takes "
+							+ target.paramCount());
 				}
 				ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
@@ -1133,7 +1136,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed
-				// type (TYPE_HASH_BUCKETS). One per (wasm:export ...) directive.
+				// type (TYPE_HASH_BUCKETS). One per (rontolisp:wasm-export ...)
+				// directive.
 				for (ExportPlan p : exportPlans) {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
 							WasmExportCompiler.resultWasmTypes(p.decl()));
@@ -1294,7 +1298,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					fnDef.addFunction(TYPE_LOOKUP);
 					fnDef.addFunction(TYPE_RAT_NEW);
 				}
-				// Export wrapper functions (host-callable), one per (wasm:export ...).
+				// Export wrapper functions (host-callable), one per
+				// (rontolisp:wasm-export ...).
 				for (ExportPlan p : exportPlans) {
 					fnDef.addFunction(p.typeIndex());
 				}
@@ -1356,7 +1361,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					if (exportUsesMemory) {
 						exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, allocFuncIndex);
 					}
-					// Host-callable Lisp functions requested via (wasm:export ...).
+					// Host-callable Lisp functions requested via (rontolisp:wasm-export
+					// ...).
 					for (ExportPlan p : exportPlans) {
 						exports.addExport(p.decl().name(), ExternalKind.FUNCTION, p.funcIndex());
 					}
@@ -1451,7 +1457,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					code.addFunction(WasmExportRuntimeBuilder.buildAllocBody());
 					code.addFunction(WasmExportRuntimeBuilder.buildStrFromMemBody());
 				}
-				// Export wrapper bodies (host-callable), one per (wasm:export ...).
+				// Export wrapper bodies (host-callable), one per (rontolisp:wasm-export
+				// ...).
 				for (byte[] body : exportBodies) {
 					code.addFunction(body);
 				}
@@ -1595,7 +1602,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * A planned host-callable export wrapper: the parsed directive plus the resolved
 	 * target function index and the wrapper's own type and function indices.
 	 *
-	 * @param decl the parsed wasm:export directive
+	 * @param decl the parsed rontolisp:wasm-export directive
 	 * @param targetFuncIndex the WASM function index of the exported defun
 	 * @param typeIndex the wrapper's function type index
 	 * @param funcIndex the wrapper's own function index

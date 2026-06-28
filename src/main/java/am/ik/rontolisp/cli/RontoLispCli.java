@@ -177,7 +177,7 @@ public final class RontoLispCli {
 		this.out.println("                     WASM only; print works, reading/file I/O not yet supported");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object,");
-		this.out.println("                     only pure-compute wasm:export functions work (I/O traps)");
+		this.out.println("                     only pure-compute rontolisp:wasm-export functions work (I/O traps)");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 	}

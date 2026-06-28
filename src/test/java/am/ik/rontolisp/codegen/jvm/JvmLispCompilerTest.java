@@ -52,11 +52,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunWasmExportIsNoOp() throws Exception {
-		// wasm:export is a directive for the WASM backend; on the JVM it is a no-op and
+		// rontolisp:wasm-export is a directive for the WASM backend; on the JVM it is a
+		// no-op and
 		// the
 		// marked function still compiles and runs normally.
 		assertThat(compileAndRun("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
-				+ "(wasm:export 'fact :params '(:int) :returns :int)" + "(print (fact 5))"))
+				+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)" + "(print (fact 5))"))
 			.isEqualTo("120");
 	}
 
