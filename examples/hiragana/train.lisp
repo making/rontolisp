@@ -4824,7 +4824,7 @@
     (reverse acc)))
 ;;;; train-main.lisp -- offline trainer.  Concatenated after common.lisp and
 ;;;; prototypes.lisp (see gen.sh) and run on the interpreter or JVM.  It trains
-;;;; a 576-20-46 MLP on shifted/noisy copies of the reference glyphs and
+;;;; a 576-20-46 MLP on multi-font, affine-augmented copies of the glyphs and
 ;;;; prints the learned weights to STDOUT as a single (defparameter *weights*
 ;;;; (quote ...)) form.  Progress is emitted as Lisp comment lines (';;'), which
 ;;;; the reader ignores, so the stdout capture is a valid weights.lisp.
