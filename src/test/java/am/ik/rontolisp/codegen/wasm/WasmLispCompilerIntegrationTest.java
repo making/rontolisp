@@ -150,6 +150,75 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoWasiAndInvoke(program, "fact", "10")).isEqualTo("3628800");
 	}
 
+	// Compiles with --optimize (dead-code elimination) and invokes a scalar export, in
+	// the
+	// given mode. Used to confirm the tree-shaken module still behaves identically.
+	private static String compileOptimizedAndInvoke(String lispCode, boolean noWasi, String function, String... args)
+			throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler(false, false, noWasi, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		List<String> command = new java.util.ArrayList<>(
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "/tmp/test.wasm"));
+		command.addAll(List.of(args));
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode())
+			.as("exit code for optimized invoke %s: %s\nstderr: %s", function, lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void optimizedNoWasiExportBehavesIdenticallyAndShrinks() throws Exception {
+		// --optimize drops every function unreachable from the export/_start roots. A
+		// pure-compute reactor module shrinks dramatically yet computes the same result.
+		String program = """
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""";
+		assertThat(compileOptimizedAndInvoke(program, true, "fact", "5")).isEqualTo("120");
+		assertThat(compileOptimizedAndInvoke(program, true, "fact", "10")).isEqualTo("3628800");
+
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		int plain = new WasmLispCompiler(false, false, true, false).compile(parsed).length;
+		int optimized = new WasmLispCompiler(false, false, true, true).compile(parsed).length;
+		assertThat(optimized).isLessThan(plain / 5);
+	}
+
+	@Test
+	void optimizedPrintProgramRunsIdentically() throws Exception {
+		// Default (WASI) mode: --optimize also drops the unused WASI imports. Behavior
+		// and
+		// stdout must be unchanged.
+		String program = """
+				(print (+ 1 2))
+				(print (string-upcase "hi"))
+				""";
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true)
+			.compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("3\n\"HI\"");
+	}
+
+	@Test
+	void optimizedEvalProgramResolvesDynamically() throws Exception {
+		// A program using eval keeps the interpreter + dispatch reachable; --optimize
+		// must
+		// not prune a dynamically-reached target.
+		String program = """
+				(defun sq (x) (* x x))
+				(print (eval '(sq 9)))
+				""";
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true)
+			.compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("81");
+	}
+
 	@Test
 	void noWasiModuleTrapsWhenItAttemptsIo() throws Exception {
 		// I/O is unsupported in no-wasi mode: the omitted fd_write becomes a trap stub,

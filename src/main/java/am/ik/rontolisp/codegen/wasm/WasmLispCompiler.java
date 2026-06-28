@@ -47,6 +47,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean noWasi;
 
+	private final boolean optimize;
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -91,11 +93,29 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * (print/read/open/getenv/time/random) traps.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
+		this(dynamic, component, noWasi, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
+	 * @param optimize when {@code true}, the emitted core module is run through
+	 * {@link am.ik.wasm.WasmTreeShaker}: functions unreachable from the module's roots
+	 * (its exports and {@code _start}) are dropped and the survivors renumbered. Combined
+	 * with {@code noWasi} a pure-compute reactor module shrinks to a handful of
+	 * functions. The pass is a no-op in {@code component} mode (the WASI 0.3 adapter
+	 * wiring relies on the core's fixed import/index layout), so component output is
+	 * unchanged.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize) {
 		this.dynamic = dynamic;
 		this.component = component;
 		// no-wasi is a Preview 1-only mode; a component has its own (lowered) import
 		// story.
 		this.noWasi = noWasi && !component;
+		this.optimize = optimize;
 	}
 
 	// Function indices (imports come first). Defined functions are indexed relative to
@@ -1483,7 +1503,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			});
 		byte[] coreModule = out.toByteArray();
-		return this.component ? WasmComponentBuilder.build(coreModule, emitHttpImport) : coreModule;
+		if (this.component) {
+			// The WASI 0.3 adapter binds the core's imports/exports by their fixed
+			// layout,
+			// so tree-shaking the core is unsafe here; leave the component path
+			// untouched.
+			return WasmComponentBuilder.build(coreModule, emitHttpImport);
+		}
+		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args) {
