@@ -37,11 +37,17 @@ Verify the install:
 rontolisp --version
 ```
 
+A prebuilt binary needs nothing else installed. To run `.wasm` output you also
+need a wasm-GC capable runtime such as [wasmtime](https://wasmtime.dev/) 14+
+(optional).
+
 The rest of the documentation uses the `rontolisp` command. If you build from
 source instead (below), substitute `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar`
 for `rontolisp`.
 
 ## Build from source
+
+Requires **Java 25+**.
 
 ```bash
 ./mvnw clean package

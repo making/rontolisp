@@ -5,8 +5,6 @@ sections:
     pages:
       - file: index.md
         title: Introduction
-      - file: getting-started/requirements.md
-        title: Requirements
       - file: getting-started/build.md
         title: Build & Install
       - file: getting-started/repl.md
