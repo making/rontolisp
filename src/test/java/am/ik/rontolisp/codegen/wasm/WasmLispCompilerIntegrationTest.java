@@ -170,8 +170,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void optimizedNoWasiExportBehavesIdenticallyAndShrinks() throws Exception {
-		// --optimize drops every function unreachable from the export/_start roots. A
-		// pure-compute reactor module shrinks dramatically yet computes the same result.
+		// --optimize drops every function unreachable from the roots (the exports plus
+		// the
+		// `_initialize` reactor entry). A pure-compute reactor module shrinks
+		// dramatically
+		// yet computes the same result.
 		String program = """
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)

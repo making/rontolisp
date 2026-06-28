@@ -37,7 +37,9 @@ class WasmTreeShakerTest {
 		Module before = Module.parse(plain);
 		Module after = Module.parse(optimized);
 		assertThat(after.definedFunctionCount()).isLessThan(before.definedFunctionCount());
-		assertThat(after.exportedFunctionNames()).contains("fact", "_start");
+		// no-wasi reactor: the top-level init entry is exported as `_initialize`, not
+		// `_start`.
+		assertThat(after.exportedFunctionNames()).contains("fact", "_initialize");
 		after.assertWellFormed();
 	}
 

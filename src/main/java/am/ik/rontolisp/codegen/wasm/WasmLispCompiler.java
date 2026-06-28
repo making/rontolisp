@@ -1372,8 +1372,19 @@ public final class WasmLispCompiler implements LispCompiler {
 					exports.addExport("run", ExternalKind.FUNCTION, FUNC_START);
 				}
 				else {
+					// A no-wasi module is a reactor/library, not a WASI command, so name
+					// its
+					// top-level init entry `_initialize` (the reactor ABI convention: a
+					// host
+					// runs it once after instantiation) rather than `_start` (the command
+					// entrypoint a no-WASI host never calls). Either way it runs the
+					// program's
+					// top-level initializers (defvar/defparameter/setq globals an export
+					// reads)
+					// and seeds the heap pointer, and stays a tree-shaker root.
+					String initExport = this.noWasi ? "_initialize" : "_start";
 					exports.addExport("memory", ExternalKind.MEMORY, 0)
-						.addExport("_start", ExternalKind.FUNCTION, FUNC_START);
+						.addExport(initExport, ExternalKind.FUNCTION, FUNC_START);
 					// The host-facing bump allocator, when any memory-typed export is
 					// present
 					// (a host calls it to reserve a scratch buffer for string/sexpr

@@ -232,13 +232,18 @@ any I/O (`print`/`read`/`open`/`getenv`/time/`random`, including a top-level for
 prints) hits a stub and **traps**. It is Preview 1 only — `--no-wasi` is ignored under
 `--component`.
 
+Because the module is a reactor (not a WASI command), its top-level initializer is
+exported as **`_initialize`** rather than `_start`. A host should call `_initialize` once
+after instantiation to run top-level forms (`defvar`/`defparameter`/`setq` globals that an
+exported function reads); pure-compute reactors that hold no top-level state can skip it.
+
 #### Optimize (dead-code elimination) (`--optimize`)
 
 By default a compiled module embeds the **entire** runtime (printer, rational, string,
 reader and `eval` helpers, the WASI import slots, …) regardless of what the program
 actually uses, because function indices are held fixed. Add `--optimize` to drop every
-function unreachable from the module's roots (its exports and `_start`) and renumber the
-survivors. Unused WASI imports are removed too, so a pure-compute reactor module shrinks to
+function unreachable from the module's roots (its exports and the `_start`/`_initialize`
+entry) and renumber the survivors. Unused WASI imports are removed too, so a pure-compute reactor module shrinks to
 a handful of functions:
 
 ```bash
