@@ -1,7 +1,7 @@
 # REPL
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar
+rontolisp
 ```
 
 ```

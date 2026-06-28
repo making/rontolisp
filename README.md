@@ -28,15 +28,25 @@ rendered to HTML by the standalone [`docs-tool/`](docs-tool/) generator.
 - [GraalVM](https://www.graalvm.org/) 25+ (optional, for native image build)
 - [wasmtime](https://wasmtime.dev/) (for running `.wasm` output, optional)
 
-## Build
+## Install
+
+Download a prebuilt native-image binary from the
+[releases page](https://github.com/making/rontolisp/releases/tag/0.1.0-SNAPSHOT)
+(macOS arm64, Linux amd64/arm64). For example, on macOS (Apple Silicon):
+
+```bash
+wget https://github.com/making/rontolisp/releases/download/0.1.0-SNAPSHOT/rontolisp-darwin-arm64
+chmod +x rontolisp-darwin-arm64
+sudo mv rontolisp-darwin-arm64 /usr/local/bin/rontolisp
+```
+
+Or build from source (produces `target/rontolisp-0.1.0-SNAPSHOT-exec.jar`):
 
 ```bash
 ./mvnw clean package
 ```
 
-This produces `target/rontolisp-0.1.0-SNAPSHOT-exec.jar`, an executable JAR with all dependencies included.
-
-Build a native executable with GraalVM (`target/rontolisp`, instant startup):
+Build a native executable with GraalVM yourself (`target/rontolisp`, instant startup):
 
 ```bash
 ./mvnw -Pnative clean package
@@ -49,13 +59,12 @@ See [Build & Install](https://making.github.io/rontolisp/docs/en/getting-started
 The same source runs on all three backends:
 
 ```bash
-JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 echo '(print (+ 1 2))' > hello.lisp
 
-java -jar $JAR                          # REPL
-java -jar $JAR hello.lisp                # interpret           -> 3
-java -jar $JAR hello.lisp -o Hello.class && java Hello          # JVM -> 3
-java -jar $JAR hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
+rontolisp                                # REPL
+rontolisp hello.lisp                     # interpret           -> 3
+rontolisp hello.lisp -o Hello.class && java Hello              # JVM -> 3
+rontolisp hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
 ```
 
 For the REPL, file interpretation, JVM/WASM compilation (including

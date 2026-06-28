@@ -1,7 +1,7 @@
 # Compile to JVM Bytecode
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o Hello.class
+rontolisp hello.lisp -o Hello.class
 java Hello
 ```
 

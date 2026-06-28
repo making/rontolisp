@@ -14,10 +14,10 @@ Example (`repl.lisp`):
 ```
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp               # interpret
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp -o repl.class
+rontolisp repl.lisp               # interpret
+rontolisp repl.lisp -o repl.class
 java repl                                                                  # REPL on the JVM
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar repl.lisp -o repl.wasm
+rontolisp repl.lisp -o repl.wasm
 wasmtime run -W gc repl.wasm                                               # REPL on WASM
 ```
 

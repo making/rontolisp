@@ -1,7 +1,7 @@
 # File Interpretation
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar program.lisp
+rontolisp program.lisp
 ```
 
 Example (`program.lisp`):

@@ -1,7 +1,7 @@
 # Compile to WASM
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp -o hello.wasm
+rontolisp hello.lisp -o hello.wasm
 wasmtime run -W gc hello.wasm
 ```
 
@@ -39,7 +39,7 @@ declaring the WASM-boundary types of its parameters and result:
 ```
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fact.lisp -o fact.wasm
+rontolisp fact.lisp -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5
 ```
 
@@ -104,7 +104,7 @@ can instantiate it with no import object at all — a "reactor"/library module w
 surface is the exported Lisp functions:
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fact.lisp --no-wasi -o fact.wasm
+rontolisp fact.lisp --no-wasi -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
 ```
 
@@ -136,7 +136,7 @@ entry) and renumber the survivors. Unused WASI imports are removed too, so a pur
 a handful of functions:
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fact.lisp --no-wasi --optimize -o fact.wasm
+rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~1 KB module
 ```
 
@@ -152,7 +152,7 @@ yet implemented.
 Add `--component` to emit a WASI 0.3 (Preview 3) **component** instead of a Preview 1 core module. The component prints through `wasi:cli/stdout@0.3.0`:
 
 ```bash
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar hello.lisp --component -o hello.wasm
+rontolisp hello.lisp --component -o hello.wasm
 wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y hello.wasm
 ```
 
@@ -175,7 +175,7 @@ cat > fileio.lisp <<'EOF'
 (with-open-file (in "greeting.txt")
   (print (read-line in)))
 EOF
-java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar fileio.lisp --component -o fileio.wasm
+rontolisp fileio.lisp --component -o fileio.wasm
 wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . fileio.wasm
 # "hello"
 ```
