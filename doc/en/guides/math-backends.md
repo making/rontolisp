@@ -1,0 +1,15 @@
+# Math Function Backends
+
+Arithmetic and comparison operators work on both integers and doubles. When any operand is a double, the result is promoted to double (e.g., `(+ 1 1.5)` returns `2.5`). `+`, `-`, `*`, `/` accept two or more arguments. `mod` supports doubles in the interpreter and JVM compiler but not in the WASM compiler.
+
+## Math function backend support
+
+The math built-ins differ in how widely they are supported, because the WASM backend only has native instructions for a few operations:
+
+- **`sqrt`, `isqrt`, `gcd`, `lcm`, `signum`, `expt`** are supported on all three backends (interpreter, JVM, WASM) and through the compiled `eval`. `sqrt` uses the native `f64.sqrt` instruction.
+- **`exp`** is supported on all three backends. The interpreter and JVM use `Math.exp`; WASM has no native transcendental instruction, so it emits a software approximation in f64 (argument reduction by repeated squaring plus a Taylor polynomial), accurate to roughly 1e-6 relative error. The WASM result is therefore close to but not bit-identical to `Math.exp` (`(exp 0)` is exactly `1.0`). This is enough to run, e.g., a sigmoid `(/ 1.0 (+ 1.0 (exp (- 0 x))))` compiled to WASM.
+- **The remaining transcendental functions** (`log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`) have no native WASM instruction and are **interpreter/JVM only**. Using one in a program compiled to WASM is rejected at compile time (`Cannot compile: sin`).
+- **`expt`** keeps an exact rational result for an integer or ratio base raised to an integer exponent (with big-integer promotion in the interpreter and JVM); a negative exponent yields the reciprocal (`(expt 2 -1)` is `1/2`) and a float base/exponent uses `Math.pow` and returns a float. The WASM `expt`, like all WASM integer arithmetic, uses 31-bit values with no overflow promotion.
+- **`isqrt`, `gcd`, `lcm`, `signum`** operate on the i31 integer range in the WASM backend (no big-integer promotion); the interpreter and JVM promote to big integers as needed.
+- **`random`** is supported on all three backends. It returns a non-negative random number below the (positive) limit, of the same type as the limit (an integer limit yields an integer, a float limit a float). The integer and float paths are chosen from the literal shape of the argument, so use a float literal (`(random 1.0)`) when a float result is wanted. The interpreter and JVM draw from `Math.random()`; the WASM backend draws real entropy from the WASI `random_get` host function (the real `wasi_snapshot_preview1.random_get` in Preview 1 mode, `wasi:random@0.3.0` in `--component` mode), so the sequence differs each run. `random` is not available inside the compiled `eval`.
+- **`logand`, `logior`, `logxor`, `lognot`, `ash`** are supported on all three backends. The interpreter and JVM compute on exact `BigInteger` values (`ash` shifts left for a non-negative count, right otherwise); the WASM backend uses the i31 integer range, so a result that overflows 31 bits is truncated.

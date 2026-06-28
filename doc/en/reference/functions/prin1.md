@@ -1,0 +1,13 @@
+# prin1
+
+`(prin1 object)`
+
+Writes `object` to standard output in its readable form, exactly like `print` but without the trailing newline. Strings are printed with surrounding quotes and characters in `#\` syntax, so the output could be read back by `read`. Returns `object`.
+
+```lisp
+(prin1 "hello")
+```
+
+```
+"hello"
+```

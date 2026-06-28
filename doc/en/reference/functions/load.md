@@ -1,0 +1,12 @@
+# load
+
+`(load filename)`
+
+Reads a file and evaluates every top-level form in it in the global environment, then returns `t`. Definitions such as `defun` and `setq` in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are reached through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). Works in all three backends; the WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime run -W gc --dir . prog.wasm`).
+
+```console
+(load "lib.lisp")
+(eval '(square 5))
+```
+
+After loading a file that defines `square`, the definition is invoked through `eval`. The WASM backend needs `--dir` because it resolves the path against the first preopened directory.

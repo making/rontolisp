@@ -1,0 +1,17 @@
+index_page: reference/special-forms.md
+categories:
+  - title: Special Forms
+    functions:
+      - { slug: quote, name: quote }
+      - { slug: if, name: if }
+      - { slug: let, name: let }
+      - { slug: lambda, name: lambda }
+      - { slug: progn, name: progn }
+      - { slug: setq, name: setq }
+      - { slug: while, name: while }
+      - { slug: return, name: return }
+      - { slug: defun, name: defun }
+      - { slug: defvar, name: defvar }
+      - { slug: defparameter, name: defparameter }
+      - { slug: defconstant, name: defconstant }
+      - { slug: function, name: function }

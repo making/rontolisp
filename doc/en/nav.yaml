@@ -1,0 +1,57 @@
+title: rontolisp
+lang_name: English
+sections:
+  - title: Getting Started
+    pages:
+      - file: index.md
+        title: Introduction
+      - file: getting-started/requirements.md
+        title: Requirements
+      - file: getting-started/build.md
+        title: Build & Install
+      - file: getting-started/repl.md
+        title: REPL
+      - file: getting-started/file-interpretation.md
+        title: File Interpretation
+  - title: Compiling
+    pages:
+      - file: compiling/jvm.md
+        title: Compile to JVM Bytecode
+      - file: compiling/wasm.md
+        title: Compile to WASM
+      - file: compiling/wasm-export.md
+        title: Exporting Lisp Functions
+      - file: compiling/no-wasi.md
+        title: No-WASI (Reactor) Mode
+      - file: compiling/optimize.md
+        title: Optimize (Tree Shaking)
+      - file: compiling/component.md
+        title: WASI 0.3 Component
+      - file: compiling/dynamic.md
+        title: Dynamic (Late Binding)
+      - file: compiling/self-hosted-repl.md
+        title: Self-Hosted REPL
+  - title: Language Reference
+    pages:
+      - file: reference/data-types.md
+        title: Data Types
+      - file: reference/special-forms.md
+        title: Special Forms
+      - file: reference/macros.md
+        title: Macros
+      - file: reference/format.md
+        title: format
+      - file: reference/builtin-functions.md
+        title: Built-in Functions
+      - file: reference/packages.md
+        title: Packages
+      - file: reference/function-namespace.md
+        title: Function Namespace
+  - title: Guides
+    pages:
+      - file: guides/eval-limitations.md
+        title: Compiled eval Limitations
+      - file: guides/read-load-limitations.md
+        title: Compiled read/load Limitations
+      - file: guides/math-backends.md
+        title: Math Function Backends

@@ -8,10 +8,14 @@
 ./mvnw spring-javaformat:apply test                             # Run all tests
 ```
 
-User-facing behavior, limitations, and examples live in the README (verified by
-`ReadmeExamplesTest`). This file is the agent-facing companion: invariants you
-must not break and pointers to where things live. When a constraint below ends
-with "(README)", the user-facing description is there — don't duplicate it here.
+User-facing behavior, limitations, and examples live in the documentation site
+sources under `doc/en/**` (Markdown rendered to HTML by the standalone
+`docs-tool/` generator; the runnable Lisp examples are verified by
+`DocExamplesTest`). The README is a slim landing page that links to the site.
+This file is the agent-facing companion: invariants you must not break and
+pointers to where things live. When a constraint below ends with "(README)", the
+user-facing description lives in `doc/` (and its rendered site) -- don't
+duplicate it here. The docs nav/table of contents is `doc/en/nav.yaml`.
 
 ## Architecture Overview
 
@@ -71,7 +75,7 @@ When adding a new built-in function or special form:
 2. **JVM compiler** -> run `JvmLispCompilerTest`
 3. **WASM compiler** -> run `WasmLispCompilerIntegrationTest`
 4. Add a case to `src/test/resources/ci-spec.yaml` if it should be covered end-to-end (`CiSpecE2eTest`)
-5. Update Built-in Functions / Compiler Limitations in the README and `ReadmeExamplesTest`
+5. Update the docs (see "Updating the Documentation Site"). For a new built-in **function / macro / special form**: add a per-operator page (H1 = name, signature, short description, one runnable ```lisp example with a `; => value` annotation -- a static ```console block for forms needing stdin/files or that signal, e.g. `error`/`with-open-file`) under the matching `reference/{functions,macros,special-forms}/` directory and a `_catalog.yaml` entry, then run the `-Drontolisp.doc.fix=true` helper. The table page name links to it automatically.
 
 ### Adding a New Built-in Function
 
@@ -94,6 +98,66 @@ Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`
 
 1. **LispEvaluator.java**: `evalCons()` case (special forms receive unevaluated arguments).
 2. **JVM / WASM**: Create `Jvm/Wasm<Form>Compiler.java`, wire into `Jvm/WasmExprCompiler.compileCons()`.
+
+### Updating the Documentation Site
+
+The user-facing manual is Markdown under `doc/en/**`, rendered to a static HTML
+site (`web/dist/docs`) by the standalone generator in `docs-tool/` and published
+to GitHub Pages by `.github/workflows/pages.yaml`. The site reuses the browser
+playground's WebAssembly runtime, so the Lisp examples are runnable in-page.
+
+**Layout.** `doc/en/nav.yaml` = the sidebar/order (Getting Started, Compiling,
+Language Reference, Guides). `doc/assets/docs.css` + `docs.js` = shared theme and
+the runnable-cell wiring. `doc/<lang>/` is a language (only `en` today; adding a
+`doc/ja/` with its own `nav.yaml` auto-creates a Japanese site under `/docs/ja/`).
+Per-operator reference pages live in catalog directories, each with a
+`_catalog.yaml` (categories -> ordered `{slug, name}` entries) and a table
+"index page": `reference/functions/` (index `reference/builtin-functions.md`),
+`reference/macros/` (index `reference/macros.md`), `reference/special-forms/`
+(index `reference/special-forms.md`). docgen discovers every `_catalog.yaml`,
+renders one HTML page per entry with prev/next, and links each operator name in
+the index table to its page.
+
+**Code-fence conventions** (parsed by `DocExamplesTest` and the docgen
+`RunnableBlockTransformer`):
+- ` ```lisp ` = a runnable, self-contained example (becomes a "Run" cell). It is
+  executed by `DocExamplesTest` and must not throw. Annotate the final form with
+  `; => value` (prin1 form) to show + assert its result; or follow the block with
+  a plain ` ``` ` output block to assert stdout (use this for printing examples).
+- ` ```console ` = a static transcript or an example that needs stdin/files/network
+  or that signals (`read`, `open`, `load`, `with-open-file`, `error`,
+  `rontolisp:fetch`). Not executed.
+- ` ```bash ` = shell commands. Plain ` ``` ` = expected output.
+- Do NOT use dotted-pair literals (`'(a . 1)`) in `lisp` blocks -- the reader
+  rejects them; build with `(cons ...)`/`(list ...)`.
+
+**Adding/editing pages.** Edit the Markdown; add new top-level pages to
+`doc/en/nav.yaml`. For a new function/macro/special form, add a per-operator page
++ a `_catalog.yaml` entry under the matching directory (see "Implementation
+Order" step 5). After editing examples, normalize the shown results to the real
+interpreter values and catch any non-runnable example:
+
+```bash
+./mvnw -Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixDetailResults test  # rewrite ; => / output of detail pages
+./mvnw -Dtest=DocExamplesTest test                                            # verify every example runs + matches
+```
+
+**Build & preview locally** (the docs build is plain Java; the playground build
+needs GraalVM + Binaryen and only matters for actually running the cells):
+
+```bash
+./mvnw -Pweb -DskipTests package                                  # (optional) refresh web/dist/rontoplayground.js(.wasm)
+./mvnw -f docs-tool/pom.xml -DskipTests package                   # build the docgen jar
+java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
+cd web/dist && jwebserver -p 8000                                 # open http://localhost:8000/docs/
+```
+
+In CI, `pages.yaml` builds the playground (`-Pweb`) first, then the docs into the
+same `web/dist` (never deleting it), then deploys -- so the deployed playground
+wasm and the docs come from the same commit (introspection examples like
+`rontolisp:list-macros` therefore agree in the deployed site even if a local
+`rontoplayground.js.wasm` is stale). The docgen and `DocExamplesTest` are also
+exercised by `./mvnw test`; the `-Drontolisp.doc.fix=true` helper is manual-only.
 
 ### Verifying Output Manually (all four backends)
 
@@ -151,12 +215,12 @@ does not need rebuilding unless Java sources changed).
 ## Development Requirements
 
 - Java 25+
-- No external dependencies for core libraries (reader, eval, codegen, am.ik.jvm, am.ik.wasm)
+- No external dependencies for core libraries (reader, eval, codegen, am.ik.jvm, am.ik.wasm). The `docs-tool/` documentation generator is a separate Maven project (not part of the reactor) and may use flexmark/snakeyaml.
 - Spring Java Format enforced via Maven plugin
 - Use modern Java features (Records, Pattern Matching, Sealed Types, Text Blocks, etc.)
 - Avoid circular references between classes and packages
 - `src/test/resources/ci-spec.yaml` is the single source of truth for the cross-backend E2E test (`CiSpecE2eTest`, package `am.ik.rontolisp.e2e`). Each case is `name` + `source` + `expected` (with an optional `expectedByBackend` override). Cases share global state and run IN ORDER: the driver concatenates them into one program, runs the native binary once per backend (interpreter / JVM / WASM Preview 1 / WASM component via `--component`), and slices the output back per case. The `WASM_COMPONENT` backend reuses each case's `expected` because the program is deterministic (no file I/O / random / time). The driver only runs when `-Drontolisp.binary=<path>` is set, so `mvn test` on the JVM skips it.
-- README code examples verified by `ReadmeExamplesTest`
+- Documentation lives in `doc/en/**` (Markdown). Runnable `lisp` examples there are verified by `DocExamplesTest`; the site is built by `docs-tool/` (`./mvnw -f docs-tool/pom.xml package`, then `java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs`) and published by `.github/workflows/pages.yaml`. A `lisp` block followed by a plain output block asserts that output; REPL transcripts use `console`, shell uses `bash`.
 - WASM integration tests skipped if Docker unavailable
 
 ### After Task Completion

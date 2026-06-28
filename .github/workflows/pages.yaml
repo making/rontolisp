@@ -16,6 +16,8 @@ on:
     - examples/hiragana/**
     - src/**
     - pom.xml
+    - doc/**
+    - docs-tool/**
     - .github/workflows/pages.yaml
   workflow_dispatch:
 
@@ -51,6 +53,13 @@ jobs:
       run: wasm-as --version
     - name: Build playground (rontolisp -> WebAssembly)
       run: ./mvnw -V --no-transfer-progress -Pweb -DskipTests package
+    # Build the standalone Markdown -> HTML docs tool and render doc/ into
+    # web/dist/docs. The web profile (above) recreates web/dist, so docs must
+    # run after it and only add the docs/ subtree (it never deletes web/dist).
+    - name: Build docs tool
+      run: ./mvnw -V --no-transfer-progress -f docs-tool/pom.xml -DskipTests package
+    - name: Generate documentation site (doc -> web/dist/docs)
+      run: java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
       with:
