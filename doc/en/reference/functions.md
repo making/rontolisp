@@ -1,4 +1,4 @@
-# Built-in Functions
+# Functions
 
 This page is the quick-reference table. **Each function name in the table links
 to its own page**, which has a fuller description and a runnable example you can

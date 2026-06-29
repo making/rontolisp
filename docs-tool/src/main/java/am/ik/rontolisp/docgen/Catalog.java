@@ -23,7 +23,7 @@ import org.yaml.snakeyaml.Yaml;
  * Expected shape (e.g. {@code reference/functions/_catalog.yaml}):
  *
  * <pre>
- * index_page: reference/builtin-functions.md
+ * index_page: reference/functions.md
  * categories:
  *   - title: Arithmetic
  *     functions:
@@ -33,7 +33,7 @@ import org.yaml.snakeyaml.Yaml;
  * @param baseDir the directory holding the detail pages and {@code _catalog.yaml},
  * relative to the language directory (e.g. {@code reference/functions})
  * @param indexPage the table page whose names link to the detail pages, relative
- * to the language directory (e.g. {@code reference/builtin-functions.md})
+ * to the language directory (e.g. {@code reference/functions.md})
  * @param categories the ordered groups of entries
  */
 public record Catalog(String baseDir, String indexPage, List<Category> categories) {

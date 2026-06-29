@@ -60,6 +60,6 @@ part of Common Lisp**. They must be referenced with the `rontolisp:` qualifier
 (or used unqualified after `(in-package rontolisp)`). Besides the introspection
 helpers above (`version`, `list-functions`, `list-macros`, `list-special-forms`),
 the package provides outgoing HTTP via `rontolisp:fetch`. All of these have their
-own pages in the [Built-in Functions](builtin-functions.md#rontolisp-package-functions)
+own pages in the [Functions](functions.md#rontolisp-package-functions)
 reference, including the full
 [`rontolisp:fetch`](functions/rontolisp-fetch.md) documentation.

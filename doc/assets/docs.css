@@ -210,7 +210,7 @@ a:hover { text-decoration: underline; }
 .markdown tr:nth-child(even) td { background: var(--panel); }
 .markdown td code, .markdown th code { white-space: nowrap; }
 
-/* function-name links in the Built-in Functions table */
+/* function-name links in the Functions table */
 .markdown a.fn-link { text-decoration: none; }
 .markdown a.fn-link code { color: var(--accent); cursor: pointer; }
 .markdown a.fn-link:hover code { text-decoration: underline; }

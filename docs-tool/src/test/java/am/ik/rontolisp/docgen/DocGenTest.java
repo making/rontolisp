@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DocGenTest {
 
 	private static Catalog functionCatalog() {
-		return new Catalog("reference/functions", "reference/builtin-functions.md",
+		return new Catalog("reference/functions", "reference/functions.md",
 				List.of(new Catalog.Category("c", List.of(new Catalog.Entry("plus", "+"), new Catalog.Entry("lt", "<"),
 						new Catalog.Entry("char-compare", "char= char< char<=")))));
 	}

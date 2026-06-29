@@ -112,7 +112,7 @@ the runnable-cell wiring. `doc/<lang>/` is a language (only `en` today; adding a
 `doc/ja/` with its own `nav.yaml` auto-creates a Japanese site under `/docs/ja/`).
 Per-operator reference pages live in catalog directories, each with a
 `_catalog.yaml` (categories -> ordered `{slug, name}` entries) and a table
-"index page": `reference/functions/` (index `reference/builtin-functions.md`),
+"index page": `reference/functions/` (index `reference/functions.md`),
 `reference/macros/` (index `reference/macros.md`), `reference/special-forms/`
 (index `reference/special-forms.md`). docgen discovers every `_catalog.yaml`,
 renders one HTML page per entry with prev/next, and links each operator name in

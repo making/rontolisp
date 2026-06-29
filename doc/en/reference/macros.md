@@ -37,5 +37,5 @@ description and a runnable example you can evaluate in your browser.
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,
 `second`..`fourth`, `1+`, `1-`, `zerop`, `plusp`, `minusp`, `evenp`, `oddp`) are listed
-under [Built-in Functions](builtin-functions.md) because they are also usable as function
+under [Functions](functions.md) because they are also usable as function
 values (`#'first`).
