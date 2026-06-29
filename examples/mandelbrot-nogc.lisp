@@ -13,13 +13,15 @@
 ;;;; Build (plain MVP module, no wasm-GC):
 ;;;;   java -jar ...-exec.jar examples/mandelbrot-nogc.lisp -o mandelbrot.wasm --no-gc
 ;;;;
-;;;; Drive it from Node (reads the returned string out of linear memory):
-;;;;   const { instance } = await WebAssembly.instantiate(
-;;;;     require('fs').readFileSync('mandelbrot.wasm'), {});
-;;;;   const ex = instance.exports;
-;;;;   const [ptr, len] = ex.mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
-;;;;   process.stdout.write(
-;;;;     Buffer.from(new Uint8Array(ex.memory.buffer, ptr, len)).toString());
+;;;; Drive it from Node (reads the returned string out of linear memory; the
+;;;; async IIFE lets `node -e` use await, which a bare top-level script cannot):
+;;;;   node -e '(async () => {
+;;;;     const ex = (await WebAssembly.instantiate(
+;;;;       require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
+;;;;     const [ptr, len] = ex.mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
+;;;;     process.stdout.write(
+;;;;       Buffer.from(new Uint8Array(ex.memory.buffer, ptr, len)).toString());
+;;;;   })()'
 
 ;;; Escape time for the complex point (cx, cy): the number of iterations of
 ;;; z <- z^2 + c before |z| > 2 (i.e. |z|^2 > 4), capped at `max-iter`.

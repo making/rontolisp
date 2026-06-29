@@ -264,12 +264,12 @@ instead of printing it:
 
 ```console
 $ rontolisp examples/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
-$ node -e '
+$ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
   const [p, n] = ex.mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
   process.stdout.write(Buffer.from(new Uint8Array(ex.memory.buffer, p, n)).toString());
-'
+})()'
 ```
 
 ### Composition
