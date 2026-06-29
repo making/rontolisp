@@ -23,7 +23,8 @@ java -jar ...-exec.jar abs.lisp -o abs.wasm && wasmtime run -W gc abs.wasm  # 0.
 
 ## Root cause
 
-Same shape as the (now-fixed) float `mod`/`rem` bug, see [[24-wasm-gc-float-mod-rem]].
+Same shape as the (now-fixed) float `mod`/`rem` bug (former .todo/24, fixed in
+commit e7eee65).
 `abs` selects its integer vs float path with the purely *syntactic*
 `hasDoubleLiteral`/`containsDouble` heuristic (does the argument expression
 textually contain a float literal?), not the runtime type:
@@ -45,7 +46,7 @@ takes the float path and is fine on every backend -- that is why
 ## Fix direction
 
 Make `abs` dispatch on the operand's runtime type instead of the syntactic
-heuristic, the way `mod`/`rem` now do (see #24):
+heuristic, the way `mod`/`rem` now do (commit e7eee65):
 
 - **Interpreter**: already correct (works on a Double).
 - **JVM** (`JvmAbsCompiler`): branch on `instanceof Double` at runtime (f64 abs) vs
@@ -63,6 +64,6 @@ checked), then fix the JVM path, then confirm parity with the interpreter.
 
 `hasDoubleLiteral` is used by several WASM/JVM arithmetic compilers as a
 compile-time float-vs-int discriminator. `mod`/`rem` were migrated to runtime
-dispatch in #24; `abs` is the next instance. Worth auditing the remaining callers
+dispatch in commit e7eee65; `abs` is the next instance. Worth auditing the remaining callers
 (comparisons, `+ - * /` already go through the rat runtime) for the same
 float-through-a-variable hazard.
