@@ -1,6 +1,21 @@
 # `--no-gc`: a non-GC WASM lowering for pure-numeric exports
 
-**Status:** Open (design captured 2026-06-28). Raised in the `claude-opus` session
+**Status:** Phase 1 LANDED (2026-06-29). Phase 2 (linear-memory `:string`/`:sexpr`) still
+open. Phase 1 shipped as `codegen.wasm.ScalarWasmCompiler` (a separate backend, GC path
+untouched): `--no-gc` emits a plain MVP module (no rec group / GC types / memory / import)
+for pure-numeric `rontolisp:wasm-export` functions with scalar boundary types
+(`:int`/`:float`/`:bool`/`:void`), runs with no `-W gc`. Resolved open decisions: all values
+are unboxed `f64` (integers exact to 2^53; `/` is float division; `0.0` is false in a
+boolean context); `--no-gc` is a self-contained reactor (no `--no-wasi` needed) and errors
+with `--component`; eligibility + reachability are enforced in one compile pass (an
+unreached ineligible defun is dropped, a reached one is a compile error naming the op).
+Composes with `--optimize`. Docs: README "Non-GC Output for Pure-Numeric Exports"
+(`doc/en/compiling/wasm.md`); CLAUDE.md design-constraint bullet. Tests:
+`ScalarWasmCompilerTest` (structural) + `--no-gc` cases in `WasmLispCompilerIntegrationTest`
+(`wasmtime --invoke` without `-W gc`, interpreter parity). **Remaining: Phase 2 only** (the
+linear-memory string ABI in "Phase 2" / "Touch points" below).
+
+**Original design note (2026-06-28).** Raised in the `claude-opus` session
 right after `--optimize` + the `--no-wasi` `_initialize` rename, while discussing how
 practical the optimized no-wasi reactor already is. The optimized no-wasi module is
 import-free and tiny, but it still requires a **wasm-GC-capable** runtime (`wasmtime -W

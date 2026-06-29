@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.codegen.wasm.ScalarWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.reader.LispReader;
@@ -69,7 +70,7 @@ public final class RontoLispCli {
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
 			compileToFile(source, outputFile, options.contains("--dynamic"), options.contains("--component"),
-					options.contains("--no-wasi"), options.contains("--optimize"));
+					options.contains("--no-wasi"), options.contains("--optimize"), options.contains("--no-gc"));
 		}
 		else {
 			interpret(source);
@@ -144,11 +145,25 @@ public final class RontoLispCli {
 	}
 
 	private void compileToFile(String source, String outputFile, boolean dynamic, boolean component, boolean noWasi,
-			boolean optimize) {
+			boolean optimize, boolean noGc) {
 		List<LispVal> program = LispReader.readAllFromString(source);
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
-			bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize).compile(program);
+			if (noGc) {
+				// --no-gc selects the separate scalar (non-GC) lowering: a plain MVP
+				// module
+				// with no wasm-GC types, no imports and no memory, for pure-numeric
+				// rontolisp:wasm-export functions. It is a pure-compute reactor, so it
+				// implies --no-wasi; --component is GC-bound and not supported here.
+				if (component) {
+					throw new UnsupportedOperationException(
+							"--no-gc cannot be combined with --component " + "(the component path requires wasm-GC)");
+				}
+				bytes = new ScalarWasmCompiler(optimize).compile(program);
+			}
+			else {
+				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize).compile(program);
+			}
 		}
 		else {
 			// JVM dead-code elimination is not yet implemented; --optimize is WASM-only.
@@ -183,6 +198,10 @@ public final class RontoLispCli {
 		this.out.println("  --optimize         Drop functions unreachable from the module's exports/_start");
 		this.out.println("                     WASM only; great with --no-wasi (a pure-compute module shrinks");
 		this.out.println("                     to a few functions). No effect in --component mode.");
+		this.out.println("  --no-gc            Emit a plain (non-wasm-GC) WASM module for pure-numeric exports");
+		this.out.println("                     Runs on any MVP runtime (no -W gc, no import object). Only");
+		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");
+		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 	}

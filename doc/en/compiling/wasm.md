@@ -29,8 +29,9 @@ such limit). Bundle the extra arguments into a list to stay within it.
 The default output is a Preview 1 core module that exposes only the WASI `_start` entry
 point. The sections below cover the WASM-specific options: marking individual functions as
 host-callable (`rontolisp:wasm-export`), dropping the WASI imports for a reactor/library
-module (`--no-wasi`), shrinking the module by tree shaking (`--optimize`), and emitting a
-WASI 0.3 component (`--component`).
+module (`--no-wasi`), shrinking the module by tree shaking (`--optimize`), emitting a plain
+non-wasm-GC module for pure-numeric exports (`--no-gc`), and emitting a WASI 0.3 component
+(`--component`).
 
 ## Exporting Lisp Functions
 
@@ -114,12 +115,11 @@ rontolisp fact.lisp --no-wasi -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
 ```
 
-```js
-// No import object needed.
-const { instance } = await WebAssembly.instantiate(bytes);
-instance.exports.fact(5);                         // => 120
-// :string / :sexpr still round-trip through the exported memory + __ronto_alloc.
-```
+A reactor is just as easy to drive from JavaScript: there is **no import object**, so the
+host side is just "instantiate, then call the exports"
+(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`). A
+complete, copy-paste runnable Node + browser example is in the
+[appendix](#appendix-calling-a-module-from-javascript) at the end of this page.
 
 The eight WASI import slots are filled with internal trap stubs so every function index
 stays fixed (no other codegen changes). This mode is for **pure-compute** exports only:
@@ -152,6 +152,54 @@ instructions, so anything reachable (including code an embedded `eval`/`load` di
 to) is kept. It is WASM only and has **no effect** under `--component` (the WASI 0.3
 adapter relies on the core's fixed import/index layout). JVM dead-code elimination is not
 yet implemented.
+
+## Non-GC Output for Pure-Numeric Exports (`--no-gc`)
+
+The default output — even the optimized reactor above — still needs a **wasm-GC
+capable** runtime, because every value is a GC heap type (`i31ref`, the float struct,
+`(ref eq)`). Add `--no-gc` to emit a plain **MVP** module instead: no rec group, no
+`struct`/`array`/`i31` type, no `eqref`, no linear memory and no import. It instantiates
+with no import object and runs on any MVP-class runtime with **no `-W gc`**:
+
+```bash
+rontolisp fact.lisp --no-gc -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
+```
+
+This works by lowering the numeric core directly onto unboxed wasm scalars. It is
+therefore restricted to **pure-numeric** exports: a function is eligible only if its
+entire transitive call graph uses just numbers and booleans — arithmetic
+(`+ - * / mod rem 1+ 1- abs min max`), comparison and predicates
+(`= < <= > >= not zerop plusp minusp evenp oddp`), `if`/`when`/`unless`/`cond`/`progn`/
+`let`/`let*`, the float/int conversions (`float truncate floor ceiling round`), recursion
+and calls to other eligible functions. Anything heap-allocating (cons/list, strings,
+characters, symbols, vectors, hash tables, `eval`/`apply`, I/O, loops, assignment, a free
+variable) makes the function ineligible and is a **compile error** that names the
+offending operation, so the boundary is explicit rather than a silent miscompile. Only
+the scalar boundary types `:int`, `:float`, `:bool` (and `:void`/omitted) are supported;
+`:string`/`:sexpr` need wasm-GC or a future linear-memory string ABI.
+
+`--no-gc` is a pure-compute reactor, so like `--no-wasi` it imports nothing and exports
+each `rontolisp:wasm-export` function under its name; it cannot be combined with
+`--component` (that path is wasm-GC bound). It composes with `--optimize`. Calling it from
+JavaScript is the same "instantiate, then call the exports" as a GC reactor — see the
+[appendix](#appendix-calling-a-module-from-javascript) for a complete runnable example —
+only here the module runs on **any** WebAssembly engine, with no wasm-GC support required.
+
+Numeric model: each value's wasm type is chosen by static type inference — integers use
+`i64` and floats use `f64`. Types are inferred with a fixpoint over the call graph seeded
+by the export boundary designators, and where an integer and a float meet (e.g.
+`(* 3.14 n)`) the integer is promoted to `f64`. Using `i64` means integer arithmetic is
+exact to 2^63 — far wider than both the GC backend's `i31` fixnums and what an all-`f64`
+lowering (exact only to 2^53) could offer; for example `a*a - (a-1)*(a+1)` stays exactly
+`1` even when the intermediates exceed 2^53. There is no rational type, so two things
+differ from full Common Lisp and from the GC backend: `/` is floating-point division (no
+`1/3` ratios), and a value is treated as false in a boolean context exactly when it is
+zero (Common Lisp treats only `nil` as false). Note the **boundary** designators stay
+host-width: `:int` is a 32-bit `i32` (as in the GC backend), so a returned value outside
+the 32-bit range wraps — the wide `i64` range applies to the internal computation. For the
+pure-numeric kernels this mode targets (factorials, math/finance functions, validators)
+the results match the interpreter and the GC backend.
 
 ## WASI 0.3 Component
 
@@ -193,3 +241,128 @@ Notes and current limitations of component mode:
 - `random` draws real entropy from `wasi:random@0.3.0` (Preview 1 uses the host's `random_get`), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `getenv` reads `wasi:cli/environment@0.3.0`.
 - Outgoing HTTP (`rontolisp:fetch`) works in component mode, but is a **hybrid**: the base I/O stays WASI 0.3 while fetch itself imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet — see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). Run a fetch component with `-S http=y` in addition to the async flags. Non-fetch components do not import `wasi:http`, so they do not need `-S http`.
 - The compiled Lisp otherwise behaves identically to the Preview 1 output for the supported features.
+
+## Appendix: Calling a Module from JavaScript
+
+A reactor module (`--no-wasi` or `--no-gc`) imports nothing, so the whole host side is
+"instantiate, then call the exports" — and it is the same code in Node and the browser.
+Here is a complete, copy-paste example end to end. Start with a small kit of three exports:
+
+```lisp
+;; mathkit.lisp
+(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+(defun area (r) (* 3.141592653589793 r r))
+(defun in-range (x lo hi) (if (< x lo) nil (if (> x hi) nil t)))
+(rontolisp:wasm-export 'fact     :params '(:int)           :returns :int)
+(rontolisp:wasm-export 'area     :params '(:float)         :returns :float)
+(rontolisp:wasm-export 'in-range :params '(:int :int :int) :returns :bool)
+```
+
+Compile it with `--no-gc` (runs on any engine) and `--optimize` (drops everything
+unreachable from the exports — here the whole module is ~200 bytes):
+
+```bash
+rontolisp mathkit.lisp --no-gc --optimize -o mathkit.wasm
+```
+
+On Node 18+, save this as `run.mjs` and run `node run.mjs`:
+
+```js
+import { readFile } from 'node:fs/promises';
+
+// Node reads the .wasm from disk. In a browser, use the streaming fetch shown below.
+const bytes = await readFile(new URL('./mathkit.wasm', import.meta.url));
+const { instance } = await WebAssembly.instantiate(bytes);   // no import object
+
+const ex = instance.exports;
+console.log(ex.fact(10));                         // 3628800
+console.log(ex.area(2));                          // 12.566370614359172
+console.log(Boolean(ex['in-range'](5, 0, 10)));   // true   (:bool crosses as 0 / 1)
+console.log(Boolean(ex['in-range'](42, 0, 10)));  // false
+```
+
+```
+3628800
+12.566370614359172
+true
+false
+```
+
+The browser differs only in how the bytes are loaded — `instantiateStreaming` takes a
+`fetch` directly — so a whole page is:
+
+```html
+<!doctype html>
+<script type="module">
+  const { instance } = await WebAssembly.instantiateStreaming(fetch('./mathkit.wasm'));
+  const ex = instance.exports;
+  document.body.textContent = `fact(10) = ${ex.fact(10)}, area(2) = ${ex.area(2)}`;
+</script>
+```
+
+A few boundary details worth knowing:
+
+- A hyphenated Lisp name such as `in-range` is not a valid JavaScript identifier, so reach
+  it with bracket access: `ex['in-range'](...)`.
+- `:int`/`:float` arrive as plain JS numbers; `:bool` crosses as an `i32` (`0`/`1`), so wrap
+  it in `Boolean(...)` for a real JS boolean.
+- A **`--no-gc`** module runs on **any** WebAssembly engine; a GC **`--no-wasi`** module
+  needs a wasm-GC-capable one (Node 22+, current browsers). The JavaScript above is
+  byte-for-byte identical for both — swap the compile flag and nothing else changes.
+
+### Passing strings and lists
+
+The scalar example above needs no memory because `:int`/`:float`/`:bool` cross the boundary
+as plain numbers. `:string` and `:sexpr` instead pass a `(ptr, len)` pair through the
+module's exported `memory`, so the host writes the bytes in and reads the result out. These
+designators are **wasm-GC only** — they are not supported under `--no-gc`, so compile with
+`--no-wasi` (a wasm-GC-capable engine such as Node 22+ or a current browser is required):
+
+```lisp
+;; textkit.lisp
+(defun shout (s) (string-upcase s))
+(defun rev (lst) (reverse lst))
+(rontolisp:wasm-export 'shout :params '(:string) :returns :string)   ; "hello" -> "HELLO"
+(rontolisp:wasm-export 'rev   :params '(:sexpr)  :returns :sexpr)    ; a list, reversed
+```
+
+```bash
+rontolisp textkit.lisp --no-wasi --optimize -o textkit.wasm
+```
+
+To call them, copy the argument bytes into the module's `memory` at an offset reserved by
+the exported `__ronto_alloc(size)` bump allocator, pass `(ptr, len)`, then decode the
+`(ptr, len)` the export returns. `:sexpr` is the same protocol over s-expression *text*
+(the module parses it with its embedded reader and prints the result back):
+
+```js
+import { readFile } from 'node:fs/promises';
+
+const bytes = await readFile(new URL('./textkit.wasm', import.meta.url));
+const { instance } = await WebAssembly.instantiate(bytes);
+const ex = instance.exports;
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+// Copy a JS string into linear memory; return its (ptr, len).
+function write(str) {
+  const b = enc.encode(str);
+  const ptr = ex.__ronto_alloc(b.length);
+  new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+  return [ptr, b.length];
+}
+// Decode a (ptr, len) result. Re-read ex.memory.buffer AFTER the call: a call may grow
+// memory, which detaches the previous ArrayBuffer.
+const read = (ptr, len) => dec.decode(new Uint8Array(ex.memory.buffer, ptr, len));
+
+console.log(read(...ex.shout(...write('hello'))));         // HELLO
+console.log(read(...ex.rev(...write('("a" "b" "c")'))));   // ("c" "b" "a")
+```
+
+```
+HELLO
+("c" "b" "a")
+```
+
+In the browser only the loading line changes (`WebAssembly.instantiateStreaming(fetch(...))`);
+the `write`/`read`/`memory`/`__ronto_alloc` logic is identical. A function that returns a
+multi-value `(ptr, len)` shows up in JS as a two-element array, hence `read(...ex.shout(...))`.

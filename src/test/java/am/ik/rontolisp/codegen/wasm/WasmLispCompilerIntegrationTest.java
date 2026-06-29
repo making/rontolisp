@@ -150,6 +150,92 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoWasiAndInvoke(program, "fact", "10")).isEqualTo("3628800");
 	}
 
+	// Compiles with --no-gc (the scalar non-GC lowering) and invokes an export
+	// WITHOUT `-W gc`, proving the module runs on a plain MVP runtime with no wasm-GC and
+	// no import object.
+	private static String compileNoGcAndInvoke(boolean optimize, String lispCode, String function, String... args)
+			throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new ScalarWasmCompiler(optimize).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		List<String> command = new java.util.ArrayList<>(
+				List.of("wasmtime", "run", "--invoke", function, "/tmp/test.wasm"));
+		command.addAll(List.of(args));
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode())
+			.as("exit code for no-gc invoke %s: %s\nstderr: %s", function, lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void noGcModuleRunsWithoutWasmGcAndMatchesTheInterpreter() throws Exception {
+		// The headline case: a recursive factorial compiled to a plain MVP module runs
+		// with no `-W gc`. Integers are unboxed i64, floats f64, so the results match the
+		// interpreter across the pure-numeric range.
+		String fact = """
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, fact, "fact", "5")).isEqualTo("120");
+		assertThat(compileNoGcAndInvoke(false, fact, "fact", "10")).isEqualTo("3628800");
+	}
+
+	@Test
+	void noGcUsesExactI64IntegerArithmetic() throws Exception {
+		// f(a) = a^2 - (a-1)(a+1) = 1 for every a. With a = 10^8 the intermediates reach
+		// 10^16, beyond f64's exact integer range (2^53): an f64 lowering would lose the
+		// odd product and return 0. The i64 path stays exact and returns 1 (the result
+		// itself fits the :int/i32 boundary).
+		String program = """
+				(defun f (a) (- (* a a) (* (- a 1) (+ a 1))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "f", "100000000")).isEqualTo("1");
+	}
+
+	@Test
+	void noGcComposesWithOptimize() throws Exception {
+		// --no-gc --optimize: the (GC-agnostic) tree shaker runs on the non-GC module
+		// too,
+		// dropping anything unreachable from the exports while preserving behavior.
+		// `used`
+		// is reachable and kept; `dead` is not and is removed, yet the module still runs
+		// with no `-W gc`.
+		String program = """
+				(defun used (n) (* n 2))
+				(defun dead (n) (+ n 999))
+				(defun entry (n) (used (used n)))
+				(rontolisp:wasm-export 'entry :params '(:int) :returns :int)
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		assertThat(compileNoGcAndInvoke(true, program, "entry", "5")).isEqualTo("20");
+		// The optimized module is no larger than the plain one (the unreachable `dead`
+		// function is dropped); behavior is identical either way.
+		int plain = new ScalarWasmCompiler(false).compile(parsed).length;
+		int optimized = new ScalarWasmCompiler(true).compile(parsed).length;
+		assertThat(optimized).isLessThanOrEqualTo(plain);
+		assertThat(compileNoGcAndInvoke(false, program, "entry", "5")).isEqualTo("20");
+	}
+
+	@Test
+	void noGcSupportsFloatBoolAndCrossFunctionCalls() throws Exception {
+		// :float (f64) and :bool (i32 0/1) boundaries, mutual recursion / cross-calls,
+		// and mod -- all on the unboxed scalar path, invoked with no `-W gc`.
+		String program = """
+				(defun gcd2 (a b) (if (= b 0) a (gcd2 b (mod a b))))
+				(defun area (r) (* 3.14159 (* r r)))
+				(defun in-range (x) (if (< x 0) nil (if (> x 100) nil t)))
+				(rontolisp:wasm-export 'gcd2 :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'area :params '(:float) :returns :float)
+				(rontolisp:wasm-export 'in-range :params '(:int) :returns :bool)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "gcd2", "48", "36")).isEqualTo("12");
+		assertThat(compileNoGcAndInvoke(false, program, "area", "2.0")).isEqualTo("12.56636");
+		assertThat(compileNoGcAndInvoke(false, program, "in-range", "50")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(false, program, "in-range", "200")).isEqualTo("0");
+	}
+
 	// Compiles with --optimize (dead-code elimination) and invokes a scalar export, in
 	// the
 	// given mode. Used to confirm the tree-shaken module still behaves identically.
