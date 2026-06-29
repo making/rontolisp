@@ -1,7 +1,8 @@
 # `--no-gc`: a non-GC WASM lowering for pure-numeric exports
 
-**Status:** Phase 1 LANDED (2026-06-29), extended with iteration + math (2026-06-29).
-Phase 2 (linear-memory `:string`/`:sexpr`) still open. Phase 1 shipped as
+**Status:** Phase 1 LANDED (2026-06-29), extended with iteration + math (2026-06-29),
+then **Phase 2a strings LANDED (2026-06-29)**. Only `:sexpr` (cons/reader/printer) is
+still open. Phase 1 shipped as
 `codegen.wasm.ScalarWasmCompiler` (a separate backend, GC path untouched): `--no-gc`
 emits a plain MVP module (no rec group / GC types / memory / import) for pure-numeric
 `rontolisp:wasm-export` functions with scalar boundary types (`:int`/`:float`/`:bool`/
@@ -29,10 +30,35 @@ CLAUDE.md design-constraint bullet. Tests: `ScalarWasmCompilerTest` (structural)
 interpreter parity), incl. `noGcSupportsIterationAndLocalMutation`,
 `noGcSupportsReturnFromALoop`, `noGcSupportsSqrtAndBitwiseOps`.
 
+**Phase 2a (2026-06-29) — strings.** Motivated by making `examples/mandelbrot.lisp` run
+under `--no-gc`: the blocker was never strings/sexpr per se but that mandelbrot prints to
+stdout, which an import-free reactor cannot do. The fix is to **return the rendered grid
+as a string** (`examples/mandelbrot-nogc.lisp`) and let the host print it. Implemented in
+`ScalarWasmCompiler`: a `Ty.STRING` = `i32` pointer to a linear-memory `[len:i32 LE][UTF-8
+bytes]` header; string literals laid out 4-byte-aligned in a data segment from
+`STR_DATA_BASE`=8 (memory addr 0 is a canonical empty string, used to type-check the
+`cond`/`(if t body nil)` expansion); `(concatenate 'string ...)` bump-allocates via an
+`__alloc` helper (mut-i32 heap-pointer global, page-growing) and copies via `__memcpy` (a
+byte loop, no bulk-memory). The memory + global + data + the two helpers + the `memory` /
+`__ronto_alloc` exports are emitted **only when the module uses strings** (`Mem.used`), so
+a pure-numeric module stays byte-identical to Phase 1 (zero regression). `:string` boundary
+ABI: a param is a `(ptr,len)` pair copied into a fresh internal header; a result is the
+internal pointer returned as `(ptr+4, len)`. The `Ty.join` lattice treats INT as the
+inference bottom that yields to STRING and makes FLOAT-vs-STRING a type error; `coerce`
+rejects string/number mixing (except nil->""). Composes with `--optimize` (the tree shaker
+already decodes the memory/global/grow/block/loop opcodes). Tests: `ScalarWasmCompilerTest`
+(memory/data/export structure, `:sexpr` still rejected) + `noGcSupportsStringConcatenation
+AtTheBoundary` in `WasmLispCompilerIntegrationTest` (wasmtime, no `-W gc`, asserts the
+returned `:string` length). Docs: README "Strings under `--no-gc`"; CLAUDE.md bullet.
+
 **Remaining follow-ups.** (a) Convenience numeric builtins `gcd`/`lcm`/`expt`/`isqrt` are
 not yet primitives, but are now user-expressible via the loop forms (e.g. an iterative
-Euclid `gcd`); add them as builtins only if demand warrants. (b) **Phase 2 only**: the
-linear-memory string ABI for `:string`/`:sexpr` ("Phase 2" / "Touch points" below).
+Euclid `gcd`); add them as builtins only if demand warrants. (b) **More string ops**:
+only literals + `(concatenate 'string ...)` are in so far; `length`/`char`/`char-code`/
+`subseq`/`string=` etc. would make string kernels far more capable (each maps cleanly onto
+the linear-memory header). (c) **`:sexpr`** — the cons/reader/printer runtime (a uniform
+tagged value for heterogeneous lists) remains the genuinely large piece; see "Out of
+scope" below.
 
 **Original design note (2026-06-28).** Raised in the `claude-opus` session
 right after `--optimize` + the `--no-wasi` `_initialize` rename, while discussing how

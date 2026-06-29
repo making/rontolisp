@@ -302,6 +302,41 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(true, program, "popcount", "43")).isEqualTo("4");
 	}
 
+	@Test
+	void noGcSupportsStringConcatenationAtTheBoundary() throws Exception {
+		// The string slice of --no-gc: literals, (concatenate 'string ...) in a loop and
+		// a
+		// :string return. This is the kernel of the string-returning mandelbrot example.
+		// The wrapper returns (content-ptr, length); we assert the round-tripped length
+		// (content bytes are checked structurally + by the in-tree examples).
+		String program = """
+				(defun shade (i max) (cond ((>= i max) "#") ((>= i 5) ".") (t " ")))
+				(defun band (n)
+				  (let ((out ""))
+				    (dotimes (k n) (setq out (concatenate 'string out (shade k 8))))
+				    out))
+				(rontolisp:wasm-export 'band :params '(:int) :returns :string)
+				""";
+		assertThat(noGcStringLength(false, program, "band", "12")).isEqualTo(12);
+		assertThat(noGcStringLength(false, program, "band", "0")).isZero();
+		// Composes with the tree shaker (--optimize).
+		assertThat(noGcStringLength(true, program, "band", "30")).isEqualTo(30);
+	}
+
+	// Invokes a --no-gc :string-returning export and returns the length component of the
+	// (content-ptr, length) host result. wasmtime prints multi-value results one per
+	// line,
+	// so the length is the last whitespace-separated token. (The string-parameter side of
+	// the ABI needs a host that writes linear memory and is exercised by the runnable
+	// docs
+	// examples / playground rather than the wasmtime-only container here.)
+	private static int noGcStringLength(boolean optimize, String lispCode, String function, String... args)
+			throws Exception {
+		String out = compileNoGcAndInvoke(optimize, lispCode, function, args);
+		String[] tokens = out.trim().split("\\s+");
+		return Integer.parseInt(tokens[tokens.length - 1]);
+	}
+
 	// Compiles with --optimize (dead-code elimination) and invokes a scalar export, in
 	// the
 	// given mode. Used to confirm the tree-shaken module still behaves identically.

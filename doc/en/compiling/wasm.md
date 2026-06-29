@@ -158,29 +158,30 @@ yet implemented.
 The default output — even the optimized reactor above — still needs a **wasm-GC
 capable** runtime, because every value is a GC heap type (`i31ref`, the float struct,
 `(ref eq)`). Add `--no-gc` to emit a plain **MVP** module instead: no rec group, no
-`struct`/`array`/`i31` type, no `eqref`, no linear memory and no import. It instantiates
-with no import object and runs on any MVP-class runtime with **no `-W gc`**:
+`struct`/`array`/`i31` type, no `eqref` and no import. It instantiates with no import
+object and runs on any MVP-class runtime with **no `-W gc`**:
 
 ```bash
 rontolisp fact.lisp --no-gc -o fact.wasm
 wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 ```
 
-This works by lowering the numeric core directly onto unboxed wasm scalars. It is
-therefore restricted to **pure-numeric** exports: a function is eligible only if its
-entire transitive call graph uses just numbers and booleans — arithmetic
+This works by lowering the numeric core directly onto unboxed wasm scalars, plus a small
+linear-memory representation for strings. A function is eligible only if its entire
+transitive call graph stays inside this subset: numbers and booleans — arithmetic
 (`+ - * / mod rem 1+ 1- abs min max sqrt`), the integer bitwise operators
 (`logand logior logxor lognot ash`), comparison and predicates
 (`= < <= > >= not zerop plusp minusp evenp oddp`), `if`/`when`/`unless`/`cond`/`progn`/
 `let`/`let*`, **iteration and local mutation** (`dotimes`/`do`/`do*`, the underlying
 `while`/`setq`/`return`, with a let/`do`-bound variable freely reassigned), the float/int
 conversions (`float truncate floor ceiling round`), recursion and calls to other eligible
-functions. Anything heap-allocating (cons/list, strings, characters, symbols, vectors,
-hash tables, `eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment
-to a global) makes the function ineligible and is a **compile error** that names the
-offending operation, so the boundary is explicit rather than a silent miscompile. Only
-the scalar boundary types `:int`, `:float`, `:bool` (and `:void`/omitted) are supported;
-`:string`/`:sexpr` need wasm-GC or a future linear-memory string ABI.
+functions — and now **strings**: string literals and `(concatenate 'string ...)`. Anything
+else that allocates on the heap (cons/list, characters, symbols, vectors, hash tables,
+`eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment to a global)
+makes the function ineligible and is a **compile error** that names the offending
+operation, so the boundary is explicit rather than a silent miscompile. The supported
+boundary types are `:int`, `:float`, `:bool`, `:string` (and `:void`/omitted); `:sexpr`
+still needs wasm-GC (it would require a cons/reader/printer runtime).
 
 An integer accumulator that is summed with floats widens automatically: a let-bound
 variable takes the join of its initializer and every value assigned to it, so
@@ -196,6 +197,43 @@ variable takes the join of its initializer and every value assigned to it, so
 
 Under `--no-gc` this infers `acc` (and the return value) as `f64` while the loop counter
 `i` stays `i64`.
+
+### Strings under `--no-gc`
+
+String literals and `(concatenate 'string ...)` work too. A string is an `i32` pointer to
+a `[length][bytes]` header in linear memory, and `concatenate` bump-allocates a fresh
+buffer — so a function that builds up a string is a normal accumulator loop:
+
+```lisp
+(defun stars (n)               ; an n-character run of '*'
+  (let ((out ""))
+    (dotimes (k n)
+      (setq out (concatenate 'string out "*")))
+    out))
+(stars 5)  ; => "*****"
+```
+
+When a module uses strings it gains a (growable) linear memory; the module exports that
+`memory` and a `__ronto_alloc` bump allocator alongside your functions. A `:string`
+parameter arrives as a `(ptr, len)` pair the host writes into memory, and a `:string`
+result is returned the same way — so unlike a pure-numeric export, a string-valued export
+needs a host that can read/write the exported memory (JavaScript, a small Node script, the
+browser playground) rather than just `wasmtime --invoke`.
+
+This is exactly what makes the ASCII-art Mandelbrot renderer run with no wasm-GC:
+[`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/main/examples/mandelbrot-nogc.lisp)
+keeps the floating-point escape-time loop and returns the rendered grid as one string
+instead of printing it:
+
+```console
+$ rontolisp examples/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
+$ node -e '
+  const ex = (await WebAssembly.instantiate(
+    require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
+  const [p, n] = ex.render(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
+  process.stdout.write(Buffer.from(new Uint8Array(ex.memory.buffer, p, n)).toString());
+'
+```
 
 `--no-gc` is a pure-compute reactor, so like `--no-wasi` it imports nothing and exports
 each `rontolisp:wasm-export` function under its name; it cannot be combined with

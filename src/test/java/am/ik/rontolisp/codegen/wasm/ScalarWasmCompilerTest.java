@@ -186,11 +186,48 @@ class ScalarWasmCompilerTest {
 	}
 
 	@Test
-	void rejectsMemoryBackedExportType() {
+	void rejectsSexprExportType() {
+		// :string is supported (Phase 2a), but :sexpr still needs a cons/reader/printer
+		// runtime and is rejected.
 		assertThatThrownBy(() -> compile("""
 				(defun id (s) s)
-				(rontolisp:wasm-export 'id :params '(:string) :returns :string)
-				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining(":string");
+				(rontolisp:wasm-export 'id :params '(:sexpr) :returns :sexpr)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining(":sexpr");
+	}
+
+	@Test
+	void stringExportEmitsLinearMemoryDataAndAllocator() {
+		// A :string-returning export that concatenates literals needs linear memory: the
+		// module now carries a memory (id 5), global (id 6) and data (id 11) section, and
+		// exports the memory + the __ronto_alloc bump allocator alongside the function.
+		byte[] module = compile("""
+				(defun shade (i) (cond ((>= i 10) "#") ((>= i 5) ".") (t " ")))
+				(defun row (n) (let ((out "")) (dotimes (k n) (setq out (concatenate 'string out (shade k)))) out))
+				(rontolisp:wasm-export 'row :params '(:int) :returns :string)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		// Still a plain MVP module: no import (id 2) and no wasm-GC rec group.
+		assertThat(sections).doesNotContainKey(2);
+		assertThat(sections).containsKey(5); // memory
+		assertThat(sections).containsKey(6); // global (heap pointer)
+		assertThat(sections).containsKey(11); // data (string literals)
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("row", "memory", "__ronto_alloc");
+	}
+
+	@Test
+	void aStringValuedFunctionInfersAnI32ReturnType() {
+		// concatenate yields a STRING, lowered to an i32 pointer internally; the wrapper
+		// returns the host (ptr,len) pair (two i32 results).
+		byte[] module = compile("""
+				(defun greet () (concatenate 'string "hi " "there"))
+				(rontolisp:wasm-export 'greet :params '() :returns :string)
+				""");
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections(module).get(1)));
+		// type 0 = internal greet: no params, one i32 (string pointer) result.
+		assertThat(types.get(0)[0]).isEmpty();
+		assertThat(types.get(0)[1]).containsExactly(0x7F); // i32 pointer
+		// type 1 = wrapper: no params, two i32 results (content ptr, length).
+		assertThat(types.get(1)[1]).containsExactly(0x7F, 0x7F);
 	}
 
 	@Test

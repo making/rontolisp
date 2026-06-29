@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
@@ -27,6 +28,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
+import am.ik.wasm.Mutability;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 import org.jspecify.annotations.Nullable;
@@ -79,16 +81,34 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ScalarWasmCompiler implements LispCompiler {
 
-	/** The native representation of a scalar value. */
+	/** The native representation of a value. */
 	private enum Ty {
 
 		/** A 64-bit integer ({@code i64}); also the domain of booleans (0/1). */
 		INT,
 		/** A 64-bit float ({@code f64}). */
-		FLOAT;
+		FLOAT,
+		/**
+		 * A string: an {@code i32} pointer to a linear-memory header
+		 * {@code [len:i32 little-endian][len UTF-8 bytes]}.
+		 */
+		STRING;
 
-		/** The result type when this and another type are combined: float wins. */
+		/**
+		 * The result type when this and another type are combined. Within the numeric
+		 * sublattice float wins over int. {@code STRING} is a separate kind: it joins
+		 * only with itself or with {@code INT} (which doubles as the inference bottom, so
+		 * a not-yet-seen slot yields to a string), while joining a {@code STRING} with a
+		 * {@code FLOAT} is a genuine type error (a slot cannot be both a string and a
+		 * float).
+		 */
 		Ty join(Ty other) {
+			if (this == STRING || other == STRING) {
+				if (this == FLOAT || other == FLOAT) {
+					throw new UnsupportedOperationException("--no-gc: a value cannot be both a string and a number");
+				}
+				return STRING;
+			}
 			return (this == FLOAT || other == FLOAT) ? FLOAT : INT;
 		}
 
@@ -96,7 +116,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		 * The wasm value type byte (also the {@code if}/{@code block} result blocktype).
 		 */
 		int valType() {
-			return this == INT ? Type.I64.code() : Type.F64.code();
+			return switch (this) {
+				case INT -> Type.I64.code();
+				case FLOAT -> Type.F64.code();
+				case STRING -> Type.I32.code();
+			};
 		}
 
 	}
@@ -106,7 +130,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOAT,
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.EQ, LispNames.LT,
 			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.SQRT, LispNames.LOGAND, LispNames.LOGIOR,
-			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH);
+			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE);
 
 	private final boolean optimize;
 
@@ -198,21 +222,28 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			}
 		}
 
-		// Infer the i64/f64 type of every parameter, local and return value.
+		// Infer the i64/f64/i32 type of every parameter, local and return value.
 		Types types = inferTypes(reachable, defuns, exportDecls);
 
-		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j.
+		// Lay out string literals in linear memory and decide whether the module needs
+		// the
+		// memory/allocator machinery at all (only when a string literal or a :string
+		// boundary type is present).
+		int internalCount = reachable.size();
+		Mem mem = planMemory(reachable, defuns, exportDecls, internalCount);
+
+		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j; the two
+		// memory helpers (when present) occupy N+E and N+E+1.
 		List<byte[]> internalBodies = new ArrayList<>();
 		for (String name : reachable) {
-			internalBodies.add(compileDefunBody(Objects.requireNonNull(defuns.get(name)), name, types, index));
+			internalBodies.add(compileDefunBody(Objects.requireNonNull(defuns.get(name)), name, types, index, mem));
 		}
-		int internalCount = reachable.size();
 		List<byte[]> wrapperBodies = new ArrayList<>();
 		for (WasmExportCompiler.Decl decl : exportDecls) {
-			wrapperBodies.add(compileWrapperBody(decl, Objects.requireNonNull(index.get(decl.name())), types));
+			wrapperBodies.add(compileWrapperBody(decl, Objects.requireNonNull(index.get(decl.name())), types, mem));
 		}
 
-		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, internalCount, types);
+		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, internalCount, types, mem);
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(module) : module;
 	}
 
@@ -289,7 +320,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			Ty[] pinned = new Ty[decl.paramTypes().size()];
 			for (int i = 0; i < pinned.length; i++) {
-				pinned[i] = WasmExportCompiler.T_FLOAT.equals(decl.paramTypes().get(i)) ? Ty.FLOAT : Ty.INT;
+				pinned[i] = boundaryTy(decl.paramTypes().get(i));
 			}
 			boundary.put(decl.name(), pinned);
 		}
@@ -353,6 +384,18 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return arr;
 	}
 
+	// The internal value type a boundary designator pins a parameter to: :float -> FLOAT,
+	// :string -> STRING, :int/:bool -> INT.
+	private static Ty boundaryTy(String designator) {
+		if (WasmExportCompiler.T_FLOAT.equals(designator)) {
+			return Ty.FLOAT;
+		}
+		if (WasmExportCompiler.T_STRING.equals(designator)) {
+			return Ty.STRING;
+		}
+		return Ty.INT;
+	}
+
 	private static Map<String, Ty> paramEnv(Defun d, Map<String, Ty[]> params) {
 		Map<String, Ty> env = new HashMap<>();
 		Ty[] pt = Objects.requireNonNull(params.get(d.name()));
@@ -384,6 +427,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return switch (expr) {
 			case LispInteger ignored -> Ty.INT;
 			case LispDouble ignored -> Ty.FLOAT;
+			case LispString ignored -> Ty.STRING;
 			case LispTrue ignored -> Ty.INT;
 			case LispNil ignored -> Ty.INT;
 			case LispSymbol sym -> env.getOrDefault(sym.name(), Ty.INT);
@@ -456,6 +500,14 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					typeOf(args.get(i), env, tc);
 				}
 				return Ty.FLOAT;
+			}
+			// (concatenate 'string ...) is always a STRING; walk the string operands (the
+			// first argument is the 'string result-type designator).
+			case LispNames.CONCATENATE -> {
+				for (int i = 2; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.STRING;
 			}
 			// Comparisons, predicates, not and the bitwise operators yield an integer.
 			case LispNames.EQ, LispNames.LT, LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.LOGAND,
@@ -551,17 +603,99 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return typeOf(expr, new HashMap<>(fn.localTypes), tc);
 	}
 
+	// --- Linear-memory layout (strings) ------------------------------------------------
+
+	/**
+	 * The linear-memory plan for a module. {@code used} is false for a pure-numeric
+	 * program (no strings), in which case no memory/global/data section and no helper
+	 * functions are emitted (so the module stays byte-identical to the original scalar
+	 * output).
+	 *
+	 * @param literals string-literal content to its header address in the data segment
+	 * @param data the static data-segment bytes (laid out from {@code dataBase})
+	 * @param dataBase the memory address at which {@code data} is placed
+	 * @param heapBase the initial bump-allocator pointer (just past the static data)
+	 * @param allocIndex the function index of the {@code __alloc} bump allocator
+	 * @param memcpyIndex the function index of the {@code __memcpy} byte-copy helper
+	 * @param used whether the module uses linear memory at all
+	 */
+	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int allocIndex,
+			int memcpyIndex, boolean used) {
+	}
+
+	private static final int STR_DATA_BASE = 8;
+
+	private Mem planMemory(List<String> reachable, Map<String, Defun> defuns, List<WasmExportCompiler.Decl> exportDecls,
+			int internalCount) {
+		// Gather every string literal in every reachable body (deterministic order), then
+		// lay each out as a 4-byte-aligned [len:i32 LE][bytes] header.
+		LinkedHashSet<String> literals = new LinkedHashSet<>();
+		for (String name : reachable) {
+			collectLiterals(progn(Objects.requireNonNull(defuns.get(name)).body()), literals);
+		}
+		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
+		ByteArrayOutputStream data = new ByteArrayOutputStream();
+		int cursor = STR_DATA_BASE;
+		for (String s : literals) {
+			while ((cursor & 3) != 0) {
+				data.write(0);
+				cursor++;
+			}
+			offsets.put(s, cursor);
+			byte[] bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			writeI32LE(data, bytes.length);
+			data.write(bytes, 0, bytes.length);
+			cursor += 4 + bytes.length;
+		}
+		int heapBase = (cursor + 7) & ~7;
+
+		boolean boundaryString = false;
+		for (WasmExportCompiler.Decl decl : exportDecls) {
+			if (WasmExportCompiler.T_STRING.equals(decl.returnType())
+					|| decl.paramTypes().contains(WasmExportCompiler.T_STRING)) {
+				boundaryString = true;
+			}
+		}
+		boolean used = !literals.isEmpty() || boundaryString;
+		int allocIndex = internalCount + exportDecls.size();
+		int memcpyIndex = allocIndex + 1;
+		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, allocIndex, memcpyIndex, used);
+	}
+
+	private static void collectLiterals(LispVal v, Set<String> out) {
+		if (v instanceof LispString s) {
+			out.add(s.value());
+		}
+		else if (v instanceof LispCons c) {
+			collectLiterals(c.car(), out);
+			collectLiterals(c.cdr(), out);
+		}
+	}
+
+	private static void writeI32LE(ByteArrayOutputStream o, int v) {
+		o.write(v & 0xff);
+		o.write((v >> 8) & 0xff);
+		o.write((v >> 16) & 0xff);
+		o.write((v >> 24) & 0xff);
+	}
+
 	// --- Module assembly ---------------------------------------------------------------
 
 	private byte[] assemble(List<String> reachable, List<byte[]> internalBodies,
-			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int internalCount, Types types) {
+			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int internalCount, Types types,
+			Mem mem) {
+		// The two extra function types/bodies for the memory helpers, present only when
+		// the
+		// module uses linear memory.
+		int helperTypeBase = internalCount + exportDecls.size();
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm")
 			.writeLittleEndian4(1)
 			// Type section: one function type per function (no dedup needed). Internal
-			// function k: its inferred (i64|f64 ...) -> (i64|f64). Wrapper j: the host
-			// scalar signature.
+			// function k: its inferred (i64|f64|i32 ...) -> (i64|f64|i32). Wrapper j: the
+			// host signature. Then, when memory is used, __alloc (i32)->i32 and __memcpy
+			// (i32,i32,i32)->().
 			.writeTypeSection(typeSec -> {
 				for (String name : reachable) {
 					typeSec.addFunc(wasmParamTypes(name, types), new Type[] { wasmType(returnTy(name, types)) });
@@ -569,22 +703,43 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				for (WasmExportCompiler.Decl decl : exportDecls) {
 					typeSec.addFunc(WasmExportCompiler.paramWasmTypes(decl), WasmExportCompiler.resultWasmTypes(decl));
 				}
+				if (mem.used()) {
+					typeSec.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 });
+					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32 }, new Type[0]);
+				}
 			})
 			// Function section: function index k uses type index k (1:1).
 			.writeFunction(func -> {
-				int total = internalCount + exportDecls.size();
+				int total = helperTypeBase + (mem.used() ? 2 : 0);
 				for (int k = 0; k < total; k++) {
 					func.addFunction(k);
 				}
-			})
+			});
+		// Memory + global (the bump-allocator heap pointer): emitted only when the module
+		// uses linear memory, so a pure-numeric module stays byte-identical to the
+		// original
+		// import-free, memoryless scalar output.
+		if (mem.used()) {
+			w.writeMemory(memories -> memories.addMemory(Math.max(1, (mem.heapBase() + 0xffff) >>> 16)))
+				.writeGlobal(gs -> gs.addGlobal(Type.I32, Mutability.VAR,
+						init -> init.write(Instruction.I32_CONST).writeSignedLeb128(mem.heapBase())));
+		}
+		w
 			// Export section: each directive exports its wrapper under the function name.
+			// When memory is used, also export the linear memory and the bump allocator
+			// so a host can write :string inputs and read :string results.
 			.writeExport(exports -> {
 				for (int j = 0; j < exportDecls.size(); j++) {
 					exports.addExport(exportDecls.get(j).name(), ExternalKind.FUNCTION, internalCount + j);
 				}
+				if (mem.used()) {
+					exports.addExport("memory", ExternalKind.MEMORY, 0);
+					exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, mem.allocIndex());
+				}
 			})
-			// Code section: internal bodies first, then wrappers, matching the function
-			// section order.
+			// Code section: internal bodies, wrappers, then the memory helpers, matching
+			// the
+			// function section order.
 			.writeCode(code -> {
 				for (byte[] body : internalBodies) {
 					code.addFunction(body);
@@ -592,8 +747,84 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				for (byte[] body : wrapperBodies) {
 					code.addFunction(body);
 				}
+				if (mem.used()) {
+					code.addFunction(allocBody());
+					code.addFunction(memcpyBody());
+				}
 			});
+		// Data section: the string-literal headers, only when present.
+		if (mem.used() && mem.data().length > 0) {
+			w.writeDataSection(data -> data.addActiveData(0, mem.dataBase(), mem.data()));
+		}
 		return out.toByteArray();
+	}
+
+	// __alloc(size i32) -> i32: a bump allocator over the heap-pointer global (index 0).
+	// It
+	// 4-byte-aligns the bump, grows linear memory by whole pages when the new top exceeds
+	// the current size, and returns the old pointer. Locals: 1=old, 2=end, 3=need(pages).
+	private static byte[] allocBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		// old = heap
+		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+		// end = (old + size + 3) & -4
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3).write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(-4).write(Instruction.I32_AND);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		// heap = end
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.SET_GLOBAL, 0x00);
+		// need = (end + 65535) >> 16
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xffff).write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(16).write(Instruction.I32_SHR_U);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		// if need > memory.size: grow(need - memory.size); drop
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.CURRENT_MEMORY, 0x00);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.CURRENT_MEMORY, 0x00);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GROW_MEMORY, 0x00);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		// return old
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING));
+	}
+
+	// __memcpy(dst i32, src i32, n i32): copy n bytes one at a time (no bulk-memory
+	// dependency, so the module stays plain MVP). Params 0=dst, 1=src, 2=n.
+	private static byte[] memcpyBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		// if n == 0 break out of the block
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		// mem[dst] = mem[src] (one byte)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1).write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// dst++, src++, n--
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB).write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(), List.of());
 	}
 
 	private static Type[] wasmParamTypes(String name, Types types) {
@@ -606,7 +837,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	}
 
 	private static Type wasmType(Ty ty) {
-		return ty == Ty.INT ? Type.I64 : Type.F64;
+		return switch (ty) {
+			case INT -> Type.I64;
+			case FLOAT -> Type.F64;
+			case STRING -> Type.I32;
+		};
 	}
 
 	private static Ty returnTy(String name, Types types) {
@@ -616,11 +851,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	// --- Function bodies ---------------------------------------------------------------
 
-	private byte[] compileDefunBody(Defun defun, String name, Types types, Map<String, Integer> index) {
+	private byte[] compileDefunBody(Defun defun, String name, Types types, Map<String, Integer> index, Mem mem) {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		Ty[] paramTypes = Objects.requireNonNull(types.params().get(name));
-		Fn fn = new Fn(w, types, index, name, new HashSet<>(defun.params()));
+		Fn fn = new Fn(w, types, index, name, new HashSet<>(defun.params()), mem);
 		for (int i = 0; i < defun.params().size(); i++) {
 			fn.bind(defun.params().get(i), i, paramTypes[i]);
 		}
@@ -632,31 +867,81 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return withLocals(bodyStream.toByteArray(), fn.extraLocalTypes);
 	}
 
-	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types) {
+	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		String name = decl.name();
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(name));
-		// Box each host scalar argument (one wasm slot each) into the internal value of
-		// the inferred parameter type, in order, then call the internal function.
-		for (int slot = 0; slot < decl.paramTypes().size(); slot++) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
-			boolean hostFloat = WasmExportCompiler.T_FLOAT.equals(decl.paramTypes().get(slot));
-			Ty internal = internalParams[slot];
-			if (hostFloat) {
-				// host f64 -> internal (always FLOAT, since :float pins the param)
-				if (internal == Ty.INT) {
-					w.write(Instruction.I64_TRUNC_S_F64);
-				}
+		// Wrapper locals start past the host parameter slots (a :string parameter
+		// occupies
+		// two slots). The string boxing/unboxing helpers allocate i32 scratch locals
+		// here.
+		List<Ty> wrapperLocals = new ArrayList<>();
+		int nextLocal = WasmExportCompiler.paramSlotCount(decl);
+
+		// Box each host argument into the internal value of the inferred parameter type,
+		// in
+		// order, then call the internal function.
+		int slot = 0;
+		for (int p = 0; p < decl.paramTypes().size(); p++) {
+			String hostType = decl.paramTypes().get(p);
+			Ty internal = internalParams[p];
+			if (WasmExportCompiler.T_STRING.equals(hostType)) {
+				// (ptr,len) -> a fresh internal [len][bytes] string copied out of the
+				// host
+				// buffer. Scratch locals: hp(host ptr), len, dst.
+				int hp = nextLocal++;
+				int len = nextLocal++;
+				int dst = nextLocal++;
+				wrapperLocals.add(Ty.STRING);
+				wrapperLocals.add(Ty.STRING);
+				wrapperLocals.add(Ty.STRING);
+				w.write(Instruction.GET_LOCAL)
+					.writeSignedLeb128(slot)
+					.write(Instruction.SET_LOCAL)
+					.writeSignedLeb128(hp);
+				w.write(Instruction.GET_LOCAL)
+					.writeSignedLeb128(slot + 1)
+					.write(Instruction.SET_LOCAL)
+					.writeSignedLeb128(len);
+				w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(len).write(Instruction.I32_ADD);
+				w.write(Instruction.CALL).writeSignedLeb128(mem.allocIndex());
+				w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
+				// store the length header
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(len).write(Instruction.I32_STORE, 0x02, 0x00);
+				// __memcpy(dst+4, hp, len)
+				w.write(Instruction.GET_LOCAL)
+					.writeSignedLeb128(dst)
+					.write(Instruction.I32_CONST)
+					.writeSignedLeb128(4)
+					.write(Instruction.I32_ADD);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(hp);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+				w.write(Instruction.CALL).writeSignedLeb128(mem.memcpyIndex());
+				// leave the internal string pointer for the call
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+				slot += 2;
 			}
 			else {
-				// host i32 (:int/:bool) -> internal
-				if (internal == Ty.INT) {
-					w.write(Instruction.I64_EXTEND_S_I32);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+				if (WasmExportCompiler.T_FLOAT.equals(hostType)) {
+					// host f64 -> internal (always FLOAT, since :float pins the param)
+					if (internal == Ty.INT) {
+						w.write(Instruction.I64_TRUNC_S_F64);
+					}
 				}
 				else {
-					w.write(Instruction.F64_CONVERT_S_I32);
+					// host i32 (:int/:bool) -> internal
+					if (internal == Ty.INT) {
+						w.write(Instruction.I64_EXTEND_S_I32);
+					}
+					else {
+						w.write(Instruction.F64_CONVERT_S_I32);
+					}
 				}
+				slot += 1;
 			}
 		}
 		w.write(Instruction.CALL).writeSignedLeb128(targetIndex);
@@ -686,12 +971,24 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_NE);
 				}
 			}
+			case WasmExportCompiler.T_STRING -> {
+				// internal [len][bytes] pointer -> (content ptr, len) host pair.
+				int r = nextLocal++;
+				wrapperLocals.add(Ty.STRING);
+				w.write(Instruction.SET_LOCAL).writeSignedLeb128(r);
+				w.write(Instruction.GET_LOCAL)
+					.writeSignedLeb128(r)
+					.write(Instruction.I32_CONST)
+					.writeSignedLeb128(4)
+					.write(Instruction.I32_ADD);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(r).write(Instruction.I32_LOAD, 0x02, 0x00);
+			}
 			case WasmExportCompiler.T_VOID -> w.write(Instruction.DROP);
 			default -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
-					+ decl.returnType() + " (only :int/:float/:bool/:void)");
+					+ decl.returnType() + " (only :int/:float/:bool/:string/:void)");
 		}
 		w.write(Instruction.END);
-		return withLocals(bodyStream.toByteArray(), List.of());
+		return withLocals(bodyStream.toByteArray(), wrapperLocals);
 	}
 
 	// Prepends the locals declaration to a function body. Each extra local is emitted as
@@ -722,6 +1019,17 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				fn.writer.write(Instruction.F64_CONST).writeF64(d.value());
 				return Ty.FLOAT;
 			}
+			case LispString s -> {
+				// A string literal is the i32 address of its [len][bytes] header in the
+				// static data segment.
+				Integer off = fn.mem.literals().get(s.value());
+				if (off == null) {
+					throw new UnsupportedOperationException(
+							"--no-gc: string literal not laid out in '" + fn.fnName + "': " + s.print());
+				}
+				fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(off);
+				return Ty.STRING;
+			}
 			case LispTrue ignored -> {
 				i64Const(fn.writer, 1);
 				return Ty.INT;
@@ -749,12 +1057,26 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	// Emits the expression, coercing its value to the requested type.
 	private void compileCoerced(LispVal expr, Fn fn, Ty target) {
+		// nil in a string context is the empty string. Address 0 is a valid zero-length
+		// string header (the first 8 bytes of linear memory are always zero and the bump
+		// allocator never hands them out), so an absent if/cond branch or a nil fallback
+		// yields "" rather than a string/number type clash. This is what makes the
+		// cond-with-a-`t`-clause expansion (which threads an explicit nil else)
+		// type-check.
+		if (target == Ty.STRING && expr instanceof LispNil) {
+			fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(0);
+			return;
+		}
 		coerce(fn.writer, compileExpr(expr, fn), target);
 	}
 
 	private static void coerce(WasmWriter w, Ty from, Ty to) {
 		if (from == to) {
 			return;
+		}
+		if (from == Ty.STRING || to == Ty.STRING) {
+			throw new UnsupportedOperationException(
+					"--no-gc: cannot use a string where a number is expected (or vice versa)");
 		}
 		if (from == Ty.INT) {
 			w.write(Instruction.F64_CONVERT_S_I64); // i64 -> f64
@@ -796,6 +1118,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.ABS -> compileAbs(cons, args, fn);
 			case LispNames.FLOAT -> compileFloat(args, fn);
 			case LispNames.SQRT -> compileSqrt(args, fn);
+			case LispNames.CONCATENATE -> compileConcatenate(args, fn);
 			case LispNames.LOGAND -> compileBitwise(args, fn, -1L, Instruction.I64_AND);
 			case LispNames.LOGIOR -> compileBitwise(args, fn, 0L, Instruction.I64_OR);
 			case LispNames.LOGXOR -> compileBitwise(args, fn, 0L, Instruction.I64_XOR);
@@ -1225,6 +1548,77 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.FLOAT;
 	}
 
+	// (concatenate 'string s1 s2 ...): allocate a fresh [len][bytes] string holding the
+	// concatenation of the operand strings. The first argument is the result-type
+	// designator ('string); the rest are string values. Each operand is materialized into
+	// an i32 local, the total content length is summed, a destination buffer is bump
+	// allocated, and every operand's bytes are copied in via the __memcpy helper.
+	private Ty compileConcatenate(List<LispVal> args, Fn fn) {
+		if (args.size() < 2) {
+			throw new UnsupportedOperationException(
+					"--no-gc: concatenate needs a result-type and operands in '" + fn.fnName + "'");
+		}
+		WasmWriter w = fn.writer;
+		// Evaluate each operand string into its own i32 (STRING) local.
+		List<Integer> operands = new ArrayList<>();
+		for (int i = 2; i < args.size(); i++) {
+			compileCoerced(args.get(i), fn, Ty.STRING);
+			int slot = fn.allocLocal(Ty.STRING); // i32 pointer
+			w.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+			operands.add(slot);
+		}
+		// total = sum of each operand's stored length.
+		int total = fn.allocLocal(Ty.STRING); // i32 scratch
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(total);
+		for (int s : operands) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+			emitStrLen(w, s);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.SET_LOCAL).writeSignedLeb128(total);
+		}
+		// dst = __alloc(4 + total); store the length header.
+		int dst = fn.allocLocal(Ty.STRING); // i32 pointer
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// off = dst + 4; copy each operand's content bytes, advancing off.
+		int off = fn.allocLocal(Ty.STRING); // i32 scratch
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(off);
+		for (int s : operands) {
+			// __memcpy(off, s + 4, len(s))
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(off);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+			w.write(Instruction.I32_ADD);
+			emitStrLen(w, s);
+			w.write(Instruction.CALL).writeSignedLeb128(fn.mem.memcpyIndex());
+			// off += len(s)
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(off);
+			emitStrLen(w, s);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.SET_LOCAL).writeSignedLeb128(off);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.STRING;
+	}
+
+	// Pushes the stored length (the i32 header word) of the string whose pointer is in
+	// the
+	// given local.
+	private static void emitStrLen(WasmWriter w, int strLocal) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
 	// (logand ...) / (logior ...) / (logxor ...): integer bitwise fold with an identity
 	// for
 	// the empty case.
@@ -1372,6 +1766,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			}
 			case LispDouble ignored -> {
 			}
+			case LispString ignored -> {
+			}
 			case LispTrue ignored -> {
 			}
 			case LispNil ignored -> {
@@ -1407,6 +1803,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 		if (LispNames.SETQ.equals(name)) {
 			collectSetq(args, bound, defuns, callees, fnName);
+			return;
+		}
+		if (LispNames.CONCATENATE.equals(name)) {
+			collectConcatenate(args, bound, defuns, callees, fnName);
 			return;
 		}
 		if (LispNames.IF.equals(name) || LispNames.PROGN.equals(name) || LispNames.WHILE.equals(name)
@@ -1445,6 +1845,34 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			}
 			collectCalls(args.get(2 + 2 * p), bound, defuns, callees, fnName);
 		}
+	}
+
+	// (concatenate 'string s1 s2 ...): the first argument must be the literal result-type
+	// designator 'string (only string concatenation is supported in scalar mode); the
+	// rest
+	// are ordinary string-valued expressions.
+	private void collectConcatenate(List<LispVal> args, Set<String> bound, Map<String, Defun> defuns,
+			Set<String> callees, String fnName) {
+		if (args.size() < 2) {
+			throw new UnsupportedOperationException(
+					"--no-gc: concatenate needs a result-type designator in '" + fnName + "'");
+		}
+		if (!isQuotedSymbol(args.get(1), "string")) {
+			throw new UnsupportedOperationException(
+					"--no-gc: concatenate only supports 'string in '" + fnName + "' (got " + args.get(1).print() + ")");
+		}
+		for (int i = 2; i < args.size(); i++) {
+			collectCalls(args.get(i), bound, defuns, callees, fnName);
+		}
+	}
+
+	// Whether value is (quote name) or the bare symbol name.
+	private static boolean isQuotedSymbol(LispVal value, String name) {
+		if (value instanceof LispSymbol s) {
+			return name.equals(s.name());
+		}
+		return value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol n && name.equals(n.name());
 	}
 
 	private void collectLet(LispCons cons, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
@@ -1504,19 +1932,23 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	private static void validateScalarTypes(WasmExportCompiler.Decl decl) {
 		for (String t : decl.paramTypes()) {
-			requireScalar(t, decl);
+			requireSupported(t, decl);
 		}
 		if (!WasmExportCompiler.T_VOID.equals(decl.returnType())) {
-			requireScalar(decl.returnType(), decl);
+			requireSupported(decl.returnType(), decl);
 		}
 	}
 
-	private static void requireScalar(String type, WasmExportCompiler.Decl decl) {
+	private static void requireSupported(String type, WasmExportCompiler.Decl decl) {
+		if (WasmExportCompiler.T_SEXPR.equals(type)) {
+			throw new UnsupportedOperationException("--no-gc does not support the :sexpr export type for '"
+					+ decl.name()
+					+ "' (it needs a cons/reader/printer runtime; only :int/:float/:bool/:string/:void are supported)");
+		}
 		if (!WasmExportCompiler.T_INT.equals(type) && !WasmExportCompiler.T_FLOAT.equals(type)
-				&& !WasmExportCompiler.T_BOOL.equals(type)) {
-			throw new UnsupportedOperationException("--no-gc supports only scalar export types (:int/:float/:bool), "
-					+ "got " + type + " for '" + decl.name() + "' (memory-backed :string/:sexpr need wasm-GC or the "
-					+ "Phase 2 linear-memory string ABI)");
+				&& !WasmExportCompiler.T_BOOL.equals(type) && !WasmExportCompiler.T_STRING.equals(type)) {
+			throw new UnsupportedOperationException("--no-gc supports only :int/:float/:bool/:string export types, "
+					+ "got " + type + " for '" + decl.name() + "'");
 		}
 	}
 
@@ -1559,6 +1991,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 		final Set<String> paramNames;
 
+		final Mem mem;
+
 		final Map<String, Integer> locals = new HashMap<>();
 
 		final Map<String, Ty> localTypes = new HashMap<>();
@@ -1577,12 +2011,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 		int nextLocal;
 
-		Fn(WasmWriter writer, Types types, Map<String, Integer> index, String fnName, Set<String> paramNames) {
+		Fn(WasmWriter writer, Types types, Map<String, Integer> index, String fnName, Set<String> paramNames, Mem mem) {
 			this.writer = writer;
 			this.types = types;
 			this.index = index;
 			this.fnName = fnName;
 			this.paramNames = paramNames;
+			this.mem = mem;
 		}
 
 		void bind(String name, int slot, Ty ty) {
