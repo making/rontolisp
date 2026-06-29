@@ -87,8 +87,52 @@
 		);
 	}
 
+	// Highlight the TOC entry of the section currently scrolled into view.
+	function wireToc() {
+		var toc = document.querySelector(".toc");
+		if (!toc) return;
+		var entries = [];
+		Array.prototype.forEach.call(toc.querySelectorAll("a"), function (a) {
+			var id = decodeURIComponent((a.getAttribute("href") || "").replace(/^#/, ""));
+			var heading = id && document.getElementById(id);
+			if (heading) entries.push({ link: a, heading: heading });
+		});
+		if (!entries.length) return;
+
+		var ticking = false;
+		function update() {
+			ticking = false;
+			var offset = 80; // a little below the sticky top bar
+			var activeIdx = 0;
+			for (var i = 0; i < entries.length; i++) {
+				if (entries[i].heading.getBoundingClientRect().top <= offset) {
+					activeIdx = i;
+				} else {
+					break;
+				}
+			}
+			// Near the very bottom, prefer the last entry (it may never reach the top).
+			if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 2) {
+				activeIdx = entries.length - 1;
+			}
+			entries.forEach(function (e, i) {
+				e.link.classList.toggle("active", i === activeIdx);
+			});
+		}
+		function onScroll() {
+			if (!ticking) {
+				ticking = true;
+				window.requestAnimationFrame(update);
+			}
+		}
+		window.addEventListener("scroll", onScroll, { passive: true });
+		window.addEventListener("resize", onScroll, { passive: true });
+		update();
+	}
+
 	function wire() {
 		statusEl = document.querySelector(".runtime-status");
+		wireToc();
 
 		var cells = document.querySelectorAll(".code-cell");
 		Array.prototype.forEach.call(cells, function (cell) {

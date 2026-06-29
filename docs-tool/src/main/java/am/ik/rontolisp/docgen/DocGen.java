@@ -185,7 +185,7 @@ public final class DocGen {
 		}
 		String docPath = lang + "/" + replaceExtension(page.file());
 		HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
-				docPath, body, null, prev, next, languageList);
+				docPath, body, TocBuilder.build(body), null, prev, next, languageList);
 		writePage(docPath, HtmlTemplate.render(ctx));
 	}
 
@@ -203,9 +203,10 @@ public final class DocGen {
 			String docPath = lang + "/" + replaceExtension(catalog.mdFile(entry));
 			HtmlTemplate.Crumb prev = (i > 0) ? detailCrumb(lang, catalog, entries.get(i - 1)) : backlink;
 			HtmlTemplate.Crumb next = (i < entries.size() - 1) ? detailCrumb(lang, catalog, entries.get(i + 1)) : null;
+			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8));
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, entry.name(), docPath,
-					catalog.mdFile(entry), indexDocPath, renderBody(Files.readString(mdPath, StandardCharsets.UTF_8)),
-					backlink, prev, next, languageList);
+					catalog.mdFile(entry), indexDocPath, detailBody, TocBuilder.build(detailBody), backlink, prev, next,
+					languageList);
 			writePage(docPath, HtmlTemplate.render(ctx));
 		}
 	}

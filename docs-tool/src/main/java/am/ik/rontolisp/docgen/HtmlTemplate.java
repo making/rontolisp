@@ -44,6 +44,8 @@ public final class HtmlTemplate {
 	 * highlight (may differ from {@code currentDocPath} for pages, such as the
 	 * per-function pages, that are not themselves sidebar entries)
 	 * @param bodyHtml the rendered Markdown body
+	 * @param tocHtml the right-hand "On this page" table of contents (an
+	 * {@code <aside class="toc">...} block), or an empty string to omit it
 	 * @param backlink an optional link shown above the content (e.g. "back to the
 	 * function index"), or {@code null}
 	 * @param prev the previous-page link, or {@code null}
@@ -51,7 +53,8 @@ public final class HtmlTemplate {
 	 * @param languages all available languages for the switcher
 	 */
 	public record PageContext(Nav nav, String lang, String title, String currentDocPath, String currentMdFile,
-			String activeNavDocPath, String bodyHtml, Crumb backlink, Crumb prev, Crumb next, List<Language> languages) {
+			String activeNavDocPath, String bodyHtml, String tocHtml, Crumb backlink, Crumb prev, Crumb next,
+			List<Language> languages) {
 	}
 
 	/** Renders the complete HTML document for one page. */
@@ -89,6 +92,9 @@ public final class HtmlTemplate {
 		html.append("<article class=\"markdown\">\n").append(ctx.bodyHtml()).append("\n</article>\n");
 		appendPrevNext(html, ctx);
 		html.append("</main>\n");
+		if (ctx.tocHtml() != null && !ctx.tocHtml().isEmpty()) {
+			html.append(ctx.tocHtml());
+		}
 		html.append("</div>\n");
 
 		html.append("<script src=\"").append(assetsJs).append("\"></script>\n");

@@ -74,6 +74,32 @@ class DocGenTest {
 	}
 
 	@Test
+	void tocCollectsH2AndH3Headings() {
+		String body = "<h1 id=\"title\">Title</h1>\n<h2 id=\"opts\">Options</h2>\n<p>x</p>\n"
+				+ "<h3 id=\"flags\">Flags</h3>\n<h2 id=\"result\">Result</h2>";
+		String toc = TocBuilder.build(body);
+		assertThat(toc).contains("class=\"toc\"")
+			.contains("On this page")
+			.contains("<li class=\"toc-h2\"><a href=\"#opts\">Options</a></li>")
+			.contains("<li class=\"toc-h3\"><a href=\"#flags\">Flags</a></li>")
+			.contains("<li class=\"toc-h2\"><a href=\"#result\">Result</a></li>")
+			// the h1 page title is excluded
+			.doesNotContain("#title");
+	}
+
+	@Test
+	void tocIsOmittedWhenFewerThanTwoHeadings() {
+		assertThat(TocBuilder.build("<h1 id=\"t\">T</h1><h2 id=\"only\">Only</h2>")).isEmpty();
+		assertThat(TocBuilder.build("<p>no headings</p>")).isEmpty();
+	}
+
+	@Test
+	void tocKeepsInlineCodeInHeadingLabels() {
+		String body = "<h2 id=\"a\"><code>fetch</code> options</h2><h2 id=\"b\">Result</h2>";
+		assertThat(TocBuilder.build(body)).contains("<a href=\"#a\"><code>fetch</code> options</a>");
+	}
+
+	@Test
 	void relativeLinksAreComputedFromDocsRoot() {
 		assertThat(HtmlTemplate.rel("en/reference/data-types.html", "assets/docs.css")).isEqualTo("../../assets/docs.css");
 		assertThat(HtmlTemplate.rel("en/index.html", "en/reference/data-types.html"))
