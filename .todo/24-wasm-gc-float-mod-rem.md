@@ -1,5 +1,40 @@
 # 24 - WASM GC backend: float `mod` / `rem` miscompile
 
+## STATUS: fixed (2026-06-29)
+
+`mod` / `rem` now dispatch on operand type at runtime, like `+ - * /`. Two runtime
+helpers were added -- `FUNC_RAT_REM` / `FUNC_RAT_MOD`
+(`WasmRatioRuntimeBuilder.buildRatRemBody(boolean mod)`) -- appended after the hash
+helpers, just before `FUNC_USER_BASE`, so no import / `FUNC_START` index shifts and
+the `--component` blobs are unaffected (same technique as `FUNC_HASH`). Each helper:
+
+- **float operand (either side)**: computes in f64 -- `rem = a - b*trunc(a/b)`
+  (`f64.trunc`), `mod = a - b*floor(a/b)` (`f64.floor`) -- boxed as `TYPE_FLOAT`.
+- **both i31 integers**: fast i32 path (`i32.rem_s`, plus the divisor-sign
+  correction `(r ^ b) < 0` for `mod`, which avoids the r*b i31 overflow).
+- **otherwise (ratio)**: exact `a - b*(trunc|floor)(a/b)` via the existing
+  `FUNC_RAT_DIV` / `FUNC_RAT_TRUNC` / `FUNC_RAT_FLOOR` / `FUNC_RAT_MUL` /
+  `FUNC_RAT_SUB` helpers -- so the GC backend now also handles ratio `mod`/`rem`.
+
+`WasmExprCompiler` routes both `MOD` and `REM` through
+`WasmArithCompiler.compileModRem`, which just compiles the two operands and calls
+the helper (no `hasDoubleLiteral` special-casing -- there is no single f64 modulo
+opcode). The dead i32-only path and the unused `i32Opcode` parameter of
+`WasmArithCompiler.compile` were removed.
+
+Verified on all four backends (interpreter / JVM / WASM Preview 1 / WASM component)
+via local wasmtime 46 and the native-image `CiSpecE2eTest` (new
+`float-and-negative-mod-rem` case). Tests:
+`WasmLispCompilerIntegrationTest#floatModAndRemComputeCorrectly` (float + negative
+integer mod/rem under wasmtime) and the ci-spec case. The full suite (1611 tests)
+passes. `examples/rainbow.lisp` now uses the built-in `mod` directly (the
+floor-based `fmod` workaround was removed).
+
+NOTE: a leftover cross-backend divergence -- the interpreter and JVM `mod`/`rem`
+still throw on a ratio operand (e.g. `(mod 1/2 1/3)`), which WASM now computes
+(`1/6`). That is a pre-existing interpreter/JVM gap, not part of this fix; out of
+scope here.
+
 ## Symptom
 
 On the **WASM-GC** backend (`WasmLispCompiler`, e.g. `--no-wasi` / Preview 1 /
@@ -59,9 +94,9 @@ Per the project's bug-fix workflow: first add a failing cross-backend test
 so all four backends are checked), then fix, then confirm parity with the
 interpreter.
 
-## Workaround in use
+## Former workaround (removed)
 
-`examples/rainbow.lisp` avoids float `mod` entirely with a local floor-based
-`fmod` helper (`(- a (* m (float (floor (/ a m)))))`), which lowers to plain
-float arithmetic and is correct on every backend. Integer `mod` is unaffected
-and still used (e.g. in `hex2`).
+Before the fix `examples/rainbow.lisp` avoided float `mod` with a local
+floor-based `fmod` helper (`(- a (* m (float (floor (/ a m)))))`). Now that the
+built-in float `mod` is correct on every backend, that helper was removed and the
+example calls `mod` directly.

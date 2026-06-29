@@ -265,6 +265,104 @@ final class WasmRatioRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	// _rat_rem/_rat_mod((ref null eq) a, (ref null eq) b) -> (ref null eq): the Common
+	// Lisp remainder (sign of the dividend) and modulo (sign of the divisor). Both are
+	// a - b*q with q = trunc(a/b) for rem and q = floor(a/b) for mod. A float operand
+	// (either side) computes q in f64 (f64.trunc / f64.floor); two i31 integers take a
+	// fast i32 path (i32.rem_s, plus the divisor-sign correction for mod); otherwise the
+	// exact rational helpers compute a - b*(trunc|floor)(a/b). Mirrors the dispatch shape
+	// of buildRatBinaryBody so a float reaching mod/rem through a variable is handled.
+	static byte[] buildRatRemBody(boolean mod) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		// locals: 2=fa (f64), 3=fb (f64), 4=ri (i32, the i31 fast-path remainder)
+		w.write(2);
+		w.write(2);
+		w.write(Type.F64);
+		w.write(1);
+		w.write(Type.I32);
+
+		// Float path: a - b * (floor|trunc)(a / b), all in f64, boxed as TYPE_FLOAT.
+		emitEitherFloat(w);
+		ifRefNullEq(w);
+		emitLocalToF64(w, 0);
+		setLocal(w, 2);
+		emitLocalToF64(w, 1);
+		setLocal(w, 3);
+		getLocal(w, 2); // fa
+		getLocal(w, 3); // fb
+		getLocal(w, 2);
+		getLocal(w, 3);
+		w.write(Instruction.F64_DIV);
+		w.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC); // q
+		w.write(Instruction.F64_MUL); // fb*q
+		w.write(Instruction.F64_SUB); // fa - fb*q
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.ELSE);
+
+		// Non-float: fast i32 path when both operands are i31 integers.
+		getLocal(w, 0);
+		refTestI31(w);
+		getLocal(w, 1);
+		refTestI31(w);
+		w.write(Instruction.I32_AND);
+		ifRefNullEq(w);
+		// r = a rem_s b (truncated remainder, sign of the dividend = Common Lisp rem)
+		getLocal(w, 0);
+		castI31GetS(w);
+		getLocal(w, 1);
+		castI31GetS(w);
+		w.write(Instruction.I32_REM_S);
+		setLocal(w, 4);
+		if (mod) {
+			// mod = r + ((r != 0 && sign(r) != sign(b)) ? b : 0). The sign test is
+			// (r ^ b) < 0, which avoids the r*b multiplication (and its i31 overflow).
+			getLocal(w, 4);
+			getLocal(w, 4);
+			constI32(w, 0);
+			w.write(Instruction.I32_NE);
+			getLocal(w, 4);
+			getLocal(w, 1);
+			castI31GetS(w);
+			w.write(Instruction.I32_XOR);
+			constI32(w, 0);
+			w.write(Instruction.I32_LT_S);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			getLocal(w, 1);
+			castI31GetS(w);
+			w.write(Instruction.ELSE);
+			constI32(w, 0);
+			w.write(Instruction.END);
+			w.write(Instruction.I32_ADD);
+		}
+		else {
+			getLocal(w, 4);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.ELSE);
+
+		// General path: a - b * (trunc|floor)(a / b) via the exact rational helpers, so
+		// a ratio operand also works (and an i31 still reduces exactly).
+		getLocal(w, 0); // a (first arg of _rat_sub)
+		getLocal(w, 1); // b (first arg of _rat_mul)
+		getLocal(w, 0);
+		getLocal(w, 1);
+		call(w, WasmLispCompiler.FUNC_RAT_DIV); // a / b
+		call(w, mod ? WasmLispCompiler.FUNC_RAT_FLOOR : WasmLispCompiler.FUNC_RAT_TRUNC); // q
+		call(w, WasmLispCompiler.FUNC_RAT_MUL); // b * q
+		call(w, WasmLispCompiler.FUNC_RAT_SUB); // a - b*q
+		w.write(Instruction.END); // end i31-fast-path if
+
+		w.write(Instruction.END); // end float-fast-path if
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	// _rat_cmp((ref null eq) a, (ref null eq) b) -> i32: -1/0/1 by cross-multiplication
 	// in i64 (denominators are positive, so the comparison direction is preserved).
 	static byte[] buildRatCmpBody() {

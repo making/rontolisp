@@ -8,16 +8,33 @@ import am.ik.wasm.Instruction;
 
 /**
  * Compiles arithmetic operations ({@code +}, {@code -}, {@code *}, {@code /},
- * {@code mod}). The integer path of {@code + - * /} folds through the rational runtime
- * helpers, which keep an i31 fast path and fall back to exact ratio arithmetic;
- * {@code mod} stays a plain i32 operation.
+ * {@code mod}, {@code rem}). All of them fold through the rational runtime helpers, which
+ * keep an i31 fast path and fall back to exact ratio (or, for a float operand, f64)
+ * arithmetic; {@code mod} / {@code rem} go through {@link #compileModRem}.
  */
 final class WasmArithCompiler {
 
 	private WasmArithCompiler() {
 	}
 
-	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int i32Opcode, int f64Opcode, int ratioFunc) {
+	/**
+	 * Compiles binary {@code mod} / {@code rem}. Both operands are compiled normally
+	 * (each boxed as i31 / ratio / {@code TYPE_FLOAT}) and the runtime helper
+	 * {@code ratioFunc} ({@code FUNC_RAT_MOD} or {@code FUNC_RAT_REM}) dispatches on
+	 * their type, so a float reaching {@code mod} / {@code rem} through a variable is
+	 * handled. Unlike {@code + - * /} this does not special-case a literal float operand
+	 * -- there is no single {@code f64} opcode for modulo, so the runtime helper computes
+	 * {@code a - b*(floor|trunc)(a/b)} in every case.
+	 */
+	static void compileModRem(LispCons cons, WasmLispCompiler.Ctx ctx, int ratioFunc) {
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(ratioFunc);
+	}
+
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int f64Opcode, int ratioFunc) {
 		List<LispVal> args = cons.toList();
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			// Unary (/ x) is the reciprocal: 1.0 / x.
@@ -40,18 +57,6 @@ final class WasmArithCompiler {
 			}
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-			return;
-		}
-		if (ratioFunc < 0) {
-			// mod: plain i32 path (a ratio operand traps on the i31 cast).
-			WasmExprCompiler.compileExpr(args.get(1), ctx);
-			WasmEmitHelper.castI31GetS(ctx);
-			for (int i = 2; i < args.size(); i++) {
-				WasmExprCompiler.compileExpr(args.get(i), ctx);
-				WasmEmitHelper.castI31GetS(ctx);
-				ctx.writer.write(i32Opcode);
-			}
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			return;
 		}
 		// Common Lisp unary forms: (- x) negates, (/ x) is the reciprocal.

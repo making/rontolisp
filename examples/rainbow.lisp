@@ -22,15 +22,6 @@
 
 ;;; --- small numeric helpers ---------------------------------------------------
 
-;;; Absolute value of a float (kept local so the example is self-contained).
-(defun fabs (x) (if (< x 0.0) (- x) x))
-
-;;; Floating-point modulo a mod m, result in [0,m) for positive m (CL `mod`
-;;; semantics: sign of the divisor). Defined here because the GC WASM backend's
-;;; `mod` is integer-only -- using it on floats miscompiles -- whereas this
-;;; floor-based form lowers to plain float arithmetic on every backend.
-(defun fmod (a m) (- a (* m (float (floor (/ a m))))))
-
 ;;; Linear interpolation a -> b by fraction f in [0,1].
 (defun lerp (a b f) (+ a (* f (- b a))))
 
@@ -66,7 +57,7 @@
          (v mx)
          (s (if (= mx 0.0) 0.0 (/ d mx)))
          (h (cond ((= d 0.0) 0.0)
-                  ((= mx r) (* 60.0 (fmod (/ (- g b) d) 6.0)))
+                  ((= mx r) (* 60.0 (mod (/ (- g b) d) 6.0)))
                   ((= mx g) (* 60.0 (+ (/ (- b r) d) 2.0)))
                   (t        (* 60.0 (+ (/ (- r g) d) 4.0))))))
     (list h s v)))
@@ -74,7 +65,7 @@
 ;;; (h s v)  ->  (r g b) with each component an integer 0..255.
 (defun hsv-rgb (h s v)
   (let* ((c (* v s))
-         (x (* c (- 1.0 (fabs (- (fmod (/ h 60.0) 2.0) 1.0)))))
+         (x (* c (- 1.0 (abs (- (mod (/ h 60.0) 2.0) 1.0)))))
          (m (- v c))
          ;; (r g b) for this 60-degree sector, before adding the m offset.
          (rgb (cond ((< h 60.0)  (list c x 0.0))
@@ -97,7 +88,7 @@
          (d (cond ((> raw 180.0) (- raw 360.0))
                   ((< raw -180.0) (+ raw 360.0))
                   (t raw))))
-    (fmod (+ h0 (* f d)) 360.0)))
+    (mod (+ h0 (* f d)) 360.0)))
 
 ;;; Interpolate a whole color: hue on the short arc, saturation/value linearly.
 ;;; a and b are (h s v) lists.

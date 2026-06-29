@@ -136,16 +136,16 @@ final class WasmExprCompiler {
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {
-				case LispNames.ADD -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_ADD, Instruction.F64_ADD,
-						WasmLispCompiler.FUNC_RAT_ADD);
-				case LispNames.SUB -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_SUB, Instruction.F64_SUB,
-						WasmLispCompiler.FUNC_RAT_SUB);
-				case LispNames.MUL -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_MUL, Instruction.F64_MUL,
-						WasmLispCompiler.FUNC_RAT_MUL);
-				case LispNames.DIV -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_DIV_S, Instruction.F64_DIV,
-						WasmLispCompiler.FUNC_RAT_DIV);
-				case LispNames.MOD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMod(cons), ctx);
-				case LispNames.REM -> WasmArithCompiler.compile(cons, ctx, Instruction.I32_REM_S, -1, -1);
+				case LispNames.ADD ->
+					WasmArithCompiler.compile(cons, ctx, Instruction.F64_ADD, WasmLispCompiler.FUNC_RAT_ADD);
+				case LispNames.SUB ->
+					WasmArithCompiler.compile(cons, ctx, Instruction.F64_SUB, WasmLispCompiler.FUNC_RAT_SUB);
+				case LispNames.MUL ->
+					WasmArithCompiler.compile(cons, ctx, Instruction.F64_MUL, WasmLispCompiler.FUNC_RAT_MUL);
+				case LispNames.DIV ->
+					WasmArithCompiler.compile(cons, ctx, Instruction.F64_DIV, WasmLispCompiler.FUNC_RAT_DIV);
+				case LispNames.MOD -> WasmArithCompiler.compileModRem(cons, ctx, WasmLispCompiler.FUNC_RAT_MOD);
+				case LispNames.REM -> WasmArithCompiler.compileModRem(cons, ctx, WasmLispCompiler.FUNC_RAT_REM);
 				case LispNames.EQ -> compileComparison(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
 				case LispNames.LT -> compileComparison(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
 				case LispNames.GT -> compileComparison(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);

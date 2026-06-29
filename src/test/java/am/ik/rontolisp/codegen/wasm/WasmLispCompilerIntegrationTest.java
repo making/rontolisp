@@ -137,6 +137,43 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(program)).isEqualTo("655360");
 	}
 
+	@Test
+	void floatModAndRemComputeCorrectly() throws Exception {
+		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
+		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a
+		// variable-borne float fell through to the i32-only path and trapped at runtime
+		// with "illegal cast". Now mod/rem dispatch through the rational runtime
+		// (FUNC_RAT_MOD/FUNC_RAT_REM): rem = a - b*trunc(a/b), mod = a - b*floor(a/b),
+		// computed in f64 when either operand is a float. The operands here arrive via
+		// :float params, so they are NOT literals -- this is the path that used to trap.
+		// Results are scaled to an integer (round of a float, which the backend already
+		// supports) so the assertion does not depend on float-printing format.
+		String floats = """
+				(defun fmod6 (a b) (round (* (mod a b) 1000000.0)))
+				(defun frem6 (a b) (round (* (rem a b) 1000000.0)))
+				(rontolisp:wasm-export 'fmod6 :params '(:float :float) :returns :int)
+				(rontolisp:wasm-export 'frem6 :params '(:float :float) :returns :int)
+				""";
+		// (mod 4.6666 2.0) = 0.6666 ; (mod -0.3 6.0) = 5.7 (sign of the divisor)
+		assertThat(compileAndInvoke(floats, "fmod6", "4.6666", "2.0")).isEqualTo("666600");
+		assertThat(compileAndInvoke(floats, "fmod6", "-0.3", "6.0")).isEqualTo("5700000");
+		// (rem 4.6666 2.0) = 0.6666 ; (rem -4.6 2.0) = -0.6 (sign of the dividend)
+		assertThat(compileAndInvoke(floats, "frem6", "4.6666", "2.0")).isEqualTo("666600");
+		assertThat(compileAndInvoke(floats, "frem6", "-4.6", "2.0")).isEqualTo("-600000");
+
+		// Integer mod/rem still work (the i31 fast path), including negative operands.
+		String ints = """
+				(defun imod (a b) (mod a b))
+				(defun irem (a b) (rem a b))
+				(rontolisp:wasm-export 'imod :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'irem :params '(:int :int) :returns :int)
+				""";
+		assertThat(compileAndInvoke(ints, "imod", "-7", "3")).isEqualTo("2");
+		assertThat(compileAndInvoke(ints, "irem", "-7", "3")).isEqualTo("-1");
+		assertThat(compileAndInvoke(ints, "imod", "7", "-3")).isEqualTo("-2");
+		assertThat(compileAndInvoke(ints, "irem", "7", "-3")).isEqualTo("1");
+	}
+
 	// Compiles in --no-wasi (reactor) mode -- the module has no wasi_snapshot_preview1
 	// imports -- and invokes a scalar export. wasmtime instantiates it with no WASI
 	// provided.

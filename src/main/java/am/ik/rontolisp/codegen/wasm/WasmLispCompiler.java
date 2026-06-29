@@ -292,9 +292,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// is exceeded.
 	static final int FUNC_HASH_RESIZE = FUNC_HASH + 1;
 
-	// User defuns start after the dispatch functions, the four fetch helpers, and the two
-	// hash-table runtime helpers.
-	static final int FUNC_USER_BASE = FUNC_HASH_RESIZE + 1;
+	// Modulo / remainder runtime: dispatch on operand type (i31 fast path, exact ratio,
+	// or f64 for a float operand) so mod/rem work on floats reaching them through a
+	// variable. Appended here (after the hash helpers, before FUNC_USER_BASE) so no
+	// import/FUNC_START index shifts and the component blobs are unaffected. Always
+	// present; only the mod/rem compiler references them.
+	static final int FUNC_RAT_REM = FUNC_HASH_RESIZE + 1;
+
+	static final int FUNC_RAT_MOD = FUNC_RAT_REM + 1;
+
+	// User defuns start after the dispatch functions, the four fetch helpers, the two
+	// hash-table runtime helpers, and the two mod/rem helpers.
+	static final int FUNC_USER_BASE = FUNC_RAT_MOD + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -1303,6 +1312,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Hash-table runtime helpers
 				fnDef.addFunction(TYPE_RAT_GET); // _hash ((ref null eq)) -> i32
 				fnDef.addFunction(TYPE_PRINT_VAL); // _hash_resize ((ref null eq)) -> ()
+				// Modulo / remainder runtime helpers
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_rem
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mod
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1473,6 +1485,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody());
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody());
+				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false));
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(true));
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
