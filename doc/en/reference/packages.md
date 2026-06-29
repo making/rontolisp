@@ -62,5 +62,4 @@ helpers above (`version`, `list-functions`, `list-macros`, `list-special-forms`)
 the package provides outgoing HTTP via `rontolisp:fetch`. All of these have their
 own pages in the [Built-in Functions](builtin-functions.md#rontolisp-package-functions)
 reference, including the full
-[HTTP requests (`rontolisp:fetch`)](builtin-functions.md#http-requests-rontolispfetch)
-documentation.
+[`rontolisp:fetch`](functions/rontolisp-fetch.md) documentation.

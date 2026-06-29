@@ -14,6 +14,8 @@
 | Pi | `pi` | The constant π, read as the double `3.141592653589793` |
 | Cons | `(1 2 3)` | Linked list built from cons cells |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
+| Array | `#(1 2 3)`, `(make-array 3)` | Fixed-size vector (rank 1) or rank-2 array; `#(...)` is a self-evaluating vector literal |
+| Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
 
 Numeric literals may use `,` as a grouping separator between digits in the
 integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to
@@ -76,3 +78,58 @@ in the 31-bit `i31` range with no overflow promotion, like all of its integer
 arithmetic. The runtime reader emitted for compiled `read`/`load` does not
 parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 `evenp`/`oddp`, `gcd`/`lcm` and `isqrt` remain integer-only.
+
+## Arrays
+
+`make-array`, `aref` and `(setf (aref ...))` work in all three backends. Only
+arrays of **rank 1 (vectors) and rank 2** are supported; the dimensions argument
+is an integer (rank 1) or a list of one or two integers, and `:initial-element`
+sets every cell (defaulting to nil). Elements are stored row-major with O(1)
+access, and arrays are compared by identity (`eq`), so two distinct arrays are
+never `equal`. `length` returns the element count of a vector (rank-1 array); a
+rank-2 array is not a sequence, so `length` signals an error on it. Unlike the
+hash-table operators, the array operators are not exposed as first-class function
+values, so `#'aref` and `#'make-array` are not available (call them directly). A
+2-D array indexed in nested loops:
+
+```lisp
+(let ((m (make-array (list 2 3) :initial-element 0)))
+  (setf (aref m 1 2) 9)
+  (incf (aref m 1 2))
+  (aref m 1 2)) ; => 10
+```
+
+The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose
+elements are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. Arrays
+print in the same readable syntax across all backends: a rank-1 array as `#(...)`
+and a rank-2 array as `#2A((row) ...)`, with `prin1` quoting string elements and
+`princ` not:
+
+```lisp
+(print #(1 2 3))                          ; #(1 2 3)
+(princ #(a "b"))                          ; #(a b)
+(make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
+```
+
+## Hash tables
+
+`make-hash-table`, `gethash`, `(setf (gethash ...))`, `remhash`, `clrhash`,
+`hash-table-count`, `hash-table-p` and `maphash` work in all three backends.
+Keys are compared structurally (as if by `equal`): a list key like `(list r c)`
+matches an equal list, and numbers, symbols, characters and strings match by
+value. `:test` is accepted for familiarity but does not change this -- an `eql`
+table also matches structurally-equal aggregate keys. Iteration order (`maphash`)
+is not guaranteed across backends, so portable code should not depend on it. They
+are also usable as first-class function values (`#'gethash`, `#'remhash`,
+`#'clrhash`, `#'hash-table-count`, `#'hash-table-p`, `#'maphash`, and
+`#'make-hash-table` in its no-argument form) on all three backends -- passed via
+fixed-arity wrappers, so `gethash`'s optional default and `make-hash-table`'s
+keyword arguments are not available through the function value. A typical use --
+counting with `incf` on the place:
+
+```lisp
+(let ((counts (make-hash-table :test 'equal)))
+  (dolist (w '("a" "b" "a"))
+    (incf (gethash w counts 0)))
+  (gethash "a" counts)) ; => 2
+```

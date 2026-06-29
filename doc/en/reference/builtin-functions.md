@@ -1,9 +1,12 @@
 # Built-in Functions
 
-This page is the quick-reference table plus the conceptual notes (deviations from
-Common Lisp, hash tables, arrays, `read`/`load`/streams). **Each function name in
-the table links to its own page**, which has a fuller description and a runnable
-example you can evaluate in your browser.
+This page is the quick-reference table. **Each function name in the table links
+to its own page**, which has a fuller description and a runnable example you can
+evaluate in your browser. Cross-cutting topics have their own homes: the
+`make-array`/`aref` and hash-table operators are described under
+[Arrays](data-types.md#arrays) and [Hash tables](data-types.md#hash-tables) on
+the Data Types page, and each function's deviations from Common Lisp are noted on
+its own page.
 
 | Function | Example | Result |
 |----------|---------|--------|
@@ -184,82 +187,6 @@ example you can evaluate in your browser.
 | `aref` | `(aref a i)`, `(aref a i j)` | Return the element at the given subscripts |
 | `(setf (aref a i j) v)` | `(setf (aref a 0 0) 1)` | Store `v` at the subscripts; works with `incf`/`decf`/`push` on the place |
 
-**Deviations from Common Lisp.** Some functions accept fewer arguments than the Common
-Lisp standard: `log` takes only one argument (no base: `(log x base)` is unsupported),
-`atan` takes only one argument (no two-argument `(atan y x)` form), and `last` takes only
-a list (no optional count: `(last list n)` is unsupported). `butlast` likewise takes only
-a list, `getf` takes no `&optional default`, `nconc` concatenates exactly two lists, and
-`remove-duplicates` compares with `eql` only (no `:test`/`:key`); `(setf (getf ...) v)` is
-unsupported (use `remf` to delete a property). The rounding functions
-`truncate`/`floor`/`ceiling`/`round` accept a single argument and return one value (no
-optional divisor and no second remainder value). These remain on the to-do list.
-
-**Hash tables.** `make-hash-table`, `gethash`, `(setf (gethash ...))`, `remhash`,
-`clrhash`, `hash-table-count`, `hash-table-p` and `maphash` work in all three backends.
-Keys are compared structurally (as if by `equal`): a list key like `(list r c)` matches an
-equal list, and numbers, symbols, characters and strings match by value. `:test` is
-accepted for familiarity but does not change this — an `eql` table also matches
-structurally-equal aggregate keys. Iteration order (`maphash`) is not guaranteed across
-backends, so portable code should not depend on it. They are also usable as first-class
-function values (`#'gethash`, `#'remhash`, `#'clrhash`, `#'hash-table-count`,
-`#'hash-table-p`, `#'maphash`, and `#'make-hash-table` in its no-argument form) on all
-three backends -- passed via fixed-arity wrappers, so `gethash`'s optional default and
-`make-hash-table`'s keyword arguments are not available through the function value. A
-typical use -- counting with `incf` on the place:
-
-```lisp
-(let ((counts (make-hash-table :test 'equal)))
-  (dolist (w '("a" "b" "a"))
-    (incf (gethash w counts 0)))
-  (gethash "a" counts)) ; => 2
-```
-
-**Arrays.** `make-array`, `aref` and `(setf (aref ...))` work in all three backends.
-Only arrays of **rank 1 (vectors) and rank 2** are supported; the dimensions argument is
-an integer (rank 1) or a list of one or two integers, and `:initial-element` sets every
-cell (defaulting to nil). Elements are stored row-major with O(1) access, and arrays are
-compared by identity (`eq`), so two distinct arrays are never `equal`. `length` returns the
-element count of a vector (rank-1 array); a rank-2 array is not a sequence, so `length`
-signals an error on it. Unlike the hash-table
-operators, the array operators are not exposed as first-class function values, so `#'aref`
-and `#'make-array` are not available (call them directly). A 2-D array indexed in nested
-loops:
-
-```lisp
-(let ((m (make-array (list 2 3) :initial-element 0)))
-  (setf (aref m 1 2) 9)
-  (incf (aref m 1 2))
-  (aref m 1 2)) ; => 10
-```
-
-The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose elements
-are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. Arrays print in the same
-readable syntax across all backends: a rank-1 array as `#(...)` and a rank-2 array as
-`#2A((row) ...)`, with `prin1` quoting string elements and `princ` not:
-
-```lisp
-(print #(1 2 3))                          ; #(1 2 3)
-(princ #(a "b"))                          ; #(a b)
-(make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
-```
-
-`read` works in all three backends. It reads one line from stdin and parses one S-expression from it. The interpreter uses the full Lisp reader; the JVM and WASM compilers each emit a small reader/parser into their output (the JVM reuses the JDK at runtime, so it has full parity; the WASM reader is limited to the value kinds listed under [Compiled `read`/`load` limitations](../guides/read-load-limitations.md)). Use `read-line` to read raw strings instead.
-
-`load` works in all three backends. It reads a file and evaluates every top-level form in the global environment, so `defun`/`setq` definitions in the loaded file remain available to subsequent code. In compiled output the loaded definitions live in the runtime `eval` interpreter's global environment, so they are used through `eval` (e.g. `(load "lib.lisp")` then `(eval '(square 5))`). The WASM `load` reads the file with WASI `path_open`, so the module must be run with a directory granted (e.g. `wasmtime run -W gc --dir . prog.wasm`).
-
-`with-open-file`/`open`/`close`/`write-line` and the stream-taking `read-line` work in all three backends. A stream value is an opaque handle (interpreter/JVM: an index into a stream table; WASM: the WASI file descriptor), so streams can be stored in variables and passed to functions, but they are only valid within the producing run. `open` supports the `:input` and `:output` directions only ( `:output` creates or truncates), and the direction must be a literal keyword so the compilers can pick the file mode statically. Like `load`, the WASM `open` resolves paths relative to the first preopened directory, so run with `--dir`.
-
-```console
-(with-open-file (out "greeting.txt" :direction :output)
-  (write-line "hello" out)
-  (write-line "world" out))
-
-(with-open-file (in "greeting.txt")
-  (print (read-line in)) ; => "hello"
-  (print (read-line in)) ; => "world"
-  (print (read-line in))) ; => nil (EOF)
-```
-
 ## rontolisp Package Functions
 
 The `rontolisp` package provides implementation-specific functions that are
@@ -277,49 +204,7 @@ package system. Each name below links to its own page.
 
 The introspection functions (`list-functions` / `list-macros` /
 `list-special-forms`) are described in detail under
-[Package introspection](packages.md#package-introspection).
-
-### HTTP requests (`rontolisp:fetch`)
-
-`rontolisp:fetch` performs an outgoing HTTP request, modeled on the JavaScript `fetch` API.
-
-```console
-;; GET, no options
-(rontolisp:fetch "http://example.com/")
-
-;; GET with request headers (an alist of (name . value) string pairs)
-(rontolisp:fetch "http://example.com/api"
-                 (list :headers (list (cons "Accept" "application/json"))))
-
-;; POST with a request body
-(rontolisp:fetch "http://example.com/api"
-                 (list :method "POST"
-                       :headers (list (cons "Content-Type" "application/json"))
-                       :body "{\"name\":\"rontolisp\"}"))
-```
-
-The optional second argument is an options property list. Recognized keys:
-
-- `:method` — the HTTP method as a string (default `"GET"`). Supported methods are `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS` and `PATCH`, matched case-insensitively; any other method is an error.
-- `:headers` — request headers, an alist of `(name . value)` string pairs.
-- `:body` — the request body as a string (omit for no body).
-
-The result is a property list `(:status <integer> :body <string> :headers <alist>)`, where `:headers` is an alist of `(name . value)` response-header pairs:
-
-```console
-(let ((res (rontolisp:fetch "http://example.com/")))
-  (print (getf res :status))    ; => 200
-  (print (getf res :body))      ; => "<html>...</html>"
-  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
-```
-
-Backend support:
-
-- **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`.
-- **WASM**: component-only, and a **hybrid** — the base I/O is WASI 0.3 but fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet; see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). Compile with `--component` and run with `-S http=y` plus the async flags. It remains a compile error in Preview 1 (core-module) mode, which has no host `wasi:http`.
-
-Current limitations:
-
-- The method must be one of `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`, `PATCH`. An unsupported `:method` is an error: the interpreter and JVM reject it at runtime; the WASM backend resolves the method statically and rejects a statically-known unsupported `:method` at compile time (a method computed at runtime cannot be checked there and is treated as GET, while a runtime-computed `:body` is sent normally).
-- A failed request (for example a refused connection) raises an error in the interpreter and JVM, and returns `nil` in WASM.
-- In WASM, the response body is capped (about 576 KiB) and very large programs may exhaust the shared linear memory the response buffers reuse.
+[Package introspection](packages.md#package-introspection). `rontolisp:fetch`
+performs an outgoing HTTP request; see its [reference
+page](functions/rontolisp-fetch.md) for options, the result plist, backend
+support, and limitations.

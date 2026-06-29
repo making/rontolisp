@@ -29,8 +29,6 @@ sections:
         title: Special Forms
       - file: reference/macros.md
         title: Macros
-      - file: reference/format.md
-        title: format
       - file: reference/builtin-functions.md
         title: Built-in Functions
       - file: reference/packages.md
