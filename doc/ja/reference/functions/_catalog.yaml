@@ -1,0 +1,225 @@
+index_page: reference/functions.md
+categories:
+  - title: "算術演算"
+    functions:
+      - { slug: plus, name: "+" }
+      - { slug: minus, name: "-" }
+      - { slug: mul, name: "*" }
+      - { slug: div, name: "/" }
+      - { slug: mod, name: "mod" }
+      - { slug: rem, name: "rem" }
+      - { slug: 1plus, name: "1+" }
+      - { slug: 1minus, name: "1-" }
+      - { slug: abs, name: "abs" }
+      - { slug: min, name: "min" }
+      - { slug: max, name: "max" }
+      - { slug: gcd, name: "gcd" }
+      - { slug: lcm, name: "lcm" }
+      - { slug: signum, name: "signum" }
+  - title: "比較と数値述語"
+    functions:
+      - { slug: numeq, name: "=" }
+      - { slug: lt, name: "<" }
+      - { slug: gt, name: ">" }
+      - { slug: le, name: "<=" }
+      - { slug: ge, name: ">=" }
+      - { slug: zerop, name: "zerop" }
+      - { slug: plusp, name: "plusp" }
+      - { slug: minusp, name: "minusp" }
+      - { slug: evenp, name: "evenp" }
+      - { slug: oddp, name: "oddp" }
+  - title: "数値変換と丸め"
+    functions:
+      - { slug: float, name: "float" }
+      - { slug: truncate, name: "truncate" }
+      - { slug: floor, name: "floor" }
+      - { slug: ceiling, name: "ceiling" }
+      - { slug: round, name: "round" }
+      - { slug: numerator, name: "numerator" }
+      - { slug: denominator, name: "denominator" }
+  - title: "数学関数"
+    functions:
+      - { slug: sqrt, name: "sqrt" }
+      - { slug: isqrt, name: "isqrt" }
+      - { slug: expt, name: "expt" }
+      - { slug: exp, name: "exp" }
+      - { slug: log, name: "log" }
+      - { slug: sin-cos-tan, name: "sin cos tan" }
+      - { slug: asin-acos-atan, name: "asin acos atan" }
+      - { slug: sinh-cosh-tanh, name: "sinh cosh tanh" }
+      - { slug: random, name: "random" }
+  - title: "ビット演算"
+    functions:
+      - { slug: logand, name: "logand" }
+      - { slug: logior, name: "logior" }
+      - { slug: logxor, name: "logxor" }
+      - { slug: lognot, name: "lognot" }
+      - { slug: ash, name: "ash" }
+  - title: "等価性と型述語"
+    functions:
+      - { slug: eq, name: "eq" }
+      - { slug: eql, name: "eql" }
+      - { slug: equal, name: "equal" }
+      - { slug: null, name: "null" }
+      - { slug: not, name: "not" }
+      - { slug: atom, name: "atom" }
+      - { slug: numberp, name: "numberp" }
+      - { slug: integerp, name: "integerp" }
+      - { slug: floatp, name: "floatp" }
+      - { slug: rationalp, name: "rationalp" }
+      - { slug: symbolp, name: "symbolp" }
+      - { slug: stringp, name: "stringp" }
+      - { slug: listp, name: "listp" }
+      - { slug: consp, name: "consp" }
+      - { slug: keywordp, name: "keywordp" }
+      - { slug: characterp, name: "characterp" }
+  - title: "出力"
+    functions:
+      - { slug: print, name: "print" }
+      - { slug: prin1, name: "prin1" }
+      - { slug: princ, name: "princ" }
+      - { slug: terpri, name: "terpri" }
+      - { slug: fresh-line, name: "fresh-line" }
+      - { slug: princ-to-string, name: "princ-to-string" }
+      - { slug: prin1-to-string, name: "prin1-to-string" }
+  - title: "文字列"
+    functions:
+      - { slug: concatenate, name: "concatenate" }
+      - { slug: string-upcase, name: "string-upcase" }
+      - { slug: string-downcase, name: "string-downcase" }
+      - { slug: string-capitalize, name: "string-capitalize" }
+      - { slug: subseq, name: "subseq" }
+      - { slug: string-eq, name: "string=" }
+      - { slug: string-equal, name: "string-equal" }
+      - { slug: string-trim, name: "string-trim" }
+      - { slug: string-left-trim, name: "string-left-trim" }
+      - { slug: string-right-trim, name: "string-right-trim" }
+  - title: "文字"
+    functions:
+      - { slug: char, name: "char schar" }
+      - { slug: char-code, name: "char-code" }
+      - { slug: code-char, name: "code-char" }
+      - { slug: char-compare, name: "char= char< char<=" }
+      - { slug: char-case, name: "char-upcase char-downcase" }
+      - { slug: alpha-char-p, name: "alpha-char-p" }
+      - { slug: digit-char-p, name: "digit-char-p" }
+  - title: "コンスとリストの構築"
+    functions:
+      - { slug: cons, name: "cons" }
+      - { slug: car, name: "car" }
+      - { slug: cdr, name: "cdr" }
+      - { slug: car-cdr-compositions, name: "caar cddddr" }
+      - { slug: first, name: "first" }
+      - { slug: rest, name: "rest" }
+      - { slug: second-third-fourth, name: "second third fourth" }
+      - { slug: nth, name: "nth" }
+      - { slug: nthcdr, name: "nthcdr" }
+      - { slug: list, name: "list" }
+      - { slug: list*, name: "list*" }
+      - { slug: acons, name: "acons" }
+      - { slug: make-list, name: "make-list" }
+      - { slug: copy-list, name: "copy-list" }
+  - title: "リスト操作"
+    functions:
+      - { slug: length, name: "length" }
+      - { slug: reverse, name: "reverse" }
+      - { slug: nreverse, name: "nreverse" }
+      - { slug: last, name: "last" }
+      - { slug: butlast, name: "butlast" }
+      - { slug: elt, name: "elt" }
+      - { slug: endp, name: "endp" }
+      - { slug: revappend, name: "revappend" }
+      - { slug: nreconc, name: "nreconc" }
+      - { slug: nconc, name: "nconc" }
+      - { slug: sort, name: "sort" }
+  - title: "リスト検索"
+    functions:
+      - { slug: member, name: "member" }
+      - { slug: member-if, name: "member-if" }
+      - { slug: find, name: "find" }
+      - { slug: find-if, name: "find-if" }
+      - { slug: find-if-not, name: "find-if-not" }
+      - { slug: position, name: "position" }
+      - { slug: position-if, name: "position-if" }
+      - { slug: count, name: "count" }
+      - { slug: count-if, name: "count-if" }
+      - { slug: assoc, name: "assoc" }
+      - { slug: assoc-if, name: "assoc-if" }
+      - { slug: rassoc, name: "rassoc" }
+      - { slug: getf, name: "getf" }
+  - title: "リストのフィルタリングと変更"
+    functions:
+      - { slug: remove, name: "remove" }
+      - { slug: remove-if, name: "remove-if" }
+      - { slug: remove-if-not, name: "remove-if-not" }
+      - { slug: remove-duplicates, name: "remove-duplicates" }
+      - { slug: delete, name: "delete" }
+      - { slug: delete-if, name: "delete-if" }
+      - { slug: delete-if-not, name: "delete-if-not" }
+      - { slug: substitute, name: "substitute" }
+      - { slug: nsubstitute, name: "nsubstitute" }
+  - title: "集合"
+    functions:
+      - { slug: union, name: "union" }
+      - { slug: intersection, name: "intersection" }
+      - { slug: set-difference, name: "set-difference" }
+      - { slug: adjoin, name: "adjoin" }
+  - title: "破壊的なセル操作"
+    functions:
+      - { slug: rplaca, name: "rplaca" }
+      - { slug: rplacd, name: "rplacd" }
+  - title: "高階関数"
+    functions:
+      - { slug: funcall, name: "funcall" }
+      - { slug: apply, name: "apply" }
+      - { slug: mapcar, name: "mapcar" }
+      - { slug: mapc, name: "mapc" }
+      - { slug: mapcan, name: "mapcan" }
+      - { slug: maplist, name: "maplist" }
+      - { slug: mapcon, name: "mapcon" }
+      - { slug: reduce, name: "reduce" }
+      - { slug: every, name: "every" }
+      - { slug: some, name: "some" }
+      - { slug: notany, name: "notany" }
+      - { slug: notevery, name: "notevery" }
+      - { slug: identity, name: "identity" }
+      - { slug: symbol-function, name: "symbol-function" }
+  - title: "ハッシュテーブル"
+    functions:
+      - { slug: make-hash-table, name: "make-hash-table" }
+      - { slug: gethash, name: "gethash" }
+      - { slug: remhash, name: "remhash" }
+      - { slug: clrhash, name: "clrhash" }
+      - { slug: hash-table-count, name: "hash-table-count" }
+      - { slug: hash-table-p, name: "hash-table-p" }
+      - { slug: maphash, name: "maphash" }
+  - title: "配列"
+    functions:
+      - { slug: make-array, name: "make-array" }
+      - { slug: aref, name: "aref" }
+  - title: "リーダーと評価"
+    functions:
+      - { slug: read, name: "read" }
+      - { slug: read-line, name: "read-line" }
+      - { slug: read-from-string, name: "read-from-string" }
+      - { slug: parse-integer, name: "parse-integer" }
+      - { slug: eval, name: "eval" }
+      - { slug: load, name: "load" }
+  - title: "ストリームとファイル"
+    functions:
+      - { slug: open, name: "open" }
+      - { slug: close, name: "close" }
+      - { slug: write-line, name: "write-line" }
+  - title: "システムと時間"
+    functions:
+      - { slug: get-universal-time, name: "get-universal-time" }
+      - { slug: get-internal-real-time, name: "get-internal-real-time" }
+      - { slug: get-internal-run-time, name: "get-internal-run-time" }
+      - { slug: getenv, name: "getenv" }
+  - title: "rontolisp パッケージ"
+    functions:
+      - { slug: rontolisp-version, name: "rontolisp:version" }
+      - { slug: rontolisp-list-functions, name: "rontolisp:list-functions" }
+      - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
+      - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }
+      - { slug: rontolisp-fetch, name: "rontolisp:fetch" }

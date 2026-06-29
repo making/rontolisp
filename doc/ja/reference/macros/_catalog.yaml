@@ -1,0 +1,32 @@
+index_page: reference/macros.md
+categories:
+  - title: マクロ
+    functions:
+      - { slug: cond, name: cond }
+      - { slug: case, name: case }
+      - { slug: ecase, name: ecase }
+      - { slug: ccase, name: ccase }
+      - { slug: and, name: and }
+      - { slug: or, name: or }
+      - { slug: when, name: when }
+      - { slug: unless, name: unless }
+      - { slug: dotimes, name: dotimes }
+      - { slug: do, name: do }
+      - { slug: do-star, name: "do*" }
+      - { slug: prog1, name: prog1 }
+      - { slug: prog2, name: prog2 }
+      - { slug: time, name: time }
+      - { slug: psetq, name: psetq }
+      - { slug: typecase, name: typecase }
+      - { slug: etypecase, name: etypecase }
+      - { slug: error, name: error }
+      - { slug: setf, name: setf }
+      - { slug: push, name: push }
+      - { slug: pop, name: pop }
+      - { slug: remf, name: remf }
+      - { slug: let-star, name: "let*" }
+      - { slug: dolist, name: dolist }
+      - { slug: incf, name: incf }
+      - { slug: decf, name: decf }
+      - { slug: format, name: format }
+      - { slug: with-open-file, name: with-open-file }

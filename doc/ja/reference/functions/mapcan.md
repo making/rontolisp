@@ -1,0 +1,9 @@
+# mapcan
+
+`(mapcan function list)`
+
+`list` の各要素に `function` を適用し（各呼び出しはリストを返すべきです）、その結果を 1 つのリストに連結します。rontolisp は破壊的でない `append` で各部分を結合します（標準的な Common Lisp のように `nconc` でスプライスはしません）。マッピングとフィルタリングを一度に行う便利な方法です。落としたい要素については `nil` を返します。単一リストの形式のみ対応しています。
+
+```lisp
+(mapcan (lambda (x) (list x x)) '(1 2)) ; => (1 1 2 2)
+```

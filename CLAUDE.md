@@ -109,8 +109,11 @@ playground's WebAssembly runtime, so the Lisp examples are runnable in-page.
 
 **Layout.** `doc/en/nav.yaml` = the sidebar/order (Getting Started, Compiling,
 Language Reference, Guides). `doc/assets/docs.css` + `docs.js` = shared theme and
-the runnable-cell wiring. `doc/<lang>/` is a language (only `en` today; adding a
-`doc/ja/` with its own `nav.yaml` auto-creates a Japanese site under `/docs/ja/`).
+the runnable-cell wiring. `doc/<lang>/` is a language; `en` and `ja` both exist
+today, each with its own `nav.yaml`, and docgen renders one site per language
+(`/docs/en/`, `/docs/ja/`) with an automatic language switcher in the header
+(2+ languages -> switcher appears; `en` is the default and gets the `/docs/`
+redirect). Adding another `doc/<lang>/` with a `nav.yaml` auto-creates its site.
 Per-operator reference pages live in catalog directories, each with a
 `_catalog.yaml` (categories -> ordered `{slug, name}` entries) and a table
 "index page": `reference/functions/` (index `reference/functions.md`),
@@ -132,11 +135,24 @@ the index table to its page.
 - Do NOT use dotted-pair literals (`'(a . 1)`) in `lisp` blocks -- the reader
   rejects them; build with `(cons ...)`/`(list ...)`.
 
+**Keep all languages in sync.** Every doc change must be mirrored across BOTH
+`doc/en/**` and `doc/ja/**` (and any future `doc/<lang>/`) in the same commit:
+adding/removing/renaming a page, a `nav.yaml` entry, or a `_catalog.yaml` entry
+must happen in every language tree, and prose edits must be translated. The two
+trees must stay structurally identical -- same file set, same heading layout, and
+**byte-identical fenced code blocks** (`lisp`/`console`/`bash` and their `; =>`
+annotations / output blocks); only prose, headings, link text, `nav.yaml`
+`title:`/`lang_name:`, and `_catalog.yaml` category `title:`s are translated
+(slugs and operator `name:`s stay identical). Note `DocExamplesTest` only
+executes `doc/en` examples, so a broken `doc/ja` code block will NOT be caught by
+the build -- this is why ja code fences must be copied verbatim from en.
+
 **Adding/editing pages.** Edit the Markdown; add new top-level pages to
-`doc/en/nav.yaml`. For a new function/macro/special form, add a per-operator page
-+ a `_catalog.yaml` entry under the matching directory (see "Implementation
-Order" step 5). After editing examples, normalize the shown results to the real
-interpreter values and catch any non-runnable example:
+`doc/en/nav.yaml` (and `doc/ja/nav.yaml`). For a new function/macro/special form,
+add a per-operator page + a `_catalog.yaml` entry under the matching directory in
+each language tree (see "Implementation Order" step 5). After editing examples,
+normalize the shown results to the real interpreter values and catch any
+non-runnable example:
 
 ```bash
 ./mvnw -Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixDetailResults test  # rewrite ; => / output of detail pages

@@ -1,0 +1,47 @@
+title: rontolisp
+lang_name: 日本語
+sections:
+  - title: はじめに
+    pages:
+      - file: index.md
+        title: 概要
+      - file: getting-started/build.md
+        title: ビルドとインストール
+      - file: getting-started/repl.md
+        title: REPL
+      - file: getting-started/file-interpretation.md
+        title: ファイルの解釈実行
+  - title: コンパイル
+    pages:
+      - file: compiling/jvm.md
+        title: JVMバイトコードへのコンパイル
+      - file: compiling/wasm.md
+        title: WASMへのコンパイル
+      - file: compiling/dynamic.md
+        title: 動的（遅延束縛）
+      - file: compiling/self-hosted-repl.md
+        title: セルフホスティングREPL
+  - title: 言語リファレンス
+    pages:
+      - file: reference/data-types.md
+        title: データ型
+      - file: reference/special-forms.md
+        title: 特殊形式
+      - file: reference/macros.md
+        title: マクロ
+      - file: reference/functions.md
+        title: 関数
+      - file: reference/packages.md
+        title: パッケージ
+      - file: reference/function-namespace.md
+        title: 関数名前空間
+  - title: ガイド
+    pages:
+      - file: guides/missing-features.md
+        title: 未対応のCL機能
+      - file: guides/eval-limitations.md
+        title: コンパイル時evalの制限
+      - file: guides/read-load-limitations.md
+        title: コンパイル時read/loadの制限
+      - file: guides/math-backends.md
+        title: 数学関数のバックエンド
