@@ -109,7 +109,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~1 KB module
 デフォルトの出力は、上記の最適化されたリアクターであっても、依然として **wasm-GC 対応** のランタイムを必要とします。なぜなら、すべての値が GC ヒープ型（`i31ref`、float 構造体、`(ref eq)`）だからです。代わりに素の **MVP** モジュールを出力するには `--no-gc` を追加します。rec グループなし、`struct`/`array`/`i31` 型なし、`eqref` なし、インポートなしです（プログラムが文字列を使用する場合にのみ素のリニアメモリが追加されます。[後述](#strings)を参照）。これはインポートオブジェクトなしでインスタンス化でき、**`-W gc` なし** で任意の MVP クラスのランタイムで動作します。
 
 ```bash
-rontolisp fact.lisp --no-gc -o fact.wasm
+rontolisp fact.lisp --no-gc --optimize -o fact.wasm
 wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 ```
 
@@ -166,7 +166,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 これにより、ASCII アートのマンデルブロレンダラを wasm-GC なしで実行できます。[`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/mandelbrot-nogc.lisp) は浮動小数点のエスケープタイムループを維持しつつ、描画したグリッドを出力する代わりに 1 つの文字列として返します。
 
 ```console
-$ rontolisp examples/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
+$ rontolisp examples/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
 $ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;

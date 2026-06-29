@@ -168,7 +168,7 @@ when the program uses strings — see [below](#strings)). It instantiates with n
 object and runs on any MVP-class runtime with **no `-W gc`**:
 
 ```bash
-rontolisp fact.lisp --no-gc -o fact.wasm
+rontolisp fact.lisp --no-gc --optimize -o fact.wasm
 wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 ```
 
@@ -263,7 +263,7 @@ keeps the floating-point escape-time loop but returns the rendered grid as one s
 instead of printing it:
 
 ```console
-$ rontolisp examples/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
+$ rontolisp examples/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
 $ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
