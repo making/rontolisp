@@ -5,6 +5,7 @@ By default the JVM and WASM compilers resolve every call and variable reference 
 The `--dynamic` flag relaxes this: a call or reference that cannot be resolved statically is deferred to the runtime `eval` environment (late binding) instead of failing. This lets a program you tested in the interpreter compile unchanged -- typically to run it faster -- without rewriting `(cube 3)` into `(eval '(cube 3))`.
 
 ```bash
+echo '(defun cube (n) (* n n n))' > lib.lisp
 echo '(load "lib.lisp") (print (cube 3))' > prog.lisp
 rontolisp prog.lisp -o Prog.class --dynamic   # compiles; (cube 3) resolves at runtime
 rontolisp prog.lisp -o prog.wasm  --dynamic
