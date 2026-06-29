@@ -120,6 +120,23 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(program)).isEqualTo("\"ok\"");
 	}
 
+	@Test
+	void heapGrowsForStringsLargerThanInitialMemory() throws Exception {
+		// Regression: the GC heap is a bump allocator over linear memory. It used to
+		// never
+		// call memory.grow, so any program whose cumulative string allocation exceeded
+		// the
+		// initial 4 pages (256 KB) trapped with "memory access out of bounds". Build a
+		// ~640 KB string by doubling (shallow recursion, so this exercises the heap, not
+		// the call stack) and print its length; before the fix _start trapped (non-zero
+		// exit), now it completes.
+		String program = """
+				(defun double-it (s n) (if (<= n 0) s (double-it (concatenate 'string s s) (- n 1))))
+				(print (length (double-it "0123456789" 16)))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("655360");
+	}
+
 	// Compiles in --no-wasi (reactor) mode -- the module has no wasi_snapshot_preview1
 	// imports -- and invokes a scalar export. wasmtime instantiates it with no WASI
 	// provided.

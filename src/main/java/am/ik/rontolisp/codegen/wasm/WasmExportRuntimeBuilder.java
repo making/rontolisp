@@ -53,6 +53,14 @@ final class WasmExportRuntimeBuilder {
 		w.writeSignedLeb128(-8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// Ensure [old, old+size) is within linear memory before the host writes into it.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.I32_ADD);
+		});
 		// return old
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(1);
@@ -86,6 +94,17 @@ final class WasmExportRuntimeBuilder {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL);
 		w.writeSignedLeb128(dst);
+		// Ensure [dst, dst+len+2) is within linear memory before writing the quoted copy.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(dst);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(len);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(2);
+			w.write(Instruction.I32_ADD);
+		});
 		// memory[dst] = '"'
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(dst);

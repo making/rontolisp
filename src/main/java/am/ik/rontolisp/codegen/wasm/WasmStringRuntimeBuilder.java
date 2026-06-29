@@ -512,6 +512,16 @@ final class WasmStringRuntimeBuilder {
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		set(w, startL);
+		// Ensure the whole output [start, start + (end-pos) + 2) fits before writing.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			get(w, startL);
+			get(w, endL);
+			get(w, posL);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.I32_ADD);
+			i32(w, 2);
+			w.write(Instruction.I32_ADD);
+		});
 		get(w, startL);
 		i32(w, QUOTE);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);

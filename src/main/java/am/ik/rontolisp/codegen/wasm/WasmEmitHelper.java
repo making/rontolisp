@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import am.ik.wasm.WasmWriter;
 
 /**
  * Shared helper methods for WASM instruction emission used across all expression
@@ -10,6 +11,48 @@ import am.ik.wasm.Type;
 final class WasmEmitHelper {
 
 	private WasmEmitHelper() {
+	}
+
+	/**
+	 * Emits a "grow linear memory if it does not yet cover {@code top}" guard. The GC
+	 * backend's heap is a bump allocator over {@code HEAP_PTR_ADDR}; without this guard a
+	 * large allocation walks past the initial memory size and any access traps with
+	 * "memory access out of bounds". This grows memory by whole pages when the
+	 * about-to-be-used top address exceeds the current size.
+	 *
+	 * <p>
+	 * It is pure-stack: it allocates no local and adds no function (so every fixed
+	 * {@code FUNC_*} index, and the component byte-identical blobs that depend on them,
+	 * stay valid). {@code pushTop} must emit code pushing the absolute byte address the
+	 * heap is about to use (an {@code i32} computed only from locals / constants / memory
+	 * loads, so it can be evaluated twice); it is called once for the test and once to
+	 * size the grow. The stack is left as it was found.
+	 * @param w the writer for the function body being emitted
+	 * @param pushTop emits the i32 top address (idempotent, no net stack effect beyond
+	 * the one value it pushes)
+	 */
+	static void emitGrowHeapTo(WasmWriter w, Runnable pushTop) {
+		// neededPages = (top + 65535) >>> 16
+		pushTop.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xffff);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(16);
+		w.write(Instruction.I32_SHR_U);
+		// neededPages > memory.size ?
+		w.write(Instruction.CURRENT_MEMORY, 0x00);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		// memory.grow(neededPages - memory.size); drop the (old size / -1) result
+		pushTop.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0xffff);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(16);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.CURRENT_MEMORY, 0x00);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GROW_MEMORY, 0x00);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
 	}
 
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {

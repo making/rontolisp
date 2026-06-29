@@ -1081,6 +1081,15 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.SET_LOCAL);
 		w.writeSignedLeb128(2);
 
+		// Ensure [cur, cur+len) is within linear memory before the copy loop.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(2);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_ADD);
+		});
+
 		// i = 0
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
@@ -1211,6 +1220,15 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.SET_LOCAL);
 		w.writeSignedLeb128(start);
 
+		// Ensure the opening-quote byte at `start` is within linear memory.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(start);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_ADD);
+		});
+
 		// memory[start] = 0x22 ('"' prefix)
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(start);
@@ -1256,6 +1274,15 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL);
 		w.writeSignedLeb128(cur);
+
+		// Ensure the closing-quote byte at `cur` is within linear memory.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(cur);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_ADD);
+		});
 
 		// memory[cur] = 0x22 ('"' suffix)
 		w.write(Instruction.GET_LOCAL);
