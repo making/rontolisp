@@ -7,6 +7,7 @@ hand without a third-party assembler. Run the result on any wasm-GC capable
 runtime:
 
 ```bash
+echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o hello.wasm
 wasmtime run -W gc hello.wasm
 ```

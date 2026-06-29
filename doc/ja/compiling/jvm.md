@@ -3,6 +3,7 @@
 `-o` で `.class` で終わる出力パスを `rontolisp` に渡すと、ソースをインタプリタで実行する代わりに JVM バイトコードへ直接コンパイルします。ASM などのライブラリは使わず、バイトコードは手作業で出力されます。バックエンドを選択するのは出力の拡張子です（JVM なら `.class`、WASM なら `.wasm`）。
 
 ```bash
+echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o Hello.class
 java Hello
 ```

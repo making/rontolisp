@@ -3,6 +3,7 @@
 `-o` で `.wasm` で終わる出力パスを `rontolisp` に渡すと、ソースをインタプリタで実行する代わりに WebAssembly バイナリへコンパイルします。JVM バックエンドと同様、ターゲットを選択するのは出力の拡張子であり、バイナリはサードパーティのアセンブラを使わずに手作業で出力されます。結果は wasm-GC 対応の任意のランタイムで実行できます。
 
 ```bash
+echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o hello.wasm
 wasmtime run -W gc hello.wasm
 ```

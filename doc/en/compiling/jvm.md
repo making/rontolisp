@@ -6,6 +6,7 @@ library, the bytecode is emitted by hand. The output extension is what selects t
 backend (`.class` for JVM, `.wasm` for WASM).
 
 ```bash
+echo '(print (+ 1 2))' > hello.lisp
 rontolisp hello.lisp -o Hello.class
 java Hello
 ```
