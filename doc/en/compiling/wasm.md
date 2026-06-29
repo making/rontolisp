@@ -30,7 +30,7 @@ The default output is a Preview 1 core module that exposes only the WASI `_start
 point. The sections below cover the WASM-specific options: marking individual functions as
 host-callable (`rontolisp:wasm-export`), dropping the WASI imports for a reactor/library
 module (`--no-wasi`), shrinking the module by tree shaking (`--optimize`), emitting a plain
-non-wasm-GC module for pure-numeric exports (`--no-gc`), and emitting a WASI 0.3 component
+non-wasm-GC module that runs on any engine (`--no-gc`), and emitting a WASI 0.3 component
 (`--component`).
 
 ## Exporting Lisp Functions
@@ -63,6 +63,11 @@ The type designators and their boundary representations are:
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:sexpr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+
+The default wasm-GC output supports all five designators (the `:int` range above is the
+internal `i31ref`). The non-GC backend ([`--no-gc`](#non-gc-output---no-gc)) supports
+`:int`/`:float`/`:bool`/`:string` — with a wider internal integer range — but not
+`:sexpr`, which needs the cons/reader/printer runtime.
 
 A side-effecting function can declare a **void** result by omitting `:returns` (or giving it
 as `nil`, `'()` or `:void`); the wrapper then discards the Lisp return value and has no WASM
@@ -153,12 +158,13 @@ to) is kept. It is WASM only and has **no effect** under `--component` (the WASI
 adapter relies on the core's fixed import/index layout). JVM dead-code elimination is not
 yet implemented.
 
-## Non-GC Output for Pure-Numeric Exports (`--no-gc`)
+## Non-GC Output (`--no-gc`)
 
 The default output — even the optimized reactor above — still needs a **wasm-GC
 capable** runtime, because every value is a GC heap type (`i31ref`, the float struct,
 `(ref eq)`). Add `--no-gc` to emit a plain **MVP** module instead: no rec group, no
-`struct`/`array`/`i31` type, no `eqref` and no import. It instantiates with no import
+`struct`/`array`/`i31` type, no `eqref` and no import (a plain linear memory is added only
+when the program uses strings — see [below](#strings)). It instantiates with no import
 object and runs on any MVP-class runtime with **no `-W gc`**:
 
 ```bash
@@ -166,25 +172,47 @@ rontolisp fact.lisp --no-gc -o fact.wasm
 wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 ```
 
-This works by lowering the numeric core directly onto unboxed wasm scalars, plus a small
-linear-memory representation for strings. A function is eligible only if its entire
-transitive call graph stays inside this subset: numbers and booleans — arithmetic
-(`+ - * / mod rem 1+ 1- abs min max sqrt`), the integer bitwise operators
-(`logand logior logxor lognot ash`), comparison and predicates
-(`= < <= > >= not zerop plusp minusp evenp oddp`), `if`/`when`/`unless`/`cond`/`progn`/
-`let`/`let*`, **iteration and local mutation** (`dotimes`/`do`/`do*`, the underlying
-`while`/`setq`/`return`, with a let/`do`-bound variable freely reassigned), the float/int
-conversions (`float truncate floor ceiling round`), recursion and calls to other eligible
-functions — and now **strings**: string literals and `(concatenate 'string ...)`. Anything
-else that allocates on the heap (cons/list, characters, symbols, vectors, hash tables,
-`eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment to a global)
-makes the function ineligible and is a **compile error** that names the offending
-operation, so the boundary is explicit rather than a silent miscompile. The supported
-boundary types are `:int`, `:float`, `:bool`, `:string` (and `:void`/omitted); `:sexpr`
-still needs wasm-GC (it would require a cons/reader/printer runtime).
+It achieves this by lowering each value directly onto an unboxed wasm scalar, plus a small
+linear-memory representation for strings — so the eligible subset is a restriction of the
+language, not a different one.
 
-An integer accumulator that is summed with floats widens automatically: a let-bound
-variable takes the join of its initializer and every value assigned to it, so
+### Eligible subset
+
+A function is eligible only if its **entire transitive call graph** stays inside this
+subset:
+
+- numbers and booleans: arithmetic (`+ - * / mod rem 1+ 1- abs min max sqrt`), the integer
+  bitwise operators (`logand logior logxor lognot ash`), comparison and predicates
+  (`= < <= > >= not zerop plusp minusp evenp oddp`);
+- control and binding: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`, recursion and
+  calls to other eligible functions;
+- iteration and local mutation: `dotimes`/`do`/`do*` and the underlying
+  `while`/`setq`/`return`, with a let/`do`-bound variable freely reassigned;
+- float/int conversions: `float truncate floor ceiling round`;
+- strings: string literals and `(concatenate 'string ...)`.
+
+Anything else that would allocate a heap object (cons/list, characters, symbols, vectors,
+hash tables, `eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment to
+a global) makes the function ineligible. Rather than miscompile silently, that is a
+**compile error** naming the offending operation, so the boundary stays explicit.
+
+The supported boundary designators are `:int`, `:float`, `:bool`, `:string` (and
+`:void`/omitted). `:sexpr` is **not** supported — it would need the cons/reader/printer
+runtime that this backend deliberately omits.
+
+### Numeric model
+
+Each value's wasm type is chosen by static type inference: integers use `i64`, floats use
+`f64`. Types are inferred with a fixpoint over the call graph seeded by the export boundary
+designators, and where an integer and a float meet (e.g. `(* 3.14 n)`) the integer is
+promoted to `f64`. Using `i64` makes integer arithmetic exact to 2^63 — far wider than both
+the GC backend's `i31` fixnums and what an all-`f64` lowering (exact only to 2^53) could
+offer; for example `a*a - (a-1)*(a+1)` stays exactly `1` even when the intermediates exceed
+2^53.
+
+Inference also widens automatically: a let/`do`-bound variable takes the join of its
+initializer and every value assigned to it, so an integer accumulator summed with floats
+becomes an `f64`:
 
 ```lisp
 (defun sum-squares (n)        ; sum of i*i for i in 0..n-1, as a float
@@ -198,11 +226,20 @@ variable takes the join of its initializer and every value assigned to it, so
 Under `--no-gc` this infers `acc` (and the return value) as `f64` while the loop counter
 `i` stays `i64`.
 
-### Strings under `--no-gc`
+There is no rational type, so two things differ from full Common Lisp and from the GC
+backend: `/` is floating-point division (no `1/3` ratios), and a value is false in a
+boolean context exactly when it is zero (Common Lisp treats only `nil` as false). The
+**boundary** designators stay host-width — `:int`/`:bool` cross as a 32-bit `i32` (as in
+the GC backend), so a returned value outside the 32-bit range wraps; the wide `i64` range
+applies only to the internal computation. For the numeric kernels this mode targets
+(factorials, math/finance functions, validators) the results match the interpreter and the
+GC backend.
 
-String literals and `(concatenate 'string ...)` work too. A string is an `i32` pointer to
-a `[length][bytes]` header in linear memory, and `concatenate` bump-allocates a fresh
-buffer — so a function that builds up a string is a normal accumulator loop:
+### Strings
+
+A string is an `i32` pointer to a `[length][bytes]` header in linear memory, and
+`(concatenate 'string ...)` bump-allocates a fresh buffer — so building up a string is just
+an accumulator loop:
 
 ```lisp
 (defun stars (n)               ; an n-character run of '*'
@@ -213,16 +250,16 @@ buffer — so a function that builds up a string is a normal accumulator loop:
 (stars 5)  ; => "*****"
 ```
 
-When a module uses strings it gains a (growable) linear memory; the module exports that
-`memory` and a `__ronto_alloc` bump allocator alongside your functions. A `:string`
-parameter arrives as a `(ptr, len)` pair the host writes into memory, and a `:string`
-result is returned the same way — so unlike a pure-numeric export, a string-valued export
-needs a host that can read/write the exported memory (JavaScript, a small Node script, the
-browser playground) rather than just `wasmtime --invoke`.
+A module that uses strings gains a (growable) linear memory, and exports that `memory` plus
+a `__ronto_alloc(size)` bump allocator alongside your functions. A `:string` parameter
+arrives as a `(ptr, len)` pair the host writes into memory, and a `:string` result is
+returned the same way — so a string-valued export needs a host that can read/write the
+exported memory (JavaScript, a small Node script, the browser playground) rather than just
+`wasmtime --invoke`. The [appendix](#passing-strings-string) walks through the JS side.
 
-This is exactly what makes the ASCII-art Mandelbrot renderer run with no wasm-GC:
+This is what lets the ASCII-art Mandelbrot renderer run with no wasm-GC:
 [`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/main/examples/mandelbrot-nogc.lisp)
-keeps the floating-point escape-time loop and returns the rendered grid as one string
+keeps the floating-point escape-time loop but returns the rendered grid as one string
 instead of printing it:
 
 ```console
@@ -235,27 +272,15 @@ $ node -e '
 '
 ```
 
-`--no-gc` is a pure-compute reactor, so like `--no-wasi` it imports nothing and exports
-each `rontolisp:wasm-export` function under its name; it cannot be combined with
-`--component` (that path is wasm-GC bound). It composes with `--optimize`. Calling it from
-JavaScript is the same "instantiate, then call the exports" as a GC reactor — see the
-[appendix](#appendix-calling-a-module-from-javascript) for a complete runnable example —
-only here the module runs on **any** WebAssembly engine, with no wasm-GC support required.
+### Composition
 
-Numeric model: each value's wasm type is chosen by static type inference — integers use
-`i64` and floats use `f64`. Types are inferred with a fixpoint over the call graph seeded
-by the export boundary designators, and where an integer and a float meet (e.g.
-`(* 3.14 n)`) the integer is promoted to `f64`. Using `i64` means integer arithmetic is
-exact to 2^63 — far wider than both the GC backend's `i31` fixnums and what an all-`f64`
-lowering (exact only to 2^53) could offer; for example `a*a - (a-1)*(a+1)` stays exactly
-`1` even when the intermediates exceed 2^53. There is no rational type, so two things
-differ from full Common Lisp and from the GC backend: `/` is floating-point division (no
-`1/3` ratios), and a value is treated as false in a boolean context exactly when it is
-zero (Common Lisp treats only `nil` as false). Note the **boundary** designators stay
-host-width: `:int` is a 32-bit `i32` (as in the GC backend), so a returned value outside
-the 32-bit range wraps — the wide `i64` range applies to the internal computation. For the
-pure-numeric kernels this mode targets (factorials, math/finance functions, validators)
-the results match the interpreter and the GC backend.
+`--no-gc` is a pure-compute reactor: like `--no-wasi` it imports nothing and exports each
+`rontolisp:wasm-export` function under its name (so it cannot do I/O, and a top-level form
+that prints is rejected). It composes with `--optimize`, but cannot be combined with
+`--component` (that path is wasm-GC bound). Calling it from JavaScript is the same
+"instantiate, then call the exports" as a GC reactor — see the
+[appendix](#appendix-calling-a-module-from-javascript) — only here the module runs on
+**any** WebAssembly engine, with no wasm-GC support required.
 
 ## WASI 0.3 Component
 
@@ -366,36 +391,33 @@ A few boundary details worth knowing:
   needs a wasm-GC-capable one (Node 22+, current browsers). The JavaScript above is
   byte-for-byte identical for both — swap the compile flag and nothing else changes.
 
-### Passing strings and lists
+### Passing strings (`:string`)
 
 The scalar example above needs no memory because `:int`/`:float`/`:bool` cross the boundary
-as plain numbers. `:string` and `:sexpr` instead pass a `(ptr, len)` pair through the
-module's exported `memory`, so the host writes the bytes in and reads the result out. These
-designators are **wasm-GC only** — they are not supported under `--no-gc`, so compile with
-`--no-wasi` (a wasm-GC-capable engine such as Node 22+ or a current browser is required):
+as plain numbers. A `:string` instead passes a `(ptr, len)` pair through the module's
+exported `memory`: the host writes the argument bytes into memory (at an offset reserved by
+the exported `__ronto_alloc(size)` bump allocator), passes `(ptr, len)`, then decodes the
+`(ptr, len)` the export returns.
+
+`:string` works under `--no-gc`, so the module still runs on **any** engine — as long as
+the function stays within the non-GC string subset (string literals and
+`(concatenate 'string ...)`). A greeting builder is enough to show the protocol:
 
 ```lisp
-;; textkit.lisp
-(defun shout (s) (string-upcase s))
-(defun rev (lst) (reverse lst))
-(rontolisp:wasm-export 'shout :params '(:string) :returns :string)   ; "hello" -> "HELLO"
-(rontolisp:wasm-export 'rev   :params '(:sexpr)  :returns :sexpr)    ; a list, reversed
+;; greetkit.lisp
+(defun greet (name) (concatenate 'string "Hello, " name "!"))
+(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
 ```
 
 ```bash
-rontolisp textkit.lisp --no-wasi --optimize -o textkit.wasm
+rontolisp greetkit.lisp --no-gc --optimize -o greetkit.wasm
 ```
-
-To call them, copy the argument bytes into the module's `memory` at an offset reserved by
-the exported `__ronto_alloc(size)` bump allocator, pass `(ptr, len)`, then decode the
-`(ptr, len)` the export returns. `:sexpr` is the same protocol over s-expression *text*
-(the module parses it with its embedded reader and prints the result back):
 
 ```js
 import { readFile } from 'node:fs/promises';
 
-const bytes = await readFile(new URL('./textkit.wasm', import.meta.url));
-const { instance } = await WebAssembly.instantiate(bytes);
+const bytes = await readFile(new URL('./greetkit.wasm', import.meta.url));
+const { instance } = await WebAssembly.instantiate(bytes);   // no import object
 const ex = instance.exports;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
@@ -410,6 +432,40 @@ function write(str) {
 // memory, which detaches the previous ArrayBuffer.
 const read = (ptr, len) => dec.decode(new Uint8Array(ex.memory.buffer, ptr, len));
 
+console.log(read(...ex.greet(...write('rontolisp'))));     // Hello, rontolisp!
+```
+
+```
+Hello, rontolisp!
+```
+
+Richer string functions (`string-upcase`, `subseq`, `string=`, …) are outside the non-GC
+subset; using one means compiling for the wasm-GC backend (`--no-wasi`) instead — the
+boundary protocol is identical, only the engine must be wasm-GC capable. The `:sexpr`
+example below shows that path.
+
+### Passing lists (`:sexpr`)
+
+A `:sexpr` carries **any** Lisp value as s-expression *text*: the module parses the input
+with its embedded reader and prints the result back, over the same `(ptr, len)` /
+`__ronto_alloc` protocol. That reader/printer/cons machinery is **wasm-GC only**, so
+`:sexpr` (and the richer string functions above) need `--no-wasi` and a wasm-GC-capable
+engine (Node 22+, a current browser):
+
+```lisp
+;; textkit.lisp
+(defun shout (s) (string-upcase s))
+(defun rev (lst) (reverse lst))
+(rontolisp:wasm-export 'shout :params '(:string) :returns :string)   ; "hello" -> "HELLO"
+(rontolisp:wasm-export 'rev   :params '(:sexpr)  :returns :sexpr)    ; a list, reversed
+```
+
+```bash
+rontolisp textkit.lisp --no-wasi --optimize -o textkit.wasm
+```
+
+```js
+// Same instantiate + write/read helper as above (textkit.wasm needs a wasm-GC engine).
 console.log(read(...ex.shout(...write('hello'))));         // HELLO
 console.log(read(...ex.rev(...write('("a" "b" "c")'))));   // ("c" "b" "a")
 ```
