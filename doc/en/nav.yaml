@@ -39,6 +39,8 @@ sections:
         title: Function Namespace
   - title: Guides
     pages:
+      - file: guides/missing-features.md
+        title: Unsupported CL Features
       - file: guides/eval-limitations.md
         title: Compiled eval Limitations
       - file: guides/read-load-limitations.md
