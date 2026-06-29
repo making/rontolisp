@@ -1,9 +1,20 @@
 # Compile to JVM Bytecode
 
+Give `rontolisp` an output path ending in `.class` with `-o`, and it compiles the
+source straight to JVM bytecode instead of interpreting it -- no ASM or other
+library, the bytecode is emitted by hand. The output extension is what selects the
+backend (`.class` for JVM, `.wasm` for WASM).
+
 ```bash
 rontolisp hello.lisp -o Hello.class
 java Hello
 ```
+
+The generated class is named after the output file, so the name you pass to
+`java` is the file's stem: `-o Hello.class` produces a class `Hello` you run with
+`java Hello`. Keep the path free of directories (use a plain `Hello.class`, not
+`out/Hello.class`), since the class name must match. The program's top-level forms
+become the class's entry point and run in order when you launch it.
 
 Example (`hello.lisp`):
 

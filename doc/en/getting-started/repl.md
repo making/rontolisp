@@ -1,5 +1,9 @@
 # REPL
 
+Run `rontolisp` with no file argument to start an interactive read-eval-print
+loop. It reads one expression at a time, evaluates it on the tree-walking
+interpreter, and prints the result -- the quickest way to explore the language.
+
 ```bash
 rontolisp
 ```
@@ -16,11 +20,18 @@ fact
 > (quit)
 ```
 
-The REPL supports line editing, history navigation (up/down keys), and Ctrl-C to
-cancel input. Type `(quit)` or Ctrl-D to exit.
+Each top-level form is evaluated as soon as it is complete, and its value is
+echoed back. Definitions persist across inputs: a `defun`, `defvar`, or `setq`
+entered at one prompt is visible at every later one, so you can build up state
+incrementally within a session.
+
+The prompt accepts multi-line input -- if an expression has unbalanced
+parentheses, the REPL keeps reading until it is closed before evaluating. It also
+supports line editing, history navigation with the up/down arrow keys, and Ctrl-C
+to cancel the current input. Type `(quit)` or press Ctrl-D to exit.
 
 Try a quick expression here:
 
 ```lisp
-(let ((x 10) (y 20)) (+ x y))
+(let ((x 10) (y 20)) (+ x y)) ; => 30
 ```

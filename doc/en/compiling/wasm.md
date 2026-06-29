@@ -1,5 +1,11 @@
 # Compile to WASM
 
+Give `rontolisp` an output path ending in `.wasm` with `-o`, and it compiles the
+source to a WebAssembly binary instead of interpreting it. As with the JVM
+backend, the output extension selects the target, and the binary is emitted by
+hand without a third-party assembler. Run the result on any wasm-GC capable
+runtime:
+
 ```bash
 rontolisp hello.lisp -o hello.wasm
 wasmtime run -W gc hello.wasm
