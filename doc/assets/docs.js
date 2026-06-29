@@ -87,6 +87,87 @@
 		);
 	}
 
+	// Copy the given text to the clipboard, with a graceful fallback for
+	// browsers/contexts where the async Clipboard API is unavailable (e.g. a
+	// page served over plain http or an older browser).
+	function copyText(text, onDone) {
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(text).then(onDone, function () {
+				fallbackCopy(text, onDone);
+			});
+		} else {
+			fallbackCopy(text, onDone);
+		}
+	}
+
+	function fallbackCopy(text, onDone) {
+		var ta = document.createElement("textarea");
+		ta.value = text;
+		ta.setAttribute("readonly", "");
+		ta.style.position = "fixed";
+		ta.style.left = "-9999px";
+		document.body.appendChild(ta);
+		ta.select();
+		try {
+			document.execCommand("copy");
+			onDone();
+		} catch (e) {
+			/* clipboard unavailable; leave the button label unchanged */
+		}
+		document.body.removeChild(ta);
+	}
+
+	function makeCopyButton() {
+		var b = document.createElement("button");
+		b.type = "button";
+		b.className = "copy";
+		b.textContent = "Copy";
+		b.setAttribute("aria-label", "Copy code to clipboard");
+		return b;
+	}
+
+	// Flash a "Copied" confirmation on the button, then restore its label.
+	function flashCopied(button) {
+		button.textContent = "Copied";
+		button.classList.add("copied");
+		window.setTimeout(function () {
+			button.textContent = "Copy";
+			button.classList.remove("copied");
+		}, 1200);
+	}
+
+	// Add a copy button to every code block: runnable cells copy the editable
+	// source; static blocks (bash, console, transcripts) copy their text.
+	function wireCopy() {
+		Array.prototype.forEach.call(document.querySelectorAll(".code-cell"), function (cell) {
+			var toolbar = cell.querySelector(".cell-toolbar");
+			var src = cell.querySelector(".cell-src");
+			if (!toolbar || !src) return;
+			var button = makeCopyButton();
+			button.addEventListener("click", function () {
+				copyText(src.value, function () { flashCopied(button); });
+			});
+			toolbar.appendChild(button);
+		});
+
+		Array.prototype.forEach.call(document.querySelectorAll(".markdown pre"), function (pre) {
+			// The runnable cells' output area is also a <pre>; skip it.
+			if (pre.classList.contains("cell-out")) return;
+			var wrap = document.createElement("div");
+			wrap.className = "code-block";
+			pre.parentNode.insertBefore(wrap, pre);
+			wrap.appendChild(pre);
+			var button = makeCopyButton();
+			button.addEventListener("click", function () {
+				var code = pre.querySelector("code");
+				copyText(code ? code.textContent : pre.textContent, function () {
+					flashCopied(button);
+				});
+			});
+			wrap.appendChild(button);
+		});
+	}
+
 	// Highlight the TOC entry of the section currently scrolled into view.
 	function wireToc() {
 		var toc = document.querySelector(".toc");
@@ -133,6 +214,7 @@
 	function wire() {
 		statusEl = document.querySelector(".runtime-status");
 		wireToc();
+		wireCopy();
 
 		var cells = document.querySelectorAll(".code-cell");
 		Array.prototype.forEach.call(cells, function (cell) {

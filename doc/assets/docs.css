@@ -319,6 +319,36 @@ pre.cell-out {
 }
 pre.cell-out.err { color: var(--err); }
 
+/* --- copy buttons --- */
+.copy {
+	background: var(--panel-2);
+	color: var(--muted);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 4px 10px;
+	font-family: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.copy:hover { color: var(--fg); border-color: var(--accent); }
+.copy.copied { color: var(--accent); border-color: var(--accent); }
+
+/* Runnable cells: the copy button sits at the right edge of the toolbar. */
+.cell-toolbar .copy { margin-left: auto; }
+
+/* Static blocks: wrapped so the copy button can float in the top-right corner,
+   revealed on hover (or keyboard focus). */
+.code-block { position: relative; }
+.code-block .copy {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.code-block:hover .copy,
+.code-block .copy:focus { opacity: 1; }
+
 /* --- prev/next --- */
 .prevnext {
 	display: flex;
