@@ -10,7 +10,7 @@ sections:
       - file: getting-started/repl.md
         title: REPL
       - file: getting-started/file-interpretation.md
-        title: ファイルの解釈実行
+        title: ファイルのインタプリタ実行
   - title: コンパイル
     pages:
       - file: compiling/jvm.md
