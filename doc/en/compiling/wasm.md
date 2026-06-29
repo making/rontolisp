@@ -258,7 +258,7 @@ exported memory (JavaScript, a small Node script, the browser playground) rather
 `wasmtime --invoke`. The [appendix](#passing-strings-string) walks through the JS side.
 
 This is what lets the ASCII-art Mandelbrot renderer run with no wasm-GC:
-[`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/main/examples/mandelbrot-nogc.lisp)
+[`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/mandelbrot-nogc.lisp)
 keeps the floating-point escape-time loop but returns the rendered grid as one string
 instead of printing it:
 
@@ -267,7 +267,7 @@ $ rontolisp examples/mandelbrot-nogc.lisp --no-gc -o mandelbrot.wasm
 $ node -e '
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;
-  const [p, n] = ex.render(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
+  const [p, n] = ex.mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
   process.stdout.write(Buffer.from(new Uint8Array(ex.memory.buffer, p, n)).toString());
 '
 ```

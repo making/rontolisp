@@ -31,7 +31,7 @@
         (t " ")))
 
 ;;; Render the region [x0,x1] x [y0,y1] as a cols x rows grid of characters.
-(defun render (x0 x1 y0 y1 cols rows max-iter)
+(defun mandelbrot (x0 x1 y0 y1 cols rows max-iter)
   (let ((dx (/ (- x1 x0) cols))
         (dy (/ (- y1 y0) rows)))
     (dotimes (r rows)
@@ -42,4 +42,4 @@
 
 (defparameter *max-iter* 30)
 (format t "Mandelbrot set (~d iterations):~%" *max-iter*)
-(render -2.5 1.0 -1.2 1.2 70 30 *max-iter*)
+(mandelbrot -2.5 1.0 -1.2 1.2 70 30 *max-iter*)

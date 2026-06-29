@@ -17,7 +17,7 @@
 ;;;;   const { instance } = await WebAssembly.instantiate(
 ;;;;     require('fs').readFileSync('mandelbrot.wasm'), {});
 ;;;;   const ex = instance.exports;
-;;;;   const [ptr, len] = ex.render(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
+;;;;   const [ptr, len] = ex.mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30);
 ;;;;   process.stdout.write(
 ;;;;     Buffer.from(new Uint8Array(ex.memory.buffer, ptr, len)).toString());
 
@@ -41,7 +41,7 @@
 
 ;;; Render the region [x0,x1] x [y0,y1] as a cols x rows grid, accumulating the
 ;;; characters (and a newline per row) into a single string that is returned.
-(defun render (x0 x1 y0 y1 cols rows max-iter)
+(defun mandelbrot (x0 x1 y0 y1 cols rows max-iter)
   (let ((dx (/ (- x1 x0) cols))
         (dy (/ (- y1 y0) rows))
         (out ""))
@@ -54,7 +54,7 @@
 "))))
     out))
 
-;;; Export render as a host-callable function: seven scalar inputs, a string out.
-(rontolisp:wasm-export 'render
+;;; Export mandelbrot as a host-callable function: seven scalar inputs, a string out.
+(rontolisp:wasm-export 'mandelbrot
   :params '(:float :float :float :float :int :int :int)
   :returns :string)
