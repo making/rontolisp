@@ -60,7 +60,7 @@ public final class RunnableBlockTransformer {
 				<div class="code-cell">\
 				<div class="cell-toolbar"><button class="run" type="button">Run</button>\
 				<span class="cell-status"></span></div>\
-				<textarea class="cell-src" spellcheck="false" rows="%d">%s</textarea>\
+				<textarea class="cell-src" spellcheck="false" wrap="off" rows="%d">%s</textarea>\
 				<pre class="cell-out" hidden></pre>\
 				</div>""".formatted(rows, code);
 	}

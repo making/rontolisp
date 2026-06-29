@@ -301,6 +301,9 @@ textarea.cell-src {
 	line-height: 1.55;
 	padding: 12px 16px;
 	tab-size: 2;
+	/* Don't soft-wrap source; scroll horizontally like the static code blocks. */
+	white-space: pre;
+	overflow-x: auto;
 }
 
 pre.cell-out {
@@ -310,8 +313,9 @@ pre.cell-out {
 	border-radius: 0;
 	background: var(--panel-2);
 	color: var(--accent-2);
-	white-space: pre-wrap;
-	word-break: break-word;
+	/* Keep output on one line per line; scroll horizontally instead of wrapping. */
+	white-space: pre;
+	overflow-x: auto;
 }
 pre.cell-out.err { color: var(--err); }
 
