@@ -57,6 +57,8 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String ABS = "_abs";
 
+	static final String SIGNUM = "_signum";
+
 	static final String MIN = "_min";
 
 	static final String MAX = "_max";
@@ -180,6 +182,10 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("negateExact"), cp.addUtf8("(J)J")));
 		MethodrefConstant absLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
+		MethodrefConstant absDouble = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
+		MethodrefConstant signumDouble = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D")));
 		MethodrefConstant floorModLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("floorMod"), cp.addUtf8("(JJ)J")));
 
@@ -265,6 +271,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nFmod = cp.addUtf8(FMOD);
 		Utf8Constant nCmp = cp.addUtf8(CMP);
 		Utf8Constant nAbs = cp.addUtf8(ABS);
+		Utf8Constant nSignum = cp.addUtf8(SIGNUM);
 		Utf8Constant nMin = cp.addUtf8(MIN);
 		Utf8Constant nMax = cp.addUtf8(MAX);
 		Utf8Constant nDbl = cp.addUtf8(DBL);
@@ -292,6 +299,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rFmod = cp.addMethodref(thisClass, cp.addNameAndType(nFmod, dFmod));
 		MethodrefConstant rCmp = cp.addMethodref(thisClass, cp.addNameAndType(nCmp, dCmp));
 		MethodrefConstant rAbs = cp.addMethodref(thisClass, cp.addNameAndType(nAbs, dUnary));
+		MethodrefConstant rSignum = cp.addMethodref(thisClass, cp.addNameAndType(nSignum, dUnary));
 		MethodrefConstant rMin = cp.addMethodref(thisClass, cp.addNameAndType(nMin, dBinary));
 		MethodrefConstant rMax = cp.addMethodref(thisClass, cp.addNameAndType(nMax, dBinary));
 		MethodrefConstant rDbl = cp.addMethodref(thisClass, cp.addNameAndType(nDbl, dUnary));
@@ -331,7 +339,10 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
 				doubleClass, rDbl, numberClass, numDoubleValue));
 		methods.add(buildAbs(nAbs, dUnary, longClass, bigClass, longValue, longValueOf, absLong, biValueOf, biNeg,
-				biAbs, rNorm, cMin, ratArrClass, rRatNum, rRatDen, rRat));
+				biAbs, rNorm, cMin, ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue,
+				doubleValueOf, absDouble));
+		methods.add(buildSignum(nSignum, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
+				signumDouble, rRatNum, biSignum, longValueOf));
 		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
 		methods.add(buildSelect(nMax, dBinary, rCmp, Opcode.IFLT));
 		methods.add(buildDbl(nDbl, dUnary, ratArrClass, numberClass, bigDecClass, bdInit, bdDivide, bdDoubleValue,
@@ -357,6 +368,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(FMOD, rFmod);
 		ops.put(CMP, rCmp);
 		ops.put(ABS, rAbs);
+		ops.put(SIGNUM, rSignum);
 		ops.put(MIN, rMin);
 		ops.put(MAX, rMax);
 		ops.put(BIG_OP, rBig);
@@ -869,14 +881,33 @@ final class JvmNumericRuntimeBuilder {
 		return new NumericMethod(name, desc, c, 4, 2, List.of());
 	}
 
-	// _abs(Object a): Math.abs for Long (promoting Long.MIN_VALUE), numerator.abs() for
-	// a ratio, BigInteger.abs otherwise.
+	// _abs(Object a): Math.abs for a Double (float), Math.abs for Long (promoting
+	// Long.MIN_VALUE), numerator.abs() for a ratio, BigInteger.abs otherwise. The Double
+	// branch handles a float reaching abs through a variable (no compile-time literal),
+	// the
+	// way the binary ops' double prologue does.
 	private static NumericMethod buildAbs(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			ClassConstant bigClass, MethodrefConstant longValue, MethodrefConstant longValueOf,
 			MethodrefConstant absLong, MethodrefConstant biValueOf, MethodrefConstant biNeg, MethodrefConstant biAbs,
 			MethodrefConstant rNorm, LongConstant cMin, ClassConstant ratArrClass, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rRat) {
+			MethodrefConstant rRatDen, MethodrefConstant rRat, ClassConstant doubleClass, MethodrefConstant rDbl,
+			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+			MethodrefConstant absDouble) {
 		List<Integer> c = new ArrayList<>();
+		// Double fast path: Math.abs((double) a) when a is a Double.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, absDouble.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
@@ -938,6 +969,42 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, rRat.index());
 		c.add(Opcode.ARETURN);
 		return new NumericMethod(name, desc, c, 4, 4, List.of());
+	}
+
+	// _signum(Object a): Math.signum for a Double (float, -1.0/0.0/1.0), otherwise the
+	// integer sign as a Long (the numerator's sign for a ratio). The Double branch
+	// handles
+	// a float reaching signum through a variable, mirroring _abs.
+	private static NumericMethod buildSignum(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
+			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
+			MethodrefConstant doubleValueOf, MethodrefConstant signumDouble, MethodrefConstant rRatNum,
+			MethodrefConstant biSignum, MethodrefConstant longValueOf) {
+		List<Integer> c = new ArrayList<>();
+		// Double fast path: Math.signum((double) a).
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, signumDouble.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
+		// Integer/ratio path: (long) _ratnum(a).signum().
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rRatNum.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biSignum.index());
+		c.add(Opcode.I2L);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 2, 1, List.of());
 	}
 
 	// _min/_max(Object a, Object b): pick an argument by the sign of _cmp(a, b).

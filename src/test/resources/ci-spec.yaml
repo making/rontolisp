@@ -322,6 +322,21 @@ cases:
       5
       3
       5
+  - name: abs-and-signum-on-float-through-a-variable
+    source: |
+      (let ((x -0.5)) (print (abs x)))
+      (print (round (* (abs -0.123) 1000000.0)))
+      (print (abs -1/2))
+      (let ((x -0.5)) (print (signum x)))
+      (let ((x 2.5)) (print (signum x)))
+      (print (signum -1/2))
+    expected: |
+      0.5
+      123000
+      1/2
+      -1.0
+      1.0
+      -1
   - name: unless
     source: |
       (print (unless nil 42))

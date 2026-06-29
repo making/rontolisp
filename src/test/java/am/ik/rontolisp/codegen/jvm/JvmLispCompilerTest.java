@@ -928,6 +928,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAbsOnFloatThroughAVariable() throws Exception {
+		// Regression: abs of a float reaching it through a variable (no compile-time
+		// double literal in the argument) used to take the integer runtime path and trap
+		// with "Double cannot be cast to BigInteger". _abs now dispatches on the runtime
+		// type and handles a Double.
+		assertThat(compileAndRun("(let ((x -0.5)) (print (abs x)))")).isEqualTo("0.5");
+		assertThat(compileAndRun("(let ((x 0.5)) (print (abs x)))")).isEqualTo("0.5");
+		assertThat(compileAndRun("""
+				(defun g (a) (abs a))
+				(print (g -2.5))
+				""")).isEqualTo("2.5");
+		// A literal-double argument (the compile-time fast path) still works.
+		assertThat(compileAndRun("(print (abs -2.5))")).isEqualTo("2.5");
+	}
+
+	@Test
 	void compileAndRunMin() throws Exception {
 		assertThat(compileAndRun("(print (min 3 5))")).isEqualTo("3");
 		assertThat(compileAndRun("(print (min 5 3))")).isEqualTo("3");
@@ -1026,6 +1042,22 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (signum 0))")).isEqualTo("0");
 		assertThat(compileAndRun("(print (signum 7))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (signum 3.5))")).isEqualTo("1.0");
+	}
+
+	@Test
+	void compileAndRunSignumOnFloatThroughAVariable() throws Exception {
+		// Regression: like abs, signum of a float reaching it through a variable used to
+		// take the integer path (_ratnum -> _big) and trap with "Double cannot be cast to
+		// BigInteger". _signum now dispatches on the runtime type.
+		assertThat(compileAndRun("(let ((x -0.5)) (print (signum x)))")).isEqualTo("-1.0");
+		assertThat(compileAndRun("(let ((x 2.5)) (print (signum x)))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(let ((x 0.0)) (print (signum x)))")).isEqualTo("0.0");
+		assertThat(compileAndRun("""
+				(defun s (a) (signum a))
+				(print (s -3.0))
+				""")).isEqualTo("-1.0");
+		// Integer / ratio still return an integer sign.
+		assertThat(compileAndRun("(let ((x -5)) (print (signum x)))")).isEqualTo("-1");
 	}
 
 	@Test
