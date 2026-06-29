@@ -7,7 +7,7 @@ A minimal Common Lisp subset implemented in Java. It supports three execution mo
 - **WASM compiler** -- Compiles Lisp to `.wasm` binary using wasm-GC and WASI Preview 1
 
 Try it right here -- the examples on these pages run in your browser via the same
-WebAssembly build as the [playground](../../index.html):
+WebAssembly build as the [playground](../../playground.html):
 
 ```lisp
 (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))

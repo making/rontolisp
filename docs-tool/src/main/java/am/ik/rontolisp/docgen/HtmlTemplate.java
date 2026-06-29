@@ -111,7 +111,7 @@ public final class HtmlTemplate {
 			.append("<span class=\"paren\">)</span> docs</a>\n");
 		html.append("<nav class=\"topnav\">\n");
 		// The playground lives one level above the docs root.
-		String playgroundHref = runtimeSrc(ctx.currentDocPath()).replace("rontoplayground.js", "index.html");
+		String playgroundHref = runtimeSrc(ctx.currentDocPath()).replace("rontoplayground.js", "playground.html");
 		html.append("<a href=\"").append(playgroundHref).append("\">Playground</a>\n");
 		html.append("<a href=\"https://github.com/making/rontolisp\" target=\"_blank\" rel=\"noopener\">GitHub</a>\n");
 		appendLanguageSwitcher(html, ctx);

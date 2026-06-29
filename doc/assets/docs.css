@@ -1,6 +1,6 @@
 /* rontolisp documentation theme.
    Colors and the monospace stack are shared with the browser playground
-   (web/index.html, Tokyonight palette). */
+   (web/playground.html, Tokyonight palette). */
 :root {
 	--bg: #1a1b26;
 	--panel: #1f2335;

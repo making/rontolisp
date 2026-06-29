@@ -388,7 +388,7 @@ public final class Version {
 							</buildArgs>
 						</configuration>
 					</plugin>
-					<!-- Stage the generated wasm/js next to index.html for serving. -->
+					<!-- Stage the generated wasm/js next to playground.html for serving. -->
 					<plugin>
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-antrun-plugin</artifactId>
@@ -410,7 +410,10 @@ public final class Version {
 												<include name="rontoplayground.js.wasm"/>
 											</fileset>
 											<fileset dir="${project.basedir}/web">
+												<!-- index.html redirects to the docs (docs/en); the
+													 playground UI is served at playground.html. -->
 												<include name="index.html"/>
+												<include name="playground.html"/>
 												<include name="compile-run.html"/>
 											</fileset>
 										</copy>

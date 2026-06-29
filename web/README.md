@@ -62,7 +62,7 @@ math (including exact rationals), `eval`, and loops.
 ## How it works
 
 ```
-index.html  (browser UI: REPL + download buttons)
+playground.html  (browser UI: REPL + download buttons)
    |  calls globalThis.rontoEval / rontoCompileJvm / rontoCompileWasm
    v
 rontoplayground.js + .wasm   (rontolisp compiled to WASM by Web Image)
@@ -119,8 +119,9 @@ Compilation errors are returned as strings prefixed with `ERROR:`.
 
 The `web` profile compiles `src/web/java` together with the rest of the project,
 then runs the `native-maven-plugin` with `--tool:svm-wasm` to compile rontolisp
-to WebAssembly, and stages `rontoplayground.js`, `rontoplayground.js.wasm`, and
-`index.html` into `web/dist/`. Build with a GraalVM that has the `svm-wasm` tool.
+to WebAssembly, and stages `rontoplayground.js`, `rontoplayground.js.wasm`,
+`playground.html` (the UI), and `index.html` (a redirect to the docs) into
+`web/dist/`. Build with a GraalVM that has the `svm-wasm` tool.
 
 Profile-specific details (all confined to the `web` profile):
 
@@ -139,7 +140,7 @@ The page must be served over HTTP (the `.wasm` is fetched relative to the page):
 ```bash
 cd web/dist
 jwebserver -p 8000          # or: python3 -m http.server 8000
-open http://localhost:8000
+open http://localhost:8000/playground.html   # / redirects to the docs
 ```
 
 ## Deployment

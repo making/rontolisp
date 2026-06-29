@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rontolisp playground</title>
+<style>
+	:root {
+		--bg: #1a1b26;
+		--panel: #1f2335;
+		--panel-2: #24283b;
+		--border: #2f334d;
+		--fg: #c0caf5;
+		--muted: #565f89;
+		--accent: #7aa2f7;
+		--accent-2: #9ece6a;
+		--accent-3: #e0af68;
+		--err: #f7768e;
+		--mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--fg);
+		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		height: 100vh;
+		display: flex;
+		flex-direction: column;
+	}
+
+	header {
+		padding: 12px 20px;
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		align-items: baseline;
+		gap: 14px;
+	}
+
+	header h1 {
+		font-size: 18px;
+		margin: 0;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+	}
+
+	header h1 .paren { color: var(--accent); }
+
+	header .sub { color: var(--muted); font-size: 13px; }
+	header .sub a { color: var(--accent); text-decoration: none; }
+	header .sub a:hover { text-decoration: underline; }
+
+	#status {
+		margin-left: auto;
+		font-size: 12px;
+		font-family: var(--mono);
+		padding: 4px 10px;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		color: var(--accent-3);
+	}
+
+	#status.ready { color: var(--accent-2); }
+	#status.error { color: var(--err); }
+
+	footer {
+		padding: 8px 20px;
+		border-top: 1px solid var(--border);
+		color: var(--muted);
+		font-size: 12px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	footer a { color: var(--accent); text-decoration: none; }
+	footer a:hover { text-decoration: underline; }
+
+	main {
+		flex: 1;
+		display: flex;
+		background: var(--border);
+		min-height: 0;
+	}
+
+	.pane {
+		background: var(--panel);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		min-width: 0;
+	}
+
+	#pane-source {
+		width: 50%;
+		flex: none;
+		min-width: 220px;
+	}
+
+	#pane-repl {
+		flex: 1;
+		min-width: 220px;
+	}
+
+	#splitter {
+		flex: 0 0 6px;
+		cursor: col-resize;
+		background: var(--border);
+		transition: background 0.12s;
+		touch-action: none;
+	}
+
+	#splitter:hover, #splitter.dragging { background: var(--accent); }
+
+	body.resizing { user-select: none; cursor: col-resize; }
+
+	.pane-head {
+		padding: 8px 14px;
+		font-size: 12px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--muted);
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.pane-head .spacer { flex: 1; }
+
+	textarea#source {
+		flex: 1;
+		border: none;
+		outline: none;
+		resize: none;
+		background: var(--panel);
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 14px;
+		line-height: 1.6;
+		padding: 14px;
+		tab-size: 2;
+	}
+
+	#repl-log {
+		flex: 1;
+		overflow-y: auto;
+		font-family: var(--mono);
+		font-size: 13px;
+		line-height: 1.55;
+		padding: 12px 14px;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.entry { margin-bottom: 8px; }
+	.entry .in { color: var(--accent); }
+	.entry .in::before { content: "› "; color: var(--muted); }
+	.entry .out { color: var(--fg); }
+	.entry .out.err { color: var(--err); }
+
+	.repl-input-row {
+		display: flex;
+		align-items: flex-start;
+		border-top: 1px solid var(--border);
+		background: var(--panel-2);
+	}
+
+	.repl-input-row .prompt {
+		padding: 10px 8px 10px 14px;
+		color: var(--accent);
+		font-family: var(--mono);
+		font-size: 14px;
+	}
+
+	#repl-input {
+		flex: 1;
+		border: none;
+		outline: none;
+		resize: none;
+		background: transparent;
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 14px;
+		line-height: 1.5;
+		padding: 10px 14px 10px 0;
+		height: 41px;
+	}
+
+	#repl-hsplitter {
+		flex: 0 0 6px;
+		cursor: row-resize;
+		background: var(--border);
+		transition: background 0.12s;
+		touch-action: none;
+	}
+
+	#repl-hsplitter:hover, #repl-hsplitter.dragging { background: var(--accent); }
+
+	body.resizing-v { user-select: none; cursor: row-resize; }
+
+	.toolbar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+		padding: 10px 14px;
+		border-top: 1px solid var(--border);
+		background: var(--panel-2);
+	}
+
+	button {
+		background: var(--panel);
+		color: var(--fg);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		padding: 7px 13px;
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: border-color 0.12s, background 0.12s;
+	}
+
+	button:hover:not(:disabled) { border-color: var(--accent); }
+	button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+	button.primary { background: var(--accent); color: #1a1b26; border-color: var(--accent); }
+	button.jvm { border-color: var(--accent-3); color: var(--accent-3); }
+	button.wasm { border-color: var(--accent-2); color: var(--accent-2); }
+
+	input[type="text"] {
+		background: var(--panel);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--fg);
+		font-family: var(--mono);
+		font-size: 13px;
+		padding: 7px 10px;
+		width: 110px;
+		outline: none;
+	}
+	input[type="text"]:focus { border-color: var(--accent); }
+
+	label { font-size: 13px; color: var(--muted); }
+
+	select {
+		background: var(--panel);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--fg);
+		font-size: 12px;
+		padding: 4px 8px;
+		outline: none;
+	}
+
+	#compile-status {
+		font-family: var(--mono);
+		font-size: 12px;
+		color: var(--muted);
+		padding: 0 14px 10px;
+		background: var(--panel-2);
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	#compile-status.ok { color: var(--accent-2); }
+	#compile-status.err { color: var(--err); }
+
+	.tabs { display: flex; gap: 4px; }
+	.tab {
+		padding: 4px 10px;
+		font-size: 12px;
+		border-radius: 6px 6px 0 0;
+		cursor: pointer;
+		color: var(--muted);
+	}
+	.tab.active { color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-bottom: none; }
+	.tabview { display: none; flex: 1; flex-direction: column; min-height: 0; }
+	.tabview.active { display: flex; }
+</style>
+</head>
+<body>
+	<header>
+		<h1><span class="paren">(</span>rontolisp<span class="paren">)</span></h1>
+		<span class="sub">playground &mdash; interpret in WASM, compile to JVM / WASM
+			&middot; <a href="./docs/en/index.html">documentation &rarr;</a>
+			&middot; <a href="./compile-run.html">compile &amp; run WASM in the browser &rarr;</a>
+				&middot; <a href="./wasm-browser/">prebuilt WASM in plain HTML/JS &rarr;</a>
+				&middot; <a href="./hiragana/">handwritten hiragana recognition &rarr;</a></span>
+		<span id="status">loading runtime&hellip;</span>
+	</header>
+
+	<main id="main">
+		<section class="pane" id="pane-source">
+			<div class="pane-head">
+				<span>source</span>
+				<span class="spacer"></span>
+				<label for="samples">sample</label>
+				<select id="samples">
+					<option value="">&mdash;</option>
+				</select>
+			</div>
+			<textarea id="source" spellcheck="false"></textarea>
+			<div class="toolbar">
+				<label for="classname">class</label>
+				<input type="text" id="classname" value="Main">
+				<button class="jvm" id="btn-jvm" disabled>Compile &rarr; .class</button>
+				<button class="wasm" id="btn-wasm" disabled>Compile &rarr; .wasm</button>
+			</div>
+			<div class="toolbar">
+				<label for="file-upload">load files</label>
+				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm" disabled>
+				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code>(load "name.lisp")</code></span>
+			</div>
+			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
+		</section>
+
+		<div id="splitter"></div>
+
+		<section class="pane" id="pane-repl">
+			<div class="pane-head">
+				<div class="tabs">
+					<div class="tab active" data-tab="repl">REPL</div>
+				</div>
+				<span class="spacer"></span>
+				<button id="btn-run-source" disabled>Run source &rarr; REPL</button>
+				<button id="btn-clear">Clear</button>
+			</div>
+			<div class="tabview active" data-view="repl">
+				<div id="repl-log"></div>
+				<div id="repl-hsplitter"></div>
+				<div class="repl-input-row">
+					<span class="prompt">&rsaquo;</span>
+					<textarea id="repl-input" rows="1" placeholder="(+ 1 2 3)" spellcheck="false" disabled></textarea>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<span>rontolisp playground &mdash; runs entirely in your browser via WebAssembly</span>
+		<span>&middot;</span>
+		<a href="https://github.com/making/rontolisp" target="_blank" rel="noopener">github.com/making/rontolisp</a>
+	</footer>
+
+	<script src="rontoplayground.js"></script>
+	<script>
+		const SAMPLES = {
+			"hello": '(print "hello, rontolisp")',
+			"factorial": '(defun fact (n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(print (fact 10))',
+			"fibonacci": '(defun fib (n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(print (fib 20))',
+			"fizzbuzz": '(defun fizzbuzz (n)\n  (cond ((= (mod n 15) 0) "FizzBuzz")\n        ((= (mod n 3) 0) "Fizz")\n        ((= (mod n 5) 0) "Buzz")\n        (t n)))\n(dotimes (i 15)\n  (format t "~a~%" (fizzbuzz (1+ i))))',
+			"tarai": ';; Takeuchi function -- a classic benchmark\n(defun tarai (x y z)\n  (if (<= x y)\n      y\n      (tarai (tarai (- x 1) y z)\n             (tarai (- y 1) z x)\n             (tarai (- z 1) x y))))\n(print (tarai 10 5 0))',
+			"higher-order": '(print (mapcar #\'(lambda (x) (* x x)) (list 1 2 3 4 5)))\n(print (reduce #\'+ (list 1 2 3 4 5 6 7 8 9 10)))\n(print (mapcar #\'string-upcase (list "foo" "bar" "baz")))',
+			"closures": '(defun make-adder (n)\n  (lambda (x) (+ x n)))\n(setq add10 (make-adder 10))\n(print (funcall add10 5))\n(print (mapcar (make-adder 100) (list 1 2 3)))',
+			"string-ops": '(print (string-upcase "hello"))\n(print (string-capitalize "hello world"))\n(print (concatenate \'string "fee fi " "fo fum"))\n(print (subseq "hello, world" 7))\n(print (string-trim " " "  spaces  "))\n(print (string= "abc" "abc"))',
+			"format": '(format t "Hello ~a, you are ~d!~%" \'world 42)\n(format t "~s and ~a~%" "quoted" "plain")\n(format t "list=~a~%" (list 1 2 3))\n(print (format nil "~a + ~a = ~a" 1 2 (+ 1 2)))',
+			"list-ops": '(setq xs (list 1 2 3 4 5))\n(print (reverse xs))\n(print (append xs (list 6 7 8)))\n(print (length xs))\n(print (member 3 xs))\n(print (subseq xs 1 4))\n(print (nth 2 xs))',
+			"assoc-list": "(setq capitals (list (list 'japan 'tokyo)\n                     (list 'france 'paris)\n                     (list 'italy 'rome)))\n(print (second (assoc 'france capitals)))\n(dolist (entry capitals)\n  (format t \"~a: ~a~%\" (first entry) (second entry)))",
+			"setf-push-pop": '(setq xs (list 1 2 3))\n(setf (second xs) 99)\n(print xs)\n(push 0 xs)\n(print xs)\n(print (pop xs))\n(print xs)',
+			"math": '(print (expt 2 10))\n(print (sqrt 2))\n(print (gcd 12 18))\n(print (lcm 4 6))\n(print (max 1 5 3))\n(print (/ 1 3))\n(print (+ (/ 1 3) (/ 1 6)))',
+			"eval": "(print (eval (list '+ 10 20 30)))",
+			"loop": '(dotimes (i 5)\n  (print (* i i)))\n(dolist (x (list "a" "b" "c"))\n  (princ x))\n(terpri)\n(let ((n 1))\n  (while (< n 100)\n    (setq n (* n 2)))\n  (print n))',
+		};
+
+		const $ = (id) => document.getElementById(id);
+		const statusEl = $("status");
+		const log = $("repl-log");
+
+		// --- sample dropdown ---
+		const samplesSel = $("samples");
+		for (const name of Object.keys(SAMPLES)) {
+			const opt = document.createElement("option");
+			opt.value = name; opt.textContent = name;
+			samplesSel.appendChild(opt);
+		}
+		$("source").value = SAMPLES["fibonacci"];
+		samplesSel.addEventListener("change", () => {
+			if (samplesSel.value) $("source").value = SAMPLES[samplesSel.value];
+		});
+
+		// --- REPL log helpers ---
+		function appendEntry(input, output, isErr) {
+			const e = document.createElement("div");
+			e.className = "entry";
+			if (input != null) {
+				const i = document.createElement("div");
+				i.className = "in"; i.textContent = input;
+				e.appendChild(i);
+			}
+			if (output != null && output !== "") {
+				const o = document.createElement("div");
+				o.className = "out" + (isErr ? " err" : "");
+				o.textContent = output;
+				e.appendChild(o);
+			}
+			log.appendChild(e);
+			log.scrollTop = log.scrollHeight;
+		}
+
+		function refreshFileList(listStr) {
+			const names = (listStr || "").split("\n").filter(Boolean);
+			$("file-list").textContent = names.length ? ("loaded: " + names.join(", ")) : "none uploaded";
+		}
+
+		function uploadFiles(files) {
+			for (const file of files) {
+				const reader = new FileReader();
+				reader.onload = () => {
+					const listStr = globalThis.rontoPutFile(file.name, String(reader.result));
+					refreshFileList(listStr);
+					appendEntry(null, `uploaded ${file.name} (${file.size} bytes) \u2014 use (load "${file.name}")`, false);
+				};
+				reader.onerror = () => appendEntry(null, "ERROR reading " + file.name, true);
+				reader.readAsText(file);
+			}
+		}
+
+		function runRepl(src) {
+			const res = globalThis.rontoEval(src);
+			const isErr = typeof res === "string" && res.startsWith("ERROR:");
+			appendEntry(src, isErr ? res.slice(6).trim() : res, isErr);
+		}
+
+		// --- REPL history (persisted to localStorage, navigated with Up/Down) ---
+		const HISTORY_KEY = "rontolisp-repl-history";
+		const HISTORY_MAX = 200;
+		let history = [];
+		try {
+			const saved = JSON.parse(localStorage.getItem(HISTORY_KEY));
+			if (Array.isArray(saved)) history = saved.filter((s) => typeof s === "string");
+		} catch (e) { /* corrupted or unavailable storage: start fresh */ }
+		let historyIdx = history.length;
+		let historyDraft = "";
+
+		function pushHistory(cmd) {
+			if (history[history.length - 1] !== cmd) {
+				history.push(cmd);
+				if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+				try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) { /* ignore */ }
+			}
+			historyIdx = history.length;
+			historyDraft = "";
+		}
+
+		function navigateHistory(input, dir) {
+			const next = historyIdx + dir;
+			if (next < 0 || next > history.length) return;
+			if (historyIdx === history.length) historyDraft = input.value;
+			historyIdx = next;
+			input.value = historyIdx === history.length ? historyDraft : history[historyIdx];
+			input.setSelectionRange(input.value.length, input.value.length);
+		}
+
+		// --- resizable split between source and REPL panes ---
+		const SPLIT_KEY = "rontolisp-split-pct";
+		const splitter = $("splitter");
+		const paneSource = $("pane-source");
+		{
+			const saved = parseFloat(localStorage.getItem(SPLIT_KEY));
+			if (saved >= 20 && saved <= 80) paneSource.style.width = saved + "%";
+		}
+		let splitDragging = false;
+		splitter.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			splitDragging = true;
+			try { splitter.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+			splitter.classList.add("dragging");
+			document.body.classList.add("resizing");
+		});
+		splitter.addEventListener("pointermove", (e) => {
+			if (!splitDragging) return;
+			const rect = $("main").getBoundingClientRect();
+			const pct = Math.min(80, Math.max(20, ((e.clientX - rect.left) / rect.width) * 100));
+			paneSource.style.width = pct + "%";
+		});
+		const endSplitDrag = () => {
+			if (!splitDragging) return;
+			splitDragging = false;
+			splitter.classList.remove("dragging");
+			document.body.classList.remove("resizing");
+			try { localStorage.setItem(SPLIT_KEY, parseFloat(paneSource.style.width).toFixed(1)); } catch (err) { /* ignore */ }
+		};
+		splitter.addEventListener("pointerup", endSplitDrag);
+		splitter.addEventListener("pointercancel", endSplitDrag);
+
+		// --- resizable REPL input height (horizontal bar above the input row) ---
+		const INPUT_H_KEY = "rontolisp-repl-input-h";
+		const hsplitter = $("repl-hsplitter");
+		const replInput = $("repl-input");
+		{
+			const saved = parseFloat(localStorage.getItem(INPUT_H_KEY));
+			if (saved >= 41 && saved <= 600) replInput.style.height = saved + "px";
+		}
+		let inputDragging = false;
+		let inputDragStartY = 0;
+		let inputDragStartH = 0;
+		hsplitter.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			inputDragging = true;
+			inputDragStartY = e.clientY;
+			inputDragStartH = replInput.getBoundingClientRect().height;
+			try { hsplitter.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+			hsplitter.classList.add("dragging");
+			document.body.classList.add("resizing-v");
+		});
+		hsplitter.addEventListener("pointermove", (e) => {
+			if (!inputDragging) return;
+			const paneH = $("pane-repl").getBoundingClientRect().height;
+			const maxH = Math.max(41, paneH - 160);
+			const h = Math.min(maxH, Math.max(41, inputDragStartH + (inputDragStartY - e.clientY)));
+			replInput.style.height = h + "px";
+		});
+		const endInputDrag = () => {
+			if (!inputDragging) return;
+			inputDragging = false;
+			hsplitter.classList.remove("dragging");
+			document.body.classList.remove("resizing-v");
+			try { localStorage.setItem(INPUT_H_KEY, String(Math.round(replInput.getBoundingClientRect().height))); } catch (err) { /* ignore */ }
+		};
+		hsplitter.addEventListener("pointerup", endInputDrag);
+		hsplitter.addEventListener("pointercancel", endInputDrag);
+
+		// --- download helper ---
+		function downloadBase64(b64, filename, mime) {
+			const bin = atob(b64);
+			const bytes = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			const blob = new Blob([bytes], { type: mime });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url; a.download = filename;
+			document.body.appendChild(a); a.click(); a.remove();
+			URL.revokeObjectURL(url);
+			return bytes.length;
+		}
+
+		function setCompileStatus(msg, kind) {
+			const el = $("compile-status");
+			el.textContent = msg;
+			el.className = kind || "";
+		}
+
+		// --- wire up after the GraalVM runtime is ready ---
+		GraalVM.run([]).then(() => {
+			statusEl.textContent = "runtime ready";
+			statusEl.className = "ready";
+			$("repl-input").disabled = false;
+			$("btn-jvm").disabled = false;
+			$("btn-wasm").disabled = false;
+			$("btn-run-source").disabled = false;
+			$("file-upload").disabled = false;
+			appendEntry(null, "rontolisp interpreter running in WebAssembly. Type an expression below.", false);
+
+			$("file-upload").addEventListener("change", (ev) => { uploadFiles(ev.target.files); ev.target.value = ""; });
+			const dropTarget = $("source");
+			["dragover", "dragenter"].forEach((t) => dropTarget.addEventListener(t, (e) => {
+				if (e.dataTransfer && e.dataTransfer.types.includes("Files")) e.preventDefault();
+			}));
+			dropTarget.addEventListener("drop", (e) => {
+				if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+					e.preventDefault();
+					uploadFiles(e.dataTransfer.files);
+				}
+			});
+
+			$("repl-input").addEventListener("keydown", (ev) => {
+				const el = ev.target;
+				if (ev.key === "Enter" && !ev.shiftKey) {
+					ev.preventDefault();
+					const v = el.value.trim();
+					if (v) { pushHistory(v); runRepl(v); el.value = ""; }
+				}
+				else if (ev.key === "ArrowUp") {
+					// navigate history only when the caret is on the first line
+					if (!el.value.slice(0, el.selectionStart).includes("\n")) {
+						ev.preventDefault();
+						navigateHistory(el, -1);
+					}
+				}
+				else if (ev.key === "ArrowDown") {
+					// navigate history only when the caret is on the last line
+					if (!el.value.slice(el.selectionEnd).includes("\n")) {
+						ev.preventDefault();
+						navigateHistory(el, 1);
+					}
+				}
+			});
+
+			$("btn-run-source").addEventListener("click", () => {
+				const src = $("source").value.trim();
+				if (src) runRepl(src);
+			});
+
+			$("btn-jvm").addEventListener("click", () => {
+				const src = $("source").value;
+				const name = $("classname").value.trim() || "Main";
+				const res = globalThis.rontoCompileJvm(src, name);
+				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
+				const n = downloadBase64(res, name + ".class", "application/java-vm");
+				setCompileStatus(`Compiled ${name}.class (${n} bytes). Run: java ${name}`, "ok");
+			});
+
+			$("btn-wasm").addEventListener("click", () => {
+				const src = $("source").value;
+				const res = globalThis.rontoCompileWasm(src);
+				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
+				const n = downloadBase64(res, "output.wasm", "application/wasm");
+				setCompileStatus(`Compiled output.wasm (${n} bytes). Run: wasmtime --wasm gc output.wasm`, "ok");
+			});
+		}).catch((e) => {
+			statusEl.textContent = "runtime failed";
+			statusEl.className = "error";
+			appendEntry(null, "Failed to start the WebAssembly runtime. A recent browser with WebAssembly GC and exception handling is required.\n\n" + e, true);
+		});
+
+		$("btn-clear").addEventListener("click", () => { log.innerHTML = ""; });
+	</script>
+</body>
+</html>
