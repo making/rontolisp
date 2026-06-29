@@ -59,6 +59,8 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String SIGNUM = "_signum";
 
+	static final String RANDOM = "_random";
+
 	static final String MIN = "_min";
 
 	static final String MAX = "_max";
@@ -186,6 +188,8 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
 		MethodrefConstant signumDouble = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D")));
+		MethodrefConstant mathRandom = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("random"), cp.addUtf8("()D")));
 		MethodrefConstant floorModLong = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("floorMod"), cp.addUtf8("(JJ)J")));
 
@@ -272,6 +276,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nCmp = cp.addUtf8(CMP);
 		Utf8Constant nAbs = cp.addUtf8(ABS);
 		Utf8Constant nSignum = cp.addUtf8(SIGNUM);
+		Utf8Constant nRandom = cp.addUtf8(RANDOM);
 		Utf8Constant nMin = cp.addUtf8(MIN);
 		Utf8Constant nMax = cp.addUtf8(MAX);
 		Utf8Constant nDbl = cp.addUtf8(DBL);
@@ -300,6 +305,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rCmp = cp.addMethodref(thisClass, cp.addNameAndType(nCmp, dCmp));
 		MethodrefConstant rAbs = cp.addMethodref(thisClass, cp.addNameAndType(nAbs, dUnary));
 		MethodrefConstant rSignum = cp.addMethodref(thisClass, cp.addNameAndType(nSignum, dUnary));
+		MethodrefConstant rRandom = cp.addMethodref(thisClass, cp.addNameAndType(nRandom, dUnary));
 		MethodrefConstant rMin = cp.addMethodref(thisClass, cp.addNameAndType(nMin, dBinary));
 		MethodrefConstant rMax = cp.addMethodref(thisClass, cp.addNameAndType(nMax, dBinary));
 		MethodrefConstant rDbl = cp.addMethodref(thisClass, cp.addNameAndType(nDbl, dUnary));
@@ -343,6 +349,8 @@ final class JvmNumericRuntimeBuilder {
 				doubleValueOf, absDouble));
 		methods.add(buildSignum(nSignum, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
 				signumDouble, rRatNum, biSignum, longValueOf));
+		methods.add(buildRandom(nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
+				longValueOf, mathRandom));
 		methods.add(buildSelect(nMin, dBinary, rCmp, Opcode.IFGT));
 		methods.add(buildSelect(nMax, dBinary, rCmp, Opcode.IFLT));
 		methods.add(buildDbl(nDbl, dUnary, ratArrClass, numberClass, bigDecClass, bdInit, bdDivide, bdDoubleValue,
@@ -369,6 +377,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(CMP, rCmp);
 		ops.put(ABS, rAbs);
 		ops.put(SIGNUM, rSignum);
+		ops.put(RANDOM, rRandom);
 		ops.put(MIN, rMin);
 		ops.put(MAX, rMax);
 		ops.put(BIG_OP, rBig);
@@ -1005,6 +1014,39 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
 		c.add(Opcode.ARETURN);
 		return new NumericMethod(name, desc, c, 2, 1, List.of());
+	}
+
+	// _random(Object limit): a non-negative random number below limit, of the same type
+	// as
+	// limit. d = Math.random() * (double) limit; a Double limit returns d, otherwise the
+	// truncated (long) d. Dispatching on the runtime type handles a float limit reaching
+	// random through a variable; using _dbl for the multiply also makes the integer path
+	// robust to a BigInteger / ratio limit.
+	private static NumericMethod buildRandom(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
+			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
+			MethodrefConstant doubleValueOf, MethodrefConstant longValueOf, MethodrefConstant mathRandom) {
+		List<Integer> c = new ArrayList<>();
+		// d = Math.random() * _dbl(limit)
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, mathRandom.index());
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.DMUL);
+		// limit instanceof Double ? Double.valueOf(d) : Long.valueOf((long) d)
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotDouble, c.size());
+		c.add(Opcode.D2L);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 4, 1, List.of());
 	}
 
 	// _min/_max(Object a, Object b): pick an argument by the sign of _cmp(a, b).

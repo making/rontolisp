@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code random} built-in function for WASM. Unlike the interpreter and JVM
@@ -15,10 +16,12 @@ import am.ik.wasm.Instruction;
  * range the integer/float paths below assume.
  *
  * <p>
- * Like {@link WasmAbsCompiler}, the integer and float paths are selected at compile time
- * from the literal shape of the argument: a float literal yields
- * {@code (rand / 2^31) * limit} (a float), otherwise the integer path yields
- * {@code rand mod limit}.
+ * A float-literal argument compiles straight to the float path
+ * ({@code (rand / 2^31) * limit}). Otherwise the limit's type is tested at runtime
+ * ({@code ref.test TYPE_FLOAT}): a float limit takes the float path, an integer limit the
+ * {@code rand mod limit} i31 path. The runtime test is what lets a float limit reaching
+ * {@code random} through a variable work (the compile-time literal shape alone cannot
+ * detect it).
  */
 final class WasmRandomCompiler {
 
@@ -35,28 +38,62 @@ final class WasmRandomCompiler {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("random expects 1 argument, got " + (args.size() - 1));
 		}
-		// Draw a random i32 from WASI entropy and leave it on the stack.
-		emitRandomI32(ctx);
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
-			// Float limit: (rand / 2^31) * limit, a TYPE_FLOAT struct.
-			ctx.writer.write(Instruction.F64_CONVERT_U_I32);
-			ctx.writer.write(Instruction.F64_CONST);
-			ctx.writer.writeF64(RANDOM_SCALE);
-			ctx.writer.write(Instruction.F64_DIV);
-			WasmExprCompiler.compileExpr(args.get(1), ctx);
-			WasmEmitHelper.castFloatGetF64(ctx);
-			ctx.writer.write(Instruction.F64_MUL);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			// Float-literal limit: the float path directly, no runtime test needed.
+			emitRandomI32(ctx);
+			emitFloatLimitProduct(ctx, () -> {
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmEmitHelper.castFloatGetF64(ctx);
+			});
 		}
 		else {
+			// Test the limit's runtime type: a float -> float path, otherwise the i31
+			// path.
+			int limitSlot = ctx.allocTemp();
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(limitSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(limitSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(Type.REFNULL.code());
+			ctx.writer.writeHeapType(Type.EQ.code());
+			// Float limit: (rand / 2^31) * limit, a TYPE_FLOAT struct.
+			emitRandomI32(ctx);
+			emitFloatLimitProduct(ctx, () -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(limitSlot);
+				WasmEmitHelper.castFloatGetF64(ctx);
+			});
+			ctx.writer.write(Instruction.ELSE);
 			// Integer limit: rand mod limit, an i31ref. The masked value is non-negative
 			// and the limit is positive, so the unsigned remainder stays in [0, limit).
-			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			emitRandomI32(ctx);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(limitSlot);
 			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.I32_REM_U);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			ctx.writer.write(Instruction.END);
 		}
+	}
+
+	// Consumes a random i32 on the stack and emits (rand / 2^31) * limit as a TYPE_FLOAT
+	// struct. pushLimitF64 is run after the [0,1) fraction is on the stack and must
+	// append
+	// the limit as an f64 (e.g. compile it and castFloatGetF64), which F64_MUL then
+	// scales.
+	private static void emitFloatLimitProduct(WasmLispCompiler.Ctx ctx, Runnable pushLimitF64) {
+		ctx.writer.write(Instruction.F64_CONVERT_U_I32);
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(RANDOM_SCALE);
+		ctx.writer.write(Instruction.F64_DIV);
+		pushLimitF64.run();
+		ctx.writer.write(Instruction.F64_MUL);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 	// Leaves a non-negative random i32 in [0, 2^31) on the stack, drawn from the WASI

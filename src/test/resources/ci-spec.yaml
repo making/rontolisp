@@ -1307,12 +1307,16 @@ cases:
       (print (floatp (random 5.0)))
       (let ((r (random 10))) (if (and (>= r 0) (< r 10)) (print "int-in-range") (print "int-oob")))
       (let ((r (random 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print "float-in-range") (print "float-oob")))
+      (let ((x 5.0)) (print (floatp (random x))))
+      (let ((x 5)) (print (integerp (random x))))
     expected: |
       0
       t
       t
       "int-in-range"
       "float-in-range"
+      t
+      t
 
   # Float values flowing through variables/parameters (not literals) must use float
   # arithmetic on every backend, with integer contagion, while integer/ratio stay exact.

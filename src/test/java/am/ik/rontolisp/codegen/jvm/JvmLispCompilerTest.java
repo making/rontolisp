@@ -1022,6 +1022,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRandomOnFloatLimitThroughAVariable() throws Exception {
+		// Regression: like abs/signum, a float limit reaching random through a variable
+		// (no float literal in the argument) used to take the integer path and trap with
+		// "Double cannot be cast to Long". _random now dispatches on the runtime type, so
+		// a float limit yields a float and an integer limit yields an integer.
+		assertThat(compileAndRun("(let ((x 5.0)) (print (floatp (random x))))")).isEqualTo("t");
+		assertThat(compileAndRun("(let ((x 5)) (print (integerp (random x))))")).isEqualTo("t");
+		assertThat(compileAndRun("""
+				(defun rnd (limit) (random limit))
+				(let ((r (rnd 1.0))) (if (and (>= r 0.0) (< r 1.0)) (print "in") (print "oob")))
+				""")).isEqualTo("\"in\"");
+		assertThat(compileAndRun("""
+				(defun rndi (limit) (random limit))
+				(let ((r (rndi 10))) (if (and (>= r 0) (< r 10)) (print "in") (print "oob")))
+				""")).isEqualTo("\"in\"");
+	}
+
+	@Test
 	void compileAndRunTimeFunctions() throws Exception {
 		// get-universal-time is seconds since 1900; well past 2020 (> 3.78e9).
 		assertThat(compileAndRun("(print (> (get-universal-time) 3786825600))")).isEqualTo("t");

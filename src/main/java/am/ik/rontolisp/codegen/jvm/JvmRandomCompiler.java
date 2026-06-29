@@ -8,10 +8,10 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code random} built-in function. Returns a non-negative random number
- * below the limit, of the same type as the limit. Like {@link JvmAbsCompiler}, the
- * integer and float paths are selected at compile time from the literal shape of the
- * argument: a float literal yields {@code Math.random() * limit} (a double), otherwise
- * the integer path yields {@code (long) (Math.random() * limit)}. Both draw from
+ * below the limit, of the same type as the limit. A float-literal argument compiles
+ * straight to {@code Math.random() * limit} (a double); otherwise the {@code _random}
+ * runtime helper dispatches on the limit's runtime type (so a float limit reaching
+ * {@code random} through a variable yields a float, not a trap). Both draw from
  * {@code java.lang.Math.random}.
  */
 final class JvmRandomCompiler {
@@ -34,14 +34,11 @@ final class JvmRandomCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
-			// Integer limit: (long) (Math.random() * limit).
-			JvmEmitHelper.unboxLong(ctx);
-			ctx.emit(Opcode.L2D);
+			// Non-literal limit: _random dispatches on the runtime type (a Double limit
+			// returns a Double, otherwise the truncated Long), so a float limit through a
+			// variable works.
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.RANDOM).index());
-			ctx.emit(Opcode.DMUL);
-			ctx.emit(Opcode.D2L);
-			JvmEmitHelper.boxLong(ctx);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).index());
 		}
 	}
 
