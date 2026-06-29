@@ -169,15 +169,33 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 This works by lowering the numeric core directly onto unboxed wasm scalars. It is
 therefore restricted to **pure-numeric** exports: a function is eligible only if its
 entire transitive call graph uses just numbers and booleans — arithmetic
-(`+ - * / mod rem 1+ 1- abs min max`), comparison and predicates
+(`+ - * / mod rem 1+ 1- abs min max sqrt`), the integer bitwise operators
+(`logand logior logxor lognot ash`), comparison and predicates
 (`= < <= > >= not zerop plusp minusp evenp oddp`), `if`/`when`/`unless`/`cond`/`progn`/
-`let`/`let*`, the float/int conversions (`float truncate floor ceiling round`), recursion
-and calls to other eligible functions. Anything heap-allocating (cons/list, strings,
-characters, symbols, vectors, hash tables, `eval`/`apply`, I/O, loops, assignment, a free
-variable) makes the function ineligible and is a **compile error** that names the
+`let`/`let*`, **iteration and local mutation** (`dotimes`/`do`/`do*`, the underlying
+`while`/`setq`/`return`, with a let/`do`-bound variable freely reassigned), the float/int
+conversions (`float truncate floor ceiling round`), recursion and calls to other eligible
+functions. Anything heap-allocating (cons/list, strings, characters, symbols, vectors,
+hash tables, `eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment
+to a global) makes the function ineligible and is a **compile error** that names the
 offending operation, so the boundary is explicit rather than a silent miscompile. Only
 the scalar boundary types `:int`, `:float`, `:bool` (and `:void`/omitted) are supported;
 `:string`/`:sexpr` need wasm-GC or a future linear-memory string ABI.
+
+An integer accumulator that is summed with floats widens automatically: a let-bound
+variable takes the join of its initializer and every value assigned to it, so
+
+```lisp
+(defun sum-squares (n)        ; sum of i*i for i in 0..n-1, as a float
+  (let ((acc 0))              ; acc starts as an integer 0 ...
+    (dotimes (i n)
+      (setq acc (+ acc (* (float i) (float i)))))  ; ... and widens to f64 here
+    acc))
+(sum-squares 5)  ; => 30.0
+```
+
+Under `--no-gc` this infers `acc` (and the return value) as `f64` while the loop counter
+`i` stays `i64`.
 
 `--no-gc` is a pure-compute reactor, so like `--no-wasi` it imports nothing and exports
 each `rontolisp:wasm-export` function under its name; it cannot be combined with

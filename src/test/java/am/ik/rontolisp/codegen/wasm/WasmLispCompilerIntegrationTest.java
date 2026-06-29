@@ -236,6 +236,72 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(false, program, "in-range", "200")).isEqualTo("0");
 	}
 
+	@Test
+	void noGcSupportsIterationAndLocalMutation() throws Exception {
+		// dotimes / do loops with a let-bound accumulator mutated by setq -- the
+		// iterative
+		// counterparts of recursion, all on the unboxed scalar path with no `-W gc`. The
+		// accumulator in `sumsq` starts as integer 0 but is summed with floats, so its
+		// inferred type widens to f64.
+		String program = """
+				(defun sum-upto (n)
+				  (let ((acc 0)) (dotimes (i n) (setq acc (+ acc i))) acc))
+				(defun ifact (n)
+				  (do ((i 1 (+ i 1)) (acc 1 (* acc i))) ((> i n) acc)))
+				(defun sumsq (n)
+				  (let ((acc 0)) (dotimes (i n) (setq acc (+ acc (* (float i) (float i))))) acc))
+				(rontolisp:wasm-export 'sum-upto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'ifact :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sumsq :params '(:int) :returns :float)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "sum-upto", "100")).isEqualTo("4950");
+		assertThat(compileNoGcAndInvoke(false, program, "ifact", "10")).isEqualTo("3628800");
+		// 0^2 + 1^2 + ... + 4^2 = 30; printed by wasmtime as an f64.
+		assertThat(compileNoGcAndInvoke(false, program, "sumsq", "5")).isEqualTo("30");
+	}
+
+	@Test
+	void noGcSupportsReturnFromALoop() throws Exception {
+		// `return` is a non-local exit from the loop's %block boundary: count up but bail
+		// out early once the limit is hit.
+		String program = """
+				(defun count-down (n)
+				  (let ((c 0))
+				    (dotimes (i 1000000)
+				      (when (>= i n) (return c))
+				      (setq c (+ c 1)))
+				    c))
+				(rontolisp:wasm-export 'count-down :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "count-down", "42")).isEqualTo("42");
+		assertThat(compileNoGcAndInvoke(false, program, "count-down", "0")).isEqualTo("0");
+	}
+
+	@Test
+	void noGcSupportsSqrtAndBitwiseOps() throws Exception {
+		// sqrt (f64.sqrt) and the integer bitwise operators (logand/logior/logxor/lognot/
+		// ash), including a popcount loop that combines do + ash + logand + setq.
+		String program = """
+				(defun root (x) (sqrt x))
+				(defun band (a b) (logand a b))
+				(defun shr (a n) (ash a (- 0 n)))
+				(defun popcount (x)
+				  (let ((c 0))
+				    (do ((v x (ash v -1))) ((= v 0) c)
+				      (setq c (+ c (logand v 1))))))
+				(rontolisp:wasm-export 'root :params '(:float) :returns :float)
+				(rontolisp:wasm-export 'band :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'shr :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'popcount :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "root", "16.0")).isEqualTo("4");
+		assertThat(compileNoGcAndInvoke(false, program, "band", "12", "10")).isEqualTo("8");
+		assertThat(compileNoGcAndInvoke(false, program, "shr", "1024", "3")).isEqualTo("128");
+		assertThat(compileNoGcAndInvoke(false, program, "popcount", "255")).isEqualTo("8");
+		// The loop-based popcount also survives the tree shaker under --optimize.
+		assertThat(compileNoGcAndInvoke(true, program, "popcount", "43")).isEqualTo("4");
+	}
+
 	// Compiles with --optimize (dead-code elimination) and invokes a scalar export, in
 	// the
 	// given mode. Used to confirm the tree-shaken module still behaves identically.

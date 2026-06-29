@@ -47,12 +47,14 @@ import org.jspecify.annotations.Nullable;
  * It is viable only because, if an exported function's entire transitive call graph
  * touches numbers only, the whole computation closes over scalars and never needs a heap.
  * Eligibility is enforced: a function reachable from a {@code --no-gc} export may use
- * only numeric literals / {@code t} / {@code nil}, arithmetic and comparison operators,
- * the boolean/numeric predicates, {@code if}/{@code let}/{@code progn} (and the macros
- * that expand into them), float/int conversions, recursion and calls to other eligible
- * functions. Anything else (cons/list/string/char/symbol/vector/hash, {@code eval}, I/O,
- * loops, assignment, a free variable) is rejected with a compile error naming the
- * offending operation so the boundary is explicit, never a silent miscompile.
+ * only numeric literals / {@code t} / {@code nil}, arithmetic / comparison / bitwise
+ * operators, the boolean/numeric predicates, {@code if}/{@code let}/{@code progn},
+ * <em>iteration</em> ({@code dotimes}/{@code do}/{@code do*}, the underlying
+ * {@code while}/{@code setq}/{@code return}) and the macros that expand into them,
+ * float/int conversions, recursion and calls to other eligible functions. Anything else
+ * (cons/list/string/char/symbol/vector/hash, {@code eval}, I/O, a free variable) is
+ * rejected with a compile error naming the offending operation so the boundary is
+ * explicit, never a silent miscompile.
  *
  * <p>
  * <strong>Numeric model.</strong> Each value is represented by a native wasm scalar
@@ -60,13 +62,14 @@ import org.jspecify.annotations.Nullable;
  * than the GC backend's i31 fixnums) and floats use {@code f64}. Types are inferred with
  * a fixpoint over the call graph seeded by the export boundary designators; where an
  * integer and a float meet (e.g. {@code (* 3.14 n)}) the integer operand is promoted to
- * {@code f64}. There is no rational type, so two things differ from full Common Lisp and
- * from the GC backend: {@code /} is floating-point division (no {@code 1/3} ratios), and
- * a value is treated as false in a boolean context exactly when it is zero ({@code nil}
- * is the only false value in Common Lisp). Both are documented limitations of
- * {@code --no-gc}; for the pure-numeric kernels this mode targets (factorials,
- * math/finance functions, validators) the results match the interpreter and the GC
- * backend.
+ * {@code f64}. Local variables (let/{@code do} bindings) that are mutated by {@code setq}
+ * take the join of their initializer and every assigned value, so an integer accumulator
+ * summed with floats widens to {@code f64}; the fixpoint is monotone (INT only ever
+ * widens to FLOAT) so it terminates. There is no rational type, so two things differ from
+ * full Common Lisp and from the GC backend: {@code /} is floating-point division (no
+ * {@code 1/3} ratios), and a value is treated as false in a boolean context exactly when
+ * it is zero ({@code nil} is the only false value in Common Lisp). Both are documented
+ * limitations of {@code --no-gc}.
  *
  * <p>
  * Only scalar boundary designators are supported: {@code :int} ({@code i32}),
@@ -98,11 +101,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	}
 
-	/** Operators handled directly as primitive numeric/boolean operations. */
+	/** Operators handled directly as primitive numeric/boolean/bitwise operations. */
 	private static final Set<String> BUILTINS = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
 			LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOAT,
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.EQ, LispNames.LT,
-			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT);
+			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.SQRT, LispNames.LOGAND, LispNames.LOGIOR,
+			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH);
 
 	private final boolean optimize;
 
@@ -194,7 +198,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			}
 		}
 
-		// Infer the i64/f64 type of every parameter and return value.
+		// Infer the i64/f64 type of every parameter, local and return value.
 		Types types = inferTypes(reachable, defuns, exportDecls);
 
 		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j.
@@ -221,8 +225,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	// --- Type inference ----------------------------------------------------------------
 
-	/** Inferred parameter and return types of every reachable function. */
-	private record Types(Map<String, Ty[]> params, Map<String, Ty> returns) {
+	/**
+	 * Inferred types of every reachable function: the {@code i64}/{@code f64} type of
+	 * each parameter, each local ({@code let}/{@code do} binding, by name within the
+	 * function) and the return value.
+	 */
+	private record Types(Map<String, Ty[]> params, Map<String, Ty> returns, Map<String, Map<String, Ty>> locals) {
 	}
 
 	// Receives the callee name and its argument types at a call site, so a fixpoint pass
@@ -233,13 +241,50 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	}
 
+	// Threads the read-only context of a type walk: which function it is in (so locals
+	// can
+	// be looked up / widened), its parameter names (params keep a fixed type; locals
+	// widen), the running Types, the optional call sink, whether the walk may widen the
+	// inferred local/return types (inference vs a frozen compile-time query), a shared
+	// "something widened" flag and the stack of %block result-type accumulators (each a
+	// one-element mutable box joined by every enclosing return).
+	private final class TC {
+
+		final String fn;
+
+		final Set<String> params;
+
+		final Types types;
+
+		final @Nullable CallSink sink;
+
+		final boolean widen;
+
+		final boolean[] changed;
+
+		final Deque<Ty[]> blockReturns = new ArrayDeque<>();
+
+		TC(String fn, Set<String> params, Types types, @Nullable CallSink sink, boolean widen, boolean[] changed) {
+			this.fn = fn;
+			this.params = params;
+			this.types = types;
+			this.sink = sink;
+			this.widen = widen;
+			this.changed = changed;
+		}
+
+		Map<String, Ty> locals() {
+			return Objects.requireNonNull(this.types.locals().get(this.fn));
+		}
+
+	}
+
 	private Types inferTypes(List<String> reachable, Map<String, Defun> defuns,
 			List<WasmExportCompiler.Decl> exportDecls) {
 		// Parameters of an exported function are pinned to the boundary designator (the
-		// host passes them in); all other parameter types and all return types start at
-		// INT
-		// (bottom) and are only ever widened to FLOAT, so the fixpoint is monotone and
-		// terminates.
+		// host passes them in); every other parameter type, every local type and every
+		// return type starts at INT (bottom) and is only ever widened to FLOAT, so the
+		// fixpoint is monotone and terminates.
 		Map<String, Ty[]> boundary = new HashMap<>();
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			Ty[] pinned = new Ty[decl.paramTypes().size()];
@@ -251,19 +296,21 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 		Map<String, Ty[]> params = new HashMap<>();
 		Map<String, Ty> returns = new HashMap<>();
+		Map<String, Map<String, Ty>> locals = new HashMap<>();
 		for (String name : reachable) {
 			Defun d = Objects.requireNonNull(defuns.get(name));
 			params.put(name, boundary.containsKey(name) ? boundary.get(name).clone() : filled(d.params().size()));
 			returns.put(name, Ty.INT);
+			locals.put(name, new HashMap<>());
 		}
-		Types types = new Types(params, returns);
+		Types types = new Types(params, returns, locals);
 
-		boolean changed = true;
-		while (changed) {
-			changed = false;
+		boolean[] changed = { true };
+		while (changed[0]) {
+			changed[0] = false;
 			// Re-derive non-pinned parameter types from scratch each pass (seeded INT, or
 			// pinned for exports), accumulating the join of every call site's argument
-			// types; recompute return types from the bodies.
+			// types; local and return types accumulate in place (they only widen).
 			Map<String, Ty[]> nextParams = new HashMap<>();
 			for (String name : reachable) {
 				int arity = Objects.requireNonNull(defuns.get(name)).params().size();
@@ -282,17 +329,18 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			};
 			for (String name : reachable) {
 				Defun d = Objects.requireNonNull(defuns.get(name));
-				Map<String, Ty> locals = paramLocals(d, types);
-				Ty rt = inferType(progn(d.body()), locals, types, sink);
-				if (rt != returns.get(name)) {
-					returns.put(name, rt);
-					changed = true;
+				TC tc = new TC(name, new HashSet<>(d.params()), types, sink, true, changed);
+				Ty rt = typeOf(progn(d.body()), paramEnv(d, params), tc);
+				Ty merged = Objects.requireNonNull(returns.get(name)).join(rt);
+				if (merged != returns.get(name)) {
+					returns.put(name, merged);
+					changed[0] = true;
 				}
 			}
 			for (String name : reachable) {
 				if (!Arrays.equals(nextParams.get(name), params.get(name))) {
 					params.put(name, Objects.requireNonNull(nextParams.get(name)));
-					changed = true;
+					changed[0] = true;
 				}
 			}
 		}
@@ -305,89 +353,121 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return arr;
 	}
 
-	private static Map<String, Ty> paramLocals(Defun d, Types types) {
-		Map<String, Ty> locals = new HashMap<>();
-		Ty[] pt = Objects.requireNonNull(types.params().get(d.name()));
+	private static Map<String, Ty> paramEnv(Defun d, Map<String, Ty[]> params) {
+		Map<String, Ty> env = new HashMap<>();
+		Ty[] pt = Objects.requireNonNull(params.get(d.name()));
 		for (int i = 0; i < d.params().size(); i++) {
-			locals.put(d.params().get(i), pt[i]);
+			env.put(d.params().get(i), pt[i]);
 		}
-		return locals;
+		return env;
 	}
 
-	// Infers the type of an expression, reporting any call-site argument types to the
-	// (optional) sink so a fixpoint pass can widen callee parameters. Assumes the
-	// expression already passed collectCalls (so it is well-formed and eligible).
-	private Ty inferType(LispVal expr, Map<String, Ty> locals, Types types, @Nullable CallSink sink) {
-		switch (expr) {
-			case LispInteger ignored -> {
-				return Ty.INT;
-			}
-			case LispDouble ignored -> {
-				return Ty.FLOAT;
-			}
-			case LispTrue ignored -> {
-				return Ty.INT;
-			}
-			case LispNil ignored -> {
-				return Ty.INT;
-			}
-			case LispSymbol sym -> {
-				Ty t = locals.get(sym.name());
-				return t == null ? Ty.INT : t;
-			}
-			case LispCons cons -> {
-				return inferCall(cons, locals, types, sink);
-			}
-			default -> {
-				return Ty.INT;
-			}
+	// Widens m[k] by joining in t; records on the shared flag when the type actually
+	// grows. Returns the (possibly widened) current type.
+	private static Ty widenLocal(Map<String, Ty> m, String k, Ty t, boolean[] changed) {
+		Ty old = m.get(k);
+		Ty next = old == null ? t : old.join(t);
+		if (next != old) {
+			m.put(k, next);
+			changed[0] = true;
 		}
+		return next;
 	}
 
-	private Ty inferCall(LispCons cons, Map<String, Ty> locals, Types types, @Nullable CallSink sink) {
+	// Infers the type of an expression. The env maps every currently-visible local (by
+	// name) to its type; binding forms thread a child env. In inference mode (tc.widen)
+	// let/do bindings and setq targets widen the function's persisted local-type map and
+	// call sites are reported to the sink; in a frozen compile-time query both are
+	// read-only. Assumes the expression already passed collectCalls (well-formed,
+	// eligible).
+	private Ty typeOf(LispVal expr, Map<String, Ty> env, TC tc) {
+		return switch (expr) {
+			case LispInteger ignored -> Ty.INT;
+			case LispDouble ignored -> Ty.FLOAT;
+			case LispTrue ignored -> Ty.INT;
+			case LispNil ignored -> Ty.INT;
+			case LispSymbol sym -> env.getOrDefault(sym.name(), Ty.INT);
+			case LispCons cons -> typeOfCall(cons, env, tc);
+			default -> Ty.INT;
+		};
+	}
+
+	private Ty typeOfCall(LispCons cons, Map<String, Ty> env, TC tc) {
 		String name = ((LispSymbol) cons.car()).name();
 		List<LispVal> args = cons.toList();
 		int argc = args.size() - 1;
 
 		LispVal expanded = expandMacro(name, cons, argc);
 		if (expanded != null) {
-			return inferType(expanded, locals, types, sink);
+			return typeOf(expanded, env, tc);
 		}
 
 		switch (name) {
 			case LispNames.IF -> {
-				inferType(args.get(1), locals, types, sink);
-				Ty thenTy = inferType(args.get(2), locals, types, sink);
-				Ty elseTy = args.size() > 3 ? inferType(args.get(3), locals, types, sink) : Ty.INT;
+				typeOf(args.get(1), env, tc);
+				Ty thenTy = typeOf(args.get(2), env, tc);
+				Ty elseTy = args.size() > 3 ? typeOf(args.get(3), env, tc) : Ty.INT;
 				return thenTy.join(elseTy);
 			}
 			case LispNames.PROGN -> {
 				Ty last = Ty.INT;
 				for (int i = 1; i < args.size(); i++) {
-					last = inferType(args.get(i), locals, types, sink);
+					last = typeOf(args.get(i), env, tc);
 				}
 				return last;
 			}
 			case LispNames.LET -> {
-				return inferLet(cons, locals, types, sink);
+				return typeOfLet(cons, env, tc);
 			}
-			// Float division and (float x) are always FLOAT.
-			case LispNames.DIV, LispNames.FLOAT -> {
+			case LispNames.SETQ -> {
+				return typeOfSetq(args, env, tc);
+			}
+			case LispNames.WHILE -> {
+				// while always yields nil (INT 0); still walk the test/body/steps so
+				// their
+				// call sites and local mutations are recorded.
 				for (int i = 1; i < args.size(); i++) {
-					inferType(args.get(i), locals, types, sink);
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.INT;
+			}
+			case LispNames.BLOCK_INTERNAL -> {
+				// %block result = join(normal completion, every (return v) inside it).
+				Ty[] box = { Ty.INT };
+				tc.blockReturns.push(box);
+				Ty bodyTy = Ty.INT;
+				for (int i = 1; i < args.size(); i++) {
+					bodyTy = typeOf(args.get(i), env, tc);
+				}
+				tc.blockReturns.pop();
+				return bodyTy.join(box[0]);
+			}
+			case LispNames.RETURN -> {
+				Ty vt = args.size() > 1 ? typeOf(args.get(1), env, tc) : Ty.INT;
+				Ty[] box = tc.blockReturns.peek();
+				if (box != null) {
+					box[0] = box[0].join(vt);
+				}
+				return vt;
+			}
+			// Float division, (float x) and sqrt are always FLOAT.
+			case LispNames.DIV, LispNames.FLOAT, LispNames.SQRT -> {
+				for (int i = 1; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
 				}
 				return Ty.FLOAT;
 			}
-			// Comparisons, predicates and not yield a boolean in the INT domain.
-			case LispNames.EQ, LispNames.LT, LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT -> {
+			// Comparisons, predicates, not and the bitwise operators yield an integer.
+			case LispNames.EQ, LispNames.LT, LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.LOGAND,
+					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH -> {
 				for (int i = 1; i < args.size(); i++) {
-					inferType(args.get(i), locals, types, sink);
+					typeOf(args.get(i), env, tc);
 				}
 				return Ty.INT;
 			}
 			// The rounding conversions return an integer.
 			case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
-				inferType(args.get(1), locals, types, sink);
+				typeOf(args.get(1), env, tc);
 				return Ty.INT;
 			}
 			// +,-,*,mod,rem,abs,min,max are FLOAT iff any operand is FLOAT.
@@ -395,7 +475,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					LispNames.MIN, LispNames.MAX -> {
 				Ty t = Ty.INT;
 				for (int i = 1; i < args.size(); i++) {
-					t = t.join(inferType(args.get(i), locals, types, sink));
+					t = t.join(typeOf(args.get(i), env, tc));
 				}
 				return t;
 			}
@@ -403,21 +483,21 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				// A call to another eligible function.
 				Ty[] argTypes = new Ty[argc];
 				for (int i = 0; i < argc; i++) {
-					argTypes[i] = inferType(args.get(i + 1), locals, types, sink);
+					argTypes[i] = typeOf(args.get(i + 1), env, tc);
 				}
-				if (sink != null) {
-					sink.record(name, argTypes);
+				if (tc.sink != null) {
+					tc.sink.record(name, argTypes);
 				}
-				Ty rt = types.returns().get(name);
+				Ty rt = tc.types.returns().get(name);
 				return rt == null ? Ty.INT : rt;
 			}
 		}
 	}
 
-	private Ty inferLet(LispCons cons, Map<String, Ty> locals, Types types, @Nullable CallSink sink) {
+	private Ty typeOfLet(LispCons cons, Map<String, Ty> env, TC tc) {
 		List<LispVal> parts = cons.toList();
 		List<LispVal> bindings = parts.get(1) instanceof LispCons bc ? bc.toList() : List.of();
-		Map<String, Ty> inner = new HashMap<>(locals);
+		Map<String, Ty> inner = new HashMap<>(env);
 		for (LispVal binding : bindings) {
 			String varName;
 			LispVal init;
@@ -431,13 +511,44 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				init = bp.size() > 1 ? bp.get(1) : LispNil.INSTANCE;
 			}
 			// Parallel `let`: initializers see the outer scope only.
-			inner.put(varName, inferType(init, locals, types, sink));
+			Ty initTy = typeOf(init, env, tc);
+			Ty bindTy = tc.widen ? widenLocal(tc.locals(), varName, initTy, tc.changed)
+					: tc.locals().getOrDefault(varName, initTy).join(initTy);
+			inner.put(varName, bindTy);
 		}
 		Ty last = Ty.INT;
 		for (int i = 2; i < parts.size(); i++) {
-			last = inferType(parts.get(i), inner, types, sink);
+			last = typeOf(parts.get(i), inner, tc);
 		}
 		return last;
+	}
+
+	private Ty typeOfSetq(List<LispVal> args, Map<String, Ty> env, TC tc) {
+		Ty last = Ty.INT;
+		int pairs = (args.size() - 1) / 2;
+		for (int p = 0; p < pairs; p++) {
+			String var = ((LispSymbol) args.get(1 + 2 * p)).name();
+			Ty rhsTy = typeOf(args.get(2 + 2 * p), env, tc);
+			if (tc.params.contains(var)) {
+				// A parameter has a fixed wasm type; the assignment coerces to it.
+				last = env.getOrDefault(var, Ty.INT);
+			}
+			else {
+				Ty next = tc.widen ? widenLocal(tc.locals(), var, rhsTy, tc.changed)
+						: tc.locals().getOrDefault(var, rhsTy).join(rhsTy);
+				env.put(var, next);
+				last = next;
+			}
+		}
+		return last;
+	}
+
+	// A frozen, read-only type query used during code generation. fn.localTypes already
+	// holds the final inferred type of every in-scope local, so a fresh env copy is
+	// enough.
+	private Ty staticType(LispVal expr, Fn fn) {
+		TC tc = new TC(fn.fnName, fn.paramNames, fn.types, null, false, new boolean[1]);
+		return typeOf(expr, new HashMap<>(fn.localTypes), tc);
 	}
 
 	// --- Module assembly ---------------------------------------------------------------
@@ -509,7 +620,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		Ty[] paramTypes = Objects.requireNonNull(types.params().get(name));
-		Fn fn = new Fn(w, types, index, name);
+		Fn fn = new Fn(w, types, index, name, new HashSet<>(defun.params()));
 		for (int i = 0; i < defun.params().size(); i++) {
 			fn.bind(defun.params().get(i), i, paramTypes[i]);
 		}
@@ -527,8 +638,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		String name = decl.name();
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(name));
 		// Box each host scalar argument (one wasm slot each) into the internal value of
-		// the
-		// inferred parameter type, in order, then call the internal function.
+		// the inferred parameter type, in order, then call the internal function.
 		for (int slot = 0; slot < decl.paramTypes().size(); slot++) {
 			w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
 			boolean hostFloat = WasmExportCompiler.T_FLOAT.equals(decl.paramTypes().get(slot));
@@ -661,9 +771,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 		String name = head.name();
 		List<LispVal> args = cons.toList();
-		int argc = args.size() - 1;
 
-		LispVal expanded = expandMacro(name, cons, argc);
+		LispVal expanded = expandMacro(name, cons, args.size() - 1);
 		if (expanded != null) {
 			return compileExpr(expanded, fn);
 		}
@@ -672,6 +781,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.IF -> compileIf(args, fn);
 			case LispNames.PROGN -> compileProgn(args.subList(1, args.size()), fn);
 			case LispNames.LET -> compileLet(cons, fn);
+			case LispNames.SETQ -> compileSetq(args, fn);
+			case LispNames.WHILE -> compileWhile(args, fn);
+			case LispNames.BLOCK_INTERNAL -> compileBlock(cons, args, fn);
+			case LispNames.RETURN -> compileReturn(args, fn);
 			case LispNames.ADD -> compileVariadic(cons, args, fn, 0, Instruction.I64_ADD, Instruction.F64_ADD);
 			case LispNames.MUL -> compileVariadic(cons, args, fn, 1, Instruction.I64_MUL, Instruction.F64_MUL);
 			case LispNames.SUB -> compileSub(cons, args, fn);
@@ -682,6 +795,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.REM -> compileModRem(cons, args, fn, false);
 			case LispNames.ABS -> compileAbs(cons, args, fn);
 			case LispNames.FLOAT -> compileFloat(args, fn);
+			case LispNames.SQRT -> compileSqrt(args, fn);
+			case LispNames.LOGAND -> compileBitwise(args, fn, -1L, Instruction.I64_AND);
+			case LispNames.LOGIOR -> compileBitwise(args, fn, 0L, Instruction.I64_OR);
+			case LispNames.LOGXOR -> compileBitwise(args, fn, 0L, Instruction.I64_XOR);
+			case LispNames.LOGNOT -> compileLognot(args, fn);
+			case LispNames.ASH -> compileAsh(args, fn);
 			case LispNames.TRUNCATE -> compileRounding(args, fn, -1);
 			case LispNames.FLOOR -> compileRounding(args, fn, Instruction.F64_FLOOR);
 			case LispNames.CEILING -> compileRounding(args, fn, Instruction.F64_CEIL);
@@ -722,13 +841,16 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		LispVal test = args.get(1);
 		LispVal then = args.get(2);
 		LispVal els = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
-		Ty result = inferType(then, fn.localTypes, fn.types, null).join(inferType(els, fn.localTypes, fn.types, null));
+		Ty result = staticType(then, fn).join(staticType(els, fn));
 		emitTruthy(compileExpr(test, fn), fn.writer); // -> i32 (1 if non-zero)
 		fn.writer.write(Instruction.IF).write(result.valType());
+		// The branches may contain a `return`, whose br depth counts this `if`.
+		fn.ctrlDepth++;
 		compileCoerced(then, fn, result);
 		fn.writer.write(Instruction.ELSE);
 		compileCoerced(els, fn, result);
 		fn.writer.write(Instruction.END);
+		fn.ctrlDepth--;
 		return result;
 	}
 
@@ -754,7 +876,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 		// Evaluate all initializers under the OUTER scope (parallel `let` semantics),
 		// each
-		// into a fresh local of its own type; only bind the names afterwards.
+		// into a fresh local of the variable's inferred type (which already accounts for
+		// any later setq), coercing the initializer to it; only bind the names
+		// afterwards.
 		List<String> names = new ArrayList<>();
 		List<Integer> slots = new ArrayList<>();
 		List<Ty> tys = new ArrayList<>();
@@ -774,7 +898,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException(
 						"--no-gc: malformed let binding in '" + fn.fnName + "': " + binding.print());
 			}
-			Ty ty = compileExpr(init, fn);
+			Ty ty = localType(fn, varName, init);
+			compileCoerced(init, fn, ty);
 			int slot = fn.allocLocal(ty);
 			fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
 			names.add(varName);
@@ -795,6 +920,122 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return result;
 	}
 
+	// The inferred type of a let/do-bound local, falling back to the initializer's static
+	// type when inference never saw it (defensive; the inference walk covers every body).
+	private Ty localType(Fn fn, String varName, LispVal init) {
+		Ty inferred = Objects.requireNonNull(fn.types.locals().get(fn.fnName)).get(varName);
+		return inferred != null ? inferred : staticType(init, fn);
+	}
+
+	// (setq v1 e1 v2 e2 ...): assign each value (coerced to the variable's wasm type)
+	// into
+	// its local, leaving the last assigned value on the stack via tee.
+	private Ty compileSetq(List<LispVal> args, Fn fn) {
+		if ((args.size() - 1) % 2 != 0) {
+			throw new UnsupportedOperationException(
+					"--no-gc: setq needs an even number of arguments in '" + fn.fnName + "': " + args.size());
+		}
+		int pairs = (args.size() - 1) / 2;
+		if (pairs == 0) {
+			i64Const(fn.writer, 0);
+			return Ty.INT;
+		}
+		Ty last = Ty.INT;
+		for (int p = 0; p < pairs; p++) {
+			if (p > 0) {
+				fn.writer.write(Instruction.DROP);
+			}
+			String var = ((LispSymbol) args.get(1 + 2 * p)).name();
+			Integer slot = fn.locals.get(var);
+			if (slot == null) {
+				throw new UnsupportedOperationException("--no-gc: setq target '" + var + "' in function '" + fn.fnName
+						+ "' is not a parameter or let binding (scalar mode has no globals)");
+			}
+			Ty ty = Objects.requireNonNull(fn.localTypes.get(var));
+			compileCoerced(args.get(2 + 2 * p), fn, ty);
+			fn.writer.write(Instruction.TEE_LOCAL).writeSignedLeb128(slot);
+			last = ty;
+		}
+		return last;
+	}
+
+	// (while test body...): a block/loop pair. The test is re-evaluated at the top; when
+	// it is falsy (zero) br exits the block, otherwise the body runs (each value dropped)
+	// and br jumps back. The form's value is nil (INT 0), matching the GC backend.
+	private Ty compileWhile(List<LispVal> args, Fn fn) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		fn.ctrlDepth += 2;
+		Ty testTy = compileExpr(args.get(1), fn);
+		emitFalsy(testTy, w); // -> i32 (1 if the test is zero/false)
+		w.write(Instruction.BR_IF, 1);
+		for (int i = 2; i < args.size(); i++) {
+			compileExpr(args.get(i), fn);
+			w.write(Instruction.DROP);
+		}
+		w.write(Instruction.BR, 0);
+		fn.ctrlDepth -= 2;
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		i64Const(w, 0);
+		return Ty.INT;
+	}
+
+	// The internal %block return boundary the loop macros wrap their expansion in: a
+	// typed
+	// wasm block whose result is the join of normal completion and every (return v)
+	// inside
+	// it. return (compileReturn) branches out carrying its value coerced to this type.
+	private Ty compileBlock(LispCons cons, List<LispVal> args, Fn fn) {
+		Ty result = staticType(cons, fn);
+		WasmWriter w = fn.writer;
+		w.write(Instruction.BLOCK, result.valType());
+		fn.ctrlDepth++;
+		fn.blockMarkers.push(fn.ctrlDepth);
+		fn.blockResultTypes.push(result);
+		if (args.size() <= 1) {
+			i64Const(w, 0);
+			coerce(w, Ty.INT, result);
+		}
+		else {
+			for (int i = 1; i < args.size(); i++) {
+				if (i > 1) {
+					w.write(Instruction.DROP);
+				}
+				if (i == args.size() - 1) {
+					compileCoerced(args.get(i), fn, result);
+				}
+				else {
+					compileExpr(args.get(i), fn);
+				}
+			}
+		}
+		fn.blockResultTypes.pop();
+		fn.blockMarkers.pop();
+		fn.ctrlDepth--;
+		w.write(Instruction.END);
+		return result;
+	}
+
+	private Ty compileReturn(List<LispVal> args, Fn fn) {
+		Integer marker = fn.blockMarkers.peek();
+		Ty result = fn.blockResultTypes.peek();
+		if (marker == null || result == null) {
+			throw new UnsupportedOperationException(
+					"--no-gc: return outside of a loop block in function '" + fn.fnName + "'");
+		}
+		if (args.size() > 1) {
+			compileCoerced(args.get(1), fn, result);
+		}
+		else {
+			i64Const(fn.writer, 0);
+			coerce(fn.writer, Ty.INT, result);
+		}
+		fn.writer.write(Instruction.BR, fn.ctrlDepth - marker);
+		return result;
+	}
+
 	// (+ ...) / (* ...): fold over the inferred result type, with an identity for the
 	// empty case (always an integer).
 	private Ty compileVariadic(LispCons cons, List<LispVal> args, Fn fn, long identity, int intOp, int floatOp) {
@@ -802,7 +1043,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			i64Const(fn.writer, identity);
 			return Ty.INT;
 		}
-		Ty target = inferType(cons, fn.localTypes, fn.types, null);
+		Ty target = staticType(cons, fn);
 		compileCoerced(args.get(1), fn, target);
 		for (int i = 2; i < args.size(); i++) {
 			compileCoerced(args.get(i), fn, target);
@@ -816,7 +1057,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (args.size() < 2) {
 			throw new UnsupportedOperationException("--no-gc: - needs at least one argument in '" + fn.fnName + "'");
 		}
-		Ty target = inferType(cons, fn.localTypes, fn.types, null);
+		Ty target = staticType(cons, fn);
 		if (args.size() == 2) {
 			if (target == Ty.INT) {
 				// 0 - x (wasm has no i64.neg)
@@ -864,7 +1105,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: " + ((LispSymbol) args.get(0)).name()
 					+ " needs at least one argument in '" + fn.fnName + "'");
 		}
-		Ty target = inferType(cons, fn.localTypes, fn.types, null);
+		Ty target = staticType(cons, fn);
 		if (target == Ty.FLOAT) {
 			compileCoerced(args.get(1), fn, Ty.FLOAT);
 			for (int i = 2; i < args.size(); i++) {
@@ -901,7 +1142,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: " + ((LispSymbol) args.get(0)).name()
 					+ " takes exactly two arguments in '" + fn.fnName + "'");
 		}
-		Ty target = inferType(cons, fn.localTypes, fn.types, null);
+		Ty target = staticType(cons, fn);
 		if (target == Ty.INT) {
 			int a = fn.allocLocal(Ty.INT);
 			int b = fn.allocLocal(Ty.INT);
@@ -942,7 +1183,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("--no-gc: abs takes exactly one argument in '" + fn.fnName + "'");
 		}
-		Ty target = inferType(cons, fn.localTypes, fn.types, null);
+		Ty target = staticType(cons, fn);
 		if (target == Ty.FLOAT) {
 			compileCoerced(args.get(1), fn, Ty.FLOAT);
 			fn.writer.write(Instruction.F64_ABS);
@@ -974,10 +1215,82 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.FLOAT;
 	}
 
+	// (sqrt x): f64.sqrt, always a float.
+	private Ty compileSqrt(List<LispVal> args, Fn fn) {
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("--no-gc: sqrt takes exactly one argument in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.FLOAT);
+		fn.writer.write(Instruction.F64_SQRT);
+		return Ty.FLOAT;
+	}
+
+	// (logand ...) / (logior ...) / (logxor ...): integer bitwise fold with an identity
+	// for
+	// the empty case.
+	private Ty compileBitwise(List<LispVal> args, Fn fn, long identity, int op) {
+		if (args.size() == 1) {
+			i64Const(fn.writer, identity);
+			return Ty.INT;
+		}
+		compileCoerced(args.get(1), fn, Ty.INT);
+		for (int i = 2; i < args.size(); i++) {
+			compileCoerced(args.get(i), fn, Ty.INT);
+			fn.writer.write(op);
+		}
+		return Ty.INT;
+	}
+
+	// (lognot x): bitwise complement = x XOR -1.
+	private Ty compileLognot(List<LispVal> args, Fn fn) {
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(
+					"--no-gc: lognot takes exactly one argument in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.INT);
+		i64Const(fn.writer, -1);
+		fn.writer.write(Instruction.I64_XOR);
+		return Ty.INT;
+	}
+
+	// (ash value count): arithmetic shift, left for count>=0 and right (sign-extending)
+	// for
+	// count<0. Both shifts are computed and `select` picks the right one on the sign of
+	// count, avoiding a branch (the wasm shift amount is taken mod 64, so the unused side
+	// is harmless).
+	private Ty compileAsh(List<LispVal> args, Fn fn) {
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("--no-gc: ash takes exactly two arguments in '" + fn.fnName + "'");
+		}
+		int v = fn.allocLocal(Ty.INT);
+		int c = fn.allocLocal(Ty.INT);
+		compileCoerced(args.get(1), fn, Ty.INT);
+		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+		compileCoerced(args.get(2), fn, Ty.INT);
+		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(c);
+		// left = v << c
+		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(c);
+		fn.writer.write(Instruction.I64_SHL);
+		// right = v >> (0 - c)
+		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		i64Const(fn.writer, 0);
+		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(c);
+		fn.writer.write(Instruction.I64_SUB);
+		fn.writer.write(Instruction.I64_SHR_S);
+		// select left when c >= 0, else right
+		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(c);
+		i64Const(fn.writer, 0);
+		fn.writer.write(Instruction.I64_GE_S);
+		fn.writer.write(Instruction.SELECT);
+		return Ty.INT;
+	}
+
 	// (truncate|floor|ceiling|round x): always yields an integer. On an integer argument
 	// it
 	// is the identity; on a float it applies the rounding (none for truncate) then
-	// converts to i64.
+	// converts
+	// to i64.
 	private Ty compileRounding(List<LispVal> args, Fn fn, int roundOp) {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("--no-gc: " + ((LispSymbol) args.get(0)).name()
@@ -1000,8 +1313,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (args.size() != 3) {
 			return compileExpr(LispMacroExpander.expandComparison(cons), fn);
 		}
-		Ty operand = inferType(args.get(1), fn.localTypes, fn.types, null)
-			.join(inferType(args.get(2), fn.localTypes, fn.types, null));
+		Ty operand = staticType(args.get(1), fn).join(staticType(args.get(2), fn));
 		compileCoerced(args.get(1), fn, operand);
 		compileCoerced(args.get(2), fn, operand);
 		fn.writer.write(operand == Ty.INT ? intOp : floatOp); // -> i32 (0/1)
@@ -1034,6 +1346,17 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 		else {
 			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_NE);
+		}
+	}
+
+	// Converts the top-of-stack value into an i32 "is false" flag: 1 iff it is zero. Used
+	// by while to br out of the loop when the test fails.
+	private static void emitFalsy(Ty ty, WasmWriter w) {
+		if (ty == Ty.INT) {
+			w.write(Instruction.I64_EQZ);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
 		}
 	}
 
@@ -1082,7 +1405,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			collectLet(cons, bound, defuns, callees, fnName);
 			return;
 		}
-		if (LispNames.IF.equals(name) || LispNames.PROGN.equals(name) || BUILTINS.contains(name)) {
+		if (LispNames.SETQ.equals(name)) {
+			collectSetq(args, bound, defuns, callees, fnName);
+			return;
+		}
+		if (LispNames.IF.equals(name) || LispNames.PROGN.equals(name) || LispNames.WHILE.equals(name)
+				|| LispNames.BLOCK_INTERNAL.equals(name) || LispNames.RETURN.equals(name) || BUILTINS.contains(name)) {
 			for (int i = 1; i < args.size(); i++) {
 				collectCalls(args.get(i), bound, defuns, callees, fnName);
 			}
@@ -1097,6 +1425,26 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 		throw new UnsupportedOperationException("--no-gc: unsupported operation '" + name + "' in function '" + fnName
 				+ "' (not a numeric primitive or an eligible function)");
+	}
+
+	private void collectSetq(List<LispVal> args, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
+			String fnName) {
+		if ((args.size() - 1) % 2 != 0) {
+			throw new UnsupportedOperationException(
+					"--no-gc: setq needs an even number of arguments in '" + fnName + "'");
+		}
+		for (int p = 0; p < (args.size() - 1) / 2; p++) {
+			LispVal target = args.get(1 + 2 * p);
+			if (!(target instanceof LispSymbol s)) {
+				throw new UnsupportedOperationException(
+						"--no-gc: setq target must be a symbol in '" + fnName + "': " + target.print());
+			}
+			if (!bound.contains(s.name())) {
+				throw new UnsupportedOperationException("--no-gc: setq target '" + s.name() + "' in function '" + fnName
+						+ "' is not a parameter or let binding (scalar mode has no globals)");
+			}
+			collectCalls(args.get(2 + 2 * p), bound, defuns, callees, fnName);
+		}
 	}
 
 	private void collectLet(LispCons cons, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
@@ -1128,10 +1476,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	// --- Macro / name helpers ----------------------------------------------------------
 
-	// Expands the macros that reduce to the supported core (if/let/progn + primitives),
-	// or
-	// returns null when name is not such a macro. Mirrors the dispatch the other backends
-	// perform via LispMacroExpander.
+	// Expands the macros that reduce to the supported core (if/let/progn/while/%block +
+	// primitives), or returns null when name is not such a macro. Mirrors the dispatch
+	// the
+	// other backends perform via LispMacroExpander.
 	private static @Nullable LispVal expandMacro(String name, LispCons cons, int argc) {
 		return switch (name) {
 			case LispNames.COND -> LispMacroExpander.expandCond(cons);
@@ -1147,6 +1495,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.MINUSP -> LispMacroExpander.expandMinusp(cons);
 			case LispNames.EVENP -> LispMacroExpander.expandEvenp(cons);
 			case LispNames.ODDP -> LispMacroExpander.expandOddp(cons);
+			case LispNames.DOTIMES -> LispMacroExpander.expandDotimes(cons);
+			case LispNames.DO -> LispMacroExpander.expandDo(cons);
+			case LispNames.DO_STAR -> LispMacroExpander.expandDoStar(cons);
 			default -> null;
 		};
 	}
@@ -1206,19 +1557,32 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 		final String fnName;
 
+		final Set<String> paramNames;
+
 		final Map<String, Integer> locals = new HashMap<>();
 
 		final Map<String, Ty> localTypes = new HashMap<>();
 
 		final List<Ty> extraLocalTypes = new ArrayList<>();
 
+		// The wasm control depth (each enclosing if = +1, each while = +2, each %block =
+		// +1) and the stack of %block boundaries: blockMarkers holds the control depth at
+		// each block so a return computes its br depth, blockResultTypes the matching
+		// result types so a returned value is coerced to the block's type.
+		int ctrlDepth;
+
+		final Deque<Integer> blockMarkers = new ArrayDeque<>();
+
+		final Deque<Ty> blockResultTypes = new ArrayDeque<>();
+
 		int nextLocal;
 
-		Fn(WasmWriter writer, Types types, Map<String, Integer> index, String fnName) {
+		Fn(WasmWriter writer, Types types, Map<String, Integer> index, String fnName, Set<String> paramNames) {
 			this.writer = writer;
 			this.types = types;
 			this.index = index;
 			this.fnName = fnName;
+			this.paramNames = paramNames;
 		}
 
 		void bind(String name, int slot, Ty ty) {

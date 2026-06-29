@@ -1,19 +1,38 @@
 # `--no-gc`: a non-GC WASM lowering for pure-numeric exports
 
-**Status:** Phase 1 LANDED (2026-06-29). Phase 2 (linear-memory `:string`/`:sexpr`) still
-open. Phase 1 shipped as `codegen.wasm.ScalarWasmCompiler` (a separate backend, GC path
-untouched): `--no-gc` emits a plain MVP module (no rec group / GC types / memory / import)
-for pure-numeric `rontolisp:wasm-export` functions with scalar boundary types
-(`:int`/`:float`/`:bool`/`:void`), runs with no `-W gc`. Resolved open decisions: all values
-are unboxed `f64` (integers exact to 2^53; `/` is float division; `0.0` is false in a
-boolean context); `--no-gc` is a self-contained reactor (no `--no-wasi` needed) and errors
-with `--component`; eligibility + reachability are enforced in one compile pass (an
-unreached ineligible defun is dropped, a reached one is a compile error naming the op).
-Composes with `--optimize`. Docs: README "Non-GC Output for Pure-Numeric Exports"
-(`doc/en/compiling/wasm.md`); CLAUDE.md design-constraint bullet. Tests:
-`ScalarWasmCompilerTest` (structural) + `--no-gc` cases in `WasmLispCompilerIntegrationTest`
-(`wasmtime --invoke` without `-W gc`, interpreter parity). **Remaining: Phase 2 only** (the
-linear-memory string ABI in "Phase 2" / "Touch points" below).
+**Status:** Phase 1 LANDED (2026-06-29), extended with iteration + math (2026-06-29).
+Phase 2 (linear-memory `:string`/`:sexpr`) still open. Phase 1 shipped as
+`codegen.wasm.ScalarWasmCompiler` (a separate backend, GC path untouched): `--no-gc`
+emits a plain MVP module (no rec group / GC types / memory / import) for pure-numeric
+`rontolisp:wasm-export` functions with scalar boundary types (`:int`/`:float`/`:bool`/
+`:void`), runs with no `-W gc`. Resolved open decisions: integers are unboxed `i64` and
+floats `f64`, chosen by a monotone type-inference fixpoint (not all-`f64` — `i64` keeps
+integer arithmetic exact to 2^63; `/` is float division; `0` is false in a boolean
+context); `--no-gc` is a self-contained reactor (no `--no-wasi` needed) and errors with
+`--component`; eligibility + reachability are enforced in one compile pass (an unreached
+ineligible defun is dropped, a reached one is a compile error naming the op). Composes
+with `--optimize`.
+
+**Extension (2026-06-29) — iteration + math.** To make the backend practical for real
+numeric kernels (which are usually written iteratively, not recursively, and have no TCO
+here): added **iteration & local mutation** — `setq` (`local.tee` to a param/let slot),
+`while` (block/loop), the internal `%block`/`return` non-local exit (typed wasm block
+whose result = join of normal completion and every enclosing `return`), and the
+`dotimes`/`do`/`do*` macros that expand into them; type inference now widens let/`do`-bound
+**local** types (`Types.locals`) so an integer accumulator summed with floats becomes
+`f64`. Added **math builtins** `sqrt` (`f64.sqrt`) and the integer bitwise ops
+`logand`/`logior`/`logxor`/`lognot`/`ash` (`ash` picks `shl`/`shr_s` by `select` on the
+shift sign). `dolist`/list iteration, a free variable and assignment to a global stay
+ineligible (compile error). Docs: README "Non-GC Output" (`doc/en/compiling/wasm.md`);
+CLAUDE.md design-constraint bullet. Tests: `ScalarWasmCompilerTest` (structural) +
+`--no-gc` cases in `WasmLispCompilerIntegrationTest` (`wasmtime --invoke` without `-W gc`,
+interpreter parity), incl. `noGcSupportsIterationAndLocalMutation`,
+`noGcSupportsReturnFromALoop`, `noGcSupportsSqrtAndBitwiseOps`.
+
+**Remaining follow-ups.** (a) Convenience numeric builtins `gcd`/`lcm`/`expt`/`isqrt` are
+not yet primitives, but are now user-expressible via the loop forms (e.g. an iterative
+Euclid `gcd`); add them as builtins only if demand warrants. (b) **Phase 2 only**: the
+linear-memory string ABI for `:string`/`:sexpr` ("Phase 2" / "Touch points" below).
 
 **Original design note (2026-06-28).** Raised in the `claude-opus` session
 right after `--optimize` + the `--no-wasi` `_initialize` rename, while discussing how

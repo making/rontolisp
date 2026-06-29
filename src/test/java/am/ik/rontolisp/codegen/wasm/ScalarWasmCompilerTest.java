@@ -83,6 +83,78 @@ class ScalarWasmCompilerTest {
 	}
 
 	@Test
+	void iterationAndLocalMutationCompileToAPlainMvpModule() {
+		// dotimes + a let-bound accumulator mutated by setq: no heap, no GC types, still
+		// a
+		// plain MVP module that exports the function.
+		byte[] module = compile("""
+				(defun sum-upto (n)
+				  (let ((acc 0))
+				    (dotimes (i n) (setq acc (+ acc i)))
+				    acc))
+				(rontolisp:wasm-export 'sum-upto :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("sum-upto");
+	}
+
+	@Test
+	void aFloatAccumulatorWidensTheLocalAndReturnTypeToF64() {
+		// acc starts as an integer 0 but is summed with floats, so the inferred local and
+		// the function's return type widen to f64.
+		List<int[][]> funcTypes = funcTypes(Objects.requireNonNull(sections(compile("""
+				(defun sumsq (n)
+				  (let ((acc 0))
+				    (dotimes (i n) (setq acc (+ acc (* (float i) (float i)))))
+				    acc))
+				(rontolisp:wasm-export 'sumsq :params '(:int) :returns :float)
+				""")).get(1)));
+		// type 0 = internal sumsq: (i64) -> f64 (param pinned i64, return widened to f64)
+		assertThat(funcTypes.get(0)[0]).containsExactly(0x7E); // i64 param
+		assertThat(funcTypes.get(0)[1]).containsExactly(0x7C); // f64 result
+	}
+
+	@Test
+	void mathBuiltinsCompileToAPlainMvpModule() {
+		byte[] module = compile("""
+				(defun popcount (x)
+				  (let ((c 0))
+				    (do ((v x (ash v -1))) ((= v 0) c)
+				      (setq c (+ c (logand v 1))))))
+				(defun root (x) (sqrt x))
+				(rontolisp:wasm-export 'popcount :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'root :params '(:float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("popcount", "root");
+	}
+
+	@Test
+	void rejectsSetqOfANonLocal() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (setq g (+ n 1)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("setq target 'g'")
+			.hasMessageContaining("not a parameter or let binding");
+	}
+
+	@Test
+	void rejectsListIteration() {
+		// dolist iterates a list (car/cdr), which is ineligible; it is not an expanded
+		// core
+		// form here, so it is rejected as an unsupported operation.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (let ((s 0)) (dolist (x (list 1 2 n)) (setq s (+ s x))) s))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("dolist");
+	}
+
+	@Test
 	void onlyReachableFunctionsAreCompiledSoUnreachedIneligibleCodeIsIgnored() {
 		// `helper` conses (ineligible), but it is not reachable from the single export,
 		// so
