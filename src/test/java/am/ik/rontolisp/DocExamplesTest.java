@@ -2,16 +2,23 @@ package am.ik.rontolisp;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.stream.Stream;
 
+import com.sun.net.httpserver.HttpServer;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
@@ -59,6 +66,57 @@ class DocExamplesTest {
 
 	private static final String ARROW = "; =>";
 
+	// The rontolisp:fetch examples document a public URL (e.g. https://httpbin.org/get),
+	// but the test must not reach the network: it serves the requests from a local JDK
+	// HttpServer and rewrites the URL in the example to point at it before evaluating.
+	// The
+	// documented URL is intentionally left as-is on the page -- this is the one place the
+	// executed example diverges from what the page shows.
+	private static @Nullable HttpServer fetchServer;
+
+	private static synchronized String localFetchUrl() {
+		HttpServer server = fetchServer;
+		if (server == null) {
+			try {
+				server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+				server.createContext("/", exchange -> {
+					byte[] body = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+					exchange.getResponseHeaders().add("Content-Type", "application/json");
+					exchange.sendResponseHeaders(200, body.length);
+					try (OutputStream os = exchange.getResponseBody()) {
+						os.write(body);
+					}
+				});
+				server.start();
+				fetchServer = server;
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		}
+		return "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+	}
+
+	@AfterAll
+	static void stopFetchServer() {
+		if (fetchServer != null) {
+			fetchServer.stop(0);
+			fetchServer = null;
+		}
+	}
+
+	/**
+	 * If an example uses {@code rontolisp:fetch}, rewrites the http(s) URL string
+	 * literals to the local test server so evaluation stays offline; otherwise returns
+	 * the source unchanged.
+	 */
+	private static String rewriteFetchUrls(String source) {
+		if (!source.contains("rontolisp:fetch")) {
+			return source;
+		}
+		return source.replaceAll("\"https?://[^\"]*\"", Matcher.quoteReplacement("\"" + localFetchUrl() + "\""));
+	}
+
 	@TestFactory
 	@DisabledIfSystemProperty(named = "rontolisp.doc.fix", matches = "true")
 	Stream<DynamicTest> documentationExamples() throws IOException {
@@ -90,7 +148,7 @@ class DocExamplesTest {
 			buffer.reset();
 			LispVal last = LispNil.INSTANCE;
 			try {
-				for (LispVal expr : LispReader.readAllFromString(block.content())) {
+				for (LispVal expr : LispReader.readAllFromString(rewriteFetchUrls(block.content()))) {
 					last = evaluator.eval(expr);
 				}
 			}
@@ -177,7 +235,13 @@ class DocExamplesTest {
 					buffer.reset();
 					LispVal last = LispNil.INSTANCE;
 					try {
-						for (LispVal expr : LispReader.readAllFromString(String.join("\n", content))) {
+						// Evaluate with fetch URLs rewritten to the local server, but
+						// keep
+						// `content` (the page source) unchanged so the fix helper
+						// rewrites
+						// only the shown result, not the documented URL.
+						for (LispVal expr : LispReader
+							.readAllFromString(rewriteFetchUrls(String.join("\n", content)))) {
 							last = evaluator.eval(expr);
 						}
 					}
