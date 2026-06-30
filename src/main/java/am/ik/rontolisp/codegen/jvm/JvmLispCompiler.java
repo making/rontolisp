@@ -278,7 +278,32 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A reference compiles to getstatic from any method body, so a global is
 		// readable/assignable from a defun/lambda (not just from main). Field names are
 		// prefixed to avoid colliding with runtime helper fields (e.g. _genv).
-		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		Set<String> globals = new java.util.LinkedHashSet<>(GlobalVarCollector.collect(topLevelExprs));
+		// Promote any top-level *free* variable that is also assigned somewhere (a setq /
+		// setf bare-symbol place) to a global field. Per Common Lisp such an assignment
+		// targets the global namespace; giving it a persistent static field (rather than
+		// a
+		// main() local) lets the top-level body be split across several methods (below)
+		// without a value set in one chunk becoming unreachable from a later one. The
+		// free
+		// test (scope-aware, via FreeVarAnalyzer) keeps a lexical that a lambda closes
+		// over
+		// out of the global set, and the assigned test keeps a genuinely-unbound read
+		// (e.g. a function name in value position) erroring instead of silently reading
+		// nil.
+		Set<String> functionNames = new HashSet<>();
+		for (DefunDecl defun : defuns) {
+			functionNames.add(defun.name);
+		}
+		Set<String> assignedSymbols = new HashSet<>();
+		for (LispVal expr : topLevelExprs) {
+			collectAssignedSymbols(expr, assignedSymbols);
+		}
+		for (String free : FreeVarAnalyzer.findFreeVars(topLevelExprs, Set.of(), functionNames, globals)) {
+			if (assignedSymbols.contains(free)) {
+				globals.add(free);
+			}
+		}
 		Map<String, FieldrefConstant> globalFields = new HashMap<>();
 		List<Utf8Constant> globalFieldNameUtfs = new ArrayList<>();
 		Utf8Constant globalFieldDescUtf = cp.addUtf8("Ljava/lang/Object;");
@@ -406,21 +431,63 @@ public final class JvmLispCompiler implements LispCompiler {
 			funcCtxs.add(funcCtx);
 		}
 
-		// Pass 2b: Compile top-level expressions as main() body
-		Ctx mainCtx = ctxBuilder.build();
-		mainCtx.topLevel = true;
-		// When eval is present, top-level global variable bindings (setq/defvar/...) are
+		// Pass 2b: Compile top-level expressions into one or more void helper methods
+		// (_top$0, _top$1, ...) that main() invokes in order. A single method's bytecode
+		// must stay under the JVM's 64 KB Code limit, so a new chunk is started whenever
+		// the current one nears that ceiling; the per-method limit then bounds a single
+		// chunk rather than the whole program. All chunks share the same static fields
+		// (globals) and methods (defuns/lambdas), and any cross-form variable is a global
+		// field (see the global-promotion step above), so the split preserves the
+		// single-shared-runtime, in-order semantics of one straight-line main().
+		// When eval is present, a top-level global variable binding (setq/defvar/...) is
 		// mirrored into the eval runtime's global environment via _store, so an eval'd
-		// expression can resolve them (the compiled value lives in a main() local that
-		// the
-		// runtime interpreter cannot reach).
-		if (usesEval) {
-			mainCtx.evalStoreRef = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_store"),
-					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		}
+		// expression can resolve it.
+		MethodrefConstant evalStoreRef = usesEval
+				? cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8("_store"),
+								cp.addUtf8(
+										"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
+				: null;
+		// defvar idempotence ("bind only if not already bound") is tracked at compile
+		// time
+		// in definedGlobals; share one set across chunks so a defvar split into a later
+		// chunk still sees an earlier binding.
+		Set<String> sharedDefinedGlobals = new HashSet<>();
+		Utf8Constant topChunkDesc = cp.addUtf8("()V");
+		List<Ctx> topChunks = new ArrayList<>();
+		List<Utf8Constant> topChunkNames = new ArrayList<>();
+		List<MethodrefConstant> topChunkRefs = new ArrayList<>();
+		// Budget well under 65535 to leave room for the final form pushed past the check
+		// plus the trailing RETURN; a single form larger than this still cannot be split
+		// (a pre-existing per-form limit, see .todo/17).
+		final int chunkCodeBudget = 48000;
+		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {
-			JvmExprCompiler.compileExpr(expr, mainCtx, this.className);
-			mainCtx.emit(Opcode.POP);
+			if (chunkCtx == null || chunkCtx.code.size() >= chunkCodeBudget) {
+				if (chunkCtx != null) {
+					chunkCtx.emit(Opcode.RETURN);
+				}
+				chunkCtx = ctxBuilder.build();
+				chunkCtx.topLevel = true;
+				chunkCtx.evalStoreRef = evalStoreRef;
+				chunkCtx.shareDefinedGlobals(sharedDefinedGlobals);
+				Utf8Constant nameUtf8 = cp.addUtf8("_top$" + topChunks.size());
+				topChunks.add(chunkCtx);
+				topChunkNames.add(nameUtf8);
+				topChunkRefs.add(cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, topChunkDesc)));
+			}
+			JvmExprCompiler.compileExpr(expr, chunkCtx, this.className);
+			chunkCtx.emit(Opcode.POP);
+		}
+		if (chunkCtx != null) {
+			chunkCtx.emit(Opcode.RETURN);
+		}
+
+		// main() simply calls each top-level chunk in order, then returns.
+		Ctx mainCtx = ctxBuilder.build();
+		for (MethodrefConstant ref : topChunkRefs) {
+			mainCtx.emit(Opcode.INVOKESTATIC);
+			mainCtx.emitU2(ref.index());
 		}
 		mainCtx.emit(Opcode.RETURN);
 
@@ -742,6 +809,19 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				// The top-level body, split into one or more void chunk methods main()
+				// calls.
+				for (int i = 0; i < topChunks.size(); i++) {
+					final Ctx chunk = topChunks.get(i);
+					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(chunk.maxStack)
+									.writeU2(chunk.maxLocals)
+									.writeCode((Object[]) chunk.code.toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				for (int i = 0; i < defuns.size(); i++) {
 					FunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defuns.get(i).name));
 					final Ctx funcCtx = funcCtxs.get(i);
@@ -1027,6 +1107,42 @@ public final class JvmLispCompiler implements LispCompiler {
 		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
 	}
 
+	/**
+	 * Collects every symbol that appears as the target of a {@code setq} place or a
+	 * {@code setf} bare-symbol place anywhere in the given form (quoted data excluded).
+	 * This is an over-approximation (it does not track lexical scope); it is intersected
+	 * with the scope-aware free-variable set to decide which top-level variables become
+	 * global fields.
+	 */
+	private static void collectAssignedSymbols(LispVal val, Set<String> out) {
+		if (!(val instanceof LispCons cons)) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (cons.car() instanceof LispSymbol head) {
+			switch (head.name()) {
+				case LispNames.QUOTE -> {
+					return;
+				}
+				case LispNames.SETQ, LispNames.SETF -> {
+					// place/value pairs; a bare-symbol place is a variable assignment (a
+					// non-symbol setf place like (car x) names a location, not a
+					// variable).
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
+							out.add(place.name());
+						}
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		for (LispVal part : parts) {
+			collectAssignedSymbols(part, out);
+		}
+	}
+
 	private static boolean usesEval(LispVal val) {
 		if (!(val instanceof LispCons cons)) {
 			return false;
@@ -1269,7 +1385,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * already bound" idempotence at compile time. Per-context (only the top-level
 		 * context mutates it).
 		 */
-		final Set<String> definedGlobals = new HashSet<>();
+		Set<String> definedGlobals = new HashSet<>();
 
 		/**
 		 * Stack of active {@code %block} return boundaries. The innermost block is on
@@ -1671,6 +1787,15 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		MethodrefConstant systemOp(String key) {
 			return Objects.requireNonNull(this.systemOps.get(key), () -> "Unknown system helper: " + key);
+		}
+
+		/**
+		 * Replaces this context's compile-time "already bound" tracking set with a shared
+		 * one, so {@code defvar} idempotence holds across the several methods the
+		 * top-level body is split into.
+		 */
+		void shareDefinedGlobals(Set<String> shared) {
+			this.definedGlobals = shared;
 		}
 
 		void emit(int opcode) {

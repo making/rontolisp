@@ -108,6 +108,46 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLargeTopLevelBodySplitsAcrossMethods() throws Exception {
+		// A top-level body that exceeds the JVM 64 KB per-method bytecode limit must be
+		// split across several helper methods, called in order from main(), without
+		// losing cross-form shared state. *n* is a top-level global (a static field), so
+		// the running total survives the method boundaries.
+		StringBuilder sb = new StringBuilder("(setq *n* 0)\n");
+		int forms = 6000;
+		for (int i = 0; i < forms; i++) {
+			sb.append("(setq *n* (+ *n* 1))\n");
+		}
+		sb.append("(print *n*)\n");
+		assertThat(compileAndRun(sb.toString())).isEqualTo(String.valueOf(forms));
+	}
+
+	@Test
+	void compileAndRunNestedFreeSetqSurvivesTopLevelSplit() throws Exception {
+		// A variable assigned by a setq nested inside a top-level form (never a direct
+		// top-level setq) is, per Common Lisp, a global. It must get a persistent backing
+		// store so a value set in one chunk is visible from a later chunk, even when the
+		// body is split. The padding forms force more than 64 KB of bytecode so the two
+		// references to *m* land in different methods.
+		StringBuilder sb = new StringBuilder("(progn (setq *m* 7) nil)\n(setq *pad* 0)\n");
+		for (int i = 0; i < 6000; i++) {
+			sb.append("(setq *pad* (+ *pad* 1))\n");
+		}
+		sb.append("(print *m*)\n");
+		assertThat(compileAndRun(sb.toString())).isEqualTo("7");
+	}
+
+	@Test
+	void compileAndRunTopLevelClosureOverLetStillCaptures() throws Exception {
+		// Promoting top-level free setq targets to globals must not promote a let-bound
+		// variable that a lambda closes over: *make* is a global, but n stays a captured
+		// lexical, so the counter increments correctly.
+		assertThat(compileAndRun(
+				"(setq *make* (let ((n 0)) (lambda () (setq n (+ n 1)) n))) (funcall *make*) (funcall *make*) (print (funcall *make*))"))
+			.isEqualTo("3");
+	}
+
+	@Test
 	void compileAndRunGlobalReadInsideLambda() throws Exception {
 		// A global referenced from a lambda nested in a defun (it must be resolved from
 		// its static field, not captured as a free variable).

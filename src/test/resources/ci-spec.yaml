@@ -587,6 +587,17 @@ cases:
       (11 12 13)
       (1 4 9)
       nil
+  - name: map
+    source: |
+      (print (map 'list #'+ '(1 2 3) '(10 20 30)))
+      (print (map 'string #'char-upcase "abc"))
+      (print (map 'list #'1+ '(1 2 3)))
+      (print (map 'list #'+ '(1 2 3) nil))
+    expected: |
+      (11 22 33)
+      "ABC"
+      (2 3 4)
+      nil
   - name: reduce
     source: |
       (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5) :initial-value 0))
