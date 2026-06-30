@@ -285,6 +285,7 @@ final class WasmExprCompiler {
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
 				case LispNames.SYMBOL_FUNCTION -> WasmFunctionFormCompiler.compileSymbolFunction(cons, ctx);
+				case LispNames.MAP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx);
 				case LispNames.MAPCAR -> WasmMapcarCompiler.compile(cons, ctx);
 				case LispNames.MAPC -> WasmMapcCompiler.compile(cons, ctx);
 				case LispNames.MAPCAN -> WasmMapcanCompiler.compile(cons, ctx);

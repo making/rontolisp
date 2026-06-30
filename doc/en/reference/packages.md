@@ -36,7 +36,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 186
+; => 187
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

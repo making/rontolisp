@@ -515,6 +515,13 @@ public final class LispNames {
 	/** The {@code mapcar} built-in function. */
 	public static final String MAPCAR = "mapcar";
 
+	/**
+	 * The {@code map} built-in function (map a function over arbitrary sequences,
+	 * building a result of a requested type: {@code 'list}, {@code 'string}, or nil for
+	 * effect).
+	 */
+	public static final String MAP = "map";
+
 	/** The {@code mapc} built-in function (apply for effect, return the list). */
 	public static final String MAPC = "mapc";
 

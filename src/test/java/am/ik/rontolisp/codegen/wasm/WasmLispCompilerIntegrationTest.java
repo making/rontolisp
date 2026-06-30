@@ -1226,6 +1226,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void mapListOverLists() throws Exception {
+		assertThat(compileAndRun("(print (map 'list #'+ '(1 2 3) '(10 20 30)))")).isEqualTo("(11 22 33)");
+	}
+
+	@Test
+	void mapListStopsAtShortestSequence() throws Exception {
+		assertThat(compileAndRun("(print (map 'list #'+ '(1 2 3) '(10 20)))")).isEqualTo("(11 22)");
+	}
+
+	@Test
+	void mapStringOverString() throws Exception {
+		assertThat(compileAndRun("(print (map 'string #'char-upcase \"abc\"))")).isEqualTo("\"ABC\"");
+	}
+
+	@Test
+	void mapListOverString() throws Exception {
+		assertThat(compileAndRun("(print (map 'list (lambda (c) (char-code c)) \"AB\"))")).isEqualTo("(65 66)");
+	}
+
+	@Test
+	void mapNilCallsForEffect() throws Exception {
+		assertThat(compileAndRun("(map nil #'print '(7 8 9))")).isEqualTo("7\n8\n9");
+	}
+
+	@Test
 	void stringUpcaseDowncase() throws Exception {
 		assertThat(compileAndRun("(princ (string-upcase \"Hello, World\"))")).isEqualTo("HELLO, WORLD");
 		assertThat(compileAndRun("(princ (string-downcase \"Hello, World\"))")).isEqualTo("hello, world");
@@ -3059,7 +3084,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("186");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("187");
 	}
 
 	@Test

@@ -3148,6 +3148,140 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (map result-type function seq...) into a {@code do*} index loop that walks
+	 * every sequence in parallel up to the shortest length, applying the function to one
+	 * element from each. Elements are read with a runtime {@code (if (stringp s) (char s
+	 * i) (nth i s))} so the same expansion handles both list and string sequences.
+	 *
+	 * <p>
+	 * The result type is a literal designator (resolved statically, like
+	 * {@code concatenate}): {@code 'list} collects the results into a list,
+	 * {@code 'string} builds a string from the (character) results, and {@code nil} calls
+	 * the function for effect and returns nil. The function designator is normalized so a
+	 * {@code 'name} quote resolves in the function namespace before being bound.
+	 * @param cons the map expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMap(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 4) {
+			throw new UnsupportedOperationException("map expects a result-type, a function, and at least one sequence");
+		}
+		LispVal resultTypeForm = parts.get(1);
+		String resultType = quotedSymbolName(resultTypeForm);
+		boolean nilResult = isNilForm(resultTypeForm);
+		if (!nilResult && !"list".equals(resultType) && !"string".equals(resultType)) {
+			throw new UnsupportedOperationException(
+					"map supports only the 'list, 'string, or nil result types, got: " + resultTypeForm.print());
+		}
+		LispVal fnForm = normalizeFunctionDesignator(parts.get(2));
+		List<LispVal> seqs = parts.subList(3, parts.size());
+
+		LispSymbol fnVar = new LispSymbol("__map_fn");
+		LispSymbol nVar = new LispSymbol("__map_n");
+		LispSymbol iVar = new LispSymbol("__map_i");
+		LispSymbol accVar = new LispSymbol("__map_acc");
+
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(fnVar, fnForm)));
+		List<LispSymbol> seqVars = new java.util.ArrayList<>();
+		for (int k = 0; k < seqs.size(); k++) {
+			LispSymbol sv = new LispSymbol("__map_s" + k);
+			seqVars.add(sv);
+			bindings.add(listToCons(List.of(sv, seqs.get(k))));
+		}
+		// n = (length s0) for a single sequence, else (min (length s0) (length s1) ...).
+		LispVal lenExpr;
+		if (seqVars.size() == 1) {
+			lenExpr = callOf(LispNames.LENGTH, seqVars.get(0));
+		}
+		else {
+			List<LispVal> minParts = new java.util.ArrayList<>();
+			minParts.add(new LispSymbol(LispNames.MIN));
+			for (LispSymbol sv : seqVars) {
+				minParts.add(callOf(LispNames.LENGTH, sv));
+			}
+			lenExpr = listToCons(minParts);
+		}
+		bindings.add(listToCons(List.of(nVar, lenExpr)));
+
+		// call = (funcall fn (elt s0 i) (elt s1 i) ...) where elt dispatches on stringp.
+		List<LispVal> callParts = new java.util.ArrayList<>();
+		callParts.add(new LispSymbol(LispNames.FUNCALL));
+		callParts.add(fnVar);
+		for (LispSymbol sv : seqVars) {
+			LispVal stringElt = listToCons(List.of(new LispSymbol(LispNames.CHAR), sv, iVar));
+			LispVal listElt = listToCons(List.of(new LispSymbol(LispNames.NTH), iVar, sv));
+			callParts.add(makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), sv)), stringElt, listElt));
+		}
+		LispVal call = listToCons(callParts);
+
+		LispVal accInit;
+		LispVal accStep;
+		LispVal resultForm;
+		if ("string".equals(resultType)) {
+			accInit = new LispString("");
+			accStep = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), accVar,
+					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call))));
+			resultForm = accVar;
+		}
+		else if ("list".equals(resultType)) {
+			accInit = LispNil.INSTANCE;
+			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS), call, accVar));
+			resultForm = callOf(LispNames.REVERSE, accVar);
+		}
+		else {
+			// nil: call the function for effect, return nil.
+			accInit = LispNil.INSTANCE;
+			accStep = call;
+			resultForm = LispNil.INSTANCE;
+		}
+		// The accumulator must be stepped before the index so the element access reads
+		// the
+		// current i (do* applies steps in source order at the end of each iteration).
+		bindings.add(listToCons(List.of(accVar, accInit, accStep)));
+		bindings.add(listToCons(
+				List.of(iVar, new LispInteger(0), listToCons(List.of(new LispSymbol(LispNames.ONE_PLUS), iVar)))));
+
+		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.GE), iVar, nVar));
+		LispVal endClause = listToCons(List.of(endTest, resultForm));
+		LispVal doStar = listToCons(List.of(new LispSymbol(LispNames.DO_STAR), listToCons(bindings), endClause));
+		return expandDoStar((LispCons) doStar);
+	}
+
+	/** Returns the symbol name inside a {@code (quote name)} form, or null otherwise. */
+	private static @Nullable String quotedSymbolName(LispVal form) {
+		if (form instanceof LispCons quoted) {
+			List<LispVal> p = quoted.toList();
+			if (p.size() == 2 && p.get(0) instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+					&& p.get(1) instanceof LispSymbol s) {
+				return s.name();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Returns true when the form denotes nil (the nil literal or the {@code nil} symbol).
+	 */
+	private static boolean isNilForm(LispVal form) {
+		return form instanceof LispNil || (form instanceof LispSymbol s && "nil".equals(s.name()));
+	}
+
+	/**
+	 * Normalizes a function designator so a {@code (quote name)} resolves in the function
+	 * namespace ({@code (function name)}) once bound to a variable; other forms (a
+	 * {@code #'name}/{@code (function ...)} value or a lambda) are returned unchanged.
+	 */
+	private static LispVal normalizeFunctionDesignator(LispVal form) {
+		String name = quotedSymbolName(form);
+		if (name != null) {
+			return listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(name)));
+		}
+		return form;
+	}
+
+	/**
 	 * Expands (notany pred lst) into (not (some pred lst)).
 	 * @param cons the notany expression
 	 * @return the expanded expression

@@ -304,6 +304,7 @@ final class JvmExprCompiler {
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
+				case LispNames.MAP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx, className);
 				case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);
 				case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
 				case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);

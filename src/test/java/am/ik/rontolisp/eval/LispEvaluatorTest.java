@@ -331,6 +331,45 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMapListOverLists() {
+		assertThat(eval("(map 'list #'+ '(1 2 3) '(10 20 30))").print()).isEqualTo("(11 22 33)");
+	}
+
+	@Test
+	void evalMapListStopsAtShortestSequence() {
+		assertThat(eval("(map 'list #'+ '(1 2 3) '(10 20))").print()).isEqualTo("(11 22)");
+	}
+
+	@Test
+	void evalMapListOverString() {
+		assertThat(eval("(map 'list (lambda (c) (char-code c)) \"AB\")").print()).isEqualTo("(65 66)");
+	}
+
+	@Test
+	void evalMapStringOverString() {
+		assertThat(eval("(map 'string #'char-upcase \"abc\")").print()).isEqualTo("\"ABC\"");
+	}
+
+	@Test
+	void evalMapNilCallsForEffect() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(map nil #'print '(7 8 9))"));
+		assertThat(result).isSameAs(LispNil.INSTANCE);
+		assertThat(baos.toString()).isEqualTo("7\n8\n9\n");
+	}
+
+	@Test
+	void evalMapAcceptsSymbolFunctionDesignator() {
+		assertThat(eval("(map 'list '1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+	}
+
+	@Test
+	void evalMapRejectsUnsupportedResultType() {
+		assertThatThrownBy(() -> eval("(map 'vector #'1+ '(1 2 3))")).isInstanceOf(UnsupportedOperationException.class);
+	}
+
+	@Test
 	void evalDefunAndCall() {
 		assertThat(evalMulti("(defun square (x) (* x x)) (square 5)")).isEqualTo(new LispInteger(25));
 	}
@@ -2411,13 +2450,13 @@ class LispEvaluatorTest {
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
-			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "mapc", "every",
-					"some", "remove", "remove-if", "remove-if-not", "find", "find-if", "find-if-not", "position",
-					"position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if", "getf",
-					"butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list", "union",
-					"intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash", "list*",
-					"acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
-					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
+			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "map", "mapc",
+					"every", "some", "remove", "remove-if", "remove-if-not", "find", "find-if", "find-if-not",
+					"position", "position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if",
+					"getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list",
+					"union", "intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash",
+					"list*", "acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany",
+					"notevery", "delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
@@ -2426,7 +2465,7 @@ class LispEvaluatorTest {
 			.contains("make-array", "aref")
 			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(186);
+			.hasSize(187);
 	}
 
 	@Test

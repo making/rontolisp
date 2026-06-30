@@ -40,7 +40,7 @@ rontolispには、3つの組み込みパッケージを持つ小さな名前空�
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 186
+; => 187
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

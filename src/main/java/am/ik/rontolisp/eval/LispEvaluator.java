@@ -439,6 +439,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandRevappend(cons), env);
 				case LispNames.NRECONC:
 					return eval(LispMacroExpander.expandNreconc(cons), env);
+				case LispNames.MAP:
+					return eval(LispMacroExpander.expandMap(cons), env);
 				case LispNames.MAPLIST:
 					return eval(LispMacroExpander.expandMaplist(cons), env);
 				case LispNames.MAPCON:

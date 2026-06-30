@@ -173,6 +173,7 @@ categories:
       - { slug: funcall, name: "funcall" }
       - { slug: apply, name: "apply" }
       - { slug: mapcar, name: "mapcar" }
+      - { slug: map, name: "map" }
       - { slug: mapc, name: "mapc" }
       - { slug: mapcan, name: "mapcan" }
       - { slug: maplist, name: "maplist" }
