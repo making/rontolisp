@@ -216,6 +216,7 @@ final class WasmExprCompiler {
 				case LispNames.DOLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx);
 				case LispNames.DO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx);
 				case LispNames.DO_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx);
+				case LispNames.LOOP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx);
 				case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx);
 				case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);

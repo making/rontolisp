@@ -19,7 +19,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `catch` / `throw` / `unwind-protect` | 利用不可 |
 | 条件とリスタート（`handler-case` など） | 利用不可 |
 | `flet` / `labels` / `macrolet` | 利用不可 |
-| `loop`（拡張版） | 利用不可 |
+| `loop`（拡張版） | 一部対応（単純ループのサブセット） |
 | `defstruct`、CLOS | 利用不可 |
 | `declare` / `the` / `typep` / `coerce` | 利用不可 |
 | `defpackage` / `export` / ユーザーパッケージ | 利用不可 |
@@ -95,8 +95,13 @@ The function ignore-errors is undefined
 
 ## `loop` マクロ
 
-拡張版の `loop`（`loop for ... collect ...`）は利用できません。反復は `do`、
-`dolist`、`dotimes`、`while` で行います。
+拡張版 `loop` の限定的なサブセットが **利用可能** です（[`loop`](../reference/macros/loop.md) を参照）。
+数値/リストのステップ（`for`）、文字列のステップ（`for ... across`）、よく使う集約
+（`collect`、`append`、`sum`、`count`、`maximize`、`minimize` など）、単純な制御節
+（`while`/`until`、`repeat`、`when`/`unless`、`finally`、`return`）に対応します。
+対象外は、分配束縛、`for` 節同士の並行 `and`、`being`、アナフォリックな `it`、
+`named`/`loop-finish`、`thereis`/`always`/`never` です。その他の反復フォーム（`do`、`dolist`、`dotimes`、
+`while`）も引き続き利用できます。
 
 ## 構造体とオブジェクト（`defstruct`、CLOS）
 

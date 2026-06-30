@@ -592,6 +592,563 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The surface keywords recognized by the {@code loop} macro, matched by symbol name
+	 * (case-insensitively, ignoring package) only in clause position. The same name used
+	 * as an ordinary value in a clause expression (e.g.
+	 * {@code (loop repeat (length to) ...)}) is not treated as a keyword because it never
+	 * appears where a keyword is expected.
+	 */
+	private static final java.util.Set<String> LOOP_KEYWORDS = java.util.Set.of("for", "as", "from", "upfrom",
+			"downfrom", "to", "upto", "below", "downto", "above", "by", "in", "on", "=", "then", "across", "repeat",
+			"while", "until", "do", "doing", "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum",
+			"summing", "count", "counting", "maximize", "maximizing", "minimize", "minimizing", "when", "if", "unless",
+			"else", "end", "finally", "initially", "return", "with", "and", "into");
+
+	/**
+	 * Expands the {@code loop} macro into the existing core ({@code %block}/{@code let*}/
+	 * {@code while}/{@code setq}/{@code return} plus list/number accumulators) so that
+	 * all three backends compile it without a dedicated form.
+	 *
+	 * <p>
+	 * Two shapes are recognized. A <em>simple loop</em> — every top-level subform is a
+	 * compound form, e.g. {@code (loop (print x) (when done (return)))} — repeats its
+	 * body forever until a {@code return}. An <em>extended loop</em> begins with a clause
+	 * keyword and supports this bounded subset of the ANSI grammar:
+	 *
+	 * <ul>
+	 * <li>numeric stepping:
+	 * {@code for v from LO [to|upto|below|downto|above HI] [by STEP]} (and
+	 * {@code upfrom}/{@code downfrom}; a limit keyword with no {@code from} defaults the
+	 * start to 0),</li>
+	 * <li>list stepping: {@code for v in LIST [by FN]} and
+	 * {@code for v on LIST [by FN]},</li>
+	 * <li>general stepping: {@code for v = INIT [then STEP]},</li>
+	 * <li>local variables: {@code with v [= INIT]} (chainable with {@code and}),</li>
+	 * <li>accumulation: {@code collect}/{@code append}/{@code nconc}/{@code sum}/
+	 * {@code count}/{@code maximize}/{@code minimize}, each with an optional
+	 * {@code into v},</li>
+	 * <li>control: {@code while}/{@code until}, {@code repeat N}, {@code do FORM...},
+	 * {@code return EXPR}, {@code initially FORM...}, {@code finally FORM...}, and the
+	 * conditionals {@code when}/{@code if}/{@code unless} with an optional {@code else}
+	 * and {@code end} (selectable clauses chainable with {@code and}).</li>
+	 * </ul>
+	 *
+	 * <p>
+	 * Limitations (out of scope for this first cut): destructuring binds, parallel
+	 * {@code and} between {@code for} clauses, {@code for ... across}/{@code being}, the
+	 * anaphoric {@code it}, {@code named}/{@code loop-finish}, and {@code thereis}/
+	 * {@code always}/{@code never}. {@code while}/{@code until} terminate at the top of
+	 * the iteration regardless of their textual position. Accumulation clauses without
+	 * {@code into} must all be of the same kind (collecting clauses build the list in
+	 * order; the result list is produced with {@code nreverse}).
+	 * @param cons the loop expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLoop(LispCons cons) {
+		List<LispVal> all = cons.toList();
+		List<LispVal> toks = all.subList(1, all.size());
+		// (loop) -> an empty endless loop, exited only by a non-local return.
+		if (toks.isEmpty()) {
+			return makeBlock(listToCons(List.of(new LispSymbol(LispNames.WHILE), LispTrue.INSTANCE, LispNil.INSTANCE)));
+		}
+		// Simple loop: the body is a sequence of forms repeated forever.
+		if (loopKeyword(toks.get(0)) == null) {
+			List<LispVal> whileParts = new java.util.ArrayList<>();
+			whileParts.add(new LispSymbol(LispNames.WHILE));
+			whileParts.add(LispTrue.INSTANCE);
+			whileParts.addAll(toks);
+			return makeBlock(listToCons(whileParts));
+		}
+		return new LoopExpander(toks).build();
+	}
+
+	/** Returns the lowercased loop keyword a token denotes, or null if it is not one. */
+	private static @Nullable String loopKeyword(LispVal v) {
+		if (v instanceof LispSymbol s) {
+			String n = s.name().toLowerCase(java.util.Locale.ROOT);
+			if (LOOP_KEYWORDS.contains(n)) {
+				return n;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Parses an extended {@code loop} clause sequence into the pieces of a {@code let*}/
+	 * {@code while} expansion: binding/init forms, per-iteration variable assignments,
+	 * the loop body, step forms, termination tests, {@code initially}/{@code finally}
+	 * forms and the accumulation result. See {@link LispMacroExpander#expandLoop} for the
+	 * grammar.
+	 */
+	private static final class LoopExpander {
+
+		private final List<LispVal> toks;
+
+		private int pos;
+
+		private int gen;
+
+		private final List<LispVal> bindings = new java.util.ArrayList<>();
+
+		private final List<LispVal> initially = new java.util.ArrayList<>();
+
+		private final List<LispVal> preBody = new java.util.ArrayList<>();
+
+		private final List<LispVal> mainBody = new java.util.ArrayList<>();
+
+		private final List<LispVal> steps = new java.util.ArrayList<>();
+
+		private final List<LispVal> endTests = new java.util.ArrayList<>();
+
+		private final List<LispVal> finallyForms = new java.util.ArrayList<>();
+
+		private final List<LispVal> postLoop = new java.util.ArrayList<>();
+
+		// The implicit (un-named) accumulator: its variable, the init form establishing
+		// it,
+		// and whether the collected list must be reversed to restore source order.
+		private @Nullable LispSymbol implicitAcc;
+
+		private @Nullable LispVal implicitInit;
+
+		private boolean implicitReverse;
+
+		LoopExpander(List<LispVal> toks) {
+			this.toks = toks;
+		}
+
+		LispVal build() {
+			parse();
+			LispVal whileCond = endTests.isEmpty() ? LispTrue.INSTANCE : makeNot(orOf(endTests));
+			List<LispVal> whileParts = new java.util.ArrayList<>();
+			whileParts.add(new LispSymbol(LispNames.WHILE));
+			whileParts.add(whileCond);
+			whileParts.addAll(preBody);
+			whileParts.addAll(mainBody);
+			whileParts.addAll(steps);
+			if (whileParts.size() == 2) {
+				// while needs a (possibly nil) body form.
+				whileParts.add(LispNil.INSTANCE);
+			}
+			List<LispVal> letBody = new java.util.ArrayList<>();
+			letBody.addAll(initially);
+			letBody.add(listToCons(whileParts));
+			letBody.addAll(postLoop);
+			letBody.addAll(finallyForms);
+			letBody.add(resultExpr());
+			List<LispVal> letParts = new java.util.ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET_STAR));
+			letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings));
+			letParts.addAll(letBody);
+			return makeBlock(listToCons(letParts));
+		}
+
+		private void parse() {
+			while (pos < toks.size()) {
+				String kw = loopKeyword(toks.get(pos));
+				if (kw == null) {
+					throw new IllegalArgumentException(
+							"loop: expected a clause keyword, got: " + toks.get(pos).print());
+				}
+				pos++;
+				parseClause(kw);
+			}
+		}
+
+		private void parseClause(String kw) {
+			switch (kw) {
+				case "for", "as" -> parseFor();
+				case "with" -> parseWith();
+				case "repeat" -> parseRepeat();
+				case "while" -> endTests.add(makeNot(nextForm()));
+				case "until" -> endTests.add(nextForm());
+				case "initially" -> initially.addAll(readForms());
+				case "finally" -> finallyForms.addAll(readForms());
+				case "do", "doing" -> mainBody.addAll(readForms());
+				case "return" -> mainBody.add(makeReturn(nextForm()));
+				case "when", "if" -> mainBody.add(parseConditional(false));
+				case "unless" -> mainBody.add(parseConditional(true));
+				case "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum", "summing", "count",
+						"counting", "maximize", "maximizing", "minimize", "minimizing" ->
+					mainBody.add(parseAccumulation(kw));
+				default -> throw new UnsupportedOperationException("loop: unsupported clause: " + kw);
+			}
+		}
+
+		private void parseFor() {
+			LispVal var = nextForm();
+			if (!(var instanceof LispSymbol)) {
+				throw new IllegalArgumentException("loop: for expects a variable, got: " + var.print());
+			}
+			String sub = peekKeyword();
+			if (sub == null) {
+				throw new IllegalArgumentException("loop: incomplete for clause for " + var.print());
+			}
+			switch (sub) {
+				case "in", "on" -> parseForList((LispSymbol) var, sub);
+				case "=" -> parseForEquals((LispSymbol) var);
+				case "from", "upfrom", "downfrom", "to", "upto", "below", "downto", "above", "by" ->
+					parseForNumeric((LispSymbol) var);
+				case "across" -> parseForAcross((LispSymbol) var);
+				default -> throw new UnsupportedOperationException("loop: unsupported for clause: " + sub);
+			}
+		}
+
+		private void parseForNumeric(LispSymbol var) {
+			String k = peekKeyword();
+			boolean down = false;
+			LispVal from;
+			if ("from".equals(k) || "upfrom".equals(k) || "downfrom".equals(k)) {
+				down = "downfrom".equals(k);
+				pos++;
+				from = nextForm();
+			}
+			else {
+				from = new LispInteger(0);
+			}
+			bindings.add(pair(var, from));
+			String limitKw = null;
+			LispSymbol limitVar = null;
+			String lk = peekKeyword();
+			if ("to".equals(lk) || "upto".equals(lk) || "below".equals(lk) || "downto".equals(lk)
+					|| "above".equals(lk)) {
+				limitKw = lk;
+				pos++;
+				limitVar = gensym("limit");
+				bindings.add(pair(limitVar, nextForm()));
+				if ("downto".equals(lk) || "above".equals(lk)) {
+					down = true;
+				}
+			}
+			LispVal by = new LispInteger(1);
+			if ("by".equals(peekKeyword())) {
+				pos++;
+				by = nextForm();
+			}
+			LispSymbol byVar = gensym("by");
+			bindings.add(pair(byVar, by));
+			steps.add(setq(var, call(down ? LispNames.SUB : LispNames.ADD, var, byVar)));
+			if (limitVar != null) {
+				boolean exclusive = "below".equals(limitKw) || "above".equals(limitKw);
+				String cmp;
+				if (down) {
+					cmp = exclusive ? LispNames.LE : LispNames.LT;
+				}
+				else {
+					cmp = exclusive ? LispNames.GE : LispNames.GT;
+				}
+				endTests.add(call(cmp, var, limitVar));
+			}
+		}
+
+		private void parseForList(LispSymbol var, String sub) {
+			pos++; // consume in/on
+			LispVal listForm = nextForm();
+			LispVal byFn = null;
+			if ("by".equals(peekKeyword())) {
+				pos++;
+				byFn = normalizeFunctionDesignator(nextForm());
+			}
+			if ("on".equals(sub)) {
+				// var is bound to successive tails of the list.
+				bindings.add(pair(var, listForm));
+				endTests.add(makeNot(call(LispNames.CONSP, var)));
+				steps.add(setq(var, stepCdr(var, byFn)));
+			}
+			else {
+				LispSymbol cursor = gensym("list");
+				bindings.add(pair(cursor, listForm));
+				bindings.add(pair(var, LispNil.INSTANCE));
+				endTests.add(makeNot(call(LispNames.CONSP, cursor)));
+				preBody.add(setq(var, call(LispNames.CAR, cursor)));
+				steps.add(setq(cursor, stepCdr(cursor, byFn)));
+			}
+		}
+
+		private void parseForAcross(LispSymbol var) {
+			pos++; // consume across
+			LispVal seqForm = nextForm();
+			// Strings are the only random-access sequence type here, so `across` iterates
+			// a string's characters via an index cursor.
+			LispSymbol seq = gensym("seq");
+			LispSymbol idx = gensym("idx");
+			bindings.add(pair(seq, seqForm));
+			bindings.add(pair(idx, new LispInteger(0)));
+			bindings.add(pair(var, LispNil.INSTANCE));
+			endTests.add(call(LispNames.GE, idx, call(LispNames.LENGTH, seq)));
+			preBody.add(setq(var, call(LispNames.CHAR, seq, idx)));
+			steps.add(setq(idx, call(LispNames.ADD, idx, new LispInteger(1))));
+		}
+
+		private LispVal stepCdr(LispSymbol cursor, @Nullable LispVal byFn) {
+			if (byFn == null) {
+				return call(LispNames.CDR, cursor);
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.FUNCALL), byFn, cursor));
+		}
+
+		private void parseForEquals(LispSymbol var) {
+			pos++; // consume =
+			LispVal init = nextForm();
+			LispVal then = null;
+			if ("then".equals(peekKeyword())) {
+				pos++;
+				then = nextForm();
+			}
+			bindings.add(pair(var, init));
+			// With `then`, step to the then-form; without it, re-evaluate the init each
+			// iteration (the step runs at the end of the iteration, so the next pass sees
+			// it).
+			steps.add(setq(var, then != null ? then : init));
+		}
+
+		private void parseWith() {
+			while (true) {
+				LispVal var = nextForm();
+				if (!(var instanceof LispSymbol)) {
+					throw new IllegalArgumentException("loop: with expects a variable, got: " + var.print());
+				}
+				LispVal val = LispNil.INSTANCE;
+				if ("=".equals(peekKeyword())) {
+					pos++;
+					val = nextForm();
+				}
+				bindings.add(pair((LispSymbol) var, val));
+				if ("and".equals(peekKeyword())) {
+					pos++;
+					continue;
+				}
+				return;
+			}
+		}
+
+		private void parseRepeat() {
+			LispVal n = nextForm();
+			LispSymbol counter = gensym("repeat");
+			bindings.add(pair(counter, n));
+			endTests.add(call(LispNames.LE, counter, new LispInteger(0)));
+			steps.add(setq(counter, call(LispNames.SUB, counter, new LispInteger(1))));
+		}
+
+		/**
+		 * Parses a {@code when}/{@code if}/{@code unless} conditional into an if
+		 * statement.
+		 */
+		private LispVal parseConditional(boolean negate) {
+			LispVal cond = nextForm();
+			if (negate) {
+				cond = makeNot(cond);
+			}
+			LispVal thenStmt = parseConditionalBranch();
+			LispVal elseStmt = LispNil.INSTANCE;
+			if ("else".equals(peekKeyword())) {
+				pos++;
+				elseStmt = parseConditionalBranch();
+			}
+			if ("end".equals(peekKeyword())) {
+				pos++;
+			}
+			return makeIf(cond, thenStmt, elseStmt);
+		}
+
+		/**
+		 * Parses one or more selectable clauses joined by {@code and} into a single
+		 * statement.
+		 */
+		private LispVal parseConditionalBranch() {
+			List<LispVal> stmts = new java.util.ArrayList<>();
+			stmts.add(parseSelectable());
+			while ("and".equals(peekKeyword())) {
+				pos++;
+				stmts.add(parseSelectable());
+			}
+			return stmts.size() == 1 ? stmts.get(0) : makeProgn(stmts);
+		}
+
+		/**
+		 * Parses a single clause selectable by {@code when}/{@code unless} into a
+		 * statement.
+		 */
+		private LispVal parseSelectable() {
+			String kw = peekKeyword();
+			if (kw == null) {
+				throw new IllegalArgumentException(
+						"loop: expected a clause after when/unless, got: " + toks.get(pos).print());
+			}
+			pos++;
+			return switch (kw) {
+				case "do", "doing" -> makeProgn(readForms());
+				case "return" -> makeReturn(nextForm());
+				case "when", "if" -> parseConditional(false);
+				case "unless" -> parseConditional(true);
+				case "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum", "summing", "count",
+						"counting", "maximize", "maximizing", "minimize", "minimizing" ->
+					parseAccumulation(kw);
+				default -> throw new UnsupportedOperationException("loop: clause not selectable by when/unless: " + kw);
+			};
+		}
+
+		private LispVal parseAccumulation(String kw) {
+			LispVal value = nextForm();
+			LispSymbol target;
+			if ("into".equals(peekKeyword())) {
+				pos++;
+				LispVal v = nextForm();
+				if (!(v instanceof LispSymbol intoVar)) {
+					throw new IllegalArgumentException("loop: into expects a variable, got: " + v.print());
+				}
+				target = intoVar;
+				registerInto(intoVar, accInit(kw), accReverse(kw));
+			}
+			else {
+				target = implicitAccumulator(accInit(kw), accReverse(kw));
+			}
+			return accStep(kw, target, value);
+		}
+
+		/** The init form for an accumulator of the given kind. */
+		private LispVal accInit(String kw) {
+			return switch (canonicalAcc(kw)) {
+				case "sum", "count" -> new LispInteger(0);
+				default -> LispNil.INSTANCE;
+			};
+		}
+
+		/** Whether a kind builds a list that must be reversed to restore source order. */
+		private boolean accReverse(String kw) {
+			return switch (canonicalAcc(kw)) {
+				case "collect", "append", "nconc" -> true;
+				default -> false;
+			};
+		}
+
+		/**
+		 * Builds the per-iteration accumulation step for the given kind onto {@code acc}.
+		 */
+		private LispVal accStep(String kw, LispSymbol acc, LispVal value) {
+			return switch (canonicalAcc(kw)) {
+				case "collect" -> setq(acc, call(LispNames.CONS, value, acc));
+				case "append" -> setq(acc, call(LispNames.REVAPPEND, value, acc));
+				case "nconc" -> setq(acc, call(LispNames.NRECONC, value, acc));
+				case "sum" -> setq(acc, call(LispNames.ADD, acc, value));
+				case "count" ->
+					makeIf(value, setq(acc, call(LispNames.ADD, acc, new LispInteger(1))), LispNil.INSTANCE);
+				case "maximize" -> setq(acc, makeIf(acc, call(LispNames.MAX, acc, value), value));
+				case "minimize" -> setq(acc, makeIf(acc, call(LispNames.MIN, acc, value), value));
+				default -> throw new UnsupportedOperationException("loop: unsupported accumulation: " + kw);
+			};
+		}
+
+		private static String canonicalAcc(String kw) {
+			return switch (kw) {
+				case "collecting" -> "collect";
+				case "appending" -> "append";
+				case "nconcing" -> "nconc";
+				case "summing" -> "sum";
+				case "counting" -> "count";
+				case "maximizing" -> "maximize";
+				case "minimizing" -> "minimize";
+				default -> kw;
+			};
+		}
+
+		private final java.util.Map<String, Boolean> intoVars = new java.util.HashMap<>();
+
+		private void registerInto(LispSymbol var, LispVal init, boolean reverse) {
+			Boolean seen = intoVars.get(var.name());
+			if (seen == null) {
+				intoVars.put(var.name(), reverse);
+				bindings.add(pair(var, init));
+				if (reverse) {
+					postLoop.add(setq(var, call(LispNames.NREVERSE, var)));
+				}
+			}
+			else if (seen != reverse) {
+				throw new IllegalArgumentException("loop: incompatible accumulation kinds into " + var.name());
+			}
+		}
+
+		private LispSymbol implicitAccumulator(LispVal init, boolean reverse) {
+			if (implicitAcc == null) {
+				implicitAcc = gensym("acc");
+				implicitInit = init;
+				implicitReverse = reverse;
+				bindings.add(pair(implicitAcc, init));
+			}
+			else if (implicitReverse != reverse || implicitInit == null || !implicitInit.equals(init)) {
+				throw new IllegalArgumentException(
+						"loop: cannot mix accumulation kinds without into (use distinct into variables)");
+			}
+			return implicitAcc;
+		}
+
+		private LispVal resultExpr() {
+			if (implicitAcc == null) {
+				return LispNil.INSTANCE;
+			}
+			return implicitReverse ? call(LispNames.NREVERSE, implicitAcc) : implicitAcc;
+		}
+
+		// --- small token / form helpers ---
+
+		private LispVal nextForm() {
+			if (pos >= toks.size()) {
+				throw new IllegalArgumentException("loop: unexpected end of clauses");
+			}
+			return toks.get(pos++);
+		}
+
+		private @Nullable String peekKeyword() {
+			return pos < toks.size() ? loopKeyword(toks.get(pos)) : null;
+		}
+
+		/**
+		 * Reads forms up to (but not consuming) the next clause keyword or end of input.
+		 */
+		private List<LispVal> readForms() {
+			List<LispVal> forms = new java.util.ArrayList<>();
+			while (pos < toks.size() && loopKeyword(toks.get(pos)) == null) {
+				forms.add(toks.get(pos++));
+			}
+			if (forms.isEmpty()) {
+				forms.add(LispNil.INSTANCE);
+			}
+			return forms;
+		}
+
+		private LispSymbol gensym(String tag) {
+			return new LispSymbol("__loop_" + tag + (gen++));
+		}
+
+		private static LispVal pair(LispSymbol var, LispVal val) {
+			return listToCons(List.of(var, val));
+		}
+
+		private static LispVal setq(LispSymbol var, LispVal val) {
+			return listToCons(List.of(new LispSymbol(LispNames.SETQ), var, val));
+		}
+
+		private static LispVal call(String op, LispVal a, LispVal b) {
+			return listToCons(List.of(new LispSymbol(op), a, b));
+		}
+
+		private static LispVal call(String op, LispVal a) {
+			return listToCons(List.of(new LispSymbol(op), a));
+		}
+
+		private static LispVal orOf(List<LispVal> tests) {
+			if (tests.size() == 1) {
+				return tests.get(0);
+			}
+			List<LispVal> parts = new java.util.ArrayList<>();
+			parts.add(new LispSymbol(LispNames.OR));
+			parts.addAll(tests);
+			return listToCons(parts);
+		}
+
+	}
+
+	/**
 	 * Builds the per-iteration step assignments for {@code do}. A single stepped variable
 	 * becomes a direct {@code setq}; multiple stepped variables are assigned in parallel
 	 * via temporaries so a step form sees the previous iteration's values.

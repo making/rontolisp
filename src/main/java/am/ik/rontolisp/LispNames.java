@@ -696,13 +696,20 @@ public final class LispNames {
 	 */
 	public static final String DO_STAR = "do*";
 
+	/**
+	 * The {@code loop} macro. Only the "simple loop" subset is supported (numeric/list
+	 * stepping, accumulation, simple control clauses); see
+	 * {@link LispMacroExpander#expandLoop} for the exact grammar and limitations.
+	 */
+	public static final String LOOP = "loop";
+
 	/** The {@code return} special form (non-local exit from the nearest loop block). */
 	public static final String RETURN = "return";
 
 	/**
 	 * The internal {@code %block} special form establishing the {@code return} boundary
-	 * that the loop macros ({@code do}/{@code dolist}/{@code dotimes}) wrap their
-	 * expansion in. Not part of the public Lisp API.
+	 * that the loop macros ({@code do}/{@code dolist}/{@code dotimes}/{@code loop}) wrap
+	 * their expansion in. Not part of the public Lisp API.
 	 */
 	public static final String BLOCK_INTERNAL = "%block";
 

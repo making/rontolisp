@@ -121,20 +121,14 @@
 
 ;;; --- the public functions ----------------------------------------------------
 
-;;; The index list (0 1 ... n-1), so the string can be transformed with mapcar
-;;; (mapcar needs a list to walk, and a string is not one; the index also drives
-;;; the color position). Built by recursion -- no explicit loop.
-(defun upto (i n) (if (>= i n) nil (cons i (upto (1+ i) n))))
-(defun iota (n) (upto 0 n))
-
 ;;; A string to an alist mapping each character to its "#rrggbb" rainbow color.
-;;; mapcar over the character indices: index i -> (char . color-at p).
+;;; `loop for i below len` walks the character indices (a string is not a list,
+;;; so an index also drives the color position): index i -> (char . color-at p).
 (defun rainbow-text (s)
   (let ((len (length s)))
-    (mapcar (lambda (i)
-              (cons (char s i)
-                    (color-at (if (<= len 1) 0.0 (/ (float i) (float (1- len)))))))
-            (iota len))))
+    (loop for i below len
+          collect (cons (char s i)
+                        (color-at (if (<= len 1) 0.0 (/ (float i) (float (1- len)))))))))
 
 ;;; HTML-escape one character to safe markup; ordinary characters pass through.
 ;;; Matched by code point so the reader never sees the tricky #\" / #\' literals.
@@ -148,11 +142,11 @@
           (t (princ-to-string ch)))))
 
 ;;; Escape every HTML-special character in a string (& < > " '), so arbitrary
-;;; input is safe to drop into markup. Builds the result by escaping each
-;;; character and joining with reduce.
+;;; input is safe to drop into markup. `map 'list` escapes each character to a
+;;; string, then reduce joins the pieces.
 (defun html-escape (s)
-  (reduce (lambda (acc i) (concatenate 'string acc (escape-char (char s i))))
-          (iota (length s)) :initial-value ""))
+  (reduce (lambda (acc piece) (concatenate 'string acc piece))
+          (map 'list #'escape-char s) :initial-value ""))
 
 ;;; One (character . color) pair to its colored <span> string, with the
 ;;; character HTML-escaped.

@@ -12,7 +12,7 @@ and a runnable example you can evaluate in your browser.
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
-| `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`), which evaluates to `value` (or nil) |
+| `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`/`loop`), which evaluates to `value` (or nil) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
 | `defvar` | `(defvar name value?)` | Define a global variable, binding `value` only if `name` is not already bound (idempotent). With no `value`, leaves it unbound. Returns the name |
 | `defparameter` | `(defparameter name value)` | Define a global variable, **always** (re)binding `value` even if `name` is already bound. Returns the name |

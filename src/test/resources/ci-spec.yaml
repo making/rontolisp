@@ -959,7 +959,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
+      (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
       187
       (fetch list-functions list-macros list-special-forms version)
@@ -1261,6 +1261,19 @@ cases:
       (print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))
     expected: |
       720
+  - name: loop-macro-stepping-and-accumulation
+    source: |
+      (print (loop for i from 1 to 5 collect i))
+      (print (loop for x in '(a b c) for i from 0 collect (list i x)))
+      (print (loop for i from 1 to 10 when (evenp i) sum i))
+      (print (loop for i from 1 do (when (> i 3) (return i))))
+      (print (loop for c across "hello" count (eql c #\l)))
+    expected: |
+      (1 2 3 4 5)
+      ((0 a) (1 b) (2 c))
+      30
+      4
+      2
   - name: delete-delete-if-delete-if-not
     source: |
       (print (delete 2 '(1 2 3 2 1)))

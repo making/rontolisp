@@ -364,6 +364,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandDo(cons), env);
 				case LispNames.DO_STAR:
 					return eval(LispMacroExpander.expandDoStar(cons), env);
+				case LispNames.LOOP:
+					return eval(LispMacroExpander.expandLoop(cons), env);
 				case LispNames.BLOCK_INTERNAL:
 					return evalBlock(cons, env);
 				case LispNames.RETURN:

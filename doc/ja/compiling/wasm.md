@@ -122,7 +122,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 
 - 数値と真偽値: 算術演算（`+ - * / mod rem 1+ 1- abs min max sqrt`）、整数ビット演算子（`logand logior logxor lognot ash`）、比較と述語（`= < <= > >= not zerop plusp minusp evenp oddp`）。
 - 制御と束縛: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`、再帰、および他の対象関数への呼び出し。
-- 反復とローカルの変更: `dotimes`/`do`/`do*` とその基盤となる `while`/`setq`/`return`、および自由に再代入される let/`do` で束縛された変数。
+- 反復とローカルの変更: `dotimes`/`do`/`do*` とその基盤となる `while`/`setq`/`return`、および自由に再代入される let/`do` で束縛された変数。`loop` は cons を生成しない節（数値 `for`、`sum`/`count`/`maximize`/`minimize`、`repeat`/`while`/`until`/`do`/`return`）に限り対象です。`collect`/`append`/`nconc` や `for ... in`/`on` の節はリストを割り当てるため対象外です。
 - 浮動小数点/整数の変換: `float truncate floor ceiling round`。
 - 文字列: 文字列リテラルと `(concatenate 'string ...)`。
 

@@ -188,7 +188,10 @@ subset:
 - control and binding: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`, recursion and
   calls to other eligible functions;
 - iteration and local mutation: `dotimes`/`do`/`do*` and the underlying
-  `while`/`setq`/`return`, with a let/`do`-bound variable freely reassigned;
+  `while`/`setq`/`return`, with a let/`do`-bound variable freely reassigned; `loop` is
+  eligible only for its non-consing clauses (numeric `for`, `sum`/`count`/`maximize`/
+  `minimize`, `repeat`/`while`/`until`/`do`/`return`) — its `collect`/`append`/`nconc`
+  and `for ... in`/`on` clauses allocate lists and are not;
 - float/int conversions: `float truncate floor ceiling round`;
 - strings: string literals and `(concatenate 'string ...)`.
 

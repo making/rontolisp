@@ -15,6 +15,7 @@
 | `dotimes` | `(dotimes (var count result?) body...)` | `var` を `0`..`count-1` に束縛してbodyを評価します。`result`(またはnil)を返します |
 | `do` | `(do ((var init step?)...) (end-test result...) body...)` | 並列にステップする変数で反復します。`end-test` が真になったとき `result` フォームを返します |
 | `do*` | `(do* ((var init step?)...) (end-test result...) body...)` | `do` と同様ですが、束縛とステップが逐次的(`let*` 形式)です。各init/stepフォームは今回の反復ですでに更新された変数を参照します |
+| `loop` | `(loop for i from 1 to n collect (f i))` | ANSI `loop` の限定サブセット。数値/リストのステップ(`for`)、集約(`collect`/`sum`/`count`/...)、単純な制御節(`while`/`repeat`/`when`/`finally`/`return`)に対応します。完全な文法と制限事項はページを参照してください |
 | `prog1` | `(prog1 first body...)` | すべてのフォームを順に評価し、`first` の値を返します |
 | `prog2` | `(prog2 first second body...)` | すべてのフォームを順に評価し、`second` の値を返します |
 | `time` | `(time form)` | `form` を評価し、経過実時間を標準出力に印字し(`; Elapsed real time: N ms`)、formの値を返します。`N` はインタプリタ/JVMではミリ秒の整数、WASMではミリ秒の浮動小数点です |

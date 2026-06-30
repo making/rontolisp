@@ -36,7 +36,7 @@ rontolispには、3つの組み込みパッケージを持つ小さな名前空�
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
+; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))

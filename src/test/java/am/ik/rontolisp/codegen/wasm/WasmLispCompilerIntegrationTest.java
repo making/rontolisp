@@ -499,6 +499,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void loopMacroCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (loop for i from 1 to 5 collect i))")).isEqualTo("(1 2 3 4 5)");
+		assertThat(compileAndRun("(print (loop for x in '(a b c) for i from 0 collect (list i x)))"))
+			.isEqualTo("((0 a) (1 b) (2 c))");
+		assertThat(compileAndRun("(print (loop for i from 1 to 5 sum i))")).isEqualTo("15");
+		assertThat(compileAndRun("(print (loop for i from 1 to 10 when (evenp i) collect i))"))
+			.isEqualTo("(2 4 6 8 10)");
+		assertThat(compileAndRun("(print (loop repeat 3 collect 'x))")).isEqualTo("(x x x)");
+		assertThat(compileAndRun("(print (loop for i from 1 do (when (> i 3) (return i))))")).isEqualTo("4");
+		assertThat(compileAndRun("(print (loop for c across \"hello\" collect c))"))
+			.isEqualTo("(#\\h #\\e #\\l #\\l #\\o)");
+	}
+
+	@Test
 	void exportUnknownFunctionFailsToCompile() {
 		assertThatThrownBy(
 				() -> compileAndInvoke("(rontolisp:wasm-export 'nope :params '(:int) :returns :int)", "nope"))
@@ -3091,7 +3105,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
+				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
 	}
 
 	@Test

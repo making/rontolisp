@@ -16,6 +16,7 @@ description and a runnable example you can evaluate in your browser.
 | `dotimes` | `(dotimes (var count result?) body...)` | Evaluate body with `var` bound to `0`..`count-1`. Returns `result` (or nil) |
 | `do` | `(do ((var init step?)...) (end-test result...) body...)` | Iterate with parallel-stepped variables. Returns the `result` forms when `end-test` is true |
 | `do*` | `(do* ((var init step?)...) (end-test result...) body...)` | Like `do` but bindings and steps are sequential (`let*`-style): each init/step form sees the variables already updated this iteration |
+| `loop` | `(loop for i from 1 to n collect (f i))` | A bounded subset of the ANSI `loop`: numeric/list stepping (`for`), accumulation (`collect`/`sum`/`count`/...), and simple control clauses (`while`/`repeat`/`when`/`finally`/`return`). See the page for the full grammar and limitations |
 | `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
 | `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
 | `time` | `(time form)` | Evaluate `form`, print the elapsed real time to standard output (`; Elapsed real time: N ms`), and return the form's value. `N` is an integer of milliseconds on the interpreter/JVM and a float of milliseconds on WASM |

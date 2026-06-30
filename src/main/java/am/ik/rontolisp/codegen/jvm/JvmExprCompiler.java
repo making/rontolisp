@@ -209,6 +209,7 @@ final class JvmExprCompiler {
 				case LispNames.DO -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx, className);
 				case LispNames.DO_STAR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx, className);
+				case LispNames.LOOP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx, className);
 				case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);

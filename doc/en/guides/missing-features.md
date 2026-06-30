@@ -19,7 +19,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `catch` / `throw` / `unwind-protect` | not available |
 | conditions & restarts (`handler-case`, ...) | not available |
 | `flet` / `labels` / `macrolet` | not available |
-| `loop` (extended) | not available |
+| `loop` (extended) | partial (simple-loop subset) |
 | `defstruct`, CLOS | not available |
 | `declare` / `the` / `typep` / `coerce` | not available |
 | `defpackage` / `export` / user packages | not available |
@@ -96,8 +96,14 @@ as a `lambda` value bound to a variable).
 
 ## The `loop` macro
 
-The extended `loop` (`loop for ... collect ...`) is not available. Iteration is
-done with `do`, `dolist`, `dotimes`, and `while`.
+A bounded subset of the extended `loop` **is** available — see
+[`loop`](../reference/macros/loop.md). It covers numeric/list stepping (`for`),
+string stepping (`for ... across`), the common accumulators (`collect`,
+`append`, `sum`, `count`, `maximize`, `minimize`, ...), and simple control
+clauses (`while`/`until`, `repeat`, `when`/`unless`, `finally`, `return`). Out of
+scope are destructuring, parallel `and` between `for` clauses, `being`, the
+anaphoric `it`, `named`/`loop-finish`, and `thereis`/`always`/`never`. The other iteration forms
+(`do`, `dolist`, `dotimes`, `while`) remain available.
 
 ## Structures and objects (`defstruct`, CLOS)
 

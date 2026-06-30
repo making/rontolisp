@@ -13,6 +13,7 @@ categories:
       - { slug: dotimes, name: dotimes }
       - { slug: do, name: do }
       - { slug: do-star, name: "do*" }
+      - { slug: loop, name: loop }
       - { slug: prog1, name: prog1 }
       - { slug: prog2, name: prog2 }
       - { slug: time, name: time }

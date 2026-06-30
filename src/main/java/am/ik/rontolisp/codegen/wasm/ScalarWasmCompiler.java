@@ -1926,6 +1926,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.DOTIMES -> LispMacroExpander.expandDotimes(cons);
 			case LispNames.DO -> LispMacroExpander.expandDo(cons);
 			case LispNames.DO_STAR -> LispMacroExpander.expandDoStar(cons);
+			case LispNames.LOOP -> LispMacroExpander.expandLoop(cons);
 			default -> null;
 		};
 	}
