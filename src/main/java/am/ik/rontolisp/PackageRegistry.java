@@ -9,10 +9,11 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A mutable registry of {@link LispPackage packages}, seeded with the three built-in
- * packages ({@code cl}, {@code cl-user}, {@code rontolisp}). The resolution rules in
- * {@link PackageResolver} operate generically over this registry, so a new package (or a
- * future {@code defpackage}) only needs to be registered here.
+ * A mutable registry of {@link LispPackage packages}, seeded with the built-in packages
+ * ({@code cl}, {@code cl-user}, {@code rontolisp}, and the interpreter-only {@code java}
+ * interop package). The resolution rules in {@link PackageResolver} operate generically
+ * over this registry, so a new package (or a future {@code defpackage}) only needs to be
+ * registered here.
  */
 public final class PackageRegistry {
 
@@ -108,7 +109,7 @@ public final class PackageRegistry {
 	private final Map<String, LispPackage> packages = new HashMap<>();
 
 	/**
-	 * Creates a registry seeded with the three built-in packages.
+	 * Creates a registry seeded with the built-in packages.
 	 */
 	public PackageRegistry() {
 		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS));
@@ -116,6 +117,10 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
 						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.WASM_EXPORT))));
+		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
+		// run on the JVM interpreter only -- the compilers cannot lower them.
+		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
+				LispNames.JAVA_CALL, LispNames.JAVA_STATIC, LispNames.JAVA_FIELD, LispNames.JAVA_PROXY))));
 	}
 
 	/**

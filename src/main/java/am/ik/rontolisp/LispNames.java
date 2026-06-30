@@ -1030,6 +1030,36 @@ public final class LispNames {
 	 */
 	public static final String WASM_EXPORT = "wasm-export";
 
+	/**
+	 * The {@code java} package name (interpreter-only Java interop by reflection). It
+	 * does not use {@code cl}; its functions wrap arbitrary host objects as
+	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and
+	 * WASM backends cannot lower a {@code LispJavaObject}.
+	 */
+	public static final String JAVA_PKG = "java";
+
+	/**
+	 * {@code java:new} -- constructs a host object: {@code (java:new "fqcn" args...)}.
+	 */
+	public static final String JAVA_NEW = "new";
+
+	/** {@code java:call} -- invokes an instance method on a host object. */
+	public static final String JAVA_CALL = "call";
+
+	/**
+	 * {@code java:static} -- invokes a static method:
+	 * {@code (java:static "fqcn" "m" ...)}.
+	 */
+	public static final String JAVA_STATIC = "static";
+
+	/** {@code java:field} -- reads a static or instance field (e.g. a constant). */
+	public static final String JAVA_FIELD = "field";
+
+	/**
+	 * {@code java:proxy} -- makes a host interface instance from a rontolisp callable.
+	 */
+	public static final String JAVA_PROXY = "proxy";
+
 	private LispNames() {
 	}
 

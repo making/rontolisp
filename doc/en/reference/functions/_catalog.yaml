@@ -225,3 +225,10 @@ categories:
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }
       - { slug: rontolisp-fetch, name: "rontolisp:fetch" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
+  - title: "java Package (JVM interpreter only)"
+    functions:
+      - { slug: java-new, name: "java:new" }
+      - { slug: java-call, name: "java:call" }
+      - { slug: java-static, name: "java:static" }
+      - { slug: java-field, name: "java:field" }
+      - { slug: java-proxy, name: "java:proxy" }

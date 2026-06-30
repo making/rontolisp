@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -315,6 +316,53 @@ public final class LispEvaluator {
 			}
 			return LispTrue.INSTANCE;
 		}));
+		registerJava();
+	}
+
+	// Registers the JVM-interpreter-only `java` interop package (a reflection bridge).
+	// Registered here, alongside eval/load, because java:proxy applies a user callback
+	// and so needs the evaluator's apply. These produce LispJavaObject values, which the
+	// JVM-class and WASM backends cannot lower; and the reflection needs runtime
+	// metadata a native image lacks -- so it runs only under `java -jar rontolisp.jar`.
+	private void registerJava() {
+		JavaInterop.Caller caller = (function, callArgs) -> apply(function, callArgs, this.globalEnv);
+		String jnew = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_NEW);
+		this.globalEnv.defineFunction(jnew, new LispFunction(jnew, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispString cls)) {
+				throw new LispEvalException(jnew + " expects a class-name string, got "
+						+ (args.isEmpty() ? "no arguments" : args.get(0).print()));
+			}
+			return JavaInterop.newInstance(cls.value(), args.subList(1, args.size()), caller);
+		}));
+		String jcall = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_CALL);
+		this.globalEnv.defineFunction(jcall, new LispFunction(jcall, args -> {
+			if (args.size() < 2 || !(args.get(1) instanceof LispString method)) {
+				throw new LispEvalException(jcall + " expects (java:call object \"method\" args...)");
+			}
+			return JavaInterop.callInstance(args.get(0), method.value(), args.subList(2, args.size()), caller);
+		}));
+		String jstatic = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_STATIC);
+		this.globalEnv.defineFunction(jstatic, new LispFunction(jstatic, args -> {
+			if (args.size() < 2 || !(args.get(0) instanceof LispString cls)
+					|| !(args.get(1) instanceof LispString method)) {
+				throw new LispEvalException(jstatic + " expects (java:static \"class\" \"method\" args...)");
+			}
+			return JavaInterop.callStatic(cls.value(), method.value(), args.subList(2, args.size()), caller);
+		}));
+		String jfield = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_FIELD);
+		this.globalEnv.defineFunction(jfield, new LispFunction(jfield, args -> {
+			if (args.size() != 2 || !(args.get(1) instanceof LispString field)) {
+				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\")");
+			}
+			return JavaInterop.field(args.get(0), field.value());
+		}));
+		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
+		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispString iface)) {
+				throw new LispEvalException(jproxy + " expects (java:proxy \"interface\" callable)");
+			}
+			return JavaInterop.proxy(iface.value(), args.get(1), caller);
+		}));
 	}
 
 	/**
@@ -348,6 +396,7 @@ public final class LispEvaluator {
 			case LispLambda l -> l;
 			case LispHashTable h -> h;
 			case LispArray a -> a;
+			case LispJavaObject j -> j;
 			case LispSymbol sym -> sym.isKeyword() ? sym : env.lookup(sym.name());
 			case LispCons cons -> evalCons(cons, env);
 		};

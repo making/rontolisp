@@ -1,0 +1,34 @@
+# Java interop follow-ups
+
+The `java:` interop package (interpreter-only reflection bridge) was adopted into
+`develop`: `LispJavaObject` + the `java` package (`java:new`/`call`/`static`/
+`field`/`proxy`) in `eval/JavaInterop.java`, with deterministic cost-based
+overload resolution, `JavaInteropTest`, docs (`doc/{en,ja}/guides/java-interop.md`
++ five `reference/functions/java-*.md`), and examples `java-interop.lisp` /
+`swing.lisp` / `life-core.lisp` / `life-gui.lisp` (the console `life.lisp` was
+split to load the shared core). See the CLAUDE.md "java: interop" bullet.
+
+Deliberately deferred (scope was kept to one clean GUI demo; the existing
+`maze-rl.lisp` / `nqueens.lisp` were left untouched):
+
+- **More GUI demos.** The `gui-poc` branch also has `maze-rl-gui.lisp` /
+  `maze-rl-core.lisp` and `nqueens-gui.lisp` / `nqueens-core.lisp` (same
+  core/gui split pattern as life). Bring them over if more Swing examples are
+  wanted: `git checkout gui-poc -- examples/<file>` then update the headers the
+  same way `life-gui.lisp`/`swing.lisp` were (file-relative `load` works now, so
+  drop the "run from inside examples/" caveat) and add README rows.
+
+- **Friendlier compile error.** Compiling a `java:` form currently fails with the
+  generic `Cannot compile: java:static`. Could special-case the `java` package in
+  `Jvm/WasmFunctionCallCompiler` to say "the java interop package is
+  interpreter-only". Low value — the guide already documents it.
+
+- **Richer marshalling (optional).** Lisp lists/arrays are not bridged to Java
+  arrays/`List`, and varargs are unsupported. Add if a real example needs it
+  (e.g. passing `String[]`); document the conversion rules in the guide.
+
+- **Native-image reflection config (optional).** Interop is interpreter-only and
+  also unusable in the native binary because arbitrary `Class.forName` is not
+  registered. A curated reflect-config could enable a fixed allow-list of classes
+  in the native binary, but Swing/AWT in a native image is its own (largely
+  experimental) problem — out of scope unless specifically requested.

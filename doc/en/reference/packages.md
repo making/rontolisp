@@ -1,10 +1,11 @@
 # Packages
 
-rontolisp has a small namespace (package) system with three built-in packages:
+rontolisp has a small namespace (package) system with four built-in packages:
 
 - **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
 - **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
 - **`rontolisp`** — a package for implementation-specific symbols. It does **not** use `cl`. It owns the `version`, `list-functions`, `list-macros` and `list-special-forms` functions.
+- **`java`** — Java interop by reflection, usable only under the JVM interpreter (`java -jar rontolisp.jar`), not the compilers or the native binary. It does **not** use `cl`. It owns `new`, `call`, `static`, `field` and `proxy`; see the [Java interop guide](../guides/java-interop.md).
 
 A symbol can be referenced with a package qualifier, `package:symbol` (e.g. `cl:car`, `rontolisp:version`). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`).
 

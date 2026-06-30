@@ -37,6 +37,8 @@ sections:
         title: 関数名前空間
   - title: ガイド
     pages:
+      - file: guides/java-interop.md
+        title: Java 連携
       - file: guides/missing-features.md
         title: 未対応のCL機能
       - file: guides/eval-limitations.md

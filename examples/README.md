@@ -13,7 +13,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | File | What it demonstrates |
 | --- | --- |
 | [`nqueens.lisp`](nqueens.lisp) | Backtracking search (N-Queens): recursion, list manipulation, functional accumulation, ASCII board output |
-| [`life.lisp`](life.lisp) | Conway's Game of Life: a glider on an 8x8 toroidal grid backed by a 2-D `make-array`, neighbour counting with wraparound, and per-generation ASCII rendering |
+| [`life.lisp`](life.lisp) | Conway's Game of Life: a console front-end that `(load ...)`s the rendering-free core (`life-core.lisp`) -- a 30x24 toroidal grid backed by a 2-D `make-array`, neighbour counting with wraparound, and per-generation ASCII rendering |
 | [`sorting.lisp`](sorting.lisp) | Quicksort and merge sort over number lists, parameterized by a first-class comparator; cross-checked against the built-in `sort` |
 | [`calc.lisp`](calc.lisp) | A tiny prefix-arithmetic interpreter: a recursive evaluator over an alist environment, cross-checked against the built-in `eval` |
 | [`mandelbrot.lisp`](mandelbrot.lisp) | ASCII Mandelbrot set: floating-point arithmetic and nested loops (no transcendental functions) |
@@ -22,6 +22,21 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`nn.lisp`](nn.lisp) | Feed-forward neural network learning XOR via backpropagation: vectors as rank-1 arrays and weight matrices as rank-2 `make-array`s, with `aref`, `(setf (aref ...))` and `incf`/`decf` for in-place weight updates |
 | [`mlp.lisp`](mlp.lisp) | Generalized multi-layer perceptron for 2-D circle classification, built on the same array-based vector/matrix representation as `nn.lisp` |
 | [`maze-rl.lisp`](maze-rl.lisp) | Tabular Q-learning that solves a grid maze: a hash-table Q-table keyed by `(row col action)`, idiomatic `random`-based epsilon-greedy exploration, and an ASCII rendering of the learned path. **Non-deterministic:** because `random` is unseeded and per-backend, the exact path and value count differ on each run and backend (the algorithm always converges to a valid route) |
+
+## Java interop / GUI (JVM interpreter only)
+
+These drive real Java APIs through the `java:` interop package, so they run on
+the **JVM interpreter only** (`java -jar $JAR ...`) — not the JVM-class/WASM
+compiler backends (which cannot lower a java object) and not the GraalVM native
+binary (which has no reflection metadata for the interop classes) — and need a
+machine with a display. See the
+[Java interop guide](../doc/en/guides/java-interop.md).
+
+| File | What it demonstrates |
+| --- | --- |
+| [`java-interop.lisp`](java-interop.lisp) | A minimal Swing window built directly through `java:new`/`java:call`/`java:field`/`java:proxy` -- a button whose `ActionListener` is a rontolisp lambda wrapped in a dynamic proxy |
+| [`swing.lisp`](swing.lisp) | A small reusable Swing grid-window helper library, written entirely on top of `java:` (no bespoke Java class); reused as the rendering layer by the GUI demos |
+| [`life-gui.lisp`](life-gui.lisp) | Conway's Game of Life animated in a Swing window: loads the same `life-core.lisp` as `life.lisp` plus `swing.lisp`, and steps the world on a `javax.swing.Timer` |
 
 ## Browser demos (compile to WASM, run in a page)
 
