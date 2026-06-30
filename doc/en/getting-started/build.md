@@ -45,6 +45,20 @@ The rest of the documentation uses the `rontolisp` command. If you build from
 source instead (below), substitute `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar`
 for `rontolisp`.
 
+## Download the executable JAR
+
+The same [releases page](https://github.com/making/rontolisp/releases/tag/0.1.0-SNAPSHOT)
+also publishes the self-contained executable JAR
+(`rontolisp-0.1.0-SNAPSHOT-exec.jar`). It needs a Java 25+ runtime but works on
+any platform, and it is the only artifact that can run the JVM-interpreter-only
+[`java:` interop package](../guides/java-interop.md) — the native binaries carry
+no reflection metadata, so `java:` forms fail there.
+
+```bash
+wget https://github.com/making/rontolisp/releases/download/0.1.0-SNAPSHOT/rontolisp-0.1.0-SNAPSHOT-exec.jar
+java -jar rontolisp-0.1.0-SNAPSHOT-exec.jar --version
+```
+
 ## Build from source
 
 Requires **Java 25+**.
