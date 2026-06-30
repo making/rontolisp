@@ -34,6 +34,9 @@ final class WasmMapcCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(listSlot);
 
+		// mapc operates on lists; a non-list (e.g. a string) traps.
+		WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
+
 		// cursor = list
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(listSlot);

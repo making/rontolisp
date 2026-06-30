@@ -1840,6 +1840,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
+		// The map* family operates on lists; a non-list (e.g. a string) signals an error
+		// rather than silently returning nil, matching the interpreter (.todo/26).
+		assertThatThrownBy(() -> compileAndRun("(mapcar #'identity \"abc\")"))
+			.hasRootCauseMessage("mapcar: argument is not a list (use map for strings/vectors)");
+		assertThatThrownBy(() -> compileAndRun("(mapc #'identity \"abc\")"))
+			.hasRootCauseMessage("mapc: argument is not a list (use map for strings/vectors)");
+		assertThatThrownBy(() -> compileAndRun("(mapcan #'list \"abc\")"))
+			.hasRootCauseMessage("mapcan: argument is not a list (use map for strings/vectors)");
+		assertThatThrownBy(() -> compileAndRun("(maplist #'identity \"abc\")"))
+			.hasRootCauseMessage("maplist: argument is not a list: \"abc\" (use map for strings/vectors)");
+		assertThatThrownBy(() -> compileAndRun("(mapcon #'list \"abc\")"))
+			.hasRootCauseMessage("mapcon: argument is not a list: \"abc\" (use map for strings/vectors)");
+		// nil (the empty list) and proper lists stay accepted.
+		assertThat(compileAndRun("(print (mapcar #'1+ '(1 2 3))) (print (mapcar #'1+ nil))")).isEqualTo("(2 3 4)\nnil");
+		assertThat(compileAndRun("(print (maplist #'identity nil))")).isEqualTo("nil");
+	}
+
+	@Test
 	void compileAndRunEvery() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");

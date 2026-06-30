@@ -227,6 +227,43 @@ final class JvmEmitHelper {
 	}
 
 	/**
+	 * Emits a list-type guard for the {@code map*} family over the value in
+	 * {@code listSlot}: if the value is neither null (nil) nor an {@code Object[]} (a
+	 * cons), a {@link RuntimeException} carrying {@code message} is thrown. This matches
+	 * the interpreter, which signals an error rather than silently treating a non-list
+	 * (e.g. a string) as the empty list. The operand stack is empty at every branch and
+	 * at the merge point, so the version-50 verifier accepts it.
+	 */
+	static void emitRequireListGuard(JvmLispCompiler.Ctx ctx, int listSlot, String message) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(listSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(listSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		int ifIsArrayPos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		// Not a list: throw new RuntimeException(message).
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		compileStringLiteral(message, ctx);
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(ctor.index());
+		ctx.emit(Opcode.ATHROW);
+		// ok: both the nil and the cons case fall through here.
+		patchBranch(ctx, ifNullPos, ctx.code.size());
+		patchBranch(ctx, ifIsArrayPos, ctx.code.size());
+	}
+
+	/**
 	 * Boxes a local variable in an Object[1] cell for capture-by-reference.
 	 */
 	static void emitBoxLocal(JvmLispCompiler.Ctx ctx, int slot) {

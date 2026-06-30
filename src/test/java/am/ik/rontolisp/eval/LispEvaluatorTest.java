@@ -1854,6 +1854,30 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void mapFamilySignalsErrorOnNonList() {
+		// The map* family operates on lists; passing a non-list (e.g. a string) signals
+		// an
+		// error rather than silently returning nil, which would hide a caller's mistake
+		// (.todo/26). nil is a valid empty list and must stay accepted.
+		assertThatThrownBy(() -> eval("(mapcar #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("mapcar: argument is not a list: \"abc\"");
+		assertThatThrownBy(() -> eval("(mapc #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("mapc: argument is not a list");
+		assertThatThrownBy(() -> eval("(mapcan #'list \"abc\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("mapcan: argument is not a list");
+		assertThatThrownBy(() -> eval("(maplist #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("maplist: argument is not a list");
+		assertThatThrownBy(() -> eval("(mapcon #'list \"abc\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("mapcon: argument is not a list");
+		assertThatThrownBy(() -> eval("(mapcar #'1+ 5)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("mapcar: argument is not a list: 5");
+		// nil (the empty list) stays accepted across the family.
+		assertThat(eval("(mapcar #'1+ nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(maplist #'identity nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(mapcon #'list nil)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalNotanyNotevery() {
 		assertThat(eval("(notany #'evenp '(1 3 5))")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(notany #'evenp '(1 2 3))")).isEqualTo(LispNil.INSTANCE);

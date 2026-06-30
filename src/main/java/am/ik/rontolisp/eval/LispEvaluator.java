@@ -102,12 +102,14 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.MAPCAR + " expects 2 arguments, got " + args.size());
 			}
+			requireList(LispNames.MAPCAR, args.get(1));
 			return mapValues(args.get(0), args.get(1));
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.MAPC + " expects 2 arguments, got " + args.size());
 			}
+			requireList(LispNames.MAPC, args.get(1));
 			return mapForEffect(args.get(0), args.get(1));
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPHASH, new LispFunction(LispNames.MAPHASH, args -> {
@@ -237,6 +239,7 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.MAPCAN + " expects 2 arguments, got " + args.size());
 			}
+			requireList(LispNames.MAPCAN, args.get(1));
 			return mapcanValues(args.get(0), args.get(1));
 		}));
 		this.globalEnv.defineFunction(LispNames.SORT, new LispFunction(LispNames.SORT, args -> {
@@ -633,6 +636,17 @@ public final class LispEvaluator {
 		List<LispSymbol> params = extractParams(parts.get(1));
 		List<LispVal> body = parts.subList(2, parts.size());
 		return new LispLambda(params, body, env);
+	}
+
+	// The map* family (mapcar/mapc/mapcan/maplist/mapcon) operates on lists; passing a
+	// non-list (e.g. a string) signals an error rather than silently behaving like the
+	// empty list, which would hide a caller's mistake. nil is a valid empty list. For
+	// mapping over a string or vector, use the generic map.
+	private void requireList(String name, LispVal value) {
+		if (!(value instanceof LispNil) && !(value instanceof LispCons)) {
+			throw new LispEvalException(
+					name + ": argument is not a list: " + value.print() + " (use map for strings/vectors)");
+		}
 	}
 
 	private LispVal mapValues(LispVal function, LispVal list) {

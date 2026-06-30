@@ -35,6 +35,9 @@ final class WasmMapcanCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(listSlot);
 
+		// mapcan operates on lists; a non-list (e.g. a string) traps.
+		WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
+
 		// result = null
 		int resultSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.REF_NULL);

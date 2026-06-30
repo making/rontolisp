@@ -35,6 +35,9 @@ final class WasmMapcarCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(listSlot);
 
+		// mapcar operates on lists; a non-list (e.g. a string) traps.
+		WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
+
 		// Create sentinel cons: struct.new TYPE_CONS (null, null)
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());

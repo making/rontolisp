@@ -34,6 +34,10 @@ final class JvmMapcanCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(listSlot);
 
+		// mapcan operates on lists; a non-list (e.g. a string) signals an error.
+		JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
+				"mapcan: argument is not a list (use map for strings/vectors)");
+
 		// result = null
 		int resultSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ACONST_NULL);

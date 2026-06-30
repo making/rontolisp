@@ -3114,16 +3114,18 @@ public final class LispMacroExpander {
 	public static LispVal expandMaplist(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol fn = new LispSymbol("__maplist_fn");
+		LispSymbol lst = new LispSymbol("__maplist_lst");
 		LispSymbol acc = new LispSymbol("__maplist_acc");
 		LispSymbol cur = new LispSymbol("__maplist_cur");
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(fn, parts.get(1))), listToCons(List.of(acc, LispNil.INSTANCE)),
-						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
+				listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
 		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), call, acc))));
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		LispVal loop = expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		return wrapMapListGuard(LispNames.MAPLIST, fn, parts.get(1), lst, parts.get(2), loop);
 	}
 
 	/**
@@ -3135,16 +3137,52 @@ public final class LispMacroExpander {
 	public static LispVal expandMapcon(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol fn = new LispSymbol("__mapcon_fn");
+		LispSymbol lst = new LispSymbol("__mapcon_lst");
 		LispSymbol acc = new LispSymbol("__mapcon_acc");
 		LispSymbol cur = new LispSymbol("__mapcon_cur");
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(fn, parts.get(1))), listToCons(List.of(acc, LispNil.INSTANCE)),
-						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
+				listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
 		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.APPEND), acc, call))));
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		LispVal loop = expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		return wrapMapListGuard(LispNames.MAPCON, fn, parts.get(1), lst, parts.get(2), loop);
+	}
+
+	/**
+	 * Wraps a {@code maplist}/{@code mapcon} loop in a guard that binds the function and
+	 * list arguments once (preserving left-to-right evaluation: function then list) and
+	 * signals an error when the list argument is not a list. The list value is bound to
+	 * {@code lstSym}, which the loop walks. nil is a valid empty list.
+	 * @param name the operator name (for the error message)
+	 * @param fnSym the symbol the function argument is bound to
+	 * @param fnArg the (unevaluated) function argument form
+	 * @param lstSym the symbol the list argument is bound to
+	 * @param listArg the (unevaluated) list argument form
+	 * @param loop the expanded loop that walks {@code lstSym}
+	 * @return the guarded expression
+	 */
+	private static LispVal wrapMapListGuard(String name, LispSymbol fnSym, LispVal fnArg, LispSymbol lstSym,
+			LispVal listArg, LispVal loop) {
+		LispVal letBindings = listToCons(
+				List.of(listToCons(List.of(fnSym, fnArg)), listToCons(List.of(lstSym, listArg))));
+		LispVal guard = makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), lstSym)), loop,
+				mapNotAListError(name, lstSym));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), letBindings, guard));
+	}
+
+	/**
+	 * Builds {@code (error "<name>: argument is not a list: ~s ..." valueSym)} for the
+	 * map* family list-type guard.
+	 * @param name the operator name
+	 * @param valueSym the symbol holding the offending value
+	 * @return the error expression
+	 */
+	private static LispVal mapNotAListError(String name, LispSymbol valueSym) {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(name + ": argument is not a list: ~s (use map for strings/vectors)"), valueSym));
 	}
 
 	/**

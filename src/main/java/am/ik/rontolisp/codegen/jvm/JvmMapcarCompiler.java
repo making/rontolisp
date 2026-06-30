@@ -33,6 +33,10 @@ final class JvmMapcarCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(listSlot);
 
+		// mapcar operates on lists; a non-list (e.g. a string) signals an error.
+		JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
+				"mapcar: argument is not a list (use map for strings/vectors)");
+
 		// Create sentinel cons: new Object[2] {null, null}
 		ctx.emit(Opcode.ICONST_2);
 		ctx.emit(Opcode.ANEWARRAY);

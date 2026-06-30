@@ -481,6 +481,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void mapFamilyTrapsOnNonList() throws Exception {
+		// The map* family operates on lists; a non-list (e.g. a string) traps rather than
+		// silently returning nil, matching the interpreter (.todo/26). WASM error is an
+		// unreachable trap (it carries no message).
+		for (String form : List.of("(mapcar #'identity \"abc\")", "(mapc #'identity \"abc\")",
+				"(mapcan #'list \"abc\")", "(maplist #'identity \"abc\")", "(mapcon #'list \"abc\")")) {
+			byte[] wasmBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(form));
+			wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+			ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+			assertThat(result.getExitCode()).as("expected a trap for: %s", form).isNotZero();
+			assertThat(result.getStderr()).as("trap message for: %s", form).contains("unreachable");
+		}
+		// nil (the empty list) and proper lists stay accepted (no trap).
+		assertThat(compileAndRun("(print (mapcar #'1+ '(1 2 3))) (print (mapcar #'1+ nil))")).isEqualTo("(2 3 4)\nnil");
+		assertThat(compileAndRun("(print (maplist #'identity nil))")).isEqualTo("nil");
+	}
+
+	@Test
 	void exportUnknownFunctionFailsToCompile() {
 		assertThatThrownBy(
 				() -> compileAndInvoke("(rontolisp:wasm-export 'nope :params '(:int) :returns :int)", "nope"))

@@ -62,6 +62,32 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits a list-type guard for the {@code map*} family over the value in
+	 * {@code listSlot}: if the value is neither null (nil) nor a cons, the function traps
+	 * ({@code unreachable}). This matches the interpreter, which signals an error rather
+	 * than silently treating a non-list (e.g. a string) as the empty list. The guard is a
+	 * balanced, self-contained {@code if}/{@code end} that pushes no value, so it does
+	 * not affect {@code wasmCtrlDepth} bookkeeping.
+	 */
+	static void emitRequireListGuard(WasmLispCompiler.Ctx ctx, int listSlot) {
+		WasmWriter w = ctx.writer;
+		// valid = (ref.is_null list) | (ref.test $cons list)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(listSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(listSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_OR);
+		// if not valid, trap.
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Runtime type check: convert (ref eq) on stack to f64. If i31ref (integer), converts
 	 * via f64.convert_i32_s. If a ratio struct, divides numerator by denominator as f64.
 	 * If float_struct, extracts f64 field.
