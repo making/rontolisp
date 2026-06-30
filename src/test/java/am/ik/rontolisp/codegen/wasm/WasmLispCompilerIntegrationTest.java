@@ -3138,6 +3138,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void listFunctionsForJava() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:list-functions :java))"))
+			.isEqualTo("(call field new proxy static)");
+		assertThat(compileAndRun("(print (rontolisp:list-macros :java))")).isEqualTo("nil");
+	}
+
+	@Test
 	void listFunctionsUnknownPackageIsRejected() {
 		assertThatThrownBy(() -> new WasmLispCompiler()
 			.compile(LispReader.readAllFromString("(print (rontolisp:list-functions :foo))")))

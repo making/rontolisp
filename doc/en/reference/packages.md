@@ -43,6 +43,8 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
 ; => (fetch list-functions list-macros list-special-forms version)
+(print (rontolisp:list-functions :java))
+; => (call field new proxy static)
 ```
 
 The classification follows the function namespace: a name is listed as a function exactly when it is usable as a function value via `#'name` (so `first`, `length`, `1+`, ... are functions even though they compile via inline expansion), and `list-macros`/`list-special-forms` list the operators that have no function value. Notes:

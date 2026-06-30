@@ -954,6 +954,7 @@ cases:
       (print (rontolisp:list-special-forms))
       (print (length (rontolisp:list-functions)))
       (print (rontolisp:list-functions :rontolisp))
+      (print (rontolisp:list-functions :java))
       (defun ci-intro-fn (x) (+ x 1))
       (print (car (member 'ci-intro-fn (rontolisp:list-functions :cl-user))))
       (print (member 'car (rontolisp:list-functions :cl-user)))
@@ -963,6 +964,7 @@ cases:
       (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
       187
       (fetch list-functions list-macros list-special-forms version)
+      (call field new proxy static)
       ci-intro-fn
       nil
       nil

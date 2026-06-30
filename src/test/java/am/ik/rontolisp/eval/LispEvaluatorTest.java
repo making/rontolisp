@@ -2600,11 +2600,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void listFunctionsForJavaReturnsOwnedFunctions() {
+		assertThat(eval("(rontolisp:list-functions :java)").print()).isEqualTo("(call field new proxy static)");
+	}
+
+	@Test
 	void listMacrosAndSpecialFormsAreNilForClUserAndRontolisp() {
 		assertThat(eval("(rontolisp:list-macros :cl-user)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(rontolisp:list-macros :rontolisp)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(rontolisp:list-macros :java)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(rontolisp:list-special-forms :cl-user)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(rontolisp:list-special-forms :rontolisp)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(rontolisp:list-special-forms :java)")).isEqualTo(LispNil.INSTANCE);
 	}
 
 	@Test

@@ -2703,6 +2703,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunListFunctionsForJava() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:list-functions :java))"))
+			.isEqualTo("(call field new proxy static)");
+		assertThat(compileAndRun("(print (rontolisp:list-macros :java))")).isEqualTo("nil");
+	}
+
+	@Test
 	void compileListFunctionsUnknownPackageThrows() {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:list-functions :foo))"))
 			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)

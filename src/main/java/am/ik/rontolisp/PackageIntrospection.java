@@ -20,6 +20,12 @@ public final class PackageIntrospection {
 			LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.VERSION);
 
 	/**
+	 * The functions owned by the {@code java} interop package, sorted alphabetically.
+	 */
+	public static final List<String> JAVA_FUNCTION_NAMES = List.of(LispNames.JAVA_CALL, LispNames.JAVA_FIELD,
+			LispNames.JAVA_NEW, LispNames.JAVA_PROXY, LispNames.JAVA_STATIC);
+
+	/**
 	 * Filters a collection of function-namespace names down to the user-defined
 	 * {@code cl-user} functions: package-qualified names, {@code %}-prefixed internals
 	 * and {@code cl} symbols (including names shadowing them) are excluded.
@@ -59,6 +65,7 @@ public final class PackageIntrospection {
 				LispNames.LIST_FUNCTIONS.equals(member) ? userFunctionNames(userFunctionCandidates) : List.of();
 			case LispNames.RONTOLISP_PKG ->
 				LispNames.LIST_FUNCTIONS.equals(member) ? RONTOLISP_FUNCTION_NAMES : List.of();
+			case LispNames.JAVA_PKG -> LispNames.LIST_FUNCTIONS.equals(member) ? JAVA_FUNCTION_NAMES : List.of();
 			default -> throw new IllegalArgumentException("No such package: " + pkg);
 		};
 	}

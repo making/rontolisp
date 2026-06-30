@@ -47,6 +47,8 @@ rontolispには、4つの組み込みパッケージを持つ小さな名前空�
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
 ; => (fetch list-functions list-macros list-special-forms version)
+(print (rontolisp:list-functions :java))
+; => (call field new proxy static)
 ```
 
 この分類は関数名前空間に従います。ある名前が関数として列挙されるのは、`#'name`
