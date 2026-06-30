@@ -22,6 +22,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.ScalarWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.LispReader;
 
 /**
@@ -146,7 +147,12 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, String outputFile, boolean dynamic, boolean component, boolean noWasi,
 			boolean optimize, boolean noGc) {
-		List<LispVal> program = LispReader.readAllFromString(source);
+		// Inline top-level (load "path") forms at compile time: the compilers collect
+		// defuns in a static pass that a runtime load cannot feed, so a program split
+		// across files (a console driver loading a rendering-free core) would otherwise
+		// fail to compile. The interpreter loads at runtime instead, so this is
+		// compile-path only.
+		List<LispVal> program = LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem());
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {

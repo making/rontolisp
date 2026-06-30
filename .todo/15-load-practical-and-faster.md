@@ -1,10 +1,11 @@
 # Make `load` practical and fast across the compilers
 
-**Status:** not started. Motivated by `examples/hiragana/` (a multi-file Lisp
-program: `common.lisp` + `prototypes.lisp` + `train-main.lisp`, and
-`common.lisp` + `weights.lisp` + `infer-main.lisp`). Today those files are
-**concatenated** by `gen.sh` before compiling, because `load` does not compose
-with the compilers. This TODO is about removing that workaround.
+**Status:** direction A DONE (compile-time include); directions B and C still
+open. Motivated by `examples/hiragana/` (a multi-file Lisp program:
+`common.lisp` + `prototypes.lisp` + `train-main.lisp`, and `common.lisp` +
+`weights.lisp` + `infer-main.lisp`). Today those files are **concatenated** by
+`gen.sh` before compiling, because `load` did not compose with the compilers;
+direction A removes the need for that workaround.
 
 ## The problem (measured)
 
@@ -38,23 +39,34 @@ Two distinct gaps:
 
 ## Directions (pick per use case)
 
-### A. Compile-time `load` / include (closes gap 1 — highest value)
+### A. Compile-time `load` / include (closes gap 1 — highest value) — DONE
 
-Treat a **top-level** `(load "x.lisp")` with a literal path as a *compile-time
-include*: splice `x.lisp`'s forms into the compilation unit before Pass 1, so the
-backends see the definitions and compile them natively (no `--dynamic`, no perf
-loss). Natural home: a pre-compile pass alongside `PackageResolver` (root
-`am.ik.rontolisp`), which already runs before the evaluator and both compilers
-and rewrites forms. Open questions:
-- Only literal-path, top-level `load` qualifies; a runtime/computed `load` stays
-  dynamic (document the split, like the `open` `:direction` literal rule).
-- Cycle/idempotency guard (a `require`-style "load once" set).
-- Path resolution relative to the including file vs. CWD.
-- Interpreter parity: the interpreter already evaluates `load` at runtime, so a
-  compile-time include must not double-define there — either share the include
-  expansion, or keep interpreter on its runtime path.
-This would let `examples/hiragana/gen.sh` drop the `cat` steps and instead have
-`train.lisp`/`infer.lisp` be thin files that `(load ...)` the shared pieces.
+Implemented as `am.ik.rontolisp.cli.LoadInliner`, wired into
+`RontoLispCli.compileToFile` (compile path only). A **top-level**
+`(load "x.lisp")` with a string-literal path is treated as a *compile-time
+include*: `x.lisp`'s forms are spliced into the program before the compilers run
+(and before their `PackageResolver` pass), so Pass 1 sees the definitions and
+compiles them natively — no `--dynamic`, no perf loss. Tests: `LoadInlinerTest`
+(in-memory loader + a JVM compile-and-run regression).
+
+How the open questions were resolved:
+- **Scope:** only a literal-path, top-level `(load "...")` is inlined; a
+  runtime/computed `load`, or one nested inside another form, is left untouched
+  (still runs at runtime via the embedded reader, e.g. under `--dynamic`).
+- **Cycle guard:** a path stack detects circular loads and throws
+  (`IllegalStateException: Circular load detected: ...`). NOT idempotent — each
+  `load` includes again, matching CL `load` semantics (no `require`-style
+  load-once set yet; add one if a diamond include becomes a problem).
+- **Path resolution:** CWD-relative, the same as the runtime `load`
+  (`SourceLoader.fileSystem()`). File-relative resolution is a follow-up and
+  should be applied to both paths together.
+- **Interpreter parity:** the inliner runs ONLY on the compile path
+  (`compileToFile`); the interpreter keeps its runtime `load`, so no
+  double-definition.
+
+Not yet done: rewrite `examples/hiragana/gen.sh` to drop the `cat` steps and have
+`train.lisp`/`infer.lisp` `(load ...)` the shared pieces (the mechanism now
+supports it; the example just hasn't been migrated).
 
 ### B. Browser virtual filesystem (closes gap 2 — enables "B2")
 
@@ -78,11 +90,12 @@ than A/B.
 
 ## Acceptance
 
-- A multi-file program using top-level `(load ...)` compiles and runs natively on
-  interpreter / JVM / WASM Preview1 / WASM component with identical output (no
-  `--dynamic`, no concatenation) — direction A.
-- (Optional) `examples/hiragana/` rewritten to `load` the shared `.lisp` pieces
-  instead of `cat` in `gen.sh`, with the committed `infer.wasm` unchanged in
-  behavior.
-- README "Compiled `eval` limitations" / load sections and CLAUDE.md updated to
-  describe the compile-time-include semantics and the browser virtual-FS option.
+- [x] A multi-file program using top-level `(load ...)` compiles and runs
+  natively on interpreter / JVM / WASM Preview1 / WASM component with identical
+  output (no `--dynamic`, no concatenation) — direction A.
+- [ ] (Optional) `examples/hiragana/` rewritten to `load` the shared `.lisp`
+  pieces instead of `cat` in `gen.sh`, with the committed `infer.wasm` unchanged
+  in behavior.
+- [x] CLAUDE.md updated to describe the compile-time-include semantics
+  (`LoadInliner`). README user-facing `load`/compile sections and the browser
+  virtual-FS option (direction B) still to do.
