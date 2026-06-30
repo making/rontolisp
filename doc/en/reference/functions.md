@@ -201,10 +201,14 @@ package system. Each name below links to its own page.
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | perform an HTTP request; returns a `(:status :body :headers)` plist |
+| `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 
 The introspection functions (`list-functions` / `list-macros` /
 `list-special-forms`) are described in detail under
 [Package introspection](packages.md#package-introspection). `rontolisp:fetch`
 performs an outgoing HTTP request; see its [reference
 page](functions/rontolisp-fetch.md) for options, the result plist, backend
-support, and limitations.
+support, and limitations. `rontolisp:wasm-export` is a compile-time directive
+for the WASM backend; see its [reference
+page](functions/rontolisp-wasm-export.md) and the
+[Compiling to WebAssembly](../compiling/wasm.md) guide.

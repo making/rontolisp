@@ -198,10 +198,14 @@
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | HTTPリクエストを実行します。`(:status :body :headers)` のplistを返します |
+| `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 
 イントロスペクション関数(`list-functions` / `list-macros` /
 `list-special-forms`)については
 [パッケージのイントロスペクション](packages.md#package-introspection)
 で詳しく説明しています。`rontolisp:fetch`
 は外向きのHTTPリクエストを実行します。オプション、結果plist、バックエンドのサポート、制限については
-[リファレンスページ](functions/rontolisp-fetch.md) を参照してください。
+[リファレンスページ](functions/rontolisp-fetch.md) を参照してください。`rontolisp:wasm-export`
+はWASMバックエンド向けのコンパイル時ディレクティブです。
+[リファレンスページ](functions/rontolisp-wasm-export.md) および
+[WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。
