@@ -15,15 +15,21 @@ WebAssembly にコンパイルし、ブラウザの `<canvas>` に書いた文�
 ## 仕組み
 
 ```
-[オフライン]  common.lisp + prototypes.lisp + train-main.lisp = train.lisp
+[オフライン]  train.lisp が common.lisp + prototypes.lisp を (load ...)
               -> (JVM で実行) 学習し、重みを weights.lisp として出力
-              common.lisp + weights.lisp + infer-main.lisp = infer.lisp
-              -> rontolisp infer.lisp -o infer.wasm   (WASI Preview1, WASM GC)
+              infer.lisp が common.lisp + weights.lisp を (load ...)
+              -> rontolisp infer.lisp -o infer.wasm  (WASI Preview1, WASM GC)
 
 [ブラウザ]    canvas 描画 -> JS が 24x24 に縮小・中心化・二値化して平坦化
               -> "(0.0 1.0 ... )" を stdin として infer.wasm に渡す (wasi-shim.js)
               -> stdout "pred <i> <romaji>" を読み、ひらがなで表示
 ```
+
+各ファイルは連結ではなく `(load ...)` で合成します。コンパイラではトップレベルのリテラル
+`(load ...)` は**コンパイル時インクルード**として展開されるので、読み込んだ `defun` は
+ネイティブにコンパイルされ（連結と同一）、インタプリタはランタイムで読み込みます。相対パスは
+**その `load` を書いたファイルからの相対**で解決されるため、どのディレクトリから実行しても
+動きます。
 
 - 画像は **24x24 グリッド**を行優先で平坦化した長さ 576 のベクトル（値は 0/1）。
 - ネットワークは **576 - 20 - 46**。出力 46 ユニット + one-hot ターゲット + argmax で多クラス分類
@@ -39,8 +45,9 @@ WebAssembly にコンパイルし、ブラウザの `<canvas>` に書いた文�
 
 ### 重みの焼き込みと「読み込めるか」
 
-重みは `infer.lisp` に Lisp ソースとして埋め込まれ、**コンパイル時にホストの `LispReader`
-（JDK 完全版）が読みます**。したがって精度の劣化はなく、WASM 実行時リーダ（整数は i31、
+重みは `weights.lisp` から `infer.lisp` に `(load ...)` で取り込まれ、コンパイル時
+インクルードとして**ホストの `LispReader`（JDK 完全版）が読みます**。したがって精度の劣化はなく、
+WASM 実行時リーダ（整数は i31、
 小数は指数なし）を通るのは **stdin のビットマップだけ**です。ブラウザ側は `0.0`/`1.0` の
 素の小数しか送らないので安全です。
 
@@ -50,7 +57,7 @@ JVM バックエンドは 1 メソッドのバイトコードが 64KB に制限�
 
 加えて JVM では**クラス全体**にも制限があり、焼き込む浮動小数定数が概ね 1.3 万個を超えると、
 スタックマップを持たないクラス版 50 のバイトコードが JDK 25 のベリファイアを通らなくなります
-（`infer.lisp` がロードできなくなる）。このため隠れ層は 20（重み合計 = 623×20+46 ≈ 1.25 万）に
+（`infer.wasm` への JVM 版確認ができなくなる）。このため隠れ層は 20（重み合計 = 623×20+46 ≈ 1.25 万）に
 抑えています。インタプリタと WASM にこの制限はありません。隠れ層を増やすと WASM 版だけは
 動きますが、JVM 版の確認はできなくなります。
 
@@ -101,7 +108,7 @@ examples/hiragana/gen.sh --weights-from examples/hiragana/weights-k49.lisp  # �
 ```
 
 - `weights-k49.lisp` は `*weights*` に加え **49 クラスの `*labels*`** を定義します。
-  `infer-main.lisp` は `defvar` で 46 を既定束縛しますが、連結で先に来るこの定義が
+  `infer.lisp` は `defvar` で 46 を既定束縛しますが、load で先に来るこの定義が
   冪等性により 49 を上書きします（既定パスは `*labels*` を出さないので 46 のまま）。
 - ブラウザ表示用に `glyphs.js` の `KANA` へ K49 固有の 3 クラス
   （ゐ=wi・ゑ=we・繰り返し記号 ゝ=iter）を追加済みです。参考字形サムネイルは合成 46 のまま。
@@ -131,6 +138,10 @@ python3 -m http.server 8000 --directory examples/hiragana
 canvas はブラウザ専用ですが、認識ロジックはバックエンド非依存です。`samples/` に各クラスを
 平坦化したビットマップ（`(0.0 1.0 ...)` 1 行）を置いてあります。
 
+`infer.lisp` の `(load ...)` はファイル相対で解決されるので、どのディレクトリから
+実行しても `common.lisp` / `weights.lisp` を見つけます（JVM だけはクラス名が出力ファイル名に
+なるため、パスを含めないようディレクトリ内で実行します）。
+
 ```bash
 JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 S=examples/hiragana/samples
@@ -154,15 +165,15 @@ java -jar $JAR examples/hiragana/infer.lisp -o /tmp/infer.wasm && wasmtime run -
 | `regen-glyphs.sh`              | `GlyphGen.java` を実行する薄いラッパ                        |
 | `prototypes.lisp`              | 各クラスの 24x24 字形テンプレート（生成物・学習データの種）   |
 | `glyphs.js`                    | ブラウザ表示用の参考字形 `GLYPHS`/`KANA`/`ORDER`（生成物）    |
-| `train-main.lisp`              | オフライン学習本体（データ拡張・SGD・重みのシリアライズ）      |
-| `infer-main.lisp`              | 推論本体（stdin から読み、forward、クラスを出力）            |
+| `train.lisp`                   | オフライン学習本体（`common.lisp`+`prototypes.lisp` を load・データ拡張・SGD・重みのシリアライズ） |
+| `infer.lisp`                   | 推論本体（`common.lisp`+`weights.lisp` を load・stdin から読み、forward、クラスを出力） |
 | `gen.sh`                       | 学習 → `infer.wasm` 生成のパイプライン（`--weights-from` で (B) 経路） |
 | `tools/k49/`                   | 実データ (Kuzushiji-49) 外部学習ツール（(B) 経路・ビルド対象外） |
 | `index.html`                   | canvas で描いて認識するブラウザページ                       |
 | `wasi-shim.js`                 | WASI Preview1 シム（`../wasm-browser/` と同一のコピー）       |
 | `samples/*.txt`                | ブラウザなし確認用の平坦化ビットマップ（全 46 クラス・生成物） |
 | `infer.wasm`                   | 学習済み重みを焼き込んだ推論モジュール（生成物・コミット対象） |
-| `train.lisp` / `infer.lisp` / `weights.lisp` | `gen.sh` が生成する中間ファイル                |
+| `weights.lisp`                 | 学習で生成される重み（`gen.sh` が出力・`infer.lisp` が load） |
 
 ## 限界
 

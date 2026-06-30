@@ -24,6 +24,7 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 
 /**
  * CLI entry point for rontolisp.
@@ -67,14 +68,18 @@ public final class RontoLispCli {
 
 		String inputFile = Objects.requireNonNull(options.getNokey());
 		String source = readFile(inputFile);
+		// Relative (load "...") paths resolve against the entry file's directory, so a
+		// program can be run or compiled from any working directory and still find its
+		// companion files (like Common Lisp's *load-pathname*).
+		String baseDir = SourceLoader.parentDir(inputFile);
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
-			compileToFile(source, outputFile, options.contains("--dynamic"), options.contains("--component"),
+			compileToFile(source, baseDir, outputFile, options.contains("--dynamic"), options.contains("--component"),
 					options.contains("--no-wasi"), options.contains("--optimize"), options.contains("--no-gc"));
 		}
 		else {
-			interpret(source);
+			interpret(source, baseDir);
 		}
 	}
 
@@ -137,22 +142,24 @@ public final class RontoLispCli {
 		buffer.setLength(0);
 	}
 
-	private void interpret(String source) {
+	private void interpret(String source, @Nullable String baseDir) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
+		evaluator.setLoadBaseDir(baseDir);
 		List<LispVal> exprs = LispReader.readAllFromString(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
 		}
 	}
 
-	private void compileToFile(String source, String outputFile, boolean dynamic, boolean component, boolean noWasi,
-			boolean optimize, boolean noGc) {
+	private void compileToFile(String source, @Nullable String baseDir, String outputFile, boolean dynamic,
+			boolean component, boolean noWasi, boolean optimize, boolean noGc) {
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
 		// fail to compile. The interpreter loads at runtime instead, so this is
 		// compile-path only.
-		List<LispVal> program = LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem());
+		List<LispVal> program = LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(),
+				baseDir);
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {

@@ -45,6 +45,19 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void resolvesRelativePathsAgainstTheLoadingFile() {
+		// The entry source lives in proj/; a top-level (load "core.lisp") resolves to
+		// proj/core.lisp, and the nested (load "common.lisp") inside it resolves relative
+		// to core.lisp's directory (proj/), not against the process working directory.
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("(load \"core.lisp\") (print (cube 3))"),
+				loaderOf(Map.of("proj/core.lisp", "(load \"common.lisp\") (defun cube (x) (* x (sq x)))", //
+						"proj/common.lisp", "(defun sq (x) (* x x))")),
+				"proj");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun sq (x) (* x x))",
+				"(defun cube (x) (* x (sq x)))", "(print (cube 3))");
+	}
+
+	@Test
 	void leavesNonLiteralLoadUntouched() {
 		// A load with a computed argument is not a compile-time include.
 		List<LispVal> result = inline("(load (concatenate 'string \"a\" \".lisp\"))", Map.of());

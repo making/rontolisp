@@ -1,11 +1,16 @@
 # Make `load` practical and fast across the compilers
 
-**Status:** direction A DONE (compile-time include); directions B and C still
-open. Motivated by `examples/hiragana/` (a multi-file Lisp program:
-`common.lisp` + `prototypes.lisp` + `train-main.lisp`, and `common.lisp` +
-`weights.lisp` + `infer-main.lisp`). Today those files are **concatenated** by
-`gen.sh` before compiling, because `load` did not compose with the compilers;
-direction A removes the need for that workaround.
+**Status:** directions A and D DONE (compile-time include + file-relative path
+resolution); the `examples/hiragana/` migration off `cat` is DONE; directions B
+and C still open. Motivated by `examples/hiragana/`, which `gen.sh` used to
+**concatenate** (`common.lisp` + `prototypes.lisp` + the trainer into a single
+`train.lisp`; `common.lisp` + `weights.lisp` + the inferer into a single
+`infer.lisp`) before compiling, because `load` did not compose with the
+compilers. Directions A (visibility) and D (run-from-anywhere paths) removed that
+workaround: the entry files now `(load ...)` their pieces and `gen.sh` compiles
+them directly. With the concatenation gone, the entry sources were renamed from
+`train-main.lisp`/`infer-main.lisp` back to `train.lisp`/`infer.lisp` (the
+`-main` suffix only existed to avoid colliding with the generated names).
 
 ## The problem (measured)
 
@@ -57,16 +62,21 @@ How the open questions were resolved:
   (`IllegalStateException: Circular load detected: ...`). NOT idempotent — each
   `load` includes again, matching CL `load` semantics (no `require`-style
   load-once set yet; add one if a diamond include becomes a problem).
-- **Path resolution:** CWD-relative, the same as the runtime `load`
-  (`SourceLoader.fileSystem()`). File-relative resolution is a follow-up and
-  should be applied to both paths together.
+- **Path resolution:** file-relative — see direction D below (a relative `load`
+  resolves against the loading file's directory, the entry file for the top
+  level), applied to BOTH the compile-time include and the runtime `load`.
 - **Interpreter parity:** the inliner runs ONLY on the compile path
   (`compileToFile`); the interpreter keeps its runtime `load`, so no
   double-definition.
 
-Not yet done: rewrite `examples/hiragana/gen.sh` to drop the `cat` steps and have
-`train.lisp`/`infer.lisp` `(load ...)` the shared pieces (the mechanism now
-supports it; the example just hasn't been migrated).
+DONE: `examples/hiragana/gen.sh` no longer concatenates. `train.lisp`
+`(load ...)`s `common.lisp` + `prototypes.lisp`; `infer.lisp` `(load ...)`s
+`common.lisp` + `weights.lisp`; `gen.sh` compiles those entry files directly. The
+old generated concatenation files (which used the `train.lisp`/`infer.lisp`
+names) were removed, and the entry sources were renamed into those freed names
+(from `train-main.lisp`/`infer-main.lisp`). Verified the load-built `infer.wasm`
+is **byte-identical** to the old concatenation build with the same JAR, and
+`pred 2 u` matches on all four backends.
 
 ### B. Browser virtual filesystem (closes gap 2 — enables "B2")
 
@@ -88,14 +98,41 @@ forms on the fly into fresh functions in the runtime function namespace
 (`_fenv` / `GLOBAL_FENV`), or cache/specialize hot `_eval` paths. Lower priority
 than A/B.
 
+### D. File-relative `load` path resolution — DONE
+
+A relative `load` path now resolves against the directory of the file doing the
+load (like CL's `*load-pathname*`), falling back to the working directory only
+for the top-level entry / REPL. Applied consistently to BOTH paths so the
+compile-time include and the runtime `load` resolve the same way:
+
+- `SourceLoader.resolve(baseDir, path)` does the (purely lexical) join, and
+  `SourceLoader.parentDir(path)` derives the next base dir. A `null`/empty
+  `baseDir` returns the path unchanged and skips all `java.nio` path math, so the
+  no-filesystem browser loader is untouched (it passes `baseDir == null`).
+- Interpreter: `LispEvaluator` keeps a `loadDirStack`; `RontoLispCli` seeds it
+  with the entry file's directory via `setLoadBaseDir`, and each runtime `load`
+  pushes the loaded file's directory so a nested `load` chains relative to it.
+- Compile-time include: `LoadInliner.inline(program, loader, baseDir)` threads
+  the entry directory and recurses with each loaded file's directory.
+
+This lets the `examples/` sets run from any working directory (`java -jar JAR
+examples/hiragana/infer.lisp` from the repo root resolves its `common.lisp`
+/ `weights.lisp`); JVM compile still wants to run inside the dir only because the
+class is named after the `-o` file. Tests: `LoadInlinerTest`
+(`resolvesRelativePathsAgainstTheLoadingFile`) +
+`LispEvaluatorTest#loadResolvesRelativePathsAgainstTheLoadingFile`.
+
 ## Acceptance
 
 - [x] A multi-file program using top-level `(load ...)` compiles and runs
   natively on interpreter / JVM / WASM Preview1 / WASM component with identical
   output (no `--dynamic`, no concatenation) — direction A.
-- [ ] (Optional) `examples/hiragana/` rewritten to `load` the shared `.lisp`
-  pieces instead of `cat` in `gen.sh`, with the committed `infer.wasm` unchanged
-  in behavior.
+- [x] `examples/hiragana/` rewritten to `load` the shared `.lisp` pieces instead
+  of `cat` in `gen.sh`, with the committed `infer.wasm` behavior unchanged
+  (load-built `.wasm` is byte-identical to the concatenation build; `pred 2 u`
+  matches on all four backends).
+- [x] Relative `load` paths resolve relative to the loading file (direction D),
+  so the `examples/` sets run from any working directory.
 - [x] CLAUDE.md updated to describe the compile-time-include semantics
-  (`LoadInliner`). README user-facing `load`/compile sections and the browser
-  virtual-FS option (direction B) still to do.
+  (`LoadInliner`) and file-relative resolution. README user-facing `load`/compile
+  sections and the browser virtual-FS option (direction B) still to do.

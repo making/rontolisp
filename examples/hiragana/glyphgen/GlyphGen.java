@@ -255,7 +255,7 @@ public class GlyphGen {
 		Files.writeString(file, b.toString());
 	}
 
-	// "(0.0 1.0 ...)\n" -- GRID*GRID floats, row-major, matching infer-main's (read).
+	// "(0.0 1.0 ...)\n" -- GRID*GRID floats, row-major, matching infer's (read).
 	static String flattenSample(String[] rows) {
 		StringBuilder b = new StringBuilder("(");
 		for (int r = 0; r < GRID; r++) {

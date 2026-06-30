@@ -54,7 +54,7 @@ old-verifier failover, so large/complex v50 classes get pushed onto the split
    a tiny number parser). Sidesteps BOTH limits at once and stays one
    self-contained class. Mirror it for WASM if convenient (WASM has no such cap,
    but a shared encoding is cleaner). Touch points: a "large constant data"
-   helper in `codegen.jvm`, and `train-main.lisp`'s serializer (emit a data blob
+   helper in `codegen.jvm`, and `train.lisp`'s serializer (emit a data blob
    instead of `gN` float-list defuns).
    - Combine with **quantization** for an even bigger win: store weights as int8
      (256 levels) + a scale, dequantize at load. Quantized values dedupe to <=256
@@ -83,14 +83,14 @@ old-verifier failover, so large/complex v50 classes get pushed onto the split
 
 ## Recommended next step
 Prototype approach 1 (packed string/blob, optionally int8-quantized) on the
-hiragana `infer.lisp` path: change `train-main.lisp` serialization + add the JVM
+hiragana `infer.lisp` path: change `train.lisp` serialization + add the JVM
 data-decode, confirm `infer.lisp` loads on the JVM at hidden=48/64 (and ideally a
 higher resolution), then re-verify all four backends. If we later want the
 limit gone program-wide (not just baked data), do approach 2.
 
 ## References
-- `examples/hiragana/train-main.lisp` (`*hidden*` cap comment + serializer),
-  `infer-main.lisp` (rebuilds the net from `*weights*`).
+- `examples/hiragana/train.lisp` (`*hidden*` cap comment + serializer),
+  `infer.lisp` (rebuilds the net from `*weights*`).
 - `JvmLispCompiler` / `codegen.jvm` (constant emission, class version 50),
   `am.ik.jvm` (bytecode writer — where StackMapTable would go).
 - CLAUDE.md: "JVM Class Version 50", "JVM method name mangling", weight chunking.

@@ -26,6 +26,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Tree-walking interpreter for Lisp expressions.
@@ -45,6 +46,17 @@ public final class LispEvaluator {
 	private final PackageResolver packageResolver = new PackageResolver();
 
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
+
+	/**
+	 * The directories against which relative {@code load} paths resolve, innermost last
+	 * (the directory of the file currently being loaded). Seeded by
+	 * {@link #setLoadBaseDir} with the entry file's directory; each runtime {@code load}
+	 * pushes the loaded file's directory so a nested {@code load} resolves relative to
+	 * that file. The empty string means "no base directory" (working-directory-relative);
+	 * it is never {@code null} because {@link java.util.ArrayDeque} forbids null
+	 * elements.
+	 */
+	private final java.util.Deque<String> loadDirStack = new java.util.ArrayDeque<>();
 
 	/**
 	 * Create a new evaluator with the given output stream.
@@ -73,6 +85,20 @@ public final class LispEvaluator {
 	 */
 	public void setSourceLoader(SourceLoader loader) {
 		this.sourceLoader = java.util.Objects.requireNonNull(loader);
+	}
+
+	/**
+	 * Sets the base directory against which a top-level relative {@code load} path
+	 * resolves -- normally the directory of the entry file being interpreted, so that a
+	 * program run from anywhere can {@code (load "sibling.lisp")} its companions (like
+	 * Common Lisp's {@code *load-pathname*}). Pass {@code null} (the REPL / stdin
+	 * default) to keep top-level loads working-directory-relative.
+	 * @param dir the entry file's directory, or {@code null} for
+	 * working-directory-relative
+	 */
+	public void setLoadBaseDir(@Nullable String dir) {
+		this.loadDirStack.clear();
+		this.loadDirStack.addLast(dir == null ? "" : dir);
 	}
 
 	private void registerEval() {
@@ -261,19 +287,31 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString path)) {
 				throw new LispEvalException(LispNames.LOAD + " expects a string argument");
 			}
+			// Resolve a relative path against the directory of the file doing the load
+			// (the top of loadDirStack), so a program run from any working directory can
+			// (load "sibling.lisp") its companions, matching the compile-time include.
+			String baseDir = this.loadDirStack.peekLast();
+			String resolved = SourceLoader.resolve(baseDir, path.value());
 			String source;
 			try {
-				source = this.sourceLoader.load(path.value());
+				source = this.sourceLoader.load(resolved);
 			}
 			catch (IOException ex) {
-				throw new LispEvalException(
-						LispNames.LOAD + ": cannot read file " + path.value() + ": " + ex.getMessage());
+				throw new LispEvalException(LispNames.LOAD + ": cannot read file " + resolved + ": " + ex.getMessage());
 			}
 			// Evaluate every top-level form in the global environment so that
 			// definitions become reusable after load returns. Route through the
 			// top-level entry so package directives in the loaded file are processed.
-			for (LispVal form : LispReader.readAllFromString(source)) {
-				eval(form);
+			// Push the loaded file's directory so a nested load resolves relative to it.
+			String childDir = SourceLoader.parentDir(resolved);
+			this.loadDirStack.addLast(childDir == null ? "" : childDir);
+			try {
+				for (LispVal form : LispReader.readAllFromString(source)) {
+					eval(form);
+				}
+			}
+			finally {
+				this.loadDirStack.removeLast();
 			}
 			return LispTrue.INSTANCE;
 		}));

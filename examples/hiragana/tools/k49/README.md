@@ -39,7 +39,7 @@ python3 train_k49.py --hidden 20      # 隠れ層（既定20: JVM 焼き込み�
 
 ## 出力フォーマット
 
-`weights-k49.lisp` は推論側の契約（`common.lisp` / `infer-main.lisp`）に厳密に一致:
+`weights-k49.lisp` は推論側の契約（`common.lisp` / `infer.lisp`）に厳密に一致:
 
 ```lisp
 (defparameter *labels* (list "a" "i" ... "wi" "we" "wo" "n" "iter"))  ; 49クラス
@@ -50,8 +50,8 @@ python3 train_k49.py --hidden 20      # 隠れ層（既定20: JVM 焼き込み�
 
 - ネットは `sigmoid(W1 x + b1) → sigmoid(W2 a1 + b2)` の argmax。`common.lisp` の
   forward と同一なので、焼き込んだ重みは学習時の予測を完全に再現します。
-- `*labels*` は **K49 のクラス順 0..48**。`infer-main.lisp` は `defvar` で 46 を既定束縛
-  しますが、この `defparameter`（連結で先に来る）が冪等性により 49 を上書きします。
+- `*labels*` は **K49 のクラス順 0..48**。`infer.lisp` は `defvar` で 46 を既定束縛
+  しますが、この `defparameter`（load で先に来る）が冪等性により 49 を上書きします。
 - ブラウザの `glyphs.js` には `wi`/`we`/`iter`(ゐ/ゑ/ゝ) の表示用 KANA を追加済みなので、
   49 クラスの予測もかなで表示されます（参考字形サムネイルは合成 46 のまま）。
 

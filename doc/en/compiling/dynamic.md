@@ -24,4 +24,4 @@ rontolisp prog.lisp -o Prog.class   # (load "lib.lisp") is inlined; cube compile
 rontolisp prog.lisp -o prog.wasm
 ```
 
-Only a top-level `load` with a literal path is inlined; a `load` whose path is computed, or one nested inside another form, stays a runtime call and needs `--dynamic` (above) for the compiler to accept calls into the loaded code. The interpreter is unaffected -- it always loads at runtime -- and the include resolves paths the same way the runtime `load` does (relative to the current working directory).
+Only a top-level `load` with a literal path is inlined; a `load` whose path is computed, or one nested inside another form, stays a runtime call and needs `--dynamic` (above) for the compiler to accept calls into the loaded code. The interpreter is unaffected -- it always loads at runtime -- and the include resolves paths the same way the runtime `load` does: a relative path resolves against the directory of the file doing the load (the entry file for a top-level `load`), so a program can be compiled or run from any working directory and still find its companion files.

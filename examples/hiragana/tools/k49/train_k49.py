@@ -12,7 +12,7 @@
 # NumPy and hand rontolisp only the finished weights (a Lisp source file).  The
 # inference itself still runs in rontolisp -> WASM, unchanged.
 #
-# What it produces (matching examples/hiragana/common.lisp + infer-main.lisp):
+# What it produces (matching examples/hiragana/common.lisp + infer.lisp):
 #   (defparameter *labels* (list "a" "i" ... "wi" "we" "wo" "n" "iter"))  ; 49
 #   (defparameter *weights*
 #     (list (list H   576 <H*576 flat row-major W1> <H flat b1>)
@@ -204,11 +204,11 @@ def fmt(x: float) -> str:
     return s
 
 
-CHUNK = 200  # floats per chunk defun (matches train-main.lisp's *chunk*)
+CHUNK = 200  # floats per chunk defun (matches train.lisp's *chunk*)
 
 
 def emit_weights(path, hidden, W1, b1, W2, b2):
-    # Mirror train-main.lisp's serialization EXACTLY: split each flat vector into
+    # Mirror train.lisp's serialization EXACTLY: split each flat vector into
     # small (defun gN () (list ...)) chunk functions and reassemble with append.
     # A single multi-thousand-element literal list otherwise overflows both the
     # JVM 64KB method cap and the recursive-descent reader/resolver's stack.
@@ -242,7 +242,7 @@ def emit_weights(path, hidden, W1, b1, W2, b2):
         f.write(";;;; ROIS-DS CODH, http://codh.rois.ac.jp/kmnist/).  Bake into infer.wasm with:\n")
         f.write(";;;;   examples/hiragana/gen.sh --weights-from weights-k49.lisp\n")
         f.write(f";;;; Network: 576-{hidden}-49, sigmoid both layers (matches common.lisp).\n")
-        f.write(";;;; Weights are split into gN chunk defuns (like train-main.lisp) so no\n")
+        f.write(";;;; Weights are split into gN chunk defuns (like train.lisp) so no\n")
         f.write(";;;; single literal list overflows the JVM method cap / the reader stack.\n\n")
         f.write("(defparameter *labels* (list")
         for lab in LABELS:

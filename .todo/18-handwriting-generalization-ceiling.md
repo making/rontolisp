@@ -67,6 +67,6 @@ On the JVM backend, array indices derived from floats are fragile:
   float-indexed array math to "just work".
 
 ## References
-- `examples/hiragana/train-main.lisp` (augmentation + `build-dataset`),
+- `examples/hiragana/train.lisp` (augmentation + `build-dataset`),
   `common.lisp` (forward pass), `glyphgen/GlyphGen.java` (`FONTS`).
 - `.todo/16` (full-set status), `.todo/17` (JVM baked-constant ceiling).

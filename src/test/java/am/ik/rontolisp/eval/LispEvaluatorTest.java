@@ -2403,6 +2403,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void loadResolvesRelativePathsAgainstTheLoadingFile(@TempDir Path tempDir) throws Exception {
+		// A driver in a subdirectory loads a sibling by bare name; with the entry
+		// directory as the base, the relative load resolves there (not against the
+		// process working directory), and a nested load chains relative to each file.
+		Path dir = Files.createDirectories(tempDir.resolve("proj"));
+		Files.writeString(dir.resolve("common.lisp"), "(defun sq (x) (* x x))\n");
+		Files.writeString(dir.resolve("core.lisp"), "(load \"common.lisp\")\n(defun cube (x) (* x (sq x)))\n");
+		Path entry = dir.resolve("main.lisp");
+		Files.writeString(entry, "(load \"core.lisp\")\n(print (cube 3))\n");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.setLoadBaseDir(dir.toString());
+		for (LispVal form : LispReader.readAllFromString(Files.readString(entry))) {
+			evaluator.eval(form);
+		}
+		assertThat(baos.toString(StandardCharsets.UTF_8).trim()).isEqualTo("27");
+	}
+
+	@Test
 	void withOpenFileWriteThenRead(@TempDir Path tempDir) {
 		String file = tempDir.resolve("out.txt").toString().replace("\\", "\\\\");
 		LispVal result = evalMulti("""

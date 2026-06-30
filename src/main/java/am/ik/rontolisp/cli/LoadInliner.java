@@ -32,9 +32,10 @@ import org.jspecify.annotations.Nullable;
  * string literal is inlined; a {@code load} with a computed argument, or one nested
  * inside another form, is left untouched (it still runs at runtime via the embedded
  * reader, e.g. under {@code --dynamic}). Inlining is recursive (a loaded file may load
- * another) and guards against cycles. Paths are resolved by the supplied
- * {@link SourceLoader} exactly as the runtime {@code load} resolves them (CWD-relative
- * for the filesystem loader).
+ * another) and guards against cycles. A relative path is resolved against the directory
+ * of the file doing the load (the entry source for top-level loads), matching the runtime
+ * {@code load} (see {@link SourceLoader#resolve}); the resolved path is then read by the
+ * supplied {@link SourceLoader}.
  */
 public final class LoadInliner {
 
@@ -44,24 +45,42 @@ public final class LoadInliner {
 	/**
 	 * Returns a copy of {@code program} with every top-level literal
 	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
-	 * file.
+	 * file, resolving top-level relative paths working-directory-relative.
 	 * @param program the top-level forms read from the source
 	 * @param loader the loader used to resolve {@code load} paths
 	 * @return the program with top-level {@code load} forms inlined
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader) {
+		return inline(program, loader, null);
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source against which a top-level relative
+	 * {@code load} resolves, or {@code null} for working-directory-relative
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir) {
 		List<LispVal> result = new ArrayList<>();
-		expandInto(program, result, loader, new ArrayDeque<>());
+		expandInto(program, result, loader, new ArrayDeque<>(), baseDir);
 		return result;
 	}
 
-	private static void expandInto(List<LispVal> forms, List<LispVal> out, SourceLoader loader, Deque<String> loading) {
+	private static void expandInto(List<LispVal> forms, List<LispVal> out, SourceLoader loader, Deque<String> loading,
+			@Nullable String baseDir) {
 		for (LispVal form : forms) {
-			String path = loadPath(form);
-			if (path == null) {
+			String rawPath = loadPath(form);
+			if (rawPath == null) {
 				out.add(form);
 				continue;
 			}
+			// Resolve relative to the loading file's directory (the entry source at the
+			// top level), the same rule the runtime load uses.
+			String path = SourceLoader.resolve(baseDir, rawPath);
 			if (loading.contains(path)) {
 				throw new IllegalStateException(
 						"Circular load detected: " + String.join(" -> ", loading) + " -> " + path);
@@ -75,7 +94,8 @@ public final class LoadInliner {
 						ex);
 			}
 			loading.addLast(path);
-			expandInto(LispReader.readAllFromString(source), out, loader, loading);
+			// A nested load inside this file resolves relative to this file's directory.
+			expandInto(LispReader.readAllFromString(source), out, loader, loading, SourceLoader.parentDir(path));
 			loading.removeLast();
 		}
 	}
