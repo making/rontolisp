@@ -37,6 +37,7 @@ machine with a display. See the
 | [`java-interop.lisp`](java-interop.lisp) | A minimal Swing window built directly through `java:new`/`java:call`/`java:field`/`java:proxy` -- a button whose `ActionListener` is a rontolisp lambda wrapped in a dynamic proxy |
 | [`swing.lisp`](swing.lisp) | A small reusable Swing grid-window helper library, written entirely on top of `java:` (no bespoke Java class); reused as the rendering layer by the GUI demos |
 | [`life-gui.lisp`](life-gui.lisp) | Conway's Game of Life animated in a Swing window: loads the same `life-core.lisp` as `life.lisp` plus `swing.lisp`, and steps the world on a `javax.swing.Timer` |
+| [`minesweeper/minesweeper-swing.lisp`](minesweeper/minesweeper-swing.lisp) | Minesweeper on the desktop: loads the same `minesweeper-core.lisp` as the browser build (only the drawing differs) and paints a clickable Swing label grid via `swing.lisp` |
 
 ## Browser demos (compile to WASM, run in a page)
 
@@ -46,7 +47,7 @@ These are directories rather than single files: a Lisp program is compiled to
 | Directory | What it demonstrates |
 | --- | --- |
 | [`wasm-browser/`](wasm-browser) | Running a rontolisp-compiled `.wasm` in the browser from plain HTML + JavaScript, including feeding stdin from the page |
-| [`minesweeper/`](minesweeper) | A playable Minesweeper: the whole game (flood fill, win/lose, board HTML) is in Lisp, compiled to a `--no-wasi` WebAssembly reactor and driven by host-callable exports from a page |
+| [`minesweeper/`](minesweeper) | A playable Minesweeper: the rules (flood fill, win/lose) live in a shared `minesweeper-core.lisp` that both a browser build (compiled to a `--no-wasi` WebAssembly reactor, HTML rendering) and a [Swing build](minesweeper/minesweeper-swing.lisp) load -- only the drawing differs |
 | [`hiragana/`](hiragana) | A 46-class handwritten-hiragana recognizer (the full gojuon): a small MLP trained offline in Lisp, baked into an inference `.wasm`, and driven from a `<canvas>` you draw on |
 
 ## Running

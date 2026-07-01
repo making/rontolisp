@@ -21,6 +21,13 @@
 ;;;;   (swing-animate delay step-fn)        -> start a repeating timer; step-fn is
 ;;;;                                           called with no args every `delay` ms
 ;;;;                                           and the timer stops when it returns nil
+;;;;
+;;;; For grids that need text and clicks (e.g. Minesweeper) use the label variant:
+;;;;   (swing-label-grid-window title rows cols size) -> a clickable text grid
+;;;;   (swing-cell-text win r c text)       -> set a cell's centred text
+;;;;   (swing-cell-fg win r c color)        -> set a cell's text colour
+;;;;   (swing-on-cell-click win handler)    -> handler is called (row col button)
+;;;;                                           on click (button: 1 left, 3 right)
 
 ;; A window handle is a small symbol-keyed hash table.
 (defun swing-rgb (r g b) (java:new "java.awt.Color" r g b))
@@ -79,6 +86,85 @@
     (java:call frame "setLocationRelativeTo" nil)
     (java:call frame "setVisible" t)
     win))
+
+;; --- clickable, text-capable grid -------------------------------------------
+;;
+;; swing-grid-window's cells are blank JPanels -- perfect for a painter like Life
+;; but they cannot show text or, on their own, tell a left-click from a right one.
+;; The three helpers below build a grid whose cells are opaque JLabels instead
+;; (JButton backgrounds are ignored by the macOS Aqua look-and-feel, so a label
+;; is the portable way to get both a background colour AND centred text). The
+;; window handle has the same shape, so swing-cell / swing-paint / swing-status /
+;; swing-fill all work on it unchanged.
+
+;; Like swing-grid-window, but every cell is a centred, bold JLabel that can hold
+;; text (swing-cell-text) and receive per-cell clicks (swing-on-cell-click).
+(defun swing-label-grid-window (title rows cols size)
+  (let ((frame (java:new "javax.swing.JFrame" title))
+        (grid (java:new "javax.swing.JPanel"
+                        (java:new "java.awt.GridLayout" rows cols 1 1)))
+        (status (java:new "javax.swing.JLabel" " "))
+        (cells (make-hash-table :test 'equal))
+        (win (make-hash-table :test 'equal))
+        (font (java:new "java.awt.Font" "SansSerif" 1 (floor (/ (* size 6) 10)))))
+    (java:call grid "setBackground" (swing-rgb 120 120 120))
+    (let ((r 0))
+      (while (< r rows)
+        (let ((c 0))
+          (while (< c cols)
+            (let ((cell (java:new "javax.swing.JLabel" "")))
+              (java:call cell "setOpaque" t)
+              (java:call cell "setHorizontalAlignment"
+                         (java:field "javax.swing.SwingConstants" "CENTER"))
+              (java:call cell "setPreferredSize"
+                         (java:new "java.awt.Dimension" size size))
+              (java:call cell "setFont" font)
+              (java:call cell "setBackground" (swing-rgb 255 255 255))
+              (java:call grid "add" cell)
+              (setf (gethash (list r c) cells) cell))
+            (setq c (+ c 1))))
+        (setq r (+ r 1))))
+    (setf (gethash 'frame win) frame)
+    (setf (gethash 'grid win) grid)
+    (setf (gethash 'status win) status)
+    (setf (gethash 'cells win) cells)
+    (setf (gethash 'rows win) rows)
+    (setf (gethash 'cols win) cols)
+    (java:call frame "add" status (java:field "java.awt.BorderLayout" "NORTH"))
+    (java:call frame "add" grid (java:field "java.awt.BorderLayout" "CENTER"))
+    (java:call frame "setDefaultCloseOperation"
+               (java:field "javax.swing.WindowConstants" "EXIT_ON_CLOSE"))
+    (java:call frame "pack")
+    (java:call frame "setLocationRelativeTo" nil)
+    (java:call frame "setVisible" t)
+    win))
+
+;; Set the centred text of a label cell (e.g. a mine count).
+(defun swing-cell-text (win r c text)
+  (java:call (swing-cell win r c) "setText" text))
+
+;; Set a label cell's text colour.
+(defun swing-cell-fg (win r c color)
+  (java:call (swing-cell win r c) "setForeground" color))
+
+;; Call HANDLER with (row col button) on every click of any cell, where button
+;; is the java.awt.event.MouseEvent button code (1 = left, 2 = middle, 3 = right).
+;; Each cell gets its own MouseListener, a java:proxy over a lambda that closes
+;; over that cell's fixed row/col.
+(defun swing-on-cell-click (win handler)
+  (let ((rows (gethash 'rows win)) (cols (gethash 'cols win)) (r 0))
+    (while (< r rows)
+      (let ((c 0))
+        (while (< c cols)
+          (let ((cell (swing-cell win r c)) (cr r) (cc c))
+            (java:call cell "addMouseListener"
+                       (java:proxy "java.awt.event.MouseListener"
+                                   (lambda (method event)
+                                     (when (equal method "mouseClicked")
+                                       (funcall handler cr cc
+                                                (java:call event "getButton")))))))
+          (setq c (+ c 1))))
+      (setq r (+ r 1)))))
 
 ;; Run step-fn every `delay` ms on the Swing event thread until it returns nil.
 ;; step-fn is a zero-argument rontolisp function; the javax.swing.Timer's

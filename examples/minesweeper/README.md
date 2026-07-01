@@ -1,18 +1,41 @@
-# Minesweeper (Lisp -> WebAssembly, playable in the browser)
+# Minesweeper (one Lisp rulebook, two front-ends)
 
-A complete Minesweeper whose rules are written in rontolisp, compiled ahead of
-time to a WebAssembly reactor, and played in a plain HTML page. All the
-interesting work -- the flood-fill reveal, win/lose detection, and even the
-board HTML -- happens in Lisp; the page is just glue.
+A complete Minesweeper whose rules are written once in rontolisp and played two
+ways: in the **browser** (the rules compiled ahead of time to a WebAssembly
+reactor) and on the **desktop** (the same rules run on the interpreter behind a
+Java/Swing window). All the interesting work -- the flood-fill reveal and
+win/lose detection -- happens in Lisp; only the drawing differs between the two.
 
 | File | Role |
 | --- | --- |
-| [`minesweeper.lisp`](minesweeper.lisp) | The whole game as a pure state machine (see below) |
+| [`minesweeper-core.lisp`](minesweeper-core.lisp) | The shared rules: a pure state machine, no rendering (see below) |
+| [`minesweeper.lisp`](minesweeper.lisp) | Browser front-end: loads the core, adds HTML rendering + WASM exports |
 | [`minesweeper.html`](minesweeper.html) | The page: grid, mouse/touch input, mine placement, timer |
 | [`minesweeper.wasm`](minesweeper.wasm) | Prebuilt module (regenerate with `build.sh`) |
-| [`build.sh`](build.sh) | Recompile the `.lisp` to `.wasm` |
+| [`build.sh`](build.sh) | Recompile `minesweeper.lisp` to `minesweeper.wasm` |
+| [`minesweeper-swing.lisp`](minesweeper-swing.lisp) | Desktop front-end: loads the core, paints a Swing grid |
 
-## Play it
+The two front-ends share `minesweeper-core.lisp` verbatim -- the browser build
+inlines it at compile time (a top-level literal `load`), and the Swing build
+loads it at run time. Swapping the rendering layer is all it takes to move the
+same game between WebAssembly and the JVM.
+
+## Play it on the desktop (Java / Swing)
+
+```bash
+# from the repo root, after ./mvnw package
+java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/minesweeper/minesweeper-swing.lisp
+```
+
+Left-click opens a cell, right-click flags it, and any click after the game ends
+starts a fresh board. The Swing front-end runs only on the interpreter (a Java
+object cannot be compiled to a JVM class or WASM) and needs a display. Unlike the
+entropy-free browser reactor, the interpreter has `random`, so this build lays
+its own mines -- keeping them off the first click. The rendering layer reuses the
+reusable [`../swing.lisp`](../swing.lisp) grid helpers (extended here with a
+clickable, text-capable label grid).
+
+## Play it in the browser (WebAssembly)
 
 ```bash
 ./build.sh                      # (optional) rebuild minesweeper.wasm
@@ -54,5 +77,5 @@ The `:string` / `:sexpr` boundary is a `(ptr, len)` into the module's linear
 memory. The page writes UTF-8 via the exported `__ronto_alloc` bump allocator,
 passes the pointer and length, and reads the returned `(ptr, len)` back out --
 the same pattern as [`../rainbow.html`](../rainbow.html). See the top of
-`minesweeper.lisp` for the state layout and the `CLAUDE.md` notes on
+`minesweeper-core.lisp` for the state layout and the `CLAUDE.md` notes on
 `rontolisp:wasm-export` and `--no-wasi` for the ABI details.
