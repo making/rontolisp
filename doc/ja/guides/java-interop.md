@@ -87,6 +87,7 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (defvar *frame* (java:new "javax.swing.JFrame" "java interop"))
 (defvar *label* (java:new "javax.swing.JLabel" "click count: 0"))
 (defvar *button* (java:new "javax.swing.JButton" "Increment"))
+(defvar *panel* (java:new "javax.swing.JPanel" (java:new "java.awt.BorderLayout" 12 12)))
 (defvar *count* 0)
 
 (java:call *button* "addActionListener"
@@ -96,6 +97,10 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
       (java:call *label* "setText"
         (concatenate 'string "click count: " (princ-to-string *count*))))))
 
+(java:call *panel* "add" *label* (java:field "java.awt.BorderLayout" "CENTER"))
+(java:call *panel* "add" *button* (java:field "java.awt.BorderLayout" "SOUTH"))
+
+(java:call *frame* "setContentPane" *panel*)
 (java:call *frame* "setDefaultCloseOperation"
   (java:field "javax.swing.WindowConstants" "DISPOSE_ON_CLOSE"))
 (java:call *frame* "setSize" 360 180)
