@@ -2,7 +2,8 @@
 # Recompile minesweeper-wasm.lisp to a browser-loadable WebAssembly reactor.
 # The --no-wasi flag drops all WASI imports and exports _initialize, so the
 # module instantiates with an empty import object and runs with just
-# WebAssembly GC support -- no shim, no server-side runtime.
+# WebAssembly GC support -- no shim, no server-side runtime. --optimize runs the
+# tree-shaker so only the reachable functions ship, shrinking the .wasm.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -16,7 +17,7 @@ if [[ ! -f "$jar" ]]; then
 fi
 
 echo "compiling minesweeper-wasm.lisp -> minesweeper.wasm"
-java -jar "$jar" "$here/minesweeper-wasm.lisp" -o "$here/minesweeper.wasm" --no-wasi
+java -jar "$jar" "$here/minesweeper-wasm.lisp" -o "$here/minesweeper.wasm" --no-wasi --optimize
 
 echo "done. Serve this directory over http, e.g.:"
 echo "  jwebserver -p 8000 --directory \"$here\""
