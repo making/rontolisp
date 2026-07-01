@@ -2,7 +2,7 @@
 ;;;;
 ;;;; The rules are shared verbatim with the browser build: this file loads the
 ;;;; same minesweeper-core.lisp, so ONLY the drawing differs. Where the WASM
-;;;; front-end (minesweeper.lisp) renders the board to HTML, this one paints a
+;;;; front-end (minesweeper-wasm.lisp) renders the board to HTML, this one paints a
 ;;;; Swing grid of clickable labels through the reusable helpers in swing.lisp.
 ;;;;
 ;;;; Swing runs only on the interpreter (a java object cannot be lowered to a JVM
@@ -123,23 +123,31 @@
     (paint-cell i (floor (/ i *w*)) (mod i *w*)))
   (update-status))
 
-;;; --- host-side rules the browser did in JavaScript ---------------------------
+;;; --- host-side entropy (the shared core owns the placement rule) -------------
 
-;; A w*h mine bit-list with COUNT mines, none at SAFE or any of its neighbours,
-;; so the first click is always safe. The interpreter has entropy, so we roll our
-;; own mines here (the WASM reactor gets them from JavaScript instead).
+;; A random permutation of 0..n-1 (Fisher-Yates). This is the only host-specific
+;; piece of mine layout: the first-click-safe placement RULE lives in the shared
+;; core (place-mines); each front-end merely supplies a random ordering. The
+;; browser does this shuffle in JavaScript because the --no-wasi reactor has no
+;; `random`; here we use the interpreter's.
+(defun shuffle-indices (n)
+  (let ((v (make-array n)))
+    (dotimes (i n) (setf (aref v i) i))
+    (let ((i (- n 1)))
+      (while (> i 0)
+        (let ((j (random (+ i 1)))
+              (tmp (aref v i)))
+          (setf (aref v i) (aref v j))
+          (setf (aref v j) tmp))
+        (setq i (- i 1))))
+    (let ((order nil))
+      (dotimes (i n) (push (aref v (- n 1 i)) order))
+      order)))
+
+;; The first-click-safe mine layout, built by the shared core rule over a random
+;; ordering -- exactly what the browser does, only the shuffle differs.
 (defun make-mines (w h count safe)
-  (let ((n (* w h))
-        (forbidden (cons safe (neighbors safe w h)))
-        (mines (zeros (* w h)))
-        (placed 0))
-    (loop while (< placed count) do
-      (let ((idx (random n)))
-        (when (and (= (nth idx mines) 0)
-                   (not (member idx forbidden)))
-          (set-nth mines idx 1)
-          (setq placed (1+ placed)))))
-    mines))
+  (place-mines w h count safe (shuffle-indices (* w h))))
 
 ;; Start (or restart) with an empty, mine-free board; mines are laid on the
 ;; first click.

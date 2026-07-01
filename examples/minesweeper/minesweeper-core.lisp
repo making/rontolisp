@@ -1,8 +1,8 @@
 ;;;; minesweeper-core.lisp -- Minesweeper rules, with no rendering.
 ;;;;
 ;;;; This is the shared game logic behind BOTH front-ends: the browser/WASM one
-;;;; (minesweeper.lisp, which adds HTML rendering and host-callable exports) and
-;;;; the desktop/Swing one (minesweeper-swing.lisp, which paints a Swing grid).
+;;;; (minesweeper-wasm.lisp, which adds HTML rendering and host-callable exports)
+;;;; and the desktop/Swing one (minesweeper-swing.lisp, which paints a Swing grid).
 ;;;; Only the drawing differs between them; the rules below are identical.
 ;;;;
 ;;;; The game is a pure state machine: every action takes the current state and
@@ -120,6 +120,24 @@
             (when (won-p state)
               (set-nth state 0 1)))))
     state))
+
+;;; A w*h mine bit-list with COUNT mines, placed at the first COUNT cells of
+;;; ORDER (a host-supplied ordering of cell indices, normally a random
+;;; permutation of 0..w*h-1) that are neither the safe first-click cell SAFE nor
+;;; one of its neighbours -- so the opening move is always safe. This is the
+;;; shared placement RULE; the host only supplies the random ORDER, because the
+;;; entropy-free --no-wasi WASM reactor cannot call `random` (the browser shuffles
+;;; in JavaScript, the Swing front-end uses the interpreter's `random`).
+(defun place-mines (w h count safe order)
+  (let ((mines (zeros (* w h)))
+        (forbidden (cons safe (neighbors safe w h)))
+        (placed 0))
+    (dolist (idx order)
+      (when (and (< placed count)
+                 (not (member idx forbidden)))
+        (set-nth mines idx 1)
+        (setq placed (1+ placed))))
+    mines))
 
 ;;; Toggle a flag on cell IDX (only while playing and still covered).
 (defun toggle-flag (state idx)

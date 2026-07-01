@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Recompile minesweeper.lisp to a browser-loadable WebAssembly reactor.
+# Recompile minesweeper-wasm.lisp to a browser-loadable WebAssembly reactor.
 # The --no-wasi flag drops all WASI imports and exports _initialize, so the
 # module instantiates with an empty import object and runs with just
 # WebAssembly GC support -- no shim, no server-side runtime.
@@ -15,8 +15,8 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling minesweeper.lisp -> minesweeper.wasm"
-java -jar "$jar" "$here/minesweeper.lisp" -o "$here/minesweeper.wasm" --no-wasi
+echo "compiling minesweeper-wasm.lisp -> minesweeper.wasm"
+java -jar "$jar" "$here/minesweeper-wasm.lisp" -o "$here/minesweeper.wasm" --no-wasi
 
 echo "done. Serve this directory over http, e.g.:"
 echo "  jwebserver -p 8000 --directory \"$here\""

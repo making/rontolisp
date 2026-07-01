@@ -1,4 +1,4 @@
-;;;; minesweeper.lisp -- Minesweeper browser front-end.
+;;;; minesweeper-wasm.lisp -- Minesweeper browser front-end.
 ;;;;
 ;;;; This is the WebAssembly rendering layer: it shares all the rules with the
 ;;;; Swing front-end by loading minesweeper-core.lisp, then adds HTML rendering
@@ -8,8 +8,9 @@
 ;;;;
 ;;;; The browser holds the game state as an opaque string that round-trips through
 ;;;; the WASM :sexpr ABI -- it never parses Lisp. Randomness: a --no-wasi reactor
-;;;; has no entropy source, so the mine layout is generated in JavaScript and
-;;;; passed to new-game. This also lets the host make the first click safe.
+;;;; has no entropy source, so the page supplies only a random ordering of cells
+;;;; and the shared core `place-mines` applies the (first-click-safe) placement
+;;;; rule -- the same rule the Swing front-end uses, entropy the only difference.
 ;;;;
 ;;;; See minesweeper-core.lisp for the state layout and the rules.
 
@@ -65,6 +66,7 @@
 
 ;;; --- host-callable exports ---------------------------------------------------
 
+(rontolisp:wasm-export 'place-mines     :params '(:int :int :int :int :sexpr) :returns :sexpr)
 (rontolisp:wasm-export 'new-game        :params '(:int :int :sexpr) :returns :sexpr)
 (rontolisp:wasm-export 'reveal          :params '(:sexpr :int)      :returns :sexpr)
 (rontolisp:wasm-export 'toggle-flag     :params '(:sexpr :int)      :returns :sexpr)

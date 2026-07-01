@@ -9,10 +9,10 @@ win/lose detection -- happens in Lisp; only the drawing differs between the two.
 | File | Role |
 | --- | --- |
 | [`minesweeper-core.lisp`](minesweeper-core.lisp) | The shared rules: a pure state machine, no rendering (see below) |
-| [`minesweeper.lisp`](minesweeper.lisp) | Browser front-end: loads the core, adds HTML rendering + WASM exports |
+| [`minesweeper-wasm.lisp`](minesweeper-wasm.lisp) | Browser front-end: loads the core, adds HTML rendering + WASM exports |
 | [`minesweeper.html`](minesweeper.html) | The page: grid, mouse/touch input, mine placement, timer |
 | [`minesweeper.wasm`](minesweeper.wasm) | Prebuilt module (regenerate with `build.sh`) |
-| [`build.sh`](build.sh) | Recompile `minesweeper.lisp` to `minesweeper.wasm` |
+| [`build.sh`](build.sh) | Recompile `minesweeper-wasm.lisp` to `minesweeper.wasm` |
 | [`minesweeper-swing.lisp`](minesweeper-swing.lisp) | Desktop front-end: loads the core, paints a Swing grid |
 
 The two front-ends share `minesweeper-core.lisp` verbatim -- the browser build
@@ -55,9 +55,13 @@ smiley starts a new game.
 The module is built with `--no-wasi`, which produces a **reactor**: it has no
 WASI imports (so `WebAssembly.instantiate(bytes, {})` needs no import object) and
 exposes an `_initialize` export the page runs once after instantiation. Because
-a reactor has no entropy source, the mine layout is generated in JavaScript and
-handed to the Lisp `new-game` -- which also lets the page keep the mines away
-from the very first click.
+a reactor has no entropy source, the page cannot ask Lisp to roll the mines; but
+it does not reimplement the placement rule either. Instead the page only shuffles
+a random ordering of the cell indices (its sole job) and hands it to the shared
+Lisp `place-mines`, which applies the first-click-safe placement rule -- the same
+`place-mines` the Swing front-end calls with an interpreter-shuffled ordering. So
+entropy stays host-side while the rule stays in Lisp, and the two front-ends
+place mines identically.
 
 The game is a **pure state machine**. The state is a nested list of integers
 `(status w h mines revealed flags)`; the page treats it as an opaque string that
@@ -66,6 +70,7 @@ Lisp. Each interaction is one export call:
 
 | Export | Signature | Purpose |
 | --- | --- | --- |
+| `place-mines` | `(:int :int :int :int :sexpr) -> :sexpr` | The shared first-click-safe placement rule: pick mines from a host-supplied random ordering |
 | `new-game` | `(:int :int :sexpr) -> :sexpr` | Build a fresh state from width, height, and a mine bit-list |
 | `reveal` | `(:sexpr :int) -> :sexpr` | Open a cell; flood-fill blanks; detect win/loss |
 | `toggle-flag` | `(:sexpr :int) -> :sexpr` | Flag / unflag a covered cell |
