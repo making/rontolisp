@@ -7,7 +7,7 @@
 ;;;; is inlined at compile time, so the compiler sees the core `defun`s natively.
 ;;;;
 ;;;; The browser holds the game state as an opaque string that round-trips through
-;;;; the WASM :sexpr ABI -- it never parses Lisp. Randomness: a --no-wasi reactor
+;;;; the WASM :s-expr ABI -- it never parses Lisp. Randomness: a --no-wasi reactor
 ;;;; has no entropy source, so the page supplies only a random ordering of cells
 ;;;; and the shared core `place-mines` applies the (first-click-safe) placement
 ;;;; rule -- the same rule the Swing front-end uses, entropy the only difference.
@@ -83,10 +83,10 @@
 
 ;;; --- host-callable exports ---------------------------------------------------
 
-(rontolisp:wasm-export 'place-mines     :params '(:int :int :int :int :sexpr) :returns :sexpr)
-(rontolisp:wasm-export 'new-game        :params '(:int :int :sexpr) :returns :sexpr)
-(rontolisp:wasm-export 'reveal          :params '(:sexpr :int)      :returns :sexpr)
-(rontolisp:wasm-export 'toggle-flag     :params '(:sexpr :int)      :returns :sexpr)
-(rontolisp:wasm-export 'render          :params '(:sexpr)           :returns :string)
-(rontolisp:wasm-export 'game-status     :params '(:sexpr)           :returns :int)
-(rontolisp:wasm-export 'mines-remaining :params '(:sexpr)           :returns :int)
+(rontolisp:wasm-export 'place-mines     :params '(:int :int :int :int :s-expr) :returns :s-expr)
+(rontolisp:wasm-export 'new-game        :params '(:int :int :s-expr) :returns :s-expr)
+(rontolisp:wasm-export 'reveal          :params '(:s-expr :int)      :returns :s-expr)
+(rontolisp:wasm-export 'toggle-flag     :params '(:s-expr :int)      :returns :s-expr)
+(rontolisp:wasm-export 'render          :params '(:s-expr)           :returns :string)
+(rontolisp:wasm-export 'game-status     :params '(:s-expr)           :returns :int)
+(rontolisp:wasm-export 'mines-remaining :params '(:s-expr)           :returns :int)

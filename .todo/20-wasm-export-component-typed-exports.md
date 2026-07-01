@@ -20,7 +20,7 @@ to:
 
 1. Generate a WIT world that declares each exported function with WIT types
    mapped from the directive's designators (`:int -> s32`/`u32`, `:float -> f64`,
-   `:bool -> bool`, `:string -> string`, `:sexpr -> string`, void -> no result).
+   `:bool -> bool`, `:string -> string`, `:s-expr -> string`, void -> no result).
 2. Lift each core wrapper through the canonical ABI in `WasmComponentBuilder` /
    `am.ik.wasm.ComponentWriter` (canon lift, with `cabi_realloc` for `string`
    results — the component already imports a shared canonical memory + realloc).

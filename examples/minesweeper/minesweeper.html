@@ -381,7 +381,7 @@
       let timer = null;
       let seconds = 0;
 
-      // --- WASM :sexpr / :string helpers --------------------------------------
+      // --- WASM :s-expr / :string helpers --------------------------------------
       const enc = new TextEncoder();
       const dec = new TextDecoder();
       function writeStr(s) {
@@ -393,7 +393,7 @@
       function readStr(p, len) {
         return dec.decode(new Uint8Array(ex.memory.buffer, p, len));
       }
-      // Call an export whose 1st arg is a state :sexpr; extra ints follow.
+      // Call an export whose 1st arg is a state :s-expr; extra ints follow.
       function callState(fn, s, ...ints) {
         const [p, l] = writeStr(s);
         const [rp, rl] = ex[fn](p, l, ...ints);

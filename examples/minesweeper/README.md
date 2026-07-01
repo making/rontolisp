@@ -65,20 +65,20 @@ place mines identically.
 
 The game is a **pure state machine**. The state is a nested list of integers
 `(status w h mines revealed flags)`; the page treats it as an opaque string that
-round-trips through the WebAssembly `:sexpr` ABI, so the JavaScript never parses
+round-trips through the WebAssembly `:s-expr` ABI, so the JavaScript never parses
 Lisp. Each interaction is one export call:
 
 | Export | Signature | Purpose |
 | --- | --- | --- |
-| `place-mines` | `(:int :int :int :int :sexpr) -> :sexpr` | The shared first-click-safe placement rule: pick mines from a host-supplied random ordering |
-| `new-game` | `(:int :int :sexpr) -> :sexpr` | Build a fresh state from width, height, and a mine bit-list |
-| `reveal` | `(:sexpr :int) -> :sexpr` | Open a cell; flood-fill blanks; detect win/loss |
-| `toggle-flag` | `(:sexpr :int) -> :sexpr` | Flag / unflag a covered cell |
-| `render` | `(:sexpr) -> :string` | The board as a run of `<div class='cell ...'>` elements |
-| `game-status` | `(:sexpr) -> :int` | 0 playing, 1 won, 2 lost |
-| `mines-remaining` | `(:sexpr) -> :int` | Mines minus flags placed |
+| `place-mines` | `(:int :int :int :int :s-expr) -> :s-expr` | The shared first-click-safe placement rule: pick mines from a host-supplied random ordering |
+| `new-game` | `(:int :int :s-expr) -> :s-expr` | Build a fresh state from width, height, and a mine bit-list |
+| `reveal` | `(:s-expr :int) -> :s-expr` | Open a cell; flood-fill blanks; detect win/loss |
+| `toggle-flag` | `(:s-expr :int) -> :s-expr` | Flag / unflag a covered cell |
+| `render` | `(:s-expr) -> :string` | The board as a run of `<div class='cell ...'>` elements |
+| `game-status` | `(:s-expr) -> :int` | 0 playing, 1 won, 2 lost |
+| `mines-remaining` | `(:s-expr) -> :int` | Mines minus flags placed |
 
-The `:string` / `:sexpr` boundary is a `(ptr, len)` into the module's linear
+The `:string` / `:s-expr` boundary is a `(ptr, len)` into the module's linear
 memory. The page writes UTF-8 via the exported `__ronto_alloc` bump allocator,
 passes the pointer and length, and reads the returned `(ptr, len)` back out --
 the same pattern as [`../rainbow.html`](../rainbow.html). See the top of

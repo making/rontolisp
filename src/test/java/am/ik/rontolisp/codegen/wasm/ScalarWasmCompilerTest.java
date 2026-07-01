@@ -187,12 +187,12 @@ class ScalarWasmCompilerTest {
 
 	@Test
 	void rejectsSexprExportType() {
-		// :string is supported (Phase 2a), but :sexpr still needs a cons/reader/printer
+		// :string is supported (Phase 2a), but :s-expr still needs a cons/reader/printer
 		// runtime and is rejected.
 		assertThatThrownBy(() -> compile("""
 				(defun id (s) s)
-				(rontolisp:wasm-export 'id :params '(:sexpr) :returns :sexpr)
-				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining(":sexpr");
+				(rontolisp:wasm-export 'id :params '(:s-expr) :returns :s-expr)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining(":s-expr");
 	}
 
 	@Test

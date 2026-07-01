@@ -1,7 +1,7 @@
 # `--no-gc`: a non-GC WASM lowering for pure-numeric exports
 
 **Status:** Phase 1 LANDED (2026-06-29), extended with iteration + math (2026-06-29),
-then **Phase 2a strings LANDED (2026-06-29)**. Only `:sexpr` (cons/reader/printer) is
+then **Phase 2a strings LANDED (2026-06-29)**. Only `:s-expr` (cons/reader/printer) is
 still open. Phase 1 shipped as
 `codegen.wasm.ScalarWasmCompiler` (a separate backend, GC path untouched): `--no-gc`
 emits a plain MVP module (no rec group / GC types / memory / import) for pure-numeric
@@ -47,7 +47,7 @@ internal pointer returned as `(ptr+4, len)`. The `Ty.join` lattice treats INT as
 inference bottom that yields to STRING and makes FLOAT-vs-STRING a type error; `coerce`
 rejects string/number mixing (except nil->""). Composes with `--optimize` (the tree shaker
 already decodes the memory/global/grow/block/loop opcodes). Tests: `ScalarWasmCompilerTest`
-(memory/data/export structure, `:sexpr` still rejected) + `noGcSupportsStringConcatenation
+(memory/data/export structure, `:s-expr` still rejected) + `noGcSupportsStringConcatenation
 AtTheBoundary` in `WasmLispCompilerIntegrationTest` (wasmtime, no `-W gc`, asserts the
 returned `:string` length). Docs: README "Strings under `--no-gc`"; CLAUDE.md bullet.
 
@@ -56,7 +56,7 @@ not yet primitives, but are now user-expressible via the loop forms (e.g. an ite
 Euclid `gcd`); add them as builtins only if demand warrants. (b) **More string ops**:
 only literals + `(concatenate 'string ...)` are in so far; `length`/`char`/`char-code`/
 `subseq`/`string=` etc. would make string kernels far more capable (each maps cleanly onto
-the linear-memory header). (c) **`:sexpr`** — the cons/reader/printer runtime (a uniform
+the linear-memory header). (c) **`:s-expr`** — the cons/reader/printer runtime (a uniform
 tagged value for heterogeneous lists) remains the genuinely large piece; see "Out of
 scope" below.
 
@@ -107,7 +107,7 @@ non-GC output can be numerically *better*, not just smaller.
   offending op (so the boundary is explicit, never a silent miscompile).
 
 ### Phase 2 (optional, later) — strings/sexpr via linear memory
-- `:string`/`:sexpr` do need memory, but **linear memory is an MVP feature** — no GC
+- `:string`/`:s-expr` do need memory, but **linear memory is an MVP feature** — no GC
   required. Represent strings as `(ptr,len)` in linear memory with a bump allocator
   (reuse the `__ronto_alloc` idea), independent of the GC `array` string repr. This is
   more work (a second string runtime) and should only follow if Phase 1 proves useful.

@@ -30,13 +30,13 @@ import am.ik.wasm.Type;
  * <li>{@code :float} -- {@code f64} (boxed as a float struct)</li>
  * <li>{@code :bool} -- {@code i32} (0 = nil, non-zero = the symbol {@code t})</li>
  * <li>{@code :string} -- {@code (ptr,len)} bytes in linear memory</li>
- * <li>{@code :sexpr} -- {@code (ptr,len)} s-expression text in linear memory</li>
+ * <li>{@code :s-expr} -- {@code (ptr,len)} s-expression text in linear memory</li>
  * </ul>
  *
  * <p>
  * Scalar designators ({@code :int}/{@code :float}/{@code :bool}) yield a pure numeric
  * signature callable straight from {@code wasmtime --invoke}. The memory-backed
- * {@code :string} / {@code :sexpr} designators pass {@code (ptr,len)} through linear
+ * {@code :string} / {@code :s-expr} designators pass {@code (ptr,len)} through linear
  * memory and need a host that can read/write it (e.g. JavaScript), using the exported
  * {@code __ronto_alloc} bump allocator to reserve input buffers.
  */
@@ -50,7 +50,7 @@ final class WasmExportCompiler {
 
 	static final String T_STRING = ":string";
 
-	static final String T_SEXPR = ":sexpr";
+	static final String T_S_EXPR = ":s-expr";
 
 	/**
 	 * Internal sentinel for a void result: the wrapper discards the Lisp return value and
@@ -59,7 +59,7 @@ final class WasmExportCompiler {
 	 */
 	static final String T_VOID = ":void";
 
-	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_FLOAT, T_BOOL, T_STRING, T_SEXPR);
+	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_FLOAT, T_BOOL, T_STRING, T_S_EXPR);
 
 	private WasmExportCompiler() {
 	}
@@ -135,7 +135,7 @@ final class WasmExportCompiler {
 
 	/**
 	 * Returns whether any declared type is memory-backed
-	 * ({@code :string}/{@code :sexpr}).
+	 * ({@code :string}/{@code :s-expr}).
 	 */
 	static boolean usesMemory(Decl decl) {
 		if (isMemoryType(decl.returnType())) {
@@ -222,7 +222,7 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(strFromMemFuncIndex);
 			}
-			case T_SEXPR -> {
+			case T_S_EXPR -> {
 				// (ptr,len) of s-expression text -> parse via the embedded reader.
 				storeWord(ctx, WasmLispCompiler.READ_CURSOR_ADDR, slot, false);
 				storeWord(ctx, WasmLispCompiler.READ_END_ADDR, slot, true);
@@ -249,7 +249,7 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.I32_EQZ);
 			}
 			case T_STRING -> emitStringResult(ctx);
-			case T_SEXPR -> {
+			case T_S_EXPR -> {
 				// Serialize any value to readable s-expression text, then return its
 				// bytes.
 				ctx.writer.write(Instruction.CALL);
@@ -312,14 +312,14 @@ final class WasmExportCompiler {
 	}
 
 	private static boolean isMemoryType(String type) {
-		return T_STRING.equals(type) || T_SEXPR.equals(type);
+		return T_STRING.equals(type) || T_S_EXPR.equals(type);
 	}
 
 	private static void appendWasmTypes(List<Type> types, String type) {
 		switch (type) {
 			case T_INT, T_BOOL -> types.add(Type.I32);
 			case T_FLOAT -> types.add(Type.F64);
-			case T_STRING, T_SEXPR -> {
+			case T_STRING, T_S_EXPR -> {
 				types.add(Type.I32);
 				types.add(Type.I32);
 			}

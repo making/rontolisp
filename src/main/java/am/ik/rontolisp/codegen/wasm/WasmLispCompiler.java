@@ -539,11 +539,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				topLevelExprs.add(expr);
 			}
 		}
-		// A :sexpr export parameter parses host-provided text with the embedded reader,
+		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
 		boolean exportNeedsReader = (!this.component)
-				&& exportDecls.stream().anyMatch(d -> d.paramTypes().contains(WasmExportCompiler.T_SEXPR));
+				&& exportDecls.stream().anyMatch(d -> d.paramTypes().contains(WasmExportCompiler.T_S_EXPR));
 		if (exportNeedsReader) {
 			usesRead = true;
 		}
@@ -810,7 +810,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// wrapper type indices follow TYPE_HASH_BUCKETS (the last fixed type).
 		List<ExportPlan> exportPlans = new ArrayList<>();
 		List<byte[]> exportBodies = new ArrayList<>();
-		// Memory-backed exports (:string/:sexpr) need two appended helper functions: the
+		// Memory-backed exports (:string/:s-expr) need two appended helper functions: the
 		// host-facing bump allocator __ronto_alloc and the _str_from_mem string builder.
 		// They precede the wrappers so the fixed FUNC_* constants are unaffected.
 		boolean exportUsesMemory = (!this.component) && exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);

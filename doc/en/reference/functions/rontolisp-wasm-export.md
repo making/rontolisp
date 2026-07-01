@@ -31,7 +31,7 @@ The type designators and their boundary representations are:
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
-| `:sexpr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+| `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
 
 ## Limitations
 
@@ -45,4 +45,4 @@ The type designators and their boundary representations are:
   random, or a top-level I/O form) traps under `--no-wasi` and is otherwise
   unsupported.
 - The non-GC backend (`--no-gc`) supports `:int`/`:float`/`:bool`/`:string` but
-  not `:sexpr`, which needs the cons/reader/printer runtime.
+  not `:s-expr`, which needs the cons/reader/printer runtime.

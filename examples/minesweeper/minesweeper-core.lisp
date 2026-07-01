@@ -27,7 +27,7 @@
 ;;; --- small list helpers ------------------------------------------------------
 
 ;;; Destructively set element I of LST to VAL, returning LST. The lists we mutate
-;;; are freshly built for each game (or parsed from the :sexpr argument on every
+;;; are freshly built for each game (or parsed from the :s-expr argument on every
 ;;; host call), so this never leaks state between actions.
 (defun set-nth (lst i val)
   (rplaca (nthcdr i lst) val)

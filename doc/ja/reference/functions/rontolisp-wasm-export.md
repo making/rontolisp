@@ -31,7 +31,7 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
-| `:sexpr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+| `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
 
 ## 制限事項
 
@@ -45,5 +45,5 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   トップレベルの I/O フォーム) は `--no-wasi` ではトラップし、それ以外ではサポート
   されません。
 - 非 GC バックエンド (`--no-gc`) は `:int`/`:float`/`:bool`/`:string` をサポート
-  しますが、cons/リーダ/プリンタのランタイムを必要とする `:sexpr` はサポートしま
+  しますが、cons/リーダ/プリンタのランタイムを必要とする `:s-expr` はサポートしま
   せん。

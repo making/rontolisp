@@ -76,7 +76,7 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Only scalar boundary designators are supported: {@code :int} ({@code i32}),
  * {@code :float} ({@code f64}), {@code :bool} ({@code i32}, 0 = false) and {@code :void}
- * / omitted. Memory-backed {@code :string}/{@code :sexpr} would need a second
+ * / omitted. Memory-backed {@code :string}/{@code :s-expr} would need a second
  * linear-memory string runtime and are deferred (Phase 2).
  */
 public final class ScalarWasmCompiler implements LispCompiler {
@@ -1941,8 +1941,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	}
 
 	private static void requireSupported(String type, WasmExportCompiler.Decl decl) {
-		if (WasmExportCompiler.T_SEXPR.equals(type)) {
-			throw new UnsupportedOperationException("--no-gc does not support the :sexpr export type for '"
+		if (WasmExportCompiler.T_S_EXPR.equals(type)) {
+			throw new UnsupportedOperationException("--no-gc does not support the :s-expr export type for '"
 					+ decl.name()
 					+ "' (it needs a cons/reader/printer runtime; only :int/:float/:bool/:string/:void are supported)");
 		}

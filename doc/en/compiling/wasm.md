@@ -63,12 +63,12 @@ The type designators and their boundary representations are:
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
-| `:sexpr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+| `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
 
 The default wasm-GC output supports all five designators (the `:int` range above is the
 internal `i31ref`). The non-GC backend ([`--no-gc`](#non-gc-output---no-gc)) supports
 `:int`/`:float`/`:bool`/`:string` — with a wider internal integer range — but not
-`:sexpr`, which needs the cons/reader/printer runtime.
+`:s-expr`, which needs the cons/reader/printer runtime.
 
 A side-effecting function can declare a **void** result by omitting `:returns` (or giving it
 as `nil`, `'()` or `:void`); the wrapper then discards the Lisp return value and has no WASM
@@ -81,7 +81,7 @@ result. Likewise an omitted, `nil` or `'()` `:params` means no arguments.
 
 Functions whose parameters and result are all scalar (`:int`/`:float`/`:bool`) get a plain
 numeric signature, so they can be called straight from `wasmtime --invoke`. The
-memory-backed `:string` and `:sexpr` designators pass a pointer/length pair through the
+memory-backed `:string` and `:s-expr` designators pass a pointer/length pair through the
 module's exported `memory`, so they need a host that can read and write it (e.g.
 JavaScript). For input, the module also exports a bump allocator `__ronto_alloc(size)`
 that returns a scratch offset to write the argument bytes into:
@@ -92,7 +92,7 @@ const ex = instance.exports, mem = ex.memory;
 const b = new TextEncoder().encode('("a" "b" "c")');
 const ptr = ex.__ronto_alloc(b.length);
 new Uint8Array(mem.buffer, ptr, b.length).set(b);
-const [rptr, rlen] = ex.rev(ptr, b.length);          // (rontolisp:wasm-export 'rev :params '(:sexpr) :returns :sexpr)
+const [rptr, rlen] = ex.rev(ptr, b.length);          // (rontolisp:wasm-export 'rev :params '(:s-expr) :returns :s-expr)
 new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b" "a")
 ```
 
@@ -201,7 +201,7 @@ a global) makes the function ineligible. Rather than miscompile silently, that i
 **compile error** naming the offending operation, so the boundary stays explicit.
 
 The supported boundary designators are `:int`, `:float`, `:bool`, `:string` (and
-`:void`/omitted). `:sexpr` is **not** supported — it would need the cons/reader/printer
+`:void`/omitted). `:s-expr` is **not** supported — it would need the cons/reader/printer
 runtime that this backend deliberately omits.
 
 ### Numeric model
@@ -445,15 +445,15 @@ Hello, rontolisp!
 
 Richer string functions (`string-upcase`, `subseq`, `string=`, …) are outside the non-GC
 subset; using one means compiling for the wasm-GC backend (`--no-wasi`) instead — the
-boundary protocol is identical, only the engine must be wasm-GC capable. The `:sexpr`
+boundary protocol is identical, only the engine must be wasm-GC capable. The `:s-expr`
 example below shows that path.
 
-### Passing lists (`:sexpr`)
+### Passing lists (`:s-expr`)
 
-A `:sexpr` carries **any** Lisp value as s-expression *text*: the module parses the input
+A `:s-expr` carries **any** Lisp value as s-expression *text*: the module parses the input
 with its embedded reader and prints the result back, over the same `(ptr, len)` /
 `__ronto_alloc` protocol. That reader/printer/cons machinery is **wasm-GC only**, so
-`:sexpr` (and the richer string functions above) need `--no-wasi` and a wasm-GC-capable
+`:s-expr` (and the richer string functions above) need `--no-wasi` and a wasm-GC-capable
 engine (Node 22+, a current browser):
 
 ```lisp
@@ -461,7 +461,7 @@ engine (Node 22+, a current browser):
 (defun shout (s) (string-upcase s))
 (defun rev (lst) (reverse lst))
 (rontolisp:wasm-export 'shout :params '(:string) :returns :string)   ; "hello" -> "HELLO"
-(rontolisp:wasm-export 'rev   :params '(:sexpr)  :returns :sexpr)    ; a list, reversed
+(rontolisp:wasm-export 'rev   :params '(:s-expr)  :returns :s-expr)    ; a list, reversed
 ```
 
 ```bash

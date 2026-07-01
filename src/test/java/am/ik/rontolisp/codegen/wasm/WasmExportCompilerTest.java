@@ -43,8 +43,8 @@ class WasmExportCompilerTest {
 	@Test
 	void parsesMultipleParamsAndMemoryTypes() {
 		WasmExportCompiler.Decl decl = parse(
-				"(rontolisp:wasm-export 'concat :params '(:string :sexpr) :returns :string)");
-		assertThat(decl.paramTypes()).containsExactly(":string", ":sexpr");
+				"(rontolisp:wasm-export 'concat :params '(:string :s-expr) :returns :string)");
+		assertThat(decl.paramTypes()).containsExactly(":string", ":s-expr");
 		assertThat(WasmExportCompiler.usesMemory(decl)).isTrue();
 		assertThat(WasmExportCompiler.paramSlotCount(decl)).isEqualTo(4);
 	}

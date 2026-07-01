@@ -107,14 +107,14 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void exportMemoryTypesProduceInstantiableModule() throws Exception {
-		// :string/:sexpr need a memory-writing host (round-trip verified out of band);
+		// :string/:s-expr need a memory-writing host (round-trip verified out of band);
 		// here
 		// we confirm the module with the bump allocator instantiates and its _start runs.
 		String program = """
 				(defun shout (s) (string-upcase s))
 				(defun rev (lst) (reverse lst))
 				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
-				(rontolisp:wasm-export 'rev :params '(:sexpr) :returns :sexpr)
+				(rontolisp:wasm-export 'rev :params '(:s-expr) :returns :s-expr)
 				(print "ok")
 				""";
 		assertThat(compileAndRun(program)).isEqualTo("\"ok\"");

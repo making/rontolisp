@@ -1,4 +1,4 @@
-# `wasm:export`: automated CI coverage for the `:string`/`:sexpr` memory ABI
+# `wasm:export`: automated CI coverage for the `:string`/`:s-expr` memory ABI
 
 **Status:** open. Follow-up to the `wasm:export` feature. Raised in the
 `claude-opus` session 2026-06-28.
@@ -8,7 +8,7 @@
 The scalar designators (`:int`/`:float`/`:bool`) and the void path are covered
 end-to-end in CI by `WasmLispCompilerIntegrationTest` via
 `wasmtime --invoke <fn> ... <args>` (Testcontainers + wasmtime). The
-**memory-backed `:string`/`:sexpr` designators are not** truly exercised in CI:
+**memory-backed `:string`/`:s-expr` designators are not** truly exercised in CI:
 
 - `wasmtime --invoke` cannot write a pointer/length into linear memory, so the
   CLI can only confirm the module **instantiates and `_start` runs**
@@ -26,7 +26,7 @@ A JS-host test that drives the memory ABI for real, run in CI:
 1. Add a small Node (or browser) harness mirroring the session's `host.mjs`:
    instantiate the Preview 1 module with eight no-op `wasi_snapshot_preview1`
    stubs, call `__ronto_alloc`, write UTF-8 input, call the export, read the
-   `(ptr,len)` result back. Assert `:string` and `:sexpr` round-trips.
+   `(ptr,len)` result back. Assert `:string` and `:s-expr` round-trips.
 2. Wire it into the **web-playground CI job** (which already has a JS toolchain)
    rather than the Java Testcontainers path, since it needs a JS WebAssembly host
    with WasmGC + i31 support (Node 22+ works).

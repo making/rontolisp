@@ -49,9 +49,9 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` は `nil`、それ以外の非ゼロ値は `t` |
 | `:string` | `(ptr, len)` | リニアメモリ内の UTF-8 バイト列 |
-| `:sexpr` | `(ptr, len)` | リニアメモリ内の S 式テキスト（関数以外の任意の値） |
+| `:s-expr` | `(ptr, len)` | リニアメモリ内の S 式テキスト（関数以外の任意の値） |
 
-デフォルトの wasm-GC 出力は 5 つすべての指定子をサポートします（上記の `:int` の範囲は内部の `i31ref` です）。非 GC バックエンド（[`--no-gc`](#non-gc-output---no-gc)）は `:int`/`:float`/`:bool`/`:string` をサポートします（内部の整数範囲はより広くなります）が、cons/リーダー/プリンターのランタイムを必要とする `:sexpr` はサポートしません。
+デフォルトの wasm-GC 出力は 5 つすべての指定子をサポートします（上記の `:int` の範囲は内部の `i31ref` です）。非 GC バックエンド（[`--no-gc`](#non-gc-output---no-gc)）は `:int`/`:float`/`:bool`/`:string` をサポートします（内部の整数範囲はより広くなります）が、cons/リーダー/プリンターのランタイムを必要とする `:s-expr` はサポートしません。
 
 副作用のある関数は、`:returns` を省略する（あるいは `nil`、`'()`、`:void` として指定する）ことで **void** の結果を宣言できます。その場合、ラッパーは Lisp の戻り値を破棄し、WASM の結果を持ちません。同様に、`:params` を省略するか `nil` または `'()` とした場合は引数なしを意味します。
 
@@ -60,7 +60,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 (rontolisp:wasm-export 'log-it :params '(:int))           ; (i32) -> () , prints n
 ```
 
-パラメータと結果がすべてスカラー（`:int`/`:float`/`:bool`）である関数は素の数値シグネチャを持つため、`wasmtime --invoke` から直接呼び出せます。メモリを介する `:string` および `:sexpr` 指定子は、モジュールがエクスポートする `memory` を通じてポインタ/長さのペアを受け渡すため、それを読み書きできるホスト（例えば JavaScript）が必要です。入力用に、モジュールはバンプアロケータ `__ronto_alloc(size)` もエクスポートします。これは引数のバイト列を書き込むためのスクラッチ領域のオフセットを返します。
+パラメータと結果がすべてスカラー（`:int`/`:float`/`:bool`）である関数は素の数値シグネチャを持つため、`wasmtime --invoke` から直接呼び出せます。メモリを介する `:string` および `:s-expr` 指定子は、モジュールがエクスポートする `memory` を通じてポインタ/長さのペアを受け渡すため、それを読み書きできるホスト（例えば JavaScript）が必要です。入力用に、モジュールはバンプアロケータ `__ronto_alloc(size)` もエクスポートします。これは引数のバイト列を書き込むためのスクラッチ領域のオフセットを返します。
 
 ```js
 const { instance } = await WebAssembly.instantiate(bytes, { wasi_snapshot_preview1: stubs });
@@ -68,7 +68,7 @@ const ex = instance.exports, mem = ex.memory;
 const b = new TextEncoder().encode('("a" "b" "c")');
 const ptr = ex.__ronto_alloc(b.length);
 new Uint8Array(mem.buffer, ptr, b.length).set(b);
-const [rptr, rlen] = ex.rev(ptr, b.length);          // (rontolisp:wasm-export 'rev :params '(:sexpr) :returns :sexpr)
+const [rptr, rlen] = ex.rev(ptr, b.length);          // (rontolisp:wasm-export 'rev :params '(:s-expr) :returns :s-expr)
 new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b" "a")
 ```
 
@@ -128,7 +128,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 
 ヒープオブジェクトを割り当てるその他のもの（cons/リスト、文字、シンボル、ベクター、ハッシュテーブル、`eval`/`apply`、I/O、`dolist`/リスト反復、自由変数やグローバルへの代入）は、その関数を対象外にします。黙ってミスコンパイルするのではなく、これは違反した演算を名指しする **コンパイルエラー** になるため、境界は明示的なままです。
 
-サポートされる境界指定子は `:int`、`:float`、`:bool`、`:string`（および `:void`/省略）です。`:sexpr` は **サポートされません** — それには、このバックエンドが意図的に省略している cons/リーダー/プリンターのランタイムが必要だからです。
+サポートされる境界指定子は `:int`、`:float`、`:bool`、`:string`（および `:void`/省略）です。`:s-expr` は **サポートされません** — それには、このバックエンドが意図的に省略している cons/リーダー/プリンターのランタイムが必要だからです。
 
 ### 数値モデル
 
@@ -323,18 +323,18 @@ console.log(read(...ex.greet(...write('rontolisp'))));     // Hello, rontolisp!
 Hello, rontolisp!
 ```
 
-より高機能な文字列関数（`string-upcase`、`subseq`、`string=` など）は非 GC サブセットの外にあります。それらを使うには代わりに wasm-GC バックエンド（`--no-wasi`）向けにコンパイルすることになります。境界プロトコルは同一で、エンジンが wasm-GC 対応でなければならないだけです。以下の `:sexpr` の例がそのパスを示します。
+より高機能な文字列関数（`string-upcase`、`subseq`、`string=` など）は非 GC サブセットの外にあります。それらを使うには代わりに wasm-GC バックエンド（`--no-wasi`）向けにコンパイルすることになります。境界プロトコルは同一で、エンジンが wasm-GC 対応でなければならないだけです。以下の `:s-expr` の例がそのパスを示します。
 
-### リストの受け渡し（`:sexpr`）
+### リストの受け渡し（`:s-expr`）
 
-`:sexpr` は **任意の** Lisp 値を S 式の *テキスト* として運びます。モジュールは組み込みのリーダーで入力を解析し、結果を同じ `(ptr, len)` / `__ronto_alloc` プロトコルで返します。そのリーダー/プリンター/cons の機構は **wasm-GC 専用** であるため、`:sexpr`（および上記のより高機能な文字列関数）には `--no-wasi` と wasm-GC 対応のエンジン（Node 22 以降、現行のブラウザ）が必要です。
+`:s-expr` は **任意の** Lisp 値を S 式の *テキスト* として運びます。モジュールは組み込みのリーダーで入力を解析し、結果を同じ `(ptr, len)` / `__ronto_alloc` プロトコルで返します。そのリーダー/プリンター/cons の機構は **wasm-GC 専用** であるため、`:s-expr`（および上記のより高機能な文字列関数）には `--no-wasi` と wasm-GC 対応のエンジン（Node 22 以降、現行のブラウザ）が必要です。
 
 ```lisp
 ;; textkit.lisp
 (defun shout (s) (string-upcase s))
 (defun rev (lst) (reverse lst))
 (rontolisp:wasm-export 'shout :params '(:string) :returns :string)   ; "hello" -> "HELLO"
-(rontolisp:wasm-export 'rev   :params '(:sexpr)  :returns :sexpr)    ; a list, reversed
+(rontolisp:wasm-export 'rev   :params '(:s-expr)  :returns :s-expr)    ; a list, reversed
 ```
 
 ```bash
