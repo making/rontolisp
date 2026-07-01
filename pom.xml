@@ -438,7 +438,17 @@ public final class Version {
 												<include name="infer.wasm"/>
 											</fileset>
 										</copy>
-										<echo message="Web playground staged in ${web.dist} (examples at ${web.dist}/wasm-browser and ${web.dist}/hiragana)"/>
+										<!-- Stage the Minesweeper demo as another subpath (/minesweeper/).
+											 Its .wasm is checked in, so no compilation is needed here. The
+											 page is copied to index.html so the demo is reachable at
+											 /minesweeper/; its fetch of ./minesweeper.wasm uses a relative
+											 URL and works under any subpath. The .lisp source is not shipped
+											 (the page links to it on GitHub). -->
+										<copy file="${project.basedir}/examples/minesweeper/minesweeper.html"
+											  tofile="${web.dist}/minesweeper/index.html"/>
+										<copy file="${project.basedir}/examples/minesweeper/minesweeper.wasm"
+											  todir="${web.dist}/minesweeper"/>
+										<echo message="Web playground staged in ${web.dist} (examples at ${web.dist}/wasm-browser, ${web.dist}/hiragana and ${web.dist}/minesweeper)"/>
 										<echo message="Serve it: cd web/dist &amp;&amp; jwebserver -p 8000"/>
 									</target>
 								</configuration>
