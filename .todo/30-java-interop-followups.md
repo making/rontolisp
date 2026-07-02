@@ -23,9 +23,13 @@ Deliberately deferred (scope was kept to one clean GUI demo; the existing
   `Jvm/WasmFunctionCallCompiler` to say "the java interop package is
   interpreter-only". Low value — the guide already documents it.
 
-- **Richer marshalling (optional).** Lisp lists/arrays are not bridged to Java
-  arrays/`List`, and varargs are unsupported. Add if a real example needs it
-  (e.g. passing `String[]`); document the conversion rules in the guide.
+- ~~**Richer marshalling (optional).**~~ DONE (2026-07-02): proper lists /
+  rank-1 vectors now marshal to Java arrays (element-wise, incl. primitives)
+  and `List`/`Collection`/`Iterable` params; varargs tails are packed (flat
+  cost penalty, fixed-arity preferred); Java array results unmarshal to Lisp
+  lists; methods on JDK-internal classes (e.g. `List.of` results) re-resolve
+  to an accessible interface declaration. Conversion rules documented in the
+  guide (both languages).
 
 - **Native-image reflection config (optional).** Interop is interpreter-only and
   also unusable in the native binary because arbitrary `Class.forName` is not

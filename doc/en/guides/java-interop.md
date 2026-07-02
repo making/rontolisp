@@ -57,9 +57,28 @@ Arguments and results are converted between rontolisp and Java automatically:
 | `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` |
 | a `java` object | the wrapped host object | any other object → a `java` object |
 | a function/lambda | a `java:proxy` over the matching interface | — |
+| a proper list / a vector | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
 
-A Java `null` (and a `void` method) comes back as `nil`. Lisp lists, symbols,
-arrays and hash tables are **not** bridged.
+A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
+rank-1 array made with `make-array` — passed where a Java array is expected is
+converted element-wise to the component type (including primitive arrays like
+`int[]`), and where a `List`/`Collection`/`Iterable` is expected it becomes a
+`java.util.List`; nested lists convert recursively. In the other direction a
+Java **array** result becomes a Lisp list, while a returned `java.util.List`
+stays an opaque `java` object whose methods you call:
+
+```lisp
+;; in: the list becomes a Collection
+(java:static "java.util.Collections" "max" (list 3 9 4))   ; => 9
+```
+
+```lisp
+;; in: (1 2 3) -> int[]; out: the int[] result -> a list
+(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
+```
+
+Symbols, hash tables, dotted (improper) lists and rank-2 arrays are **not**
+bridged.
 
 ## Overload resolution
 
@@ -80,6 +99,23 @@ When no integer overload exists the integer is converted to the available type:
 
 ```lisp
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+## Varargs
+
+A varargs method (e.g. `String.format(String, Object...)`) accepts any number
+of trailing arguments; they are packed into the varargs array automatically. A
+fixed-arity overload is preferred when both match, and a list/vector passed in
+the varargs position can also supply the whole array itself:
+
+```lisp
+;; 1 and "x" are packed into the Object... array
+(java:static "java.lang.String" "format" "%s-%s" 1 "x")   ; => "1-x"
+```
+
+```lisp
+;; the list is the CharSequence[] varargs array itself
+(java:static "java.lang.String" "join" "-" (list "a" "b" "c"))   ; => "a-b-c"
 ```
 
 ## Callbacks via java:proxy
@@ -141,9 +177,12 @@ functions, and `examples/life-gui.lisp` animates Conway's Game of Life with it.
 - **JVM interpreter only** (`java -jar rontolisp.jar`): not on the WASM/JVM-class
   compiler backends, and not in the GraalVM native binary, whose image carries no
   reflection metadata for the interop classes.
-- Lisp lists, symbols, arrays and hash tables are not marshalled — pass them as
-  Java collections you build with `java:new`/`java:call` instead.
-- Varargs and array parameters are not supported.
+- Symbols, hash tables, dotted (improper) lists and rank-2 arrays are not
+  marshalled — pass them as Java collections you build with
+  `java:new`/`java:call` instead.
+- A returned `java.util.List` (unlike a Java array) stays an opaque `java`
+  object: it keeps its identity and mutability, so read it with
+  `java:call` (`"get"`, `"size"`, ...) rather than list functions.
 - Overload resolution is by argument cost, not the full Java type-inference
   rules; an ambiguous call resolves to the lowest-cost (then
   lowest-signature) candidate rather than signalling an ambiguity error.

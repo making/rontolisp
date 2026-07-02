@@ -43,8 +43,21 @@
 | `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy` | — |
+| 真リスト / ベクタ | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
 
-Java の `null` (および `void` メソッド) は `nil` として返ります。Lisp のリスト、シンボル、配列、ハッシュテーブルはマーシャリング **されません**。
+Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
+
+```lisp
+;; in: the list becomes a Collection
+(java:static "java.util.Collections" "max" (list 3 9 4))   ; => 9
+```
+
+```lisp
+;; in: (1 2 3) -> int[]; out: the int[] result -> a list
+(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
+```
+
+シンボル、ハッシュテーブル、ドット対 (非真リスト)、ランク 2 の配列はマーシャリング **されません**。
 
 ## オーバーロード解決
 
@@ -60,6 +73,20 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 
 ```lisp
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+## 可変長引数 (varargs)
+
+可変長引数メソッド (例: `String.format(String, Object...)`) には任意個の末尾引数を渡せます。末尾引数は自動的に varargs 配列へパックされます。固定アリティのオーバーロードが両方に一致する場合はそちらが優先され、varargs 位置に渡したリスト/ベクタは配列そのものとしても扱えます。
+
+```lisp
+;; 1 and "x" are packed into the Object... array
+(java:static "java.lang.String" "format" "%s-%s" 1 "x")   ; => "1-x"
+```
+
+```lisp
+;; the list is the CharSequence[] varargs array itself
+(java:static "java.lang.String" "join" "-" (list "a" "b" "c"))   ; => "a-b-c"
 ```
 
 ## java:proxy によるコールバック
@@ -112,7 +139,7 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 ## 制限
 
 - **JVM インタプリタ専用** (`java -jar rontolisp.jar`)。WASM/JVM クラスのコンパイラバックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでも動作しません。
-- Lisp のリスト、シンボル、配列、ハッシュテーブルはマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
-- 可変長引数と配列パラメータはサポートされません。
+- シンボル、ハッシュテーブル、ドット対 (非真リスト)、ランク 2 の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
+- 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
 - オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。
 - これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

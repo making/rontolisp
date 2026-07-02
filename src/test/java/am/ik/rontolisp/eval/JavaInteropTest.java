@@ -133,6 +133,78 @@ class JavaInteropTest {
 				""").print()).isEqualTo("(10 30)");
 	}
 
+	// A proper list marshals to a primitive array parameter; the int elements prefer
+	// the int[] overload of binarySearch over long[]/double[]/Object[].
+	@Test
+	void listMarshalsToPrimitiveArrayParameter() {
+		assertThat(eval("(java:static \"java.util.Arrays\" \"binarySearch\" (list 10 20 30 40) 30)"))
+			.isEqualTo(new LispInteger(2));
+	}
+
+	// A proper list marshals to a Collection parameter as a java.util.List.
+	@Test
+	void listMarshalsToCollectionParameter() {
+		assertThat(eval("(java:static \"java.util.Collections\" \"max\" (list 3 9 4))")).isEqualTo(new LispInteger(9));
+	}
+
+	// Nested lists marshal recursively (the inner lists become Lists boxed as Object).
+	@Test
+	void nestedListMarshalsRecursively() {
+		assertThat(eval("(java:static \"java.util.Arrays\" \"deepToString\" (list (list 1 2) (list 3)))"))
+			.isEqualTo(new LispString("[[1, 2], [3]]"));
+	}
+
+	// A rank-1 vector marshals like a list; string elements select the CharSequence[]
+	// varargs parameter of String.join taken as-is (not element-packed).
+	@Test
+	void vectorMarshalsToArrayParameter() {
+		assertThat(eval("""
+				(setq v (make-array 2))
+				(setf (aref v 0) "a")
+				(setf (aref v 1) "b")
+				(java:static "java.lang.String" "join" "-" v)
+				""")).isEqualTo(new LispString("a-b"));
+	}
+
+	// A dotted (improper) list is not a sequence, so no overload matches.
+	@Test
+	void dottedListDoesNotMarshal() {
+		assertThatThrownBy(() -> eval("(java:static \"java.util.Collections\" \"max\" (cons 1 2))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("No matching method");
+	}
+
+	// Extra trailing arguments are packed into the varargs array.
+	@Test
+	void varargsPacksTrailingArguments() {
+		assertThat(eval("(java:static \"java.lang.String\" \"format\" \"%s-%s\" 1 \"x\")"))
+			.isEqualTo(new LispString("1-x"));
+	}
+
+	// Eleven arguments exceed every fixed-arity List.of overload, forcing the varargs
+	// one; and a varargs method also accepts an empty tail.
+	@Test
+	void varargsAcceptsAnyArity() {
+		assertThat(eval("(java:call (java:static \"java.util.List\" \"of\" 1 2 3 4 5 6 7 8 9 10 11) \"size\")"))
+			.isEqualTo(new LispInteger(11));
+		assertThat(eval("(java:call (java:static \"java.util.List\" \"of\") \"size\")")).isEqualTo(new LispInteger(0));
+	}
+
+	// A returned Java array surfaces as a Lisp list, and a list marshals back into an
+	// array parameter -- Arrays.copyOf(int[], int) round-trips both directions.
+	@Test
+	void arrayRoundTripsThroughCopyOf() {
+		assertThat(eval("(java:static \"java.util.Arrays\" \"copyOf\" (list 1 2 3) 2)").print()).isEqualTo("(1 2)");
+	}
+
+	// A returned primitive array unmarshals element-wise; the IntStream implementation
+	// class is JDK-internal, so this also exercises the accessible-method resolution.
+	@Test
+	void returnedPrimitiveArrayUnmarshalsToList() {
+		assertThat(eval("(java:call (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"chars\") \"toArray\")")
+			.print()).isEqualTo("(97 98)");
+	}
+
 	@Test
 	void printsOpaquely() {
 		assertThat(eval("(java:new \"java.lang.StringBuilder\")").print()).isEqualTo("#<java java.lang.StringBuilder>");

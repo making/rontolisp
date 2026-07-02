@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
@@ -11,7 +12,9 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
@@ -27,8 +30,10 @@ import am.ik.rontolisp.LispVal;
  * interpreter. It marshals between Lisp values and Java objects, resolves overloaded
  * constructors/methods <em>deterministically</em> (by a per-argument conversion cost, so
  * an integer prefers an {@code int} overload over a {@code long}/{@code double} one, with
- * ties broken by a stable signature key rather than by reflection ordering), and turns
- * Lisp callables into Java interface instances via {@link Proxy}.
+ * ties broken by a stable signature key rather than by reflection ordering), turns Lisp
+ * callables into Java interface instances via {@link Proxy}, bridges proper lists and
+ * rank-1 vectors to Java arrays / {@code java.util.List} parameters (packing varargs
+ * tails), and returns Java array results as Lisp lists.
  * <p>
  * JVM-interpreter-only: the wrapped objects are {@link LispJavaObject}s, which the
  * compiler backends cannot lower, and the reflection relies on classes (and their
@@ -65,6 +70,9 @@ final class JavaInterop {
 	private static final int COST_BOXED = 6; // boxed/Object/Number/super-type target
 
 	private static final int COST_PROXY = 8; // a Lisp callable adapted to an interface
+
+	private static final int COST_VARARGS = 10; // flat penalty for packing a varargs
+												// tail, so a fixed-arity overload wins
 
 	private static final int NO_MATCH = -1; // this argument cannot become this type
 
@@ -106,7 +114,10 @@ final class JavaInterop {
 		List<Method> candidates = new ArrayList<>();
 		for (Method method : cls.getMethods()) {
 			if (method.getName().equals(methodName)) {
-				candidates.add(method);
+				Method accessible = accessibleMethod(method);
+				if (accessible != null) {
+					candidates.add(accessible);
+				}
 			}
 		}
 		Selected<Method> sel = select(candidates, args, caller);
@@ -115,7 +126,6 @@ final class JavaInterop {
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.size() + " argument(s)");
 		}
 		try {
-			sel.executable().setAccessible(true);
 			return unmarshal(sel.executable().invoke(receiver, sel.args()));
 		}
 		catch (ReflectiveOperationException ex) {
@@ -123,38 +133,129 @@ final class JavaInterop {
 		}
 	}
 
+	// A public method declared in a non-exported/non-public class (e.g. the List.of
+	// result type java.util.ImmutableCollections$ListN) cannot be invoked reflectively;
+	// re-resolve it to the same method on an accessible superclass or interface
+	// (List.size() instead of ImmutableCollections$ListN.size()).
+	private static @Nullable Method accessibleMethod(Method method) {
+		if (method.trySetAccessible()) {
+			return method;
+		}
+		for (Class<?> c = method.getDeclaringClass(); c != null; c = c.getSuperclass()) {
+			Method onInterface = accessibleOnInterfaces(c, method);
+			if (onInterface != null) {
+				return onInterface;
+			}
+			if (c != method.getDeclaringClass()) {
+				Method declared = accessibleDeclaration(c, method);
+				if (declared != null) {
+					return declared;
+				}
+			}
+		}
+		return null;
+	}
+
+	private static @Nullable Method accessibleOnInterfaces(Class<?> cls, Method method) {
+		for (Class<?> iface : cls.getInterfaces()) {
+			Method declared = accessibleDeclaration(iface, method);
+			if (declared != null) {
+				return declared;
+			}
+			Method nested = accessibleOnInterfaces(iface, method);
+			if (nested != null) {
+				return nested;
+			}
+		}
+		return null;
+	}
+
+	private static @Nullable Method accessibleDeclaration(Class<?> cls, Method method) {
+		try {
+			Method declared = cls.getMethod(method.getName(), method.getParameterTypes());
+			return declared.trySetAccessible() ? declared : null;
+		}
+		catch (NoSuchMethodException ex) {
+			return null;
+		}
+	}
+
 	// Picks the overload whose arguments marshal at the lowest total cost; ties are
 	// broken by the parameter-type signature so the result never depends on the
-	// (unspecified) order getMethods()/getConstructors() returns.
+	// (unspecified) order getMethods()/getConstructors() returns. A varargs executable
+	// is tried both as-is (the last argument supplying the array itself) and with the
+	// trailing arguments packed into the varargs array (at a flat extra cost, so a
+	// fixed-arity interpretation is preferred).
 	private static <E extends Executable> @Nullable Selected<E> select(List<E> candidates, List<LispVal> args,
 			Caller caller) {
 		Selected<E> best = null;
 		for (E e : candidates) {
-			if (e.getParameterCount() != args.size()) {
-				continue;
-			}
-			Class<?>[] params = e.getParameterTypes();
-			@Nullable Object[] out = new @Nullable Object[params.length];
-			int total = 0;
-			boolean ok = true;
-			for (int i = 0; i < params.length; i++) {
-				int cost = marshal(args.get(i), params[i], caller, out, i);
-				if (cost == NO_MATCH) {
-					ok = false;
-					break;
-				}
-				total += cost;
-			}
-			if (!ok) {
-				continue;
-			}
-			String signature = signatureOf(params);
-			if (best == null || total < best.cost()
-					|| (total == best.cost() && signature.compareTo(best.signature()) < 0)) {
-				best = new Selected<>(e, out, total, signature);
+			best = better(best, tryFixedArity(e, args, caller));
+			if (e.isVarArgs()) {
+				best = better(best, tryVarargs(e, args, caller));
 			}
 		}
 		return best;
+	}
+
+	private static <E extends Executable> @Nullable Selected<E> better(@Nullable Selected<E> a,
+			@Nullable Selected<E> b) {
+		if (a == null) {
+			return b;
+		}
+		if (b == null) {
+			return a;
+		}
+		return b.cost() < a.cost() || (b.cost() == a.cost() && b.signature().compareTo(a.signature()) < 0) ? b : a;
+	}
+
+	private static <E extends Executable> @Nullable Selected<E> tryFixedArity(E e, List<LispVal> args, Caller caller) {
+		if (e.getParameterCount() != args.size()) {
+			return null;
+		}
+		Class<?>[] params = e.getParameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.length];
+		int total = 0;
+		for (int i = 0; i < params.length; i++) {
+			int cost = marshal(args.get(i), params[i], caller, out, i);
+			if (cost == NO_MATCH) {
+				return null;
+			}
+			total += cost;
+		}
+		return new Selected<>(e, out, total, signatureOf(params));
+	}
+
+	private static <E extends Executable> @Nullable Selected<E> tryVarargs(E e, List<LispVal> args, Caller caller) {
+		Class<?>[] params = e.getParameterTypes();
+		int fixed = params.length - 1;
+		if (args.size() < fixed) {
+			return null;
+		}
+		@Nullable Object[] out = new @Nullable Object[params.length];
+		int total = COST_VARARGS;
+		for (int i = 0; i < fixed; i++) {
+			int cost = marshal(args.get(i), params[i], caller, out, i);
+			if (cost == NO_MATCH) {
+				return null;
+			}
+			total += cost;
+		}
+		Class<?> component = params[fixed].getComponentType();
+		Object packed = Array.newInstance(component, args.size() - fixed);
+		@Nullable Object[] slot = new @Nullable Object[1];
+		for (int i = fixed; i < args.size(); i++) {
+			int cost = marshal(args.get(i), component, caller, slot, 0);
+			if (cost == NO_MATCH) {
+				return null;
+			}
+			total += cost;
+			Array.set(packed, i - fixed, slot[0]);
+		}
+		out[fixed] = packed;
+		// The "*" keeps the packed signature distinct from the same method's fixed-arity
+		// interpretation, so the tie-break stays a total order.
+		return new Selected<>(e, out, total, signatureOf(params) + "*");
 	}
 
 	private static String signatureOf(Class<?>[] params) {
@@ -298,10 +399,76 @@ final class JavaInterop {
 			case LispFunction function -> {
 				return marshalCallable(function, target, caller, out, index);
 			}
+			case LispCons cons -> {
+				List<LispVal> elements = properListElements(cons);
+				if (elements == null) {
+					return NO_MATCH; // a dotted (improper) list is not a sequence
+				}
+				return marshalSequence(elements, target, caller, out, index);
+			}
+			case LispArray array -> {
+				if (array.dimensions().length != 1) {
+					return NO_MATCH; // only rank-1 vectors are bridged
+				}
+				List<LispVal> elements = new ArrayList<>(array.data().length);
+				for (LispVal element : array.data()) {
+					elements.add(element == null ? LispNil.INSTANCE : element);
+				}
+				return marshalSequence(elements, target, caller, out, index);
+			}
 			default -> {
-				return NO_MATCH; // cons, symbol, array, hash-table, ... are not bridged
+				return NO_MATCH; // symbol, hash-table, ... are not bridged
 			}
 		}
+	}
+
+	// A proper list (or rank-1 vector) converts to a Java array (element-wise to the
+	// component type, recursively) or, for any List-compatible reference target, to a
+	// java.util.List of boxed elements. The per-element costs count toward the total so
+	// string elements still prefer a String[] parameter over Object[].
+	private static int marshalSequence(List<LispVal> elements, Class<?> target, Caller caller, @Nullable Object[] out,
+			int index) {
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (target.isArray()) {
+			Class<?> component = target.getComponentType();
+			Object array = Array.newInstance(component, elements.size());
+			int total = COST_CONVERT;
+			for (int i = 0; i < elements.size(); i++) {
+				int cost = marshal(elements.get(i), component, caller, slot, 0);
+				if (cost == NO_MATCH) {
+					return NO_MATCH;
+				}
+				total += cost;
+				Array.set(array, i, slot[0]);
+			}
+			out[index] = array;
+			return total;
+		}
+		if (target.isAssignableFrom(ArrayList.class)) {
+			List<@Nullable Object> list = new ArrayList<>(elements.size());
+			int total = COST_BOXED;
+			for (LispVal element : elements) {
+				int cost = marshal(element, Object.class, caller, slot, 0);
+				if (cost == NO_MATCH) {
+					return NO_MATCH;
+				}
+				total += cost;
+				list.add(slot[0]);
+			}
+			out[index] = list;
+			return total;
+		}
+		return NO_MATCH;
+	}
+
+	private static @Nullable List<LispVal> properListElements(LispCons cons) {
+		List<LispVal> result = new ArrayList<>();
+		LispVal current = cons;
+		while (current instanceof LispCons c) {
+			result.add(c.car());
+			current = c.cdr();
+		}
+		return current instanceof LispNil ? result : null;
 	}
 
 	// A Lisp callable passed where an interface is expected is auto-wrapped in a proxy.
@@ -376,8 +543,18 @@ final class JavaInterop {
 			case Float f -> new LispDouble(f);
 			case Character c -> new LispChar(c);
 			case String s -> new LispString(s);
-			default -> new LispJavaObject(o);
+			default -> o.getClass().isArray() ? arrayToList(o) : new LispJavaObject(o);
 		};
+	}
+
+	// A Java array result (e.g. String.split) surfaces as a Lisp list, elements
+	// unmarshalled recursively; it round-trips back through marshalSequence.
+	private static LispVal arrayToList(Object array) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
+			result = new LispCons(unmarshal(Array.get(array, i)), result);
+		}
+		return result;
 	}
 
 	private static Class<?> loadClass(String name) {
