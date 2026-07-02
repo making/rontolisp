@@ -656,6 +656,160 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFormatRadixDirectives() {
+		assertThat(eval("(format nil \"~x\" 256)")).isEqualTo(new LispString("100"));
+		assertThat(eval("(format nil \"~x\" 255)")).isEqualTo(new LispString("FF"));
+		assertThat(eval("(format nil \"~o\" 256)")).isEqualTo(new LispString("400"));
+		assertThat(eval("(format nil \"~b\" #x10000)")).isEqualTo(new LispString("10000000000000000"));
+		assertThat(eval("(format nil \"~8r\" #x10000)")).isEqualTo(new LispString("200000"));
+		assertThat(eval("(format nil \"~x\" -255)")).isEqualTo(new LispString("-FF"));
+		assertThat(eval("(format nil \"~x\" 0)")).isEqualTo(new LispString("0"));
+		// Prefix parameters and modifiers work like ~d: width, pad, sign, grouping.
+		assertThat(eval("(format nil \"[~8x]\" 255)")).isEqualTo(new LispString("[      FF]"));
+		assertThat(eval("(format nil \"[~8,'0x]\" 255)")).isEqualTo(new LispString("[000000FF]"));
+		assertThat(eval("(format nil \"~@x\" 255)")).isEqualTo(new LispString("+FF"));
+		assertThat(eval("(format nil \"~:b\" 1010)")).isEqualTo(new LispString("1,111,110,010"));
+		assertThat(eval("(format nil \"~16r\" 255)")).isEqualTo(new LispString("FF"));
+		assertThat(eval("(format nil \"~2,8,'0r\" 10)")).isEqualTo(new LispString("00001010"));
+	}
+
+	@Test
+	void evalFormatCharacterDirective() {
+		assertThat(eval("(format nil \"~c\" #\\a)")).isEqualTo(new LispString("a"));
+		assertThat(eval("(format nil \"~@c\" #\\a)")).isEqualTo(new LispString("#\\a"));
+		assertThat(eval("(format nil \"~@c\" #\\Newline)")).isEqualTo(new LispString("#\\Newline"));
+		assertThat(eval("(format nil \"~:c\" #\\a)")).isEqualTo(new LispString("a"));
+		assertThat(eval("(format nil \"~:c\" #\\Newline)")).isEqualTo(new LispString("Newline"));
+		assertThat(eval("(format nil \"~:c\" #\\Space)")).isEqualTo(new LispString("Space"));
+	}
+
+	@Test
+	void evalFormatCaseConversion() {
+		assertThat(eval("(format nil \"~(~a~)\" \"FOO BAR\")")).isEqualTo(new LispString("foo bar"));
+		assertThat(eval("(format nil \"~:@(~a~)\" \"foo bar\")")).isEqualTo(new LispString("FOO BAR"));
+		assertThat(eval("(format nil \"~:(~a~)\" \"foo bar\")")).isEqualTo(new LispString("Foo Bar"));
+		assertThat(eval("(format nil \"~@(~a~)\" \"foo BAR\")")).isEqualTo(new LispString("Foo bar"));
+		// Literal text inside the group is converted too.
+		assertThat(eval("(format nil \"~(X~aY~)\" 'sym)")).isEqualTo(new LispString("xsymy"));
+	}
+
+	@Test
+	void evalFormatConditional() {
+		assertThat(eval("(format nil \"~[foo~a~;bar~a~:;baz~a~]\" 0 100)")).isEqualTo(new LispString("foo100"));
+		assertThat(eval("(format nil \"~[foo~a~;bar~a~:;baz~a~]\" 1 100)")).isEqualTo(new LispString("bar100"));
+		assertThat(eval("(format nil \"~[foo~a~;bar~a~:;baz~a~]\" 10 100)")).isEqualTo(new LispString("baz100"));
+		// Without a default clause, an out-of-range selector prints nothing.
+		assertThat(eval("(format nil \"<~[a~;b~]>\" 5)")).isEqualTo(new LispString("<>"));
+		assertThat(eval("(format nil \"~:[foo~a~;bar~a~]\" t 100)")).isEqualTo(new LispString("bar100"));
+		assertThat(eval("(format nil \"~:[foo~a~;bar~a~]\" nil 100)")).isEqualTo(new LispString("foo100"));
+		assertThat(eval("(format nil \"~@[foo~a~] ~a\" 100 200)")).isEqualTo(new LispString("foo100 200"));
+		assertThat(eval("(format nil \"~@[foo~a~] ~a\" nil 200)")).isEqualTo(new LispString(" 200"));
+	}
+
+	@Test
+	void evalFormatConditionalStaticSelectors() {
+		// A literal selector picks the clause at expansion time.
+		assertThat(eval("(format nil \"~1[foo~a~;bar~a~:;baz~a~]\" 100)")).isEqualTo(new LispString("bar100"));
+		// ~#[ selects by the number of remaining arguments.
+		assertThat(eval("(format nil \"~#[none~;bar~a~;bar~a_~a~:;bar_many~]\")")).isEqualTo(new LispString("none"));
+		assertThat(eval("(format nil \"~#[none~;bar~a~;bar~a_~a~:;bar_many~]\" 10)"))
+			.isEqualTo(new LispString("bar10"));
+		assertThat(eval("(format nil \"~#[none~;bar~a~;bar~a_~a~:;bar_many~]\" 10 100)"))
+			.isEqualTo(new LispString("bar10_100"));
+		assertThat(eval("(format nil \"~#[none~;bar~a~;bar~a_~a~:;bar_many~]\" 10 100 1000)"))
+			.isEqualTo(new LispString("bar_many"));
+	}
+
+	@Test
+	void evalFormatIteration() {
+		assertThat(eval("(format nil \"~{ ~a,~}\" '(a b c d))")).isEqualTo(new LispString(" a, b, c, d,"));
+		assertThat(eval("(format nil \"~{ <~a, ~a> ~}\" '(a 1 b 2 c 3))"))
+			.isEqualTo(new LispString(" <a, 1>  <b, 2>  <c, 3> "));
+		assertThat(eval("(format nil \"~2{ <~a, ~a> ~}\" '(a 1 b 2 c 3))"))
+			.isEqualTo(new LispString(" <a, 1>  <b, 2> "));
+		assertThat(eval("(format nil \"~:{ <~a, ~a> ~}\" '((a 1) (b 2) (c 3)))"))
+			.isEqualTo(new LispString(" <a, 1>  <b, 2>  <c, 3> "));
+		assertThat(eval("(format nil \"~{~a~}\" nil)")).isEqualTo(new LispString(""));
+	}
+
+	@Test
+	void evalFormatIterationOverRemainingArgs() {
+		assertThat(eval("(format nil \"~@{ ~a,~}\" 1 2 3 4 5)")).isEqualTo(new LispString(" 1, 2, 3, 4, 5,"));
+		assertThat(eval("(format nil \"~4@{ ~a,~} ~4d\" 1 2 3 4 5)")).isEqualTo(new LispString(" 1, 2, 3, 4,    5"));
+		assertThat(eval("(format nil \"~:@{ <~a, ~a> ~}\" '(a 1) '(b 2) '(c 3))"))
+			.isEqualTo(new LispString(" <a, 1>  <b, 2>  <c, 3> "));
+	}
+
+	@Test
+	void evalFormatNestedIteration() {
+		assertThat(eval("(format nil \"~{~{~a~}|~}\" '((1 2) (3)))")).isEqualTo(new LispString("12|3|"));
+		// An iteration whose body holds a conditional.
+		assertThat(eval("(format nil \"~{~:[n~;y~]~}\" '(t nil t))")).isEqualTo(new LispString("yny"));
+	}
+
+	@Test
+	void evalFormatArgumentJump() {
+		assertThat(eval("(format nil \"~a ~a ~:* ~a\" 1 2 3)")).isEqualTo(new LispString("1 2  2"));
+		assertThat(eval("(format nil \"~a ~a ~2:* ~a\" 1 2 3)")).isEqualTo(new LispString("1 2  1"));
+		assertThat(eval("(format nil \"~a ~* ~a\" 1 2 3)")).isEqualTo(new LispString("1  3"));
+		assertThat(eval("(format nil \"~a ~2* ~a\" 1 2 3 4)")).isEqualTo(new LispString("1  4"));
+	}
+
+	@Test
+	void evalFormatRuntimePadChar() {
+		// A v parameter supplies the pad character at run time (a char or a string).
+		assertThat(eval("(format nil \"~v,vd\" 6 (char \"abcd\" 1) 10)")).isEqualTo(new LispString("bbbb10"));
+		assertThat(eval("(format nil \"~v,'0d\" 5 10)")).isEqualTo(new LispString("00010"));
+	}
+
+	@Test
+	void evalFormatFixedOverflowAndScale() {
+		assertThat(eval("(format nil \"[~10,4f]\" pi)")).isEqualTo(new LispString("[    3.1416]"));
+		assertThat(eval("(format nil \"[~10,4,,,'0f]\" pi)")).isEqualTo(new LispString("[00003.1416]"));
+		assertThat(eval("(format nil \"[~10,8,,'*,'0f]\" pi)")).isEqualTo(new LispString("[3.14159265]"));
+		assertThat(eval("(format nil \"[~10,9,,'*,'0f]\" pi)")).isEqualTo(new LispString("[**********]"));
+		// The scale factor (3rd param) multiplies by 10^k before printing.
+		assertThat(eval("(format nil \"~,2,2f\" 3.14159)")).isEqualTo(new LispString("314.16"));
+	}
+
+	@Test
+	void evalFormatExponentialParams() {
+		assertThat(eval("(format nil \"[~15,5e]\" pi)")).isEqualTo(new LispString("[     3.14159e+0]"));
+		assertThat(eval("(format nil \"[~15,5,3e]\" pi)")).isEqualTo(new LispString("[   3.14159e+000]"));
+		assertThat(eval("(format nil \"[~15,5,3,,'*,'0e]\" pi)")).isEqualTo(new LispString("[0003.14159e+000]"));
+		assertThat(eval("(format nil \"[~15,8,3,,'*,'0e]\" pi)")).isEqualTo(new LispString("[3.14159265e+000]"));
+		assertThat(eval("(format nil \"[~15,9,3,,'*,'0e]\" pi)")).isEqualTo(new LispString("[***************]"));
+		// The exponent-marker character (7th param) replaces the default e.
+		assertThat(eval("(format nil \"~,2,,,,,'de\" 314.159)")).isEqualTo(new LispString("3.14d+2"));
+	}
+
+	@Test
+	void evalFormatGeneralFloat() {
+		// ~g falls back to the plain float representation in the fixed range and to
+		// the ~e form outside it.
+		assertThat(eval("(format nil \"~g\" 1234.5)")).isEqualTo(new LispString("1234.5"));
+		assertThat(eval("(format nil \"~g\" 0.5)")).isEqualTo(new LispString("0.5"));
+		assertThat(eval("(format nil \"~g\" 0.00012345)")).isEqualTo(new LispString("1.2345e-4"));
+		assertThat(eval("(format nil \"~g\" 0.0)")).isEqualTo(new LispString("0.0"));
+		assertThat(eval("(format nil \"~g\" -1234.5)")).isEqualTo(new LispString("-1234.5"));
+	}
+
+	@Test
+	void evalFormatCompositeToStandardOutput() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(format t \"~{~a~}~[x~;y~]~(Z~)\" '(1 2) 1 )"));
+		assertThat(baos.toString()).isEqualTo("12yz");
+	}
+
+	@Test
+	void evalFormatConditionalUnequalConsumptionRejected() {
+		assertThatThrownBy(() -> eval("(format nil \"~[~a~;~a ~a~]\" 0 1 2)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("clause");
+	}
+
+	@Test
 	void evalFormatUnsupportedDestination() {
 		assertThatThrownBy(() -> eval("(format 'foo \"~a\" 1)")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("destination");
@@ -754,7 +908,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalFormatUnsupportedDirective() {
-		assertThatThrownBy(() -> eval("(format t \"~c\" 65)")).isInstanceOf(UnsupportedOperationException.class)
+		assertThatThrownBy(() -> eval("(format t \"~<~>\" 65)")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("unsupported directive");
 	}
 
@@ -1996,6 +2150,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalEltEndpRassoc() {
 		assertThat(eval("(elt '(a b c) 1)").print()).isEqualTo("b");
+		assertThat(eval("(elt \"abcd\" 1)").print()).isEqualTo("#\\b");
 		assertThat(eval("(endp nil)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(endp '(1))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(rassoc 2 (list (cons 'a 1) (cons 'b 2)))").print()).isEqualTo("(b . 2)");

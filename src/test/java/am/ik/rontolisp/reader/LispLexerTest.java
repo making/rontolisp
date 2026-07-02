@@ -163,4 +163,33 @@ class LispLexerTest {
 		assertThat(new LispLexer("1d0x").tokenize()).containsExactly(new Token.SymbolToken("1d0x"));
 	}
 
+	@Test
+	void tokenizeRadixIntegerLiterals() {
+		assertThat(new LispLexer("#x10000").tokenize()).containsExactly(new Token.NumberToken(0x10000));
+		assertThat(new LispLexer("#xff").tokenize()).containsExactly(new Token.NumberToken(255));
+		assertThat(new LispLexer("#XFF").tokenize()).containsExactly(new Token.NumberToken(255));
+		assertThat(new LispLexer("#o400").tokenize()).containsExactly(new Token.NumberToken(256));
+		assertThat(new LispLexer("#b1010").tokenize()).containsExactly(new Token.NumberToken(10));
+		assertThat(new LispLexer("#x-10").tokenize()).containsExactly(new Token.NumberToken(-16));
+		assertThat(new LispLexer("(+ #x10 #o10 #b10)").tokenize()).containsExactly(new Token.LeftParen(),
+				new Token.SymbolToken("+"), new Token.NumberToken(16), new Token.NumberToken(8),
+				new Token.NumberToken(2), new Token.RightParen());
+	}
+
+	@Test
+	void tokenizeRadixIntegerLiteralOverflowPromotesToBigInteger() {
+		assertThat(new LispLexer("#x10000000000000000").tokenize())
+			.containsExactly(new Token.BigIntegerToken(new java.math.BigInteger("10000000000000000", 16)));
+	}
+
+	@Test
+	void tokenizeRadixIntegerLiteralWithInvalidDigitThrows() {
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> new LispLexer("#xzz").tokenize())
+			.isInstanceOf(LispReadException.class);
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> new LispLexer("#b12").tokenize())
+			.isInstanceOf(LispReadException.class);
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> new LispLexer("#x").tokenize())
+			.isInstanceOf(LispReadException.class);
+	}
+
 }

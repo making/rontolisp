@@ -3254,8 +3254,8 @@ public final class LispMacroExpander {
 			argSyms.add(g);
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
-		List<LispVal> forms = toString ? formatStringPieces(control.value(), argSyms)
-				: formatOutputForms(control.value(), argSyms);
+		List<FmtOp> parsed = new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms));
+		List<LispVal> forms = toString ? opsToPieces(parsed) : formatOutputForms(parsed);
 		if (toString) {
 			// Fold the pieces into nested %string-concat calls (left-associative).
 			LispVal result = forms.isEmpty() ? new LispString("") : forms.get(0);
@@ -3302,168 +3302,582 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Parses a format control string into a list of {@link FmtOp}s, consuming format
-	 * arguments (left to right) as it encounters value directives and {@code v}/{@code #}
-	 * prefix parameters. Prefix parameters and the colon/at-sign modifiers are resolved
-	 * here; value directives that need padding, comma grouping, or fixed-decimal
-	 * rendering are expanded into calls to the {@code %fmt-*} runtime helpers.
+	 * A cursor over the arguments a format control string consumes. At the top level the
+	 * arguments are the pre-bound {@code __format_arg} temporaries ("static" source, with
+	 * a known count); inside a {@code ~{ ... ~}} iteration body they are per-iteration
+	 * item temporaries allocated on demand and later bound to successive list elements
+	 * ("runtime" source, with an unknown count). Conditional clauses parse against a
+	 * {@link #branch()} of the cursor so each clause sees the same starting position.
 	 */
-	private static List<FmtOp> parseFormat(String s, List<LispSymbol> argSyms) {
-		List<FmtOp> ops = new java.util.ArrayList<>();
-		StringBuilder lit = new StringBuilder();
-		int[] argIndex = { 0 };
-		int n = s.length();
-		int i = 0;
-		while (i < n) {
-			char c = s.charAt(i);
-			if (c != '~') {
-				lit.append(c);
-				i++;
-				continue;
+	private static final class FmtArgs {
+
+		private final List<LispSymbol> syms;
+
+		@Nullable private final String runtimePrefix;
+
+		private int index;
+
+		private FmtArgs(List<LispSymbol> syms, @Nullable String runtimePrefix, int index) {
+			this.syms = syms;
+			this.runtimePrefix = runtimePrefix;
+			this.index = index;
+		}
+
+		static FmtArgs forTemps(List<LispSymbol> temps) {
+			return new FmtArgs(temps, null, 0);
+		}
+
+		static FmtArgs forRuntimeItems(String prefix) {
+			return new FmtArgs(new java.util.ArrayList<>(), prefix, 0);
+		}
+
+		boolean isStatic() {
+			return this.runtimePrefix == null;
+		}
+
+		LispSymbol next(char directive) {
+			if (this.runtimePrefix == null && this.index >= this.syms.size()) {
+				throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
 			}
-			i++; // skip '~'
-			// Prefix parameters (numbers, 'char, v, #), comma-separated.
-			List<LispVal> params = new java.util.ArrayList<>();
-			if (i < n && (isParamStart(s.charAt(i)) || s.charAt(i) == ',')) {
-				while (true) {
-					char p = (i < n) ? s.charAt(i) : '\0';
-					if (p == '\'') {
-						if (i + 1 >= n) {
-							throw new IllegalArgumentException("format: ~' prefix with no character");
-						}
-						params.add(new LispInteger(s.charAt(i + 1)));
-						i += 2;
-					}
-					else if (p == 'v' || p == 'V') {
-						params.add(consumeFormatArg(argSyms, argIndex, 'v'));
-						i++;
-					}
-					else if (p == '#') {
-						params.add(new LispInteger(argSyms.size() - argIndex[0]));
-						i++;
-					}
-					else if (p == '-' || Character.isDigit(p)) {
-						int start = i;
-						if (p == '-') {
-							i++;
-						}
-						while (i < n && Character.isDigit(s.charAt(i))) {
-							i++;
-						}
-						params.add(new LispInteger(Long.parseLong(s.substring(start, i))));
+			while (this.syms.size() <= this.index) {
+				this.syms.add(new LispSymbol(this.runtimePrefix + this.syms.size()));
+			}
+			return this.syms.get(this.index++);
+		}
+
+		int position() {
+			return this.index;
+		}
+
+		void move(int delta, char directive) {
+			int to = this.index + delta;
+			if (to < 0 || (this.runtimePrefix == null && to > this.syms.size())) {
+				throw new IllegalArgumentException("format: ~" + directive + " moves outside the argument list");
+			}
+			this.index = to;
+		}
+
+		int remaining(char directive) {
+			if (this.runtimePrefix != null) {
+				throw new UnsupportedOperationException(
+						"format: " + directive + " is not supported inside a ~{ iteration body");
+			}
+			return this.syms.size() - this.index;
+		}
+
+		FmtArgs branch() {
+			return new FmtArgs(this.syms, this.runtimePrefix, this.index);
+		}
+
+		FmtArgs branchAt(int index) {
+			return new FmtArgs(this.syms, this.runtimePrefix, index);
+		}
+
+		void adoptIndex(int index) {
+			this.index = index;
+		}
+
+		/** Every item temporary this (runtime) source handed out, in index order. */
+		List<LispSymbol> items() {
+			return this.syms;
+		}
+
+	}
+
+	/** A parsed conditional clause: its ops and the argument position it ended at. */
+	private record FmtClause(List<FmtOp> ops, int end, boolean isDefault) {
+	}
+
+	/**
+	 * Recursive-descent parser for a format control string. Parses directives into
+	 * {@link FmtOp}s, consuming format arguments (left to right) through a
+	 * {@link FmtArgs} cursor as it encounters value directives and {@code v}/{@code #}
+	 * prefix parameters. Composite directives (case conversion {@code ~(...~)},
+	 * conditionals {@code ~[...~]}, iteration {@code ~{...~}}) parse their bodies
+	 * recursively and collapse to a single string-valued {@link FmtString}.
+	 */
+	private static final class FmtParser {
+
+		private final String src;
+
+		private int pos;
+
+		private int gensym;
+
+		/** The terminator directive that ended the last {@link #parseOps} call. */
+		private char stopChar;
+
+		/** Whether that terminator carried a {@code :} modifier (for {@code ~:;}). */
+		private boolean stopColon;
+
+		FmtParser(String src) {
+			this.src = src;
+		}
+
+		List<FmtOp> parseTop(FmtArgs args) {
+			return parseOps(args, "");
+		}
+
+		/**
+		 * Parses ops until the end of the control string (when {@code stoppers} is empty)
+		 * or until one of the {@code stoppers} directives ({@code ~;}, {@code ~]},
+		 * {@code ~&#125;}, {@code ~)}) is read, recording it in {@link #stopChar}/
+		 * {@link #stopColon}.
+		 */
+		private List<FmtOp> parseOps(FmtArgs args, String stoppers) {
+			List<FmtOp> ops = new java.util.ArrayList<>();
+			StringBuilder lit = new StringBuilder();
+			this.stopChar = 0;
+			this.stopColon = false;
+			int n = this.src.length();
+			while (this.pos < n) {
+				char c = this.src.charAt(this.pos);
+				if (c != '~') {
+					lit.append(c);
+					this.pos++;
+					continue;
+				}
+				this.pos++; // skip '~'
+				List<LispVal> params = parseParams(args);
+				boolean colon = false;
+				boolean at = false;
+				while (this.pos < n && (this.src.charAt(this.pos) == ':' || this.src.charAt(this.pos) == '@')) {
+					if (this.src.charAt(this.pos) == ':') {
+						colon = true;
 					}
 					else {
-						params.add(LispNil.INSTANCE); // omitted parameter slot
+						at = true;
 					}
-					if (i < n && s.charAt(i) == ',') {
-						i++;
-						continue;
-					}
-					break;
+					this.pos++;
 				}
+				if (this.pos >= n) {
+					throw new IllegalArgumentException("format: control string ends with ~");
+				}
+				char directive = this.src.charAt(this.pos++);
+				if (stoppers.indexOf(directive) >= 0) {
+					flushFmtLiteral(lit, ops);
+					this.stopChar = directive;
+					this.stopColon = colon;
+					return ops;
+				}
+				dispatch(directive, params, colon, at, args, ops, lit);
 			}
-			boolean colon = false;
-			boolean at = false;
-			while (i < n && (s.charAt(i) == ':' || s.charAt(i) == '@')) {
-				if (s.charAt(i) == ':') {
-					colon = true;
+			if (!stoppers.isEmpty()) {
+				throw new IllegalArgumentException(
+						"format: missing ~" + stoppers.charAt(stoppers.length() - 1) + " in control string");
+			}
+			flushFmtLiteral(lit, ops);
+			return ops;
+		}
+
+		/** Parses the comma-separated prefix parameters (numbers, 'char, v, #). */
+		private List<LispVal> parseParams(FmtArgs args) {
+			List<LispVal> params = new java.util.ArrayList<>();
+			int n = this.src.length();
+			if (this.pos >= n || (!isParamStart(this.src.charAt(this.pos)) && this.src.charAt(this.pos) != ',')) {
+				return params;
+			}
+			while (true) {
+				char p = (this.pos < n) ? this.src.charAt(this.pos) : '\0';
+				if (p == '\'') {
+					if (this.pos + 1 >= n) {
+						throw new IllegalArgumentException("format: ~' prefix with no character");
+					}
+					params.add(new LispInteger(this.src.charAt(this.pos + 1)));
+					this.pos += 2;
+				}
+				else if (p == 'v' || p == 'V') {
+					params.add(args.next('v'));
+					this.pos++;
+				}
+				else if (p == '#') {
+					params.add(new LispInteger(args.remaining('#')));
+					this.pos++;
+				}
+				else if (p == '-' || Character.isDigit(p)) {
+					int start = this.pos;
+					if (p == '-') {
+						this.pos++;
+					}
+					while (this.pos < n && Character.isDigit(this.src.charAt(this.pos))) {
+						this.pos++;
+					}
+					params.add(new LispInteger(Long.parseLong(this.src.substring(start, this.pos))));
 				}
 				else {
-					at = true;
+					params.add(LispNil.INSTANCE); // omitted parameter slot
 				}
-				i++;
+				if (this.pos < n && this.src.charAt(this.pos) == ',') {
+					this.pos++;
+					continue;
+				}
+				break;
 			}
-			if (i >= n) {
-				throw new IllegalArgumentException("format: control string ends with ~");
-			}
-			char directive = s.charAt(i++);
-			parseDirective(directive, params, colon, at, argSyms, argIndex, ops, lit);
+			return params;
 		}
-		flushFmtLiteral(lit, ops);
-		return ops;
+
+		private void dispatch(char directive, List<LispVal> params, boolean colon, boolean at, FmtArgs args,
+				List<FmtOp> ops, StringBuilder lit) {
+			switch (Character.toLowerCase(directive)) {
+				case '~' -> {
+					int count = fmtCount(params, 0, 1, directive);
+					lit.append("~".repeat(count));
+				}
+				case '%' -> {
+					flushFmtLiteral(lit, ops);
+					ops.add(new FmtNewline(fmtCount(params, 0, 1, directive)));
+				}
+				case '&' -> {
+					flushFmtLiteral(lit, ops);
+					ops.add(new FmtFreshLine(fmtCount(params, 0, 1, directive)));
+				}
+				case 'a', 's' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_TO_STRING
+							: LispNames.PRINC_TO_STRING;
+					LispVal base = fmtCall(op, arg);
+					if (colon) {
+						base = makeIf(arg, base, new LispString("()"));
+					}
+					if (fmtHasParam(params, 0)) {
+						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 3, ' '), at);
+					}
+					ops.add(new FmtString(base));
+				}
+				case 'd' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					LispVal base = (colon || at)
+							? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
+							: fmtCall(LispNames.PRINC_TO_STRING, arg);
+					if (fmtHasParam(params, 0)) {
+						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
+					}
+					ops.add(new FmtString(base));
+				}
+				case 'x', 'o', 'b' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					int base = switch (Character.toLowerCase(directive)) {
+						case 'x' -> 16;
+						case 'o' -> 8;
+						default -> 2;
+					};
+					LispVal digits = radixIntegerExpr(arg, new LispInteger(base), colon, fmtCommaChar(params, 2),
+							fmtInterval(params, 3), at);
+					if (fmtHasParam(params, 0)) {
+						digits = padExpr(digits, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
+					}
+					ops.add(new FmtString(digits));
+				}
+				case 'r' -> {
+					flushFmtLiteral(lit, ops);
+					if (!fmtHasParam(params, 0)) {
+						throw new UnsupportedOperationException(
+								"format: ~r requires a radix parameter (English cardinal/ordinal output is not supported)");
+					}
+					LispVal arg = args.next(directive);
+					LispVal digits = radixIntegerExpr(arg, fmtParam(params, 0), colon, fmtCommaChar(params, 3),
+							fmtInterval(params, 4), at);
+					if (fmtHasParam(params, 1)) {
+						digits = padExpr(digits, fmtParam(params, 1), fmtPadChar(params, 2, ' '), true);
+					}
+					ops.add(new FmtString(digits));
+				}
+				case 'c' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					LispVal base;
+					if (at) {
+						base = fmtCall(LispNames.PRIN1_TO_STRING, arg);
+					}
+					else if (colon) {
+						// prin1 of a character is "#\name"; dropping the #\ prefix
+						// yields the glyph for graphic characters and the standard
+						// name (Newline, Space, ...) for non-graphic ones.
+						base = fmtCall(LispNames.SUBSEQ, fmtCall(LispNames.PRIN1_TO_STRING, arg), new LispInteger(2));
+					}
+					else {
+						base = fmtCall(LispNames.PRINC_TO_STRING, arg);
+					}
+					ops.add(new FmtString(base));
+				}
+				case 'f' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					int scale = fmtHasParam(params, 2) ? fmtIntParam(params, 2, directive) : 0;
+					LispVal value = (scale == 0) ? arg
+							: fmtCall(LispNames.MUL, arg, new LispDouble(Math.pow(10, scale)));
+					LispVal base = fmtHasParam(params, 1) ? decimalFloatExpr(value, fmtParam(params, 1), null, at)
+							: fmtCall(LispNames.PRINC_TO_STRING, value);
+					if (fmtHasParam(params, 0)) {
+						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 4, ' '), true);
+					}
+					base = maybeOverflow(base, params, 0, 3, directive);
+					ops.add(new FmtString(base));
+				}
+				case 'e' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					boolean dGiven = fmtHasParam(params, 1);
+					int places = dGiven ? fmtIntParam(params, 1, directive) : DEFAULT_EXP_PLACES;
+					if (places < 0) {
+						throw new IllegalArgumentException("format: ~e precision must be non-negative");
+					}
+					int expDigits = fmtHasParam(params, 2) ? fmtIntParam(params, 2, directive) : 0;
+					if (fmtHasParam(params, 3) && fmtIntParam(params, 3, directive) != 1) {
+						throw new UnsupportedOperationException(
+								"format: ~e scale factors other than 1 are not supported");
+					}
+					char marker = fmtCharParam(params, 6, 'e');
+					LispVal base = decimalExpExpr(arg, places, !dGiven, at, expDigits, marker);
+					if (fmtHasParam(params, 0)) {
+						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 5, ' '), true);
+					}
+					base = maybeOverflow(base, params, 0, 4, directive);
+					ops.add(new FmtString(base));
+				}
+				case 'g' -> {
+					flushFmtLiteral(lit, ops);
+					for (LispVal p : params) {
+						if (!(p instanceof LispNil)) {
+							throw new UnsupportedOperationException(
+									"format: ~g prefix parameters are not supported; use ~f or ~e");
+						}
+					}
+					LispVal arg = args.next(directive);
+					ops.add(new FmtString(generalFloatExpr(arg, at)));
+				}
+				case '$' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal arg = args.next(directive);
+					LispVal places = fmtHasParam(params, 0) ? fmtParam(params, 0) : new LispInteger(2);
+					LispVal nbefore = fmtHasParam(params, 1) ? fmtParam(params, 1) : new LispInteger(1);
+					LispVal base = decimalFloatExpr(arg, places, nbefore, at);
+					if (fmtHasParam(params, 2)) {
+						base = padExpr(base, fmtParam(params, 2), fmtPadChar(params, 3, ' '), true);
+					}
+					ops.add(new FmtString(base));
+				}
+				case '*' -> {
+					if (at) {
+						// ~n@* is an absolute jump to argument n (default 0).
+						args.move(fmtCount(params, 0, 0, directive) - args.position(), directive);
+					}
+					else if (colon) {
+						args.move(-fmtCount(params, 0, 1, directive), directive);
+					}
+					else {
+						args.move(fmtCount(params, 0, 1, directive), directive);
+					}
+				}
+				case '(' -> {
+					flushFmtLiteral(lit, ops);
+					LispVal body = opsToExpr(parseOps(args, ")"));
+					LispVal converted;
+					if (colon && at) {
+						converted = fmtCall(LispNames.STRING_UPCASE, body);
+					}
+					else if (colon) {
+						converted = fmtCall(LispNames.STRING_CAPITALIZE, body);
+					}
+					else if (at) {
+						converted = capitalizeFirstExpr(body);
+					}
+					else {
+						converted = fmtCall(LispNames.STRING_DOWNCASE, body);
+					}
+					ops.add(new FmtString(converted));
+				}
+				case '[' -> {
+					flushFmtLiteral(lit, ops);
+					parseConditional(params, colon, at, args, ops);
+				}
+				case '{' -> {
+					flushFmtLiteral(lit, ops);
+					parseIteration(params, colon, at, args, ops);
+				}
+				case ';', ']', '}', ')' -> throw new IllegalArgumentException("format: misplaced ~" + directive);
+				default -> throw new UnsupportedOperationException("format: unsupported directive ~" + directive);
+			}
+		}
+
+		/**
+		 * Parses the clauses of a {@code ~[...~]}, each against a branch of the cursor.
+		 */
+		private List<FmtClause> parseClauses(FmtArgs args) {
+			List<FmtClause> clauses = new java.util.ArrayList<>();
+			boolean nextIsDefault = false;
+			while (true) {
+				FmtArgs branch = args.branch();
+				List<FmtOp> body = parseOps(branch, ";]");
+				clauses.add(new FmtClause(body, branch.position(), nextIsDefault));
+				if (this.stopChar == ']') {
+					return clauses;
+				}
+				nextIsDefault = this.stopColon;
+			}
+		}
+
+		/**
+		 * A runtime-selected conditional can only be expanded statically when every
+		 * clause consumes the same number of arguments (the selected clause is not known
+		 * until run time). Returns that common end position.
+		 */
+		private static int requireEqualConsumption(List<FmtClause> clauses) {
+			int end = clauses.get(0).end();
+			for (FmtClause clause : clauses) {
+				if (clause.end() != end) {
+					throw new UnsupportedOperationException(
+							"format: every ~[ clause must consume the same number of arguments"
+									+ " (use a literal or # selector for uneven clauses)");
+				}
+			}
+			return end;
+		}
+
+		private void parseConditional(List<LispVal> params, boolean colon, boolean at, FmtArgs args, List<FmtOp> ops) {
+			if (at) {
+				// ~@[str~]: the tested argument is re-used by the clause when non-nil
+				// and consumed outright when nil, so the clause must consume exactly it.
+				LispSymbol sel = args.next('[');
+				FmtArgs branch = args.branchAt(args.position() - 1);
+				List<FmtOp> body = parseOps(branch, "]");
+				if (branch.position() != args.position()) {
+					throw new UnsupportedOperationException(
+							"format: the ~@[ clause must consume exactly the tested argument");
+				}
+				ops.add(new FmtString(makeIf(sel, opsToExpr(body), new LispString(""))));
+				return;
+			}
+			if (colon) {
+				LispSymbol sel = args.next('[');
+				List<FmtClause> clauses = parseClauses(args);
+				if (clauses.size() != 2) {
+					throw new IllegalArgumentException("format: ~:[ requires exactly two clauses");
+				}
+				args.adoptIndex(requireEqualConsumption(clauses));
+				ops.add(new FmtString(makeIf(sel, opsToExpr(clauses.get(1).ops()), opsToExpr(clauses.get(0).ops()))));
+				return;
+			}
+			LispVal selParam = params.isEmpty() ? LispNil.INSTANCE : params.get(0);
+			if (selParam instanceof LispInteger li) {
+				// A literal (or #) selector picks the clause at expansion time, so
+				// clauses may consume different numbers of arguments. Unselected
+				// clauses parse against a throwaway source (they never touch the
+				// real arguments); the default clause (after ~:;) is last, so by the
+				// time it is reached the numbered selection is decided.
+				long nval = li.value();
+				List<FmtOp> chosenOps = null;
+				int chosenEnd = -1;
+				boolean nextIsDefault = false;
+				int numberedIdx = 0;
+				while (true) {
+					boolean isDefault = nextIsDefault;
+					boolean choose = (chosenOps == null) && (isDefault || numberedIdx == nval);
+					if (!isDefault) {
+						numberedIdx++;
+					}
+					if (choose) {
+						FmtArgs branch = args.branch();
+						chosenOps = parseOps(branch, ";]");
+						chosenEnd = branch.position();
+					}
+					else {
+						parseOps(FmtArgs.forRuntimeItems("__fmtdis" + this.gensym++ + "_"), ";]");
+					}
+					if (this.stopChar == ']') {
+						break;
+					}
+					nextIsDefault = this.stopColon;
+				}
+				if (chosenOps != null) {
+					ops.addAll(chosenOps);
+					args.adoptIndex(chosenEnd);
+				}
+				return;
+			}
+			LispVal sel = (selParam instanceof LispNil) ? args.next('[') : selParam;
+			List<FmtClause> clauses = parseClauses(args);
+			args.adoptIndex(requireEqualConsumption(clauses));
+			List<FmtClause> numbered = clauses.stream().filter(c -> !c.isDefault()).toList();
+			FmtClause dflt = clauses.stream().filter(FmtClause::isDefault).findFirst().orElse(null);
+			LispVal chain = (dflt != null) ? opsToExpr(dflt.ops()) : new LispString("");
+			for (int i = numbered.size() - 1; i >= 0; i--) {
+				chain = makeIf(fmtCall(LispNames.EQL, sel, new LispInteger(i)), opsToExpr(numbered.get(i).ops()),
+						chain);
+			}
+			ops.add(new FmtString(chain));
+		}
+
+		private void parseIteration(List<LispVal> params, boolean colon, boolean at, FmtArgs args, List<FmtOp> ops) {
+			int id = this.gensym++;
+			LispVal maxParam = (params.isEmpty()) ? LispNil.INSTANCE : params.get(0);
+			if (at) {
+				// ~@{ iterates over the remaining top-level arguments, so the passes
+				// can be unrolled at expansion time (each pass re-parses the body).
+				if (!args.isStatic()) {
+					throw new UnsupportedOperationException("format: ~@{ is not supported inside a ~{ iteration body");
+				}
+				int limit = Integer.MAX_VALUE;
+				if (maxParam instanceof LispInteger li) {
+					limit = (int) li.value();
+				}
+				else if (!(maxParam instanceof LispNil)) {
+					throw new UnsupportedOperationException("format: a runtime (v) count is not supported for ~@{");
+				}
+				int bodyStart = this.pos;
+				int bodyEnd = -1;
+				int passes = 0;
+				while (args.remaining('{') > 0 && passes < limit) {
+					if (colon) {
+						// ~:@{: each remaining argument is one iteration's sublist.
+						LispSymbol sub = args.next('{');
+						FmtArgs items = FmtArgs.forRuntimeItems("__fmtsub" + id + "_" + passes + "_");
+						this.pos = bodyStart;
+						List<FmtOp> body = parseOps(items, "}");
+						bodyEnd = this.pos;
+						ops.add(new FmtString(letItems(items.items(), sub, opsToExpr(body))));
+						passes++;
+					}
+					else {
+						int before = args.position();
+						this.pos = bodyStart;
+						ops.addAll(parseOps(args, "}"));
+						bodyEnd = this.pos;
+						passes++;
+						if (args.position() == before) {
+							break; // a pass that consumes nothing would never terminate
+						}
+					}
+				}
+				if (bodyEnd < 0) {
+					// Zero passes ran; skip the body with a throwaway parse.
+					this.pos = bodyStart;
+					parseOps(FmtArgs.forRuntimeItems("__fmtskip" + id + "_"), "}");
+				}
+				else {
+					this.pos = bodyEnd;
+				}
+				return;
+			}
+			LispSymbol listSym = args.next('{');
+			FmtArgs items = FmtArgs.forRuntimeItems("__fmtit" + id + "_");
+			List<FmtOp> body = parseOps(items, "}");
+			LispVal maxExpr = (maxParam instanceof LispNil) ? null : maxParam;
+			if (!colon && items.position() == 0) {
+				throw new UnsupportedOperationException("format: the ~{ body must consume at least one argument");
+			}
+			LispVal loop = colon ? sublistLoopExpr(listSym, items, opsToExpr(body), maxExpr, id)
+					: flatLoopExpr(listSym, items, opsToExpr(body), maxExpr, id);
+			ops.add(new FmtString(loop));
+		}
+
 	}
 
 	private static boolean isParamStart(char c) {
 		return c == '\'' || c == 'v' || c == 'V' || c == '#' || c == '-' || Character.isDigit(c);
-	}
-
-	private static void parseDirective(char directive, List<LispVal> params, boolean colon, boolean at,
-			List<LispSymbol> argSyms, int[] argIndex, List<FmtOp> ops, StringBuilder lit) {
-		switch (Character.toLowerCase(directive)) {
-			case '~' -> {
-				int count = fmtCount(params, 0, 1, directive);
-				lit.append("~".repeat(count));
-			}
-			case '%' -> {
-				flushFmtLiteral(lit, ops);
-				ops.add(new FmtNewline(fmtCount(params, 0, 1, directive)));
-			}
-			case '&' -> {
-				flushFmtLiteral(lit, ops);
-				ops.add(new FmtFreshLine(fmtCount(params, 0, 1, directive)));
-			}
-			case 'a', 's' -> {
-				flushFmtLiteral(lit, ops);
-				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
-				String op = (Character.toLowerCase(directive) == 's') ? LispNames.PRIN1_TO_STRING
-						: LispNames.PRINC_TO_STRING;
-				LispVal base = fmtCall(op, arg);
-				if (colon) {
-					base = makeIf(arg, base, new LispString("()"));
-				}
-				if (fmtHasParam(params, 0)) {
-					base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 3, ' '), at);
-				}
-				ops.add(new FmtString(base));
-			}
-			case 'd' -> {
-				flushFmtLiteral(lit, ops);
-				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
-				LispVal base = (colon || at)
-						? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
-						: fmtCall(LispNames.PRINC_TO_STRING, arg);
-				if (fmtHasParam(params, 0)) {
-					base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
-				}
-				ops.add(new FmtString(base));
-			}
-			case 'f' -> {
-				flushFmtLiteral(lit, ops);
-				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
-				LispVal base = fmtHasParam(params, 1) ? decimalFloatExpr(arg, fmtParam(params, 1), null, at)
-						: fmtCall(LispNames.PRINC_TO_STRING, arg);
-				if (fmtHasParam(params, 0)) {
-					base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 4, ' '), true);
-				}
-				ops.add(new FmtString(base));
-			}
-			case 'e' -> {
-				flushFmtLiteral(lit, ops);
-				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
-				boolean dGiven = fmtHasParam(params, 1);
-				int places = dGiven ? fmtIntParam(params, 1, directive) : DEFAULT_EXP_PLACES;
-				if (places < 0) {
-					throw new IllegalArgumentException("format: ~e precision must be non-negative");
-				}
-				LispVal base = decimalExpExpr(arg, places, !dGiven, at);
-				if (fmtHasParam(params, 0)) {
-					base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 5, ' '), true);
-				}
-				ops.add(new FmtString(base));
-			}
-			case '$' -> {
-				flushFmtLiteral(lit, ops);
-				LispVal arg = consumeFormatArg(argSyms, argIndex, directive);
-				LispVal places = fmtHasParam(params, 0) ? fmtParam(params, 0) : new LispInteger(2);
-				LispVal nbefore = fmtHasParam(params, 1) ? fmtParam(params, 1) : new LispInteger(1);
-				LispVal base = decimalFloatExpr(arg, places, nbefore, at);
-				if (fmtHasParam(params, 2)) {
-					base = padExpr(base, fmtParam(params, 2), fmtPadChar(params, 3, ' '), true);
-				}
-				ops.add(new FmtString(base));
-			}
-			default -> throw new UnsupportedOperationException("format: unsupported directive ~" + directive);
-		}
 	}
 
 	private static LispVal fmtCall(String op, LispVal... args) {
@@ -3479,13 +3893,13 @@ public final class LispMacroExpander {
 	 * reaches {@code mincol} columns. When {@code left} is true the padding is prepended
 	 * (right-justify), otherwise appended (left-justify). Pure-Lisp so all three backends
 	 * share the implementation; {@code mincol} may be a compile-time literal or a runtime
-	 * (v) parameter.
+	 * (v) parameter, and {@code padChar} a literal string or a runtime string expression.
 	 */
-	private static LispVal padExpr(LispVal strExpr, LispVal mincolExpr, String padChar, boolean left) {
+	private static LispVal padExpr(LispVal strExpr, LispVal mincolExpr, LispVal padChar, boolean left) {
 		LispSymbol r = new LispSymbol("__fmtr");
 		LispVal lenCheck = fmtCall(LispNames.LT, fmtCall(LispNames.LENGTH, r), mincolExpr);
-		LispVal concat = left ? fmtCall(LispNames.STRING_CONCAT, new LispString(padChar), r)
-				: fmtCall(LispNames.STRING_CONCAT, r, new LispString(padChar));
+		LispVal concat = left ? fmtCall(LispNames.STRING_CONCAT, padChar, r)
+				: fmtCall(LispNames.STRING_CONCAT, r, padChar);
 		LispVal loop = fmtCall(LispNames.WHILE, lenCheck, fmtCall(LispNames.SETQ, r, concat));
 		LispVal binding = listToCons(List.of(listToCons(List.of(r, strExpr))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), binding, loop, r));
@@ -3557,10 +3971,10 @@ public final class LispMacroExpander {
 		// integer `abs` runtime path rejects a float operand on the compiled backends).
 		LispVal signedScaled = fmtCall(LispNames.ROUND, fmtCall(LispNames.MUL, v, pow10));
 		LispVal scInit = makeIf(neg, fmtCall(LispNames.SUB, new LispInteger(0), signedScaled), signedScaled);
-		LispVal s2Init = padExpr(fmtCall(LispNames.PRINC_TO_STRING, sc), nPlus1, "0", true);
+		LispVal s2Init = padExpr(fmtCall(LispNames.PRINC_TO_STRING, sc), nPlus1, new LispString("0"), true);
 		LispVal lenInit = fmtCall(LispNames.LENGTH, s2);
 		LispVal ipSlice = fmtCall(LispNames.SUBSEQ, s2, new LispInteger(0), fmtCall(LispNames.SUB, len, placesExpr));
-		LispVal ipInit = (nbefore == null) ? ipSlice : padExpr(ipSlice, nbefore, "0", true);
+		LispVal ipInit = (nbefore == null) ? ipSlice : padExpr(ipSlice, nbefore, new LispString("0"), true);
 		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
 		List<LispVal> bindings = new java.util.ArrayList<>(List.of(listToCons(List.of(v, vInit)),
 				listToCons(List.of(neg, negInit)), listToCons(List.of(sc, scInit)), listToCons(List.of(s2, s2Init)),
@@ -3605,9 +4019,12 @@ public final class LispMacroExpander {
 	 * exponent and renormalizes to {@code 1.0}. When {@code strip} is true (the {@code d}
 	 * parameter was omitted) trailing fractional zeros are dropped down to a single
 	 * digit. On the WASM backend the scaled mantissa must fit in an {@code i31}, so
-	 * {@code places} is effectively limited to about 8.
+	 * {@code places} is effectively limited to about 8. When {@code expDigits} is
+	 * positive the exponent magnitude is zero-padded to that many digits, and
+	 * {@code marker} is the exponent-marker character (default {@code e}).
 	 */
-	private static LispVal decimalExpExpr(LispVal arg, int places, boolean strip, boolean plus) {
+	private static LispVal decimalExpExpr(LispVal arg, int places, boolean strip, boolean plus, int expDigits,
+			char marker) {
 		long pd = pow10(places);
 		long pd1 = pow10(places + 1L);
 		LispSymbol v = new LispSymbol("__ev");
@@ -3647,10 +4064,13 @@ public final class LispMacroExpander {
 		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
 		LispVal eabs = fmtCall(LispNames.PRINC_TO_STRING,
 				makeIf(eneg, fmtCall(LispNames.SUB, new LispInteger(0), eef), eef));
+		if (expDigits > 0) {
+			eabs = padExpr(eabs, new LispInteger(expDigits), new LispString("0"), true);
+		}
 		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
 		LispVal frFinal = strip ? stripTrailingZeros(fr) : fr;
 		LispVal mant = (places == 0) ? ip : fmtConcat(ip, new LispString("."), frFinal);
-		LispVal body = fmtConcat(sign, mant, new LispString("e"), esign, eabs);
+		LispVal body = fmtConcat(sign, mant, new LispString(String.valueOf(marker)), esign, eabs);
 		List<LispVal> innerBindings = List.of(listToCons(List.of(sc, scInit)), listToCons(List.of(ovf, ovfInit)),
 				listToCons(List.of(sc2, sc2Init)), listToCons(List.of(eef, eefInit)), listToCons(List.of(s, sInit)),
 				listToCons(List.of(ip, ipInit)), listToCons(List.of(fr, frInit)));
@@ -3658,7 +4078,7 @@ public final class LispMacroExpander {
 		LispVal normal = listToCons(List.of(new LispSymbol(LispNames.PROGN), up, down, innerLet));
 		// Zero needs no normalization (it would loop forever), so short-circuit it.
 		String zeroMant = (places == 0) ? "0" : (strip ? "0.0" : "0." + "0".repeat(places));
-		LispVal zero = new LispString((plus ? "+" : "") + zeroMant + "e+0");
+		LispVal zero = new LispString((plus ? "+" : "") + zeroMant + marker + "+" + "0".repeat(Math.max(1, expDigits)));
 		LispVal outerBody = makeIf(fmtCall(LispNames.EQ, a, new LispDouble(0.0)), zero, normal);
 		List<LispVal> outerBindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(neg, negInit)),
 				listToCons(List.of(a, aInit)), listToCons(List.of(ee, new LispInteger(0))));
@@ -3707,15 +4127,29 @@ public final class LispMacroExpander {
 				"format: runtime (v) parameter not supported for directive ~" + directive);
 	}
 
-	/** The literal single-character pad string for a pad-character parameter. */
-	private static String fmtPadChar(List<LispVal> params, int idx, char def) {
+	/**
+	 * The pad string for a pad-character parameter: a literal string for a {@code 'c}
+	 * parameter, or a {@code (princ-to-string v)} expression for a runtime (v) parameter.
+	 */
+	private static LispVal fmtPadChar(List<LispVal> params, int idx, char def) {
 		if (idx < params.size() && params.get(idx) instanceof LispInteger code) {
-			return String.valueOf((char) code.value());
+			return new LispString(String.valueOf((char) code.value()));
+		}
+		if (idx < params.size() && params.get(idx) instanceof LispSymbol v) {
+			return fmtCall(LispNames.PRINC_TO_STRING, v);
+		}
+		return new LispString(String.valueOf(def));
+	}
+
+	/** A literal character parameter (e.g. the ~e exponent marker), or the default. */
+	private static char fmtCharParam(List<LispVal> params, int idx, char def) {
+		if (idx < params.size() && params.get(idx) instanceof LispInteger code) {
+			return (char) code.value();
 		}
 		if (idx < params.size() && !(params.get(idx) instanceof LispNil)) {
-			throw new UnsupportedOperationException("format: runtime pad character is not supported");
+			throw new UnsupportedOperationException("format: a runtime (v) character parameter is not supported here");
 		}
-		return String.valueOf(def);
+		return def;
 	}
 
 	/** The literal comma character for ~:d (default {@code ,}). */
@@ -3760,13 +4194,6 @@ public final class LispMacroExpander {
 		throw new UnsupportedOperationException("format: runtime (v) count not supported for directive ~" + directive);
 	}
 
-	private static LispSymbol consumeFormatArg(List<LispSymbol> argSyms, int[] argIndex, char directive) {
-		if (argIndex[0] >= argSyms.size()) {
-			throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
-		}
-		return argSyms.get(argIndex[0]++);
-	}
-
 	private static void flushFmtLiteral(StringBuilder lit, List<FmtOp> ops) {
 		if (!lit.isEmpty()) {
 			ops.add(new FmtLiteral(lit.toString()));
@@ -3779,9 +4206,9 @@ public final class LispMacroExpander {
 	 * and string-valued directives become {@code (princ ...)}, {@code ~%} becomes
 	 * {@code (terpri)}, and {@code ~&} becomes {@code (fresh-line)}.
 	 */
-	private static List<LispVal> formatOutputForms(String s, List<LispSymbol> argSyms) {
+	private static List<LispVal> formatOutputForms(List<FmtOp> ops) {
 		List<LispVal> forms = new java.util.ArrayList<>();
-		for (FmtOp op : parseFormat(s, argSyms)) {
+		for (FmtOp op : ops) {
 			switch (op) {
 				case FmtLiteral l -> forms.add(fmtCall(LispNames.PRINC, new LispString(l.text())));
 				case FmtString f -> forms.add(fmtCall(LispNames.PRINC, f.expr()));
@@ -3802,14 +4229,15 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Renders the parsed ops into string-valued pieces for the {@code nil} destination.
-	 * Newlines become literal {@code \n} runs; {@code ~&} is statically approximated from
-	 * the surrounding literal text (a value piece is assumed not to end a line).
+	 * Renders the parsed ops into string-valued pieces for the {@code nil} destination
+	 * (and for the bodies of composite directives). Newlines become literal {@code \n}
+	 * runs; {@code ~&} is statically approximated from the surrounding literal text (a
+	 * value piece is assumed not to end a line).
 	 */
-	private static List<LispVal> formatStringPieces(String s, List<LispSymbol> argSyms) {
+	private static List<LispVal> opsToPieces(List<FmtOp> ops) {
 		List<LispVal> pieces = new java.util.ArrayList<>();
 		boolean atLineStart = true;
-		for (FmtOp op : parseFormat(s, argSyms)) {
+		for (FmtOp op : ops) {
 			switch (op) {
 				case FmtLiteral l -> {
 					pieces.add(new LispString(l.text()));
@@ -3835,6 +4263,223 @@ public final class LispMacroExpander {
 			}
 		}
 		return pieces;
+	}
+
+	/**
+	 * Folds the string pieces of a composite-directive body into one string-valued
+	 * expression (the empty string when the body is empty).
+	 */
+	private static LispVal opsToExpr(List<FmtOp> ops) {
+		List<LispVal> pieces = opsToPieces(ops);
+		if (pieces.isEmpty()) {
+			return new LispString("");
+		}
+		LispVal result = pieces.get(0);
+		for (int i = 1; i < pieces.size(); i++) {
+			result = fmtCall(LispNames.STRING_CONCAT, result, pieces.get(i));
+		}
+		return result;
+	}
+
+	/**
+	 * Builds the string-valued expansion of an integer in an arbitrary radix
+	 * ({@code ~x}/{@code ~o}/{@code ~b}/{@code ~nR}): a runtime division loop over the
+	 * magnitude producing uppercase digits (via {@code code-char}), with the same
+	 * sign/grouping handling as {@code ~d}. {@code base} is a literal or a runtime (v)
+	 * parameter.
+	 */
+	private static LispVal radixIntegerExpr(LispVal arg, LispVal base, boolean comma, String commaChar, int interval,
+			boolean plus) {
+		LispSymbol neg = new LispSymbol("__rxneg");
+		LispSymbol m = new LispSymbol("__rxm");
+		LispSymbol s = new LispSymbol("__rxs");
+		LispSymbol d = new LispSymbol("__rxd");
+		LispSymbol g = new LispSymbol("__rxg");
+		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
+		LispVal mInit = makeIf(neg, fmtCall(LispNames.SUB, new LispInteger(0), arg), arg);
+		// Digit character: 0-9 then uppercase A-Z (48 = '0', 55 = 'A' - 10).
+		LispVal digitChar = fmtCall(LispNames.PRINC_TO_STRING,
+				fmtCall(LispNames.CODE_CHAR,
+						makeIf(fmtCall(LispNames.LT, d, new LispInteger(10)),
+								fmtCall(LispNames.ADD, new LispInteger(48), d),
+								fmtCall(LispNames.ADD, new LispInteger(55), d))));
+		LispVal digitStep = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(d, fmtCall(LispNames.MOD, m, base))))),
+				fmtCall(LispNames.SETQ, s, fmtCall(LispNames.STRING_CONCAT, digitChar, s))));
+		// Integer division by the base: / yields a rational, truncate the quotient.
+		LispVal divStep = fmtCall(LispNames.SETQ, m, fmtCall(LispNames.TRUNCATE, fmtCall(LispNames.DIV, m, base)));
+		LispVal loop = fmtCall(LispNames.WHILE, fmtCall(LispNames.GT, m, new LispInteger(0)), digitStep, divStep);
+		LispVal gInit = makeIf(fmtCall(LispNames.STRING_EQ, s, new LispString("")), new LispString("0"), s);
+		LispVal grouped = comma ? groupExpr(g, commaChar, interval) : g;
+		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
+		LispVal inner = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(g, gInit)))), fmtCall(LispNames.STRING_CONCAT, sign, grouped)));
+		List<LispVal> bindings = List.of(listToCons(List.of(neg, negInit)), listToCons(List.of(m, mInit)),
+				listToCons(List.of(s, new LispString(""))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), loop, inner));
+	}
+
+	/**
+	 * Builds the string-valued expansion of {@code ~g}: the plain (backend-native) float
+	 * representation when the magnitude is zero or within {@code [0.1, 1e16)}, and the
+	 * {@code ~e} default form outside that range. An approximation of the CLHS rule
+	 * (which chooses between {@code ~f} and {@code ~e} by the number of significant
+	 * digits); prefix parameters are not supported.
+	 */
+	private static LispVal generalFloatExpr(LispVal arg, boolean plus) {
+		LispSymbol v = new LispSymbol("__fmtgv");
+		LispSymbol a = new LispSymbol("__fmtga");
+		LispVal vInit = fmtCall(LispNames.MUL, arg, new LispDouble(1.0));
+		LispVal aInit = makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)),
+				fmtCall(LispNames.SUB, new LispDouble(0.0), v), v);
+		LispVal fixedRange = fmtCall(LispNames.OR, fmtCall(LispNames.EQ, a, new LispDouble(0.0)), fmtCall(LispNames.AND,
+				fmtCall(LispNames.GE, a, new LispDouble(0.1)), fmtCall(LispNames.LT, a, new LispDouble(1.0e16))));
+		LispVal fixed = fmtCall(LispNames.PRINC_TO_STRING, v);
+		if (plus) {
+			fixed = fmtCall(LispNames.STRING_CONCAT,
+					makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)), new LispString(""), new LispString("+")),
+					fixed);
+		}
+		LispVal expo = decimalExpExpr(v, DEFAULT_EXP_PLACES, true, plus, 0, 'e');
+		List<LispVal> bindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(a, aInit)));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), makeIf(fixedRange, fixed, expo)));
+	}
+
+	/**
+	 * Builds the {@code ~@(} conversion: downcase the whole string, then upcase the first
+	 * alphabetic character (capitalize just the first word).
+	 */
+	private static LispVal capitalizeFirstExpr(LispVal strExpr) {
+		LispSymbol s = new LispSymbol("__fmtcs");
+		LispSymbol n = new LispSymbol("__fmtcn");
+		LispSymbol i = new LispSymbol("__fmtci");
+		LispVal notAlpha = fmtCall(LispNames.NOT, fmtCall(LispNames.ALPHA_CHAR_P, fmtCall(LispNames.CHAR, s, i)));
+		LispVal scan = fmtCall(LispNames.WHILE, fmtCall(LispNames.AND, fmtCall(LispNames.LT, i, n), notAlpha),
+				fmtCall(LispNames.SETQ, i, fmtCall(LispNames.ADD, i, new LispInteger(1))));
+		LispVal iPlus1 = fmtCall(LispNames.ADD, i, new LispInteger(1));
+		LispVal recombined = fmtConcat(fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), i),
+				fmtCall(LispNames.STRING_UPCASE, fmtCall(LispNames.SUBSEQ, s, i, iPlus1)),
+				fmtCall(LispNames.SUBSEQ, s, iPlus1));
+		LispVal body = makeIf(fmtCall(LispNames.LT, i, n), recombined, s);
+		List<LispVal> bindings = List.of(listToCons(List.of(s, fmtCall(LispNames.STRING_DOWNCASE, strExpr))),
+				listToCons(List.of(n, fmtCall(LispNames.LENGTH, s))), listToCons(List.of(i, new LispInteger(0))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), scan, body));
+	}
+
+	/**
+	 * Wraps a padded field with the overflow check: when the field width (literal
+	 * {@code w} at {@code widthIdx}) and an overflow character (literal at
+	 * {@code ovfIdx}) are both given and the formatted text exceeds the width, the field
+	 * is replaced by {@code w} copies of the overflow character.
+	 */
+	private static LispVal maybeOverflow(LispVal strExpr, List<LispVal> params, int widthIdx, int ovfIdx,
+			char directive) {
+		if (!fmtHasParam(params, ovfIdx)) {
+			return strExpr;
+		}
+		if (!(fmtParam(params, ovfIdx) instanceof LispInteger ovf)
+				|| !(fmtParam(params, widthIdx) instanceof LispInteger w)) {
+			throw new UnsupportedOperationException(
+					"format: the overflow character of ~" + directive + " requires literal width and character");
+		}
+		LispSymbol r = new LispSymbol("__fmtovf");
+		LispVal over = fmtCall(LispNames.GT, fmtCall(LispNames.LENGTH, r), new LispInteger(w.value()));
+		LispVal filled = new LispString(String.valueOf((char) ovf.value()).repeat((int) w.value()));
+		LispVal binding = listToCons(List.of(listToCons(List.of(r, strExpr))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), binding, makeIf(over, filled, r)));
+	}
+
+	/**
+	 * The k-th element of a runtime list: {@code (car base)} /
+	 * {@code (car (nthcdr k base))}.
+	 */
+	private static LispVal carChain(LispVal base, int k) {
+		return (k == 0) ? fmtCall(LispNames.CAR, base)
+				: fmtCall(LispNames.CAR, fmtCall(LispNames.NTHCDR, new LispInteger(k), base));
+	}
+
+	/**
+	 * Binds the iteration item temporaries to successive elements of {@code base} around
+	 * {@code bodyExpr} (no binding when the body consumed no items).
+	 */
+	private static LispVal letItems(List<LispSymbol> items, LispVal base, LispVal bodyExpr) {
+		if (items.isEmpty()) {
+			return bodyExpr;
+		}
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		for (int k = 0; k < items.size(); k++) {
+			bindings.add(listToCons(List.of(items.get(k), carChain(base, k))));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), bodyExpr));
+	}
+
+	/**
+	 * Builds the {@code ~{str~}} loop over a flat runtime list: each pass binds the
+	 * body's item temporaries to the next {@code m} elements, appends the body string to
+	 * an accumulator, and advances the cursor by {@code m}; an optional {@code maxExpr}
+	 * caps the number of passes.
+	 */
+	private static LispVal flatLoopExpr(LispSymbol listSym, FmtArgs items, LispVal bodyExpr, @Nullable LispVal maxExpr,
+			int id) {
+		int m = items.position();
+		LispSymbol l = new LispSymbol("__fmtl" + id);
+		LispSymbol o = new LispSymbol("__fmto" + id);
+		LispSymbol c = new LispSymbol("__fmtc" + id);
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(l, listSym)));
+		bindings.add(listToCons(List.of(o, new LispString(""))));
+		LispVal test = fmtCall(LispNames.CONSP, l);
+		if (maxExpr != null) {
+			bindings.add(listToCons(List.of(c, new LispInteger(0))));
+			test = fmtCall(LispNames.AND, test, fmtCall(LispNames.LT, c, maxExpr));
+		}
+		LispVal append = letItems(items.items(), l,
+				fmtCall(LispNames.SETQ, o, fmtCall(LispNames.STRING_CONCAT, o, bodyExpr)));
+		LispVal advance = fmtCall(LispNames.SETQ, l,
+				(m == 1) ? fmtCall(LispNames.CDR, l) : fmtCall(LispNames.NTHCDR, new LispInteger(m), l));
+		List<LispVal> loopParts = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.WHILE), test, append, advance));
+		if (maxExpr != null) {
+			loopParts.add(fmtCall(LispNames.SETQ, c, fmtCall(LispNames.ADD, c, new LispInteger(1))));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), listToCons(loopParts), o));
+	}
+
+	/**
+	 * Builds the {@code ~:{str~}} loop over a runtime list of sublists: each pass binds
+	 * the body's item temporaries to the elements of the next sublist and advances by
+	 * one.
+	 */
+	private static LispVal sublistLoopExpr(LispSymbol listSym, FmtArgs items, LispVal bodyExpr,
+			@Nullable LispVal maxExpr, int id) {
+		LispSymbol l = new LispSymbol("__fmtl" + id);
+		LispSymbol o = new LispSymbol("__fmto" + id);
+		LispSymbol c = new LispSymbol("__fmtc" + id);
+		LispSymbol sub = new LispSymbol("__fmtsl" + id);
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(l, listSym)));
+		bindings.add(listToCons(List.of(o, new LispString(""))));
+		LispVal test = fmtCall(LispNames.CONSP, l);
+		if (maxExpr != null) {
+			bindings.add(listToCons(List.of(c, new LispInteger(0))));
+			test = fmtCall(LispNames.AND, test, fmtCall(LispNames.LT, c, maxExpr));
+		}
+		List<LispVal> innerBindings = new java.util.ArrayList<>();
+		innerBindings.add(listToCons(List.of(sub, fmtCall(LispNames.CAR, l))));
+		List<LispSymbol> syms = items.items();
+		for (int k = 0; k < syms.size(); k++) {
+			innerBindings.add(listToCons(List.of(syms.get(k), carChain(sub, k))));
+		}
+		LispVal append = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(innerBindings),
+				fmtCall(LispNames.SETQ, o, fmtCall(LispNames.STRING_CONCAT, o, bodyExpr))));
+		LispVal advance = fmtCall(LispNames.SETQ, l, fmtCall(LispNames.CDR, l));
+		List<LispVal> loopParts = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.WHILE), test, append, advance));
+		if (maxExpr != null) {
+			loopParts.add(fmtCall(LispNames.SETQ, c, fmtCall(LispNames.ADD, c, new LispInteger(1))));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), listToCons(loopParts), o));
 	}
 
 	private static final String ERROR_ARG_VAR = "__error_arg";
@@ -3865,7 +4510,7 @@ public final class LispMacroExpander {
 			argSyms.add(g);
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
-		List<LispVal> pieces = formatStringPieces(control.value(), argSyms);
+		List<LispVal> pieces = opsToPieces(new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms)));
 		// Fold the pieces into nested %string-concat calls (left-associative), as the
 		// format nil destination does.
 		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
@@ -4030,14 +4675,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (elt seq n) into (nth n seq). Lists only; string indexing is not supported.
+	 * Expands (elt seq n) into a runtime dispatch on the sequence type: {@code char} for
+	 * a string, {@code nth} for a list.
 	 * @param cons the elt expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandElt(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispCons nthCons = listToCons(List.of(new LispSymbol(LispNames.NTH), parts.get(2), parts.get(1)));
-		return expandNth(nthCons);
+		LispSymbol seq = new LispSymbol("__elt_seq");
+		LispSymbol idx = new LispSymbol("__elt_idx");
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(seq, parts.get(1))), listToCons(List.of(idx, parts.get(2)))));
+		LispVal stringCase = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
+		LispVal listCase = listToCons(List.of(new LispSymbol(LispNames.NTH), idx, seq));
+		LispVal body = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), seq)), stringCase, listCase);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
 	}
 
 	/**

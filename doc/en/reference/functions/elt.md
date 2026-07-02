@@ -1,9 +1,13 @@
 # elt
 
-`(elt list index)`
+`(elt sequence index)`
 
-Returns the element at zero-based `index` of `list`. Unlike Common Lisp's general sequence `elt`, rontolisp's version works on lists only -- it does not index into strings or vectors (use `char` for strings, `aref` for vectors). The traversal is the same as `nth` with the arguments swapped.
+Returns the element at zero-based `index` of `sequence`: a character for a string, the element for a list (the same traversal as `nth` with the arguments swapped). Unlike Common Lisp's general sequence `elt`, rontolisp's version does not index into vectors (use `aref` for vectors).
 
 ```lisp
 (elt '(a b c) 1) ; => b
+```
+
+```lisp
+(elt "abcd" 1) ; => #\b
 ```

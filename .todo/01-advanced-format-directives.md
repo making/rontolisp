@@ -1,32 +1,54 @@
 # Advanced `format` directives (deferred scope)
 
-**Status:** intentionally out of scope for the current `format` work.
+**Status:** mostly implemented; a small remainder is still deferred.
 
-The `format` macro now covers the ["Basic Formatting" directives](https://gigamonkeys.com/book/a-few-format-recipes.html#basic-formatting): `~a`/`~s`
-(padding, `:` for nil), `~d` (`:` comma grouping, `@` sign, padding), `~f`, `~e`
-(scientific, padding, `@` sign), `~$`, `~%`, `~&`, `~~`, prefix parameters
-(number / `'c` / `v` / `#`) and the `:`/`@` modifiers. See the README "format"
-section for the supported set and limitations.
+The `format` macro now covers, in addition to the original "Basic Formatting"
+set (`~a`/`~s`, `~d`, `~f`, `~e`, `~$`, `~%`, `~&`, `~~`, prefix parameters,
+`:`/`@` modifiers):
 
-`~e` notes: the mantissa is built from integer arithmetic (so output is identical
-on all three backends, unlike a raw `princ-to-string` of a float); the digit count
-must be a literal (no runtime `v`); the WASM i31 cap limits precision to roughly
-`~,De` with `D` <= 8; the omitted-digit default is 6 (C `printf("%e")` convention)
-with trailing fractional zeros stripped.
+- Radix integers: `~x`/`~o`/`~b` (uppercase digits, same parameters/modifiers
+  as `~d`) and `~NR` (radix parameter required). The reader also gained
+  `#x`/`#o`/`#b` integer literals.
+- `~c` (character), with `@` (`#\` prin1 syntax) and `:` (names for non-graphic
+  characters, derived from `prin1-to-string` minus the `#\` prefix).
+- Case conversion `~( ... ~)` with all four variants (`~(`, `~:(`, `~@(`,
+  `~:@(`).
+- Conditionals `~[ ... ~]` incl. `~;` / `~:;` default clauses, `~:[`, `~@[`,
+  literal `~N[` and `~#[` selectors. Because the expansion is static, a
+  runtime-selected `~[` requires every clause to consume the same number of
+  arguments (a literal/`#` selector is resolved at expansion time and lifts
+  the restriction); `~@[` must consume exactly the tested argument.
+- Iteration `~{ ... ~}` with `~:{`, `~@{`, `~:@{` and a max-pass count
+  (literal or `v` for the runtime-list forms; `~@{`/`~:@{` unroll statically
+  over the remaining arguments). Bodies parse against a runtime argument
+  source (`FmtArgs.forRuntimeItems`), so directives inside the body consume
+  list elements via car/nthcdr chains. `#` and `~@{` are not available inside
+  a `~{` body.
+- Argument jumps `~*`, `~N*`, `~:*`, `~N:*`, `~N@*`.
+- `~g` (no prefix parameters): plain float representation for magnitudes in
+  [0.1, 1e16) and zero, the `~e` default form otherwise — an approximation of
+  the CLHS significant-digit rule.
+- Runtime (`v`) pad characters (`~v,vd`), `~f` scale factor and overflowchar,
+  `~e` exponent-digit count / overflowchar / exponentchar (scale factor fixed
+  at 1).
 
-Not yet implemented (a possible future task):
+Implementation: `LispMacroExpander.FmtParser` (recursive descent) +
+`FmtArgs` (static temporaries at the top level, on-demand item temporaries
+inside iteration bodies). All expansions remain pure-Lisp over primitives the
+three backends already share; covered by `LispEvaluatorTest` /
+`JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest` format cases and the
+`format-directives-*` cases in `ci-spec.yaml` (verified on all four backends).
 
-- Iteration `~{ ... ~}` (and `~@{`), and the loop-escape `~^`.
-- Conditional `~[ ... ~]` (and `~:[`, `~@[`), and case conversion `~( ... ~)`.
-- `~c` (character), `~r` (radix / cardinal-ordinal English), `~o`/`~x`/`~b`
-  (octal / hex / binary), `~g` (general float).
-- Column control: `~t` (tabulate), `~<...~>` (justification), `~*` (argument
-  jump).
-- A runtime `v` count for `~%`/`~&`/`~~`, and accurate column tracking for `~&`
-  with destination `nil` (currently a static approximation — see README).
+Still not implemented (possible future work):
 
-These are independent of the existing expansion (`LispMacroExpander` parses the
-control string into pure-Lisp forms built only from primitives the three backends
-already share — `subseq`/`length`/`%string-concat`/`while`/`round`/`expt`/...),
-so each can be added directive-by-directive without new runtime helpers, except
-where genuine runtime state is required (as `~&` needed an output-column flag).
+- Column control: `~t` (tabulate), `~<...~>` (justification).
+- The loop escape `~^` (terminate a `~{` iteration early).
+- `~r` without a radix (English cardinal/ordinal, Roman numerals `~@r`).
+- A runtime `v` count for `~%`/`~&`/`~~`, and accurate column tracking for
+  `~&` with destination `nil` and inside composite bodies (still a static
+  approximation).
+- Runtime-selected `~[` with clauses of uneven argument consumption (would
+  need a runtime argument cursor instead of the static expansion).
+- `~e` notes carried over: the mantissa is built from integer arithmetic, the
+  digit count must be a literal, and the WASM i31 cap limits precision to
+  roughly `~,De` with `D` <= 8.

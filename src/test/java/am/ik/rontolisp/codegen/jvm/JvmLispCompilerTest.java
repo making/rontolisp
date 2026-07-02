@@ -715,6 +715,62 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFormatRadix() throws Exception {
+		assertThat(compileAndRun("(format t \"~x ~o ~b ~8r ~x [~8,'0x]\" 255 256 10 4096 -255 255)"))
+			.isEqualTo("FF 400 1010 10000 -FF [000000FF]");
+	}
+
+	@Test
+	void compileAndRunFormatCharacter() throws Exception {
+		assertThat(compileAndRun("(format t \"~c ~@c ~:c ~:c\" #\\a #\\b #\\Newline #\\z)"))
+			.isEqualTo("a #\\b Newline z");
+	}
+
+	@Test
+	void compileAndRunFormatCaseConversion() throws Exception {
+		assertThat(compileAndRun(
+				"(format t \"~(~a~) ~:@(~a~) ~:(~a~) ~@(~a~)\" \"FOO BAR\" \"foo bar\" \"foo bar\" \"foo BAR\")"))
+			.isEqualTo("foo bar FOO BAR Foo Bar Foo bar");
+	}
+
+	@Test
+	void compileAndRunFormatConditional() throws Exception {
+		assertThat(compileAndRun("(format t \"~[a~a~;b~a~:;c~a~]|~:[no~a~;yes~a~]|~@[v=~a~] ~a\" 1 10 nil 20 nil 30)"))
+			.isEqualTo("b10|no20| 30");
+		assertThat(compileAndRun("(format t \"~#[none~;one ~a~;two ~a ~a~]\" 5 6)")).isEqualTo("two 5 6");
+	}
+
+	@Test
+	void compileAndRunFormatIteration() throws Exception {
+		assertThat(compileAndRun("(format t \"~{<~a>~}|~2{ ~a~}|~:{(~a,~a)~}\" '(1 2) '(a b c d) '((x 1) (y 2)))"))
+			.isEqualTo("<1><2>| a b|(x,1)(y,2)");
+		assertThat(compileAndRun("(format t \"x~2@{ ~a~}|~:@{(~a)~}\" 1 2 '(3) '(4))")).isEqualTo("x 1 2|(3)(4)");
+	}
+
+	@Test
+	void compileAndRunFormatArgumentJump() throws Exception {
+		assertThat(compileAndRun("(format t \"~a ~2* ~a ~2:* ~a\" 1 2 3 4)")).isEqualTo("1  4  3");
+	}
+
+	@Test
+	void compileAndRunFormatRuntimePadCharAndExponentParams() throws Exception {
+		assertThat(compileAndRun("(format t \"~v,vd [~15,5,3e] [~8,4,,,'*e]\" 6 #\\0 42 pi pi)"))
+			.isEqualTo("000042 [   3.14159e+000] [********]");
+	}
+
+	@Test
+	void compileAndRunFormatGeneralFloat() throws Exception {
+		assertThat(compileAndRun("(format t \"~g ~g ~g ~g\" 1234.5 0.5 0.00012345 0.0)"))
+			.isEqualTo("1234.5 0.5 1.2345e-4 0.0");
+	}
+
+	@Test
+	void compileAndRunFormatFixedOverflow() throws Exception {
+		assertThat(compileAndRun("(format t \"[~10,8,,'*,'0f][~10,9,,'*,'0f]\" pi pi)"))
+			.isEqualTo("[3.14159265][**********]");
+	}
+
+	@Test
 	void compileAndRunPrincToString() throws Exception {
 		assertThat(compileAndRun("(print (princ-to-string 42)) (princ (princ-to-string 'sym))"))
 			.isEqualTo("\"42\"\nsym");

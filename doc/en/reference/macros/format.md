@@ -31,20 +31,28 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes). With `:`, nil prints as `()` |
 | `~s`, `~S` | Standard: prints the argument like `prin1` (readable, strings quoted). With `:`, nil prints as `()` |
 | `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
-| `~f`, `~F` | Fixed-format floating point. `~,Df` prints `D` digits after the decimal point (rounded); with `@`, a leading `+` |
-| `~e`, `~E` | Exponential (scientific) floating point: `[-]d.ddde[+/-]xx`. `~,De` prints `D` digits after the decimal point (default 6, rounded); with `@`, a leading `+` |
+| `~x`, `~o`, `~b` | Hexadecimal / octal / binary integer (uppercase digits), with the same parameters and modifiers as `~d` |
+| `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). The radix parameter is required (English cardinal/ordinal output is not implemented) |
+| `~c`, `~C` | Character: prints the glyph like `write-char`. With `@`, the `#\` reader syntax (like `prin1`); with `:`, non-graphic characters print their name (`Newline`, `Space`, ...) |
+| `~f`, `~F` | Fixed-format floating point. `~,Df` prints `D` digits after the decimal point (rounded); with `@`, a leading `+`. Full parameters: `~w,d,k,overflowchar,padchar F` |
+| `~e`, `~E` | Exponential (scientific) floating point: `[-]d.ddde[+/-]xx`. `~,De` prints `D` digits after the decimal point (default 6, rounded); with `@`, a leading `+`. Full parameters: `~w,d,e,k,overflowchar,padchar,exponentchar E` (`k` must be 1) |
+| `~g`, `~G` | General floating point: the plain float representation for magnitudes in `[0.1, 1e16)` (and zero), the `~e` form otherwise |
 | `~$` | Monetary: `~D$` prints `D` digits after the decimal point (default 2); with `@`, a leading `+` |
 | `~%` | Newline (one, or the count given by a prefix parameter) |
 | `~&` | Fresh line: a newline only if not already at the start of a line |
 | `~~` | A literal `~` |
+| `~(str~)` | Case conversion of the processed `str`: downcase; `~:(` capitalizes every word, `~@(` capitalizes only the first word, `~:@(` upcases |
+| `~[str0~;str1~:;default~]` | Conditional: the argument (an integer) selects a clause; `~:;` introduces the default. `~N[` / `~#[` select by a literal / by the number of remaining arguments; `~:[false~;true~]` tests nil; `~@[str~]` processes `str` (re-using the tested argument) only when it is non-nil |
+| `~{str~}` | Iteration: applies `str` repeatedly to the elements of the list argument. `~N{` caps the passes at `N`; `~:{` iterates over a list of sublists; `~@{` iterates over the remaining arguments; `~:@{` treats each remaining argument as a sublist |
+| `~*` | Argument jump: `~N*` skips `N` arguments (default 1), `~N:*` moves back `N`, `~N@*` jumps to argument `N` (default 0) |
 
 Directives accept prefix parameters (written after the `~`, comma-separated) and
 the `:`/`@` modifiers. A parameter is a decimal number, a character (`'c`), `v`
 (consume an argument and use its value), or `#` (the number of remaining
-arguments). Field directives (`~a`/`~s`/`~d`/`~f`/`~e`/`~$`) take a leading
-minimum-width parameter; text shorter than the width is padded (with the
-pad-character parameter, space by default). `~a`/`~s` pad on the right (left with
-`@`); numbers pad on the left.
+arguments). Field directives (`~a`/`~s`/`~d`/`~x`/`~o`/`~b`/`~f`/`~e`/`~$`) take
+a leading minimum-width parameter; text shorter than the width is padded (with
+the pad-character parameter -- a `'c` literal or a runtime `v` -- space by
+default). `~a`/`~s` pad on the right (left with `@`); numbers pad on the left.
 
 ```lisp
 (format t "Hello ~a, you are ~d years old.~%" 'world 42)
@@ -53,6 +61,13 @@ pad-character parameter, space by default). `~a`/`~s` pad on the right (left wit
 (format t "~e and ~,4e~%" 1234.5 pi)
 (format t "~10a|~5,'0d|~%" "foo" 42)
 (princ (format nil "Hello ~a!" 'world))
+(terpri)
+(format t "~x ~o ~b ~8r~%" 255 64 5 4096)
+(format t "~c ~@c ~:c~%" #\a #\b #\Newline)
+(format t "~(~a~) ~:(~a~)~%" "FOO BAR" "foo bar")
+(format t "~[zero~;one~:;many~] ~:[no~;yes~] ~@[x=~a~]~%" 1 t 42)
+(format t "~{<~a>~} ~:{(~a,~a)~}~@{ ~a~}~%" '(1 2) '((x 1) (y 2)) 'a 'b)
+(format t "~a ~:* ~a~%" 1)
 ```
 
 ```
@@ -62,28 +77,42 @@ Hello world, you are 42 years old.
 1.2345e+3 and 3.1416e+0
 foo       |00042|
 Hello world!
+FF 100 101 10000
+a #\b Newline
+foo bar Foo Bar
+one yes x=42
+<1><2> (x,1)(y,2) a b
+1  1
 ```
 
 ## Limitations
 
 Other destinations (streams, strings with fill pointers) are not supported, the
-control string cannot be a runtime value, and the remaining directives (`~c`,
-`~g`, `~{`, ...) are not implemented. Further notes:
+control string cannot be a runtime value, and the column-control directives
+(`~t`, `~<...~>`), the loop escape `~^`, and `~r` without a radix parameter are
+not implemented. Further notes:
 
-- A `~f` without a digit count (no `~,D`) falls back to each backend's native
-  float printing, so its exact form is backend-specific; supply a digit count for
-  portable output.
+- A `~f` (and the fixed branch of `~g`) without a digit count falls back to each
+  backend's native float printing, so its exact form is backend-specific; supply
+  a digit count for portable output. `~g` accepts no prefix parameters.
 - `~e` builds its mantissa from integer arithmetic (so the output is identical on
   every backend) and the digit count must be a literal, not a runtime `v`. Because
   the WASM backend caps integers at the i31 range, the scaled mantissa limits
   `~,De` to roughly `D` ≤ 8 digits of precision; the default (`~e`, 6 digits) is
-  well within that bound.
+  well within that bound. The scale factor of `~e` must be 1 (the default), and
+  the overflow character of `~f`/`~e` requires a literal width.
 - The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count
   there is not supported). `~&` decides whether to emit a newline from the actual
   output column for destination `t`, but from the surrounding literal text (a
-  static approximation) for destination `nil`.
+  static approximation) for destination `nil` and inside composite
+  (`~(`/`~[`/`~{`) bodies.
+- Because `format` expands statically, a runtime-selected `~[` requires every
+  clause to consume the same number of arguments (a literal or `#` selector
+  lifts that restriction), a `~@[` clause must consume exactly the tested
+  argument, and `#` and `~@{` are not available inside a `~{ ... ~}` body.
 - On the WASM backend integers are limited to the i31 range, so `~:d` grouping of
-  very large (bignum) integers works only in the interpreter and the JVM backend.
+  very large (bignum) integers (and `~x`/`~o`/`~b`/`~r` of such values) works
+  only in the interpreter and the JVM backend.
 
 Like the other macros, `format` is not recognized by the embedded `eval` runtime
 in compiled output (see [Compiled `eval` limitations](../../guides/eval-limitations.md)).

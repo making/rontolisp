@@ -58,6 +58,9 @@ public final class LispLexer {
 				tokens.add(new Token.VectorOpen());
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && isRadixMarker(this.input.charAt(this.pos + 1))) {
+				tokens.add(readRadixNumber());
+			}
 			else if (c == '.') {
 				if (this.pos + 1 < this.input.length() && !isSymbolChar(this.input.charAt(this.pos + 1))) {
 					tokens.add(new Token.Dot());
@@ -154,6 +157,43 @@ public final class LispLexer {
 		catch (NumberFormatException overflow) {
 			// Literal does not fit in a long: promote to an arbitrary-precision integer.
 			return new Token.BigIntegerToken(new java.math.BigInteger(digits));
+		}
+	}
+
+	private static boolean isRadixMarker(char c) {
+		return c == 'x' || c == 'X' || c == 'o' || c == 'O' || c == 'b' || c == 'B';
+	}
+
+	// Reads a #x/#o/#b radix integer literal (e.g., #x10000, #o400, #b1010, #x-10).
+	// The digits (after an optional sign) must be non-empty and valid in the radix;
+	// a literal that does not fit in a long is promoted to an arbitrary-precision
+	// integer, matching decimal literals.
+	private Token readRadixNumber() {
+		char marker = this.input.charAt(this.pos + 1);
+		int radix = switch (Character.toLowerCase(marker)) {
+			case 'x' -> 16;
+			case 'o' -> 8;
+			default -> 2;
+		};
+		this.pos += 2; // skip "#x" / "#o" / "#b"
+		int start = this.pos;
+		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '-') {
+			this.pos++;
+		}
+		int digitsStart = this.pos;
+		while (this.pos < this.input.length() && Character.digit(this.input.charAt(this.pos), radix) >= 0) {
+			this.pos++;
+		}
+		if (this.pos == digitsStart || (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos)))) {
+			throw new LispReadException("Invalid digits after #" + marker + ": "
+					+ this.input.substring(start, Math.min(this.pos + 1, this.input.length())));
+		}
+		String digits = this.input.substring(start, this.pos);
+		try {
+			return new Token.NumberToken(Long.parseLong(digits, radix));
+		}
+		catch (NumberFormatException overflow) {
+			return new Token.BigIntegerToken(new java.math.BigInteger(digits, radix));
 		}
 	}
 
