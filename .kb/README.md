@@ -1,0 +1,27 @@
+# Knowledge Base
+
+Detailed, implementation-level notes on invariants referenced from `CLAUDE.md`.
+Each file expands one bullet from CLAUDE.md's "Key Design Constraints" (or a
+workflow) with full detail: internal class names, per-backend mechanics, edge
+cases, and the tests that pin the behavior. Read the CLAUDE.md summary first;
+come here only when you need the "why exactly" behind a constraint.
+
+- [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split across all backends
+- [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary
+- [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time macro expansion
+- [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
+- [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
+- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime
+- [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)
+- [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
+- [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
+- [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
+- [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- `--optimize` tree-shaking (WASM + JVM)
+- [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
+- [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
+- [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
+- [java-interop.md](java-interop.md) -- `java:` reflection interop bridge
+- [template-class-embedding.md](template-class-embedding.md) -- when/how to embed a Java "template" class
+- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
+- [hash-tables.md](hash-tables.md) -- hash table representation per backend
+- [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview

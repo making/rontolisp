@@ -1,0 +1,7 @@
+# Compile-time `load` include (`LoadInliner`, cli pkg)
+
+On the **compile path only** (`RontoLispCli.compileToFile`, before the compilers' `PackageResolver` pass), a **top-level** `(load "literal.lisp")` is spliced in place with the loaded file's forms (recursively, with a path-stack cycle guard), so Pass 1 sees the loaded `defun`s and compiles them natively — no `--dynamic`, no perf loss. Only a literal-path, top-level `load` qualifies; a computed or nested `load` is left untouched (runs at runtime via the embedded reader). Not idempotent (each `load` includes again, matching CL).
+
+**File-relative paths**: a relative `load` resolves against the directory of the loading file (the entry file at the top level), falling back to CWD for the top-level entry / REPL — applied to BOTH the inliner and the runtime `load` via `SourceLoader.resolve`/`parentDir` (a `null`/empty base dir skips all `java.nio` math, so the no-FS browser loader is untouched). Interpreter threads a `loadDirStack` (`LispEvaluator.setLoadBaseDir`, seeded by `RontoLispCli` with the entry dir, pushed per nested `load`); the inliner takes a `baseDir` arg. So `java -jar JAR examples/hiragana/infer.lisp` resolves its `(load "common.lisp")` from the repo root.
+
+The **interpreter keeps its runtime `load`** (no inliner), so there is no double-definition. This is what lets a program split across files (a thin driver that `(load "lib.lisp")`s shared `defun`s) compile on JVM/WASM. Tests: `LoadInlinerTest`.
