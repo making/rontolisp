@@ -411,10 +411,15 @@ public final class Version {
 											</fileset>
 											<fileset dir="${project.basedir}/web">
 												<!-- index.html redirects to the docs (docs/en); the
-													 playground UI is served at playground.html. -->
+													 playground UI is served at playground.html. The
+													 interpreter runs inside ronto-worker.js;
+													 coi-serviceworker supplies the COOP/COEP headers
+													 SharedArrayBuffer needs on GitHub Pages. -->
 												<include name="index.html"/>
 												<include name="playground.html"/>
 												<include name="compile-run.html"/>
+												<include name="ronto-worker.js"/>
+												<include name="coi-serviceworker.min.js"/>
 											</fileset>
 										</copy>
 										<!-- Stage the standalone "run user WASM in the browser" example as a

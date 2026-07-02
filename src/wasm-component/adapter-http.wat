@@ -487,13 +487,13 @@
     (i32.store (local.get $body_len_out) (local.get $total))
 
     ;; --- drops ---
-    ;; The future is deliberately NOT dropped: its handle is the promise the rontolisp
-    ;; core keys its await-result cache on, and wasmtime reuses handle indices after a
-    ;; drop -- a later fetch would get the same number and awaits would cross wires.
-    ;; Keeping the settled future alive (a few bytes per request) keeps handles unique.
+    ;; The future can be dropped safely: the rontolisp core memoizes the settled
+    ;; result inside its promise struct and never calls fetch-await twice for the same
+    ;; future, so a recycled handle index going to a later fetch is harmless.
     (call $drop_in (local.get $stream))
     (call $drop_body (local.get $body))
     (call $drop_resp (local.get $resp))
+    (call $drop_future (local.get $future))
     (i32.const 0))
 
   (export "fd_write" (func $fd_write))

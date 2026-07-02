@@ -42,7 +42,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch list-functions list-macros list-special-forms version)
+; => (await fetch list-functions list-macros list-special-forms promisep then version)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```
@@ -63,8 +63,11 @@ part of Common Lisp**. They must be referenced with the `rontolisp:` qualifier
 (or used unqualified after `(in-package rontolisp)`). Besides the introspection
 helpers above (`version`, `list-functions`, `list-macros`, `list-special-forms`),
 the package provides asynchronous outgoing HTTP via `rontolisp:fetch` (which
-returns a promise) and `rontolisp:await` (which resolves it). All of these have
-their own pages in the [Functions](functions.md#rontolisp-package-functions)
-reference, including the full
-[`rontolisp:fetch`](functions/rontolisp-fetch.md) /
-[`rontolisp:await`](functions/rontolisp-await.md) documentation.
+returns a promise) together with the generic promise operations
+`rontolisp:await` (resolve, blocking), `rontolisp:then` (chain a callback) and
+`rontolisp:promisep` (type predicate). All of these have their own pages in the
+[Functions](functions.md#rontolisp-package-functions) reference, including the
+full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
+[`rontolisp:await`](functions/rontolisp-await.md) /
+[`rontolisp:then`](functions/rontolisp-then.md) /
+[`rontolisp:promisep`](functions/rontolisp-promisep.md) documentation.

@@ -156,7 +156,8 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
 			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
-			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
+			@org.jspecify.annotations.Nullable PromisePrint promisePrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -168,6 +169,9 @@ final class JvmRuntimeBuilder {
 
 		// if (val instanceof Long) return ((Long)val).toString();
 		patchBranch(code, ifNonnullPos, code.size());
+		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (only when the
+		// program can create promises)
+		emitPromiseBranch(code, promisePrint);
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
 		// used)
 		emitArrayBranch(code, arrayListClass, arrayToStringMethod);
@@ -460,7 +464,8 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
 			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
-			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
+			@org.jspecify.annotations.Nullable PromisePrint promisePrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -472,6 +477,8 @@ final class JvmRuntimeBuilder {
 
 		// if (val instanceof Long) return ((Long)val).toString();
 		patchBranch(code, ifNonnullPos, code.size());
+		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (promises only)
+		emitPromiseBranch(code, promisePrint);
 		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
 		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod);
 		code.add(Opcode.ALOAD_0);
@@ -732,6 +739,34 @@ final class JvmRuntimeBuilder {
 	record JavaPrint(ClassConstant bigIntegerClass, @org.jspecify.annotations.Nullable ClassConstant hashMapClass,
 			MethodrefConstant objectGetClass, MethodrefConstant classGetName, MethodrefConstant stringConcat,
 			ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+	}
+
+	/**
+	 * Constant-pool references for printing a promise (a {@code CompletableFuture} at
+	 * runtime) as {@code #<PROMISE>} (interpreter parity), threaded into the two
+	 * lisp-to-string builders only when the program can create promises
+	 * ({@code rontolisp:fetch} / {@code rontolisp:then}).
+	 */
+	record PromisePrint(ClassConstant futureClass, ConstantPool.StringConstant promiseStr) {
+	}
+
+	// Emits "if (val instanceof CompletableFuture) return "#<PROMISE>";" at the current
+	// position. A no-op when the program cannot create promises, keeping the branch out
+	// of promise-free programs.
+	private static void emitPromiseBranch(List<Integer> code,
+			@org.jspecify.annotations.Nullable PromisePrint promisePrint) {
+		if (promisePrint == null) {
+			return;
+		}
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, promisePrint.futureClass().index());
+		int skip = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		emitLdc(code, promisePrint.promiseStr().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, skip, code.size());
 	}
 
 	/**

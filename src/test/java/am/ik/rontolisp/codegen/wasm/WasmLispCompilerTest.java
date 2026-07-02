@@ -26,8 +26,15 @@ class WasmLispCompilerTest {
 		assertThatThrownBy(() -> compile("(rontolisp:fetch \"http://x/\")"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("component");
-		assertThatThrownBy(() -> compile("(rontolisp:await 0)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
+	}
+
+	@Test
+	void promiseOpsCompileInEveryMode() {
+		// await/then/promisep are generic promise operations; unlike fetch they compile
+		// in Preview 1 mode too
+		assertThat(compile("(print (rontolisp:await 42))")).isNotEmpty();
+		assertThat(compile("(print (rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2)))))")).isNotEmpty();
+		assertThat(compile("(print (rontolisp:promisep 1))")).isNotEmpty();
 	}
 
 	@Test
@@ -35,6 +42,9 @@ class WasmLispCompilerTest {
 		assertThat(compileComponent("(print (getf (rontolisp:await (rontolisp:fetch \"http://x/\")) :status))"))
 			.isNotEmpty();
 		assertThat(compileComponent("(let ((p (rontolisp:fetch \"http://x/\"))) (rontolisp:await p))")).isNotEmpty();
+		assertThat(compileComponent("(rontolisp:await (rontolisp:then (rontolisp:fetch \"http://x/\")"
+				+ " (lambda (r) (getf r :status))))"))
+			.isNotEmpty();
 	}
 
 	@Test

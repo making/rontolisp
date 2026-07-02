@@ -308,9 +308,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// references it.
 	static final int FUNC_GENSYM = FUNC_RAT_MOD + 1;
 
+	// _promise_await ((ref null eq)) -> (ref null eq): the generic rontolisp:await
+	// resolver (WasmPromiseRuntimeBuilder). Recursive, so it is a real function rather
+	// than inline code at each await site.
+	static final int FUNC_PROMISE_AWAIT = FUNC_GENSYM + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
 	// hash-table runtime helpers, the two mod/rem helpers, and the gensym helper.
-	static final int FUNC_USER_BASE = FUNC_GENSYM + 1;
+	static final int FUNC_USER_BASE = FUNC_PROMISE_AWAIT + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -400,22 +405,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bucket array can be stored in a cons/cell field and compared with ref.eq.
 	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 34
 
+	// Promise struct {mut i32 kind, mut (ref null eq) base, mut (ref null eq) fn}: the
+	// runtime representation of a promise, distinct from every other value so promisep
+	// and _promise_await dispatch on it via ref.test. kind 0 = a fetch root (base = the
+	// i31-boxed wasi:http future handle), kind 1 = a rontolisp:then chain (base = the
+	// chained value-or-promise, fn = the callback), kind 2 = settled (base = the
+	// memoized result; _promise_await rewrites a promise in place after resolving it, so
+	// the wasi:http response -- which future-incoming-response.get hands out only once
+	// -- and a chain callback are each consumed exactly once however often the promise
+	// is awaited).
+	static final int TYPE_PROMISE = TYPE_HASH_BUCKETS + 1; // 35
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
 
 	// Global (wasm global section) index holding the runtime eval function namespace
 	// (Lisp-2): defuns evaluated at runtime (e.g. from load) are bound here, separate
-	// from the variable environment above.
+	// from the variable environment above. (Await results are memoized inside each
+	// TYPE_PROMISE struct, so no global cache is needed.)
 	static final int GLOBAL_FENV = 1;
-
-	// Global (wasm global section) index holding the await result cache: an alist of
-	// cons(promise-i31, result-plist) pushed by rontolisp:await. wasi:http hands out a
-	// response only once (future-incoming-response.get consumes it), so awaiting a
-	// settled promise again must return the cached plist instead of calling the adapter
-	// -- matching the interpreter/JVM, where join() is idempotent. The adapter keeps
-	// settled futures alive so the handle keys stay unique (see adapter-http.wat).
-	static final int GLOBAL_PROMISE_CACHE = 2;
 
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
@@ -535,15 +544,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.APPLY);
-		// rontolisp:fetch / rontolisp:await are component-only. In component mode they
-		// are the http.fetch-start / http.fetch-await imports (function indices
+		// rontolisp:fetch is component-only. In component mode it drives the
+		// http.fetch-start / http.fetch-await imports (function indices
 		// FUNC_FETCH_START / FUNC_FETCH_AWAIT); the component wrapper then imports
-		// wasi:http. In Preview 1 mode those indices are unused trap stubs and
-		// fetch/await raise a compile error (WasmFetchCompiler / WasmAwaitCompiler), so
-		// the imports/wasi:http are never emitted.
+		// wasi:http. In Preview 1 mode those indices are unused trap stubs and fetch
+		// raises a compile error (WasmFetchCompiler), so the imports/wasi:http are never
+		// emitted. Only fetch itself needs the http machinery: await/then/promisep are
+		// generic promise operations that compile in every mode (a root promise simply
+		// cannot exist without fetch, so _promise_await's fetch-await call stays
+		// unreachable).
 		boolean usesFetch = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH))
-				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT));
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
 		boolean emitHttpImport = this.component && usesFetch;
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
@@ -608,13 +619,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		// Collect top-level global variables and give each its own module-level wasm
-		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV/
-		// GLOBAL_PROMISE_CACHE (indices 3+). A reference compiles to global.get from any
-		// function body, so a defun/lambda can read a defvar/defparameter global.
-		// Indices follow declaration order.
+		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).
+		// A reference compiles to global.get from any function body, so a defun/lambda
+		// can read a defvar/defparameter global. Indices follow declaration order.
 		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
 		Map<String, Integer> globalIndices = new HashMap<>();
-		int nextGlobalIndex = GLOBAL_PROMISE_CACHE + 1;
+		int nextGlobalIndex = GLOBAL_FENV + 1;
 		for (String g : globals) {
 			globalIndices.put(g, nextGlobalIndex++);
 		}
@@ -855,7 +865,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int strFromMemFuncIndex = exportUsesMemory ? exportHelperBase + 1 : -1;
 		if (!this.component && !exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (exportUsesMemory ? 2 : 0);
-			int wrapperTypeIndex = TYPE_HASH_BUCKETS + 1;
+			int wrapperTypeIndex = TYPE_PROMISE + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				WasmFunctionInfo target = functions.get(decl.name());
 				if (target == null || !userDefinedNames.contains(decl.name())) {
@@ -1200,9 +1210,17 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.writeRefType(true, Type.EQ.code());
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
+				// type 35 (TYPE_PROMISE): promise struct {mut i32 kind, mut (ref null eq)
+				// base, mut (ref null eq) fn} -- all fields mutable so _promise_await can
+				// rewrite a promise to its settled state in place.
+				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+					fields.addField(true, w -> w.write(Type.I32));
+					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+				}));
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed
-				// type (TYPE_HASH_BUCKETS). One per (rontolisp:wasm-export ...)
+				// type (TYPE_PROMISE). One per (rontolisp:wasm-export ...)
 				// directive.
 				for (ExportPlan p : exportPlans) {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
@@ -1359,6 +1377,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mod
 				// gensym runtime helper
 				fnDef.addFunction(TYPE_RAT_NEW); // _gensym (i32, i32) -> (ref null eq)
+				// promise-await runtime helper
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _promise_await
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1388,9 +1408,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					memories.addMemory(4);
 				}
 			})
-			// Global section: the eval top-level variable environment (GLOBAL_ENV), the
-			// Lisp-2 function namespace (GLOBAL_FENV) and the await result cache
-			// (GLOBAL_PROMISE_CACHE), all (mut (ref null eq)) = null
+			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
+			// the Lisp-2 function namespace (GLOBAL_FENV), both (mut (ref null eq)) =
+			// null
 			.writeGlobal(gs -> {
 				gs.add(g -> {
 					g.write(Type.REFNULL.code());
@@ -1406,16 +1426,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
 					g.write(Instruction.END);
-				}).add(g -> {
-					g.write(Type.REFNULL.code());
-					g.writeHeapType(Type.EQ.code());
-					g.write(am.ik.wasm.Mutability.VAR.code());
-					g.write(Instruction.REF_NULL);
-					g.writeHeapType(Type.EQ.code());
-					g.write(Instruction.END);
 				});
 				// One (mut (ref null eq)) = null per top-level global variable (indices
-				// 3+).
+				// 2+).
 				for (int i = 0; i < globalCount; i++) {
 					gs.add(g -> {
 						g.write(Type.REFNULL.code());
@@ -1543,6 +1556,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(true));
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
+				// promise-await runtime helper body (FUNC_PROMISE_AWAIT)
+				code.addFunction(WasmPromiseRuntimeBuilder.buildAwait(stringTable));
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -1946,6 +1961,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry funcStr;
 
+		final StringEntry promiseStr;
+
 		// Vector/array literal printing: the "#(" prefix for rank-1 and "#2A(" for
 		// rank-2.
 		final StringEntry vecPrefix;
@@ -1987,6 +2004,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dot = addString(" . ");
 			this.newline = addString("\n");
 			this.funcStr = addString("#<function>");
+			this.promiseStr = addString("#<PROMISE>");
 			this.vecPrefix = addString("#(");
 			this.vec2Prefix = addString("#2A(");
 			this.minus = addString("-");

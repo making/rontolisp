@@ -3,11 +3,13 @@
 `(rontolisp:fetch url &optional options)`
 
 Starts an outgoing HTTP request, modeled on the JavaScript `fetch` API, and
-immediately returns a **promise** — an opaque handle — while the request runs
-asynchronously. Pass the promise to
+immediately returns a **promise** while the request runs asynchronously. A
+promise is an opaque value (it prints as `#<PROMISE>` and satisfies
+[`rontolisp:promisep`](rontolisp-promisep.md)); pass it to
 [`rontolisp:await`](rontolisp-await.md) to block until the response arrives and
 obtain the result property list
-`(:status <integer> :body <string> :headers <alist>)`.
+`(:status <integer> :body <string> :headers <alist>)`, or chain a callback
+with [`rontolisp:then`](rontolisp-then.md).
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))
@@ -70,11 +72,16 @@ alist of `(name . value)` response-header pairs:
   exist upstream yet; see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). The
   promise is the in-flight `wasi:http` response handle, so multiple requests
   genuinely overlap. Compile with `--component` and run with `-S http=y` plus
-  the async flags. fetch and await remain compile errors in Preview 1
-  (core-module) mode, which has no host `wasi:http`.
-- **Browser playground**: the request is performed synchronously (via
-  `XMLHttpRequest`) when `fetch` is called and an already-settled promise is
-  returned, so programs behave the same but requests do not overlap.
+  the async flags. fetch remains a compile error in Preview 1 (core-module)
+  mode, which has no host `wasi:http`; the generic promise operations
+  (`await`, `then`, `promisep`) compile in every mode.
+- **Browser playground**: truly asynchronous. The interpreter runs in a Web
+  Worker; `fetch` hands the request to the page's main thread, which runs the
+  real browser `fetch()` (subject to CORS) while the program continues, so
+  requests overlap, and `await` blocks the worker until the response arrives.
+  When cross-origin isolation is unavailable (`SharedArrayBuffer` disabled)
+  the playground falls back to a synchronous request per fetch — programs
+  behave the same, requests simply do not overlap.
 
 ## Limitations
 

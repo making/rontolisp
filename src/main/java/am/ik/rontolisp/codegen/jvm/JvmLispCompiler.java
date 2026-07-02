@@ -223,10 +223,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(readLineHelperName, readLineHelperDesc));
 
 		// fetch/await helpers: emitted only when the program uses rontolisp:fetch or
-		// rontolisp:await (they share the _promises table, so both are emitted together).
+		// rontolisp:await (both live in the same builder, so they are emitted together).
+		// rontolisp:then and rontolisp:promisep compile inline (JvmThenCompiler /
+		// JvmPromisepCompiler); then just additionally gates the #<PROMISE> print branch.
 		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		String awaitQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
+		String thenQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN);
 		boolean usesFetch = programUsesSymbol(program, fetchQualified) || programUsesSymbol(program, awaitQualified);
+		boolean usesPromise = usesFetch || programUsesSymbol(program, thenQualified);
 		MethodrefConstant fetchHelperMethod = usesFetch
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_NAME),
 						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
@@ -376,6 +380,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);
 			}
+		}
+		// _await applies rontolisp:then callbacks through the arity-1 dispatcher, so its
+		// emission must be forced whenever the fetch/await runtime is present.
+		if (usesFetch) {
+			indirectCallArities.add(1);
 		}
 
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
@@ -727,11 +736,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			javaPrint = null;
 		}
 
+		// Promises (CompletableFutures at runtime) print as #<PROMISE> (interpreter
+		// parity); the branch is emitted only when the program can create promises.
+		final JvmRuntimeBuilder.@Nullable PromisePrint promisePrint = usesPromise ? new JvmRuntimeBuilder.PromisePrint(
+				cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture")), cp.addString("#<PROMISE>")) : null;
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, javaPrint);
+				arrayListClassForPrint, arrayToStringMethod, javaPrint, promisePrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -739,7 +753,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
-				javaPrint);
+				javaPrint, promisePrint);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -768,10 +782,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant colFieldDesc = cp.addUtf8(JvmFreshLineCompiler.COL_DESC);
 		Utf8Constant gensymCtrFieldName = cp.addUtf8(JvmGensymCompiler.CTR_FIELD);
 		Utf8Constant gensymCtrFieldDesc = cp.addUtf8(JvmGensymCompiler.CTR_DESC);
-		// Promise table for fetch/await: a lazily-initialized ArrayList of the
-		// CompletableFutures started by _fetch, indexed by the Long promise handles.
-		Utf8Constant promisesFieldName = cp.addUtf8(JvmFetchRuntimeBuilder.PROMISES_FIELD);
-		Utf8Constant promisesFieldDesc = cp.addUtf8(JvmFetchRuntimeBuilder.PROMISES_DESC);
 
 		// fetch/await runtime helper bodies (only when the program uses rontolisp:fetch
 		// or rontolisp:await).
@@ -834,12 +844,6 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(gensymCtrFieldName)
 					.writeU2(gensymCtrFieldDesc)
 					.writeU2(0));
-				if (fetchRuntimeBodies != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(promisesFieldName)
-						.writeU2(promisesFieldDesc)
-						.writeU2(0));
-				}
 				// One static Object field per top-level global variable (default null =
 				// nil); written by setq/defvar, read by getstatic from any method body.
 				for (Utf8Constant gfName : globalFieldNameUtfs) {

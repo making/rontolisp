@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispPromise;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -154,6 +155,15 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
 			}
 			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
+		}));
+		// await lives here rather than in Environment because resolving a then-chain
+		// applies the callback, which needs the evaluator's apply.
+		String awaitName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
+		this.globalEnv.defineFunction(awaitName, new LispFunction(awaitName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.AWAIT + " expects 1 argument, got " + args.size());
+			}
+			return awaitValue(args.get(0));
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR, args -> {
 			if (args.size() != 2) {
@@ -428,6 +438,7 @@ public final class LispEvaluator {
 			case LispHashTable h -> h;
 			case LispArray a -> a;
 			case LispJavaObject j -> j;
+			case LispPromise p -> p;
 			case LispSymbol sym -> sym.isKeyword() ? sym : env.lookup(sym.name());
 			case LispCons cons -> evalCons(cons, env);
 		};
@@ -1169,6 +1180,35 @@ public final class LispEvaluator {
 			rest = argCons.cdr();
 		}
 		return args;
+	}
+
+	// Resolves a promise to its value on the calling thread: a root promise joins its
+	// future, a chained promise (rontolisp:then) resolves its base, applies the callback
+	// and memoizes the result (flattening a promise-returning callback), and a
+	// non-promise value passes through unchanged, like JavaScript await. A failed root
+	// promise (e.g. a refused connection) signals here -- the same timing as a
+	// JavaScript await rejection; the failure skips any chained callbacks.
+	private LispVal awaitValue(LispVal v) {
+		if (!(v instanceof LispPromise promise)) {
+			return v;
+		}
+		java.util.concurrent.CompletableFuture<LispVal> future = promise.future();
+		if (future != null) {
+			try {
+				return future.join();
+			}
+			catch (java.util.concurrent.CompletionException ex) {
+				Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
+				throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
+			}
+		}
+		if (promise.isSettled()) {
+			return promise.settledValue();
+		}
+		LispVal base = awaitValue(promise.base());
+		LispVal resolved = awaitValue(apply(promise.fn(), List.of(base), this.globalEnv));
+		promise.settle(resolved);
+		return resolved;
 	}
 
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {

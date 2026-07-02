@@ -46,7 +46,7 @@ rontolispには、4つの組み込みパッケージを持つ小さな名前空�
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch list-functions list-macros list-special-forms version)
+; => (await fetch list-functions list-macros list-special-forms promisep then version)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```
@@ -79,9 +79,12 @@ rontolispには、4つの組み込みパッケージを持つ小さな名前空�
 `rontolisp` パッケージが所有するシンボルは **実装固有であり、Common Lispの一部ではありません**。`rontolisp:`
 修飾子で参照する(または `(in-package rontolisp)`
 の後に修飾なしで使用する)必要があります。上記のイントロスペクションヘルパー(`version`、`list-functions`、`list-macros`、`list-special-forms`)に加え、このパッケージは
-`rontolisp:fetch` (プロミスを返す) と `rontolisp:await` (それを解決する)
-を通じて非同期の外向きHTTPを提供します。これらはすべて
+`rontolisp:fetch` (プロミスを返す) と、汎用のプロミス操作である
+`rontolisp:await` (解決・ブロッキング)、`rontolisp:then` (コールバックのチェーン)、
+`rontolisp:promisep` (型述語) を通じて非同期の外向きHTTPを提供します。これらはすべて
 [関数](functions.md#rontolisp-package-functions)
 リファレンスに独自のページを持ち、完全な
 [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
-[`rontolisp:await`](functions/rontolisp-await.md) ドキュメントも含まれます。
+[`rontolisp:await`](functions/rontolisp-await.md) /
+[`rontolisp:then`](functions/rontolisp-then.md) /
+[`rontolisp:promisep`](functions/rontolisp-promisep.md) ドキュメントも含まれます。

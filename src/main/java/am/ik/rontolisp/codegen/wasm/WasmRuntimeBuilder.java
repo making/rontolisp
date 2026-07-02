@@ -1438,6 +1438,21 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check promise struct -> print "#<PROMISE>"
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_PROMISE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.promiseStr.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.promiseStr.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7);
 
@@ -1685,6 +1700,21 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(st.funcStr.offset());
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(st.funcStr.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+
+		// Check promise struct -> print "#<PROMISE>"
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_PROMISE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.promiseStr.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.promiseStr.length());
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);

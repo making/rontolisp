@@ -1041,20 +1041,38 @@ public final class LispNames {
 	/**
 	 * The {@code fetch} function provided by the {@code rontolisp} package. Starts an
 	 * outgoing HTTP request (JavaScript {@code fetch}-style) and immediately returns a
-	 * <em>promise</em> (an opaque handle) while the request runs asynchronously. The
-	 * optional second argument is an options property list ({@code :method},
-	 * {@code :headers}, {@code :body}). The result property list
+	 * <em>promise</em> while the request runs asynchronously. The optional second
+	 * argument is an options property list ({@code :method}, {@code :headers},
+	 * {@code :body}). The result property list
 	 * {@code (:status <int> :body <string> :headers <alist>)} is obtained by passing the
 	 * promise to {@code rontolisp:await}.
 	 */
 	public static final String FETCH = "fetch";
 
 	/**
-	 * The {@code await} function provided by the {@code rontolisp} package. Blocks until
-	 * the promise returned by {@code rontolisp:fetch} settles and returns the result
-	 * property list {@code (:status <int> :body <string> :headers <alist>)}.
+	 * The {@code await} function provided by the {@code rontolisp} package. Given a
+	 * promise, blocks until it settles and returns its value (for a
+	 * {@code rontolisp:fetch} promise, the result property list
+	 * {@code (:status <int> :body <string> :headers <alist>)}). Any other value is
+	 * returned unchanged, like a JavaScript {@code await} on a non-promise.
 	 */
 	public static final String AWAIT = "await";
+
+	/**
+	 * The {@code promisep} predicate provided by the {@code rontolisp} package. Returns
+	 * {@code t} if the argument is a promise (as returned by {@code rontolisp:fetch} or
+	 * {@code rontolisp:then}), {@code nil} otherwise.
+	 */
+	public static final String PROMISEP = "promisep";
+
+	/**
+	 * The {@code then} function provided by the {@code rontolisp} package. Derives a new
+	 * promise from a value (usually a promise) and a callback: awaiting the derived
+	 * promise awaits the base value and applies the callback to it (lazily, at first
+	 * await; the result is memoized). A callback returning a promise is flattened, like
+	 * JavaScript {@code Promise.prototype.then}.
+	 */
+	public static final String THEN = "then";
 
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";

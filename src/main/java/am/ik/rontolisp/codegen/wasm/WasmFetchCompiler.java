@@ -104,15 +104,21 @@ final class WasmFetchCompiler {
 		i32(w, WasmLispCompiler.FETCH_HANDLE_ADDR);
 		call(w, WasmLispCompiler.FUNC_FETCH_START);
 		// On a non-zero errno (e.g. a malformed URL) the adapter has not written the
-		// handle, so yield nil instead of a promise. Otherwise the promise is the
-		// in-flight handle boxed as an i31 integer.
+		// handle, so yield nil instead of a promise. Otherwise the promise is a
+		// TYPE_PROMISE root struct (kind 0) holding the in-flight handle boxed as an i31
+		// integer; _promise_await resolves and settles it.
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
+		i32(w, 0); // kind 0: fetch root
 		i32(w, WasmLispCompiler.FETCH_HANDLE_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_PROMISE);
 		w.write(Instruction.ELSE);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());

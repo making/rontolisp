@@ -3222,7 +3222,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -3247,6 +3247,28 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (mapcar #'rest '((1 2) (3 4))))")).isEqualTo("((2) (4))");
 		assertThat(compileAndRun("(print (funcall #'nth 1 '(1 2 3)))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (mapcar #'second '((1 2) (3 4))))")).isEqualTo("(2 4)");
+	}
+
+	@Test
+	void promiseOpsWorkInPreview1Mode() throws Exception {
+		// await/then/promisep are generic promise operations that run in Preview 1 too
+		// (only fetch itself is component-only): non-promise passthrough, then chains
+		// with flattening and at-first-await memoization, promisep, and opaque printing.
+		assertThat(compileAndRun("(print (rontolisp:await 42)) (print (rontolisp:await nil))")).isEqualTo("42\nnil");
+		assertThat(compileAndRun("(print (rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2)))))")).isEqualTo("42");
+		assertThat(compileAndRun(
+				"(print (rontolisp:await (rontolisp:then (rontolisp:then 10 (lambda (x) (+ x 1))) (lambda (x) (* x 3)))))"))
+			.isEqualTo("33");
+		assertThat(compileAndRun(
+				"(print (rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1)))))))"))
+			.isEqualTo("6");
+		assertThat(compileAndRun("(setq cnt 0)" + " (let ((p (rontolisp:then 1 (lambda (x) (setq cnt (+ cnt 1)) x))))"
+				+ " (rontolisp:await p) (rontolisp:await p) (print cnt))"))
+			.isEqualTo("1");
+		assertThat(compileAndRun(
+				"(print (rontolisp:promisep 42))" + " (print (rontolisp:promisep (rontolisp:then 1 (lambda (x) x))))"
+						+ " (print (rontolisp:then 1 (lambda (x) x)))"))
+			.isEqualTo("nil\nt\n#<PROMISE>");
 	}
 
 	@Test
@@ -3329,7 +3351,10 @@ class WasmLispCompilerIntegrationTest {
 					+ " (let ((p1 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"one\")))"
 					+ "       (p2 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"two\"))))"
 					+ "   (print (getf (rontolisp:await p2) :body))" + "   (print (getf (rontolisp:await p1) :body))"
-					+ "   (print (getf (rontolisp:await p1) :status)))";
+					+ "   (print (getf (rontolisp:await p1) :status)))"
+					// a fetch promise chains with then (the callback extracts the status)
+					+ " (print (rontolisp:await (rontolisp:then (rontolisp:fetch \"" + url
+					+ "\") (lambda (r) (getf r :status)))))";
 			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);

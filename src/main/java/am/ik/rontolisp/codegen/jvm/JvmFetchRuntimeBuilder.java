@@ -14,17 +14,23 @@ import am.ik.jvm.Opcode;
 /**
  * Builds the JVM bytecode for the {@code rontolisp:fetch} / {@code rontolisp:await}
  * built-ins, emitted as two {@code private static} methods into the generated standalone
- * {@code .class}. {@code _fetch(Object url, Object options)} <em>starts</em> an outgoing
- * HTTP request (JavaScript {@code fetch}-style) via
- * {@link java.net.http.HttpClient#sendAsync}, stores the returned
- * {@link java.util.concurrent.CompletableFuture} in the static {@code _promises} table
- * and immediately returns the promise: a {@code Long} handle indexing that table.
- * {@code _await(Object promise)} blocks on the future ({@code join()}) and returns the
- * property list {@code (:status <int> :body <string> :headers <alist>)} in the shared
- * runtime value representation ({@code Long} status, quote-wrapped {@code String} body,
- * and an alist of quote-wrapped {@code (name . value)} string pairs, one entry per
- * response header name). A failed request propagates from {@code join()} as a
- * {@code CompletionException} -- the JavaScript await-rejection timing.
+ * {@code .class}. A promise in this backend <em>is</em> a
+ * {@link java.util.concurrent.CompletableFuture} (nothing else in the runtime value
+ * representation is one, so {@code promisep} is a single {@code instanceof}).
+ * {@code _fetch(Object url, Object options)} <em>starts</em> an outgoing HTTP request
+ * (JavaScript {@code fetch}-style) via {@link java.net.http.HttpClient#sendAsync} and
+ * returns the future itself. {@code _await(Object value)} is the generic promise
+ * resolver: a non-promise value passes through unchanged; a fetch promise blocks on
+ * {@code join()} and returns the property list
+ * {@code (:status <int> :body <string> :headers <alist>)} in the shared runtime value
+ * representation ({@code Long} status, quote-wrapped {@code String} body, and an alist of
+ * quote-wrapped {@code (name . value)} string pairs); a {@code rontolisp:then} chain (a
+ * completed future holding a {@code {MARKER, base, fn}} payload, see
+ * {@code JvmThenCompiler}) resolves its base recursively, applies the callback through
+ * the {@code _invoke_1} dispatcher, flattens a promise-returning callback and memoizes
+ * the result back into the future ({@code obtrudeValue}) so the callback runs once. A
+ * failed request propagates from {@code join()} as a {@code CompletionException} -- the
+ * JavaScript await-rejection timing -- and skips any chained callbacks.
  *
  * <p>
  * The optional {@code options} argument is a property list; {@code :method} (default
@@ -48,11 +54,15 @@ final class JvmFetchRuntimeBuilder {
 	/** The {@code _await} method descriptor. */
 	static final String AWAIT_METHOD_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
-	/** The static promise-table field name ({@code java.util.ArrayList} of futures). */
-	static final String PROMISES_FIELD = "_promises";
-
-	/** The promise-table field descriptor. */
-	static final String PROMISES_DESC = "Ljava/util/ArrayList;";
+	/**
+	 * The chain-payload marker, the first element of the 3-element {@code Object[]} a
+	 * {@code rontolisp:then} future is completed with ({@code {MARKER, base, fn}}; a
+	 * memoized chain stores {@code {MARKER, value, MARKER}}). {@code ldc} of equal string
+	 * constants yields the same interned instance, so identity comparison works across
+	 * methods. The embedded newline keeps it distinct from every reader-producible symbol
+	 * (the runtime represents symbols as their bare name).
+	 */
+	static final String MARKER = "%promise\n";
 
 	private JvmFetchRuntimeBuilder() {
 	}
@@ -94,24 +104,17 @@ final class JvmFetchRuntimeBuilder {
 			.addMethodref(httpClientClass, cp.addNameAndType(cp.addUtf8("sendAsync"), cp.addUtf8(
 					"(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/util/concurrent/CompletableFuture;")));
 
-		// --- Promise table (static ArrayList of CompletableFutures) + await support ---
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		MethodrefConstant arrayListInit = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant arrayListAdd = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant arrayListSize = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant arrayListGet = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		MethodrefConstant longLongValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		// --- await support: the future itself is the promise value ---
 		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
 		MethodrefConstant futureJoin = cp.addMethodref(futureClass,
 				cp.addNameAndType(cp.addUtf8("join"), cp.addUtf8("()Ljava/lang/Object;")));
-		ConstantPool.FieldrefConstant promisesField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(PROMISES_FIELD), cp.addUtf8(PROMISES_DESC)));
+		MethodrefConstant futureObtrudeValue = cp.addMethodref(futureClass,
+				cp.addNameAndType(cp.addUtf8("obtrudeValue"), cp.addUtf8("(Ljava/lang/Object;)V")));
+		MethodrefConstant awaitSelf = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(AWAIT_METHOD_NAME), cp.addUtf8(AWAIT_METHOD_DESC)));
+		MethodrefConstant invoke1 = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_invoke_1"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
+		ConstantPool.StringConstant marker = cp.addString(MARKER);
 
 		ClassConstant httpRequestClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest"));
 		MethodrefConstant newBuilder = cp.addMethodref(httpRequestClass, cp.addNameAndType(cp.addUtf8("newBuilder"),
@@ -320,9 +323,10 @@ final class JvmFetchRuntimeBuilder {
 		a.op(0);
 		a.op(Opcode.POP); // discard returned builder
 
-		// future = HttpClient.newHttpClient().sendAsync(builder.build(),
+		// promise = HttpClient.newHttpClient().sendAsync(builder.build(),
 		// BodyHandlers.ofString()) -- the request starts NOW and runs on the client's
-		// executor threads while the compiled program continues.
+		// executor threads while the compiled program continues. The future itself is
+		// the promise value.
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(newHttpClient.index()); // [client]
 		a.aload(2); // [client, builder]
@@ -334,35 +338,6 @@ final class JvmFetchRuntimeBuilder {
 		a.u2(ofString.index()); // [client, request, handler]
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(clientSendAsync.index()); // [future]
-		a.astore(4);
-
-		// Lazily initialize the promise table, then
-		// handle = _promises.size(); _promises.add(future); return Long.valueOf(handle)
-		int tableReady = a.label();
-		a.op(Opcode.GETSTATIC);
-		a.u2(promisesField.index());
-		a.branch(Opcode.IFNONNULL, tableReady);
-		a.op(Opcode.NEW);
-		a.u2(arrayListClass.index());
-		a.op(Opcode.DUP);
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(arrayListInit.index());
-		a.op(Opcode.PUTSTATIC);
-		a.u2(promisesField.index());
-		a.bind(tableReady);
-		a.op(Opcode.GETSTATIC);
-		a.u2(promisesField.index());
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(arrayListSize.index()); // [handleI]
-		a.op(Opcode.I2L);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(longValueOf.index()); // [handleLong]
-		a.op(Opcode.GETSTATIC);
-		a.u2(promisesField.index());
-		a.aload(4);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(arrayListAdd.index()); // [handleLong, added]
-		a.op(Opcode.POP); // [handleLong]
 		a.areturn();
 
 		List<Integer> code = a.finish();
@@ -370,24 +345,112 @@ final class JvmFetchRuntimeBuilder {
 		Utf8Constant descUtf8 = cp.addUtf8(METHOD_DESC);
 		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, 12, 20, code);
 
-		// --- _await(promise): join the future and build the result plist ---
+		// --- _await(value): resolve a promise (generic; non-promises pass through) ---
 		Asm b = new Asm();
-		// response = (HttpResponse) ((CompletableFuture) _promises
-		// .get((int) ((Long) promise).longValue())).join() -- blocks until the request
-		// settles; a failed request propagates as a CompletionException here (the
-		// JavaScript await-rejection timing).
-		b.op(Opcode.GETSTATIC);
-		b.u2(promisesField.index()); // [table]
+		// A non-promise value passes through unchanged (like JavaScript await).
+		int isPromise = b.label();
 		b.aload(0);
-		b.checkcast(longClass);
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(longLongValue.index()); // [table, handleJ]
-		b.op(Opcode.L2I); // [table, handleI]
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(arrayListGet.index()); // [future]
+		b.op(Opcode.INSTANCEOF);
+		b.u2(futureClass.index());
+		b.branch(Opcode.IFNE, isPromise);
+		b.aload(0);
+		b.areturn();
+		b.bind(isPromise);
+		// v = ((CompletableFuture) value).join() -- blocks until the promise settles; a
+		// failed request propagates as a CompletionException here (the JavaScript
+		// await-rejection timing), skipping any chained callbacks below.
+		b.aload(0);
 		b.checkcast(futureClass);
 		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(futureJoin.index()); // [response]
+		b.u2(futureJoin.index()); // [v]
+		b.astore(1);
+		// A rontolisp:then chain settles to {MARKER, base, fn}; a memoized chain to
+		// {MARKER, value, MARKER}. Anything else falls through (a fetch response below,
+		// or a plain settled value that returns as-is).
+		int notChain = b.label();
+		b.aload(1);
+		b.op(Opcode.INSTANCEOF);
+		b.u2(objectArrayClass.index());
+		b.branch(Opcode.IFEQ, notChain);
+		b.aload(1);
+		b.checkcast(objectArrayClass);
+		b.op(Opcode.ARRAYLENGTH);
+		b.iconst(3);
+		b.branch(Opcode.IF_ICMPNE, notChain);
+		b.aload(1);
+		b.checkcast(objectArrayClass);
+		b.iconst(0);
+		b.aaload();
+		b.ldc(marker.index());
+		b.branch(Opcode.IF_ACMPNE, notChain);
+		// memoized: return the stored value
+		int notMemo = b.label();
+		b.aload(1);
+		b.checkcast(objectArrayClass);
+		b.iconst(2);
+		b.aaload();
+		b.ldc(marker.index());
+		b.branch(Opcode.IF_ACMPNE, notMemo);
+		b.aload(1);
+		b.checkcast(objectArrayClass);
+		b.iconst(1);
+		b.aaload();
+		b.areturn();
+		b.bind(notMemo);
+		// r = _await(_invoke_1(fn, _await(base))) -- resolve the base first (it may
+		// itself be a promise), apply the callback, and flatten a promise-returning
+		// callback, like JavaScript then.
+		b.aload(1);
+		b.checkcast(objectArrayClass);
+		b.iconst(2);
+		b.aaload(); // [fn]
+		b.aload(1);
+		b.checkcast(objectArrayClass);
+		b.iconst(1);
+		b.aaload(); // [fn, base]
+		b.op(Opcode.INVOKESTATIC);
+		b.u2(awaitSelf.index()); // [fn, baseValue]
+		b.op(Opcode.INVOKESTATIC);
+		b.u2(invoke1.index()); // [r0]
+		b.op(Opcode.INVOKESTATIC);
+		b.u2(awaitSelf.index()); // [r]
+		b.astore(2);
+		// Memoize: promise.obtrudeValue(new Object[]{MARKER, r, MARKER}) so the callback
+		// runs once even when the chain is awaited again.
+		b.aload(0);
+		b.checkcast(futureClass);
+		b.iconst(3);
+		b.anewarray(objectClass);
+		b.op(Opcode.DUP);
+		b.iconst(0);
+		b.ldc(marker.index());
+		b.aastore();
+		b.op(Opcode.DUP);
+		b.iconst(1);
+		b.aload(2);
+		b.aastore();
+		b.op(Opcode.DUP);
+		b.iconst(2);
+		b.ldc(marker.index());
+		b.aastore();
+		b.op(Opcode.INVOKEVIRTUAL);
+		b.u2(futureObtrudeValue.index());
+		b.aload(2);
+		b.areturn();
+		b.bind(notChain);
+		// A fetch promise settles to the HttpResponse; build the result plist from it.
+		// Any other settled value returns as-is (future non-fetch producers). The
+		// HttpResponse instanceof is only reached with a fetch promise in hand, so
+		// then-only programs never touch java.net.http classes.
+		int isHttp = b.label();
+		b.aload(1);
+		b.op(Opcode.INSTANCEOF);
+		b.u2(httpResponseClass.index());
+		b.branch(Opcode.IFNE, isHttp);
+		b.aload(1);
+		b.areturn();
+		b.bind(isHttp);
+		b.aload(1);
 		b.checkcast(httpResponseClass);
 		b.astore(4);
 

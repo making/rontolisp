@@ -62,8 +62,11 @@ math (including exact rationals), `eval`, and loops.
 ## How it works
 
 ```
-playground.html  (browser UI: REPL + download buttons)
-   |  calls globalThis.rontoEval / rontoCompileJvm / rontoCompileWasm
+playground.html  (browser UI: REPL + download buttons + fetch broker)
+   |  postMessage RPC (vmCall)
+   v
+ronto-worker.js  (Web Worker hosting the runtime; blocks on Atomics.wait for fetch)
+   |  importScripts
    v
 rontoplayground.js + .wasm   (rontolisp compiled to WASM by Web Image)
    |  wraps
@@ -73,6 +76,17 @@ RontoPlayground.java   (@JS bootstrap that exports 3 functions to JS)
    v
 LispEvaluator / JvmLispCompiler / WasmLispCompiler   (the existing core)
 ```
+
+The interpreter runs inside a **Web Worker** (`ronto-worker.js`), so long
+evaluations do not freeze the page and `rontolisp:fetch` is truly asynchronous:
+the worker posts each request (with a growable `SharedArrayBuffer`) to the main
+thread, whose broker runs the real browser `fetch()` concurrently — multiple
+requests overlap — and `rontolisp:await` blocks the worker with `Atomics.wait`
+until the response bytes land in the buffer. `SharedArrayBuffer` needs
+cross-origin isolation (COOP/COEP); GitHub Pages cannot send those headers, so
+`coi-serviceworker.min.js` (vendored, MIT) supplies them via a service worker
+(one automatic reload on first visit). Without isolation the playground falls
+back to a synchronous XHR per request — same behavior, no overlap.
 
 `compile-run.html` reuses the same `rontoplayground.js` runtime but adds the
 in-browser execution step:
@@ -120,8 +134,10 @@ Compilation errors are returned as strings prefixed with `ERROR:`.
 The `web` profile compiles `src/web/java` together with the rest of the project,
 then runs the `native-maven-plugin` with `--tool:svm-wasm` to compile rontolisp
 to WebAssembly, and stages `rontoplayground.js`, `rontoplayground.js.wasm`,
-`playground.html` (the UI), and `index.html` (a redirect to the docs) into
-`web/dist/`. Build with a GraalVM that has the `svm-wasm` tool.
+`playground.html` (the UI), `ronto-worker.js` (the Web Worker host),
+`coi-serviceworker.min.js` (COOP/COEP for GitHub Pages), and `index.html` (a
+redirect to the docs) into `web/dist/`. Build with a GraalVM that has the
+`svm-wasm` tool.
 
 Profile-specific details (all confined to the `web` profile):
 
@@ -172,18 +188,20 @@ One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
   limitations" for the compiled backends.
 - `rontolisp:fetch` (HTTP) works in the browser, but through a different transport.
   `java.net.http` cannot be compiled by Web Image (it needs the TLS/security stack
-  and host sockets), so a Web Image substitution
-  (`src/web/java/.../eval/Target_HttpSupport.java`) routes `fetch` to a
-  **synchronous `XMLHttpRequest`** (`src/web/java/.../web/BrowserHttp.java`). A
-  synchronous XHR is used rather than the browser `fetch()` API because the
-  interpreter's `fetch` is a synchronous call and a WASM guest cannot `await` a
-  Promise without JS Promise Integration. Consequences: requests are subject to
-  the browser **same-origin policy / CORS** (cross-origin targets must send
+  and host sockets), and Web Image has neither JS Promise Integration nor threads,
+  so a WASM guest cannot `await` a browser Promise directly. Instead, a Web Image
+  substitution (`src/web/java/.../eval/Target_HttpSupport.java`) hands the request
+  to the **main-thread fetch broker** over a `SharedArrayBuffer`
+  (`src/web/java/.../web/BrowserHttp.java`) and `await` blocks the worker with
+  `Atomics.wait` — requests genuinely overlap. On the main thread (e.g.
+  `compile-run.html`) or without cross-origin isolation it falls back to a
+  **synchronous `XMLHttpRequest`**. Either way requests are subject to the browser
+  **same-origin policy / CORS** (cross-origin targets must send
   `Access-Control-Allow-Origin`, and only "simple" response headers appear in
   `:headers` unless the server sets `Access-Control-Expose-Headers`); a blocked or
-  failed request surfaces as a REPL error. (Compiling a `fetch` program to JVM
-  still works; compiling to WASM needs `--component`, which the playground does
-  not emit.)
+  failed request surfaces as an error when the promise is awaited. (Compiling a
+  `fetch` program to JVM still works; compiling to WASM needs `--component`, which
+  the playground does not emit.)
 - `load` works against uploaded files: pick (or drag-and-drop) `.lisp` files
   with the **load files** control, then `(load "name.lisp")` resolves them from
   an in-memory map. The browser has no real filesystem, so the playground

@@ -346,7 +346,12 @@
 		<a href="https://github.com/making/rontolisp" target="_blank" rel="noopener">github.com/making/rontolisp</a>
 	</footer>
 
-	<script src="rontoplayground.js"></script>
+	<!-- GitHub Pages cannot send the COOP/COEP headers that SharedArrayBuffer (used for
+	     truly asynchronous rontolisp:fetch) requires; coi-serviceworker supplies them via
+	     a service worker, reloading the page once on first visit. Without cross-origin
+	     isolation everything still works -- fetch just falls back to synchronous
+	     requests. -->
+	<script src="coi-serviceworker.min.js"></script>
 	<script>
 		const SAMPLES = {
 			"hello": '(print "hello, rontolisp")',
@@ -409,8 +414,8 @@
 		function uploadFiles(files) {
 			for (const file of files) {
 				const reader = new FileReader();
-				reader.onload = () => {
-					const listStr = globalThis.rontoPutFile(file.name, String(reader.result));
+				reader.onload = async () => {
+					const listStr = await vmCall("rontoPutFile", file.name, String(reader.result));
 					refreshFileList(listStr);
 					appendEntry(null, `uploaded ${file.name} (${file.size} bytes) \u2014 use (load "${file.name}")`, false);
 				};
@@ -419,10 +424,20 @@
 			}
 		}
 
-		function runRepl(src) {
-			const res = globalThis.rontoEval(src);
-			const isErr = typeof res === "string" && res.startsWith("ERROR:");
-			appendEntry(src, isErr ? res.slice(6).trim() : res, isErr);
+		let replBusy = false;
+		async function runRepl(src) {
+			if (replBusy) return;
+			replBusy = true;
+			$("repl-input").disabled = true;
+			try {
+				const res = await vmCall("rontoEval", src);
+				const isErr = typeof res === "string" && res.startsWith("ERROR:");
+				appendEntry(src, isErr ? res.slice(6).trim() : res, isErr);
+			} finally {
+				replBusy = false;
+				$("repl-input").disabled = false;
+				$("repl-input").focus();
+			}
 		}
 
 		// --- REPL history (persisted to localStorage, navigated with Up/Down) ---
@@ -544,8 +559,80 @@
 			el.className = kind || "";
 		}
 
+		// --- the interpreter runs in a Web Worker (ronto-worker.js) so that long
+		// evaluations do not freeze the page and rontolisp:fetch can be truly
+		// asynchronous: the worker posts {type:"ronto-fetch"} messages here and blocks
+		// on Atomics.wait; this thread performs the real browser fetch()es concurrently
+		// (multiple requests overlap) and writes each response into the request's
+		// SharedArrayBuffer. SharedArrayBuffer requires cross-origin isolation (see the
+		// coi-serviceworker note above); without it the worker falls back to a
+		// synchronous XHR per request.
+		const worker = new Worker("ronto-worker.js");
+		const pendingCalls = new Map();
+		let callSeq = 0;
+		function vmCall(fn, ...args) {
+			return new Promise((resolve) => {
+				const id = callSeq++;
+				pendingCalls.set(id, resolve);
+				worker.postMessage({ type: "call", id, fn, args });
+			});
+		}
+
+		// Fetch broker: run the real fetch() for a worker request and write the
+		// response into its SharedArrayBuffer as [i32 state, i32 length, utf8 bytes...]
+		// (payload at byte offset 8), then wake the worker.
+		async function brokerFetch(m) {
+			const i32 = new Int32Array(m.sab, 0, 2);
+			let payload;
+			try {
+				const headers = {};
+				const hs = (m.reqHeaders || "").split("\n");
+				for (let i = 0; i + 1 < hs.length; i += 2) {
+					if (hs[i].length > 0) headers[hs[i]] = hs[i + 1];
+				}
+				const resp = await fetch(m.url, { method: m.method, headers, body: m.body === null ? undefined : m.body });
+				const text = await resp.text();
+				let headerLines = "";
+				resp.headers.forEach((v, k) => { headerLines += k + ": " + v + "\r\n"; });
+				payload = new TextEncoder().encode(resp.status + "\u0001" + headerLines + "\u0001" + text);
+			} catch (err) {
+				payload = new TextEncoder().encode("ERR\u0001" + (err && err.message ? err.message : "request failed"));
+			}
+			const needed = 8 + payload.length;
+			if (m.sab.byteLength < needed) m.sab.grow(needed);
+			new Uint8Array(m.sab).set(payload, 8);
+			i32[1] = payload.length;
+			Atomics.store(i32, 0, 1);
+			Atomics.notify(i32, 0);
+		}
+
+		worker.onmessage = (e) => {
+			const m = e.data;
+			if (m.type === "result") {
+				const resolve = pendingCalls.get(m.id);
+				pendingCalls.delete(m.id);
+				if (resolve) resolve(m.value);
+			}
+			else if (m.type === "ronto-fetch") {
+				brokerFetch(m);
+			}
+			else if (m.type === "ready") {
+				onRuntimeReady(m);
+			}
+			else if (m.type === "init-error") {
+				onRuntimeError(m.error);
+			}
+		};
+		worker.onerror = (e) => onRuntimeError(e.message || String(e));
+
+		function onRuntimeError(msg) {
+			statusEl.textContent = "runtime failed";
+			statusEl.className = "error";
+			appendEntry(null, "Failed to start the WebAssembly runtime. A recent browser with WebAssembly GC and exception handling is required.\n\n" + msg, true);
+		}
+
 		// --- wire up after the GraalVM runtime is ready ---
-		GraalVM.run([]).then(() => {
+		function onRuntimeReady(readyMsg) {
 			statusEl.textContent = "runtime ready";
 			statusEl.className = "ready";
 			$("repl-input").disabled = false;
@@ -554,6 +641,9 @@
 			$("btn-run-source").disabled = false;
 			$("file-upload").disabled = false;
 			appendEntry(null, "rontolisp interpreter running in WebAssembly. Type an expression below.", false);
+			if (!readyMsg.crossOriginIsolated) {
+				appendEntry(null, "note: cross-origin isolation is unavailable, so rontolisp:fetch falls back to synchronous requests (promises settle at fetch time; no overlap).", false);
+			}
 
 			$("file-upload").addEventListener("change", (ev) => { uploadFiles(ev.target.files); ev.target.value = ""; });
 			const dropTarget = $("source");
@@ -595,27 +685,23 @@
 				if (src) runRepl(src);
 			});
 
-			$("btn-jvm").addEventListener("click", () => {
+			$("btn-jvm").addEventListener("click", async () => {
 				const src = $("source").value;
 				const name = $("classname").value.trim() || "Main";
-				const res = globalThis.rontoCompileJvm(src, name);
+				const res = await vmCall("rontoCompileJvm", src, name);
 				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
 				const n = downloadBase64(res, name + ".class", "application/java-vm");
 				setCompileStatus(`Compiled ${name}.class (${n} bytes). Run: java ${name}`, "ok");
 			});
 
-			$("btn-wasm").addEventListener("click", () => {
+			$("btn-wasm").addEventListener("click", async () => {
 				const src = $("source").value;
-				const res = globalThis.rontoCompileWasm(src);
+				const res = await vmCall("rontoCompileWasm", src);
 				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
 				const n = downloadBase64(res, "output.wasm", "application/wasm");
 				setCompileStatus(`Compiled output.wasm (${n} bytes). Run: wasmtime --wasm gc output.wasm`, "ok");
 			});
-		}).catch((e) => {
-			statusEl.textContent = "runtime failed";
-			statusEl.className = "error";
-			appendEntry(null, "Failed to start the WebAssembly runtime. A recent browser with WebAssembly GC and exception handling is required.\n\n" + e, true);
-		});
+		}
 
 		$("btn-clear").addEventListener("click", () => { log.innerHTML = ""; });
 	</script>

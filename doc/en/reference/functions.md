@@ -205,16 +205,20 @@ package system. Each name below links to its own page.
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | start an HTTP request asynchronously; returns a promise |
-| `rontolisp:await` | `(rontolisp:await p)` | block until a fetch promise settles; returns a `(:status :body :headers)` plist |
+| `rontolisp:await` | `(rontolisp:await p)` | resolve a promise (blocking); a non-promise passes through unchanged |
+| `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | derive a new promise that applies a callback to the settled value |
+| `rontolisp:promisep` | `(rontolisp:promisep p)` | `t` if the value is a promise |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 
 The introspection functions (`list-functions` / `list-macros` /
 `list-special-forms`) are described in detail under
 [Package introspection](packages.md#package-introspection). `rontolisp:fetch`
-starts an outgoing HTTP request and returns a promise resolved by
-`rontolisp:await`; see the [fetch](functions/rontolisp-fetch.md) and
-[await](functions/rontolisp-await.md) reference pages for options, the result
-plist, backend support, and limitations. `rontolisp:wasm-export` is a
+starts an outgoing HTTP request and returns a promise, resolved with the
+generic promise operations `rontolisp:await` / `rontolisp:then` /
+`rontolisp:promisep`; see the [fetch](functions/rontolisp-fetch.md),
+[await](functions/rontolisp-await.md), [then](functions/rontolisp-then.md) and
+[promisep](functions/rontolisp-promisep.md) reference pages for options, the
+result plist, backend support, and limitations. `rontolisp:wasm-export` is a
 compile-time directive
 for the WASM backend; see its [reference
 page](functions/rontolisp-wasm-export.md) and the

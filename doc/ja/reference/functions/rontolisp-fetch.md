@@ -3,10 +3,12 @@
 `(rontolisp:fetch url &optional options)`
 
 JavaScript の `fetch` API を模した送信 HTTP リクエストを開始し、リクエストが
-非同期に実行されている間に **プロミス** (不透明なハンドル) を即座に返します。
+非同期に実行されている間に **プロミス** を即座に返します。プロミスは不透明な値で、
+`#<PROMISE>` と印字され、[`rontolisp:promisep`](rontolisp-promisep.md) を満たします。
 プロミスを [`rontolisp:await`](rontolisp-await.md) に渡すと、レスポンスの到着まで
 ブロックし、結果のプロパティリスト
 `(:status <integer> :body <string> :headers <alist>)` が得られます。
+[`rontolisp:then`](rontolisp-then.md) でコールバックをチェーンすることもできます。
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))
@@ -70,10 +72,15 @@ JavaScript の `fetch` API を模した送信 HTTP リクエストを開始し�
   を参照)。プロミスは処理中の `wasi:http` レスポンスハンドルそのものなので、複数の
   リクエストが実際に並行します。`--component` でコンパイルし、非同期フラグに加えて
   `-S http=y` を付けて実行してください。ホストの `wasi:http` を持たない Preview 1
-  (コアモジュール) モードでは fetch と await はコンパイルエラーのままです。
-- **ブラウザ プレイグラウンド**: `fetch` の呼び出し時にリクエストが同期的に
-  (`XMLHttpRequest` で) 実行され、既に解決済みのプロミスが返ります。プログラムの
-  動作は同じですが、リクエストは並行しません。
+  (コアモジュール) モードでは fetch はコンパイルエラーのままです。汎用のプロミス
+  操作 (`await`、`then`、`promisep`) はどのモードでもコンパイルできます。
+- **ブラウザ プレイグラウンド**: 真に非同期です。インタプリタは Web Worker 内で
+  実行され、`fetch` はリクエストをページのメインスレッドに引き渡します。メイン
+  スレッドがブラウザの本物の `fetch()` を (CORS の制約の下で) 実行している間も
+  プログラムは動き続けるためリクエストは並行し、`await` はレスポンスの到着まで
+  ワーカーをブロックします。クロスオリジン分離が使えない環境
+  (`SharedArrayBuffer` が無効) では、fetch ごとに同期リクエストへフォールバック
+  します — プログラムの動作は同じですが、リクエストは並行しません。
 
 ## 制限事項
 

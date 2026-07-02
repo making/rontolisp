@@ -18,8 +18,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.function.DoubleUnaryOperator;
 
 import am.ik.rontolisp.LispArray;
@@ -32,6 +30,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispPromise;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -361,16 +360,14 @@ public final class Environment implements Scope {
 		env.defineFunction(exportName,
 				new LispFunction(exportName, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
 		// fetch starts an outgoing HTTP request, JavaScript fetch-style, and immediately
-		// returns a promise (an opaque integer handle indexing the table below, matching
-		// the stream-handle convention) while the request runs on a background thread. It
+		// returns a promise (a LispPromise wrapping the future, which settles with the
+		// result property list) while the request runs on a background thread. It
 		// belongs to the rontolisp package (it is not a Common Lisp standard function).
 		// The optional second argument is an options property list (:method, :headers,
 		// :body); the options are validated eagerly (like JavaScript fetch, which throws
 		// synchronously on invalid arguments). The supported methods are GET, HEAD, POST,
 		// PUT, DELETE, OPTIONS and PATCH; :body is the request body string (e.g. for
 		// POST/PUT).
-		Map<Long, CompletableFuture<HttpSupport.HttpResult>> promises = new HashMap<>();
-		long[] nextPromiseHandle = { 0 };
 		String fetchName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		env.defineFunction(fetchName, new LispFunction(fetchName, args -> {
 			if (args.isEmpty() || args.size() > 2) {
@@ -383,34 +380,30 @@ public final class Environment implements Scope {
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
 			String body = fetchBody(options);
-			long handle = nextPromiseHandle[0]++;
-			promises.put(handle, HttpSupport.requestAsync(method, url.value(), requestHeaders, body));
-			return new LispInteger(handle);
+			return LispPromise.root(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
+				.thenApply(result -> fetchList(new LispSymbol(":status"), new LispInteger(result.status()),
+						new LispSymbol(":body"), new LispString(result.body()), new LispSymbol(":headers"),
+						buildHeaderAlist(result.headers()))));
 		}));
-		// await blocks until the promise returned by fetch settles and returns the result
-		// property list (:status <int> :body <string> :headers <alist>), where :headers
-		// is an alist of (name . value) string pairs. A request failure (e.g. a refused
-		// connection) signals here -- the same timing as a JavaScript await rejection. A
-		// settled promise can be awaited again.
-		String awaitName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
-		env.defineFunction(awaitName, new LispFunction(awaitName, args -> {
+		// then derives a new promise from a value (usually a promise): awaiting the
+		// derived promise awaits the base and applies the callback to its value. The
+		// callback runs lazily at first await (memoized), which is the timing all three
+		// backends implement identically. await itself is registered by the evaluator
+		// because resolving a chain applies the callback.
+		String thenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN);
+		env.defineFunction(thenName, new LispFunction(thenName, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.THEN + " expects 2 arguments, got " + args.size());
+			}
+			return LispPromise.chain(args.get(0), args.get(1));
+		}));
+		// promisep tests whether a value is a promise.
+		String promisepName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.PROMISEP);
+		env.defineFunction(promisepName, new LispFunction(promisepName, args -> {
 			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.AWAIT + " expects 1 argument, got " + args.size());
+				throw new LispEvalException(LispNames.PROMISEP + " expects 1 argument, got " + args.size());
 			}
-			if (!(args.get(0) instanceof LispInteger handle) || !promises.containsKey(handle.value())) {
-				throw new LispEvalException(LispNames.AWAIT + " expects a promise returned by " + fetchName + ", got: "
-						+ args.get(0).print());
-			}
-			HttpSupport.HttpResult result;
-			try {
-				result = promises.get(handle.value()).join();
-			}
-			catch (CompletionException ex) {
-				Throwable cause = Objects.requireNonNullElse(ex.getCause(), ex);
-				throw new LispEvalException(Objects.requireNonNullElse(cause.getMessage(), "fetch failed"));
-			}
-			return fetchList(new LispSymbol(":status"), new LispInteger(result.status()), new LispSymbol(":body"),
-					new LispString(result.body()), new LispSymbol(":headers"), buildHeaderAlist(result.headers()));
+			return (args.get(0) instanceof LispPromise) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
 

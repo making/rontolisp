@@ -2852,7 +2852,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print())
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
 	}
 
 	@Test
@@ -2894,7 +2894,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print())
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
 	}
 
 	@Test
@@ -2973,9 +2973,14 @@ class LispEvaluatorTest {
 					"(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :headers)");
 			// the JDK HttpClient normalizes response header names to lower case
 			assertThat(headers.print()).contains("x-test").contains("ok");
-			// fetch itself returns an opaque promise handle (an integer), not the result
+			// fetch itself returns an opaque promise, not the result; it prints as
+			// #<PROMISE> and satisfies promisep
 			assertThat(eval("(rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")"))
-				.isInstanceOf(LispInteger.class);
+				.isInstanceOf(am.ik.rontolisp.LispPromise.class);
+			assertThat(eval("(rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")").print())
+				.isEqualTo("#<PROMISE>");
+			assertThat(eval("(rontolisp:promisep (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\"))").print())
+				.isEqualTo("t");
 			// a settled promise can be awaited more than once
 			assertThat(eval("(let ((p (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
 					+ " (rontolisp:await p) (getf (rontolisp:await p) :status))"))
@@ -2985,6 +2990,10 @@ class LispEvaluatorTest {
 					+ " (p2 (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
 					+ " (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status)))")
 				.print()).isEqualTo("(200 200)");
+			// a fetch promise chains with then
+			assertThat(eval("(rontolisp:await (rontolisp:then (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/hello\") (lambda (r) (getf r :status))))"))
+				.isEqualTo(new LispInteger(200));
 		}
 		finally {
 			server.stop(0);
@@ -3057,10 +3066,40 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void awaitRejectsNonPromise() {
-		assertThatThrownBy(() -> eval("(rontolisp:await 42)")).hasMessageContaining("expects a promise");
-		assertThatThrownBy(() -> eval("(rontolisp:await \"p\")")).hasMessageContaining("expects a promise");
+	void awaitPassesNonPromiseThrough() {
+		// like JavaScript await, a non-promise value is returned unchanged
+		assertThat(eval("(rontolisp:await 42)")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(rontolisp:await \"p\")")).isEqualTo(new LispString("p"));
+		assertThat(eval("(rontolisp:await nil)").print()).isEqualTo("nil");
 		assertThatThrownBy(() -> eval("(rontolisp:await)")).hasMessageContaining("await");
+	}
+
+	@Test
+	void promisepDistinguishesPromises() {
+		assertThat(eval("(rontolisp:promisep 42)").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:promisep nil)").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:promisep \"p\")").print()).isEqualTo("nil");
+		assertThatThrownBy(() -> eval("(rontolisp:promisep)")).hasMessageContaining("promisep");
+	}
+
+	@Test
+	void thenDerivesChainablePromises() {
+		// then always yields a promise, even from a plain value
+		assertThat(eval("(rontolisp:promisep (rontolisp:then 1 (lambda (x) x)))").print()).isEqualTo("t");
+		assertThat(eval("(rontolisp:then 1 (lambda (x) x))").print()).isEqualTo("#<PROMISE>");
+		assertThat(eval("(rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2))))")).isEqualTo(new LispInteger(42));
+		// chains compose left to right
+		assertThat(eval(
+				"(rontolisp:await (rontolisp:then (rontolisp:then 10 (lambda (x) (+ x 1))) (lambda (x) (* x 3))))"))
+			.isEqualTo(new LispInteger(33));
+		// a callback returning a promise is flattened, like JavaScript then
+		assertThat(eval("(rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1))))))"))
+			.isEqualTo(new LispInteger(6));
+		// the callback runs at first await only; the result is memoized
+		assertThat(eval("(progn (setq cnt 0)" + " (let ((p (rontolisp:then 1 (lambda (x) (setq cnt (+ cnt 1)) x))))"
+				+ " (rontolisp:await p) (rontolisp:await p) cnt))"))
+			.isEqualTo(new LispInteger(1));
+		assertThatThrownBy(() -> eval("(rontolisp:then 1)")).hasMessageContaining("then");
 	}
 
 	// Characters and string/number parsing

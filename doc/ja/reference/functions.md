@@ -202,16 +202,20 @@
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | HTTPリクエストを非同期に開始します。プロミスを返します |
-| `rontolisp:await` | `(rontolisp:await p)` | fetch のプロミスが確定するまでブロックします。`(:status :body :headers)` のplistを返します |
+| `rontolisp:await` | `(rontolisp:await p)` | プロミスを解決します (ブロッキング)。プロミス以外はそのまま返します |
+| `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | 確定値にコールバックを適用する新しいプロミスを導出します |
+| `rontolisp:promisep` | `(rontolisp:promisep p)` | 値がプロミスなら `t` |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 
 イントロスペクション関数(`list-functions` / `list-macros` /
 `list-special-forms`)については
 [パッケージのイントロスペクション](packages.md#package-introspection)
 で詳しく説明しています。`rontolisp:fetch`
-は外向きのHTTPリクエストを開始してプロミスを返し、`rontolisp:await` がそれを解決します。オプション、結果plist、バックエンドのサポート、制限については
-[fetch](functions/rontolisp-fetch.md) と
-[await](functions/rontolisp-await.md) のリファレンスページを参照してください。`rontolisp:wasm-export`
+は外向きのHTTPリクエストを開始してプロミスを返し、汎用のプロミス操作 `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` がそれを解決します。オプション、結果plist、バックエンドのサポート、制限については
+[fetch](functions/rontolisp-fetch.md)、
+[await](functions/rontolisp-await.md)、
+[then](functions/rontolisp-then.md)、
+[promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:wasm-export`
 はWASMバックエンド向けのコンパイル時ディレクティブです。
 [リファレンスページ](functions/rontolisp-wasm-export.md) および
 [WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。
