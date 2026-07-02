@@ -29,6 +29,7 @@ import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ConstantPool;
+import am.ik.jvm.JvmClassShaker;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -46,6 +47,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	private final String className;
 
 	private final boolean dynamic;
+
+	private final boolean optimize;
 
 	/**
 	 * Create a new JVM compiler targeting the given class name.
@@ -65,8 +68,23 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * to be emitted.
 	 */
 	public JvmLispCompiler(String className, boolean dynamic) {
+		this(className, dynamic, false);
+	}
+
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are resolved at runtime against the embedded {@code eval} global environment (late
+	 * binding); see {@link #JvmLispCompiler(String, boolean)}
+	 * @param optimize when {@code true}, dead-code-eliminate the finished class with
+	 * {@link JvmClassShaker}: methods unreachable from {@code main} (and any static field
+	 * only they reference) are dropped and the constant pool is compacted
+	 */
+	public JvmLispCompiler(String className, boolean dynamic, boolean optimize) {
 		this.className = className;
 		this.dynamic = dynamic;
+		this.optimize = optimize;
 	}
 
 	@Override
@@ -1082,7 +1100,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			}) //
 			.writeAttributes(a -> {
 			});
-		return classOut.toByteArray();
+		byte[] classBytes = classOut.toByteArray();
+		if (this.optimize) {
+			// Drop every method unreachable from main (and compact the constant pool).
+			// Dispatch methods contain real invokestatic calls to every registered
+			// function, so dynamically-reached methods (eval/apply/funcall targets) stay
+			// alive through ordinary call-graph reachability. The one edge the bytecode
+			// cannot show is the java: bridge's reflective getDeclaredMethod("_apply",
+			// ..)
+			// lookup, so _apply is an extra root when the program uses java: interop.
+			classBytes = JvmClassShaker.shake(classBytes, usesJava ? Set.of("main", "_apply") : Set.of("main"));
+		}
+		return classBytes;
 	}
 
 	private static boolean programUsesEval(List<LispVal> program) {

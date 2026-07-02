@@ -27,6 +27,27 @@ Example (`hello.lisp`):
 3
 ```
 
+## Optimize (Dead-Code Elimination)
+
+By default a compiled class embeds the **entire** runtime (printer, numeric, reader
+and `eval` helper methods, plus a first-class wrapper for every built-in) regardless
+of what the program actually uses. Add `--optimize` to drop every method unreachable
+from `main`, along with any static field only they referenced, and compact the
+constant pool accordingly:
+
+```bash
+rontolisp fact.lisp --optimize -o Fact.class
+java Fact
+```
+
+For a small program like `fact` the class shrinks from ~46 KB to ~4.6 KB. The flag is
+opt-in and behavior-preserving: reachability follows the actual `invoke` instructions
+in the bytecode, so anything a first-class function value, `funcall`, or an embedded
+`eval`/`load` can dispatch to is kept (the dispatch methods call every registered
+function directly), and the `java:` interop bridge's reflective entry point survives
+as an explicit root. The same flag also tree-shakes the
+[WASM output](wasm.md).
+
 The generated `.class` file targets Java 6 (class version 50), so its bytecode
 loads on any JRE 6+. Beyond `java.lang` and `java.io`, the emitted runtime
 helpers reference `java.math` (`BigInteger`/`BigDecimal`/`MathContext`, for the

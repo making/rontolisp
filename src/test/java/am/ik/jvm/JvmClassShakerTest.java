@@ -1,0 +1,157 @@
+package am.ik.jvm;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Structural + behavioral tests for the JVM dead-code eliminator. These verify the
+ * shaker's invariants on real compiled classes: the output is smaller, unreachable
+ * methods and unreferenced fields are gone, the class still loads (the JVM verifier is
+ * the well-formedness check) and behaves identically, dynamically-reached methods and the
+ * reflective {@code _apply} root survive, and the pass is idempotent. The whole
+ * cross-backend feature corpus is exercised by {@code JvmClassShakerCorpusTest}.
+ */
+class JvmClassShakerTest {
+
+	@TempDir
+	Path tempDir;
+
+	private static byte[] compile(String source, boolean optimize) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return new JvmLispCompiler("Test", false, optimize).compile(program);
+	}
+
+	// Loads the class (which makes the JVM verifier check the shaken bytecode), runs its
+	// main, and returns the captured stdout.
+	private String run(byte[] classBytes) throws Exception {
+		Path classFile = this.tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			catch (InvocationTargetException ex) {
+				if (ex.getCause() instanceof RuntimeException re) {
+					throw re;
+				}
+				throw ex;
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	private List<String> declaredMethodNames(byte[] classBytes) throws Exception {
+		Path classFile = this.tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			return Arrays.stream(loader.loadClass("Test").getDeclaredMethods()).map(Method::getName).toList();
+		}
+	}
+
+	@Test
+	void dropsUnreachableMethodsAndShrinksOutput() throws Exception {
+		String source = "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1))))) (print (fact 5))";
+		byte[] plain = compile(source, false);
+		byte[] optimized = compile(source, true);
+
+		assertThat(optimized.length).isLessThan(plain.length / 2);
+		assertThat(declaredMethodNames(optimized).size()).isLessThan(declaredMethodNames(plain).size());
+		assertThat(run(optimized)).isEqualTo("120");
+	}
+
+	@Test
+	void dropsAnUncalledDefunAndItsHelpers() throws Exception {
+		byte[] optimized = compile("(defun used (x) (+ x 1)) (defun unused (x) (car x)) (print (used 41))", true);
+		List<String> names = declaredMethodNames(optimized);
+		assertThat(names).contains("main", "used").doesNotContain("unused");
+		assertThat(run(optimized)).isEqualTo("42");
+	}
+
+	@Test
+	void dropsUnreferencedFields() throws Exception {
+		byte[] optimized = compile("(print 1)", true);
+		Path classFile = this.tempDir.resolve("Test.class");
+		Files.write(classFile, optimized);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			// (print 1) tracks the stdout column (_col) but touches no stream/stdin
+			// state, so those fields are dropped with the I/O helpers that used them.
+			List<String> fieldNames = Arrays.stream(loader.loadClass("Test").getDeclaredFields())
+				.map(java.lang.reflect.Field::getName)
+				.toList();
+			assertThat(fieldNames).containsExactly("_col");
+		}
+	}
+
+	@Test
+	void keepsTransitivelyReachableRuntime() throws Exception {
+		// Ratio arithmetic reaches the rational runtime helpers; they must survive.
+		assertThat(run(compile("(print (+ 1/3 1/6))", true))).isEqualTo("1/2");
+	}
+
+	@Test
+	void keepsDynamicallyReachedFunctionsThroughDispatch() throws Exception {
+		// funcall/#'/eval resolve targets at runtime through the dispatch methods, whose
+		// bodies contain real invokestatic calls -- reachability must keep every target.
+		String source = """
+				(defun add1 (x) (+ x 1))
+				(print (funcall #'add1 41))
+				(print (reduce #'+ (list 1 2 3)))
+				(print (eval '(add1 4)))
+				""";
+		assertThat(run(compile(source, true))).isEqualTo("42\n6\n5");
+	}
+
+	@Test
+	void keepsTheReflectiveApplyRootForJavaInterop() throws Exception {
+		// The java: bridge looks up _apply reflectively (no bytecode edge); the shaker is
+		// invoked with _apply as an extra root, so a proxy callback still works.
+		String source = """
+				(setq s (java:proxy "java.util.function.Supplier" (lambda (method) 42)))
+				(print (java:call s "get"))
+				""";
+		assertThat(run(compile(source, true))).isEqualTo("42");
+	}
+
+	@Test
+	void nonAsciiConstantsSurviveCompaction() throws Exception {
+		// Compaction copies CONSTANT_Utf8 entries verbatim (byte-length modified UTF-8).
+		assertThat(run(compile("(princ \"日本語\")", true))).isEqualTo("日本語");
+		assertThat(run(compile("(print '日本語)", true))).isEqualTo("日本語");
+	}
+
+	@Test
+	void isIdempotent() {
+		byte[] once = JvmClassShaker.shake(compile("(print (+ 1 2))", false), Set.of("main"));
+		byte[] twice = JvmClassShaker.shake(once, Set.of("main"));
+		assertThat(twice).isEqualTo(once);
+	}
+
+}

@@ -179,9 +179,8 @@ public final class RontoLispCli {
 			}
 		}
 		else {
-			// JVM dead-code elimination is not yet implemented; --optimize is WASM-only.
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic).compile(program);
+			bytes = new JvmLispCompiler(className, dynamic, optimize).compile(program);
 		}
 		try {
 			Files.write(Path.of(outputFile), bytes);
@@ -208,9 +207,10 @@ public final class RontoLispCli {
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object,");
 		this.out.println("                     only pure-compute rontolisp:wasm-export functions work (I/O traps)");
-		this.out.println("  --optimize         Drop functions unreachable from the module's exports/_start");
-		this.out.println("                     WASM only; great with --no-wasi (a pure-compute module shrinks");
-		this.out.println("                     to a few functions). No effect in --component mode.");
+		this.out.println("  --optimize         Dead-code-eliminate the compiled output");
+		this.out.println("                     WASM: drop functions unreachable from the exports/_start; great");
+		this.out.println("                     with --no-wasi. No effect in --component mode.");
+		this.out.println("                     JVM: drop methods unreachable from main + compact the constant pool");
 		this.out.println("  --no-gc            Emit a plain (non-wasm-GC) WASM module for pure-numeric exports");
 		this.out.println("                     Runs on any MVP runtime (no -W gc, no import object). Only");
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");

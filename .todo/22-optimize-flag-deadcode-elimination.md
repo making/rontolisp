@@ -1,6 +1,6 @@
 # `--optimize`: in-house output optimization (dead-code elimination) for WASM and JVM
 
-**Status:** WASM DONE (2026-06-28); JVM still open. Raised in the `claude-opus`
+**Status:** WASM DONE (2026-06-28); JVM DONE (2026-07-02). Raised in the `claude-opus`
 session 2026-06-28 while finishing the `wasm:export` / `--no-wasi` reactor mode.
 The user wants an opt-in `--optimize` flag that performs **our own** optimization
 (primarily dead-code elimination) for both the WASM and JVM backends, falling back
@@ -28,8 +28,27 @@ the only function reference) and a finite opcode set; an unknown opcode throws
 rather than corrupt. Tests: `WasmTreeShakerTest` (no Docker) + optimize cases in
 `WasmLispCompilerIntegrationTest` (`wasmtime` parity). README "Optimize" + CLAUDE.md.
 
-**Remaining: JVM** (see approach 2 below) — method-level DCE over the constant
-pool / method-ref edges; interacts with `.todo/17` (v50 baked-constant ceiling).
+## JVM: implemented (in-house, method DCE + constant-pool compaction)
+
+Approach 2 was implemented as a **post-pass class shaker** mirroring the WASM one:
+`am.ik.jvm.JvmClassShaker` parses the finished class bytes at the end of
+`JvmLispCompiler.compile`, builds the call graph from the `invoke*` constant-pool
+immediates in every `Code` attribute, keeps methods reachable from `main` (plus
+`_apply` as an extra root when the program uses `java:` interop — the embedded
+bridge looks `_apply` up reflectively, an edge bytecode cannot show), drops
+unreachable methods and any static field only they referenced, and compacts the
+constant pool, rewriting every CP index immediate in the surviving bytecode in
+place (sizes never change, so exception-table pcs and switch padding stay valid;
+no method renumbering — JVM methods are referenced by name). Dispatch methods keep
+eval/funcall/`#'` targets alive exactly as on WASM. The shaker throws on anything
+unrecognized (opcode, constant tag, non-`Code` attribute). Measured: `fact`
+~46 KB -> ~4.6 KB. Wired as `--optimize` (`RontoLispCli` ->
+`JvmLispCompiler(className, dynamic, optimize)`). Tests: `JvmClassShakerTest`
+(structural + behavior) and `JvmClassShakerCorpusTest` (whole `ci-spec.yaml`
+corpus: shrink + identical run output). Docs: `doc/{en,ja}/compiling/jvm.md`
+"Optimize" + CLAUDE.md. The `.todo/17` ceiling is relieved in practice (dead
+wrapper methods and their constants no longer ship), though a single oversized
+form is still a per-form limit.
 
 ## Motivation (measured)
 
@@ -144,19 +163,11 @@ stability") is what makes naive removal shift every index and break every call.
   `.todo/21-wasm-export-memory-abi-ci-coverage.md` (reuse its host harness to verify
   optimized memory exports).
 
-## Remaining follow-ups (WASM core DONE; these are optional further wins)
+## Remaining follow-ups (WASM + JVM core DONE; these are optional further wins)
 
 Tracked here because they are all facets of `--optimize`. Priority order:
 
-1. **JVM dead-code elimination (the main remaining piece).** See approach 2 above:
-   drop unreferenced methods by reachability over the constant-pool / method-ref
-   edges before writing the class. Methods are referenced by name (not positional
-   index), so no renumbering — simpler than the WASM pass. Co-design with
-   `.todo/17` (fewer methods/constants also relieves the v50 baked-constant
-   ceiling). `--optimize` is already threaded into the CLI; `JvmLispCompiler`
-   currently ignores it (`RontoLispCli.compileToFile` notes this).
-
-2. **WASM type-section compaction.** `WasmTreeShaker` keeps the type section
+1. **WASM type-section compaction.** `WasmTreeShaker` keeps the type section
    verbatim (only function indices are renumbered), so unused types linger and the
    output is a bit larger than `wasm-opt` (`fact`: ours 1327 B vs wasm-opt 1149 B).
    Compacting would mean renumbering every type-index immediate (the `0xFB` GC ops,
@@ -164,20 +175,20 @@ Tracked here because they are all facets of `--optimize`. Priority order:
    already visits all of them, so it is additive but raises the renumbering blast
    radius. Medium effort, small size win; do only if minimal size matters.
 
-3. **WASM data-segment / dead-string trimming.** The data section (string table +
+2. **WASM data-segment / dead-string trimming.** The data section (string table +
    eval/registry blobs) is copied verbatim, so strings reachable only from dropped
    functions still ship. Trimming needs tracking which data offsets each surviving
    body references (the offsets are `i32.const` immediates feeding `struct.new
    $string`), which is materially harder than the function-level DCE. Low priority.
 
-4. **WASM component-mode optimization.** Currently a deliberate no-op (the WASI 0.3
+3. **WASM component-mode optimization.** Currently a deliberate no-op (the WASI 0.3
    adapter binds the core's fixed import/`FUNC_*` layout). A *restricted* shake that
    drops unreachable **defined** functions but keeps ALL imports (and the `run`
    export name) would be safe — the adapter links by name, and internal renumbering
    is invisible to it. Needs validation on wasmtime 46+ (the component path) before
    shipping. Medium effort.
 
-5. **Decoder hardening.** `WasmTreeShakerCorpusTest` compiles the whole
+4. **Decoder hardening.** `WasmTreeShakerCorpusTest` compiles the whole
    `ci-spec.yaml` corpus with `--optimize` and `wasm-tools validate`s it, so a new
    opcode the shaker can't decode fails CI rather than silently disabling
    `--optimize`. But the corpus is a proxy, not exhaustive. Cheap extra safety:

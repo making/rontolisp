@@ -155,9 +155,9 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~1 KB module
 For the `fact` example above the module drops from ~26 KB to ~1.3 KB. `--optimize`
 is opt-in and behavior-preserving: it walks the call graph from the actual `call`
 instructions, so anything reachable (including code an embedded `eval`/`load` dispatches
-to) is kept. It is WASM only and has **no effect** under `--component` (the WASI 0.3
-adapter relies on the core's fixed import/index layout). JVM dead-code elimination is not
-yet implemented.
+to) is kept. It has **no effect** under `--component` (the WASI 0.3 adapter relies on
+the core's fixed import/index layout). The same flag also dead-code-eliminates the
+[JVM output](jvm.md).
 
 ## Non-GC Output (`--no-gc`)
 
