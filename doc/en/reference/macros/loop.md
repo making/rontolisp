@@ -16,17 +16,24 @@ If every top-level subform is a compound form, `loop` is a **simple loop**: it r
 Otherwise it is an **extended loop** built from clauses. The supported clauses are:
 
 - Numeric stepping: `for VAR from LO [to|upto|below|downto|above HI] [by STEP]` (also `upfrom`/`downfrom`; a limit keyword with no `from` starts at 0).
-- List stepping: `for VAR in LIST [by FN]` and `for VAR on LIST [by FN]`.
-- String stepping: `for VAR across STRING` binds `VAR` to each character in turn.
-- General stepping: `for VAR = INIT [then STEP]`.
-- Local variables: `with VAR [= INIT]` (chainable with `and`).
+- List stepping: `for VAR in LIST [by FN]` and `for VAR on LIST [by FN]` (`VAR` may be a destructuring pattern).
+- Sequence stepping: `for VAR across SEQ` binds `VAR` to each character of a string or each element of a vector in turn.
+- General stepping: `for VAR = INIT [then STEP]` (`VAR` may be a destructuring pattern).
+- Local variables: `with VAR [= INIT]` (`VAR` may be a destructuring pattern; `and`-joined `with` bindings are parallel).
 - Accumulation: `collect`, `append`, `nconc`, `sum`, `count`, `maximize`, `minimize`, each with an optional `into VAR`.
-- Control: `while`/`until`, `repeat N`, `do FORM...`, `return EXPR`, `initially FORM...`, `finally FORM...`, and the conditionals `when`/`if`/`unless` with optional `else` and `end`.
+- Termination tests: `thereis EXPR`, `always EXPR`, `never EXPR`.
+- Control: `while`/`until` (honoring their textual position), `repeat N`, `do FORM...`, `return EXPR`, `(loop-finish)` inside body forms, `initially FORM...`, `finally FORM...`, and the conditionals `when`/`if`/`unless` with optional `else` and `end` (the tested value is available as `it` in the selected clauses).
 
-Multiple `for` clauses step in parallel, so the loop ends as soon as the shortest driver is exhausted — the idiomatic indexed map:
+Multiple `for` clauses step together, and the loop ends as soon as the shortest driver is exhausted — the idiomatic indexed map. Sequential clauses step in order (a later clause's init and step forms see the values the earlier clauses just produced, and stepping stops at the first exhausted driver, so `for x in xs for a = (f x) then (g a x)` works as in CL):
 
 ```lisp
 (loop for x in '(a b c) for i from 0 collect (list i x)) ; => ((0 a) (1 b) (2 c))
+```
+
+`and` joins `for` clauses into one group whose inits and steps are computed against the previous iteration's values (like `do`'s parallel stepping versus `do*`):
+
+```lisp
+(loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b) ; => (1 1 2 3 5 8 13 21)
 ```
 
 Accumulation and numeric ranges cover the common cases directly:
@@ -35,10 +42,47 @@ Accumulation and numeric ranges cover the common cases directly:
 (loop for i from 1 to 10 when (evenp i) sum i) ; => 30
 ```
 
-`for ... across` walks a string character by character (strings are the only random-access sequence type here):
+A `while`/`until` after body clauses (or after a `for` that assigns its variable at the top of the body, such as `in`/`on`/`across`) tests at its textual position, so it can reference the current element:
+
+```lisp
+(loop for x in '(1 2 3 9 4) while (< x 4) collect x) ; => (1 2 3)
+```
+
+Inside a `when`/`if`/`unless`, the anaphoric `it` names the value the test produced:
+
+```lisp
+(loop for x in '(1 nil 3 nil 5) when x collect it) ; => (1 3 5)
+```
+
+`thereis` returns the first non-nil value of its expression; `always`/`never` short-circuit to `nil` on the first failure and return `t` on normal completion. Like `return`, an early exit from these skips `finally`:
+
+```lisp
+(loop for x in '(nil nil 7 9) thereis x) ; => 7
+```
+
+`(loop-finish)` inside a body form terminates the iteration normally: `finally` still runs and the loop result is produced (unlike `return`, which skips both):
+
+```lisp
+(loop for i from 1
+      collect i into xs
+      do (when (>= i 3) (loop-finish))
+      finally (return (length xs))) ; => 3
+```
+
+A `for`/`with` variable may be a destructuring pattern — a proper list of variables (nested patterns allowed, `nil` ignores a position):
+
+```lisp
+(loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)) ; => (3 7 11)
+```
+
+`for ... across` walks a string character by character, or a vector element by element:
 
 ```lisp
 (loop for c across "hello" count (eql c #\l)) ; => 2
 ```
 
-Limitations (out of scope for this first cut): destructuring binds, parallel `and` between `for` clauses, `being`, the anaphoric `it`, `named`/`loop-finish`, and `thereis`/`always`/`never`. `while`/`until` terminate at the top of the iteration regardless of their textual position. Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.
+```lisp
+(loop for x across #(1 2 3 4 5) collect (* x x)) ; => (1 4 9 16 25)
+```
+
+Limitations: `being` (hash-table/package iteration) and `named`/`return-from` are not supported. Destructuring patterns are proper lists of variables — dotted patterns like `(a . b)` are unavailable because the reader rejects dotted-pair syntax, and lambda-list keywords are not recognized. `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.

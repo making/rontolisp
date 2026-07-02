@@ -1585,6 +1585,22 @@ class LispEvaluatorTest {
 		assertThat(eval("(loop for c across \"hello\" collect c)").print()).isEqualTo("(#\\h #\\e #\\l #\\l #\\o)");
 		assertThat(eval("(loop for c across \"hello\" count (eql c #\\l))")).isEqualTo(new LispInteger(2));
 		assertThat(eval("(loop for c across \"\" collect c)").print()).isEqualTo("nil");
+		// across also walks a vector's elements.
+		assertThat(eval("(loop for x across #(1 2 3 4 5) collect (* x x))").print()).isEqualTo("(1 4 9 16 25)");
+		assertThat(eval("(loop for x across #(3 1 4 1 5) maximize x)")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalSetfMultiplePairs() {
+		// Multiple place/value pairs assign sequentially, like consecutive setfs.
+		assertThat(evalMulti("(setq l (list 1 2 3)) (setf (car l) 9 (second l) 8) l").print()).isEqualTo("(9 8 3)");
+		assertThat(evalMulti("(setf a 1 b (+ a 1)) (list a b)").print()).isEqualTo("(1 2)");
+		assertThat(evalMulti("""
+				(setq h (make-hash-table))
+				(setf (gethash "foo" h) 10 (gethash "bar" h) 20)
+				(list (gethash "foo" h) (gethash "bar" h))""").print()).isEqualTo("(10 20)");
+		assertThatThrownBy(() -> eval("(setf a 1 b)")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("odd number");
 	}
 
 	@Test
@@ -1617,6 +1633,90 @@ class LispEvaluatorTest {
 		// into + finally with an explicit return value.
 		assertThat(eval("(loop for i from 1 to 3 collect i into xs finally (return (length xs)))"))
 			.isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalLoopPositionalWhileUntil() {
+		// After body clauses (or a for that assigns its variable at the top of the
+		// body), while/until fire at their textual position.
+		assertThat(eval("(loop for x in '(1 2 3 9 4) while (< x 4) collect x)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(loop for x in '(1 2 3 9 4) until (> x 3) collect x)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(let ((n 0)) (loop for i from 1 do (setq n (+ n 1)) while (< i 3)) n)"))
+			.isEqualTo(new LispInteger(3));
+		assertThat(eval("(loop for i from 1 do nil until (> i 2) collect i)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(loop for c across \"abXc\" while (not (eql c #\\X)) collect c)").print())
+			.isEqualTo("(#\\a #\\b)");
+	}
+
+	@Test
+	void evalLoopThereisAlwaysNever() {
+		assertThat(eval("(loop for x in '(nil nil 7 9) thereis x)")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(loop for x in '(nil nil) thereis x)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(loop for x in '(1 2 3) always (< x 5))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(loop for x in '(1 2 9) always (< x 5))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(loop for x in '(1 2 3) never (> x 5))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(loop for x in '(1 2 9) never (> x 5))")).isEqualTo(LispNil.INSTANCE);
+		// Early termination short-circuits like return (finally is skipped); normal
+		// completion runs finally.
+		assertThat(eval("(let ((r nil)) (loop for x in '(9) always (< x 5) finally (setq r t)) r)"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((r nil)) (loop for x in '(1) always (< x 5) finally (setq r t)) r)"))
+			.isEqualTo(LispTrue.INSTANCE);
+		assertThatThrownBy(() -> eval("(loop for x in '(1) thereis x collect x)"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("always/never/thereis");
+	}
+
+	@Test
+	void evalLoopAnaphoricIt() {
+		assertThat(eval("(loop for x in '(1 nil 3 nil 5) when x collect it)").print()).isEqualTo("(1 3 5)");
+		assertThat(eval("(loop for x in '(nil 2 nil) when x return it)")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(loop for x in '(1 6 3 8) when (and (evenp x) x) sum it)")).isEqualTo(new LispInteger(14));
+		// A nested loop's conditionals own their it.
+		assertThat(eval("(loop for x in '(1 nil) when x collect (loop for y in '(5 nil 6) when y collect it))").print())
+			.isEqualTo("((5 6))");
+	}
+
+	@Test
+	void evalLoopFinish() {
+		assertThat(eval("(loop for i from 1 do (when (> i 3) (loop-finish)) collect i)").print()).isEqualTo("(1 2 3)");
+		// Unlike return, loop-finish runs finally and yields the loop result.
+		assertThat(eval(
+				"(loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish)) finally (return (length xs)))"))
+			.isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalLoopSequentialDriverStepping() {
+		// A later sequential for sees the in-variable already at binding time (CL
+		// sequencing), and stepping stops at the first exhausted driver, so the
+		// fold-left idiom works.
+		assertThat(eval("(loop for x in '(1 2 3 4 5) for a = x then (+ a x) finally (return a))"))
+			.isEqualTo(new LispInteger(15));
+		assertThat(eval("(loop for x in '((1 2) (3 4)) for y in x collect y)").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void evalLoopParallelForAnd() {
+		// and-joined for clauses step against the previous iteration's values.
+		assertThat(eval("(loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b)").print())
+			.isEqualTo("(1 1 2 3 5 8 13 21)");
+		assertThat(eval("(loop for x in '(1 2 3) and y = 'init then x collect (list x y))").print())
+			.isEqualTo("((1 init) (2 1) (3 2))");
+		// and-joined with bindings are parallel: a later init sees the outer binding.
+		assertThat(eval("(let ((x 5)) (loop with a = x and x = 10 repeat 1 collect (list a x)))").print())
+			.isEqualTo("((5 10))");
+	}
+
+	@Test
+	void evalLoopDestructuring() {
+		assertThat(eval("(loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b))").print()).isEqualTo("(3 7 11)");
+		assertThat(eval("(loop for (a (b c)) in '((1 (2 3)) (4 (5 6))) collect (list a b c))").print())
+			.isEqualTo("((1 2 3) (4 5 6))");
+		assertThat(eval("(loop for (a b) = '(1 2) then (list b (+ a b)) repeat 5 collect a)").print())
+			.isEqualTo("(1 2 3 5 8)");
+		assertThat(eval("(loop with (x y) = '(10 20) repeat 1 collect (+ x y))").print()).isEqualTo("(30)");
+		assertThat(eval("(loop for (x) on '(1 2 3) collect x)").print()).isEqualTo("(1 2 3)");
 	}
 
 	@Test

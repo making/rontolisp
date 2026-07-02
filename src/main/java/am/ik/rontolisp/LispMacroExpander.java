@@ -602,7 +602,10 @@ public final class LispMacroExpander {
 			"downfrom", "to", "upto", "below", "downto", "above", "by", "in", "on", "=", "then", "across", "repeat",
 			"while", "until", "do", "doing", "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum",
 			"summing", "count", "counting", "maximize", "maximizing", "minimize", "minimizing", "when", "if", "unless",
-			"else", "end", "finally", "initially", "return", "with", "and", "into");
+			"else", "end", "finally", "initially", "return", "with", "and", "into", "thereis", "always", "never",
+			// Recognized so their use fails with a clear "unsupported" error instead of
+			// being misparsed as a simple-loop body or a missing for sub-clause.
+			"named", "being");
 
 	/**
 	 * Expands the {@code loop} macro into the existing core ({@code %block}/{@code let*}/
@@ -620,27 +623,39 @@ public final class LispMacroExpander {
 	 * {@code for v from LO [to|upto|below|downto|above HI] [by STEP]} (and
 	 * {@code upfrom}/{@code downfrom}; a limit keyword with no {@code from} defaults the
 	 * start to 0),</li>
-	 * <li>list stepping: {@code for v in LIST [by FN]} and
-	 * {@code for v on LIST [by FN]},</li>
-	 * <li>general stepping: {@code for v = INIT [then STEP]},</li>
-	 * <li>local variables: {@code with v [= INIT]} (chainable with {@code and}),</li>
+	 * <li>list stepping: {@code for v in LIST [by FN]} and {@code for v on LIST [by FN]}
+	 * ({@code v} may be a destructuring pattern),</li>
+	 * <li>general stepping: {@code for v = INIT [then STEP]} ({@code v} may be a
+	 * destructuring pattern),</li>
+	 * <li>sequence stepping: {@code for v across SEQ} (a string's characters or a
+	 * vector's elements),</li>
+	 * <li>parallel {@code for} groups: {@code for a ... and b ...} binds and steps the
+	 * group in parallel (each init/step sees the previous iteration's values),</li>
+	 * <li>local variables: {@code with v [= INIT]} ({@code v} may be a destructuring
+	 * pattern; {@code and}-joined {@code with} bindings are parallel),</li>
 	 * <li>accumulation: {@code collect}/{@code append}/{@code nconc}/{@code sum}/
 	 * {@code count}/{@code maximize}/{@code minimize}, each with an optional
 	 * {@code into v},</li>
-	 * <li>control: {@code while}/{@code until}, {@code repeat N}, {@code do FORM...},
-	 * {@code return EXPR}, {@code initially FORM...}, {@code finally FORM...}, and the
-	 * conditionals {@code when}/{@code if}/{@code unless} with an optional {@code else}
-	 * and {@code end} (selectable clauses chainable with {@code and}).</li>
+	 * <li>termination tests: {@code thereis}/{@code always}/{@code never} (short-circuit
+	 * like {@code return}, skipping {@code finally}; {@code always}/{@code never} yield
+	 * {@code t} on normal completion),</li>
+	 * <li>control: {@code while}/{@code until} (honoring their textual position),
+	 * {@code repeat N}, {@code do FORM...}, {@code return EXPR}, {@code (loop-finish)}
+	 * inside body forms (jumps to the {@code finally}+result epilogue),
+	 * {@code initially FORM...}, {@code finally FORM...}, and the conditionals
+	 * {@code when}/{@code if}/{@code unless} with an optional {@code else} and
+	 * {@code end} (selectable clauses chainable with {@code and}, supporting the
+	 * anaphoric {@code it}).</li>
 	 * </ul>
 	 *
 	 * <p>
-	 * Limitations (out of scope for this first cut): destructuring binds, parallel
-	 * {@code and} between {@code for} clauses, {@code for ... across}/{@code being}, the
-	 * anaphoric {@code it}, {@code named}/{@code loop-finish}, and {@code thereis}/
-	 * {@code always}/{@code never}. {@code while}/{@code until} terminate at the top of
-	 * the iteration regardless of their textual position. Accumulation clauses without
-	 * {@code into} must all be of the same kind (collecting clauses build the list in
-	 * order; the result list is produced with {@code nreverse}).
+	 * Limitations: {@code being} (hash/package iteration), {@code named}/
+	 * {@code return-from}, and lambda-list keywords inside destructuring patterns.
+	 * {@code (loop-finish)} must appear in statement position and not inside a nested
+	 * iteration form. Accumulation clauses without {@code into} must all be of the same
+	 * kind (collecting clauses build the list in order; the result list is produced with
+	 * {@code nreverse}) and cannot be combined with {@code thereis}/{@code always}/
+	 * {@code never}.
 	 * @param cons the loop expression
 	 * @return the expanded expression
 	 */
@@ -692,13 +707,18 @@ public final class LispMacroExpander {
 
 		private final List<LispVal> initially = new java.util.ArrayList<>();
 
-		private final List<LispVal> preBody = new java.util.ArrayList<>();
-
 		private final List<LispVal> mainBody = new java.util.ArrayList<>();
 
 		private final List<LispVal> steps = new java.util.ArrayList<>();
 
 		private final List<LispVal> endTests = new java.util.ArrayList<>();
+
+		// The termination tests contributed by driver clauses (for/repeat) only, in
+		// clause order. A later driver's steps are guarded by the earlier drivers'
+		// tests so that, as in CL, stepping stops at the first exhausted driver
+		// (e.g. `for x in xs for a = ... then (f a x)` must not evaluate the step
+		// form once xs runs out).
+		private final List<LispVal> driverEndTests = new java.util.ArrayList<>();
 
 		private final List<LispVal> finallyForms = new java.util.ArrayList<>();
 
@@ -713,17 +733,48 @@ public final class LispMacroExpander {
 
 		private boolean implicitReverse;
 
+		// Set by always/never (TRUE: normal completion returns t) or thereis (FALSE:
+		// normal completion returns nil). Incompatible with implicit accumulation.
+		private @Nullable Boolean terminationT;
+
+		/**
+		 * Placeholder statement emitted where a positional {@code while}/{@code until}
+		 * (or a {@code (loop-finish)} call) exits to the loop epilogue; replaced with the
+		 * actual finally+result exit once the whole loop has been parsed.
+		 */
+		private static final LispSymbol EPILOGUE_MARKER = new LispSymbol("__loop_epilogue_exit");
+
+		/**
+		 * Form heads the epilogue-exit substitution must not descend into: quoted data,
+		 * function values, and forms that establish their own {@code %block} boundary
+		 * (the epilogue exit is a {@code return} to the nearest block, so it is only
+		 * valid directly inside this loop's block).
+		 */
+		private static final java.util.Set<String> EXIT_SKIP_HEADS = java.util.Set.of(LispNames.QUOTE,
+				LispNames.FUNCTION, LispNames.LAMBDA, LispNames.DEFUN, LispNames.LOOP, LispNames.DO, LispNames.DO_STAR,
+				LispNames.DOLIST, LispNames.DOTIMES, LispNames.BLOCK_INTERNAL);
+
+		/**
+		 * Form heads the anaphoric-{@code it} substitution must not descend into: quoted
+		 * data and nested loops (whose own conditionals define their own {@code it}).
+		 */
+		private static final java.util.Set<String> IT_SKIP_HEADS = java.util.Set.of(LispNames.QUOTE, LispNames.FUNCTION,
+				LispNames.LOOP);
+
 		LoopExpander(List<LispVal> toks) {
 			this.toks = toks;
 		}
 
 		LispVal build() {
 			parse();
+			LispVal epilogue = epilogueExit();
+			substituteEpilogueExits(initially, epilogue);
+			substituteEpilogueExits(mainBody, epilogue);
+			substituteEpilogueExits(steps, epilogue);
 			LispVal whileCond = endTests.isEmpty() ? LispTrue.INSTANCE : makeNot(orOf(endTests));
 			List<LispVal> whileParts = new java.util.ArrayList<>();
 			whileParts.add(new LispSymbol(LispNames.WHILE));
 			whileParts.add(whileCond);
-			whileParts.addAll(preBody);
 			whileParts.addAll(mainBody);
 			whileParts.addAll(steps);
 			if (whileParts.size() == 2) {
@@ -760,8 +811,11 @@ public final class LispMacroExpander {
 				case "for", "as" -> parseFor();
 				case "with" -> parseWith();
 				case "repeat" -> parseRepeat();
-				case "while" -> endTests.add(makeNot(nextForm()));
-				case "until" -> endTests.add(nextForm());
+				case "while" -> addTerminationTest(nextForm(), false);
+				case "until" -> addTerminationTest(nextForm(), true);
+				case "thereis" -> parseThereis();
+				case "always" -> parseAlwaysNever(false);
+				case "never" -> parseAlwaysNever(true);
 				case "initially" -> initially.addAll(readForms());
 				case "finally" -> finallyForms.addAll(readForms());
 				case "do", "doing" -> mainBody.addAll(readForms());
@@ -775,26 +829,145 @@ public final class LispMacroExpander {
 			}
 		}
 
+		/**
+		 * One {@code for} clause's binding/init entry. {@code user} marks a user-visible
+		 * variable (as opposed to an internal cursor/limit gensym), whose binding is
+		 * deferred behind temporaries when the clause is part of a parallel {@code and}
+		 * group.
+		 */
+		private record ForBinding(LispSymbol var, LispVal init, boolean user) {
+		}
+
+		/**
+		 * One {@code for} clause's contributions, kept separate so {@code and}-joined
+		 * clauses can bind and step in parallel.
+		 */
+		private static final class ForPiece {
+
+			final List<ForBinding> binds = new java.util.ArrayList<>();
+
+			// {stepped variable, step expression} pairs (see makeStepForms).
+			final List<LispVal[]> steps = new java.util.ArrayList<>();
+
+			// Assignments syncing an iteration variable with its stepped cursor (e.g.
+			// the `in` variable from its list cursor). Run after the clause's steps —
+			// and, in an `and` group, after the whole group's parallel steps, so the
+			// other clauses' step forms still see the previous element.
+			final List<LispVal> postSteps = new java.util.ArrayList<>();
+
+			final List<LispVal> endTests = new java.util.ArrayList<>();
+
+		}
+
 		private void parseFor() {
+			List<ForPiece> group = new java.util.ArrayList<>();
+			while (true) {
+				group.add(parseForPiece());
+				if ("and".equals(peekKeyword())) {
+					pos++;
+					// Tolerate a redundant `for`/`as` after `and`.
+					String k = peekKeyword();
+					if ("for".equals(k) || "as".equals(k)) {
+						pos++;
+					}
+					continue;
+				}
+				break;
+			}
+			flushForGroup(group);
+		}
+
+		private ForPiece parseForPiece() {
 			LispVal var = nextForm();
-			if (!(var instanceof LispSymbol)) {
-				throw new IllegalArgumentException("loop: for expects a variable, got: " + var.print());
+			if (!(var instanceof LispSymbol) && !(var instanceof LispCons)) {
+				throw new IllegalArgumentException(
+						"loop: for expects a variable or destructuring pattern, got: " + var.print());
 			}
 			String sub = peekKeyword();
 			if (sub == null) {
 				throw new IllegalArgumentException("loop: incomplete for clause for " + var.print());
 			}
+			ForPiece piece = new ForPiece();
 			switch (sub) {
-				case "in", "on" -> parseForList((LispSymbol) var, sub);
-				case "=" -> parseForEquals((LispSymbol) var);
+				case "in", "on" -> parseForList(piece, var, sub);
+				case "=" -> parseForEquals(piece, var);
 				case "from", "upfrom", "downfrom", "to", "upto", "below", "downto", "above", "by" ->
-					parseForNumeric((LispSymbol) var);
-				case "across" -> parseForAcross((LispSymbol) var);
+					parseForNumeric(piece, requireSymbol(var, "numeric stepping"));
+				case "across" -> parseForAcross(piece, requireSymbol(var, "across"));
 				default -> throw new UnsupportedOperationException("loop: unsupported for clause: " + sub);
+			}
+			return piece;
+		}
+
+		private static LispSymbol requireSymbol(LispVal var, String what) {
+			if (var instanceof LispSymbol s) {
+				return s;
+			}
+			throw new IllegalArgumentException("loop: " + what + " does not support destructuring: " + var.print());
+		}
+
+		/**
+		 * Merges a group of {@code and}-joined {@code for} clauses. A single clause binds
+		 * and steps sequentially as before. A parallel group evaluates every init before
+		 * binding any user variable (so a later init sees the outer bindings) and steps
+		 * all variables against the previous iteration's values via temporaries.
+		 */
+		private void flushForGroup(List<ForPiece> group) {
+			boolean parallel = group.size() > 1;
+			List<ForBinding> deferred = new java.util.ArrayList<>();
+			List<LispVal[]> groupSteps = new java.util.ArrayList<>();
+			for (ForPiece piece : group) {
+				for (ForBinding b : piece.binds) {
+					if (parallel && b.user()) {
+						if (b.init() instanceof LispNil) {
+							deferred.add(b);
+						}
+						else {
+							LispSymbol temp = gensym("tmp");
+							bindings.add(pair(temp, b.init()));
+							deferred.add(new ForBinding(b.var(), temp, true));
+						}
+					}
+					else {
+						bindings.add(pair(b.var(), b.init()));
+					}
+				}
+				endTests.addAll(piece.endTests);
+				groupSteps.addAll(piece.steps);
+			}
+			for (ForBinding b : deferred) {
+				bindings.add(pair(b.var(), b.init()));
+			}
+			// As in CL, stepping stops at the first exhausted driver: guard this
+			// group's steps with the earlier drivers' termination tests (exiting
+			// through the epilogue, exactly like the loop head test would).
+			if (!steps.isEmpty() && !driverEndTests.isEmpty()) {
+				steps.add(makeIf(orOf(driverEndTests), EPILOGUE_MARKER, LispNil.INSTANCE));
+			}
+			if (parallel) {
+				// All steps compute against the previous iteration's values; the
+				// cursor-var syncs run once every cursor has stepped.
+				steps.addAll(makeStepForms(groupSteps));
+				for (ForPiece piece : group) {
+					steps.addAll(piece.postSteps);
+				}
+			}
+			else {
+				// Sequential (do*-style): each clause steps fully -- cursor then its
+				// variable -- before the next clause's step forms run.
+				for (ForPiece piece : group) {
+					for (LispVal[] s : piece.steps) {
+						steps.add(setq((LispSymbol) s[0], s[1]));
+					}
+					steps.addAll(piece.postSteps);
+				}
+			}
+			for (ForPiece piece : group) {
+				driverEndTests.addAll(piece.endTests);
 			}
 		}
 
-		private void parseForNumeric(LispSymbol var) {
+		private void parseForNumeric(ForPiece piece, LispSymbol var) {
 			String k = peekKeyword();
 			boolean down = false;
 			LispVal from;
@@ -806,7 +979,7 @@ public final class LispMacroExpander {
 			else {
 				from = new LispInteger(0);
 			}
-			bindings.add(pair(var, from));
+			piece.binds.add(new ForBinding(var, from, true));
 			String limitKw = null;
 			LispSymbol limitVar = null;
 			String lk = peekKeyword();
@@ -815,7 +988,7 @@ public final class LispMacroExpander {
 				limitKw = lk;
 				pos++;
 				limitVar = gensym("limit");
-				bindings.add(pair(limitVar, nextForm()));
+				piece.binds.add(new ForBinding(limitVar, nextForm(), false));
 				if ("downto".equals(lk) || "above".equals(lk)) {
 					down = true;
 				}
@@ -826,8 +999,8 @@ public final class LispMacroExpander {
 				by = nextForm();
 			}
 			LispSymbol byVar = gensym("by");
-			bindings.add(pair(byVar, by));
-			steps.add(setq(var, call(down ? LispNames.SUB : LispNames.ADD, var, byVar)));
+			piece.binds.add(new ForBinding(byVar, by, false));
+			piece.steps.add(new LispVal[] { var, call(down ? LispNames.SUB : LispNames.ADD, var, byVar) });
 			if (limitVar != null) {
 				boolean exclusive = "below".equals(limitKw) || "above".equals(limitKw);
 				String cmp;
@@ -837,11 +1010,11 @@ public final class LispMacroExpander {
 				else {
 					cmp = exclusive ? LispNames.GE : LispNames.GT;
 				}
-				endTests.add(call(cmp, var, limitVar));
+				piece.endTests.add(call(cmp, var, limitVar));
 			}
 		}
 
-		private void parseForList(LispSymbol var, String sub) {
+		private void parseForList(ForPiece piece, LispVal pattern, String sub) {
 			pos++; // consume in/on
 			LispVal listForm = nextForm();
 			LispVal byFn = null;
@@ -850,34 +1023,59 @@ public final class LispMacroExpander {
 				byFn = normalizeFunctionDesignator(nextForm());
 			}
 			if ("on".equals(sub)) {
-				// var is bound to successive tails of the list.
-				bindings.add(pair(var, listForm));
-				endTests.add(makeNot(call(LispNames.CONSP, var)));
-				steps.add(setq(var, stepCdr(var, byFn)));
+				// The variable is bound to successive tails of the list.
+				if (pattern instanceof LispSymbol var) {
+					piece.binds.add(new ForBinding(var, listForm, true));
+					piece.endTests.add(makeNot(call(LispNames.CONSP, var)));
+					piece.steps.add(new LispVal[] { var, stepCdr(var, byFn) });
+				}
+				else {
+					LispSymbol tail = gensym("on");
+					piece.binds.add(new ForBinding(tail, listForm, false));
+					piece.endTests.add(makeNot(call(LispNames.CONSP, tail)));
+					destructureInto(piece, pattern, tail);
+					piece.steps.add(new LispVal[] { tail, stepCdr(tail, byFn) });
+				}
 			}
 			else {
+				// The variable holds the first element already at binding time (so a
+				// later sequential clause's init can reference it, as in CL) and is
+				// re-synced from the cursor after each step.
 				LispSymbol cursor = gensym("list");
-				bindings.add(pair(cursor, listForm));
-				bindings.add(pair(var, LispNil.INSTANCE));
-				endTests.add(makeNot(call(LispNames.CONSP, cursor)));
-				preBody.add(setq(var, call(LispNames.CAR, cursor)));
-				steps.add(setq(cursor, stepCdr(cursor, byFn)));
+				piece.binds.add(new ForBinding(cursor, listForm, false));
+				piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
+				destructureInto(piece, pattern, call(LispNames.CAR, cursor));
+				piece.steps.add(new LispVal[] { cursor, stepCdr(cursor, byFn) });
 			}
 		}
 
-		private void parseForAcross(LispSymbol var) {
+		private void parseForAcross(ForPiece piece, LispSymbol var) {
 			pos++; // consume across
 			LispVal seqForm = nextForm();
-			// Strings are the only random-access sequence type here, so `across` iterates
-			// a string's characters via an index cursor.
+			// `across` walks a random-access sequence (a string's characters or a
+			// vector's elements) via an index cursor; the element accessor is chosen at
+			// runtime because the sequence type is unknown at expansion time. The
+			// element read is bounds-guarded because the variable syncs at binding time
+			// and after each step, where the index may sit at the (empty or exhausted)
+			// sequence's length.
 			LispSymbol seq = gensym("seq");
 			LispSymbol idx = gensym("idx");
-			bindings.add(pair(seq, seqForm));
-			bindings.add(pair(idx, new LispInteger(0)));
-			bindings.add(pair(var, LispNil.INSTANCE));
-			endTests.add(call(LispNames.GE, idx, call(LispNames.LENGTH, seq)));
-			preBody.add(setq(var, call(LispNames.CHAR, seq, idx)));
-			steps.add(setq(idx, call(LispNames.ADD, idx, new LispInteger(1))));
+			piece.binds.add(new ForBinding(seq, seqForm, false));
+			piece.binds.add(new ForBinding(idx, new LispInteger(0), false));
+			piece.binds.add(new ForBinding(var, guardedElt(seq, idx), true));
+			piece.endTests.add(call(LispNames.GE, idx, call(LispNames.LENGTH, seq)));
+			piece.steps.add(new LispVal[] { idx, call(LispNames.ADD, idx, new LispInteger(1)) });
+			piece.postSteps.add(setq(var, guardedElt(seq, idx)));
+		}
+
+		/**
+		 * A bounds-checked element read: the sequence's element at the index, or nil when
+		 * the index is past the end.
+		 */
+		private static LispVal guardedElt(LispSymbol seq, LispSymbol idx) {
+			LispVal elt = makeIf(call(LispNames.STRINGP, seq), call(LispNames.CHAR, seq, idx),
+					call(LispNames.AREF, seq, idx));
+			return makeIf(call(LispNames.LT, idx, call(LispNames.LENGTH, seq)), elt, LispNil.INSTANCE);
 		}
 
 		private LispVal stepCdr(LispSymbol cursor, @Nullable LispVal byFn) {
@@ -887,7 +1085,7 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.FUNCALL), byFn, cursor));
 		}
 
-		private void parseForEquals(LispSymbol var) {
+		private void parseForEquals(ForPiece piece, LispVal pattern) {
 			pos++; // consume =
 			LispVal init = nextForm();
 			LispVal then = null;
@@ -895,17 +1093,60 @@ public final class LispMacroExpander {
 				pos++;
 				then = nextForm();
 			}
-			bindings.add(pair(var, init));
 			// With `then`, step to the then-form; without it, re-evaluate the init each
 			// iteration (the step runs at the end of the iteration, so the next pass sees
 			// it).
-			steps.add(setq(var, then != null ? then : init));
+			if (pattern instanceof LispSymbol var) {
+				piece.binds.add(new ForBinding(var, init, true));
+				piece.steps.add(new LispVal[] { var, then != null ? then : init });
+			}
+			else {
+				LispSymbol whole = gensym("d");
+				piece.binds.add(new ForBinding(whole, init, false));
+				destructureInto(piece, pattern, whole);
+				piece.steps.add(new LispVal[] { whole, then != null ? then : init });
+			}
+		}
+
+		/**
+		 * Binds every symbol of a destructuring pattern (or a single variable) to its
+		 * accessor over the source expression, and re-destructures after each step.
+		 */
+		private void destructureInto(ForPiece piece, LispVal pattern, LispVal source) {
+			List<LispVal[]> parts = new java.util.ArrayList<>();
+			destructure(pattern, source, parts);
+			for (LispVal[] p : parts) {
+				piece.binds.add(new ForBinding((LispSymbol) p[0], p[1], true));
+				piece.postSteps.add(setq((LispSymbol) p[0], p[1]));
+			}
+		}
+
+		/**
+		 * Collects {@code {var, accessor}} pairs binding each symbol of a destructuring
+		 * pattern to the matching car/cdr chain over the source expression. A nil in the
+		 * pattern ignores that position.
+		 */
+		private static void destructure(LispVal pattern, LispVal source, List<LispVal[]> out) {
+			if (pattern instanceof LispNil) {
+				return;
+			}
+			if (pattern instanceof LispSymbol s) {
+				out.add(new LispVal[] { s, source });
+				return;
+			}
+			if (pattern instanceof LispCons c) {
+				destructure(c.car(), call(LispNames.CAR, source), out);
+				destructure(c.cdr(), call(LispNames.CDR, source), out);
+				return;
+			}
+			throw new IllegalArgumentException("loop: invalid destructuring pattern: " + pattern.print());
 		}
 
 		private void parseWith() {
+			List<LispVal[]> group = new java.util.ArrayList<>(); // {pattern, init}
 			while (true) {
 				LispVal var = nextForm();
-				if (!(var instanceof LispSymbol)) {
+				if (!(var instanceof LispSymbol) && !(var instanceof LispCons)) {
 					throw new IllegalArgumentException("loop: with expects a variable, got: " + var.print());
 				}
 				LispVal val = LispNil.INSTANCE;
@@ -913,32 +1154,127 @@ public final class LispMacroExpander {
 					pos++;
 					val = nextForm();
 				}
-				bindings.add(pair((LispSymbol) var, val));
+				group.add(new LispVal[] { var, val });
 				if ("and".equals(peekKeyword())) {
 					pos++;
 					continue;
 				}
+				break;
+			}
+			if (group.size() == 1) {
+				bindWithPattern(group.get(0)[0], group.get(0)[1]);
 				return;
 			}
+			// `and`-joined with bindings are parallel: evaluate every init before binding
+			// any variable, so a later init sees the outer bindings.
+			List<LispVal[]> deferred = new java.util.ArrayList<>();
+			for (LispVal[] g : group) {
+				if (g[1] instanceof LispNil) {
+					deferred.add(g);
+					continue;
+				}
+				LispSymbol temp = gensym("tmp");
+				bindings.add(pair(temp, g[1]));
+				deferred.add(new LispVal[] { g[0], temp });
+			}
+			for (LispVal[] d : deferred) {
+				bindWithPattern(d[0], d[1]);
+			}
+		}
+
+		private void bindWithPattern(LispVal pattern, LispVal init) {
+			if (pattern instanceof LispSymbol var) {
+				bindings.add(pair(var, init));
+				return;
+			}
+			LispVal source = init;
+			if (!(init instanceof LispSymbol)) {
+				LispSymbol temp = gensym("tmp");
+				bindings.add(pair(temp, init));
+				source = temp;
+			}
+			List<LispVal[]> parts = new java.util.ArrayList<>();
+			destructure(pattern, source, parts);
+			for (LispVal[] p : parts) {
+				bindings.add(pair((LispSymbol) p[0], p[1]));
+			}
+		}
+
+		/**
+		 * A {@code while}/{@code until} before any body clause is hoisted into the loop
+		 * head (iteration variables are already current there — they sync at binding time
+		 * and at the end of the step forms); once body statements exist, the test runs at
+		 * its textual position and exits through the epilogue (finally + result) when it
+		 * fires.
+		 */
+		private void addTerminationTest(LispVal test, boolean until) {
+			if (mainBody.isEmpty()) {
+				endTests.add(until ? test : makeNot(test));
+			}
+			else if (until) {
+				mainBody.add(makeIf(test, EPILOGUE_MARKER, LispNil.INSTANCE));
+			}
+			else {
+				mainBody.add(makeIf(test, LispNil.INSTANCE, EPILOGUE_MARKER));
+			}
+		}
+
+		/**
+		 * {@code always EXPR} returns nil (skipping {@code finally}, like {@code return})
+		 * the first time the expression is nil and t on normal completion;
+		 * {@code never EXPR} is the negation.
+		 */
+		private void parseAlwaysNever(boolean never) {
+			setTerminationResult(true);
+			LispVal form = nextForm();
+			mainBody.add(never ? makeIf(form, makeReturn(LispNil.INSTANCE), LispNil.INSTANCE)
+					: makeIf(form, LispNil.INSTANCE, makeReturn(LispNil.INSTANCE)));
+		}
+
+		/**
+		 * {@code thereis EXPR} returns the first non-nil value of the expression
+		 * (skipping {@code finally}, like {@code return}) and nil on normal completion.
+		 */
+		private void parseThereis() {
+			setTerminationResult(false);
+			LispSymbol val = gensym("thereis");
+			bindings.add(pair(val, LispNil.INSTANCE));
+			mainBody.add(makeProgn(List.of(setq(val, nextForm()), makeIf(val, makeReturn(val), LispNil.INSTANCE))));
+		}
+
+		private void setTerminationResult(boolean t) {
+			if (implicitAcc != null) {
+				throw new IllegalArgumentException(
+						"loop: cannot combine always/never/thereis with accumulation (use into)");
+			}
+			if (terminationT != null && terminationT != t) {
+				throw new IllegalArgumentException("loop: cannot mix always/never with thereis");
+			}
+			terminationT = t;
 		}
 
 		private void parseRepeat() {
 			LispVal n = nextForm();
 			LispSymbol counter = gensym("repeat");
 			bindings.add(pair(counter, n));
-			endTests.add(call(LispNames.LE, counter, new LispInteger(0)));
+			LispVal test = call(LispNames.LE, counter, new LispInteger(0));
+			endTests.add(test);
+			if (!steps.isEmpty() && !driverEndTests.isEmpty()) {
+				steps.add(makeIf(orOf(driverEndTests), EPILOGUE_MARKER, LispNil.INSTANCE));
+			}
 			steps.add(setq(counter, call(LispNames.SUB, counter, new LispInteger(1))));
+			driverEndTests.add(test);
 		}
 
 		/**
 		 * Parses a {@code when}/{@code if}/{@code unless} conditional into an if
-		 * statement.
+		 * statement. When a branch references the anaphoric {@code it}, the raw test
+		 * value is stored in a per-conditional variable that {@code it} is substituted
+		 * with (nested conditionals substitute their own {@code it} first, so each
+		 * {@code it} refers to the nearest enclosing test).
 		 */
 		private LispVal parseConditional(boolean negate) {
 			LispVal cond = nextForm();
-			if (negate) {
-				cond = makeNot(cond);
-			}
 			LispVal thenStmt = parseConditionalBranch();
 			LispVal elseStmt = LispNil.INSTANCE;
 			if ("else".equals(peekKeyword())) {
@@ -948,7 +1284,14 @@ public final class LispMacroExpander {
 			if ("end".equals(peekKeyword())) {
 				pos++;
 			}
-			return makeIf(cond, thenStmt, elseStmt);
+			LispSymbol itVar = gensym("it");
+			LispVal thenSub = substituteIt(thenStmt, itVar);
+			LispVal elseSub = substituteIt(elseStmt, itVar);
+			if (thenSub == thenStmt && elseSub == elseStmt) {
+				return makeIf(negate ? makeNot(cond) : cond, thenStmt, elseStmt);
+			}
+			bindings.add(pair(itVar, LispNil.INSTANCE));
+			return makeProgn(List.of(setq(itVar, cond), makeIf(negate ? makeNot(itVar) : itVar, thenSub, elseSub)));
 		}
 
 		/**
@@ -1069,6 +1412,10 @@ public final class LispMacroExpander {
 		}
 
 		private LispSymbol implicitAccumulator(LispVal init, boolean reverse) {
+			if (terminationT != null) {
+				throw new IllegalArgumentException(
+						"loop: cannot combine always/never/thereis with accumulation (use into)");
+			}
 			if (implicitAcc == null) {
 				implicitAcc = gensym("acc");
 				implicitInit = init;
@@ -1084,9 +1431,72 @@ public final class LispMacroExpander {
 
 		private LispVal resultExpr() {
 			if (implicitAcc == null) {
-				return LispNil.INSTANCE;
+				return Boolean.TRUE.equals(terminationT) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
 			return implicitReverse ? call(LispNames.NREVERSE, implicitAcc) : implicitAcc;
+		}
+
+		/**
+		 * The loop's normal-completion epilogue as an inline exit statement: the
+		 * accumulator finish forms, then {@code finally}, then a {@code return} of the
+		 * loop result. Substituted for positional {@code while}/{@code until} exits and
+		 * {@code (loop-finish)} calls.
+		 */
+		private LispVal epilogueExit() {
+			List<LispVal> parts = new java.util.ArrayList<>();
+			parts.add(new LispSymbol(LispNames.PROGN));
+			parts.addAll(postLoop);
+			parts.addAll(finallyForms);
+			parts.add(makeReturn(resultExpr()));
+			return listToCons(parts);
+		}
+
+		/**
+		 * Replaces every epilogue marker and {@code (loop-finish)} call in the given
+		 * statements with the epilogue exit.
+		 */
+		private static void substituteEpilogueExits(List<LispVal> stmts, LispVal epilogue) {
+			stmts.replaceAll(stmt -> substituteTree(stmt, EXIT_SKIP_HEADS, v -> isEpilogueExit(v) ? epilogue : null));
+		}
+
+		private static boolean isEpilogueExit(LispVal v) {
+			if (v instanceof LispSymbol s && EPILOGUE_MARKER.name().equals(s.name())) {
+				return true;
+			}
+			return v instanceof LispCons c && c.car() instanceof LispSymbol head
+					&& head.name().equalsIgnoreCase("loop-finish");
+		}
+
+		/** Substitutes the anaphoric {@code it} symbol with the given variable. */
+		private static LispVal substituteIt(LispVal tree, LispSymbol itVar) {
+			return substituteTree(tree, IT_SKIP_HEADS,
+					v -> (v instanceof LispSymbol s && s.name().equalsIgnoreCase("it")) ? itVar : null);
+		}
+
+		/**
+		 * Rebuilds a form tree with every node the replacer maps swapped out, without
+		 * descending into forms whose head is in {@code skipHeads}. Returns the original
+		 * instance when nothing was replaced (callers use identity to detect a hit).
+		 */
+		private static LispVal substituteTree(LispVal tree, java.util.Set<String> skipHeads,
+				java.util.function.Function<LispVal, @Nullable LispVal> replacer) {
+			LispVal replaced = replacer.apply(tree);
+			if (replaced != null) {
+				return replaced;
+			}
+			if (tree instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol head
+						&& skipHeads.contains(head.name().toLowerCase(java.util.Locale.ROOT))) {
+					return tree;
+				}
+				LispVal car = substituteTree(cons.car(), skipHeads, replacer);
+				LispVal cdr = substituteTree(cons.cdr(), skipHeads, replacer);
+				if (car == cons.car() && cdr == cons.cdr()) {
+					return tree;
+				}
+				return new LispCons(car, cdr);
+			}
+			return tree;
 		}
 
 		// --- small token / form helpers ---
@@ -1427,11 +1837,25 @@ public final class LispMacroExpander {
 	 * (setf (fourth x) val)   -> (let ((__setf val)) (rplaca (nthcdr 3 x) __setf) __setf)
 	 * (setf (caXXXr x) val)   -> rplaca/rplacd on nested cdr chain
 	 * </pre>
+	 *
+	 * Multiple place/value pairs assign sequentially, like several setf forms in a row:
+	 * {@code (setf p1 v1 p2 v2)} -> {@code (progn (setf p1 v1) (setf p2 v2))}.
 	 * @param cons the setf expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() > 3) {
+			if (parts.size() % 2 == 0) {
+				throw new IllegalArgumentException("setf: odd number of arguments: " + cons.print());
+			}
+			List<LispVal> forms = new java.util.ArrayList<>();
+			for (int i = 1; i < parts.size(); i += 2) {
+				forms.add(expandSetf((LispCons) listToCons(
+						List.of(new LispSymbol(LispNames.SETF), parts.get(i), parts.get(i + 1)))));
+			}
+			return makeProgn(forms);
+		}
 		LispVal place = parts.get(1);
 		LispVal value = parts.get(2);
 		// (setf x val) -> (setq x val)

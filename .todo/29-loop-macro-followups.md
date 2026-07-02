@@ -8,68 +8,71 @@ core via `LispMacroExpander.expandLoop` + the private `LoopExpander` class
 `LispEvaluator`, `Jvm/WasmExprCompiler`, `ScalarWasmCompiler.expandMacro`,
 `FreeVarAnalyzer` (both methods). Docs: `doc/{en,ja}/reference/macros/loop.md`.
 
-These ANSI `loop` features are still unimplemented and documented as limitations
-in `loop.md`. Each item notes how it maps onto the existing `LoopExpander`.
+## Done (second cut, 2026-07)
 
-## Quick wins (small, self-contained — close these first)
+- **DONE** `for VAR across SEQ` (`LoopExpander.parseForAcross`): strings and
+  vectors — the element accessor is a runtime `(if (stringp seq) (char ...)
+  (aref ...))` branch because the sequence type is unknown at expansion time.
+- **DONE** (related, outside loop) multi-pair `setf`: `(setf p1 v1 p2 v2 ...)`
+  now expands to a `progn` of single setfs (`LispMacroExpander.expandSetf`);
+  previously the extra pairs were SILENTLY dropped. An even argument count
+  throws.
+- **DONE** CL-faithful driver sequencing: an `in`/`across` variable holds its
+  first element already at BINDING time (so a later sequential clause's init
+  sees it — `for x in xs for a = (f x)`), is re-synced from its cursor at the
+  END of the step forms (`ForPiece.postSteps`; no more top-of-body preBody),
+  and stepping stops at the first exhausted driver (each later for/repeat
+  group's steps are guarded by the earlier drivers' `driverEndTests`, exiting
+  through the inline epilogue). This is what makes the fold-left idiom
+  (`for x in xs for a = (funcall fn init x) then (funcall fn a x)`) work; the
+  guarded `across` element read returns nil past the end.
+- **DONE** `with VAR = INIT and VAR2 = INIT2` parallel binding: `and`-joined
+  `with` inits are evaluated into temps before any variable binds.
+- **DONE** Anaphoric `it`: each `when`/`if`/`unless` that references `it` in a
+  branch stores its raw test value in a per-conditional gensym and substitutes
+  `it` within that conditional's branches (nested conditionals substitute first,
+  so `it` binds to the nearest test; the walk does not descend into `quote` or
+  nested `loop` forms).
+- **DONE** `thereis`/`always`/`never`: early exit is a `return` (skips
+  `finally`, like CL); `always`/`never` override the normal-completion result to
+  `t` via `terminationT`. Combining with implicit accumulation throws.
+- **DONE** `while`/`until` at textual position: a test before any body clause
+  (and with no `preBody`, i.e. no `in`/`on`/`across` var assignment) is still
+  hoisted into the `while` head; otherwise it becomes a body statement that
+  exits through an inline copy of the epilogue (`postLoop` + `finally` +
+  `(return result)` — the `return` targets the loop's own `%block`). This also
+  fixed `for x in l while (p x)`, which previously evaluated the hoisted test
+  before `x` was assigned.
+- **DONE** `loop-finish`: `(loop-finish)` inside `initially`/body forms is
+  substituted with the same inline epilogue exit at build time (so `finally`
+  runs, unlike `return`). The substitution skips `quote`/`function`/`lambda`/
+  `defun`/nested `loop`/`do`/`do*`/`dolist`/`dotimes`/`%block` — inside those a
+  `loop-finish` is left alone and surfaces as an undefined function. Must be in
+  statement position (compilers cannot `return` mid-expression).
+- **DONE** Parallel `and` between `for` clauses: `parseFor` collects an
+  `and`-group of `ForPiece`s; `flushForGroup` defers every user-variable binding
+  behind temps (so a later init sees outer bindings) and merges all step pairs
+  through `makeStepForms` (the same temp-swap `do` uses) for parallel stepping.
+- **DONE** Destructuring binds (`for (a b) in pairs`, `with (x y) = ...`,
+  `for (a b) = ... then ...`, `for (x) on ...`): `LoopExpander.destructure`
+  walks a pattern into car/cdr accessor chains; `for` patterns bind vars to nil
+  and re-destructure in `preBody` each iteration. Patterns are proper lists only
+  — the reader rejects dotted-pair syntax, so `(a . b)` cannot even be written;
+  lambda-list keywords are not recognized. If a general `destructuring-bind`
+  lands later, lift `destructure` to share it.
 
-- **DONE** `for VAR across STRING`: iterates a string's characters via an index
-  cursor (`LoopExpander.parseForAcross`). Tested on all four backends
-  (eval/JVM/WASM P1+component) plus a `ci-spec.yaml` case; documented in
-  `loop.md` and the limitations lists.
+Tests: `LispEvaluatorTest#evalLoop*`, `JvmLispCompilerTest#compileAndRunLoop*`,
+`WasmLispCompilerIntegrationTest#loopExtendedClausesCompileAndRun`,
+`ci-spec.yaml` case `loop-macro-extended-clauses`.
 
-- **`with VAR = INIT and VAR2 = INIT2` parallel binding**: today `parseWith`
-  treats `and` as another sequential (`let*`) binding. CL makes `and`-joined
-  `with` bindings parallel. Low value (only differs when a later init references
-  an earlier var), but if desired, evaluate the `and`-group's inits into temps
-  first. Consider leaving as a documented divergence instead.
-
-## Medium
-
-- **Anaphoric `it`**: `when TEST collect it` (also `sum`/`return`/etc.) collects
-  the test value. In `parseConditional`, bind the test to a gensym
-  (`__loop_it`), declare it in `bindings`, emit `(setq __loop_it TEST)` before
-  the `if`, use `__loop_it` as the condition, and substitute the `it` symbol with
-  `__loop_it` inside the selectable clause's parsed expression (walk the
-  resulting `LispVal` tree). Nesting makes the substitution scope tricky — give
-  each conditional its own `it` var and only substitute within that branch.
-
-- **`thereis` / `always` / `never`**: value-returning termination clauses.
-  `always EXPR` keeps a result that starts `t` and short-circuits to `nil` (via a
-  `return nil`) the first time EXPR is nil; `never EXPR` is the negation;
-  `thereis EXPR` returns the first non-nil EXPR via `return`. These interact with
-  the loop's default result value — `always`/`never` return `t`/`nil` on normal
-  termination, so they need to override `resultExpr()`. Implement as: on a falsy
-  (or truthy) test do `(return <val>)`, and set the normal-completion result.
-
-## Harder (needs control-flow we don't have yet)
-
-- **`while`/`until` at textual position**: currently every termination test is
-  hoisted into the `while` head, so `while`/`until` fire at the top of the
-  iteration regardless of where they appear. Honoring their position needs a
-  mid-body jump to the epilogue (finally + result). We have no `go`/`tagbody`;
-  `return` skips `finally`. Would need a "normal finish" non-local exit distinct
-  from `return` (e.g. a second `%block` layer whose value flows into finally).
-
-- **`loop-finish`**: same machinery as above — a non-local jump to the
-  finally+result epilogue (NOT skipping `finally`, unlike `return`).
+## Still out of scope
 
 - **`named NAME` + `return-from NAME`**: needs named block support
   (`block`/`return-from`), which rontolisp does not have generally. Out of scope
   until block/return-from exist.
 
-- **Parallel `and` between `for` clauses**: `for a = ... and b = ...` steps the
-  group in parallel (all steps computed against the old values, then assigned).
-  `LoopExpander` appends per-clause steps sequentially (do*-style). Parallel
-  stepping needs the temp-swap trick `LispMacroExpander.makeStepForms` already
-  does for `do` — refactor `steps` to support grouped parallel assignment.
+- **`being` (hash-table/package iteration)**: needs a way to enumerate hash
+  keys/values as a driver; revisit if a `hash-table-keys`-style primitive lands.
 
-- **Destructuring binds** (`for (a b) in pairs`, `with (x . y) = ...`): needs a
-  destructuring helper shared with a future `destructuring-bind`. Out of scope.
-
-## Tests / docs reminders
-
-- Per CLAUDE.md: add cases to `LispEvaluatorTest`, `JvmLispCompilerTest`,
-  `WasmLispCompilerIntegrationTest`; consider a `ci-spec.yaml` case (then rebuild
-  native + run `CiSpecE2eTest`). Keep `doc/en` and `doc/ja` `loop.md` in sync
-  (byte-identical code fences) and update the limitations list as items land.
+- **Dotted destructuring patterns**: blocked on the reader (no dotted-pair
+  syntax).

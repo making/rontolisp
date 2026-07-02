@@ -16,17 +16,24 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 それ以外の場合は、節 (clause) から構成される **拡張ループ** です。サポートする節は次のとおりです。
 
 - 数値ステップ: `for VAR from LO [to|upto|below|downto|above HI] [by STEP]` (`upfrom`/`downfrom` も可。`from` のない上限キーワードは 0 から開始)。
-- リストステップ: `for VAR in LIST [by FN]` と `for VAR on LIST [by FN]`。
-- 文字列ステップ: `for VAR across STRING` は `VAR` を各文字に順に束縛します。
-- 汎用ステップ: `for VAR = INIT [then STEP]`。
-- ローカル変数: `with VAR [= INIT]` (`and` で連結可能)。
+- リストステップ: `for VAR in LIST [by FN]` と `for VAR on LIST [by FN]` (`VAR` には分配束縛パターンも指定可能)。
+- シーケンスステップ: `for VAR across SEQ` は `VAR` を文字列の各文字、またはベクタの各要素に順に束縛します。
+- 汎用ステップ: `for VAR = INIT [then STEP]` (`VAR` には分配束縛パターンも指定可能)。
+- ローカル変数: `with VAR [= INIT]` (`VAR` には分配束縛パターンも指定可能。`and` で連結した `with` の束縛は並行に行われます)。
 - 集約: `collect`、`append`、`nconc`、`sum`、`count`、`maximize`、`minimize`。それぞれ省略可能な `into VAR` を取れます。
-- 制御: `while`/`until`、`repeat N`、`do FORM...`、`return EXPR`、`initially FORM...`、`finally FORM...`、および条件節 `when`/`if`/`unless` (省略可能な `else` と `end` を伴う)。
+- 終了判定: `thereis EXPR`、`always EXPR`、`never EXPR`。
+- 制御: `while`/`until` (記述位置で判定)、`repeat N`、`do FORM...`、`return EXPR`、本体形式内の `(loop-finish)`、`initially FORM...`、`finally FORM...`、および条件節 `when`/`if`/`unless` (省略可能な `else` と `end` を伴い、選択された節では判定値を `it` で参照可能)。
 
-複数の `for` 節は並行してステップするため、最も短いドライバが尽きた時点でループは終了します。これがインデックス付き map の定石です。
+複数の `for` 節は一緒にステップし、最も短いドライバが尽きた時点でループは終了します。これがインデックス付き map の定石です。逐次的な節は順にステップします (後の節の初期化式・ステップ式は直前の節が生成した値を参照でき、最初に尽きたドライバでステップは停止するため、`for x in xs for a = (f x) then (g a x)` は CL と同様に動作します)。
 
 ```lisp
 (loop for x in '(a b c) for i from 0 collect (list i x)) ; => ((0 a) (1 b) (2 c))
+```
+
+`and` は `for` 節をひとつのグループに連結し、初期化とステップを前回の反復の値に対して計算します (`do*` に対する `do` の並行ステップに相当)。
+
+```lisp
+(loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b) ; => (1 1 2 3 5 8 13 21)
 ```
 
 集約と数値範囲はよくあるケースを直接表現できます。
@@ -35,10 +42,47 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 (loop for i from 1 to 10 when (evenp i) sum i) ; => 30
 ```
 
-`for ... across` は文字列を 1 文字ずつ走査します (ここでランダムアクセス可能なシーケンス型は文字列のみです)。
+本体節の後 (または `in`/`on`/`across` のように本体の先頭で変数を代入する `for` の後) に置いた `while`/`until` は、その記述位置で判定するため、現在の要素を参照できます。
+
+```lisp
+(loop for x in '(1 2 3 9 4) while (< x 4) collect x) ; => (1 2 3)
+```
+
+`when`/`if`/`unless` の内側では、アナフォリックな `it` で判定式の値を参照できます。
+
+```lisp
+(loop for x in '(1 nil 3 nil 5) when x collect it) ; => (1 3 5)
+```
+
+`thereis` は式が最初に非 nil になった値を返します。`always`/`never` は最初の失敗で `nil` に短絡し、正常終了時には `t` を返します。これらによる早期脱出は `return` と同様に `finally` をスキップします。
+
+```lisp
+(loop for x in '(nil nil 7 9) thereis x) ; => 7
+```
+
+本体形式内の `(loop-finish)` は反復を正常終了させます。`finally` は実行され、ループの結果値も生成されます (両方をスキップする `return` とは異なります)。
+
+```lisp
+(loop for i from 1
+      collect i into xs
+      do (when (>= i 3) (loop-finish))
+      finally (return (length xs))) ; => 3
+```
+
+`for`/`with` の変数には分配束縛パターン — 変数の真リスト (ネスト可能。`nil` はその位置を無視) — を指定できます。
+
+```lisp
+(loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)) ; => (3 7 11)
+```
+
+`for ... across` は文字列を 1 文字ずつ、またはベクタを 1 要素ずつ走査します。
 
 ```lisp
 (loop for c across "hello" count (eql c #\l)) ; => 2
 ```
 
-制限事項 (この第一段階では対象外): 分配束縛、`for` 節同士の並行 `and`、`being`、アナフォリックな `it`、`named`/`loop-finish`、`thereis`/`always`/`never`。`while`/`until` は記述位置にかかわらず反復の先頭で終了判定を行います。`into` を伴わない集約節はすべて同種でなければならず、収集系の節は結果リストをソース順に構築します。
+```lisp
+(loop for x across #(1 2 3 4 5) collect (* x x)) ; => (1 4 9 16 25)
+```
+
+制限事項: `being` (ハッシュテーブル/パッケージの反復) と `named`/`return-from` は未対応です。分配束縛パターンは変数の真リストに限られます — リーダーがドット対構文を受け付けないため `(a . b)` のようなドットパターンは使えず、ラムダリストキーワードも認識されません。`(loop-finish)` は文の位置 (式の途中は不可) に置く必要があり、ネストした反復形式の内側では使えません。`thereis`/`always`/`never` はデフォルト結果への集約とは併用できません (`into` を使ってください)。`into` を伴わない集約節はすべて同種でなければならず、収集系の節は結果リストをソース順に構築します。

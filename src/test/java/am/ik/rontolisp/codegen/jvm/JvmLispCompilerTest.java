@@ -216,6 +216,60 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLoopPositionalWhileUntil() throws Exception {
+		assertThat(compileAndRun("(print (loop for x in '(1 2 3 9 4) while (< x 4) collect x))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (let ((n 0)) (loop for i from 1 do (setq n (+ n 1)) while (< i 3)) n))"))
+			.isEqualTo("3");
+		assertThat(compileAndRun("(print (loop for i from 1 do nil until (> i 2) collect i))")).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void compileAndRunLoopThereisAlwaysNever() throws Exception {
+		assertThat(compileAndRun("(print (loop for x in '(nil nil 7 9) thereis x))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (loop for x in '(1 2 3) always (< x 5)))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (loop for x in '(1 2 9) always (< x 5)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (loop for x in '(1 2 3) never (> x 5)))")).isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunLoopAnaphoricItAndLoopFinish() throws Exception {
+		assertThat(compileAndRun("(print (loop for x in '(1 nil 3 nil 5) when x collect it))")).isEqualTo("(1 3 5)");
+		assertThat(compileAndRun("(print (loop for x in '(nil 2 nil) when x return it))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (loop for i from 1 do (when (> i 3) (loop-finish)) collect i))"))
+			.isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(
+				"(print (loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish)) finally (return (length xs))))"))
+			.isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunLoopAcrossVectorAndMultiPairSetf() throws Exception {
+		assertThat(compileAndRun("(print (loop for x across #(1 2 3 4 5) collect (* x x)))"))
+			.isEqualTo("(1 4 9 16 25)");
+		assertThat(compileAndRun("(print (let ((l (list 1 2 3))) (setf (car l) 9 (second l) 8) l))"))
+			.isEqualTo("(9 8 3)");
+	}
+
+	@Test
+	void compileAndRunLoopSequentialDriverStepping() throws Exception {
+		assertThat(compileAndRun("(print (loop for x in '(1 2 3 4 5) for a = x then (+ a x) finally (return a)))"))
+			.isEqualTo("15");
+	}
+
+	@Test
+	void compileAndRunLoopParallelAndDestructuring() throws Exception {
+		assertThat(compileAndRun("(print (loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b))"))
+			.isEqualTo("(1 1 2 3 5 8 13 21)");
+		assertThat(compileAndRun("(print (let ((x 5)) (loop with a = x and x = 10 repeat 1 collect (list a x))))"))
+			.isEqualTo("((5 10))");
+		assertThat(compileAndRun("(print (loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)))"))
+			.isEqualTo("(3 7 11)");
+		assertThat(compileAndRun("(print (loop for (a b) = '(1 2) then (list b (+ a b)) repeat 5 collect a))"))
+			.isEqualTo("(1 2 3 5 8)");
+		assertThat(compileAndRun("(print (loop with (x y) = '(10 20) repeat 1 collect (+ x y)))")).isEqualTo("(30)");
+	}
+
+	@Test
 	void compileAndRunDelete() throws Exception {
 		assertThat(compileAndRun("(print (delete 2 '(1 2 3 2 1)))")).isEqualTo("(1 3 1)");
 		assertThat(compileAndRun("(print (delete-if #'evenp '(1 2 3 4 5)))")).isEqualTo("(1 3 5)");
