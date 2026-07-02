@@ -12,8 +12,8 @@ This page lists the most notable omissions. For what **is** available, see the
 
 | Feature | Status |
 | --- | --- |
-| `defmacro` (user macros) | not available |
-| `&optional` / `&rest` / `&key` / `&aux` | not available |
+| `defmacro` (user macros) | available (see [`defmacro`](../reference/special-forms/defmacro.md)) |
+| `&optional` / `&rest` / `&key` / `&aux` | not available (except `&rest`/`&body` in `defmacro`) |
 | `values` / `multiple-value-bind` | not available |
 | `block` / `return-from` / `tagbody` / `go` | not available |
 | `catch` / `throw` / `unwind-protect` | not available |
@@ -28,24 +28,21 @@ This page lists the most notable omissions. For what **is** available, see the
 
 ## User-defined macros (`defmacro`)
 
-Macros cannot be defined in rontolisp. The macro set is fixed and built into the
-compiler (`cond`, `case`, `when`, `unless`, `dotimes`, `dolist`, `do`, `setf`,
-`push`, `pop`, `incf`, ...). `defmacro` itself is not a defined operator:
-
-```console
-> (defmacro square (x) (list '* x x))
-The function defmacro is undefined
-```
-
-Run `(rontolisp:list-macros)` to see the macros you do have.
+User macros **are** supported — see [`defmacro`](../reference/special-forms/defmacro.md)
+for the details, including the backquote template syntax and the limitations
+(no `&optional`/`&key`, no nested backquote, unknown to the runtime `eval` of
+compiled programs). The built-in macro set (`cond`, `case`, `when`, `unless`,
+`dotimes`, `dolist`, `do`, `setf`, `push`, `pop`, `incf`, ...) can be listed with
+`(rontolisp:list-macros)`; those names cannot be redefined.
 
 ## Lambda list keywords (`&optional`, `&rest`, `&key`, `&aux`)
 
-A function takes a **fixed number of positional parameters**. There are no
-optional, rest, or keyword parameters.
+A **function** takes a fixed number of positional parameters. There are no
+optional, rest, or keyword parameters (`defmacro` is the exception: its lambda
+list accepts one trailing `&rest`/`&body` parameter).
 
-This is an easy trap: a lambda-list keyword like `&rest` is not rejected — it is
-silently treated as an ordinary parameter **named** `&rest`, so
+This is an easy trap: in a `defun` a lambda-list keyword like `&rest` is not
+rejected — it is silently treated as an ordinary parameter **named** `&rest`, so
 `(defun f (a &rest r) ...)` defines a three-parameter function (`a`, `&rest`, `r`)
 rather than a variadic one.
 

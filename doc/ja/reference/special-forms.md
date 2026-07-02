@@ -13,6 +13,7 @@
 | `while` | `(while test body...)` | testが非nilの間、bodyを繰り返し評価します。nilを返します |
 | `return` | `(return value?)` | 最も内側を囲むループ(`do`/`dolist`/`dotimes`/`loop`)からの非局所脱出。そのループは `value`(またはnil)に評価されます |
 | `defun` | `(defun name (params...) body...)` | 関数名前空間に関数を定義します。関数名を返します |
+| `defmacro` | `(defmacro name (params...) body...)` | ユーザーマクロを定義します。呼び出しは展開され(本体は未評価の引数フォームを束縛して実行)、展開形が評価されます。`&rest`/`&body` をサポートします。名前を返します |
 | `defvar` | `(defvar name value?)` | グローバル変数を定義します。`name` がまだ束縛されていない場合のみ `value` を束縛します(冪等)。`value` がなければ未束縛のままにします。名前を返します |
 | `defparameter` | `(defparameter name value)` | グローバル変数を定義します。`name` がすでに束縛されていても **常に** `value` を(再)束縛します。名前を返します |
 | `defconstant` | `(defconstant name value)` | `defparameter` と同様(rontolispは定数性を強制しません)。名前を返します |

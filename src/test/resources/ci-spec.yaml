@@ -973,8 +973,8 @@ cases:
       (print (rontolisp:list-macros :cl-user))
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
-      (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
-      187
+      (defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)
+      190
       (fetch list-functions list-macros list-special-forms version)
       (call field new proxy static)
       ci-intro-fn
@@ -1673,3 +1673,74 @@ cases:
       15
       2
       (11 12 13)
+
+  # defmacro (user macros) with backquote templates. The interpreter expands macro
+  # calls at evaluation time; the compile path (JVM / WASM / component) expands them
+  # in a pre-pass (eval.UserMacroExpander) before the compilers run, so all four
+  # backends must agree. Covers &body splicing, unevaluated argument forms (swap!),
+  # expansion-time helper calls, and a macro expanding into another macro call.
+  - name: defmacro-user-macros
+    source: |
+      (defmacro ci-my-when (test &body body)
+        `(if ,test (progn ,@body) nil))
+      (defmacro ci-swap (a b)
+        `(let ((__ci-tmp ,a))
+           (setq ,a ,b)
+           (setq ,b __ci-tmp)))
+      (defun ci-expand-helper (n) (* n 2))
+      (defmacro ci-with-doubled (n x) `(+ ,(ci-expand-helper n) ,x))
+      (defmacro ci-inner (x) `(+ ,x 1))
+      (defmacro ci-outer (x) `(ci-inner ,x))
+      (print (ci-my-when (> 3 1) 10 20))
+      (print (ci-my-when nil 1))
+      (setq ci-p 1)
+      (setq ci-q 2)
+      (ci-swap ci-p ci-q)
+      (print (list ci-p ci-q))
+      (print (ci-with-doubled 5 1))
+      (print (ci-outer 41))
+      (print `(a ,(+ 1 2) ,@(list 3 4) b))
+    expected: |
+      20
+      nil
+      (2 1)
+      11
+      42
+      (a 3 3 4 b)
+
+  # gensym + macroexpand/macroexpand-1. Runtime gensym names print identically on
+  # all four backends only while no earlier form runs gensym at macro-expansion
+  # time: the interpreter shares one counter between expansion time and run time,
+  # the compile path does not. Keep the runtime prints BEFORE the gensym-using
+  # macro below, and never print a name generated inside a macro body.
+  # ci-my-when / ci-outer come from the defmacro-user-macros case above (cases
+  # share global state and run in order).
+  - name: gensym-and-macroexpand
+    source: |
+      (print (gensym))
+      (print (gensym "ci"))
+      (print (eq (gensym) (gensym)))
+      (print (symbolp (gensym)))
+      (defmacro ci-swap-safe (a b)
+        (let ((tmp (gensym "swap")))
+          `(let ((,tmp ,a))
+             (setq ,a ,b)
+             (setq ,b ,tmp))))
+      (setq ci-tmp 90)
+      (setq ci-other 9)
+      (ci-swap-safe ci-tmp ci-other)
+      (print (list ci-tmp ci-other))
+      (print (macroexpand-1 '(ci-my-when a b)))
+      (print (macroexpand-1 '(unless c x)))
+      (print (macroexpand '(ci-outer 41)))
+      (print (macroexpand-1 '(+ 1 2)))
+    expected: |
+      #:g1
+      #:ci2
+      nil
+      t
+      (9 90)
+      (if a (progn b) nil)
+      (if c nil x)
+      (+ 41 1)
+      (+ 1 2)

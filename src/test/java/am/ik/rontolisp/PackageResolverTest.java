@@ -98,6 +98,14 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void gensymStyleSymbolIsNotPackageQualified() {
+		// A gensym-generated "#:g1" contains a colon but must not be parsed as the
+		// package "#"; it stays a plain user symbol (expanded macro bodies reach the
+		// resolver on the compile path).
+		assertThat(resolve("(let ((#:g1 1)) #:g1)")).isEqualTo("(let ((#:g1 1)) #:g1)");
+	}
+
+	@Test
 	void introspectionDesignatorIsNormalizedToKeyword() {
 		assertThat(resolve("(rontolisp:list-functions cl)")).isEqualTo("(rontolisp:list-functions :cl)");
 		assertThat(resolve("(rontolisp:list-functions :cl-user)")).isEqualTo("(rontolisp:list-functions :cl-user)");

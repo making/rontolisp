@@ -159,6 +159,7 @@ final class WasmExprCompiler {
 				case LispNames.PRINC_TO_STRING -> WasmPrincToStringCompiler.compile(cons, ctx);
 				case LispNames.PRIN1_TO_STRING -> WasmPrin1ToStringCompiler.compile(cons, ctx);
 				case LispNames.STRING_CONCAT -> WasmStringConcatCompiler.compile(cons, ctx);
+				case LispNames.GENSYM -> WasmGensymCompiler.compile(cons, ctx);
 				case LispNames.CONCATENATE -> WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx);
 				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
 				case LispNames.OPEN -> WasmOpenCompiler.compile(cons, ctx);

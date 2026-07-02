@@ -1238,6 +1238,25 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.IDENTITY, args, 1);
 			return args.get(0);
 		}));
+		// gensym: a per-environment counter; the result is an ordinary symbol (rontolisp
+		// has no uninterned symbols) whose "#:" prefix keeps it out of the way of
+		// user-written names. The compilers require a literal string prefix; here the
+		// prefix is any runtime string.
+		java.util.concurrent.atomic.AtomicLong gensymCounter = new java.util.concurrent.atomic.AtomicLong();
+		env.defineFunction(LispNames.GENSYM, new LispFunction(LispNames.GENSYM, args -> {
+			if (args.size() > 1) {
+				throw new LispEvalException(LispNames.GENSYM + " expects at most 1 argument, got " + args.size());
+			}
+			String prefix = "g";
+			if (args.size() == 1) {
+				if (!(args.get(0) instanceof LispString s)) {
+					throw new LispEvalException(
+							LispNames.GENSYM + " prefix must be a string, got " + args.get(0).print());
+				}
+				prefix = s.value();
+			}
+			return new LispSymbol("#:" + prefix + gensymCounter.incrementAndGet());
+		}));
 		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
 			requireArgCount(LispNames.COPY_LIST, args, 1);
 			List<LispVal> elements = new java.util.ArrayList<>();

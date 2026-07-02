@@ -2798,7 +2798,7 @@ class LispEvaluatorTest {
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -2818,9 +2818,10 @@ class LispEvaluatorTest {
 					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
 			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
 			.contains("make-array", "aref")
+			.contains("gensym", "macroexpand", "macroexpand-1")
 			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(187);
+			.hasSize(190);
 	}
 
 	@Test
@@ -3325,6 +3326,194 @@ class LispEvaluatorTest {
 				*m*
 				""");
 		assertThat(result.print()).isEqualTo("#2A((1 0 0) (0 0 9))");
+	}
+
+	// --- defmacro (user macros) ---
+
+	@Test
+	void defmacroReturnsName() {
+		assertThat(evalMulti("(defmacro my-noop (x) x)")).isEqualTo(new LispSymbol("my-noop"));
+	}
+
+	@Test
+	void defmacroWithBackquoteBody() {
+		LispVal result = evalMulti("""
+				(defmacro my-when2 (test &body body)
+				  `(if ,test (progn ,@body) nil))
+				(my-when2 (> 3 1) 10 20)
+				""");
+		assertThat(result).isEqualTo(new LispInteger(20));
+	}
+
+	@Test
+	void defmacroReceivesUnevaluatedForms() {
+		// swap! must see the variable names, not their values.
+		LispVal result = evalMulti("""
+				(defmacro swap! (a b)
+				  `(let ((__tmp ,a)) (setq ,a ,b) (setq ,b __tmp)))
+				(setq p 1)
+				(setq q 2)
+				(swap! p q)
+				(list p q)
+				""");
+		assertThat(result.print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void defmacroBodyRunsAtExpansionTime() {
+		// The helper is called while expanding, not at run time.
+		LispVal result = evalMulti("""
+				(defun expand-helper (n) (* n 2))
+				(defmacro with-doubled (n x) `(+ ,(expand-helper n) ,x))
+				(with-doubled 5 1)
+				""");
+		assertThat(result).isEqualTo(new LispInteger(11));
+	}
+
+	@Test
+	void defmacroRestCollectsArguments() {
+		LispVal result = evalMulti("""
+				(defmacro as-list (&rest forms) `(list ,@forms))
+				(as-list 1 (+ 1 1) 3)
+				""");
+		assertThat(result.print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void defmacroExpansionMayBeAnotherMacroCall() {
+		LispVal result = evalMulti("""
+				(defmacro inner (x) `(+ ,x 1))
+				(defmacro outer (x) `(inner ,x))
+				(outer 41)
+				""");
+		assertThat(result).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void defmacroCannotRedefineStandardOperator() {
+		assertThatThrownBy(() -> evalMulti("(defmacro when (x) x)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot redefine");
+		assertThatThrownBy(() -> evalMulti("(defmacro cadr (x) x)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot redefine");
+	}
+
+	@Test
+	void defmacroHasNoFunctionValue() {
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (x) x) #'my-mac")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("not a function");
+	}
+
+	@Test
+	void defmacroArgumentCountIsChecked() {
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (a b) `(+ ,a ,b)) (my-mac 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 2 arguments");
+	}
+
+	@Test
+	void defmacroRejectsUnsupportedLambdaListKeywords() {
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (a &optional b) a)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("&rest/&body");
+	}
+
+	@Test
+	void defmacroWorksThroughRuntimeEval() {
+		LispVal result = evalMulti("""
+				(defmacro twice (x) `(* 2 ,x))
+				(eval '(twice 21))
+				""");
+		assertThat(result).isEqualTo(new LispInteger(42));
+	}
+
+	// --- gensym ---
+
+	@Test
+	void gensymReturnsFreshSymbols() {
+		LispVal result = evalMulti("(list (gensym) (gensym))");
+		assertThat(result.print()).isEqualTo("(#:g1 #:g2)");
+		assertThat(evalMulti("(eq (gensym) (gensym))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void gensymResultIsASymbol() {
+		assertThat(evalMulti("(symbolp (gensym))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(stringp (gensym))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(keywordp (gensym))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void gensymAcceptsAPrefixString() {
+		assertThat(evalMulti("(gensym \"tmp\")").print()).isEqualTo("#:tmp1");
+	}
+
+	@Test
+	void gensymRejectsANonStringPrefix() {
+		assertThatThrownBy(() -> evalMulti("(gensym 'tmp)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("prefix must be a string");
+		assertThatThrownBy(() -> evalMulti("(gensym \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("at most 1 argument");
+	}
+
+	@Test
+	void gensymIsAFirstClassFunction() {
+		assertThat(evalMulti("(symbolp (funcall #'gensym))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void gensymMakesMacroTemporariesCaptureSafe() {
+		LispVal result = evalMulti("""
+				(defmacro swap2 (a b)
+				  (let ((tmp (gensym)))
+				    `(let ((,tmp ,a)) (setq ,a ,b) (setq ,b ,tmp))))
+				(setq tmp 99)
+				(setq other 1)
+				(swap2 tmp other)
+				(list tmp other)
+				""");
+		assertThat(result.print()).isEqualTo("(1 99)");
+	}
+
+	// --- macroexpand-1 / macroexpand ---
+
+	@Test
+	void macroexpand1ExpandsAUserMacroOnce() {
+		LispVal result = evalMulti("""
+				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
+				(macroexpand-1 '(my-when2 (> 2 1) 'a 'b))
+				""");
+		assertThat(result.print()).isEqualTo("(if (> 2 1) (progn (quote a) (quote b)) nil)");
+	}
+
+	@Test
+	void macroexpand1ExpandsABuiltinMacroOnce() {
+		assertThat(evalMulti("(macroexpand-1 '(unless c x))").print()).isEqualTo("(if c nil x)");
+		// incf expands to setf: one step only, the setf is left for another round.
+		assertThat(evalMulti("(macroexpand-1 '(incf n 2))").print()).isEqualTo("(setf n (+ n 2))");
+	}
+
+	@Test
+	void macroexpand1ReturnsANonMacroFormUnchanged() {
+		assertThat(evalMulti("(macroexpand-1 '(+ 1 2))").print()).isEqualTo("(+ 1 2)");
+		assertThat(evalMulti("(macroexpand-1 'x)").print()).isEqualTo("x");
+		assertThat(evalMulti("(macroexpand-1 12)").print()).isEqualTo("12");
+		assertThat(evalMulti("(macroexpand-1 '(if a b c))").print()).isEqualTo("(if a b c)");
+	}
+
+	@Test
+	void macroexpandExpandsToAFixpoint() {
+		// outer expands to inner, which expands again; subforms are not walked.
+		LispVal result = evalMulti("""
+				(defmacro inner (x) `(+ ,x 1))
+				(defmacro outer (x) `(inner ,x))
+				(macroexpand '(outer 41))
+				""");
+		assertThat(result.print()).isEqualTo("(+ 41 1)");
+		assertThat(evalMulti("(macroexpand '(when a (when b c)))").print()).isEqualTo("(if a (when b c) nil)");
+	}
+
+	@Test
+	void macroexpandWorksThroughRuntimeEval() {
+		assertThat(evalMulti("(eval '(macroexpand-1 '(unless c x)))").print()).isEqualTo("(if c nil x)");
 	}
 
 }

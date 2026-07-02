@@ -223,7 +223,11 @@ public final class BuiltinFunctionWrappers {
 			// fresh-line: 0-arity
 			new WrapperDef(LispNames.FRESH_LINE, List.of(), List.of(call(LispNames.FRESH_LINE))),
 			// read-line: 0-arity
-			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))));
+			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))),
+			// gensym: 0-arity (the literal-prefix form cannot be a first-class value;
+			// macroexpand/macroexpand-1 have no wrapper at all -- the macro table does
+			// not exist at runtime in compiled output)
+			new WrapperDef(LispNames.GENSYM, List.of(), List.of(call(LispNames.GENSYM))));
 
 	private static LispVal listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;

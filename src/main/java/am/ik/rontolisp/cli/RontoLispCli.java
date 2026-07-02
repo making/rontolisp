@@ -23,6 +23,7 @@ import am.ik.rontolisp.codegen.wasm.ScalarWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -158,8 +159,12 @@ public final class RontoLispCli {
 		// across files (a console driver loading a rendering-free core) would otherwise
 		// fail to compile. The interpreter loads at runtime instead, so this is
 		// compile-path only.
-		List<LispVal> program = LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(),
-				baseDir);
+		// Expand user macros (defmacro) after inlining: the definitions are consumed
+		// and every call site is fully expanded by the macro-time interpreter, so the
+		// compilers see only ordinary forms. The interpreter path expands natively at
+		// evaluation time instead.
+		List<LispVal> program = UserMacroExpander
+			.expand(LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(), baseDir));
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {

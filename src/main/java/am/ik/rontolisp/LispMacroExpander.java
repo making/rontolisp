@@ -16,6 +16,53 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Single-step expansion of a built-in macro call, used by
+	 * {@code macroexpand-1}/{@code macroexpand}. The case list must stay in sync with
+	 * {@code PackageRegistry.CL_MACROS} (the names {@code rontolisp:list-macros}
+	 * reports); function-like operators expanded through this class (e.g. {@code 1+},
+	 * {@code member}) are CL functions, not macros, and are deliberately absent.
+	 * @param cons the form to expand
+	 * @return the expansion, or {@code null} when the operator is not a built-in macro
+	 */
+	public static @Nullable LispVal expandBuiltinMacro(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol sym)) {
+			return null;
+		}
+		return switch (sym.name()) {
+			case LispNames.COND -> expandCond(cons);
+			case LispNames.CASE -> expandCase(cons);
+			case LispNames.ECASE -> expandEcase(cons);
+			case LispNames.CCASE -> expandCcase(cons);
+			case LispNames.TYPECASE -> expandTypecase(cons);
+			case LispNames.ETYPECASE -> expandEtypecase(cons);
+			case LispNames.AND -> expandAnd(cons);
+			case LispNames.OR -> expandOr(cons);
+			case LispNames.WHEN -> expandWhen(cons);
+			case LispNames.UNLESS -> expandUnless(cons);
+			case LispNames.DOTIMES -> expandDotimes(cons);
+			case LispNames.DOLIST -> expandDolist(cons);
+			case LispNames.DO -> expandDo(cons);
+			case LispNames.DO_STAR -> expandDoStar(cons);
+			case LispNames.LET_STAR -> expandLetStar(cons);
+			case LispNames.SETF -> expandSetf(cons);
+			case LispNames.PUSH -> expandPush(cons);
+			case LispNames.POP -> expandPop(cons);
+			case LispNames.REMF -> expandRemf(cons);
+			case LispNames.INCF -> expandIncf(cons);
+			case LispNames.DECF -> expandDecf(cons);
+			case LispNames.FORMAT -> expandFormat(cons);
+			case LispNames.WITH_OPEN_FILE -> expandWithOpenFile(cons);
+			case LispNames.PROG1 -> expandProg1(cons);
+			case LispNames.PROG2 -> expandProg2(cons);
+			case LispNames.PSETQ -> expandPsetq(cons);
+			case LispNames.ERROR -> expandError(cons);
+			case LispNames.TIME -> expandTime(cons);
+			case LispNames.LOOP -> expandLoop(cons);
+			default -> null;
+		};
+	}
+
+	/**
 	 * Expands (cond (test body...) ...) into nested if/let/progn expressions.
 	 *
 	 * <pre>

@@ -759,6 +759,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// start).
 		Utf8Constant colFieldName = cp.addUtf8(JvmFreshLineCompiler.COL_FIELD);
 		Utf8Constant colFieldDesc = cp.addUtf8(JvmFreshLineCompiler.COL_DESC);
+		Utf8Constant gensymCtrFieldName = cp.addUtf8(JvmGensymCompiler.CTR_FIELD);
+		Utf8Constant gensymCtrFieldDesc = cp.addUtf8(JvmGensymCompiler.CTR_DESC);
 
 		// http-get runtime helper body (only when the program uses rontolisp:http-get).
 		final JvmFetchRuntimeBuilder.@Nullable FetchMethod fetchMethodBody = usesFetch
@@ -815,6 +817,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 					.writeU2(colFieldName)
 					.writeU2(colFieldDesc)
+					.writeU2(0));
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+					.writeU2(gensymCtrFieldName)
+					.writeU2(gensymCtrFieldDesc)
 					.writeU2(0));
 				// One static Object field per top-level global variable (default null =
 				// nil); written by setq/defvar, read by getstatic from any method body.

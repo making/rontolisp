@@ -23,7 +23,8 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_SPECIAL_FORMS = Set.of(LispNames.QUOTE, LispNames.IF, LispNames.LET,
 			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
-			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN, LispNames.IN_PACKAGE);
+			LispNames.DEFMACRO, LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN,
+			LispNames.IN_PACKAGE);
 
 	/**
 	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no
@@ -78,8 +79,8 @@ public final class PackageRegistry {
 			LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE,
 			LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P,
 			LispNames.DIGIT_CHAR_P, LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
-			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_P, LispNames.MAPHASH, LispNames.MAKE_ARRAY,
-			LispNames.AREF);
+			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_P, LispNames.MAPHASH, LispNames.MAKE_ARRAY, LispNames.AREF,
+			LispNames.GENSYM, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
@@ -229,6 +230,10 @@ public final class PackageRegistry {
 	 * @return the split parts, or {@code null} if the name is not package-qualified
 	 */
 	public static @Nullable QualifiedName splitQualified(String name) {
+		if (name.startsWith("#:")) {
+			// A gensym-style "uninterned" symbol (#:g1): not package-qualified.
+			return null;
+		}
 		int idx = name.indexOf(':');
 		if (idx <= 0) {
 			// No colon, or a leading colon (keyword): not package-qualified.

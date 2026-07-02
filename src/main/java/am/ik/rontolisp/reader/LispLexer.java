@@ -47,6 +47,23 @@ public final class LispLexer {
 				tokens.add(new Token.Quote());
 				this.pos++;
 			}
+			else if (c == '`') {
+				tokens.add(new Token.Backquote());
+				this.pos++;
+			}
+			else if (c == ',') {
+				// A comma between two digits is a grouping separator consumed inside
+				// readNumber (e.g. "1,000"), so a comma reaching here starts a token:
+				// unquote (,x) or unquote-splicing (,@x) inside a backquote template.
+				if (this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '@') {
+					tokens.add(new Token.UnquoteSplicing());
+					this.pos += 2;
+				}
+				else {
+					tokens.add(new Token.Unquote());
+					this.pos++;
+				}
+			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\'') {
 				tokens.add(new Token.FunctionQuote());
 				this.pos += 2;
@@ -339,7 +356,12 @@ public final class LispLexer {
 	}
 
 	private static boolean isSymbolChar(char c) {
-		return !Character.isWhitespace(c) && c != '(' && c != ')' && c != '\'' && c != '"' && c != ';';
+		// ',' and '`' terminate a symbol (Common Lisp terminating macro characters)
+		// so `(a ,b) and `(,x ,@xs) tokenize without surrounding whitespace. A comma
+		// used as a digit-grouping separator ("1,000") is consumed inside readNumber
+		// before this predicate is consulted.
+		return !Character.isWhitespace(c) && c != '(' && c != ')' && c != '\'' && c != '"' && c != ';' && c != ','
+				&& c != '`';
 	}
 
 }

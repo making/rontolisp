@@ -35,9 +35,9 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-macros))
 ; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
-; => (defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)
+; => (defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 187
+; => 190
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

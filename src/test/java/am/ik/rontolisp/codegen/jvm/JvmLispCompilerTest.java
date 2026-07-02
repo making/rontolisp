@@ -66,6 +66,87 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}
 
+	// defmacro is handled by the compile-path pass (eval.UserMacroExpander, run by the
+	// CLI before this compiler), which consumes the definitions and fully expands every
+	// call site -- the compiler itself never sees a macro form.
+	@Test
+	void compileAndRunUserMacroAfterExpansionPass() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
+				(defmacro swap! (a b) `(let ((__tmp ,a)) (setq ,a ,b) (setq ,b __tmp)))
+				(print (my-when2 (> 3 1) 10 20))
+				(setq p 1)
+				(setq q 2)
+				(swap! p q)
+				(print (list p q))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("20\n(2 1)");
+		}
+	}
+
+	@Test
+	void compileAndRunGensym() throws Exception {
+		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
+				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
+			.isEqualTo("#:g1\n#:tmp2\nnil\nt\nt");
+	}
+
+	@Test
+	void compileGensymRejectsANonLiteralPrefix() {
+		assertThatThrownBy(() -> compileAndRun("(setq p \"tmp\") (print (gensym p))"))
+			.hasMessageContaining("literal string");
+	}
+
+	// macroexpand/macroexpand-1 with a literal quoted argument are folded to the
+	// expansion by the compile-path pass (eval.UserMacroExpander); the compiler itself
+	// never sees them.
+	@Test
+	void compileAndRunMacroexpandAfterExpansionPass() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
+				(print (macroexpand-1 '(my-when2 (> 2 1) 'a 'b)))
+				(print (macroexpand-1 '(unless c x)))
+				(print (macroexpand-1 '(+ 1 2)))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim())
+				.isEqualTo("(if (> 2 1) (progn (quote a) (quote b)) nil)\n(if c nil x)\n(+ 1 2)");
+		}
+	}
+
 	// A non-ASCII string or symbol becomes a CONSTANT_Utf8 entry, which must be
 	// written as modified UTF-8 with a BYTE length -- a char-count length makes the
 	// whole class fail to load with "Illegal UTF8 string in constant pool".
@@ -2788,17 +2869,17 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("187");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("190");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("187");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("190");
 	}
 
 	@Test

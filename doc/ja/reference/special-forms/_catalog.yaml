@@ -11,6 +11,7 @@ categories:
       - { slug: while, name: while }
       - { slug: return, name: return }
       - { slug: defun, name: defun }
+      - { slug: defmacro, name: defmacro }
       - { slug: defvar, name: defvar }
       - { slug: defparameter, name: defparameter }
       - { slug: defconstant, name: defconstant }

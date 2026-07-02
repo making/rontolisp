@@ -58,6 +58,9 @@ its own page.
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
+| `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- a fresh symbol for macro temporaries (the counter is program-wide) |
+| `macroexpand-1` | `(macroexpand-1 '(unless c x))` | `(if c nil x)` -- expand the top-level form once (user and built-in macros) |
+| `macroexpand` | `(macroexpand '(outer 41))` | The full expansion: `macroexpand-1` repeated to a fixpoint |
 | `null` | `(null nil)` | `t` |
 | `not` | `(not nil)` | `t` (identical to `null`) |
 | `atom` | `(atom 1)` | `t` |

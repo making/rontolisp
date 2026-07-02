@@ -123,10 +123,18 @@ class LispLexerTest {
 
 	@Test
 	void tokenizeCommaNotBetweenDigitsIsNotGrouping() {
-		// A comma not followed by a digit is not a grouping separator; like "1+",
-		// the trailing symbol char makes the whole token a symbol.
+		// A comma not followed by a digit is not a grouping separator: the number ends
+		// and the comma starts an unquote token (backquote syntax).
 		List<Token> tokens = new LispLexer("1,").tokenize();
-		assertThat(tokens).containsExactly(new Token.SymbolToken("1,"));
+		assertThat(tokens).containsExactly(new Token.NumberToken(1), new Token.Unquote());
+	}
+
+	@Test
+	void tokenizeBackquoteAndUnquotes() {
+		List<Token> tokens = new LispLexer("`(a ,b ,@c)").tokenize();
+		assertThat(tokens).containsExactly(new Token.Backquote(), new Token.LeftParen(), new Token.SymbolToken("a"),
+				new Token.Unquote(), new Token.SymbolToken("b"), new Token.UnquoteSplicing(),
+				new Token.SymbolToken("c"), new Token.RightParen());
 	}
 
 	@Test

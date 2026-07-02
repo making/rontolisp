@@ -3186,12 +3186,26 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("187");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("190");
+	}
+
+	@Test
+	void gensymReturnsFreshSymbols() throws Exception {
+		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
+				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
+			.isEqualTo("#:g1\n#:tmp2\nnil\nt\nt");
+	}
+
+	@Test
+	void gensymRejectsANonLiteralPrefix() {
+		assertThatThrownBy(
+				() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(setq p \"t\") (gensym p)")))
+			.hasMessageContaining("literal string");
 	}
 
 	@Test

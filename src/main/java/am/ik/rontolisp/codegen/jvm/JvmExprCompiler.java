@@ -153,6 +153,7 @@ final class JvmExprCompiler {
 				case LispNames.PRINC_TO_STRING -> JvmPrincToStringCompiler.compile(cons, ctx, className);
 				case LispNames.PRIN1_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
+				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 				case LispNames.CONCATENATE ->
 					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx, className);
 				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);

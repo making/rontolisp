@@ -21,6 +21,18 @@ public sealed interface Token {
 	record FunctionQuote() implements Token {
 	}
 
+	/** Backquote ({@code `}) token. */
+	record Backquote() implements Token {
+	}
+
+	/** Unquote ({@code ,}) token; only valid inside a backquote template. */
+	record Unquote() implements Token {
+	}
+
+	/** Unquote-splicing ({@code ,@}) token; only valid inside a backquote template. */
+	record UnquoteSplicing() implements Token {
+	}
+
 	/** Vector literal open ({@code #(}) token; closed by a {@link RightParen}. */
 	record VectorOpen() implements Token {
 	}

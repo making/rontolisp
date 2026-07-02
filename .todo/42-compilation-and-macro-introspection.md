@@ -1,4 +1,4 @@
-# Compilation and macro introspection (`compile`, `compile-file`, `load-time-value`, `eval-when`, `macroexpand`, `macroexpand-1`, `macrolet` (see #34), `compiler-macroexpand`, `defcompiler-macro`, `function-lambda-args`, `function-information`, `documentation`, `cookie`, `implementation`, `lisp-implementation-type`, `lisp-implementation-version`, `lisp-version`, `lisp`, `features`, `member` (done), `random` (done), `make-random-state`, `random-state-p`, `code-consumption-signal`, `code-declaration`, `code-error`, `code-reader-extensivity`, `code-termination`, `declaration`, `ignore` (see #35), `ignorable` (see #35), `inline` (see #35), `notinline` (see #35), `optimize` (see #35), `special` (see #35), `speed`, `safety`, `space`, `debug`, `compilation-speed`, `declaim` (see #35), `declare` (see #35), `the` (see #35))
+# Compilation and macro introspection (`compile`, `compile-file`, `load-time-value`, `eval-when`, `macroexpand` (done), `macroexpand-1` (done), `macrolet` (see #34), `compiler-macroexpand`, `defcompiler-macro`, `function-lambda-args`, `function-information`, `documentation`, `cookie`, `implementation`, `lisp-implementation-type`, `lisp-implementation-version`, `lisp-version`, `lisp`, `features`, `member` (done), `random` (done), `make-random-state`, `random-state-p`, `code-consumption-signal`, `code-declaration`, `code-error`, `code-reader-extensivity`, `code-termination`, `declaration`, `ignore` (see #35), `ignorable` (see #35), `inline` (see #35), `notinline` (see #35), `optimize` (see #35), `special` (see #35), `speed`, `safety`, `space`, `debug`, `compilation-speed`, `declaim` (see #35), `declare` (see #35), `the` (see #35))
 
 **Status:** not implemented. Low-Medium priority — useful for development and metaprogramming.
 
@@ -18,8 +18,8 @@
 
 | Operator | Purpose |
 |----------|---------|
-| `macroexpand` | Fully expand macro |
-| `macroexpand-1` | Single-step macro expansion |
+| `macroexpand` (done) | Fully expand macro |
+| `macroexpand-1` (done) | Single-step macro expansion |
 | `compiler-macroexpand` | Compiler macro expansion |
 | `defcompiler-macro` | Define compiler macro |
 | `function-lambda-args` | Introspect function lambda list |
@@ -55,8 +55,10 @@
 
 ### Implementation approach
 
-**Macro introspection** (highest ROI for metaprogramming):
-1. `macroexpand-1` — single-step expansion (use the same logic as the evaluator/compilers).
+**Note (2026-07):** `defmacro` (user macros), `macroexpand-1`/`macroexpand` and `gensym` are now implemented (interpreter-native + compile-path pre-pass `eval.UserMacroExpander`; see `.todo/44-defmacro-followups.md`).
+
+**Macro introspection** — done:
+1. `macroexpand-1` — single-step expansion (`LispEvaluator.macroexpand1`).
 2. `macroexpand` — full expansion (repeated `macroexpand-1`).
 
 **Compilation**:

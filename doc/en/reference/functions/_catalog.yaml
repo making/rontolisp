@@ -206,6 +206,11 @@ categories:
       - { slug: parse-integer, name: "parse-integer" }
       - { slug: eval, name: "eval" }
       - { slug: load, name: "load" }
+  - title: "Symbols & Macros"
+    functions:
+      - { slug: gensym, name: "gensym" }
+      - { slug: macroexpand-1, name: "macroexpand-1" }
+      - { slug: macroexpand, name: "macroexpand" }
   - title: "Streams & Files"
     functions:
       - { slug: open, name: "open" }

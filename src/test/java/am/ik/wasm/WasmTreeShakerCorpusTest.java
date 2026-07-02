@@ -65,7 +65,10 @@ class WasmTreeShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndStaysValid() throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(corpusSource());
+		// Mirror the CLI compile path: user macros (defmacro) are expanded by the
+		// pre-pass before the compiler ever sees the program.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString(corpusSource()));
 
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.

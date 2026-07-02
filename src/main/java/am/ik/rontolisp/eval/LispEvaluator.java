@@ -46,6 +46,21 @@ public final class LispEvaluator {
 
 	private final PackageResolver packageResolver = new PackageResolver();
 
+	/**
+	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
+	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
+	 * evaluated in its place.
+	 */
+	private final java.util.Map<String, UserMacro> userMacros = new java.util.HashMap<>();
+
+	/**
+	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
+	 * parameter, the body forms, and the environment captured at definition time.
+	 */
+	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body,
+			Environment env) {
+	}
+
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
 
 	/**
@@ -108,6 +123,21 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
 			}
 			return eval(args.get(0));
+		}));
+		// macroexpand-1/macroexpand live on the evaluator (not Environment) because they
+		// need the user macro table. On the compile path, calls with a literal quoted
+		// argument are folded to their expansion by UserMacroExpander.
+		this.globalEnv.defineFunction(LispNames.MACROEXPAND_1, new LispFunction(LispNames.MACROEXPAND_1, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.MACROEXPAND_1 + " expects 1 argument, got " + args.size());
+			}
+			return macroexpand1(args.get(0));
+		}));
+		this.globalEnv.defineFunction(LispNames.MACROEXPAND, new LispFunction(LispNames.MACROEXPAND, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.MACROEXPAND + " expects 1 argument, got " + args.size());
+			}
+			return macroexpand(args.get(0));
 		}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
 			if (args.size() != 1) {
@@ -415,6 +445,8 @@ public final class LispEvaluator {
 					return evalLet(cons, env);
 				case LispNames.DEFUN:
 					return evalDefun(cons, env);
+				case LispNames.DEFMACRO:
+					return evalDefmacro(cons, env);
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
@@ -546,6 +578,12 @@ public final class LispEvaluator {
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
 			}
+			// User macros defined with defmacro: expand (evaluating the macro body with
+			// the unevaluated argument forms bound) and evaluate the expansion. Checked
+			// after the built-in operators, so a user macro can never shadow them.
+			if (this.userMacros.containsKey(sym.name())) {
+				return eval(expandUserMacro(cons), env);
+			}
 			// Lisp-2: a symbol in call position is resolved in the function namespace
 			// only; variable bindings of the same name do not shadow it.
 			LispVal function = resolveFunction(sym.name());
@@ -567,6 +605,123 @@ public final class LispEvaluator {
 		// lexical environment, and returns the function name like Common Lisp.
 		this.globalEnv.defineFunction(name.name(), new LispLambda(params, body, env));
 		return name;
+	}
+
+	private LispVal evalDefmacro(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name)) {
+			throw new LispEvalException(LispNames.DEFMACRO + " expects (defmacro name (params...) body...)");
+		}
+		if (PackageRegistry.isClSymbol(name.name())) {
+			throw new LispEvalException(LispNames.DEFMACRO + " cannot redefine the standard operator " + name.name());
+		}
+		List<LispSymbol> required = new ArrayList<>();
+		LispSymbol rest = null;
+		if (parts.get(2) instanceof LispCons paramCons) {
+			List<LispVal> paramList = paramCons.toList();
+			for (int i = 0; i < paramList.size(); i++) {
+				if (!(paramList.get(i) instanceof LispSymbol param)) {
+					throw new LispEvalException(
+							LispNames.DEFMACRO + " parameter must be a symbol: " + paramList.get(i).print());
+				}
+				if (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name())) {
+					if (i + 2 != paramList.size() || !(paramList.get(i + 1) instanceof LispSymbol restParam)) {
+						throw new LispEvalException(LispNames.DEFMACRO + ": " + param.name()
+								+ " must be followed by exactly one parameter symbol");
+					}
+					rest = restParam;
+					break;
+				}
+				if (param.name().startsWith("&")) {
+					throw new LispEvalException(LispNames.DEFMACRO + " supports required parameters and &rest/&body"
+							+ " only, got " + param.name());
+				}
+				required.add(param);
+			}
+		}
+		this.userMacros.put(name.name(), new UserMacro(required, rest, parts.subList(3, parts.size()), env));
+		return name;
+	}
+
+	/**
+	 * Returns whether the given name is a user macro defined with {@code defmacro}.
+	 * @param name the operator name
+	 * @return {@code true} if a user macro of that name is defined
+	 */
+	public boolean isUserMacro(String name) {
+		return this.userMacros.containsKey(name);
+	}
+
+	/**
+	 * Expands a user macro call by one step: binds the unevaluated argument forms to the
+	 * macro parameters and evaluates the macro body, returning the expansion form.
+	 * @param form the macro call form; its operator must be a defined user macro
+	 * @return the expansion
+	 */
+	public LispVal expandUserMacro(LispCons form) {
+		String name = ((LispSymbol) form.car()).name();
+		UserMacro macro = this.userMacros.get(name);
+		if (macro == null) {
+			throw new LispEvalException(name + " is not a user macro");
+		}
+		List<LispVal> args = form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
+		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
+			throw new LispEvalException(
+					"Macro " + name + " expects " + (macro.rest() == null ? String.valueOf(macro.required().size())
+							: "at least " + macro.required().size()) + " arguments, got " + args.size());
+		}
+		Environment macroEnv = new Environment(macro.env());
+		for (int i = 0; i < macro.required().size(); i++) {
+			macroEnv.define(macro.required().get(i).name(), args.get(i));
+		}
+		if (macro.rest() != null) {
+			LispVal restList = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= macro.required().size(); i--) {
+				restList = new LispCons(args.get(i), restList);
+			}
+			macroEnv.define(macro.rest().name(), restList);
+		}
+		LispVal expansion = LispNil.INSTANCE;
+		for (LispVal bodyExpr : macro.body()) {
+			expansion = eval(bodyExpr, macroEnv);
+		}
+		return expansion;
+	}
+
+	/**
+	 * Expands the top-level form once when its operator is a user macro or a built-in
+	 * macro ({@code macroexpand-1}). Subforms are not walked. Returns the form itself
+	 * (same reference) when the operator is not a macro, so callers can detect
+	 * non-expansion by identity.
+	 * @param form the form to expand
+	 * @return the expansion, or {@code form} unchanged
+	 */
+	public LispVal macroexpand1(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym) {
+			if (isUserMacro(sym.name())) {
+				return expandUserMacro(cons);
+			}
+			LispVal expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			if (expanded != null) {
+				return expanded;
+			}
+		}
+		return form;
+	}
+
+	/**
+	 * Repeats {@link #macroexpand1(LispVal)} on the top-level form until it stops
+	 * expanding ({@code macroexpand}).
+	 * @param form the form to expand
+	 * @return the full expansion of the top-level form
+	 */
+	public LispVal macroexpand(LispVal form) {
+		LispVal expanded = macroexpand1(form);
+		while (expanded != form) {
+			form = expanded;
+			expanded = macroexpand1(form);
+		}
+		return form;
 	}
 
 	private LispVal evalDefvar(LispCons cons, Environment env, boolean force) {
@@ -608,7 +763,7 @@ public final class LispEvaluator {
 	 * @throws LispEvalException if the name is a special operator or macro, or undefined
 	 */
 	private LispVal resolveFunction(String name) {
-		if (SPECIAL_OPERATORS.contains(name)) {
+		if (SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)) {
 			throw new LispEvalException(name + " is a macro or special operator, not a function");
 		}
 		LispVal fn = this.globalEnv.lookupFunctionOrNull(name);

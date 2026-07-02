@@ -162,4 +162,77 @@ class LispReaderTest {
 		assertThat(result).isEqualTo(new LispDouble(3000.5));
 	}
 
+	// --- Backquote (quasiquote): expanded at read time into list/append/quote ---
+
+	@Test
+	void readBackquoteSymbol() {
+		assertThat(LispReader.readFromString("`x").print()).isEqualTo("(quote x)");
+	}
+
+	@Test
+	void readBackquoteSelfEvaluatingAtom() {
+		assertThat(LispReader.readFromString("`42").print()).isEqualTo("42");
+		assertThat(LispReader.readFromString("`\"s\"").print()).isEqualTo("\"s\"");
+	}
+
+	@Test
+	void readBackquoteUnquoteAtTop() {
+		assertThat(LispReader.readFromString("`,(+ 1 2)").print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void readBackquoteList() {
+		assertThat(LispReader.readFromString("`(a ,b 3)").print()).isEqualTo("(list (quote a) b 3)");
+	}
+
+	@Test
+	void readBackquoteSplicing() {
+		assertThat(LispReader.readFromString("`(a ,@bs c)").print())
+			.isEqualTo("(append (list (quote a)) bs (list (quote c)))");
+	}
+
+	@Test
+	void readBackquoteLoneSplicing() {
+		assertThat(LispReader.readFromString("`(,@xs)").print()).isEqualTo("(append xs)");
+	}
+
+	@Test
+	void readBackquoteNestedList() {
+		assertThat(LispReader.readFromString("`(a (b ,c))").print()).isEqualTo("(list (quote a) (list (quote b) c))");
+	}
+
+	@Test
+	void readBackquoteEmptyList() {
+		assertThat(LispReader.readFromString("`()").print()).isEqualTo("nil");
+	}
+
+	@Test
+	void readBackquoteQuoteInTemplate() {
+		assertThat(LispReader.readFromString("`('a ,b)").print()).isEqualTo("(list (list (quote quote) (quote a)) b)");
+	}
+
+	@Test
+	void readBackquoteWithoutWhitespaceAroundUnquote() {
+		// ',' terminates a symbol, so `(a ,b) parses the same without the space.
+		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(list (quote a) b)");
+	}
+
+	@Test
+	void readCommaOutsideBackquoteFails() {
+		assertThatThrownBy(() -> LispReader.readFromString(",x")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("outside of backquote");
+	}
+
+	@Test
+	void readSplicingAtTemplateTopFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("`,@xs")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("inside a list");
+	}
+
+	@Test
+	void readNestedBackquoteFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("``x")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Nested backquote");
+	}
+
 }

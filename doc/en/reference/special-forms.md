@@ -14,6 +14,7 @@ and a runnable example you can evaluate in your browser.
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`/`loop`), which evaluates to `value` (or nil) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
+| `defmacro` | `(defmacro name (params...) body...)` | Define a user macro; a call is expanded (the body runs with unevaluated argument forms bound) and the expansion is evaluated. Supports `&rest`/`&body`. Returns the name |
 | `defvar` | `(defvar name value?)` | Define a global variable, binding `value` only if `name` is not already bound (idempotent). With no `value`, leaves it unbound. Returns the name |
 | `defparameter` | `(defparameter name value)` | Define a global variable, **always** (re)binding `value` even if `name` is already bound. Returns the name |
 | `defconstant` | `(defconstant name value)` | Like `defparameter` (rontolisp does not enforce constancy). Returns the name |

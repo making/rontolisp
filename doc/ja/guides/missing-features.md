@@ -12,8 +12,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 | 機能 | 状況 |
 | --- | --- |
-| `defmacro`（ユーザーマクロ） | 利用不可 |
-| `&optional` / `&rest` / `&key` / `&aux` | 利用不可 |
+| `defmacro`（ユーザーマクロ） | 利用可能（[`defmacro`](../reference/special-forms/defmacro.md) 参照） |
+| `&optional` / `&rest` / `&key` / `&aux` | 利用不可（`defmacro` の `&rest`/`&body` を除く） |
 | `values` / `multiple-value-bind` | 利用不可 |
 | `block` / `return-from` / `tagbody` / `go` | 利用不可 |
 | `catch` / `throw` / `unwind-protect` | 利用不可 |
@@ -28,23 +28,22 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 ## ユーザー定義マクロ（`defmacro`）
 
-rontolisp ではマクロを定義できません。マクロのセットは固定で、コンパイラに
-組み込まれています（`cond`、`case`、`when`、`unless`、`dotimes`、`dolist`、`do`、
-`setf`、`push`、`pop`、`incf` など）。`defmacro` 自体は定義された演算子ではありません。
-
-```console
-> (defmacro square (x) (list '* x x))
-The function defmacro is undefined
-```
-
-利用できるマクロを確認するには `(rontolisp:list-macros)` を実行してください。
+ユーザーマクロは**サポートされています** —
+バッククォートのテンプレート構文や制限事項（`&optional`/`&key` 非対応、
+ネストしたバッククォート非対応、コンパイル済みプログラムの実行時 `eval` では
+認識されない、など）を含む詳細は
+[`defmacro`](../reference/special-forms/defmacro.md) を参照してください。
+組み込みマクロのセット（`cond`、`case`、`when`、`unless`、`dotimes`、`dolist`、
+`do`、`setf`、`push`、`pop`、`incf` など）は `(rontolisp:list-macros)` で
+一覧できます。これらの名前は再定義できません。
 
 ## ラムダリストキーワード（`&optional`、`&rest`、`&key`、`&aux`）
 
-関数は**固定数の位置パラメータ**を取ります。オプション引数、レスト引数、
-キーワード引数はありません。
+**関数**は固定数の位置パラメータを取ります。オプション引数、レスト引数、
+キーワード引数はありません（`defmacro` は例外で、ラムダリストの末尾に
+`&rest`/`&body` パラメータを 1 つ取れます）。
 
-これは陥りやすい落とし穴です。`&rest` のようなラムダリストキーワードは
+これは陥りやすい落とし穴です。`defun` では `&rest` のようなラムダリストキーワードは
 拒否されず、`&rest` という**名前**の通常のパラメータとして黙って扱われます。
 そのため `(defun f (a &rest r) ...)` は可変長関数ではなく、3 パラメータの関数
 （`a`、`&rest`、`r`）を定義します。

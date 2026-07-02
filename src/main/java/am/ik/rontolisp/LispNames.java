@@ -594,6 +594,39 @@ public final class LispNames {
 	/** The {@code defun} macro. */
 	public static final String DEFUN = "defun";
 
+	/**
+	 * The {@code defmacro} special form. User macros are expanded by the interpreter at
+	 * evaluation time and by a compile-time pass on the compilation path, so the JVM/WASM
+	 * backends never see a macro call.
+	 */
+	public static final String DEFMACRO = "defmacro";
+
+	/** The {@code &rest} lambda-list keyword. */
+	public static final String LAMBDA_REST = "&rest";
+
+	/**
+	 * The {@code &body} lambda-list keyword ({@code defmacro} alias for {@code &rest}).
+	 */
+	public static final String LAMBDA_BODY = "&body";
+
+	/**
+	 * The {@code gensym} function. Returns a fresh symbol named
+	 * {@code #:<prefix><counter>} (default prefix {@code g}). rontolisp symbols are plain
+	 * strings, so the result is an ordinary symbol whose uniqueness rests on the
+	 * {@code #:} prefix and a monotonically increasing counter.
+	 */
+	public static final String GENSYM = "gensym";
+
+	/**
+	 * The {@code macroexpand-1} function. Expands the top-level form once when its
+	 * operator is a user macro or a built-in macro; returns the form unchanged otherwise
+	 * (rontolisp has no multiple values, so no second {@code expanded-p} value).
+	 */
+	public static final String MACROEXPAND_1 = "macroexpand-1";
+
+	/** The {@code macroexpand} function. Repeats {@code macroexpand-1} to a fixpoint. */
+	public static final String MACROEXPAND = "macroexpand";
+
 	/** The {@code defvar} special form. */
 	public static final String DEFVAR = "defvar";
 
