@@ -27,6 +27,10 @@ On the WASM backend a function (`defun` or `lambda`) may take at most **seven
 parameters**; a larger arity is a compile error (the interpreter and JVM backends have no
 such limit). Bundle the extra arguments into a list to stay within it.
 
+A float with magnitude 2³¹ or larger computes and compares correctly but
+cannot be printed (`print`/`princ-to-string` trap with an integer overflow);
+this also limits `rontolisp:json-stringify` for such values.
+
 The default output is a Preview 1 core module that exposes only the WASI `_start` entry
 point. The sections below cover the WASM-specific options: marking individual functions as
 host-callable (`rontolisp:wasm-export`), dropping the WASI imports for a reactor/library

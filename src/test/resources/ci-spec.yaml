@@ -975,7 +975,7 @@ cases:
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)
       190
-      (await fetch list-functions list-macros list-special-forms promisep then version)
+      (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn
       nil
@@ -1770,3 +1770,69 @@ cases:
       (if c nil x)
       (+ 41 1)
       (+ 1 2)
+
+  # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
+  # loaded lazily by the interpreter, so one implementation runs on all four
+  # backends. Integers wider than 9 digits become floats (WASM i31 range); a
+  # float with magnitude >= 2^31 cannot be *printed* on WASM (see .todo/46), so
+  # the wide-integer case asserts floatp instead of printing the value.
+  # Hash-table object mode uses single-key objects here because iteration order
+  # is backend-specific.
+  - name: json-parse-and-stringify
+    source: |
+      (print (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))
+      (print (getf (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}") :a))
+      (print (rontolisp:json-parse "[1, 2.5, \"x\", false, null]"))
+      (print (rontolisp:json-parse "1e3"))
+      (print (floatp (rontolisp:json-parse "1234567890123")))
+      (print (rontolisp:json-parse "\"a\\tb\\u3042\""))
+      (print (rontolisp:json-parse "{}"))
+      (let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}" :hash-table)))
+        (print (gethash "content-type" h))
+        (print (hash-table-count h)))
+      (print (rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5)))
+      (print (rontolisp:json-stringify (list 1 (list 2 3) nil)))
+      (print (rontolisp:json-stringify "a\"b"))
+      (print (rontolisp:json-stringify 3/2))
+      (let ((h (make-hash-table)))
+        (setf (gethash "x" h) (list 1 2))
+        (print (rontolisp:json-stringify h)))
+      (print (rontolisp:json-stringify (rontolisp:json-parse "{\"deep\": {\"list\": [{\"k\": \"v\"}, 2.5, true]}}")))
+      (print (funcall #'rontolisp:json-stringify (list 7)))
+    expected: |
+      (:name "rontolisp" :n 2)
+      (:b (1 t nil))
+      (1 2.5 "x" nil nil)
+      1000.0
+      t
+      "a	bあ"
+      nil
+      "text/html"
+      1
+      "{"name":"rontolisp","ok":true,"ver":1.5}"
+      "[1,[2,3],null]"
+      ""a\"b""
+      "1.5"
+      "{"x":[1,2]}"
+      "{"deep":{"list":[{"k":"v"},2.5,true]}}"
+      "[7]"
+
+  # equal on strings compares content on every backend (the WASM _equal/_hash
+  # runtime folds string bytes), so runtime-built strings work as hash-table
+  # keys and equal partners of interned literals.
+  - name: string-equal-content-and-hash-keys
+    source: |
+      (print (equal (concatenate 'string "a" "b") "ab"))
+      (print (equal "ab" 'ab))
+      (let ((h (make-hash-table)))
+        (setf (gethash (concatenate 'string "a" "b") h) 1)
+        (print (gethash "ab" h))
+        (setf (gethash (subseq "xaby" 1 3) h) 2)
+        (print (gethash "ab" h))
+        (print (hash-table-count h)))
+    expected: |
+      t
+      nil
+      1
+      2
+      1

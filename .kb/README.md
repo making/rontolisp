@@ -20,6 +20,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
+- [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify` Lisp-source library + splice
 - [java-interop.md](java-interop.md) -- `java:` reflection interop bridge
 - [template-class-embedding.md](template-class-embedding.md) -- when/how to embed a Java "template" class
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output

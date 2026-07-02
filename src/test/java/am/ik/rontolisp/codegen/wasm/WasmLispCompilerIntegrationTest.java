@@ -47,6 +47,17 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private static String compileAndRunJson(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 	// Preview 1 variant that passes an environment variable and returns the raw
 	// (untrimmed)
 	// stdout, so callers can assert on exact bytes (e.g. that a newline stays 0x0a).
@@ -3221,8 +3232,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
+		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -3676,6 +3687,53 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");
 		assertThat(compileAndRun("(print (length #(10 20 30)))")).isEqualTo("3");
 		assertThat(compileAndRun("(print (length #()))")).isEqualTo("0");
+	}
+
+	@Test
+	void jsonOpsWorkInPreview1Mode() throws Exception {
+		// The Lisp-source JSON library (spliced by JsonLibrary.process, mirroring the
+		// cli pre-pass) runs in Preview 1: plist and hash-table object modes, escapes
+		// (including \\uXXXX decoded to UTF-8 bytes), numbers, stringify and the
+		// #' wrappers.
+		assertThat(
+				compileAndRunJson("(print (rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\"))"))
+			.isEqualTo("(:name \"rontolisp\" :n 2)");
+		assertThat(compileAndRunJson("""
+				(print (rontolisp:json-parse "42"))
+				(print (rontolisp:json-parse "1e3"))
+				(print (floatp (rontolisp:json-parse "1234567890123")))
+				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
+				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
+				""")).isEqualTo("42\n1000.0\nt\n(1 (2 \"x\") nil)\n\"A\u3042\"");
+		assertThat(compileAndRunJson("""
+				(let ((h (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}" :hash-table)))
+				  (print (gethash "content-type" h)))
+				""")).isEqualTo("\"text/html\"");
+		assertThat(compileAndRunJson(
+				"""
+						(print (rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5)))
+						(print (rontolisp:json-stringify (rontolisp:json-parse "{\\"deep\\": {\\"list\\": [{\\"k\\": \\"v\\"}, 2.5, true]}}")))
+						(print (funcall #'rontolisp:json-stringify (list 1 2)))
+						"""))
+			.isEqualTo(
+					"\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"\n\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"\n\"[1,2]\"");
+	}
+
+	@Test
+	void equalAndHashTablesAcceptRuntimeBuiltStringKeys() throws Exception {
+		// Regression: _equal compares string content (via _string_eq) and _hash folds
+		// the content bytes, so a runtime-built string (concatenate/subseq/JSON parse)
+		// is equal to -- and hashes like -- an interned literal.
+		assertThat(compileAndRun("""
+				(print (equal (concatenate 'string "a" "b") "ab"))
+				(print (equal "ab" 'ab))
+				(let ((h (make-hash-table)))
+				  (setf (gethash (concatenate 'string "a" "b") h) 1)
+				  (print (gethash "ab" h))
+				  (setf (gethash (subseq "xaby" 1 3) h) 2)
+				  (print (gethash "ab" h))
+				  (print (hash-table-count h)))
+				""")).isEqualTo("t\nnil\n1\n2\n1");
 	}
 
 }

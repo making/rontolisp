@@ -18,6 +18,12 @@
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmJavaRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.JsonLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/json\\.lisp"
       }
     ]
   }

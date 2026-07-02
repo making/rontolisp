@@ -62,6 +62,11 @@ JavaScript の `fetch` API を模した送信 HTTP リクエストを開始し�
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
 
+JSON のレスポンスボディは
+[`rontolisp:json-parse`](rontolisp-json-parse.md) で Lisp の値にパースでき、
+[`rontolisp:json-stringify`](rontolisp-json-stringify.md) で S 式から JSON の
+リクエスト `:body` を組み立てられます。
+
 ## バックエンドのサポート
 
 - **インタプリタ** および **JVM**: JDK の `java.net.http.HttpClient` を使用します。

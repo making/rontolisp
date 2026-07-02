@@ -17,8 +17,8 @@ public final class PackageIntrospection {
 	 * The functions owned by the {@code rontolisp} package, sorted alphabetically.
 	 */
 	public static final List<String> RONTOLISP_FUNCTION_NAMES = List.of(LispNames.AWAIT, LispNames.FETCH,
-			LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.PROMISEP,
-			LispNames.THEN, LispNames.VERSION);
+			LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
+			LispNames.LIST_SPECIAL_FORMS, LispNames.PROMISEP, LispNames.THEN, LispNames.VERSION);
 
 	/**
 	 * The functions owned by the {@code java} interop package, sorted alphabetically.

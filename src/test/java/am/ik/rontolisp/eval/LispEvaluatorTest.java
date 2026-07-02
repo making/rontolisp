@@ -2851,8 +2851,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
-		assertThat(eval("(rontolisp:list-functions :rontolisp)").print())
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
+		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
 	}
 
 	@Test
@@ -2893,8 +2893,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
-		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print())
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
+		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
 	}
 
 	@Test
@@ -3583,6 +3583,87 @@ class LispEvaluatorTest {
 	@Test
 	void macroexpandWorksThroughRuntimeEval() {
 		assertThat(evalMulti("(eval '(macroexpand-1 '(unless c x)))").print()).isEqualTo("(if c nil x)");
+	}
+
+	@Test
+	void jsonParseReturnsPlistByDefault() {
+		assertThat(eval("(rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\")").print())
+			.isEqualTo("(:name \"rontolisp\" :n 2)");
+		assertThat(eval("(getf (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\") :a)").print())
+			.isEqualTo("(:b (1 t nil))");
+		assertThat(eval("(rontolisp:json-parse \"{}\")").print()).isEqualTo("nil");
+	}
+
+	@Test
+	void jsonParseParsesScalarsArraysAndEscapes() {
+		assertThat(eval("(rontolisp:json-parse \"42\")").print()).isEqualTo("42");
+		assertThat(eval("(rontolisp:json-parse \"-3.5\")").print()).isEqualTo("-3.5");
+		assertThat(eval("(rontolisp:json-parse \"1e3\")").print()).isEqualTo("1000.0");
+		// integers wider than 9 digits become floats on every backend (WASM i31)
+		assertThat(eval("(floatp (rontolisp:json-parse \"1234567890123\"))").print()).isEqualTo("t");
+		assertThat(eval("(rontolisp:json-parse \"true\")").print()).isEqualTo("t");
+		assertThat(eval("(rontolisp:json-parse \"false\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:json-parse \"null\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:json-parse \"[1, [2, \\\"x\\\"], null]\")").print()).isEqualTo("(1 (2 \"x\") nil)");
+		assertThat(eval("(rontolisp:json-parse \"\\\"a\\\\nb\\\"\")").print()).isEqualTo("\"a\nb\"");
+		assertThat(eval("(rontolisp:json-parse \"\\\"\\\\u0041\\\\u3042\\\"\")").print()).isEqualTo("\"Aあ\"");
+	}
+
+	@Test
+	void jsonParseHashTableMode() {
+		assertThat(eval("""
+				(let ((h (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}" :hash-table)))
+				  (gethash "content-type" h))""").print()).isEqualTo("\"text/html\"");
+		// the representation applies recursively
+		assertThat(eval("""
+				(let ((h (rontolisp:json-parse "{\\"a\\": {\\"b\\": 5}}" :hash-table)))
+				  (gethash "b" (gethash "a" h)))""").print()).isEqualTo("5");
+	}
+
+	@Test
+	void jsonParseSignalsOnInvalidInput() {
+		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"{\\\"a\\\": \")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("json-parse");
+		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"1 2\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("trailing");
+		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"1\" :alist)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining(":plist or :hash-table");
+		assertThatThrownBy(() -> eval("(rontolisp:json-parse 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string");
+		// an object key that does not read as a keyword only works with :hash-table
+		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"{\\\"a b\\\": 1}\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining(":hash-table");
+		assertThat(eval("""
+				(let ((h (rontolisp:json-parse "{\\"a b\\": 1}" :hash-table)))
+				  (gethash "a b" h))""").print()).isEqualTo("1");
+	}
+
+	@Test
+	void jsonStringifySerializesLispValues() {
+		assertThat(eval("(rontolisp:json-stringify (list :name \"rontolisp\" :ok t :ver 1.5))").print())
+			.isEqualTo("\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"");
+		assertThat(eval("(rontolisp:json-stringify (list 1 (list 2 3) nil))").print()).isEqualTo("\"[1,[2,3],null]\"");
+		assertThat(eval("(rontolisp:json-stringify \"a\\\"b\")").print()).isEqualTo("\"\"a\\\"b\"\"");
+		assertThat(eval("(rontolisp:json-stringify :key)").print()).isEqualTo("\"\"key\"\"");
+		assertThat(eval("(rontolisp:json-stringify 3/2)").print()).isEqualTo("\"1.5\"");
+		assertThat(eval("""
+				(let ((h (make-hash-table)))
+				  (setf (gethash "x" h) (list 1 2))
+				  (rontolisp:json-stringify h))""").print()).isEqualTo("\"{\"x\":[1,2]}\"");
+	}
+
+	@Test
+	void jsonRoundTripPreservesStructure() {
+		assertThat(eval(
+				"(rontolisp:json-stringify (rontolisp:json-parse \"{\\\"deep\\\": {\\\"list\\\": [{\\\"k\\\": \\\"v\\\"}, 2.5, true]}}\"))")
+			.print()).isEqualTo("\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"");
+	}
+
+	@Test
+	void jsonFunctionsAreFirstClass() {
+		assertThat(eval("(funcall #'rontolisp:json-stringify (list 1 2))").print()).isEqualTo("\"[1,2]\"");
+		assertThat(eval("(funcall #'rontolisp:json-parse \"[7]\")").print()).isEqualTo("(7)");
 	}
 
 }

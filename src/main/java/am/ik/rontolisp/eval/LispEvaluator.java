@@ -47,6 +47,8 @@ public final class LispEvaluator {
 
 	private final PackageResolver packageResolver = new PackageResolver();
 
+	private boolean jsonLibraryLoaded = false;
+
 	/**
 	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
 	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
@@ -164,6 +166,25 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.AWAIT + " expects 1 argument, got " + args.size());
 			}
 			return awaitValue(args.get(0));
+		}));
+		// The JSON functions live here because they dispatch to the Lisp-source
+		// library (JsonLibrary), evaluated into the global environment on first use;
+		// user lambda lists have no &optional yet, so these variadic dispatchers pad
+		// the fixed-arity helper arguments.
+		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);
+		this.globalEnv.defineFunction(jsonParseName, new LispFunction(jsonParseName, args -> {
+			if (args.size() != 1 && args.size() != 2) {
+				throw new LispEvalException(LispNames.JSON_PARSE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			LispVal as = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
+			return applyJsonHelper(JsonLibrary.HELPER_PARSE, List.of(args.get(0), as));
+		}));
+		String jsonStringifyName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_STRINGIFY);
+		this.globalEnv.defineFunction(jsonStringifyName, new LispFunction(jsonStringifyName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.JSON_STRINGIFY + " expects 1 argument, got " + args.size());
+			}
+			return applyJsonHelper(JsonLibrary.HELPER_STRINGIFY, List.of(args.get(0)));
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR, args -> {
 			if (args.size() != 2) {
@@ -1209,6 +1230,18 @@ public final class LispEvaluator {
 		LispVal resolved = awaitValue(apply(promise.fn(), List.of(base), this.globalEnv));
 		promise.settle(resolved);
 		return resolved;
+	}
+
+	// Evaluates the Lisp-source JSON library into the global environment on first
+	// use, then applies the named fixed-arity helper.
+	private LispVal applyJsonHelper(String helperName, List<LispVal> args) {
+		if (!this.jsonLibraryLoaded) {
+			this.jsonLibraryLoaded = true;
+			for (LispVal form : JsonLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+		return apply(resolveFunction(helperName), args, this.globalEnv);
 	}
 
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {

@@ -205,6 +205,8 @@
 | `rontolisp:await` | `(rontolisp:await p)` | プロミスを解決します (ブロッキング)。プロミス以外はそのまま返します |
 | `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | 確定値にコールバックを適用する新しいプロミスを導出します |
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | 値がプロミスなら `t` |
+| `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします: オブジェクトはキーワードのplist（`:hash-table` 指定でハッシュテーブル）になります |
+| `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | 値（plistとハッシュテーブルはオブジェクト）をJSON文字列にシリアライズします |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 
 イントロスペクション関数(`list-functions` / `list-macros` /
@@ -215,7 +217,9 @@
 [fetch](functions/rontolisp-fetch.md)、
 [await](functions/rontolisp-await.md)、
 [then](functions/rontolisp-then.md)、
-[promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:wasm-export`
+[promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（JavaScriptの `JSON.parse`/`JSON.stringify` 相当。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
+[json-parse](functions/rontolisp-json-parse.md) と
+[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。`rontolisp:wasm-export`
 はWASMバックエンド向けのコンパイル時ディレクティブです。
 [リファレンスページ](functions/rontolisp-wasm-export.md) および
 [WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。

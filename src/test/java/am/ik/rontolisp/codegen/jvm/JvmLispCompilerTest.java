@@ -26,7 +26,16 @@ class JvmLispCompilerTest {
 	Path tempDir;
 
 	private String compileAndRun(String lispCode) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		return compileAndRun(LispReader.readAllFromString(lispCode));
+	}
+
+	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunJson(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	private String compileAndRun(List<LispVal> program) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = tempDir.resolve("Test.class");
@@ -2900,8 +2909,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(await fetch list-functions list-macros list-special-forms promisep then version)");
+		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -3311,6 +3320,73 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");
 		assertThat(compileAndRun("(print (length #(10 20 30)))")).isEqualTo("3");
 		assertThat(compileAndRun("(print (length #()))")).isEqualTo("0");
+	}
+
+	@Test
+	void compileAndRunJsonParseReturnsPlistByDefault() throws Exception {
+		assertThat(
+				compileAndRunJson("(print (rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\"))"))
+			.isEqualTo("(:name \"rontolisp\" :n 2)");
+		assertThat(compileAndRunJson(
+				"(print (getf (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\") :a))"))
+			.isEqualTo("(:b (1 t nil))");
+	}
+
+	@Test
+	void compileAndRunJsonParseScalarsAndEscapes() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (rontolisp:json-parse "42"))
+				(print (rontolisp:json-parse "-3.5"))
+				(print (rontolisp:json-parse "1e3"))
+				(print (floatp (rontolisp:json-parse "1234567890123")))
+				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
+				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
+				""")).isEqualTo("42\n-3.5\n1000.0\nt\n(1 (2 \"x\") nil)\n\"A\u3042\"");
+	}
+
+	@Test
+	void compileAndRunJsonParseHashTableMode() throws Exception {
+		assertThat(compileAndRunJson("""
+				(let ((h (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}" :hash-table)))
+				  (print (gethash "content-type" h)))
+				""")).isEqualTo("\"text/html\"");
+	}
+
+	@Test
+	void compileAndRunJsonStringify() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5)))
+				(print (rontolisp:json-stringify (list 1 (list 2 3) nil)))
+				(print (rontolisp:json-stringify 3/2))
+				(let ((h (make-hash-table)))
+				  (setf (gethash "x" h) (list 1 2))
+				  (print (rontolisp:json-stringify h)))
+				""")).isEqualTo(
+				"\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"\n\"[1,[2,3],null]\"\n\"1.5\"\n\"{\"x\":[1,2]}\"");
+	}
+
+	@Test
+	void compileAndRunJsonRoundTrip() throws Exception {
+		assertThat(compileAndRunJson(
+				"(print (rontolisp:json-stringify (rontolisp:json-parse \"{\\\"deep\\\": {\\\"list\\\": [{\\\"k\\\": \\\"v\\\"}, 2.5, true]}}\")))"))
+			.isEqualTo("\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"");
+	}
+
+	@Test
+	void compileAndRunJsonFunctionsAreFirstClass() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (funcall #'rontolisp:json-stringify (list 1 2)))
+				(print (funcall #'rontolisp:json-parse "[7]"))
+				""")).isEqualTo("\"[1,2]\"\n(7)");
+	}
+
+	@Test
+	void compileAndRunJsonSplicedLibraryStaysOutOfClUserIntrospection() throws Exception {
+		assertThat(compileAndRunJson("""
+				(defun my-fn (x) x)
+				(print (rontolisp:json-parse "1"))
+				(print (rontolisp:list-functions :cl-user))
+				""")).isEqualTo("1\n(my-fn)");
 	}
 
 }

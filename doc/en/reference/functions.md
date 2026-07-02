@@ -208,6 +208,8 @@ package system. Each name below links to its own page.
 | `rontolisp:await` | `(rontolisp:await p)` | resolve a promise (blocking); a non-promise passes through unchanged |
 | `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | derive a new promise that applies a callback to the settled value |
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | `t` if the value is a promise |
+| `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string: objects become keyword plists, or hash tables with `:hash-table` |
+| `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | serialize a value (plists and hash tables become objects) to a JSON string |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 
 The introspection functions (`list-functions` / `list-macros` /
@@ -218,7 +220,13 @@ generic promise operations `rontolisp:await` / `rontolisp:then` /
 `rontolisp:promisep`; see the [fetch](functions/rontolisp-fetch.md),
 [await](functions/rontolisp-await.md), [then](functions/rontolisp-then.md) and
 [promisep](functions/rontolisp-promisep.md) reference pages for options, the
-result plist, backend support, and limitations. `rontolisp:wasm-export` is a
+result plist, backend support, and limitations. `rontolisp:json-parse` and
+`rontolisp:json-stringify` convert between JSON documents and Lisp values
+(JavaScript `JSON.parse`/`JSON.stringify` style) -- for example to parse a
+fetch response body; see the
+[json-parse](functions/rontolisp-json-parse.md) and
+[json-stringify](functions/rontolisp-json-stringify.md) reference pages for
+the value mapping and limitations. `rontolisp:wasm-export` is a
 compile-time directive
 for the WASM backend; see its [reference
 page](functions/rontolisp-wasm-export.md) and the

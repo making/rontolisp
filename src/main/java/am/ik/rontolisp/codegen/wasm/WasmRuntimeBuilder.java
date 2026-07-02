@@ -157,8 +157,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.ELSE);
 
-		// symbols and strings -> interned offsets equal
-		emitStringOffsetEq(w);
+		// symbols and strings -> byte-wise same content (via _string_eq), so a
+		// runtime-built string is equal to a literal with the same content
+		emitStringContentEq(w);
 		w.write(Instruction.END); // end ratio if
 		w.write(Instruction.END); // end float if
 		w.write(Instruction.END); // end char if
@@ -173,7 +174,7 @@ final class WasmRuntimeBuilder {
 	 * Builds the _hash helper (structural hash). Takes one (ref null eq) arg (local 0),
 	 * returns an i32 hash that agrees with {@link #buildEqualBody _equal}: equal values
 	 * hash equal. It walks conses recursively and folds i31 integers, character codes,
-	 * interned string/symbol offsets, float bit patterns and ratio components into the
+	 * string/symbol content bytes, float bit patterns and ratio components into the
 	 * result. Value types not recognised by {@code _equal}'s eql base case (e.g.
 	 * closures, which {@code equal} compares by identity) hash to a constant 0, which is
 	 * correct (they simply collide into one bucket).
@@ -182,10 +183,13 @@ final class WasmRuntimeBuilder {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		// one i64 local (index 1) used to fold a float's 64-bit pattern into i32
-		w.write(1); // 1 local group
+		// one i64 local (index 1) used to fold a float's 64-bit pattern into i32,
+		// three i32 locals (2 = h, 3 = ptr, 4 = end) for the string byte fold
+		w.write(2); // 2 local groups
 		w.write(1); // 1 local
 		w.write(Type.I64);
+		w.write(3); // 3 locals
+		w.write(Type.I32);
 
 		// if v is null -> 0
 		getLocal(w, 0);
@@ -232,11 +236,48 @@ final class WasmRuntimeBuilder {
 		charField(w, 0);
 		w.write(Instruction.ELSE);
 
-		// symbol or string -> interned data offset
+		// symbol or string -> fold the content bytes (h = h * 31 + byte), so the
+		// hash agrees with _equal's byte-wise string comparison
 		refTest(w, 0, WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2); // h = 0
 		stringOffset(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3); // ptr = offset
+		getLocal(w, 3);
+		stringLength(w, 0);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(4); // end = ptr + length
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, 3);
+		getLocal(w, 4);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, 2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(31);
+		w.write(Instruction.I32_MUL);
+		getLocal(w, 3);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2); // h = h * 31 + mem[ptr]
+		getLocal(w, 3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3); // ptr = ptr + 1
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // end loop
+		w.write(Instruction.END); // end block
+		getLocal(w, 2);
 		w.write(Instruction.ELSE);
 
 		// float -> fold the 64-bit pattern's halves
@@ -451,25 +492,26 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0);
 	}
 
-	// 1 if both locals are TYPE_STRING structs with the same data offset, else 0.
-	private static void emitStringOffsetEq(WasmWriter w) {
+	// 1 if both locals are TYPE_STRING structs with byte-wise equal content, else 0.
+	// Content comparison (not offset comparison) so runtime-built strings compare
+	// equal to interned literals; _hash folds the same bytes so the invariant
+	// "equal keys hash equal" holds for hash-table keys.
+	private static void emitStringContentEq(WasmWriter w) {
 		refTest(w, 0, WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
 		refTest(w, 1, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		stringOffset(w, 0);
-		stringOffset(w, 1);
-		w.write(Instruction.I32_EQ);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_STRING_EQ);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.ELSE);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
-		w.write(Instruction.END); // end b-string if
-		w.write(Instruction.ELSE);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.END); // end a-string if
+		w.write(Instruction.END); // end both-strings if
 	}
 
 	private static void getLocal(WasmWriter w, int idx) {
@@ -508,6 +550,15 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.writeSignedLeb128(0);
+	}
+
+	private static void stringLength(WasmWriter w, int local) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(1);
 	}
 
 	private static void ratioComponent(WasmWriter w, int local, int func) {

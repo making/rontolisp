@@ -1074,6 +1074,23 @@ public final class LispNames {
 	 */
 	public static final String THEN = "then";
 
+	/**
+	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
+	 * JSON document string into Lisp values (JavaScript {@code JSON.parse}-style). The
+	 * optional second argument selects the object representation: {@code :plist} (the
+	 * default; object keys become keywords) or {@code :hash-table} (object keys stay
+	 * strings).
+	 */
+	public static final String JSON_PARSE = "json-parse";
+
+	/**
+	 * The {@code json-stringify} function provided by the {@code rontolisp} package.
+	 * Serializes a Lisp value into a JSON document string (JavaScript
+	 * {@code JSON.stringify}-style); accepts both the plist and the hash-table object
+	 * representations produced by {@code rontolisp:json-parse}.
+	 */
+	public static final String JSON_STRINGIFY = "json-stringify";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";
 

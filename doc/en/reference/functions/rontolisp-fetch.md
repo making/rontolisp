@@ -63,6 +63,11 @@ alist of `(name . value)` response-header pairs:
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
 
+A JSON response body parses into Lisp values with
+[`rontolisp:json-parse`](rontolisp-json-parse.md), and
+[`rontolisp:json-stringify`](rontolisp-json-stringify.md) builds a JSON
+request `:body` from an s-expression.
+
 ## Backend support
 
 - **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`; the

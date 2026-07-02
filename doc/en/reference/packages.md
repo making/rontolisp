@@ -42,7 +42,7 @@ The default package `cl-user` is empty and uses `cl`, so ordinary programs do no
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch list-functions list-macros list-special-forms promisep then version)
+; => (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```
@@ -65,9 +65,12 @@ helpers above (`version`, `list-functions`, `list-macros`, `list-special-forms`)
 the package provides asynchronous outgoing HTTP via `rontolisp:fetch` (which
 returns a promise) together with the generic promise operations
 `rontolisp:await` (resolve, blocking), `rontolisp:then` (chain a callback) and
-`rontolisp:promisep` (type predicate). All of these have their own pages in the
-[Functions](functions.md#rontolisp-package-functions) reference, including the
-full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
+`rontolisp:promisep` (type predicate), and JSON conversion via
+[`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /
+[`rontolisp:json-stringify`](functions/rontolisp-json-stringify.md)
+(JavaScript `JSON.parse`/`JSON.stringify` style). All of these have their own
+pages in the [Functions](functions.md#rontolisp-package-functions) reference,
+including the full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](functions/rontolisp-await.md) /
 [`rontolisp:then`](functions/rontolisp-then.md) /
 [`rontolisp:promisep`](functions/rontolisp-promisep.md) documentation.
