@@ -10,8 +10,9 @@ return value is marshalled back to the method's return type (a `void` method
 ignores it). This is how a rontolisp lambda becomes a Java listener or
 comparator. For a single-method (SAM) interface the method name is always the
 same, so it is conventionally ignored (the `method` parameter in the examples
-below). Part of the JVM-interpreter-only `java` interop
-package — compiling a `java:` form is an error. See the [Java interop
+below). Part of the JVM-only `java` interop
+package — available on the interpreter and in JVM-compiled classes, not on the
+WASM backend. See the [Java interop
 guide](../../guides/java-interop.md).
 
 ```lisp

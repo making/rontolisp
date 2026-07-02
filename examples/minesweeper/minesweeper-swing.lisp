@@ -5,10 +5,12 @@
 ;;;; front-end (minesweeper-wasm.lisp) renders the board to HTML, this one paints a
 ;;;; Swing grid of clickable labels through the reusable helpers in swing.lisp.
 ;;;;
-;;;; Swing runs only on the interpreter (a java object cannot be lowered to a JVM
-;;;; class or WASM) and needs a display. Run it from anywhere -- the loads resolve
-;;;; relative to this file:
+;;;; Swing runs on the JVM -- interpret this file, or compile it to a .class (the
+;;;; WASM backend cannot lower a java object) -- and needs a display. Run it from
+;;;; anywhere; the loads resolve relative to this file (the compile path inlines
+;;;; them):
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/minesweeper/minesweeper-swing.lisp
+;;;;   java -jar ...-exec.jar examples/minesweeper/minesweeper-swing.lisp -o Minesweeper.class && java Minesweeper
 ;;;;
 ;;;; Left-click opens a cell, right-click flags it, and any click after the game
 ;;;; ends starts a fresh board. Unlike the entropy-free WASM reactor, the

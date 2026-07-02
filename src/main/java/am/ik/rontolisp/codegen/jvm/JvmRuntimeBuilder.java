@@ -155,7 +155,8 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant funcStr, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
 			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod) {
+			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -271,12 +272,9 @@ final class JvmRuntimeBuilder {
 		emitU2(code, consToStringMethod.index());
 		code.add(Opcode.ARETURN);
 
-		// return val.toString();
+		// "#<java class>" for a wrapped host object (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectToString.index());
-		code.add(Opcode.ARETURN);
+		emitDefaultTail(code, objectToString, javaPrint);
 
 		return code;
 	}
@@ -461,7 +459,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant stringSubstring, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
 			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod) {
+			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -598,12 +597,9 @@ final class JvmRuntimeBuilder {
 		emitU2(code, consToDisplayStringMethod.index());
 		code.add(Opcode.ARETURN);
 
-		// return val.toString();
+		// "#<java class>" for a wrapped host object (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectToString.index());
-		code.add(Opcode.ARETURN);
+		emitDefaultTail(code, objectToString, javaPrint);
 
 		return code;
 	}
@@ -723,6 +719,67 @@ final class JvmRuntimeBuilder {
 		emitU2(code, stringConcat.index());
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * Constant-pool references for printing a wrapped {@code java:} host object as
+	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
+	 * lisp-to-string builders only when the program uses {@code java:} interop.
+	 * {@code hashMapClass} is non-null only when the program also uses hash tables, so a
+	 * Lisp hash table (a {@code HashMap} at runtime) keeps its plain {@code toString}
+	 * printing instead of being mistaken for a host object.
+	 */
+	record JavaPrint(ClassConstant bigIntegerClass, @org.jspecify.annotations.Nullable ClassConstant hashMapClass,
+			MethodrefConstant objectGetClass, MethodrefConstant classGetName, MethodrefConstant stringConcat,
+			ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+	}
+
+	/**
+	 * Emits the final fallback of {@code _lispToString}/{@code _lispToDisplayString}:
+	 * plain {@code val.toString()}, preceded -- when {@code java:} interop is in use --
+	 * by a {@code #<java class.Name>} branch for wrapped host objects. {@code
+	 * BigInteger} (a promoted Lisp integer) and, when hash tables are used,
+	 * {@code HashMap} still fall through to {@code toString()}.
+	 */
+	private static void emitDefaultTail(List<Integer> code, MethodrefConstant objectToString,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
+		if (javaPrint != null) {
+			List<Integer> toStringBranches = new ArrayList<>();
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, javaPrint.bigIntegerClass().index());
+			toStringBranches.add(code.size());
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			if (javaPrint.hashMapClass() != null) {
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.INSTANCEOF);
+				emitU2(code, javaPrint.hashMapClass().index());
+				toStringBranches.add(code.size());
+				code.add(Opcode.IFNE);
+				emitU2(code, 0);
+			}
+			// return "#<java ".concat(val.getClass().getName()).concat(">");
+			emitLdc(code, javaPrint.prefix().index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.objectGetClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.classGetName().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.stringConcat().index());
+			emitLdc(code, javaPrint.suffix().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.stringConcat().index());
+			code.add(Opcode.ARETURN);
+			for (int branch : toStringBranches) {
+				patchBranch(code, branch, code.size());
+			}
+		}
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectToString.index());
+		code.add(Opcode.ARETURN);
 	}
 
 	static void emitU2(List<Integer> code, int value) {

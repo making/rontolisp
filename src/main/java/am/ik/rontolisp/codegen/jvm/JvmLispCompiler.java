@@ -212,6 +212,13 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
 				: null;
 
+		// java: interop runtime: emitted only when the program uses one of the five
+		// java: functions. It embeds the (renamed) JavaBridgeTemplate bytecode and
+		// forces the eval runtime (the bridge applies Lisp callables through _apply).
+		boolean usesJava = programUsesAnyJavaOp(program);
+		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJava
+				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
@@ -339,7 +346,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
 		// every arity up to the maximum callable must have a dispatch method. The apply
 		// built-in reuses _apply, so it forces the eval runtime to be emitted as well.
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava
 				|| programUsesSymbol(program, LispNames.APPLY);
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
@@ -393,6 +400,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.objectEquals(objectEquals)
 			.readLineHelper(readLineHelperMethod)
 			.fetchHelper(fetchHelperMethod)
+			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
@@ -676,18 +684,37 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING_DESC)))
 				: null;
 
+		// Wrapped java: host objects print as #<java class.Name> (interpreter parity);
+		// the branch is emitted only when the program uses java: interop.
+		final JvmRuntimeBuilder.@Nullable JavaPrint javaPrint;
+		if (usesJava) {
+			ClassConstant bigIntegerClassForPrint = cp.addClass(cp.addUtf8("java/math/BigInteger"));
+			ClassConstant hashMapClassForPrint = usesHashTables ? cp.addClass(cp.addUtf8("java/util/HashMap")) : null;
+			MethodrefConstant objectGetClass = cp.addMethodref(objectClass,
+					cp.addNameAndType(cp.addUtf8("getClass"), cp.addUtf8("()Ljava/lang/Class;")));
+			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
+			MethodrefConstant classGetName = cp.addMethodref(classClass,
+					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
+			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, hashMapClassForPrint, objectGetClass,
+					classGetName, stringConcat, cp.addString("#<java "), cp.addString(">"));
+		}
+		else {
+			javaPrint = null;
+		}
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod);
+				arrayListClassForPrint, arrayToStringMethod, javaPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
-				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod);
+				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
+				javaPrint);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -777,6 +804,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(gfName)
 						.writeU2(globalFieldDescUtf)
+						.writeU2(0));
+				}
+				if (javaRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(javaRuntime.initedFieldName())
+						.writeU2(javaRuntime.initedFieldDesc())
 						.writeU2(0));
 				}
 				if (usesEval) {
@@ -894,6 +927,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(im.maxStack())
 									.writeU2(im.maxLocals())
 									.writeCode((Object[]) im.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (javaRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaRuntime.initName(),
+							javaRuntime.initDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(javaRuntime.maxStack())
+									.writeU2(javaRuntime.maxLocals())
+									.writeCode((Object[]) javaRuntime.initCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -1053,6 +1097,18 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
 		for (LispVal expr : program) {
 			if (usesSymbol(expr, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// True when the program references any of the five java: interop functions, so the
+	// bridge runtime (and the eval runtime its callbacks need) is emitted.
+	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
+		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
+				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY)) {
+			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
 				return true;
 			}
 		}
@@ -1315,6 +1371,13 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant fetchHelper;
 
+		/**
+		 * The {@code java:} interop bridge references ({@code init}/{@code new}/
+		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
+		 * program uses a {@code java:} function.
+		 */
+		final @Nullable Map<String, MethodrefConstant> javaOps;
+
 		Map<String, MethodrefConstant> numOps = Map.of();
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
@@ -1434,6 +1497,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.objectEquals = Objects.requireNonNull(builder.objectEquals);
 			this.readLineHelper = Objects.requireNonNull(builder.readLineHelper);
 			this.fetchHelper = builder.fetchHelper;
+			this.javaOps = builder.javaOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -1516,6 +1580,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant readLineHelper;
 
 			private @Nullable MethodrefConstant fetchHelper;
+
+			private @Nullable Map<String, MethodrefConstant> javaOps;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -1708,6 +1774,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder fetchHelper(@Nullable MethodrefConstant fetchHelper) {
 				this.fetchHelper = fetchHelper;
+				return this;
+			}
+
+			Builder javaOps(@Nullable Map<String, MethodrefConstant> javaOps) {
+				this.javaOps = javaOps;
 				return this;
 			}
 

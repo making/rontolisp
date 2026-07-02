@@ -5,8 +5,9 @@
 ;;;; and a GridLayout of one JPanel per cell in the center. Examples reuse it as
 ;;;; the rendering layer so their core logic stays free of any UI code.
 ;;;;
-;;;; Swing is reachable only on the interpreter (the JVM-class and WASM backends
-;;;; cannot lower a java object), and only on a machine with a display. The
+;;;; Swing is reachable on the JVM -- interpret the program, or compile it to a
+;;;; .class (the WASM backend cannot lower a java object) -- and it needs a
+;;;; machine with a display. The
 ;;;; loading example resolves "swing.lisp" relative to its own directory, so run
 ;;;; it from anywhere, e.g.:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/life-gui.lisp

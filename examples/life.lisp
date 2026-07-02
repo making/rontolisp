@@ -2,7 +2,7 @@
 ;;;;
 ;;;; The simulation lives in life-core.lisp; this file only loads it and prints a
 ;;;; handful of generations as ASCII. life-gui.lisp renders the same core in a
-;;;; Swing window (interpreter only). The load resolves relative to this file, so
+;;;; Swing window (JVM only). The load resolves relative to this file, so
 ;;;; it runs from anywhere and on all three backends.
 ;;;;
 ;;;; Run:

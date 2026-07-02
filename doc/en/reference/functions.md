@@ -217,10 +217,11 @@ page](functions/rontolisp-wasm-export.md) and the
 ## java Package Functions
 
 The `java` package drives arbitrary Java APIs by reflection. It is
-**JVM-interpreter-only** (`java -jar rontolisp.jar`) — the compiler backends
-cannot lower a host object, and the GraalVM native binary carries no reflection
-metadata for the interop classes — and **not part of Common Lisp**; reference its
-functions with the `java:`
+**JVM-only** — it works on the interpreter (`java -jar rontolisp.jar`) and in
+JVM-compiled classes (the compiler embeds a reflection bridge into the
+generated `.class`), but not on the WASM backend, and the GraalVM native binary
+carries no reflection metadata to interpret it — and **not part of Common
+Lisp**; reference its functions with the `java:`
 qualifier. Each name below links to its own page; the [Java interop
 guide](../guides/java-interop.md) covers marshalling, overload resolution and
 limitations.

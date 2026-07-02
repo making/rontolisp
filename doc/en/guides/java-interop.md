@@ -6,15 +6,20 @@ rontolisp lambda into a Java interface instance. It is how the Swing demos in
 `examples/` (`java-interop.lisp`, `swing.lisp`, `life-gui.lisp`) put a window on
 the screen without any bespoke Java glue.
 
-> **JVM interpreter only.** Interop values are opaque host-object references,
-> which the JVM-class and WASM compiler backends cannot lower, so compiling a
-> form that uses `java:` is a `Cannot compile: java:...` error. And because it
-> loads and calls classes by reflection, it works only under the **JVM-hosted
-> interpreter** (`java -jar rontolisp.jar program.lisp`) — **not** in the GraalVM
-> native binary (`rontolisp program.lisp`). A native image only contains the
-> classes and members its build registered for reflection, and rontolisp's build
-> registers none for interop, so there even `(java:static "java.lang.Math" "max"
-> 3 7)` fails with `No such class`. Treat `java:` as a feature of the JVM jar.
+> **JVM only (interpreter and compiled `.class`).** Interop values are opaque
+> host-object references resolved by reflection, so the feature needs a real
+> JVM: it works under the **JVM-hosted interpreter** (`java -jar rontolisp.jar
+> program.lisp`) and in a **JVM-compiled program** (`-o Prog.class`, run with
+> `java Prog`) — the compiler embeds a small reflection bridge into the
+> generated class, so the output stays a single self-contained `.class` file
+> (running one that uses `java:` requires a JRE at least as new as the one
+> rontolisp was built with). The WASM backend cannot lower host references, so
+> compiling `java:` to `.wasm` remains a `Cannot compile: java:...` error. The
+> GraalVM native binary (`rontolisp program.lisp`) can **compile** a `java:`
+> program to a `.class`, but cannot **interpret** one: a native image only
+> contains the classes and members its build registered for reflection, and
+> rontolisp's build registers none for interop, so there even `(java:static
+> "java.lang.Math" "max" 3 7)` fails with `No such class`.
 
 ## The functions
 
@@ -143,7 +148,7 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 ## A Swing example
 
 `examples/java-interop.lisp` builds a small window directly through the package
-(run it on the interpreter, on a machine with a display):
+(interpret it -- or compile it to a `.class` -- on a machine with a display):
 
 ```console
 (defvar *frame* (java:new "javax.swing.JFrame" "java interop"))
@@ -174,9 +179,16 @@ functions, and `examples/life-gui.lisp` animates Conway's Game of Life with it.
 
 ## Limitations
 
-- **JVM interpreter only** (`java -jar rontolisp.jar`): not on the WASM/JVM-class
-  compiler backends, and not in the GraalVM native binary, whose image carries no
-  reflection metadata for the interop classes.
+- **JVM only**: the interpreter (`java -jar rontolisp.jar`) and JVM-compiled
+  classes (`java Prog`). Not on the WASM backend, and not when interpreting in
+  the GraalVM native binary, whose image carries no reflection metadata for the
+  interop classes (the native binary can still *compile* a `java:` program to a
+  `.class`).
+- In a compiled class the five functions work in call position only: they have
+  no first-class value, so `#'java:call` or `(funcall 'java:new ...)` is a
+  compile error (wrap them in your own `defun` instead), and the embedded
+  `eval` runtime does not know them either. A compiled program that uses
+  `java:` needs a JRE at least as new as the one rontolisp was built with.
 - Symbols, hash tables, dotted (improper) lists and rank-2 arrays are not
   marshalled — pass them as Java collections you build with
   `java:new`/`java:call` instead.

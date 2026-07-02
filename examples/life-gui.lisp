@@ -6,10 +6,12 @@
 ;;;; toroidal Life world decays to a stable "ash" of still lifes and blinkers
 ;;;; after a couple hundred generations, so once it has run long enough this demo
 ;;;; reseeds with the classic patterns plus a fresh random soup to stay lively.
-;;;; Close the window to stop. Interpreter only (Swing), and needs a display.
+;;;; Close the window to stop. JVM only (Swing), and needs a display.
 ;;;;
-;;;; Run from anywhere (the loads resolve relative to this file):
+;;;; Run from anywhere (the loads resolve relative to this file; the compile
+;;;; path inlines them):
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/life-gui.lisp
+;;;;   java -jar ...-exec.jar examples/life-gui.lisp -o Life.class && java Life
 
 (load "life-core.lisp")
 (load "swing.lisp")

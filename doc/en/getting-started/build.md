@@ -50,9 +50,11 @@ for `rontolisp`.
 The same [releases page](https://github.com/making/rontolisp/releases/tag/0.1.0-SNAPSHOT)
 also publishes the self-contained executable JAR
 (`rontolisp-0.1.0-SNAPSHOT-exec.jar`). It needs a Java 25+ runtime but works on
-any platform, and it is the only artifact that can run the JVM-interpreter-only
+any platform, and it is the only artifact that can *interpret* the JVM-only
 [`java:` interop package](../guides/java-interop.md) — the native binaries carry
-no reflection metadata, so `java:` forms fail there.
+no reflection metadata, so interpreting `java:` forms fails there (both
+artifacts can still compile a `java:` program to a `.class` that runs under
+`java`).
 
 ```bash
 wget https://github.com/making/rontolisp/releases/download/0.1.0-SNAPSHOT/rontolisp-0.1.0-SNAPSHOT-exec.jar

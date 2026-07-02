@@ -4,8 +4,9 @@
 
 Constructs a host (Java) object by reflection, choosing the constructor whose
 parameters best match the arguments, and returns an opaque `java` object that
-prints as `#<java <class-name>>`. Part of the JVM-interpreter-only `java` interop
-package — compiling a `java:` form is an error, and it needs the class to be
+prints as `#<java <class-name>>`. Part of the JVM-only `java` interop
+package — available on the interpreter and in JVM-compiled classes, not on the
+WASM backend, and it needs the class to be
 present and reflectable at runtime. See the [Java interop
 guide](../../guides/java-interop.md).
 

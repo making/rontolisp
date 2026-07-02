@@ -35,11 +35,15 @@ import am.ik.rontolisp.LispVal;
  * rank-1 vectors to Java arrays / {@code java.util.List} parameters (packing varargs
  * tails), and returns Java array results as Lisp lists.
  * <p>
- * JVM-interpreter-only: the wrapped objects are {@link LispJavaObject}s, which the
- * compiler backends cannot lower, and the reflection relies on classes (and their
- * members) being registered for reflection at runtime -- a GraalVM native image carries
- * none for interop, so it does not work in the native binary, only under {@code java -jar
- * rontolisp.jar}.
+ * This is the interpreter side of the bridge: the wrapped objects are
+ * {@link LispJavaObject}s, and the reflection relies on classes (and their members) being
+ * registered for reflection at runtime -- a GraalVM native image carries none for
+ * interop, so interpreting {@code java:} works only under {@code java -jar
+ * rontolisp.jar}. The JVM compiler supports the same five functions through its own
+ * rewrite of this class against the compiled value representation
+ * ({@code codegen.jvm.JavaBridgeTemplate}) -- keep the marshalling rules and overload
+ * costs of the two in sync. The WASM backend cannot lower host references and rejects
+ * {@code java:} forms.
  */
 final class JavaInterop {
 

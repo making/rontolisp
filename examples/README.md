@@ -23,13 +23,14 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`mlp.lisp`](mlp.lisp) | Generalized multi-layer perceptron for 2-D circle classification, built on the same array-based vector/matrix representation as `nn.lisp` |
 | [`maze-rl.lisp`](maze-rl.lisp) | Tabular Q-learning that solves a grid maze: a hash-table Q-table keyed by `(row col action)`, idiomatic `random`-based epsilon-greedy exploration, and an ASCII rendering of the learned path. **Non-deterministic:** because `random` is unseeded and per-backend, the exact path and value count differ on each run and backend (the algorithm always converges to a valid route) |
 
-## Java interop / GUI (JVM interpreter only)
+## Java interop / GUI (JVM only)
 
 These drive real Java APIs through the `java:` interop package, so they run on
-the **JVM interpreter only** (`java -jar $JAR ...`) — not the JVM-class/WASM
-compiler backends (which cannot lower a java object) and not the GraalVM native
-binary (which has no reflection metadata for the interop classes) — and need a
-machine with a display. See the
+the **JVM only** — interpret them (`java -jar $JAR ...`) or compile them to a
+`.class` (`-o Prog.class && java Prog`); not the WASM backend (which cannot
+lower a java object) and not interpreted in the GraalVM native binary (which
+has no reflection metadata for the interop classes) — and need a machine with a
+display. See the
 [Java interop guide](../doc/en/guides/java-interop.md).
 
 | File | What it demonstrates |

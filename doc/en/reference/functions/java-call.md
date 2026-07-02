@@ -4,8 +4,9 @@
 
 Invokes an instance method on a `java` object by reflection, choosing the
 overload whose parameters best match the arguments, and returns the marshalled
-result (a `void` method returns `nil`). Part of the JVM-interpreter-only `java`
-interop package — compiling a `java:` form is an error. See the [Java interop
+result (a `void` method returns `nil`). Part of the JVM-only `java` interop
+package — available on the interpreter and in JVM-compiled classes, not on the
+WASM backend. See the [Java interop
 guide](../../guides/java-interop.md).
 
 ```lisp

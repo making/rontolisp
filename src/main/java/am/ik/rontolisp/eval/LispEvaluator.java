@@ -319,11 +319,12 @@ public final class LispEvaluator {
 		registerJava();
 	}
 
-	// Registers the JVM-interpreter-only `java` interop package (a reflection bridge).
-	// Registered here, alongside eval/load, because java:proxy applies a user callback
-	// and so needs the evaluator's apply. These produce LispJavaObject values, which the
-	// JVM-class and WASM backends cannot lower; and the reflection needs runtime
-	// metadata a native image lacks -- so it runs only under `java -jar rontolisp.jar`.
+	// Registers the interpreter side of the `java` interop package (a reflection
+	// bridge). Registered here, alongside eval/load, because java:proxy applies a user
+	// callback and so needs the evaluator's apply. The reflection needs runtime
+	// metadata a native image lacks, so interpreting `java:` works only under
+	// `java -jar rontolisp.jar`; the JVM compiler supports the same functions via its
+	// embedded bridge (codegen.jvm.JavaBridgeTemplate), the WASM backend rejects them.
 	private void registerJava() {
 		JavaInterop.Caller caller = (function, callArgs) -> apply(function, callArgs, this.globalEnv);
 		String jnew = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_NEW);

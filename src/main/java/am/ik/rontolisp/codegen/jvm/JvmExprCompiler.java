@@ -123,6 +123,10 @@ final class JvmExprCompiler {
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
+			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {
+				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
 			switch (sym.name()) {
 				case LispNames.ADD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);

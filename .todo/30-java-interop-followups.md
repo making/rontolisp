@@ -18,10 +18,22 @@ Deliberately deferred (scope was kept to one clean GUI demo; the existing
   same way `life-gui.lisp`/`swing.lisp` were (file-relative `load` works now, so
   drop the "run from inside examples/" caveat) and add README rows.
 
-- **Friendlier compile error.** Compiling a `java:` form currently fails with the
-  generic `Cannot compile: java:static`. Could special-case the `java` package in
-  `Jvm/WasmFunctionCallCompiler` to say "the java interop package is
-  interpreter-only". Low value — the guide already documents it.
+- ~~**Friendlier compile error.**~~ OBSOLETE for the JVM (2026-07-02): the JVM
+  compiler now supports the five `java:` functions natively via an embedded
+  bridge (`codegen.jvm.JavaBridgeTemplate` rewritten against the compiled value
+  representation, base64-embedded + `Lookup.defineClass`'d by the emitted
+  `_javaInit`; see the CLAUDE.md bullet and `JvmJavaInteropCompilerTest`). The
+  WASM backend still fails with the generic `Cannot compile: java:new`; a
+  special-cased "the java interop package needs a JVM backend" message there
+  remains low value.
+
+- **First-class `java:` functions in compiled code.** The compilers have no
+  `BuiltinFunctionWrappers` entries for the five functions (they are variadic,
+  which the fixed-arity wrapper scheme cannot express), so `#'java:call` /
+  `(funcall 'java:new ...)` is a compile error while the interpreter allows it;
+  the embedded `eval` runtime does not know `java:` either. Documented in the
+  guide's limitations. Would need variadic wrapper support or dedicated
+  dispatch entries.
 
 - ~~**Richer marshalling (optional).**~~ DONE (2026-07-02): proper lists /
   rank-1 vectors now marshal to Java arrays (element-wise, incl. primitives)
@@ -31,8 +43,9 @@ Deliberately deferred (scope was kept to one clean GUI demo; the existing
   to an accessible interface declaration. Conversion rules documented in the
   guide (both languages).
 
-- **Native-image reflection config (optional).** Interop is interpreter-only and
-  also unusable in the native binary because arbitrary `Class.forName` is not
-  registered. A curated reflect-config could enable a fixed allow-list of classes
+- **Native-image reflection config (optional).** Interpreting interop in the
+  native binary is unusable because arbitrary `Class.forName` is not registered
+  (the native binary CAN compile a `java:` program to a `.class` since
+  2026-07-02 — the bridge template bytes are a registered resource). A curated reflect-config could enable a fixed allow-list of classes
   in the native binary, but Swing/AWT in a native image is its own (largely
   experimental) problem — out of scope unless specifically requested.

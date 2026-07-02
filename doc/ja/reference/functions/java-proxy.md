@@ -2,7 +2,7 @@
 
 `(java:proxy "fully.qualified.Interface" callable)`
 
-rontolisp の callable を背後に持つ、指定インターフェースのホストインスタンスを生成します。各インターフェースメソッドは `(callable "method-name" arg...)` として callable に振り分けられます。つまり callable の**第 1 引数には呼び出されたメソッドの名前**(文字列)が渡され、残りの引数がそのメソッドの実引数になります。callable の戻り値はメソッドの戻り型へマーシャリングされます (`void` メソッドは無視します)。これにより rontolisp のラムダが Java のリスナーやコンパレータになります。単一メソッド (SAM) インターフェースではメソッド名は常に同じなので、慣習的に無視します (下記の例の `method` 引数)。JVM インタプリタ専用の `java` 連携パッケージの一部であり、`java:` フォームのコンパイルはエラーになります。[Java 連携ガイド](../../guides/java-interop.md)を参照してください。
+rontolisp の callable を背後に持つ、指定インターフェースのホストインスタンスを生成します。各インターフェースメソッドは `(callable "method-name" arg...)` として callable に振り分けられます。つまり callable の**第 1 引数には呼び出されたメソッドの名前**(文字列)が渡され、残りの引数がそのメソッドの実引数になります。callable の戻り値はメソッドの戻り型へマーシャリングされます (`void` メソッドは無視します)。これにより rontolisp のラムダが Java のリスナーやコンパレータになります。単一メソッド (SAM) インターフェースではメソッド名は常に同じなので、慣習的に無視します (下記の例の `method` 引数)。JVM 専用の `java` 連携パッケージの一部であり、インタプリタと JVM クラスへのコンパイルの両方で利用できます (WASM バックエンドでは利用できません)。[Java 連携ガイド](../../guides/java-interop.md)を参照してください。
 
 ```lisp
 (java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get")

@@ -50,9 +50,10 @@ rontolisp --version
 同じ[リリースページ](https://github.com/making/rontolisp/releases/tag/0.1.0-SNAPSHOT)では、
 すべての依存関係を含む実行可能 JAR（`rontolisp-0.1.0-SNAPSHOT-exec.jar`）も公開されています。
 Java 25 以降のランタイムが必要ですが、どのプラットフォームでも動作します。また、JVM
-インタプリタ専用の [`java:` 連携パッケージ](../guides/java-interop.md)を実行できる唯一の
+専用の [`java:` 連携パッケージ](../guides/java-interop.md)を*インタプリタ実行*できる唯一の
 成果物です。ネイティブバイナリはリフレクションのメタデータを持たないため、`java:`
-フォームはそこでは失敗します。
+フォームのインタプリタ実行はそこでは失敗します (どちらの成果物でも `java:` プログラムを
+`.class` にコンパイルして `java` で実行することは可能です)。
 
 ```bash
 wget https://github.com/making/rontolisp/releases/download/0.1.0-SNAPSHOT/rontolisp-0.1.0-SNAPSHOT-exec.jar

@@ -28,9 +28,10 @@ java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/minesweeper/mineswee
 ```
 
 Left-click opens a cell, right-click flags it, and any click after the game ends
-starts a fresh board. The Swing front-end runs only on the interpreter (a Java
-object cannot be compiled to a JVM class or WASM) and needs a display. Unlike the
-entropy-free browser reactor, the interpreter has `random`, so this build lays
+starts a fresh board. The Swing front-end runs on the JVM -- interpret it, or
+compile it to a `.class` (`-o Minesweeper.class`; WASM cannot lower a Java
+object) -- and needs a display. Unlike the
+entropy-free browser reactor, this build has `random`, so it lays
 its own mines -- keeping them off the first click. The rendering layer reuses the
 reusable [`../swing.lisp`](../swing.lisp) grid helpers (extended here with a
 clickable, text-capable label grid).

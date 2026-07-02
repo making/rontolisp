@@ -225,7 +225,7 @@ categories:
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }
       - { slug: rontolisp-fetch, name: "rontolisp:fetch" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
-  - title: "java Package (JVM interpreter only)"
+  - title: "java Package (JVM only)"
     functions:
       - { slug: java-new, name: "java:new" }
       - { slug: java-call, name: "java:call" }

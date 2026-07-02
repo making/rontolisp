@@ -2,7 +2,7 @@
 
 `(java:new "fully.qualified.ClassName" args...)`
 
-リフレクションでホスト (Java) オブジェクトを生成します。引数に最も適合するパラメータを持つコンストラクタを選び、`#<java <class-name>>` と表示される不透明な `java` オブジェクトを返します。JVM インタプリタ専用の `java` 連携パッケージの一部であり、`java:` フォームのコンパイルはエラーになります。また実行時にクラスが存在しリフレクション可能である必要があります。[Java 連携ガイド](../../guides/java-interop.md)を参照してください。
+リフレクションでホスト (Java) オブジェクトを生成します。引数に最も適合するパラメータを持つコンストラクタを選び、`#<java <class-name>>` と表示される不透明な `java` オブジェクトを返します。JVM 専用の `java` 連携パッケージの一部であり、インタプリタと JVM クラスへのコンパイルの両方で利用できます (WASM バックエンドでは利用できません)。また実行時にクラスが存在しリフレクション可能である必要があります。[Java 連携ガイド](../../guides/java-interop.md)を参照してください。
 
 ```lisp
 (java:call (java:new "java.lang.StringBuilder" "ab") "length")   ; => 2
