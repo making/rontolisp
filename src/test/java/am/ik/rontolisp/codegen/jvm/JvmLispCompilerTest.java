@@ -66,6 +66,18 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}
 
+	// A non-ASCII string or symbol becomes a CONSTANT_Utf8 entry, which must be
+	// written as modified UTF-8 with a BYTE length -- a char-count length makes the
+	// whole class fail to load with "Illegal UTF8 string in constant pool".
+	@Test
+	void compileAndRunNonAsciiConstants() throws Exception {
+		assertThat(compileAndRun("(princ \"✸⚑✗\")")).isEqualTo("✸⚑✗");
+		assertThat(compileAndRun("(princ \"日本語\")")).isEqualTo("日本語");
+		assertThat(compileAndRun("(print '日本語)")).isEqualTo("日本語");
+		// A supplementary character encodes as a CESU-8 surrogate pair in the pool.
+		assertThat(compileAndRun("(princ \"💣\")")).isEqualTo("💣");
+	}
+
 	@Test
 	void compileAndRunDefvarDefinesGlobal() throws Exception {
 		assertThat(compileAndRun("(defvar *x* 42) (print *x*)")).isEqualTo("42");

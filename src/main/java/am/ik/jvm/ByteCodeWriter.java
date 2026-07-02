@@ -75,15 +75,38 @@ public class ByteCodeWriter {
 	}
 
 	/**
-	 * Write a UTF-8 string with its length prefix.
+	 * Write a {@code CONSTANT_Utf8} string with its length prefix. The class-file format
+	 * uses "modified UTF-8": the u2 length counts <em>bytes</em>, {@code U+0000} is
+	 * encoded as the two-byte sequence {@code 0xC0 0x80}, and a supplementary character
+	 * is encoded as its CESU-8 surrogate pair -- encoding each UTF-16 char independently
+	 * produces exactly that.
 	 * @param s the string to write
 	 * @return this instance for chaining
 	 */
 	public ByteCodeWriter writeUtf8Info(String s) {
+		final ByteArrayOutputStream buf = new ByteArrayOutputStream(s.length());
+		for (int i = 0; i < s.length(); i++) {
+			final char c = s.charAt(i);
+			if (c >= 0x0001 && c <= 0x007F) {
+				buf.write(c);
+			}
+			else if (c <= 0x07FF) { // includes U+0000
+				buf.write(0xC0 | ((c >> 6) & 0x1F));
+				buf.write(0x80 | (c & 0x3F));
+			}
+			else {
+				buf.write(0xE0 | ((c >> 12) & 0x0F));
+				buf.write(0x80 | ((c >> 6) & 0x3F));
+				buf.write(0x80 | (c & 0x3F));
+			}
+		}
+		final byte[] bytes = buf.toByteArray();
+		if (bytes.length > 0xFFFF) {
+			throw new IllegalArgumentException("CONSTANT_Utf8 exceeds 65535 bytes: " + bytes.length);
+		}
 		try {
-			final int len = s.length();
-			this.writeU2(len);
-			out.write(s.getBytes(StandardCharsets.UTF_8));
+			this.writeU2(bytes.length);
+			out.write(bytes);
 		}
 		catch (IOException e) {
 			throw new UncheckedIOException(e);

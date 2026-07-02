@@ -18,6 +18,31 @@ class ByteCodeWriterTest {
 	@TempDir
 	Path tempDir;
 
+	// CONSTANT_Utf8 requires the class-file "modified UTF-8": the u2 length counts
+	// BYTES (not chars), U+0000 is the two-byte 0xC0 0x80, and a supplementary
+	// character is encoded as its CESU-8 surrogate pair (never a 4-byte sequence).
+	@Test
+	void writeUtf8InfoEncodesModifiedUtf8() {
+		assertThat(utf8Bytes("A")).containsExactly(0x00, 0x01, 'A');
+		// U+2738 (3-byte BMP char): the length must be 3, not the char count 1.
+		assertThat(utf8Bytes("✸")).containsExactly(0x00, 0x03, 0xE2, 0x9C, 0xB8);
+		// U+0000 must not be a raw 0x00 byte.
+		assertThat(utf8Bytes("\u0000")).containsExactly(0x00, 0x02, 0xC0, 0x80);
+		// U+1F4A3 (supplementary): the surrogate pair D83D DCA3 as two 3-byte units.
+		assertThat(utf8Bytes("💣")).containsExactly(0x00, 0x06, 0xED, 0xA0, 0xBD, 0xED, 0xB2, 0xA3);
+	}
+
+	private static int[] utf8Bytes(String s) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new ByteCodeWriter(out).writeUtf8Info(s);
+		byte[] bytes = out.toByteArray();
+		int[] unsigned = new int[bytes.length];
+		for (int i = 0; i < bytes.length; i++) {
+			unsigned[i] = bytes[i] & 0xFF;
+		}
+		return unsigned;
+	}
+
 	@Test
 	void generateAndRunHelloWorld() throws Exception {
 		ConstantPool cp = new ConstantPool();

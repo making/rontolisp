@@ -142,6 +142,18 @@ cases:
     expected: |
       "hello"
       "world"
+  - name: non-ascii-string-and-symbol-constants
+    # A non-ASCII constant becomes a JVM CONSTANT_Utf8 entry, which must be
+    # modified UTF-8 with a byte length (a char-count length breaks class
+    # loading with "Illegal UTF8 string in constant pool").
+    source: |
+      (princ "ミネ") (terpri)
+      (princ "✸⚑✗") (terpri)
+      (print '日本語)
+    expected: |
+      ミネ
+      ✸⚑✗
+      日本語
   - name: list-car-cdr-cons
     source: |
       (print (car (cons 1 2)))
