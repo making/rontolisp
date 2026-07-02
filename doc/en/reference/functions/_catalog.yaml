@@ -229,6 +229,7 @@ categories:
       - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }
       - { slug: rontolisp-fetch, name: "rontolisp:fetch" }
+      - { slug: rontolisp-await, name: "rontolisp:await" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
   - title: "java Package (JVM only)"
     functions:

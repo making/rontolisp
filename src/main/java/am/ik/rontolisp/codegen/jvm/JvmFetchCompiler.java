@@ -7,11 +7,12 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles {@code rontolisp:fetch}: performs an outgoing HTTP request (JavaScript
- * {@code fetch}-style) and returns the property list
- * {@code (:status <int> :body <string> :headers <alist>)}. The request URL is the first
- * argument; an optional second argument is an options property list ({@code :method},
- * {@code :headers}). The actual work is performed by the {@code _fetch} runtime helper
+ * Compiles {@code rontolisp:fetch}: starts an outgoing HTTP request (JavaScript
+ * {@code fetch}-style) and immediately returns a promise (a {@code Long} handle) whose
+ * result plist {@code (:status <int> :body <string> :headers <alist>)} is obtained via
+ * {@code rontolisp:await}. The request URL is the first argument; an optional second
+ * argument is an options property list ({@code :method}, {@code :headers},
+ * {@code :body}). The actual work is performed by the {@code _fetch} runtime helper
  * emitted by {@link JvmFetchRuntimeBuilder}; this compiler only evaluates the arguments
  * and calls it.
  */

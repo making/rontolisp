@@ -10,5 +10,5 @@
 [パッケージのイントロスペクション](../packages.md#package-introspection) を参照してください。
 
 ```lisp
-(rontolisp:list-functions :rontolisp) ; => (fetch list-functions list-macros list-special-forms version)
+(rontolisp:list-functions :rontolisp) ; => (await fetch list-functions list-macros list-special-forms version)
 ```

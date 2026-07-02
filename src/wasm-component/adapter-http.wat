@@ -1,14 +1,18 @@
 ;; preview1-to-WASI-0.3 adapter core module, HTTP variant (rontolisp:fetch).
 ;;
 ;; Identical to adapter.wat for the eight wasi_snapshot_preview1 functions (base I/O over
-;; WASI 0.3 stream<u8> / future<T>), PLUS a `fetch` export implementing outgoing HTTP. fetch
-;; stays on WASI 0.2 (wasi:http@0.2 + wasi:io@0.2) because an async stream/future
-;; wasi:http@0.3 does not exist upstream yet (see ../../TODO.md): it parses the URL, builds
-;; an outgoing-request, sends it via outgoing-handler.handle, blocks on the response
-;; pollable, then serializes the response status, headers and body back for the rontolisp
-;; core. So the base byte I/O uses the 0.3 async canonical built-ins while the http body
-;; streaming uses the 0.2 wasi:io input-stream / output-stream blocking ops (imported here
-;; under distinct names io-read / io-write / drop-in / drop-out).
+;; WASI 0.3 stream<u8> / future<T>), PLUS `fetch-start` / `fetch-await` exports
+;; implementing asynchronous outgoing HTTP (the rontolisp:fetch promise API). fetch stays
+;; on WASI 0.2 (wasi:http@0.2 + wasi:io@0.2) because an async stream/future wasi:http@0.3
+;; does not exist upstream yet (see ../../TODO.md). fetch-start parses the URL, builds an
+;; outgoing-request, sends it via outgoing-handler.handle (streaming the request body if
+;; any) and returns the future-incoming-response handle IMMEDIATELY -- that handle is the
+;; promise the rontolisp core hands out, and several can be in flight at once. fetch-await
+;; then blocks on the response pollable and serializes the response status, headers and
+;; body back for the rontolisp core. So the base byte I/O uses the 0.3 async canonical
+;; built-ins while the http body streaming uses the 0.2 wasi:io input-stream /
+;; output-stream blocking ops (imported here under distinct names io-read / io-write /
+;; drop-in / drop-out).
 ;;
 ;; Straight-line synchronous code is fine: `run` is lifted as a STACKFUL async export, so
 ;; both the 0.3 stream/future built-ins and the synchronous 0.2 pollable.block block
@@ -273,26 +277,23 @@
         (br $l)))
     (i32.const 0))
 
-  ;; fetch(method, url_ptr, url_len, req_body_ptr, req_body_len, rhdr_ptr, rhdr_len, st_ptr,
-  ;;       rhdr_out, rhdr_len_out, body_out, body_len_out) -> errno. Performs an outgoing
-  ;; request over wasi:http@0.2 and writes the status, a serialized response-header buffer
-  ;; (at 0x60000) and the response body bytes (at 0x70000) back through the out pointers.
-  ;; method is the WASI http method variant discriminant (0=get,1=head,2=post,3=put,
-  ;; 4=delete,6=options,8=patch). The request-header buffer is count-prefixed:
+  ;; fetch-start(method, url_ptr, url_len, req_body_ptr, req_body_len, rhdr_ptr, rhdr_len,
+  ;;             handle_out) -> errno. Starts an outgoing request over wasi:http@0.2:
+  ;; builds and sends the request (streaming the request body if any) and writes the
+  ;; future-incoming-response handle -- the PROMISE the rontolisp core hands out -- through
+  ;; handle_out without waiting for the response. method is the WASI http method variant
+  ;; discriminant (0=get,1=head,2=post,3=put,4=delete,6=options,8=patch). The
+  ;; request-header buffer is count-prefixed:
   ;;   count:u32, then per header { name_len:u32, name bytes, value_len:u32, value bytes }.
-  (func $fetch
+  (func $fetch_start
     (param $method i32) (param $url_ptr i32) (param $url_len i32)
     (param $req_body_ptr i32) (param $req_body_len i32)
     (param $rhdr_ptr i32) (param $rhdr_len i32)
-    (param $st_ptr i32) (param $rhdr_out i32) (param $rhdr_len_out i32)
-    (param $body_out i32) (param $body_len_out i32) (result i32)
-    (local $fields i32) (local $req i32) (local $future i32) (local $poll i32)
-    (local $resp i32) (local $rh i32) (local $body i32) (local $stream i32)
+    (param $handle_out i32) (result i32)
+    (local $fields i32) (local $req i32) (local $future i32)
     (local $i i32) (local $colon i32) (local $isHttps i32)
     (local $authStart i32) (local $authLen i32) (local $pathStart i32) (local $pathLen i32)
     (local $p i32) (local $cnt i32) (local $k i32) (local $nl i32) (local $vl i32) (local $np i32) (local $vp i32)
-    (local $ep i32) (local $ecnt i32) (local $hp i32) (local $e i32)
-    (local $out i32) (local $total i32) (local $src i32) (local $n i32) (local $j i32)
     (local $obody i32) (local $bstream i32) (local $bi i32) (local $chunk i32)
 
     ;; --- parse URL: find "://" ---
@@ -385,6 +386,24 @@
         (call $drop_out (local.get $bstream))
         (call $body_finish (local.get $obody) (i32.const 0) (i32.const 0) (i32.const 0x508D0))))
 
+    ;; The request is now fully sent and in flight: hand the future handle back as the
+    ;; promise. fetch-await picks it up from here.
+    (i32.store (local.get $handle_out) (local.get $future))
+    (i32.const 0))
+
+  ;; fetch-await(handle, st_ptr, rhdr_out, rhdr_len_out, body_out, body_len_out) -> errno.
+  ;; Blocks until the in-flight request started by fetch-start (handle = its
+  ;; future-incoming-response) has a response, then writes the status, a serialized
+  ;; response-header buffer (at 0x60000) and the response body bytes (at 0x70000) back
+  ;; through the out pointers. The 0x60000/0x70000 buffers are shared scratch: the
+  ;; rontolisp core copies them into GC values before the next fetch-await runs.
+  (func $fetch_await
+    (param $future i32) (param $st_ptr i32) (param $rhdr_out i32) (param $rhdr_len_out i32)
+    (param $body_out i32) (param $body_len_out i32) (result i32)
+    (local $poll i32) (local $resp i32) (local $rh i32) (local $body i32) (local $stream i32)
+    (local $ep i32) (local $ecnt i32) (local $hp i32) (local $e i32)
+    (local $np i32) (local $nl i32) (local $vp i32) (local $vl i32)
+    (local $out i32) (local $total i32) (local $src i32) (local $n i32) (local $i i32) (local $j i32)
     (local.set $poll (call $future_subscribe (local.get $future)))
     (call $poll_block (local.get $poll))
     (call $drop_pollable (local.get $poll))
@@ -468,10 +487,13 @@
     (i32.store (local.get $body_len_out) (local.get $total))
 
     ;; --- drops ---
+    ;; The future is deliberately NOT dropped: its handle is the promise the rontolisp
+    ;; core keys its await-result cache on, and wasmtime reuses handle indices after a
+    ;; drop -- a later fetch would get the same number and awaits would cross wires.
+    ;; Keeping the settled future alive (a few bytes per request) keeps handles unique.
     (call $drop_in (local.get $stream))
     (call $drop_body (local.get $body))
     (call $drop_resp (local.get $resp))
-    (call $drop_future (local.get $future))
     (i32.const 0))
 
   (export "fd_write" (func $fd_write))
@@ -482,4 +504,5 @@
   (export "clock_time_get" (func $clock_time_get))
   (export "environ_sizes_get" (func $environ_sizes_get))
   (export "environ_get" (func $environ_get))
-  (export "fetch" (func $fetch)))
+  (export "fetch-start" (func $fetch_start))
+  (export "fetch-await" (func $fetch_await)))

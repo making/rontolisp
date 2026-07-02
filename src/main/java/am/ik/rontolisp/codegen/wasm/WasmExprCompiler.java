@@ -133,6 +133,10 @@ final class WasmExprCompiler {
 					WasmFetchCompiler.compile(cons, ctx);
 					return;
 				}
+				if (LispNames.AWAIT.equals(qn.member())) {
+					WasmAwaitCompiler.compile(cons, ctx);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {

@@ -12,25 +12,27 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Builds the JVM bytecode for the {@code rontolisp:fetch} built-in, emitted as a
- * {@code private static Object _fetch(Object url, Object options)} method into the
- * generated standalone {@code .class}. The method performs an outgoing HTTP request
- * (JavaScript {@code fetch}-style) using the JDK {@link java.net.http.HttpClient} and
- * returns the property list {@code (:status <int> :body <string> :headers <alist>)} in
- * the shared runtime value representation ({@code Long} status, quote-wrapped
- * {@code String} body, and an alist of quote-wrapped {@code (name . value)} string pairs,
- * one entry per response header name).
+ * Builds the JVM bytecode for the {@code rontolisp:fetch} / {@code rontolisp:await}
+ * built-ins, emitted as two {@code private static} methods into the generated standalone
+ * {@code .class}. {@code _fetch(Object url, Object options)} <em>starts</em> an outgoing
+ * HTTP request (JavaScript {@code fetch}-style) via
+ * {@link java.net.http.HttpClient#sendAsync}, stores the returned
+ * {@link java.util.concurrent.CompletableFuture} in the static {@code _promises} table
+ * and immediately returns the promise: a {@code Long} handle indexing that table.
+ * {@code _await(Object promise)} blocks on the future ({@code join()}) and returns the
+ * property list {@code (:status <int> :body <string> :headers <alist>)} in the shared
+ * runtime value representation ({@code Long} status, quote-wrapped {@code String} body,
+ * and an alist of quote-wrapped {@code (name . value)} string pairs, one entry per
+ * response header name). A failed request propagates from {@code join()} as a
+ * {@code CompletionException} -- the JavaScript await-rejection timing.
  *
  * <p>
  * The optional {@code options} argument is a property list; {@code :method} (default
  * {@code "GET"}; one of GET/HEAD/POST/PUT/DELETE/OPTIONS/PATCH, matched
  * case-insensitively and sent in canonical upper case), {@code :headers} (a
  * request-header alist) and {@code :body} (a request body string) are recognized. The
- * method is only emitted when the program actually uses {@code rontolisp:fetch}.
- * {@code HttpClient.send} declares checked
- * {@code IOException}/{@code InterruptedException}, but the JVM does not enforce checked
- * exceptions at the bytecode level, so the call needs no exception table; an exception
- * simply propagates.
+ * methods are only emitted when the program actually uses {@code rontolisp:fetch} or
+ * {@code rontolisp:await}.
  */
 final class JvmFetchRuntimeBuilder {
 
@@ -40,6 +42,18 @@ final class JvmFetchRuntimeBuilder {
 	/** The {@code _fetch} method descriptor. */
 	static final String METHOD_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	/** The emitted {@code _await} method name. */
+	static final String AWAIT_METHOD_NAME = "_await";
+
+	/** The {@code _await} method descriptor. */
+	static final String AWAIT_METHOD_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/** The static promise-table field name ({@code java.util.ArrayList} of futures). */
+	static final String PROMISES_FIELD = "_promises";
+
+	/** The promise-table field descriptor. */
+	static final String PROMISES_DESC = "Ljava/util/ArrayList;";
+
 	private JvmFetchRuntimeBuilder() {
 	}
 
@@ -47,8 +61,13 @@ final class JvmFetchRuntimeBuilder {
 	record FetchMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 	}
 
+	/** The two emitted method bodies ({@code _fetch} and {@code _await}). */
+	record FetchRuntime(FetchMethod fetch, FetchMethod await) {
+	}
+
 	/**
-	 * Builds the {@code _fetch} method body and the constant-pool entries it references.
+	 * Builds the {@code _fetch} / {@code _await} method bodies and the constant-pool
+	 * entries they reference.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 * @param objectClass {@code java/lang/Object}
@@ -58,9 +77,9 @@ final class JvmFetchRuntimeBuilder {
 	 * @param stringLength {@code String.length()}
 	 * @param stringSubstring {@code String.substring(II)}
 	 * @param stringConcat {@code String.concat(String)}
-	 * @return the method body
+	 * @return the two method bodies
 	 */
-	static FetchMethod build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
+	static FetchRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
 			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
 		// --- Interface / class references for the JDK HTTP client ---
@@ -71,9 +90,28 @@ final class JvmFetchRuntimeBuilder {
 		ClassConstant httpClientClass = cp.addClass(cp.addUtf8("java/net/http/HttpClient"));
 		MethodrefConstant newHttpClient = cp.addMethodref(httpClientClass,
 				cp.addNameAndType(cp.addUtf8("newHttpClient"), cp.addUtf8("()Ljava/net/http/HttpClient;")));
-		MethodrefConstant clientSend = cp
-			.addMethodref(httpClientClass, cp.addNameAndType(cp.addUtf8("send"), cp.addUtf8(
-					"(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/net/http/HttpResponse;")));
+		MethodrefConstant clientSendAsync = cp
+			.addMethodref(httpClientClass, cp.addNameAndType(cp.addUtf8("sendAsync"), cp.addUtf8(
+					"(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/util/concurrent/CompletableFuture;")));
+
+		// --- Promise table (static ArrayList of CompletableFutures) + await support ---
+		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+		MethodrefConstant arrayListInit = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+		MethodrefConstant arrayListAdd = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		MethodrefConstant arrayListSize = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+		MethodrefConstant arrayListGet = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
+		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
+		MethodrefConstant longLongValue = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
+		MethodrefConstant futureJoin = cp.addMethodref(futureClass,
+				cp.addNameAndType(cp.addUtf8("join"), cp.addUtf8("()Ljava/lang/Object;")));
+		ConstantPool.FieldrefConstant promisesField = cp.addFieldref(thisClass,
+				cp.addNameAndType(cp.addUtf8(PROMISES_FIELD), cp.addUtf8(PROMISES_DESC)));
 
 		ClassConstant httpRequestClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest"));
 		MethodrefConstant newBuilder = cp.addMethodref(httpRequestClass, cp.addNameAndType(cp.addUtf8("newBuilder"),
@@ -282,8 +320,9 @@ final class JvmFetchRuntimeBuilder {
 		a.op(0);
 		a.op(Opcode.POP); // discard returned builder
 
-		// response = HttpClient.newHttpClient().send(builder.build(),
-		// BodyHandlers.ofString())
+		// future = HttpClient.newHttpClient().sendAsync(builder.build(),
+		// BodyHandlers.ofString()) -- the request starts NOW and runs on the client's
+		// executor threads while the compiled program continues.
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(newHttpClient.index()); // [client]
 		a.aload(2); // [client, builder]
@@ -294,124 +333,178 @@ final class JvmFetchRuntimeBuilder {
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(ofString.index()); // [client, request, handler]
 		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(clientSend.index()); // [response]
+		a.u2(clientSendAsync.index()); // [future]
 		a.astore(4);
 
-		// status (slot 12) = Long.valueOf(response.statusCode())
-		a.aload(4);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(statusCode.index());
-		a.op(1);
-		a.op(0); // [statusI]
+		// Lazily initialize the promise table, then
+		// handle = _promises.size(); _promises.add(future); return Long.valueOf(handle)
+		int tableReady = a.label();
+		a.op(Opcode.GETSTATIC);
+		a.u2(promisesField.index());
+		a.branch(Opcode.IFNONNULL, tableReady);
+		a.op(Opcode.NEW);
+		a.u2(arrayListClass.index());
+		a.op(Opcode.DUP);
+		a.op(Opcode.INVOKESPECIAL);
+		a.u2(arrayListInit.index());
+		a.op(Opcode.PUTSTATIC);
+		a.u2(promisesField.index());
+		a.bind(tableReady);
+		a.op(Opcode.GETSTATIC);
+		a.u2(promisesField.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(arrayListSize.index()); // [handleI]
 		a.op(Opcode.I2L);
 		a.op(Opcode.INVOKESTATIC);
-		a.u2(longValueOf.index());
-		a.astore(12);
-
-		// body (slot 14) = quote(response.body())
+		a.u2(longValueOf.index()); // [handleLong]
+		a.op(Opcode.GETSTATIC);
+		a.u2(promisesField.index());
 		a.aload(4);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(responseBody.index());
-		a.op(1);
-		a.op(0);
-		a.checkcast(stringClass);
-		quoteWrap(a, quote, stringConcat);
-		a.astore(14);
-
-		// Build response-header alist into slot 5 (init null for definite assignment).
-		a.aconstNull();
-		a.astore(5);
-		a.aload(4);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(responseHeaders.index());
-		a.op(1);
-		a.op(0); // [HttpHeaders]
 		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(headersMap.index()); // [Map]
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(mapEntrySet.index());
-		a.op(1);
-		a.op(0); // [Set]
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(setIterator.index());
-		a.op(1);
-		a.op(0); // [Iterator]
-		a.astore(6);
-		int eLoop = a.label();
-		int eEnd = a.label();
-		a.bind(eLoop);
-		a.aload(6);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(iteratorHasNext.index());
-		a.op(1);
-		a.op(0); // [boolean]
-		a.branch(Opcode.IFEQ, eEnd);
-		// entry = iterator.next() (slot 7 = entry, slot 8 = pair array)
-		a.aload(6);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(iteratorNext.index());
-		a.op(1);
-		a.op(0);
-		a.checkcast(entryClass);
-		a.astore(7);
-		// pair = new Object[2]
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.astore(8);
-		// pair[0] = "\"" + entry.getKey() + "\""
-		a.aload(8);
-		a.iconst(0);
-		a.aload(7);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(entryGetKey.index());
-		a.op(1);
-		a.op(0);
-		a.checkcast(stringClass);
-		quoteWrap(a, quote, stringConcat);
-		a.aastore();
-		// pair[1] = "\"" + String.join(", ", entry.getValue()) + "\""
-		a.aload(8);
-		a.iconst(1);
-		a.ldc(comma.index());
-		a.aload(7);
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(entryGetValue.index());
-		a.op(1);
-		a.op(0);
-		a.checkcast(iterableClass);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(stringJoin.index());
-		quoteWrap(a, quote, stringConcat);
-		a.aastore();
-		// alist = new Object[]{ pair, alist }
-		consSlots(a, objectClass, 8, 5);
-		a.astore(5);
-		a.branch(Opcode.GOTO, eLoop);
-		a.bind(eEnd);
-
-		// result = (:status status :body body :headers alist), built tail-first into slot
-		// 13
-		a.aconstNull();
-		a.astore(13);
-		consSlots(a, objectClass, 5, 13); // (alist)
-		a.astore(13);
-		consLdcCdr(a, objectClass, headersResultKey, 13); // (:headers alist)
-		a.astore(13);
-		consSlots(a, objectClass, 14, 13); // (body :headers alist)
-		a.astore(13);
-		consLdcCdr(a, objectClass, bodyKey, 13); // (:body body :headers alist)
-		a.astore(13);
-		consSlots(a, objectClass, 12, 13); // (status :body body :headers alist)
-		a.astore(13);
-		consLdcCdr(a, objectClass, statusKey, 13); // (:status status ...)
+		a.u2(arrayListAdd.index()); // [handleLong, added]
+		a.op(Opcode.POP); // [handleLong]
 		a.areturn();
 
 		List<Integer> code = a.finish();
 		Utf8Constant nameUtf8 = cp.addUtf8(METHOD_NAME);
 		Utf8Constant descUtf8 = cp.addUtf8(METHOD_DESC);
+		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, 12, 20, code);
+
+		// --- _await(promise): join the future and build the result plist ---
+		Asm b = new Asm();
+		// response = (HttpResponse) ((CompletableFuture) _promises
+		// .get((int) ((Long) promise).longValue())).join() -- blocks until the request
+		// settles; a failed request propagates as a CompletionException here (the
+		// JavaScript await-rejection timing).
+		b.op(Opcode.GETSTATIC);
+		b.u2(promisesField.index()); // [table]
+		b.aload(0);
+		b.checkcast(longClass);
+		b.op(Opcode.INVOKEVIRTUAL);
+		b.u2(longLongValue.index()); // [table, handleJ]
+		b.op(Opcode.L2I); // [table, handleI]
+		b.op(Opcode.INVOKEVIRTUAL);
+		b.u2(arrayListGet.index()); // [future]
+		b.checkcast(futureClass);
+		b.op(Opcode.INVOKEVIRTUAL);
+		b.u2(futureJoin.index()); // [response]
+		b.checkcast(httpResponseClass);
+		b.astore(4);
+
+		// status (slot 12) = Long.valueOf(response.statusCode())
+		b.aload(4);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(statusCode.index());
+		b.op(1);
+		b.op(0); // [statusI]
+		b.op(Opcode.I2L);
+		b.op(Opcode.INVOKESTATIC);
+		b.u2(longValueOf.index());
+		b.astore(12);
+
+		// body (slot 14) = quote(response.body())
+		b.aload(4);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(responseBody.index());
+		b.op(1);
+		b.op(0);
+		b.checkcast(stringClass);
+		quoteWrap(b, quote, stringConcat);
+		b.astore(14);
+
+		// Build response-header alist into slot 5 (init null for definite assignment).
+		b.aconstNull();
+		b.astore(5);
+		b.aload(4);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(responseHeaders.index());
+		b.op(1);
+		b.op(0); // [HttpHeaders]
+		b.op(Opcode.INVOKEVIRTUAL);
+		b.u2(headersMap.index()); // [Map]
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(mapEntrySet.index());
+		b.op(1);
+		b.op(0); // [Set]
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(setIterator.index());
+		b.op(1);
+		b.op(0); // [Iterator]
+		b.astore(6);
+		int eLoop = b.label();
+		int eEnd = b.label();
+		b.bind(eLoop);
+		b.aload(6);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(iteratorHasNext.index());
+		b.op(1);
+		b.op(0); // [boolean]
+		b.branch(Opcode.IFEQ, eEnd);
+		// entry = iterator.next() (slot 7 = entry, slot 8 = pair array)
+		b.aload(6);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(iteratorNext.index());
+		b.op(1);
+		b.op(0);
+		b.checkcast(entryClass);
+		b.astore(7);
+		// pair = new Object[2]
+		b.iconst(2);
+		b.anewarray(objectClass);
+		b.astore(8);
+		// pair[0] = "\"" + entry.getKey() + "\""
+		b.aload(8);
+		b.iconst(0);
+		b.aload(7);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(entryGetKey.index());
+		b.op(1);
+		b.op(0);
+		b.checkcast(stringClass);
+		quoteWrap(b, quote, stringConcat);
+		b.aastore();
+		// pair[1] = "\"" + String.join(", ", entry.getValue()) + "\""
+		b.aload(8);
+		b.iconst(1);
+		b.ldc(comma.index());
+		b.aload(7);
+		b.op(Opcode.INVOKEINTERFACE);
+		b.u2(entryGetValue.index());
+		b.op(1);
+		b.op(0);
+		b.checkcast(iterableClass);
+		b.op(Opcode.INVOKESTATIC);
+		b.u2(stringJoin.index());
+		quoteWrap(b, quote, stringConcat);
+		b.aastore();
+		// alist = new Object[]{ pair, alist }
+		consSlots(b, objectClass, 8, 5);
+		b.astore(5);
+		b.branch(Opcode.GOTO, eLoop);
+		b.bind(eEnd);
+
+		// result = (:status status :body body :headers alist), built tail-first into slot
+		// 13
+		b.aconstNull();
+		b.astore(13);
+		consSlots(b, objectClass, 5, 13); // (alist)
+		b.astore(13);
+		consLdcCdr(b, objectClass, headersResultKey, 13); // (:headers alist)
+		b.astore(13);
+		consSlots(b, objectClass, 14, 13); // (body :headers alist)
+		b.astore(13);
+		consLdcCdr(b, objectClass, bodyKey, 13); // (:body body :headers alist)
+		b.astore(13);
+		consSlots(b, objectClass, 12, 13); // (status :body body :headers alist)
+		b.astore(13);
+		consLdcCdr(b, objectClass, statusKey, 13); // (:status status ...)
+		b.areturn();
+
 		// The header-pair construction nests Object[2] allocations a few deep; 12 leaves
 		// headroom.
-		return new FetchMethod(nameUtf8, descUtf8, 12, 20, code);
+		FetchMethod await = new FetchMethod(cp.addUtf8(AWAIT_METHOD_NAME), cp.addUtf8(AWAIT_METHOD_DESC), 12, 20,
+				b.finish());
+		return new FetchRuntime(fetch, await);
 	}
 
 	/**

@@ -142,8 +142,11 @@ src/main/resources/.../component/
 `regen.sh` regenerates both variants. `WasmComponentBuilder.buildHttp` wires the http
 variant (next free component type index 25; 31 lowered WASI funcs + 10 resource drops + the
 0.3 stream/future built-ins; `run` lifted async as in the base). `adapter-http.wat` is
-`adapter.wat` plus a `fetch` export driving the outgoing request over `wasi:http@0.2` /
-`pollable.block`. Run a fetch component with `-S http=y` in addition to the async flags.
+`adapter.wat` plus `fetch-start` / `fetch-await` exports driving the asynchronous outgoing
+request (the `rontolisp:fetch` promise API) over `wasi:http@0.2`: `fetch-start` sends the
+request and returns the `future-incoming-response` handle immediately, `fetch-await`
+blocks on its pollable and reads the response. Run a fetch component with `-S http=y` in
+addition to the async flags.
 
 When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-http.wat`
 over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http.wit`, regenerate, and

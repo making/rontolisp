@@ -10,5 +10,5 @@ function exactly when it is usable as a function value via `#'name`. For
 See [Package introspection](../packages.md#package-introspection) for details.
 
 ```lisp
-(rontolisp:list-functions :rontolisp) ; => (fetch list-functions list-macros list-special-forms version)
+(rontolisp:list-functions :rontolisp) ; => (await fetch list-functions list-macros list-special-forms version)
 ```

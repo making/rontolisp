@@ -99,8 +99,9 @@ public final class WasmComponentBuilder {
 	private static final byte[] MEM_MODULE_HTTP = resource("mem-http.wasm");
 
 	/**
-	 * The HTTP variant of the adapter: like {@link #ADAPTER_MODULE} but with an extra
-	 * {@code fetch} export driving an outgoing request over {@code wasi:http@0.2} +
+	 * The HTTP variant of the adapter: like {@link #ADAPTER_MODULE} but with extra
+	 * {@code fetch-start} / {@code fetch-await} exports driving an asynchronous outgoing
+	 * request (the {@code rontolisp:fetch} promise API) over {@code wasi:http@0.2} +
 	 * {@code wasi:io@0.2}. Source: {@code src/wasm-component/adapter-http.wat}.
 	 */
 	private static final byte[] ADAPTER_MODULE_HTTP = resource("adapter-http.wasm");
@@ -543,7 +544,7 @@ public final class WasmComponentBuilder {
 		// Instantiate rontolisp (core instance 3): mem = instance 0, and both
 		// wasi_snapshot_preview1 AND http satisfied by the adapter instance 2 (which
 		// exports
-		// the eight preview1 functions plus fetch).
+		// the eight preview1 functions plus fetch-start / fetch-await).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
 			.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1", "http"), List.of(0, 2, 2)))));
 		// Alias rontolisp's run (core func 51 = cabi_realloc + 50 lowered/built-in

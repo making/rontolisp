@@ -1039,13 +1039,22 @@ public final class LispNames {
 	public static final String LIST_SPECIAL_FORMS = "list-special-forms";
 
 	/**
-	 * The {@code fetch} function provided by the {@code rontolisp} package. Performs an
-	 * outgoing HTTP request (JavaScript {@code fetch}-style) and returns a property list
-	 * {@code (:status <int> :body <string> :headers <alist>)}. The optional second
-	 * argument is an options property list ({@code :method}, {@code :headers}); only the
-	 * GET method is currently supported.
+	 * The {@code fetch} function provided by the {@code rontolisp} package. Starts an
+	 * outgoing HTTP request (JavaScript {@code fetch}-style) and immediately returns a
+	 * <em>promise</em> (an opaque handle) while the request runs asynchronously. The
+	 * optional second argument is an options property list ({@code :method},
+	 * {@code :headers}, {@code :body}). The result property list
+	 * {@code (:status <int> :body <string> :headers <alist>)} is obtained by passing the
+	 * promise to {@code rontolisp:await}.
 	 */
 	public static final String FETCH = "fetch";
+
+	/**
+	 * The {@code await} function provided by the {@code rontolisp} package. Blocks until
+	 * the promise returned by {@code rontolisp:fetch} settles and returns the result
+	 * property list {@code (:status <int> :body <string> :headers <alist>)}.
+	 */
+	public static final String AWAIT = "await";
 
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";

@@ -25,9 +25,12 @@ So there is no async http ABI to target and no host to run it. Verified
 
 ## Why this is a clean, isolated stopgap (not a dead end)
 
-The rontolisp **core never sees a WASI http version**: it imports a single
-bespoke `http.fetch(12 x i32)` seam (`WasmFetchRuntimeBuilder` /
-`WasmFetchCompiler`), exactly like the version-agnostic preview1 file-I/O seam.
+The rontolisp **core never sees a WASI http version**: it imports a bespoke
+two-function seam (`http.fetch-start(8 x i32)` starts the request and returns the
+promise handle; `http.fetch-await(6 x i32)` blocks and reads the response --
+`WasmFetchCompiler` / `WasmAwaitCompiler` / `WasmFetchRuntimeBuilder`), exactly
+like the version-agnostic preview1 file-I/O seam. The promise handle handed to
+Lisp code is the wasi:http `future-incoming-response` handle itself.
 Only `adapter-http.wat` + `import-block-http.bin` +
 `WasmComponentBuilder.buildHttp` bind to a specific WASI http version — the same
 layer we already rewrote when migrating the base I/O from 0.2 to 0.3.
@@ -44,13 +47,16 @@ entirely and the component becomes uniformly 0.3.
    built-ins (`future.read` / `stream.read` / `stream.write`), mirroring how
    `adapter.wat` drives the base I/O. The `outgoing-handler.handle` becomes a
    `future<incoming-response>`; the request/response bodies become `stream<u8>`.
+   Preserve the `fetch-start` / `fetch-await` split (the promise API): start
+   sends the request and returns the future/readable handle, await blocks on it.
 3. Drop the `wasi:io/poll` + `wasi:io/streams` imports from `uni-http.wit`;
    regenerate `import-block-http.bin` via `regen.sh`.
 4. Re-derive the `WasmComponentBuilder.buildHttp` wiring constants
    (import-instance indices, lowered-func indices, canonical options) from a
    fresh `wasm-tools dump` of the regenerated reference.
-5. Leave the core seam, `WasmFetchCompiler`, and `WasmFetchRuntimeBuilder`
-   untouched — only `WasmFetchCompiler.methodDiscriminant` may need its variant
-   discriminants re-checked against the 0.3 http `method` enum.
+5. Leave the core seam, `WasmFetchCompiler`, `WasmAwaitCompiler`, and
+   `WasmFetchRuntimeBuilder` untouched — only
+   `WasmFetchCompiler.methodDiscriminant` may need its variant discriminants
+   re-checked against the 0.3 http `method` enum.
 6. Drop the `-S http=y` requirement note once the host no longer needs it (still
    needed while on 0.2).

@@ -222,12 +222,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant readLineHelperMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(readLineHelperName, readLineHelperDesc));
 
-		// fetch helper: emitted only when the program uses rontolisp:fetch.
+		// fetch/await helpers: emitted only when the program uses rontolisp:fetch or
+		// rontolisp:await (they share the _promises table, so both are emitted together).
 		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
-		boolean usesFetch = programUsesSymbol(program, fetchQualified);
+		String awaitQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
+		boolean usesFetch = programUsesSymbol(program, fetchQualified) || programUsesSymbol(program, awaitQualified);
 		MethodrefConstant fetchHelperMethod = usesFetch
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_NAME),
 						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
+				: null;
+		MethodrefConstant awaitHelperMethod = usesFetch
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.AWAIT_METHOD_NAME),
+						cp.addUtf8(JvmFetchRuntimeBuilder.AWAIT_METHOD_DESC)))
 				: null;
 
 		// java: interop runtime: emitted only when the program uses one of the five
@@ -418,6 +424,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.objectEquals(objectEquals)
 			.readLineHelper(readLineHelperMethod)
 			.fetchHelper(fetchHelperMethod)
+			.awaitHelper(awaitHelperMethod)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.className(this.className)
@@ -761,9 +768,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant colFieldDesc = cp.addUtf8(JvmFreshLineCompiler.COL_DESC);
 		Utf8Constant gensymCtrFieldName = cp.addUtf8(JvmGensymCompiler.CTR_FIELD);
 		Utf8Constant gensymCtrFieldDesc = cp.addUtf8(JvmGensymCompiler.CTR_DESC);
+		// Promise table for fetch/await: a lazily-initialized ArrayList of the
+		// CompletableFutures started by _fetch, indexed by the Long promise handles.
+		Utf8Constant promisesFieldName = cp.addUtf8(JvmFetchRuntimeBuilder.PROMISES_FIELD);
+		Utf8Constant promisesFieldDesc = cp.addUtf8(JvmFetchRuntimeBuilder.PROMISES_DESC);
 
-		// http-get runtime helper body (only when the program uses rontolisp:http-get).
-		final JvmFetchRuntimeBuilder.@Nullable FetchMethod fetchMethodBody = usesFetch
+		// fetch/await runtime helper bodies (only when the program uses rontolisp:fetch
+		// or rontolisp:await).
+		final JvmFetchRuntimeBuilder.@Nullable FetchRuntime fetchRuntimeBodies = usesFetch
 				? JvmFetchRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
 						stringLength, stringSubstring, stringConcat)
 				: null;
@@ -822,6 +834,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(gensymCtrFieldName)
 					.writeU2(gensymCtrFieldDesc)
 					.writeU2(0));
+				if (fetchRuntimeBodies != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(promisesFieldName)
+						.writeU2(promisesFieldDesc)
+						.writeU2(0));
+				}
 				// One static Object field per top-level global variable (default null =
 				// nil); written by setq/defvar, read by getstatic from any method body.
 				for (Utf8Constant gfName : globalFieldNameUtfs) {
@@ -966,16 +984,18 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
-				if (fetchMethodBody != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fetchMethodBody.name(),
-							fetchMethodBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(fetchMethodBody.maxStack())
-									.writeU2(fetchMethodBody.maxLocals())
-									.writeCode((Object[]) fetchMethodBody.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
+				if (fetchRuntimeBodies != null) {
+					for (JvmFetchRuntimeBuilder.FetchMethod fm : List.of(fetchRuntimeBodies.fetch(),
+							fetchRuntimeBodies.await())) {
+						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc(),
+								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+									attr.writeU2(fm.maxStack())
+										.writeU2(fm.maxLocals())
+										.writeCode((Object[]) fm.code().toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0);
+								})));
+					}
 				}
 				if (parseIntMethodBody != null) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, parseIntMethodBody.name(),
@@ -1406,6 +1426,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant fetchHelper;
 
+		final @Nullable MethodrefConstant awaitHelper;
+
 		/**
 		 * The {@code java:} interop bridge references ({@code init}/{@code new}/
 		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
@@ -1532,6 +1554,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.objectEquals = Objects.requireNonNull(builder.objectEquals);
 			this.readLineHelper = Objects.requireNonNull(builder.readLineHelper);
 			this.fetchHelper = builder.fetchHelper;
+			this.awaitHelper = builder.awaitHelper;
 			this.javaOps = builder.javaOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
@@ -1615,6 +1638,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant readLineHelper;
 
 			private @Nullable MethodrefConstant fetchHelper;
+
+			private @Nullable MethodrefConstant awaitHelper;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
 
@@ -1809,6 +1834,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder fetchHelper(@Nullable MethodrefConstant fetchHelper) {
 				this.fetchHelper = fetchHelper;
+				return this;
+			}
+
+			Builder awaitHelper(@Nullable MethodrefConstant awaitHelper) {
+				this.awaitHelper = awaitHelper;
 				return this;
 			}
 

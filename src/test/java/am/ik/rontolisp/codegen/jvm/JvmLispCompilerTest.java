@@ -2901,7 +2901,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -2943,14 +2943,21 @@ class JvmLispCompilerTest {
 		try {
 			int port = server.getAddress().getPort();
 			String url = "http://127.0.0.1:" + port + "/echo";
-			assertThat(compileAndRun("(print (getf (rontolisp:fetch \"" + url
-					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) " + ":status))"))
+			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) " + ":status))"))
 				.isEqualTo("200");
-			assertThat(compileAndRun("(print (getf (rontolisp:fetch \"" + url
-					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) " + ":body))"))
+			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) " + ":body))"))
 				.isEqualTo("\"got:abc\"");
-			String headers = compileAndRun("(print (getf (rontolisp:fetch \"" + url + "\") :headers))");
+			String headers = compileAndRun(
+					"(print (getf (rontolisp:await (rontolisp:fetch \"" + url + "\")) :headers))");
 			assertThat(headers).contains("x-test");
+			// a settled promise can be awaited more than once, and two in-flight promises
+			// resolve independently
+			assertThat(compileAndRun("(let ((p1 (rontolisp:fetch \"" + url + "\")) (p2 (rontolisp:fetch \"" + url
+					+ "\"))) (rontolisp:await p1)"
+					+ " (print (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status))))"))
+				.isEqualTo("(200 200)");
 		}
 		finally {
 			server.stop(0);
@@ -2971,8 +2978,8 @@ class JvmLispCompilerTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			assertThat(compileAndRun("(print (getf (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/post\" (list :method \"post\" :body \"hello\")) :body))"))
+			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/post\" (list :method \"post\" :body \"hello\"))) :body))"))
 				.isEqualTo("\"POST:hello\"");
 		}
 		finally {
@@ -3003,6 +3010,18 @@ class JvmLispCompilerTest {
 	@Test
 	void compileFetchRejectsWrongArgCount() {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:fetch)")).isInstanceOf(UnsupportedOperationException.class);
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:await)")).isInstanceOf(UnsupportedOperationException.class);
+	}
+
+	@Test
+	void compileAndRunFetchFailureSignalsAtAwaitTime() throws Exception {
+		// fetch itself returns the promise even for a request that will fail; the
+		// failure surfaces when the promise is awaited (JavaScript await-rejection
+		// timing)
+		assertThat(compileAndRun("(let ((p (rontolisp:fetch \"http://127.0.0.1:1/x\"))) (print (integerp p)))"))
+			.isEqualTo("t");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/x\"))"))
+			.hasStackTraceContaining("java.net.ConnectException");
 	}
 
 	// Characters and string/number parsing

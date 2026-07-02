@@ -3222,7 +3222,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))"))
-			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -3255,9 +3255,9 @@ class WasmLispCompilerIntegrationTest {
 		// must
 		// handle a failed request without trapping. Fetching an unreachable port
 		// exercises
-		// the full request/poll/response path; the connection error is detected and fetch
-		// returns nil (deterministic, no server).
-		String program = "(print (rontolisp:fetch \"http://127.0.0.1:1/nope\"))";
+		// the full request-start/poll/response path; the connection error is detected at
+		// await time and await returns nil (deterministic, no server).
+		String program = "(print (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/nope\")))";
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-err.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
@@ -3316,10 +3316,20 @@ class WasmLispCompilerIntegrationTest {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
 			String url = base + "/hello";
 			String echo = base + "/echo";
-			String program = "(let ((r (rontolisp:fetch \"" + url + "\")))" + " (print (getf r :status))"
-					+ " (print (getf r :body)) (print (getf r :headers)))" + " (print (getf (rontolisp:fetch \"" + url
-					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))) :body))"
-					+ " (print (getf (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"hi\")) :body))";
+			String program = "(let ((r (rontolisp:await (rontolisp:fetch \"" + url + "\"))))"
+					+ " (print (getf r :status))" + " (print (getf r :body)) (print (getf r :headers)))"
+					+ " (print (getf (rontolisp:await (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) :body))"
+					+ " (print (getf (rontolisp:await (rontolisp:fetch \"" + echo
+					+ "\" (list :method \"POST\" :body \"hi\"))) :body))"
+					// two promises in flight at once, awaited out of order; p1 is awaited
+					// twice (the second await must come from the result cache --
+					// wasi:http
+					// hands out the response only once)
+					+ " (let ((p1 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"one\")))"
+					+ "       (p2 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"two\"))))"
+					+ "   (print (getf (rontolisp:await p2) :body))" + "   (print (getf (rontolisp:await p1) :body))"
+					+ "   (print (getf (rontolisp:await p1) :status)))";
 			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
@@ -3334,7 +3344,9 @@ class WasmLispCompilerIntegrationTest {
 				.contains("\"hello-from-fetch\"")
 				.contains("x-test")
 				.contains("\"got-header\"")
-				.contains("\"POST:hi\"");
+				.contains("\"POST:hi\"")
+				.contains("\"POST:two\"")
+				.contains("\"POST:one\"");
 		}
 		finally {
 			server.stop(0);

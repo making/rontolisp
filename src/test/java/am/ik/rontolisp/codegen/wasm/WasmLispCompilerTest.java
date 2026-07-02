@@ -26,6 +26,15 @@ class WasmLispCompilerTest {
 		assertThatThrownBy(() -> compile("(rontolisp:fetch \"http://x/\")"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("component");
+		assertThatThrownBy(() -> compile("(rontolisp:await 0)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+	}
+
+	@Test
+	void awaitOfFetchCompilesInComponentMode() {
+		assertThat(compileComponent("(print (getf (rontolisp:await (rontolisp:fetch \"http://x/\")) :status))"))
+			.isNotEmpty();
+		assertThat(compileComponent("(let ((p (rontolisp:fetch \"http://x/\"))) (rontolisp:await p))")).isNotEmpty();
 	}
 
 	@Test

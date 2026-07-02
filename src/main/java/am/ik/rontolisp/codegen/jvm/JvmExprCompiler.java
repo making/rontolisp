@@ -114,6 +114,10 @@ final class JvmExprCompiler {
 					JvmFetchCompiler.compile(cons, ctx, className);
 					return;
 				}
+				if (LispNames.AWAIT.equals(qn.member())) {
+					JvmAwaitCompiler.compile(cons, ctx, className);
+					return;
+				}
 				if (LispNames.WASM_EXPORT.equals(qn.member())) {
 					// rontolisp:wasm-export marks a function for direct WASM export; the
 					// JVM

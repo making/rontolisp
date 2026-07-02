@@ -117,7 +117,7 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>()));
 		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
-						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.WASM_EXPORT))));
+						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.WASM_EXPORT))));
 		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
 		// run on the JVM interpreter only -- the compilers cannot lower them.
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,

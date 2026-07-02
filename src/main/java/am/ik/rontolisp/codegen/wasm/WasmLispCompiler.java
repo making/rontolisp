@@ -147,17 +147,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	/** Number of preview1-style imported functions (fd_write..environ_get). */
 	static final int IMPORT_FUNC_COUNT = 8;
 
-	// Function index 8 is reserved for rontolisp:fetch in BOTH modes so the
-	// defined-function
-	// indices stay identical across modes: in component mode it is the imported
-	// http.fetch;
-	// in Preview 1 mode it is an unused trap stub (fetch raises a compile error there).
-	// This
-	// keeps FUNC_START at 9 uniformly, so all the static FUNC_* constants below are
-	// stable.
-	static final int FUNC_FETCH = IMPORT_FUNC_COUNT; // 8
+	// Function indices 8 and 9 are reserved for rontolisp:fetch / rontolisp:await in
+	// BOTH modes so the defined-function indices stay identical across modes: in
+	// component mode they are the imported http.fetch-start / http.fetch-await; in
+	// Preview 1 mode they are unused trap stubs (fetch/await raise a compile error
+	// there). This keeps FUNC_START at 10 uniformly, so all the static FUNC_* constants
+	// below are stable.
+	static final int FUNC_FETCH_START = IMPORT_FUNC_COUNT; // 8
 
-	static final int FUNC_START = FUNC_FETCH + 1; // 9
+	static final int FUNC_FETCH_AWAIT = FUNC_FETCH_START + 1; // 9
+
+	static final int FUNC_START = FUNC_FETCH_AWAIT + 1; // 10
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -380,19 +380,25 @@ public final class WasmLispCompiler implements LispCompiler {
 	// clock_time_get (i32 clock_id, i64 precision, i32 result_ptr) -> i32 errno
 	static final int TYPE_CLOCK_TIME_GET = TYPE_OPEN + 1; // 30
 
-	// fetch (10x i32) -> i32 errno: the adapter's http.fetch import / Preview 1 stub
-	// type.
-	static final int TYPE_FETCH = TYPE_CLOCK_TIME_GET + 1; // 31
+	// fetch-start (8x i32) -> i32 errno: the adapter's http.fetch-start import /
+	// Preview 1 stub type. Starts an outgoing request and writes the promise handle
+	// (the wasi:http future-incoming-response handle) through the out pointer.
+	static final int TYPE_FETCH_START = TYPE_CLOCK_TIME_GET + 1; // 31
+
+	// fetch-await (6x i32) -> i32 errno: the adapter's http.fetch-await import /
+	// Preview 1 stub type. Blocks on the promise handle and writes the response
+	// status / headers / body back through the out pointers.
+	static final int TYPE_FETCH_AWAIT = TYPE_FETCH_START + 1; // 32
 
 	// Character struct {i32 code}: the runtime representation of a character, distinct
 	// from
 	// an i31 integer so characterp and the accessors can dispatch on it via ref.test.
-	static final int TYPE_CHAR = TYPE_FETCH + 1; // 32
+	static final int TYPE_CHAR = TYPE_FETCH_AWAIT + 1; // 33
 
 	// Hash-table bucket array: array (mut (ref null eq)). Each slot holds a bucket alist
 	// (a cons chain of (key . value) entries) or null. Implicitly a subtype of eq, so a
 	// bucket array can be stored in a cons/cell field and compared with ref.eq.
-	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 33
+	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 34
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -402,6 +408,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// (Lisp-2): defuns evaluated at runtime (e.g. from load) are bound here, separate
 	// from the variable environment above.
 	static final int GLOBAL_FENV = 1;
+
+	// Global (wasm global section) index holding the await result cache: an alist of
+	// cons(promise-i31, result-plist) pushed by rontolisp:await. wasi:http hands out a
+	// response only once (future-incoming-response.get consumes it), so awaiting a
+	// settled promise again must return the cached plist instead of calling the adapter
+	// -- matching the interpreter/JVM, where join() is idempotent. The adapter keeps
+	// settled futures alive so the handle keys stay unique (see adapter-http.wat).
+	static final int GLOBAL_PROMISE_CACHE = 2;
 
 	// Memory layout
 	static final int PRINT_BUF_OFFSET = 0;
@@ -481,6 +495,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FETCH_BODY_LEN_ADDR = 0x40010;
 
+	// fetch-start writes the promise handle (the wasi:http future-incoming-response
+	// handle) here; the compiler boxes it as an i31 integer -- the promise value.
+	static final int FETCH_HANDLE_ADDR = 0x40014;
+
 	static final int REQ_HDR_BUF = 0x40100;
 
 	static final int RT_INTERN_BASE = 8192;
@@ -517,14 +535,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.APPLY);
-		// rontolisp:fetch is component-only. In component mode it is the http.fetch
-		// import
-		// (function index FUNC_FETCH); the component wrapper then imports wasi:http. In
-		// Preview 1 mode index FUNC_FETCH is an unused trap stub and fetch raises a
-		// compile
-		// error (WasmFetchCompiler), so the import/wasi:http are never emitted.
+		// rontolisp:fetch / rontolisp:await are component-only. In component mode they
+		// are the http.fetch-start / http.fetch-await imports (function indices
+		// FUNC_FETCH_START / FUNC_FETCH_AWAIT); the component wrapper then imports
+		// wasi:http. In Preview 1 mode those indices are unused trap stubs and
+		// fetch/await raise a compile error (WasmFetchCompiler / WasmAwaitCompiler), so
+		// the imports/wasi:http are never emitted.
 		boolean usesFetch = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT));
 		boolean emitHttpImport = this.component && usesFetch;
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
@@ -589,12 +608,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		// Collect top-level global variables and give each its own module-level wasm
-		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).
-		// A reference compiles to global.get from any function body, so a defun/lambda
-		// can read a defvar/defparameter global. Indices follow declaration order.
+		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV/
+		// GLOBAL_PROMISE_CACHE (indices 3+). A reference compiles to global.get from any
+		// function body, so a defun/lambda can read a defvar/defparameter global.
+		// Indices follow declaration order.
 		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
 		Map<String, Integer> globalIndices = new HashMap<>();
-		int nextGlobalIndex = GLOBAL_FENV + 1;
+		int nextGlobalIndex = GLOBAL_PROMISE_CACHE + 1;
 		for (String g : globals) {
 			globalIndices.put(g, nextGlobalIndex++);
 		}
@@ -1157,15 +1177,21 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 30: clock_time_get (i32, i64, i32) -> i32
 				types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32 }, new Type[] { Type.I32 });
-				// type 31 (TYPE_FETCH): fetch (12x i32) -> i32 errno. The 12 params are
-				// method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, reqHdrPtr, reqHdrLen,
-				// statusPtr, rhdrPtrOut, rhdrLenOut, bodyPtrOut, bodyLenOut.
-				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32,
-						Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
-				// type 32 (TYPE_CHAR): character struct {i32 code}
+				// type 31 (TYPE_FETCH_START): fetch-start (8x i32) -> i32 errno. The 8
+				// params are method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, reqHdrPtr,
+				// reqHdrLen, handleOut.
+				types.addFunc(
+						new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
+						new Type[] { Type.I32 });
+				// type 32 (TYPE_FETCH_AWAIT): fetch-await (6x i32) -> i32 errno. The 6
+				// params are handle, statusPtr, rhdrPtrOut, rhdrLenOut, bodyPtrOut,
+				// bodyLenOut.
+				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
+						new Type[] { Type.I32 });
+				// type 33 (TYPE_CHAR): character struct {i32 code}
 				types.addRecGroup(
 						rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))));
-				// type 33 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
+				// type 34 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
 				// buckets. Encoded as a bare array comptype (sugar for sub final),
 				// implicitly
 				// a subtype of eq so it stores in cons/cell fields and supports ref.eq.
@@ -1210,12 +1236,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
 						.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
-				// 9th function import (index FUNC_FETCH) when the program calls fetch in
-				// component mode: the adapter's exported http.fetch. In Preview 1 mode
-				// (or a
-				// component without fetch) index 8 is a defined trap stub instead.
+				// 9th/10th function imports (indices FUNC_FETCH_START / FUNC_FETCH_AWAIT)
+				// when the program calls fetch/await in component mode: the adapter's
+				// exported http.fetch-start / http.fetch-await. In Preview 1 mode (or a
+				// component without fetch) indices 8/9 are defined trap stubs instead.
 				if (emitHttpImport) {
-					imports.addImport("http", "fetch", ExternalKind.FUNCTION, TYPE_FETCH);
+					imports.addImport("http", "fetch-start", ExternalKind.FUNCTION, TYPE_FETCH_START);
+					imports.addImport("http", "fetch-await", ExternalKind.FUNCTION, TYPE_FETCH_AWAIT);
 				}
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
@@ -1247,11 +1274,15 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
 						.addFunction(TYPE_INTERN); // 7: environ_get
 				}
-				// Reserve function index FUNC_FETCH (8): in component+fetch it is the
-				// http.fetch import (emitted above); otherwise a defined trap stub so the
-				// following defined-function indices line up with the FUNC_* constants.
+				// Reserve function indices FUNC_FETCH_START (8) / FUNC_FETCH_AWAIT (9):
+				// in component+fetch they are the http.fetch-start / http.fetch-await
+				// imports (emitted above); otherwise defined trap stubs so the following
+				// defined-function indices line up with the FUNC_* constants.
 				if (!emitHttpImport) {
-					fnDef.addFunction(TYPE_FETCH); // index 8: unused fetch trap stub
+					fnDef.addFunction(TYPE_FETCH_START); // index 8: unused fetch-start
+															// stub
+					fnDef.addFunction(TYPE_FETCH_AWAIT); // index 9: unused fetch-await
+															// stub
 				}
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
@@ -1357,9 +1388,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					memories.addMemory(4);
 				}
 			})
-			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
-			// the Lisp-2 function namespace (GLOBAL_FENV), both (mut (ref null eq)) =
-			// null
+			// Global section: the eval top-level variable environment (GLOBAL_ENV), the
+			// Lisp-2 function namespace (GLOBAL_FENV) and the await result cache
+			// (GLOBAL_PROMISE_CACHE), all (mut (ref null eq)) = null
 			.writeGlobal(gs -> {
 				gs.add(g -> {
 					g.write(Type.REFNULL.code());
@@ -1375,9 +1406,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
 					g.write(Instruction.END);
+				}).add(g -> {
+					g.write(Type.REFNULL.code());
+					g.writeHeapType(Type.EQ.code());
+					g.write(am.ik.wasm.Mutability.VAR.code());
+					g.write(Instruction.REF_NULL);
+					g.writeHeapType(Type.EQ.code());
+					g.write(Instruction.END);
 				});
 				// One (mut (ref null eq)) = null per top-level global variable (indices
-				// 2+).
+				// 3+).
 				for (int i = 0; i < globalCount; i++) {
 					gs.add(g -> {
 						g.write(Type.REFNULL.code());
@@ -1434,9 +1472,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
-				// fetch trap stub at function index FUNC_FETCH (only when it is not the
-				// http.fetch import): no locals, unreachable, end. It is never called.
+				// fetch-start / fetch-await trap stubs at function indices
+				// FUNC_FETCH_START / FUNC_FETCH_AWAIT (only when they are not the http
+				// imports): no locals, unreachable, end. They are never called.
 				if (!emitHttpImport) {
+					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 				}
 				code.addFunction(finalStartBody.toByteArray())

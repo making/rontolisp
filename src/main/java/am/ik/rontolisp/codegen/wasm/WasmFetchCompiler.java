@@ -14,11 +14,14 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles {@code rontolisp:fetch} for the WASM component backend. The heavy lifting (the
- * WASI 0.2 request/response state machine) lives in the adapter's {@code http.fetch}
- * import; this compiler evaluates the URL, serializes the request headers via
- * {@code _fetch_ser_headers}, calls {@code http.fetch}, then builds the
- * {@code (:status N :body "..." :headers ((name . value)...))} property list from the
- * status / body / response-header buffers the adapter wrote back.
+ * WASI 0.2 request state machine) lives in the adapter's {@code http.fetch-start} import;
+ * this compiler evaluates the URL, serializes the request headers via
+ * {@code _fetch_ser_headers} and calls {@code http.fetch-start}, which sends the request
+ * and immediately returns while the response is still in flight. The result is a
+ * <em>promise</em>: the adapter's in-flight request handle (the wasi:http
+ * {@code future-incoming-response} handle) boxed as an i31 integer, to be resolved by
+ * {@code rontolisp:await} ({@link WasmAwaitCompiler}). Multiple promises can be in flight
+ * at once.
  *
  * <p>
  * fetch is component-only: in Preview 1 mode it raises a compile error (there is no host
@@ -28,7 +31,8 @@ import org.jspecify.annotations.Nullable;
  * as GET, and a statically-known unsupported method is rejected at compile time). The
  * {@code :body} value (a request body string) <em>is</em> resolved at runtime: it is read
  * out of the options property list and its bytes are passed straight to the adapter. A
- * failed request (e.g. a refused connection) returns {@code nil}.
+ * request that cannot be started (e.g. a malformed URL) returns {@code nil} instead of a
+ * promise, matching the nil-on-failure convention of this backend.
  */
 final class WasmFetchCompiler {
 
@@ -52,15 +56,8 @@ final class WasmFetchCompiler {
 		int urlTmp = ctx.allocTemp();
 		int optTmp = ctx.allocTemp();
 		int reqBodyTmp = ctx.allocTemp();
-		int statusTmp = ctx.allocTemp();
-		int bodyTmp = ctx.allocTemp();
-		int hdrTmp = ctx.allocTemp();
-		int accTmp = ctx.allocTemp();
 		int bodyOff = ctx.stringTable.addString(":body").offset();
 		int headersOff = ctx.stringTable.addString(":headers").offset();
-		WasmLispCompiler.StringTable.StringEntry statusSym = ctx.stringTable.addString(":status");
-		WasmLispCompiler.StringTable.StringEntry bodySym = ctx.stringTable.addString(":body");
-		WasmLispCompiler.StringTable.StringEntry headersSym = ctx.stringTable.addString(":headers");
 
 		// Evaluate the URL string and stash the struct so we can read offset and length.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -81,8 +78,8 @@ final class WasmFetchCompiler {
 		call(w, WasmLispCompiler.FUNC_FETCH_PLIST_GET);
 		setLocal(w, reqBodyTmp);
 
-		// http.fetch(method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, REQ_HDR_BUF,
-		// reqHdrLen, status, rhdrPtr, rhdrLen, bodyPtr, bodyLen)
+		// http.fetch-start(method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, REQ_HDR_BUF,
+		// reqHdrLen, handleOut)
 		i32(w, methodDisc);
 		getLocal(w, urlTmp);
 		refCast(w, WasmLispCompiler.TYPE_STRING);
@@ -104,56 +101,18 @@ final class WasmFetchCompiler {
 		i32(w, headersOff);
 		call(w, WasmLispCompiler.FUNC_FETCH_PLIST_GET);
 		call(w, WasmLispCompiler.FUNC_FETCH_SER_HDRS);
-		i32(w, WasmLispCompiler.FETCH_STATUS_ADDR);
-		i32(w, WasmLispCompiler.FETCH_RHDR_PTR_ADDR);
-		i32(w, WasmLispCompiler.FETCH_RHDR_LEN_ADDR);
-		i32(w, WasmLispCompiler.FETCH_BODY_PTR_ADDR);
-		i32(w, WasmLispCompiler.FETCH_BODY_LEN_ADDR);
-		call(w, WasmLispCompiler.FUNC_FETCH);
-		// On a non-zero errno (e.g. a malformed URL or a failed connection) the adapter
-		// has not written the out-params, so return nil instead of reading uninitialized
-		// buffers. Otherwise build the result plist.
+		i32(w, WasmLispCompiler.FETCH_HANDLE_ADDR);
+		call(w, WasmLispCompiler.FUNC_FETCH_START);
+		// On a non-zero errno (e.g. a malformed URL) the adapter has not written the
+		// handle, so yield nil instead of a promise. Otherwise the promise is the
+		// in-flight handle boxed as an i31 integer.
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-
-		// status = i31(memory[FETCH_STATUS_ADDR])
-		i32(w, WasmLispCompiler.FETCH_STATUS_ADDR);
+		i32(w, WasmLispCompiler.FETCH_HANDLE_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		setLocal(w, statusTmp);
-		// body = _fetch_str(memory[FETCH_BODY_PTR_ADDR], memory[FETCH_BODY_LEN_ADDR])
-		i32(w, WasmLispCompiler.FETCH_BODY_PTR_ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		i32(w, WasmLispCompiler.FETCH_BODY_LEN_ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		call(w, WasmLispCompiler.FUNC_FETCH_STR);
-		setLocal(w, bodyTmp);
-		// headers = _fetch_deser_headers(memory[FETCH_RHDR_PTR_ADDR])
-		i32(w, WasmLispCompiler.FETCH_RHDR_PTR_ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		call(w, WasmLispCompiler.FUNC_FETCH_DESER_HDRS);
-		setLocal(w, hdrTmp);
-
-		// Build (:status status :body body :headers headers) tail-first.
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
-		setLocal(w, accTmp);
-		consLocal(w, hdrTmp, accTmp);
-		setLocal(w, accTmp);
-		consSymCdr(w, headersSym, accTmp);
-		setLocal(w, accTmp);
-		consLocal(w, bodyTmp, accTmp);
-		setLocal(w, accTmp);
-		consSymCdr(w, bodySym, accTmp);
-		setLocal(w, accTmp);
-		consLocal(w, statusTmp, accTmp);
-		setLocal(w, accTmp);
-		// final cons (:status . rest) left on the stack as the result
-		consSymCdr(w, statusSym, accTmp);
-
-		// else branch: errno != 0 -> nil
 		w.write(Instruction.ELSE);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
@@ -241,22 +200,6 @@ final class WasmFetchCompiler {
 		return null;
 	}
 
-	// Pushes cons(local carSlot, local cdrSlot).
-	private static void consLocal(WasmWriter w, int carSlot, int cdrSlot) {
-		getLocal(w, carSlot);
-		getLocal(w, cdrSlot);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-	}
-
-	// Pushes cons(<keyword symbol>, local cdrSlot).
-	private static void consSymCdr(WasmWriter w, WasmLispCompiler.StringTable.StringEntry sym, int cdrSlot) {
-		i32(w, sym.offset());
-		i32(w, sym.length());
-		structNew(w, WasmLispCompiler.TYPE_STRING);
-		getLocal(w, cdrSlot);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-	}
-
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(slot);
@@ -286,11 +229,6 @@ final class WasmFetchCompiler {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeSignedLeb128(type);
 		w.writeSignedLeb128(field);
-	}
-
-	private static void structNew(WasmWriter w, int type) {
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(type);
 	}
 
 }

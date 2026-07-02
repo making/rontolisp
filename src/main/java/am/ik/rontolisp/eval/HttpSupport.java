@@ -7,6 +7,7 @@ import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import org.jspecify.annotations.Nullable;
 
@@ -32,37 +33,51 @@ final class HttpSupport {
 	}
 
 	/**
-	 * Sends an HTTP request and reads the full response body as a string.
+	 * Starts an HTTP request asynchronously (JavaScript {@code fetch}-style) via
+	 * {@link HttpClient#sendAsync}: the request is in flight when this returns and the
+	 * future settles when the full response has been read. Request-building failures
+	 * (e.g. a malformed URL) fail the returned future rather than throwing, so every
+	 * failure surfaces at await time. This is the seam the browser playground substitutes
+	 * (see {@code src/web/java/.../eval/Target_HttpSupport.java}), where the request is
+	 * performed synchronously and an already-completed future is returned. The
+	 * per-request client is intentionally not closed: {@code close()} would block until
+	 * the in-flight request completes, and the compiled JVM backend leaves its client to
+	 * be garbage-collected the same way.
 	 * @param method the HTTP method (e.g. {@code "GET"}, {@code "POST"})
 	 * @param url the request URL
 	 * @param requestHeaders the request headers to set
 	 * @param body the request body, or {@code null} for no body
-	 * @return the response status, body and headers
+	 * @return a future settling to the response status, body and headers
 	 */
-	static HttpResult request(String method, String url, List<Header> requestHeaders, @Nullable String body) {
-		try (HttpClient client = HttpClient.newHttpClient()) {
+	static CompletableFuture<HttpResult> requestAsync(String method, String url, List<Header> requestHeaders,
+			@Nullable String body) {
+		HttpClient client;
+		HttpRequest request;
+		try {
 			HttpRequest.BodyPublisher publisher = (body == null) ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofString(body);
 			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
 			for (Header header : requestHeaders) {
 				builder.header(header.name(), header.value());
 			}
-			HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-			List<Header> responseHeaders = new ArrayList<>();
-			for (Map.Entry<String, List<String>> entry : response.headers().map().entrySet()) {
-				for (String value : entry.getValue()) {
-					responseHeaders.add(new Header(entry.getKey(), value));
-				}
+			request = builder.build();
+			client = HttpClient.newHttpClient();
+		}
+		catch (RuntimeException ex) {
+			return CompletableFuture
+				.failedFuture(new IllegalStateException("HTTP request failed: " + ex.getMessage(), ex));
+		}
+		return client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply(HttpSupport::toResult);
+	}
+
+	private static HttpResult toResult(HttpResponse<String> response) {
+		List<Header> responseHeaders = new ArrayList<>();
+		for (Map.Entry<String, List<String>> entry : response.headers().map().entrySet()) {
+			for (String value : entry.getValue()) {
+				responseHeaders.add(new Header(entry.getKey(), value));
 			}
-			return new HttpResult(response.statusCode(), response.body(), responseHeaders);
 		}
-		catch (InterruptedException ex) {
-			Thread.currentThread().interrupt();
-			throw new IllegalStateException("HTTP request interrupted: " + ex.getMessage(), ex);
-		}
-		catch (Exception ex) {
-			throw new IllegalStateException("HTTP request failed: " + ex.getMessage(), ex);
-		}
+		return new HttpResult(response.statusCode(), response.body(), responseHeaders);
 	}
 
 }

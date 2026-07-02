@@ -2852,7 +2852,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print())
-			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
 	}
 
 	@Test
@@ -2894,7 +2894,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print())
-			.isEqualTo("(fetch list-functions list-macros list-special-forms version)");
+			.isEqualTo("(await fetch list-functions list-macros list-special-forms version)");
 	}
 
 	@Test
@@ -2962,14 +2962,29 @@ class LispEvaluatorTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			// result is the plist (:status 200 :body "hello world" :headers (...))
-			assertThat(eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\") :status)"))
+			// fetch returns a promise immediately; await resolves it into the plist
+			// (:status 200 :body "hello world" :headers (...))
+			assertThat(
+					eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :status)"))
 				.isEqualTo(new LispInteger(200));
-			assertThat(eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\") :body)"))
+			assertThat(eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :body)"))
 				.isEqualTo(new LispString("hello world"));
-			LispVal headers = eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\") :headers)");
+			LispVal headers = eval(
+					"(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :headers)");
 			// the JDK HttpClient normalizes response header names to lower case
 			assertThat(headers.print()).contains("x-test").contains("ok");
+			// fetch itself returns an opaque promise handle (an integer), not the result
+			assertThat(eval("(rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")"))
+				.isInstanceOf(LispInteger.class);
+			// a settled promise can be awaited more than once
+			assertThat(eval("(let ((p (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
+					+ " (rontolisp:await p) (getf (rontolisp:await p) :status))"))
+				.isEqualTo(new LispInteger(200));
+			// two in-flight promises resolve independently
+			assertThat(eval("(let ((p1 (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\"))"
+					+ " (p2 (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
+					+ " (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status)))")
+				.print()).isEqualTo("(200 200)");
 		}
 		finally {
 			server.stop(0);
@@ -2990,8 +3005,8 @@ class LispEvaluatorTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			LispVal result = eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/echo\" (list :headers (list (cons \"X-Custom\" \"abc\")))) :body)");
+			LispVal result = eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/echo\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) :body)");
 			assertThat(result).isEqualTo(new LispString("got:abc"));
 		}
 		finally {
@@ -3013,8 +3028,8 @@ class LispEvaluatorTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			LispVal result = eval("(getf (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/post\" (list :method \"POST\" :body \"hello\")) :body)");
+			LispVal result = eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/post\" (list :method \"POST\" :body \"hello\"))) :body)");
 			assertThat(result).isEqualTo(new LispString("POST:hello"));
 		}
 		finally {
@@ -3031,6 +3046,21 @@ class LispEvaluatorTest {
 	@Test
 	void fetchRejectsWrongArgCount() {
 		assertThatThrownBy(() -> eval("(rontolisp:fetch)")).hasMessageContaining("fetch");
+	}
+
+	@Test
+	void fetchFailureSignalsAtAwaitTime() {
+		// a refused connection settles the promise exceptionally; the error surfaces
+		// when the promise is awaited (like a JavaScript await rejection), not at fetch
+		assertThatThrownBy(() -> eval("(rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/x\"))"))
+			.isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void awaitRejectsNonPromise() {
+		assertThatThrownBy(() -> eval("(rontolisp:await 42)")).hasMessageContaining("expects a promise");
+		assertThatThrownBy(() -> eval("(rontolisp:await \"p\")")).hasMessageContaining("expects a promise");
+		assertThatThrownBy(() -> eval("(rontolisp:await)")).hasMessageContaining("await");
 	}
 
 	// Characters and string/number parsing

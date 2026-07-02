@@ -18,6 +18,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.DoubleUnaryOperator;
 
 import am.ik.rontolisp.LispArray;
@@ -358,13 +360,17 @@ public final class Environment implements Scope {
 		String exportName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT);
 		env.defineFunction(exportName,
 				new LispFunction(exportName, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
-		// fetch performs an outgoing HTTP request, JavaScript fetch-style. It belongs to
-		// the rontolisp package (it is not a Common Lisp standard function). The optional
-		// second argument is an options property list (:method, :headers, :body). The
-		// supported methods are GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH; :body is
-		// the request body string (e.g. for POST/PUT). The result is the property list
-		// (:status <int> :body <string> :headers <alist>), where :headers is an alist of
-		// (name . value) string pairs.
+		// fetch starts an outgoing HTTP request, JavaScript fetch-style, and immediately
+		// returns a promise (an opaque integer handle indexing the table below, matching
+		// the stream-handle convention) while the request runs on a background thread. It
+		// belongs to the rontolisp package (it is not a Common Lisp standard function).
+		// The optional second argument is an options property list (:method, :headers,
+		// :body); the options are validated eagerly (like JavaScript fetch, which throws
+		// synchronously on invalid arguments). The supported methods are GET, HEAD, POST,
+		// PUT, DELETE, OPTIONS and PATCH; :body is the request body string (e.g. for
+		// POST/PUT).
+		Map<Long, CompletableFuture<HttpSupport.HttpResult>> promises = new HashMap<>();
+		long[] nextPromiseHandle = { 0 };
 		String fetchName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		env.defineFunction(fetchName, new LispFunction(fetchName, args -> {
 			if (args.isEmpty() || args.size() > 2) {
@@ -377,12 +383,31 @@ public final class Environment implements Scope {
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
 			String body = fetchBody(options);
+			long handle = nextPromiseHandle[0]++;
+			promises.put(handle, HttpSupport.requestAsync(method, url.value(), requestHeaders, body));
+			return new LispInteger(handle);
+		}));
+		// await blocks until the promise returned by fetch settles and returns the result
+		// property list (:status <int> :body <string> :headers <alist>), where :headers
+		// is an alist of (name . value) string pairs. A request failure (e.g. a refused
+		// connection) signals here -- the same timing as a JavaScript await rejection. A
+		// settled promise can be awaited again.
+		String awaitName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
+		env.defineFunction(awaitName, new LispFunction(awaitName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.AWAIT + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispInteger handle) || !promises.containsKey(handle.value())) {
+				throw new LispEvalException(LispNames.AWAIT + " expects a promise returned by " + fetchName + ", got: "
+						+ args.get(0).print());
+			}
 			HttpSupport.HttpResult result;
 			try {
-				result = HttpSupport.request(method, url.value(), requestHeaders, body);
+				result = promises.get(handle.value()).join();
 			}
-			catch (RuntimeException ex) {
-				throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), "fetch failed"));
+			catch (CompletionException ex) {
+				Throwable cause = Objects.requireNonNullElse(ex.getCause(), ex);
+				throw new LispEvalException(Objects.requireNonNullElse(cause.getMessage(), "fetch failed"));
 			}
 			return fetchList(new LispSymbol(":status"), new LispInteger(result.status()), new LispSymbol(":body"),
 					new LispString(result.body()), new LispSymbol(":headers"), buildHeaderAlist(result.headers()));
