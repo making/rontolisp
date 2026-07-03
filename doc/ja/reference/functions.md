@@ -269,21 +269,21 @@
 | `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#2A((0 1 2) (3 4 5))`(行優先。サイズは一致が必要) |
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#(1 0 0 1)` |
 | `linalg:transpose` | `(linalg:transpose (linalg:from-list '((1 2 3) (4 5 6))))` | `#2A((1 4) (2 5) (3 6))`(ベクタはそのまま返します) |
-| `linalg:add` | `(linalg:add (linalg:from-list '(1 2 3)) 10)` | `#(11 12 13)`(要素ごと。スカラーのオペランドはブロードキャスト) |
-| `linalg:sub` | `(linalg:sub (linalg:from-list '(5 5)) 1)` | `#(4 4)` |
+| `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#(11 12 13)`(要素ごと。スカラーのオペランドはブロードキャスト) |
+| `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#(4 4)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | アダマール積(要素ごとの積)。行列積ではありません |
-| `linalg:div` | `(linalg:div (linalg:from-list '(1 2 3)) 2)` | `#(1/2 1 3/2)`(整数の除算は厳密な有理数) |
+| `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#(1/2 1 3/2)`(整数の除算は厳密な有理数) |
 | `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#(0 1 4 9)`(全要素に関数を適用) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
 | `linalg:matmul` | `(linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8))))` | `#2A((19 22) (43 50))`(行列積) |
-| `linalg:outer` | `(linalg:outer (linalg:from-list '(1 2)) (linalg:from-list '(3 4 5)))` | `#2A((3 4 5) (6 8 10))`(外積) |
+| `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#2A((3 4 5) (6 8 10))`(外積) |
 | `linalg:sum` | `(linalg:sum (linalg:from-list '((1 2) (3 4))))` | `10` |
-| `linalg:mean` | `(linalg:mean (linalg:from-list '(1 2 3 4)))` | `5/2`(整数入力に対しては厳密) |
+| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(整数入力に対しては厳密) |
 | `linalg:amax` | `(linalg:amax (linalg:from-list '((1 9) (3 4))))` | `9`(最大の要素) |
-| `linalg:amin` | `(linalg:amin (linalg:from-list '(5 2 8)))` | `2`(最小の要素) |
-| `linalg:argmax` | `(linalg:argmax (linalg:from-list '(1 9 3)))` | `1`(ベクタのみ。同値の場合は最初のインデックス) |
-| `linalg:argmin` | `(linalg:argmin (linalg:from-list '(5 2 8)))` | `1` |
-| `linalg:norm` | `(linalg:norm (linalg:from-list '(3 4)))` | `5.0`(ユークリッド / フロベニウスノルム) |
+| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2`(最小の要素) |
+| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1`(ベクタのみ。同値の場合は最初のインデックス) |
+| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` |
+| `linalg:norm` | `(linalg:norm #(3 4))` | `5.0`(ユークリッド / フロベニウスノルム) |
 | `linalg:trace` | `(linalg:trace (linalg:from-list '((1 2) (3 4))))` | `5`(正方行列のみ) |
 | `linalg:det` | `(linalg:det (linalg:from-list '((1 2) (3 4))))` | `-2`(整数・有理数入力に対しては厳密) |
 | `linalg:inv` | `(linalg:inv (linalg:from-list '((1 2) (3 4))))` | `#2A((-2 1) (3/2 -1/2))`(特異行列ではエラーを通知します) |

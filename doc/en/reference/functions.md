@@ -278,21 +278,21 @@ guide](../guides/linear-algebra.md) gives an overview and worked examples.
 | `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#2A((0 1 2) (3 4 5))` (row-major; the sizes must match) |
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#(1 0 0 1)` |
 | `linalg:transpose` | `(linalg:transpose (linalg:from-list '((1 2 3) (4 5 6))))` | `#2A((1 4) (2 5) (3 6))` (a vector is returned unchanged) |
-| `linalg:add` | `(linalg:add (linalg:from-list '(1 2 3)) 10)` | `#(11 12 13)` (elementwise; a scalar operand broadcasts) |
-| `linalg:sub` | `(linalg:sub (linalg:from-list '(5 5)) 1)` | `#(4 4)` |
+| `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#(11 12 13)` (elementwise; a scalar operand broadcasts) |
+| `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#(4 4)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | The Hadamard (elementwise) product -- not the matrix product |
-| `linalg:div` | `(linalg:div (linalg:from-list '(1 2 3)) 2)` | `#(1/2 1 3/2)` (integer division gives exact ratios) |
+| `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#(1/2 1 3/2)` (integer division gives exact ratios) |
 | `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#(0 1 4 9)` (apply a function to every element) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpy-style dispatch: vec.vec scalar, mat.vec / vec.mat vector, mat.mat matrix product |
 | `linalg:matmul` | `(linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8))))` | `#2A((19 22) (43 50))` (the matrix product) |
-| `linalg:outer` | `(linalg:outer (linalg:from-list '(1 2)) (linalg:from-list '(3 4 5)))` | `#2A((3 4 5) (6 8 10))` (the outer product) |
+| `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#2A((3 4 5) (6 8 10))` (the outer product) |
 | `linalg:sum` | `(linalg:sum (linalg:from-list '((1 2) (3 4))))` | `10` |
-| `linalg:mean` | `(linalg:mean (linalg:from-list '(1 2 3 4)))` | `5/2` (exact for integer inputs) |
+| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (exact for integer inputs) |
 | `linalg:amax` | `(linalg:amax (linalg:from-list '((1 9) (3 4))))` | `9` (the largest element) |
-| `linalg:amin` | `(linalg:amin (linalg:from-list '(5 2 8)))` | `2` (the smallest element) |
-| `linalg:argmax` | `(linalg:argmax (linalg:from-list '(1 9 3)))` | `1` (vectors only; first index on ties) |
-| `linalg:argmin` | `(linalg:argmin (linalg:from-list '(5 2 8)))` | `1` |
-| `linalg:norm` | `(linalg:norm (linalg:from-list '(3 4)))` | `5.0` (the Euclidean / Frobenius norm) |
+| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2` (the smallest element) |
+| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1` (vectors only; first index on ties) |
+| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` |
+| `linalg:norm` | `(linalg:norm #(3 4))` | `5.0` (the Euclidean / Frobenius norm) |
 | `linalg:trace` | `(linalg:trace (linalg:from-list '((1 2) (3 4))))` | `5` (square matrices only) |
 | `linalg:det` | `(linalg:det (linalg:from-list '((1 2) (3 4))))` | `-2` (exact for integer/rational inputs) |
 | `linalg:inv` | `(linalg:inv (linalg:from-list '((1 2) (3 4))))` | `#2A((-2 1) (3/2 -1/2))` (signals an error for a singular matrix) |

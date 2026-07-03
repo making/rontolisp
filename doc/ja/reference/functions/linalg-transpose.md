@@ -6,5 +6,5 @@
 
 ```lisp
 (linalg:transpose (linalg:from-list '((1 2 3) (4 5 6)))) ; => #2A((1 4) (2 5) (3 6))
-(linalg:transpose (linalg:from-list '(1 2 3)))           ; => #(1 2 3)
+(linalg:transpose #(1 2 3))                              ; => #(1 2 3)
 ```

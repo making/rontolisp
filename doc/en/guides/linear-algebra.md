@@ -22,7 +22,7 @@ Arithmetic is generic and exact: integer inputs stay integers and ratios rather 
 (linalg:det (linalg:from-list '((1 2) (3 4))))   ; => -2
 (linalg:inv (linalg:from-list '((1 2) (3 4))))   ; => #2A((-2 1) (3/2 -1/2))
 (linalg:solve (linalg:from-list '((2 1) (1 3)))
-              (linalg:from-list '(3 5)))         ; => #(4/5 7/5)
+              #(3 5))                            ; => #(4/5 7/5)
 ```
 
 ## Elementwise arithmetic and broadcasting
@@ -30,9 +30,9 @@ Arithmetic is generic and exact: integer inputs stay integers and ratios rather 
 [`linalg:add`](../reference/functions/linalg-add.md), [`linalg:sub`](../reference/functions/linalg-sub.md), [`linalg:mul`](../reference/functions/linalg-mul.md) and [`linalg:div`](../reference/functions/linalg-div.md) operate elementwise, and a scalar operand on either side is broadcast over the other operand's shape; two array operands must have equal shapes. Note that `mul` is the Hadamard (elementwise) product -- the matrix product is [`linalg:matmul`](../reference/functions/linalg-matmul.md) (or the rank-dispatching [`linalg:dot`](../reference/functions/linalg-dot.md)). Arbitrary per-element transformations go through [`linalg:emap`](../reference/functions/linalg-emap.md).
 
 ```lisp
-(linalg:add (linalg:from-list '(1 2 3)) 10)      ; => #(11 12 13)
+(linalg:add #(1 2 3) 10)                         ; => #(11 12 13)
 (linalg:mul 2 (linalg:from-list '((1 2) (3 4)))) ; => #2A((2 4) (6 8))
-(linalg:div (linalg:from-list '(1 2 3)) 2)       ; => #(1/2 1 3/2)
+(linalg:div #(1 2 3) 2)                          ; => #(1/2 1 3/2)
 ```
 
 ## First-class functions
@@ -40,9 +40,7 @@ Arithmetic is generic and exact: integer inputs stay integers and ratios rather 
 linalg functions are ordinary `defun`s, so `#'linalg:norm` and friends work as first-class values wherever a function is expected:
 
 ```lisp
-(mapcar #'linalg:norm
-        (list (linalg:from-list '(3 4))
-              (linalg:from-list '(6 8)))) ; => (5.0 10.0)
+(mapcar #'linalg:norm (list #(3 4) #(6 8))) ; => (5.0 10.0)
 ```
 
 Because arrays compare by identity (`eq`) only, results are compared with [`linalg:array-equal`](../reference/functions/linalg-array-equal.md), which checks shape and numeric equality (`1` and `1.0` compare equal).

@@ -22,7 +22,7 @@ linalg の配列は `make-array` で作られる組み込みの配列です。�
 (linalg:det (linalg:from-list '((1 2) (3 4))))   ; => -2
 (linalg:inv (linalg:from-list '((1 2) (3 4))))   ; => #2A((-2 1) (3/2 -1/2))
 (linalg:solve (linalg:from-list '((2 1) (1 3)))
-              (linalg:from-list '(3 5)))         ; => #(4/5 7/5)
+              #(3 5))                            ; => #(4/5 7/5)
 ```
 
 ## 要素ごとの算術演算とブロードキャスト
@@ -30,9 +30,9 @@ linalg の配列は `make-array` で作られる組み込みの配列です。�
 [`linalg:add`](../reference/functions/linalg-add.md)、[`linalg:sub`](../reference/functions/linalg-sub.md)、[`linalg:mul`](../reference/functions/linalg-mul.md)、[`linalg:div`](../reference/functions/linalg-div.md) は要素ごとに演算し、どちらか一方のスカラーのオペランドはもう一方のオペランドの形状にブロードキャストされます。2 つの配列オペランドは同じ形状でなければなりません。`mul` はアダマール積（要素ごとの積）であることに注意してください。行列積は [`linalg:matmul`](../reference/functions/linalg-matmul.md)（またはランクに応じてディスパッチする [`linalg:dot`](../reference/functions/linalg-dot.md)）です。要素ごとの任意の変換には [`linalg:emap`](../reference/functions/linalg-emap.md) を使います。
 
 ```lisp
-(linalg:add (linalg:from-list '(1 2 3)) 10)      ; => #(11 12 13)
+(linalg:add #(1 2 3) 10)                         ; => #(11 12 13)
 (linalg:mul 2 (linalg:from-list '((1 2) (3 4)))) ; => #2A((2 4) (6 8))
-(linalg:div (linalg:from-list '(1 2 3)) 2)       ; => #(1/2 1 3/2)
+(linalg:div #(1 2 3) 2)                          ; => #(1/2 1 3/2)
 ```
 
 ## 第一級関数
@@ -40,9 +40,7 @@ linalg の配列は `make-array` で作られる組み込みの配列です。�
 linalg の関数は通常の `defun` なので、`#'linalg:norm` などは関数が期待されるあらゆる場所で第一級の値として動作します。
 
 ```lisp
-(mapcar #'linalg:norm
-        (list (linalg:from-list '(3 4))
-              (linalg:from-list '(6 8)))) ; => (5.0 10.0)
+(mapcar #'linalg:norm (list #(3 4) #(6 8))) ; => (5.0 10.0)
 ```
 
 配列は同一性 (`eq`) でしか比較されないため、結果の比較には形状と数値の等価性を検査する [`linalg:array-equal`](../reference/functions/linalg-array-equal.md) を使います（`1` と `1.0` は等しいと判定されます）。

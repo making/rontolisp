@@ -6,5 +6,5 @@
 
 ```lisp
 (linalg:shape (linalg:from-list '((1 2 3) (4 5 6)))) ; => (2 3)
-(linalg:shape (linalg:from-list '(1 2 3)))           ; => (3)
+(linalg:shape #(1 2 3))                              ; => (3)
 ```
