@@ -195,6 +195,13 @@
 | `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | 階数1または2の配列を作成します。`:initial-element` はすべてのセルを設定します(省略時はnil) |
 | `aref` | `(aref a i)`, `(aref a i j)` | 指定した添字の要素を返します |
 | `(setf (aref a i j) v)` | `(setf (aref a 0 0) 1)` | 添字の位置に `v` を格納します。placeに対する `incf`/`decf`/`push` と組み合わせて使えます |
+| `vector` | `(vector 1 2 3)` | `#(1 2 3)`(引数からなる新しい階数1の配列) |
+| `svref` | `(svref (vector 10 20 30) 1)` | `20`(ベクタの要素アクセス。`setf` のplaceとしても使えます) |
+| `array-dimensions` | `(array-dimensions (make-array (list 2 3)))` | `(2 3)`(各次元のサイズのリスト) |
+| `array-dimension` | `(array-dimension (make-array (list 2 3)) 1)` | `3`(指定した軸のサイズ。0始まり) |
+| `array-rank` | `(array-rank (vector 1 2))` | `1`(階数2の配列では `2`) |
+| `array-total-size` | `(array-total-size (make-array (list 2 3)))` | `6`(要素の総数) |
+| `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`、`(#\a #\b)`(結果型はリテラルの `'list`/`'vector`/`'string` のみ) |
 
 ## rontolisp パッケージの関数
 
@@ -233,6 +240,53 @@
 [wasm-export](functions/rontolisp-wasm-export.md) と
 [wasm-import](functions/rontolisp-wasm-import.md) のリファレンスページ、および
 [WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。
+
+## linalg パッケージの関数
+
+`linalg` パッケージは、組み込みの階数1/階数2の配列に対する numpy
+スタイルのベクトル・行列演算を提供します。**Common Lispの一部ではありません**。
+関数は `linalg:` 修飾子で参照してください(このパッケージは `cl` を使用しないため、
+通常は `cl-user` に留まり修飾名で呼び出します)。パッケージはLispソースで一度だけ
+実装されており、すべてのバックエンドで同一に動作します。算術は整数・有理数入力に
+対して厳密で、整数行列の `det`・`inv`・`solve` は厳密な有理数を返します。
+以下の各名前はそれぞれのページにリンクしています。概要と実例は
+[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `linalg:zeros` | `(linalg:zeros 3)`, `(linalg:zeros '(2 2))` | `#(0 0 0)`、`#2A((0 0) (0 0))`(shapeは整数または `(rows cols)` のリスト) |
+| `linalg:ones` | `(linalg:ones '(2 2))` | `#2A((1 1) (1 1))` |
+| `linalg:full` | `(linalg:full '(2 2) 7)` | `#2A((7 7) (7 7))` |
+| `linalg:eye` | `(linalg:eye 2)` | `#2A((1 0) (0 1))`(単位行列) |
+| `linalg:arange` | `(linalg:arange 5)`, `(linalg:arange 2 10 2)` | `#(0 1 2 3 4)`、`#(2 4 6 8)`(stopは含まない。stepは負も可) |
+| `linalg:linspace` | `(linalg:linspace 0 1 5)` | `#(0 1/4 1/2 3/4 1)`(両端を含むn等分の値) |
+| `linalg:from-list` | `(linalg:from-list '((1 2) (3 4)))` | `#2A((1 2) (3 4))`(フラットなリストからはベクタ) |
+| `linalg:to-list` | `(linalg:to-list (linalg:eye 2))` | `((1 0) (0 1))` |
+| `linalg:shape` | `(linalg:shape (linalg:from-list '((1 2 3) (4 5 6))))` | `(2 3)` |
+| `linalg:size` | `(linalg:size (linalg:eye 3))` | `9`(要素の総数) |
+| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#2A((0 1 2) (3 4 5))`(行優先。サイズは一致が必要) |
+| `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#(1 0 0 1)` |
+| `linalg:transpose` | `(linalg:transpose (linalg:from-list '((1 2 3) (4 5 6))))` | `#2A((1 4) (2 5) (3 6))`(ベクタはそのまま返します) |
+| `linalg:add` | `(linalg:add (linalg:from-list '(1 2 3)) 10)` | `#(11 12 13)`(要素ごと。スカラーのオペランドはブロードキャスト) |
+| `linalg:sub` | `(linalg:sub (linalg:from-list '(5 5)) 1)` | `#(4 4)` |
+| `linalg:mul` | `(linalg:mul m1 m2)` | アダマール積(要素ごとの積)。行列積ではありません |
+| `linalg:div` | `(linalg:div (linalg:from-list '(1 2 3)) 2)` | `#(1/2 1 3/2)`(整数の除算は厳密な有理数) |
+| `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#(0 1 4 9)`(全要素に関数を適用) |
+| `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
+| `linalg:matmul` | `(linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8))))` | `#2A((19 22) (43 50))`(行列積) |
+| `linalg:outer` | `(linalg:outer (linalg:from-list '(1 2)) (linalg:from-list '(3 4 5)))` | `#2A((3 4 5) (6 8 10))`(外積) |
+| `linalg:sum` | `(linalg:sum (linalg:from-list '((1 2) (3 4))))` | `10` |
+| `linalg:mean` | `(linalg:mean (linalg:from-list '(1 2 3 4)))` | `5/2`(整数入力に対しては厳密) |
+| `linalg:amax` | `(linalg:amax (linalg:from-list '((1 9) (3 4))))` | `9`(最大の要素) |
+| `linalg:amin` | `(linalg:amin (linalg:from-list '(5 2 8)))` | `2`(最小の要素) |
+| `linalg:argmax` | `(linalg:argmax (linalg:from-list '(1 9 3)))` | `1`(ベクタのみ。同値の場合は最初のインデックス) |
+| `linalg:argmin` | `(linalg:argmin (linalg:from-list '(5 2 8)))` | `1` |
+| `linalg:norm` | `(linalg:norm (linalg:from-list '(3 4)))` | `5.0`(ユークリッド / フロベニウスノルム) |
+| `linalg:trace` | `(linalg:trace (linalg:from-list '((1 2) (3 4))))` | `5`(正方行列のみ) |
+| `linalg:det` | `(linalg:det (linalg:from-list '((1 2) (3 4))))` | `-2`(整数・有理数入力に対しては厳密) |
+| `linalg:inv` | `(linalg:inv (linalg:from-list '((1 2) (3 4))))` | `#2A((-2 1) (3/2 -1/2))`(特異行列ではエラーを通知します) |
+| `linalg:solve` | `(linalg:solve a b)` | `a . x = b` の解(`b` はベクタまたは行列) |
+| `linalg:array-equal` | `(linalg:array-equal (linalg:eye 2) (linalg:from-list '((1 0) (0 1))))` | `t`(同じ形状かつ数値的に等しい要素。配列自体は `eq` でしか比較できません) |
 
 ## java パッケージの関数
 
