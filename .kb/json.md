@@ -44,9 +44,10 @@ everywhere (WASM i31 range); WASM cannot *print* floats >= 2^31
 (`.todo/46`). plist keywords are interned via `read-from-string` (round-trip
 guarded, so non-symbol-friendly keys error toward `:hash-table`), which pulls
 the runtime reader into compiled output. The one closure (maphash callback in
-`%json-out-hash`) uses `%json-`-prefixed capture variable names because
-compiled closures resolve captured names against same-named top-level globals
-(`.todo/47`).
+`%json-out-hash`) uses `%json-`-prefixed capture variable names, a leftover
+workaround from when compiled closures resolved captured names against
+same-named top-level globals (fixed 2026-07-03 in `Jvm/WasmLambdaCompiler`;
+the rename stays because it is harmless).
 
 **WASM `equal`/`_hash` fix (shipped with this feature)**: `_equal` compared
 strings by interned offset, so runtime-built strings (concatenate/subseq/JSON

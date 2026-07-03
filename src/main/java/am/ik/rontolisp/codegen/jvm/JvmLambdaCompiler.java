@@ -31,8 +31,14 @@ final class JvmLambdaCompiler {
 		List<String> paramNames = nf.paramNames();
 		List<LispVal> bodyExprs = nf.body();
 		Set<String> boundVars = new HashSet<>(paramNames);
+		// A global shadowed by a lexical binding visible at this lambda's creation site
+		// (an enclosing let variable, defun parameter, or an outer closure's capture)
+		// must be captured like any other free variable, not resolved to the global.
+		Set<String> visibleGlobals = new HashSet<>(ctx.globals);
+		visibleGlobals.removeAll(ctx.locals.keySet());
+		visibleGlobals.removeAll(ctx.captures.keySet());
 		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, boundVars, ctx.functions.keySet(),
-				ctx.globals);
+				visibleGlobals);
 		int funcId = ctx.nextFuncId[0]++;
 		String methodName = "_lambda_" + funcId;
 		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,

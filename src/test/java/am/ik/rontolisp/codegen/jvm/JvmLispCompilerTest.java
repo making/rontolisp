@@ -282,6 +282,30 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunClosureReadsLetVarShadowingGlobal() throws Exception {
+		// A lambda capturing a let variable must read the captured binding, not a
+		// same-named top-level global.
+		assertThat(compileAndRun("(setq c 777) (print (let ((c 5)) (funcall (lambda () c))))")).isEqualTo("5");
+	}
+
+	@Test
+	void compileAndRunClosureWritesLetVarShadowingGlobal() throws Exception {
+		// A setq inside the lambda must write the captured cell, and the global must
+		// stay untouched.
+		assertThat(
+				compileAndRun("(setq d 666) (print (let ((d 5)) (funcall (lambda () (setq d (+ d 1)) d)))) (print d)"))
+			.isEqualTo("6\n666");
+	}
+
+	@Test
+	void compileAndRunClosureCapturesParamShadowingGlobal() throws Exception {
+		// A lambda capturing an enclosing defun parameter must not resolve it to a
+		// same-named global.
+		assertThat(compileAndRun("(setq e2 555) (defun g (e2) (funcall (lambda () e2))) (print (g 42))"))
+			.isEqualTo("42");
+	}
+
+	@Test
 	void compileAndRunTime() throws Exception {
 		// time prints the elapsed real time and returns the form's value (here printed).
 		String output = compileAndRun("(print (time (+ 1 2)))");

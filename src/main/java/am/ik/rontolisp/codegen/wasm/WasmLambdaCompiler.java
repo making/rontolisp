@@ -32,14 +32,15 @@ final class WasmLambdaCompiler {
 		List<String> paramNames = nf.paramNames();
 		List<LispVal> bodyExprs = nf.body();
 
-		// Free variable analysis
-		Set<String> boundVars = new HashSet<>(paramNames);
-		boundVars.addAll(ctx.locals.keySet());
-		if (ctx.captures != null) {
-			boundVars.addAll(ctx.captures.keySet());
-		}
+		// Free variable analysis. A global shadowed by a lexical binding visible at this
+		// lambda's creation site (an enclosing let variable, defun parameter, or an
+		// outer closure's capture) must be captured like any other free variable, not
+		// resolved to the global.
+		Set<String> visibleGlobals = new HashSet<>(ctx.globals);
+		visibleGlobals.removeAll(ctx.locals.keySet());
+		visibleGlobals.removeAll(ctx.captures.keySet());
 		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, new HashSet<>(paramNames),
-				ctx.functions.keySet(), ctx.globals);
+				ctx.functions.keySet(), visibleGlobals);
 
 		int funcId = ctx.nextFuncId[0]++;
 		String methodName = "_lambda_" + funcId;

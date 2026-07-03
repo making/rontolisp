@@ -1859,6 +1859,28 @@ cases:
       2
       (11 12 13)
 
+  # A lambda capturing a local (a surrounding let variable or an enclosing defun
+  # parameter) that shadows a same-named top-level global must read/write the
+  # captured binding, not the global (the interpreter always got this right; the
+  # compilers used to resolve the name to the global).
+  - name: closure-capture-shadowing-globals
+    source: |
+      (setq ci-shad-a 777)
+      (print (let ((ci-shad-a 5)) (funcall (lambda () ci-shad-a))))
+      (setq ci-shad-b 666)
+      (print (let ((ci-shad-b 5)) (funcall (lambda () (setq ci-shad-b (+ ci-shad-b 1)) ci-shad-b))))
+      (print ci-shad-b)
+      (setq ci-shad-e 555)
+      (defun ci-shad-g (ci-shad-e) (funcall (lambda () ci-shad-e)))
+      (print (ci-shad-g 42))
+      (print ci-shad-e)
+    expected: |
+      5
+      6
+      666
+      42
+      555
+
   # defmacro (user macros) with backquote templates. The interpreter expands macro
   # calls at evaluation time; the compile path (JVM / WASM / component) expands them
   # in a pre-pass (eval.UserMacroExpander) before the compilers run, so all four
