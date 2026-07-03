@@ -45,14 +45,17 @@ public final class PackageIntrospection {
 	 * Returns the listing of the given introspection function for the given package. The
 	 * {@code cl} listings come from the categorized sets in {@link PackageRegistry}; the
 	 * {@code cl-user} function listing is derived from the given candidates (the global
-	 * function namespace at runtime, or the Pass-1 defun names at compile time).
+	 * function namespace at runtime, or the Pass-1 defun names at compile time). Any
+	 * other package name is treated as a user-defined ({@code defpackage}) package: its
+	 * function listing is the candidates qualified with that package prefix (the resolver
+	 * validates that the package exists before the listing is computed, so an unknown
+	 * name simply yields an empty listing here).
 	 * @param member the introspection function name ({@code list-functions},
 	 * {@code list-macros} or {@code list-special-forms})
 	 * @param pkg the package name (without a leading colon)
-	 * @param userFunctionCandidates the candidate names for the {@code cl-user} function
-	 * listing
+	 * @param userFunctionCandidates the candidate names for the {@code cl-user} and
+	 * user-package function listings
 	 * @return the names, sorted alphabetically
-	 * @throws IllegalArgumentException if the package is unknown
 	 */
 	public static List<String> listNames(String member, String pkg, Collection<String> userFunctionCandidates) {
 		return switch (pkg) {
@@ -67,8 +70,23 @@ public final class PackageIntrospection {
 			case LispNames.RONTOLISP_PKG ->
 				LispNames.LIST_FUNCTIONS.equals(member) ? RONTOLISP_FUNCTION_NAMES : List.of();
 			case LispNames.JAVA_PKG -> LispNames.LIST_FUNCTIONS.equals(member) ? JAVA_FUNCTION_NAMES : List.of();
-			default -> throw new IllegalArgumentException("No such package: " + pkg);
+			default ->
+				LispNames.LIST_FUNCTIONS.equals(member) ? packageFunctionNames(pkg, userFunctionCandidates) : List.of();
 		};
+	}
+
+	/**
+	 * Filters a collection of function-namespace names down to the members of a
+	 * user-defined package: the names qualified as {@code pkg:name} or {@code pkg::name}
+	 * (the canonical spellings produced by the resolver), kept in their qualified form.
+	 * @param pkg the package name
+	 * @param names the candidate names (global function-namespace keys or Pass-1 defun
+	 * names)
+	 * @return the qualified member names, sorted alphabetically
+	 */
+	public static List<String> packageFunctionNames(String pkg, Collection<String> names) {
+		String prefix = pkg + ":";
+		return names.stream().filter(name -> name.startsWith(prefix)).sorted().toList();
 	}
 
 	/**

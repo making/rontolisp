@@ -18,6 +18,7 @@
 | `defparameter` | `(defparameter name value)` | グローバル変数を定義します。`name` がすでに束縛されていても **常に** `value` を(再)束縛します。名前を返します |
 | `defconstant` | `(defconstant name value)` | `defparameter` と同様(rontolispは定数性を強制しません)。名前を返します |
 | `function` | `(function name)` or `#'name` | 関数名前空間から関数を検索し、値として返します |
+| `defpackage` | `(defpackage name (:use ...) (:export ...))` | 新しいパッケージを定義します(トップレベルの read/コンパイル時ディレクティブ。clause は `:use` と `:export` のみ)。名前を返します |
 
 rontolispはCommon Lispのような **Lisp-2** です。関数と変数は別々の名前空間に存在します。裸のシンボルは変数として評価され(`car`
 単独は未束縛変数エラー)、呼び出し位置のシンボルは関数名前空間のみで解決され(`car`

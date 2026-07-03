@@ -3275,6 +3275,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void defpackageDefunAndCallAcrossPackages() throws Exception {
+		String code = """
+				(defpackage :mypkg (:use :cl) (:export :greet :twice))
+				(in-package :mypkg)
+				(defun greet (name) (concatenate 'string "hello, " name))
+				(defun twice (x) (* x 2))
+				(defun helper () 42)
+				(in-package :cl-user)
+				(print (mypkg:greet "world"))
+				(print (mapcar #'mypkg:twice '(1 2 3)))
+				(print (mypkg::helper))
+				(print (rontolisp:list-functions :mypkg))
+				""";
+		assertThat(compileAndRun(code))
+			.isEqualTo("\"hello, world\"\n(2 4 6)\n42\n(mypkg::helper mypkg:greet mypkg:twice)");
+	}
+
+	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
 				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
@@ -3283,7 +3301,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test

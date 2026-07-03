@@ -221,6 +221,129 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void defpackageRegistersPackageAndResolvesQuoted() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("(quote mypkg)");
+		// defpackage does not switch the current package.
+		assertThat(resolve(resolver, "*package*")).isEqualTo("(quote cl-user)");
+		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(quote mypkg)");
+		assertThat(resolve(resolver, "*package*")).isEqualTo("(quote mypkg)");
+	}
+
+	@Test
+	void defpackageExportedDefunIsExternalUnexportedIsInternal() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))");
+		resolve(resolver, "(in-package :mypkg)");
+		// The exported name is owned and external: the canonical spelling is
+		// single-colon.
+		assertThat(resolve(resolver, "(defun greet (x) (car x))"))
+			.isEqualTo("(defun mypkg:greet (mypkg::x) (car mypkg::x))");
+		// A name interned later (not in the :export clause) is internal.
+		assertThat(resolve(resolver, "(defun helper (x) x)")).isEqualTo("(defun mypkg::helper (mypkg::x) mypkg::x)");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(mypkg:greet '(1))")).isEqualTo("(mypkg:greet (quote (1)))");
+		assertThat(resolve(resolver, "#'mypkg:greet")).isEqualTo("(function mypkg:greet)");
+		assertThatThrownBy(() -> resolve(resolver, "(mypkg:helper 1)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("The symbol helper is not external in the mypkg package")
+			.hasMessageContaining("use mypkg::helper");
+		assertThat(resolve(resolver, "(mypkg::helper 1)")).isEqualTo("(mypkg::helper 1)");
+	}
+
+	@Test
+	void defpackageWithoutUseClauseRequiresQualifiedCl() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :bare (:export :f))");
+		resolve(resolver, "(in-package :bare)");
+		assertThatThrownBy(() -> resolve(resolver, "(car x)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("use cl:car");
+		assertThat(resolve(resolver, "(cl:car cl:*package*)")).isEqualTo("(car (quote bare))");
+	}
+
+	@Test
+	void defpackageUseMakesOnlyExportedSymbolsVisible() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :base (:use :cl) (:export :pub))");
+		resolve(resolver, "(in-package :base)");
+		resolve(resolver, "(defun pub () 1)");
+		resolve(resolver, "(defun priv () 2)");
+		resolve(resolver, "(defpackage :client (:use :cl :base))");
+		resolve(resolver, "(in-package :client)");
+		// The exported symbol is inherited from the used package ...
+		assertThat(resolve(resolver, "(pub)")).isEqualTo("(base:pub)");
+		// ... but the internal one is not: an unqualified priv interns as client's own
+		// symbol instead (CL: use makes only external symbols accessible).
+		assertThat(resolve(resolver, "(priv)")).isEqualTo("(client::priv)");
+		assertThat(resolve(resolver, "(base::priv)")).isEqualTo("(base::priv)");
+	}
+
+	@Test
+	void defpackageAcceptsStringAndBareSymbolDesignators() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(defpackage \"strpkg\" (:use cl) (:export \"f\" g :h))"))
+			.isEqualTo("(quote strpkg)");
+		resolve(resolver, "(in-package :strpkg)");
+		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(defun strpkg:f nil 1)");
+		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(defun strpkg:g nil 2)");
+		assertThat(resolve(resolver, "(defun h () 3)")).isEqualTo("(defun strpkg:h nil 3)");
+	}
+
+	@Test
+	void defpackageIntrospectionDesignatorIsAccepted() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :mypkg (:use :cl))");
+		assertThat(resolve(resolver, "(rontolisp:list-functions :mypkg)"))
+			.isEqualTo("(rontolisp:list-functions :mypkg)");
+	}
+
+	@Test
+	void defpackageExistingPackageIsRejected() {
+		assertThatThrownBy(() -> resolve("(defpackage :cl-user)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Package already exists: cl-user");
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :mypkg)");
+		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mypkg)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Package already exists: mypkg");
+	}
+
+	@Test
+	void defpackageUnknownUsedPackageIsRejected() {
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:use :nosuch))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: nosuch");
+	}
+
+	@Test
+	void defpackageUnsupportedClauseIsRejected() {
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:nicknames :mp))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Unsupported defpackage clause: :nicknames");
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:documentation \"doc\"))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Unsupported defpackage clause: :documentation");
+	}
+
+	@Test
+	void defpackageMalformedClauseIsRejected() {
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg :use)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("expects (:use ...) / (:export ...) clauses");
+		assertThatThrownBy(() -> resolve("(defpackage)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("defpackage expects a package name");
+		assertThatThrownBy(() -> resolve("(defpackage (car x))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("defpackage expects a package name");
+	}
+
+	@Test
+	void defpackageNestedIsRejected() {
+		assertThatThrownBy(() -> resolve("(print (defpackage :mypkg))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("defpackage is only supported as a literal top-level form");
+	}
+
+	@Test
+	void defpackageQuotedDatumIsLeftUntouched() {
+		assertThat(resolve("'(defpackage :mypkg)")).isEqualTo("(quote (defpackage :mypkg))");
+	}
+
+	@Test
 	void newPackageInRegistryResolvesViaUseListAndQualifiesOwnSymbols() {
 		// Extensibility: registering a package that uses rontolisp makes its symbols
 		// (version) visible unqualified, and the resolution logic is unchanged.

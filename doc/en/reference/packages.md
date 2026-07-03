@@ -1,6 +1,6 @@
 # Packages
 
-rontolisp has a small namespace (package) system with four built-in packages:
+rontolisp has a small namespace (package) system with four built-in packages, plus [user-defined packages via `defpackage`](#user-defined-packages-defpackage):
 
 - **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
 - **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
@@ -55,11 +55,49 @@ time:
 Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
 ```
 
-There is no `export` function — each built-in package's export set is fixed
-(see [Missing features](../guides/missing-features.md)). A symbol defined
+There is no runtime `export` function — a package's export set is fixed when
+it is defined: the built-in packages export their documented API, and a
+user-defined package exports its `(:export ...)` clause (see
+[Missing features](../guides/missing-features.md)). A symbol defined
 while `(in-package rontolisp)` is in effect is interned into the `rontolisp`
 package as an internal symbol, so from other packages it must be referenced
 with the double colon.
+
+## User-defined packages (`defpackage`)
+
+New packages are defined with [`defpackage`](special-forms/defpackage.md):
+
+```lisp
+(defpackage :mypkg (:use :cl) (:export :greet))
+(in-package :mypkg)
+(defun greet (name) (concatenate 'string "hello, " name))
+(defun helper () 42)                  ; not exported: internal
+(in-package :cl-user)
+(print (mypkg:greet "world"))         ; => "hello, world"
+(print (mypkg::helper))               ; => 42
+```
+
+Like `in-package`, `defpackage` is a **literal, top-level directive consumed at
+read/compile time**, so packages are defined in source order, before any use.
+The supported clauses are `(:use package...)` and `(:export symbol...)`; the
+name and the clause arguments are keywords, bare symbols, or strings. Any other
+clause (`:nicknames`, `:shadow`, `:import-from`, `:documentation`, ...) is an
+error, and so is redefining an existing package or using a package that does
+not exist yet.
+
+- `:use` makes the **external** symbols of the used packages visible
+  unqualified, as in Common Lisp — internal symbols of a used package still
+  need the double colon. Without a `:use` clause nothing is inherited (like
+  SBCL), so `cl` symbols would need the `cl:` prefix; ordinary packages should
+  say `(:use :cl)`. When several used packages export the same name, the first
+  package in `:use` order wins (Common Lisp signals a conflict instead).
+- `:export` declares the package's external symbols. Symbols interned later
+  (a `defun` under `(in-package name)` that is not in the `:export` clause, a
+  free variable) are internal, exactly like the built-in packages.
+
+There is no runtime package manipulation: `make-package`, `export`, `import`,
+`use-package`, `find-package` and friends are not available, and a `defpackage`
+inside another form (not top-level) is an error.
 
 ## Package introspection
 
@@ -69,7 +107,7 @@ with the double colon.
 (print (rontolisp:list-macros))
 ; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
-; => (defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)
+; => (defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
 ; => 190
 (defun square (x) (* x x))
@@ -84,8 +122,9 @@ with the double colon.
 The classification follows the function namespace: a name is listed as a function exactly when it is usable as a function value via `#'name` (so `first`, `length`, `1+`, ... are functions even though they compile via inline expansion), and `list-macros`/`list-special-forms` list the operators that have no function value. Notes:
 
 - `list-functions` of `cl-user` lists the user-defined functions (`defun`s); names that are package-qualified, `%`-prefixed internals or shadow a `cl` symbol are excluded. In compiled output it is a **compile-time snapshot** of the program's `defun`s — functions defined at runtime through `load`/`eval` (even with `--dynamic`) are not included, and functions defined while `(in-package :rontolisp)` is in effect are not listed for any package.
+- `list-functions` of a [user-defined package](#user-defined-packages-defpackage) lists the package's `defun`s under their canonical qualified names — `mypkg:fn` for an exported function, `mypkg::fn` for an internal one. `list-macros` and `list-special-forms` of a user package are `nil`.
 - Car/cdr compositions (`cadr`, `caddr`, ...) are recognized by pattern, not enumerated, so they do not appear in `list-functions`.
-- The package designator must be a literal; a computed designator is rejected at read/compile time (the interpreter additionally accepts a computed designator through `funcall`).
+- The package designator must be a literal; a computed designator is rejected at read/compile time (the interpreter additionally accepts a computed designator through `funcall`, where an unknown package yields `nil` instead of an error — user packages are known only at read/compile time).
 - Like `version`, these functions are not supported inside the compiled runtime `eval`/`load`.
 
 Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive and `*package*` reflects the current package rather than being a mutable runtime variable. In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, `list-functions`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.

@@ -23,7 +23,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
 | `defstruct`、CLOS | 利用不可 |
 | `declare` / `the` / `typep` / `coerce` | 利用不可 |
-| `defpackage` / `export` / ユーザーパッケージ | 利用不可 |
+| `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export` のみ。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
+| `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
 | `let` による動的（special）束縛 | レキシカルのみ |
 | 複素数 | 利用不可 |
 
@@ -115,14 +116,19 @@ The function ignore-errors is undefined
 
 ## ユーザー定義パッケージ
 
-rontolisp にはちょうど 3 つの組み込みパッケージ — `cl`、`cl-user`、`rontolisp`
-があります（[パッケージ](../reference/packages.md)を参照）。新しいパッケージは
-作成できません。`defpackage`、`make-package`、`export`、`import`、`use-package`
-は利用できません。`in-package` は 3 つの組み込みパッケージの間で現在のパッケージ
-を切り替えるだけです。各組み込みパッケージの export(external)シンボルの
-集合は固定です。シングル/ダブルコロンの修飾子(external シンボルには
+新しいパッケージは [`defpackage`](../reference/special-forms/defpackage.md) で
+定義 **できます**。これは `:use` と `:export` の clause のみをサポートする、
+リテラルなトップレベルの read/コンパイル時ディレクティブです
+（[パッケージ](../reference/packages.md#ユーザー定義パッケージdefpackage)を参照）。
+それ以外の `defpackage` clause（`:nicknames`、`:shadow`、`:import-from`、
+`:documentation` など）はエラーで、**ランタイム** のパッケージ操作はありません:
+`make-package`、`export`、`import`、`use-package`、`find-package`、
+`rename-package` は利用できません。パッケージの export(external)シンボルの
+集合は定義時に固定されます。シングル/ダブルコロンの修飾子(external シンボルには
 `pkg:name`、internal シンボルには `pkg::name`)は Common Lisp と同様に
 機能します([パッケージ](../reference/packages.md#external-シンボルと-internal-シンボル)を参照)。
+複数の使用先パッケージが同じ名前を export している場合、コンフリクトをシグナル
+する代わりに `:use` 順で最初のパッケージが優先されます。
 
 ## 動的（special）変数束縛
 

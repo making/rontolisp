@@ -16,3 +16,4 @@ categories:
       - { slug: defparameter, name: defparameter }
       - { slug: defconstant, name: defconstant }
       - { slug: function, name: function }
+      - { slug: defpackage, name: defpackage }

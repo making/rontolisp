@@ -1036,6 +1036,19 @@ public final class LispNames {
 	/** The {@code in-package} directive that switches the current package. */
 	public static final String IN_PACKAGE = "in-package";
 
+	/**
+	 * The {@code defpackage} directive that defines a new package. Like
+	 * {@code in-package}, it is a literal, top-level, read/compile-time directive
+	 * consumed by the {@code PackageResolver}.
+	 */
+	public static final String DEFPACKAGE = "defpackage";
+
+	/** The {@code :use} clause keyword of {@code defpackage}. */
+	public static final String USE_KEYWORD = ":use";
+
+	/** The {@code :export} clause keyword of {@code defpackage}. */
+	public static final String EXPORT_KEYWORD = ":export";
+
 	/** The {@code *package*} variable holding the current package name. */
 	public static final String PACKAGE_VAR = "*package*";
 

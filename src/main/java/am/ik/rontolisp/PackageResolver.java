@@ -1,7 +1,9 @@
 package am.ik.rontolisp;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Resolves package-qualified and unqualified symbols against a {@link PackageRegistry}
@@ -17,7 +19,9 @@ import java.util.List;
  * (e.g. {@code rontolisp::%json-parse}), so the canonical form re-resolves to
  * itself;</li>
  * <li>{@code *package*} is replaced by a quoted symbol naming the current package;</li>
- * <li>{@code (in-package P)} is consumed and replaced by a quoted package symbol.</li>
+ * <li>{@code (in-package P)} is consumed and replaced by a quoted package symbol;</li>
+ * <li>{@code (defpackage NAME (:use ...) (:export ...))} registers a new package and is
+ * likewise consumed and replaced by a quoted package symbol.</li>
  * </ul>
  *
  * Mirroring Common Lisp, a single-colon qualifier only reaches external (exported)
@@ -67,9 +71,14 @@ public final class PackageResolver {
 	 * @return the resolved form
 	 */
 	public LispVal resolve(LispVal form) {
-		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& LispNames.IN_PACKAGE.equals(operatorMember(op))) {
-			return resolveInPackage(cons);
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op) {
+			String member = operatorMember(op);
+			if (LispNames.IN_PACKAGE.equals(member)) {
+				return resolveInPackage(cons);
+			}
+			if (LispNames.DEFPACKAGE.equals(member)) {
+				return resolveDefpackage(cons);
+			}
 		}
 		return resolveForm(form);
 	}
@@ -87,12 +96,66 @@ public final class PackageResolver {
 		return quotedSymbol(name);
 	}
 
+	/**
+	 * Defines a new package from a literal, top-level {@code (defpackage NAME
+	 * (:use ...) (:export ...))} directive. Exported names become owned and external;
+	 * symbols interned later (defuns under {@code (in-package NAME)}, free variables) are
+	 * internal. Without a {@code :use} clause nothing is visible unqualified (like SBCL),
+	 * so {@code (:use :cl)} must be spelled out. Any other clause is an error.
+	 */
+	private LispVal resolveDefpackage(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispPackageException(LispNames.DEFPACKAGE + " expects a package name");
+		}
+		String name = designator(LispNames.DEFPACKAGE, "a package name", parts.get(1));
+		if (this.registry.contains(name)) {
+			throw new LispPackageException("Package already exists: " + name);
+		}
+		List<String> useList = new ArrayList<>();
+		Set<String> exports = new HashSet<>();
+		for (LispVal clause : parts.subList(2, parts.size())) {
+			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
+					|| !keyword.isKeyword()) {
+				throw new LispPackageException(
+						LispNames.DEFPACKAGE + " expects (:use ...) / (:export ...) clauses, got " + clause.print());
+			}
+			List<LispVal> args = clauseCons.toList();
+			switch (keyword.name()) {
+				case LispNames.USE_KEYWORD -> {
+					for (LispVal arg : args.subList(1, args.size())) {
+						String used = designator(LispNames.USE_KEYWORD, "a package name", arg);
+						if (!this.registry.contains(used)) {
+							throw new LispPackageException("No such package: " + used);
+						}
+						if (!useList.contains(used)) {
+							useList.add(used);
+						}
+					}
+				}
+				case LispNames.EXPORT_KEYWORD -> {
+					for (LispVal arg : args.subList(1, args.size())) {
+						exports.add(designator(LispNames.EXPORT_KEYWORD, "a symbol name", arg));
+					}
+				}
+				default -> throw new LispPackageException(
+						"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
+			}
+		}
+		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(exports), Set.copyOf(exports)));
+		return quotedSymbol(name);
+	}
+
 	private static String packageDesignator(String context, LispVal designator) {
+		return designator(context, "a package name", designator);
+	}
+
+	private static String designator(String context, String kind, LispVal designator) {
 		return switch (designator) {
 			// A keyword (:cl-user) or a bare symbol (cl-user); strip a leading colon.
 			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
 			case LispString str -> str.value();
-			default -> throw new LispPackageException(context + " expects a package name, got " + designator.print());
+			default -> throw new LispPackageException(context + " expects " + kind + ", got " + designator.print());
 		};
 	}
 
@@ -109,6 +172,11 @@ public final class PackageResolver {
 			// (quote DATUM): the operator is exempt and the datum is left untouched.
 			LispVal datum = ((LispCons) cons.cdr()).car();
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
+		}
+		if (cons.car() instanceof LispSymbol rawOp && LispNames.DEFPACKAGE.equals(operatorMember(rawOp))) {
+			// resolveCons only sees non-top-level forms (resolve() consumes the
+			// top-level directive), so a defpackage here is out of place.
+			throw new LispPackageException(LispNames.DEFPACKAGE + " is only supported as a literal top-level form");
 		}
 		LispVal car = resolveForm(cons.car());
 		if (car instanceof LispSymbol op) {
@@ -222,7 +290,9 @@ public final class PackageResolver {
 			if (LispNames.CL_PKG.equals(used)) {
 				continue;
 			}
-			if (this.registry.get(used).owns(name)) {
+			// Using a package makes only its external (exported) symbols accessible,
+			// like Common Lisp; internal symbols still require the double colon.
+			if (this.registry.get(used).exports(name)) {
 				return canonical(used, name);
 			}
 		}

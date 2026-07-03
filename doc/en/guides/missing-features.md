@@ -23,7 +23,8 @@ This page lists the most notable omissions. For what **is** available, see the
 | `loop` (extended) | partial (simple-loop subset) |
 | `defstruct`, CLOS | not available |
 | `declare` / `the` / `typep` / `coerce` | not available |
-| `defpackage` / `export` / user packages | not available |
+| `defpackage` (user packages) | partial (`:use`/`:export` only; see [`defpackage`](../reference/special-forms/defpackage.md)) |
+| `make-package` / `export` / `use-package` (runtime) | not available |
 | dynamic (special) binding via `let` | lexical only |
 | complex numbers | not available |
 
@@ -114,14 +115,21 @@ not available, and neither are the runtime helpers `typep` and `coerce`.
 
 ## User-defined packages
 
-rontolisp has exactly three built-in packages — `cl`, `cl-user`, and `rontolisp`
-(see [Packages](../reference/packages.md)). You cannot create new ones:
-`defpackage`, `make-package`, `export`, `import`, and `use-package` are not
-available. `in-package` only switches the current package among the three
-built-ins. Each built-in package's set of exported (external) symbols is fixed;
-the single/double colon qualifiers (`pkg:name` for external symbols,
-`pkg::name` for internal ones) work as in Common Lisp (see
-[Packages](../reference/packages.md#external-and-internal-symbols)).
+New packages **can** be defined with
+[`defpackage`](../reference/special-forms/defpackage.md), as a literal,
+top-level, read/compile-time directive supporting the `:use` and `:export`
+clauses only (see
+[Packages](../reference/packages.md#user-defined-packages-defpackage)). The
+other `defpackage` clauses (`:nicknames`, `:shadow`, `:import-from`,
+`:documentation`, ...) are errors, and there is no **runtime** package
+manipulation: `make-package`, `export`, `import`, `use-package`,
+`find-package`, and `rename-package` are not available. A package's set of
+exported (external) symbols is fixed when it is defined; the single/double
+colon qualifiers (`pkg:name` for external symbols, `pkg::name` for internal
+ones) work as in Common Lisp (see
+[Packages](../reference/packages.md#external-and-internal-symbols)). When
+several used packages export the same name, the first package in `:use` order
+wins instead of signaling a conflict.
 
 ## Dynamic (special) variable binding
 

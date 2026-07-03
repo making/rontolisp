@@ -973,13 +973,30 @@ cases:
       (print (rontolisp:list-macros :cl-user))
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
-      (defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)
+      (defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)
       190
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn
       nil
       nil
+  - name: defpackage-use-export
+    source: |
+      (defpackage :ci-pkg (:use :cl) (:export :ci-greet :ci-twice))
+      (in-package :ci-pkg)
+      (defun ci-greet (name) (concatenate 'string "hello, " name))
+      (defun ci-twice (x) (* x 2))
+      (defun ci-priv () 42)
+      (in-package :cl-user)
+      (print (ci-pkg:ci-greet "world"))
+      (print (mapcar #'ci-pkg:ci-twice '(1 2 3)))
+      (print (ci-pkg::ci-priv))
+      (print (rontolisp:list-functions :ci-pkg))
+    expected: |
+      "hello, world"
+      (2 4 6)
+      42
+      (ci-pkg::ci-priv ci-pkg:ci-greet ci-pkg:ci-twice)
   - name: promise-generic-await-then-promisep
     source: |
       (print (rontolisp:await 42))

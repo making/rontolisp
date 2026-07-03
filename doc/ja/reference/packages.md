@@ -1,6 +1,6 @@
 # パッケージ
 
-rontolispには、4つの組み込みパッケージを持つ小さな名前空間(パッケージ)システムがあります:
+rontolispには、4つの組み込みパッケージと[`defpackage` によるユーザー定義パッケージ](#ユーザー定義パッケージdefpackage)を持つ小さな名前空間(パッケージ)システムがあります:
 
 - **`cl`** — 標準パッケージ。すべての組み込み関数、マクロ、特殊形式、および `*package*` 変数がここに属します。
 - **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
@@ -60,11 +60,50 @@ external でないシンボルへのシングルコロンでの参照は read/�
 Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
 ```
 
-`export` 関数はありません — 各組み込みパッケージの export セットは固定です
+ランタイムの `export` 関数はありません — パッケージの export セットは定義時に
+固定されます: 組み込みパッケージはドキュメント化された API を export し、
+ユーザー定義パッケージは `(:export ...)` clause の内容を export します
 ([未対応の機能](../guides/missing-features.md)を参照)。`(in-package rontolisp)`
 が有効な間に定義されたシンボルは `rontolisp` パッケージに internal
 シンボルとして intern されるため、他のパッケージからはダブルコロンで参照する
 必要があります。
+
+## ユーザー定義パッケージ(defpackage)
+
+新しいパッケージは [`defpackage`](special-forms/defpackage.md) で定義します:
+
+```lisp
+(defpackage :mypkg (:use :cl) (:export :greet))
+(in-package :mypkg)
+(defun greet (name) (concatenate 'string "hello, " name))
+(defun helper () 42)                  ; not exported: internal
+(in-package :cl-user)
+(print (mypkg:greet "world"))         ; => "hello, world"
+(print (mypkg::helper))               ; => 42
+```
+
+`in-package` と同様に、`defpackage` は **read/コンパイル時に消費されるリテラルな
+トップレベルディレクティブ** であり、パッケージは使用より前に、ソース順に
+定義されます。サポートされる clause は `(:use package...)` と
+`(:export symbol...)` で、名前と clause の引数はキーワード、裸のシンボル、
+または文字列です。それ以外の clause(`:nicknames`、`:shadow`、`:import-from`、
+`:documentation` など)はエラーで、既存パッケージの再定義や、まだ存在しない
+パッケージの使用もエラーです。
+
+- `:use` は、使用するパッケージの **external** シンボルを修飾なしで見えるように
+  します(Common Lisp と同様) — 使用先パッケージの internal シンボルには
+  依然としてダブルコロンが必要です。`:use` clause がなければ何も継承されない
+  (SBCL と同様)ため、`cl` シンボルには `cl:` プレフィックスが必要になります。
+  通常のパッケージでは `(:use :cl)` と書いてください。複数の使用先パッケージが
+  同じ名前を export している場合、`:use` 順で最初のパッケージが優先されます
+  (Common Lisp はコンフリクトをシグナルします)。
+- `:export` はパッケージの external シンボルを宣言します。後から intern される
+  シンボル(`(in-package name)` の下で定義され `:export` clause に含まれない
+  `defun` や自由変数)は、組み込みパッケージとまったく同様に internal です。
+
+ランタイムのパッケージ操作はありません: `make-package`、`export`、`import`、
+`use-package`、`find-package` などは利用できず、(トップレベルでない)他の
+フォームの中の `defpackage` はエラーです。
 
 ## パッケージのイントロスペクション
 
@@ -76,7 +115,7 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 (print (rontolisp:list-macros))
 ; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
-; => (defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)
+; => (defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
 ; => 190
 (defun square (x) (* x x))
@@ -98,10 +137,14 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
   `defun` の **コンパイル時スナップショット** です。`load`/`eval` を通じて実行時に定義された関数(`--dynamic`
   を使っても)は含まれず、`(in-package :rontolisp)`
   が有効な間に定義された関数はどのパッケージにも列挙されません。
+- [ユーザー定義パッケージ](#ユーザー定義パッケージdefpackage)の `list-functions` は、そのパッケージの
+  `defun` を正規の修飾名で列挙します — export された関数は `mypkg:fn`、internal な関数は
+  `mypkg::fn` です。ユーザーパッケージの `list-macros` と `list-special-forms` は `nil` です。
 - car/cdrの合成(`cadr`、`caddr` ...)はパターンで認識され列挙されないため、`list-functions`
   には現れません。
 - パッケージ指定子はリテラルでなければなりません。計算された指定子は読み込み/コンパイル時に拒否されます(インタプリタはさらに
-  `funcall` を通じて計算された指定子を受け付けます)。
+  `funcall` を通じて計算された指定子を受け付けますが、その場合、未知のパッケージはエラーではなく
+  `nil` になります — ユーザーパッケージは read/コンパイル時にのみ知られているためです)。
 - `version` と同様に、これらの関数はコンパイルされたランタイムの `eval`/`load` 内ではサポートされません。
 
 パッケージは読み込み/コンパイル時に(ソース順で)解決されるため、`in-package`

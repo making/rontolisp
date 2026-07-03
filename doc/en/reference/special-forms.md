@@ -19,6 +19,7 @@ and a runnable example you can evaluate in your browser.
 | `defparameter` | `(defparameter name value)` | Define a global variable, **always** (re)binding `value` even if `name` is already bound. Returns the name |
 | `defconstant` | `(defconstant name value)` | Like `defparameter` (rontolisp does not enforce constancy). Returns the name |
 | `function` | `(function name)` or `#'name` | Look up a function in the function namespace and return it as a value |
+| `defpackage` | `(defpackage name (:use ...) (:export ...))` | Define a new package (a top-level, read/compile-time directive; `:use` and `:export` clauses only). Returns the name |
 
 rontolisp is a **Lisp-2** like Common Lisp: functions and variables live in separate
 namespaces. A bare symbol evaluates as a variable (`car` alone is an unbound-variable

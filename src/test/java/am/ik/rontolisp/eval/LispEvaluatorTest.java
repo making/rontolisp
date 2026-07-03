@@ -2810,7 +2810,7 @@ class LispEvaluatorTest {
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defconstant defmacro defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -2890,10 +2890,12 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void listFunctionsUnknownPackageViaFuncallThrows() {
-		assertThatThrownBy(() -> eval("(funcall #'rontolisp:list-functions :foo)"))
-			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("No such package: foo");
+	void listFunctionsUnknownPackageViaFuncallReturnsNil() {
+		// The registry of user-defined (defpackage) packages lives in the resolver, so
+		// a designator that only becomes known at runtime (funcall) cannot be
+		// validated: any non-built-in name is treated as a user-package prefix filter
+		// and an unknown one simply yields nil.
+		assertThat(eval("(funcall #'rontolisp:list-functions :foo)")).isEqualTo(LispNil.INSTANCE);
 	}
 
 	@Test
@@ -2958,6 +2960,82 @@ class LispEvaluatorTest {
 	void inPackageUnknownPackageThrows() {
 		assertThatThrownBy(() -> eval("(in-package foo)")).isInstanceOf(am.ik.rontolisp.LispPackageException.class)
 			.hasMessageContaining("No such package: foo");
+	}
+
+	@Test
+	void defpackageDefunAndCallAcrossPackages() {
+		assertThat(evalMulti("""
+				(defpackage :mypkg (:use :cl) (:export :greet))
+				(in-package :mypkg)
+				(defun greet (name) (concatenate 'string "hello, " name))
+				(in-package :cl-user)
+				(mypkg:greet "world")
+				""")).isEqualTo(new LispString("hello, world"));
+	}
+
+	@Test
+	void defpackageFunctionValueWorksAcrossPackages() {
+		assertThat(evalMulti("""
+				(defpackage :mypkg (:use :cl) (:export :twice))
+				(in-package :mypkg)
+				(defun twice (x) (* x 2))
+				(in-package :cl-user)
+				(mapcar #'mypkg:twice '(1 2 3))
+				""").print()).isEqualTo("(2 4 6)");
+	}
+
+	@Test
+	void defpackageInternalFunctionRequiresDoubleColon() {
+		String prologue = """
+				(defpackage :mypkg (:use :cl))
+				(in-package :mypkg)
+				(defun helper () 42)
+				(in-package :cl-user)
+				""";
+		assertThat(evalMulti(prologue + "(mypkg::helper)")).isEqualTo(new LispInteger(42));
+		assertThatThrownBy(() -> evalMulti(prologue + "(mypkg:helper)"))
+			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
+			.hasMessageContaining("The symbol helper is not external in the mypkg package");
+	}
+
+	@Test
+	void defpackageUseInheritsOnlyExportedSymbols() {
+		String prologue = """
+				(defpackage :base (:use :cl) (:export :pub))
+				(in-package :base)
+				(defun pub () 1)
+				(defun priv () 2)
+				(defpackage :client (:use :cl :base))
+				(in-package :client)
+				""";
+		assertThat(evalMulti(prologue + "(pub)")).isEqualTo(new LispInteger(1));
+		// priv is internal to base, so an unqualified priv interns as client's own
+		// (undefined) symbol instead of reaching base's function.
+		assertThatThrownBy(() -> evalMulti(prologue + "(priv)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The function client::priv is undefined");
+	}
+
+	@Test
+	void listFunctionsForUserPackageListsItsDefunsQualified() {
+		assertThat(evalMulti("""
+				(defpackage :mypkg (:use :cl) (:export :pub))
+				(in-package :mypkg)
+				(defun pub () 1)
+				(defun priv () 2)
+				(in-package :cl-user)
+				(rontolisp:list-functions :mypkg)
+				""").print()).isEqualTo("(mypkg::priv mypkg:pub)");
+	}
+
+	@Test
+	void userPackageDefunsStayOutOfClUserListing() {
+		assertThat(evalMulti("""
+				(defpackage :mypkg (:use :cl) (:export :pub))
+				(in-package :mypkg)
+				(defun pub () 1)
+				(in-package :cl-user)
+				(rontolisp:list-functions :cl-user)
+				""")).isEqualTo(LispNil.INSTANCE);
 	}
 
 	@Test
