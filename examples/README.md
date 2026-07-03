@@ -62,6 +62,7 @@ These are directories rather than single files: a Lisp program is compiled to
 | [`webgl-triangle/`](webgl-triangle) | The WebGL hello world and the smallest `rontolisp:wasm-import` program: Lisp compiles two shaders and draws one colored triangle through ten imported host functions -- no exports, no frame loop; the page just calls `_initialize()` |
 | [`webgl-cube/`](webgl-cube) | Hello 3D: a rotating cube whose perspective projection and rotation matrices are computed in Lisp every frame (4x4 matrix math on `make-array`s); bulk floats (geometry, the mat4 uniform) cross the boundary through a small staging array |
 | [`webgl-galaxy/`](webgl-galaxy) | A spiral galaxy whose WebGL pipeline is driven entirely from Lisp: the GLSL shaders live in the Lisp source, and Lisp compiles, links, buffers and issues every draw call through 34 `rontolisp:wasm-import` host functions (even `Math.sin`/`Math.cos`) — JavaScript is one-line bindings and the HUD |
+| [`webgl-heat3d/`](webgl-heat3d) | The rank-3 array showcase in the browser: the page's whole state is one `(n n n)` `make-array` — every frame Lisp deposits heat at two orbiting sources with three-subscript `(setf (aref ...))`, diffuses it across the voxel lattice, normalizes the colors with the rank-generic `linalg:amax`, and projects every voxel itself (same one-line WebGL host boundary as `webgl-galaxy`) |
 
 ## Running
 

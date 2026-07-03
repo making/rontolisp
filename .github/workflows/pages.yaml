@@ -16,6 +16,7 @@ on:
     - examples/hiragana/**
     - examples/minesweeper/**
     - examples/webgl-galaxy/**
+    - examples/webgl-heat3d/**
     - examples/webgl-triangle/**
     - examples/webgl-cube/**
     - src/**
