@@ -1,15 +1,18 @@
-;;;; galaxy.lisp -- a spiral galaxy computed in Lisp, rendered by WebGL.
+;;;; galaxy.lisp -- a spiral galaxy: the simulation AND the WebGL pipeline,
+;;;; all driven from Lisp.
 ;;;;
-;;;; This is the rontolisp:wasm-import showcase: the page (index.html) exposes
-;;;; two host functions from JavaScript under the import module "gl", and this
-;;;; program calls them like ordinary Lisp functions. Per animation frame the
-;;;; browser calls the exported `frame`, and Lisp answers with one
-;;;; (draw-particle x y hue size) call per star; the page batches those into a
-;;;; single additive-blended WebGL point draw.
+;;;; This is the rontolisp:wasm-import showcase. The page (index.html) does not
+;;;; know how to render a galaxy: it only exposes the WebGL2 API one function at
+;;;; a time (a handle table resolves :int handles to GL objects, every binding
+;;;; is one line of JavaScript). Lisp compiles the shaders -- the GLSL source
+;;;; lives in this file as string constants -- links the program, sets up the
+;;;; vertex buffer and blending, and issues every draw call. JavaScript keeps
+;;;; only the UI (canvas sizing, the star-count select, the HUD meters) and the
+;;;; final vertex upload.
 ;;;;
 ;;;; Compiled ahead of time to a --no-wasi reactor (build.sh), so the module
-;;;; imports nothing but the two "gl" functions and instantiates in any
-;;;; wasm-GC-capable browser with a two-line import object.
+;;;; imports nothing but the host functions declared below and instantiates in
+;;;; any wasm-GC-capable browser.
 ;;;;
 ;;;; The galaxy is the classic density-wave toy model: every star follows a
 ;;;; fixed ellipse, and the ellipses' orientations twist with radius, so the
@@ -17,17 +20,181 @@
 ;;;; random: star i is scattered with the golden angle, so the disc looks
 ;;;; even without an entropy source (a --no-wasi reactor has none).
 
-;; The host functions provided by the page. :as maps the Lisp name to the
-;; JavaScript property; :from names the import-object key.
-(rontolisp:wasm-import 'draw-particle :from "gl" :as "drawParticle"
+;; --- the host boundary ------------------------------------------------------
+;;
+;; WebGL2, imported one entry point at a time. :as maps the Lisp name to the
+;; JavaScript property; :from names the import-object key. GL objects (shaders,
+;; programs, buffers, uniform locations) cross the boundary as :int handles
+;; into a table the page keeps; strings (GLSL source, uniform names, info logs)
+;; cross as :string.
+
+(rontolisp:wasm-import 'gl-create-shader :from "gl" :as "createShader"
+                       :params '(:int) :returns :int)
+(rontolisp:wasm-import 'gl-shader-source :from "gl" :as "shaderSource"
+                       :params '(:int :string) :returns :void)
+(rontolisp:wasm-import 'gl-compile-shader :from "gl" :as "compileShader"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-shader-compiled-p :from "gl" :as "getShaderParameter"
+                       :params '(:int :int) :returns :bool)
+(rontolisp:wasm-import 'gl-shader-info-log :from "gl" :as "getShaderInfoLog"
+                       :params '(:int) :returns :string)
+(rontolisp:wasm-import 'gl-create-program :from "gl" :as "createProgram"
+                       :params '() :returns :int)
+(rontolisp:wasm-import 'gl-attach-shader :from "gl" :as "attachShader"
+                       :params '(:int :int) :returns :void)
+(rontolisp:wasm-import 'gl-link-program :from "gl" :as "linkProgram"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-program-linked-p :from "gl" :as "getProgramParameter"
+                       :params '(:int :int) :returns :bool)
+(rontolisp:wasm-import 'gl-program-info-log :from "gl" :as "getProgramInfoLog"
+                       :params '(:int) :returns :string)
+(rontolisp:wasm-import 'gl-use-program :from "gl" :as "useProgram"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-get-uniform-location :from "gl" :as "getUniformLocation"
+                       :params '(:int :string) :returns :int)
+(rontolisp:wasm-import 'gl-uniform1f :from "gl" :as "uniform1f"
+                       :params '(:int :float) :returns :void)
+(rontolisp:wasm-import 'gl-enable :from "gl" :as "enable"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-blend-func :from "gl" :as "blendFunc"
+                       :params '(:int :int) :returns :void)
+(rontolisp:wasm-import 'gl-create-buffer :from "gl" :as "createBuffer"
+                       :params '() :returns :int)
+(rontolisp:wasm-import 'gl-bind-buffer :from "gl" :as "bindBuffer"
+                       :params '(:int :int) :returns :void)
+(rontolisp:wasm-import 'gl-buffer-data :from "gl" :as "bufferData"
+                       :params '(:int :int :int) :returns :void)
+(rontolisp:wasm-import 'gl-create-vertex-array :from "gl" :as "createVertexArray"
+                       :params '() :returns :int)
+(rontolisp:wasm-import 'gl-bind-vertex-array :from "gl" :as "bindVertexArray"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-enable-vertex-attrib-array :from "gl" :as "enableVertexAttribArray"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-vertex-attrib-pointer :from "gl" :as "vertexAttribPointer"
+                       :params '(:int :int :int :bool :int :int) :returns :void)
+(rontolisp:wasm-import 'gl-viewport :from "gl" :as "viewport"
+                       :params '(:int :int :int :int) :returns :void)
+(rontolisp:wasm-import 'gl-clear-color :from "gl" :as "clearColor"
                        :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'aspect-ratio :from "gl" :as "aspectRatio"
+(rontolisp:wasm-import 'gl-clear :from "gl" :as "clear"
+                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-draw-arrays :from "gl" :as "drawArrays"
+                       :params '(:int :int :int) :returns :void)
+
+;; The vertex staging path: floats cannot be written into GPU memory across the
+;; boundary one call at a time, so the page keeps one Float32Array. set-vertex
+;; writes one star's (x y hue size) record into it; gl-buffer-sub-data uploads
+;; the first COUNT floats of it to the bound buffer. These two are the only
+;; imports that are not literal WebGL2 API entries.
+(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
+                       :params '(:int :float :float :float :float) :returns :void)
+(rontolisp:wasm-import 'gl-buffer-sub-data :from "gl" :as "bufferSubData"
+                       :params '(:int :int :int) :returns :void)
+
+;; Canvas metrics, owned by the page (it resizes the backing store on window
+;; resize; Lisp reads the result every frame and sets the viewport itself).
+(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
+                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
+                       :params '() :returns :float)
+(rontolisp:wasm-import 'device-pixel-ratio :from "canvas" :as "devicePixelRatio"
                        :params '() :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's:
 ;; these two lines are literally Math.sin / Math.cos on the JavaScript side.
 (rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
 (rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
+
+;; Fatal-error reporting: shows the page's error box (and stops the program by
+;; throwing on the JavaScript side).
+(rontolisp:wasm-import 'fail :from "ui" :params '(:string) :returns :void)
+
+;; --- WebGL constants --------------------------------------------------------
+;; The numeric enum values from the WebGL specification.
+
+(defconstant +gl-vertex-shader+ 35633)          ; 0x8B31
+(defconstant +gl-fragment-shader+ 35632)        ; 0x8B30
+(defconstant +gl-compile-status+ 35713)         ; 0x8B81
+(defconstant +gl-link-status+ 35714)            ; 0x8B82
+(defconstant +gl-array-buffer+ 34962)           ; 0x8892
+(defconstant +gl-dynamic-draw+ 35048)           ; 0x88E8
+(defconstant +gl-float+ 5126)                   ; 0x1406
+(defconstant +gl-blend+ 3042)                   ; 0x0BE2
+(defconstant +gl-one+ 1)
+(defconstant +gl-color-buffer-bit+ 16384)       ; 0x4000
+(defconstant +gl-points+ 0)
+
+;; --- shaders ----------------------------------------------------------------
+;; The GLSL lives here, in Lisp, and reaches the GPU through the imported
+;; gl-shader-source (a :string parameter crossing the boundary as (ptr,len)
+;; into this module's linear memory).
+
+(defconstant +vertex-shader-source+ "#version 300 es
+layout(location=0) in vec2 aPos;    // clip-space position from Lisp
+layout(location=1) in float aHue;   // 0..1 hue from Lisp
+layout(location=2) in float aSize;  // point size from Lisp
+uniform float uDpr;
+out float vHue;
+void main() {
+  gl_Position = vec4(aPos, 0.0, 1.0);
+  gl_PointSize = aSize * uDpr;
+  vHue = aHue;
+}")
+
+(defconstant +fragment-shader-source+ "#version 300 es
+precision mediump float;
+in float vHue;
+out vec4 color;
+// hue = 0 at the core, 1 at the rim: warm white -> ice blue -> violet,
+// the classic stellar-population gradient.
+vec3 tint(float h) {
+  vec3 core = vec3(1.00, 0.93, 0.78);
+  vec3 mid  = vec3(0.62, 0.78, 1.00);
+  vec3 rim  = vec3(0.66, 0.47, 1.00);
+  return h < 0.5 ? mix(core, mid, h * 2.0) : mix(mid, rim, h * 2.0 - 1.0);
+}
+void main() {
+  // a soft round sprite: bright center, glow falloff, additive blending
+  float d = length(gl_PointCoord - 0.5) * 2.0;
+  float a = exp(-3.2 * d * d) * (1.0 - smoothstep(0.8, 1.0, d));
+  color = vec4(tint(vHue) * a, a);
+}")
+
+;; --- GL pipeline setup ------------------------------------------------------
+
+(defvar *u-dpr* 0)                      ; uniform location handle for uDpr
+
+(defun make-shader (type source)
+  (let ((shader (gl-create-shader type)))
+    (gl-shader-source shader source)
+    (gl-compile-shader shader)
+    (unless (gl-shader-compiled-p shader +gl-compile-status+)
+      (fail (gl-shader-info-log shader)))
+    shader))
+
+(defun setup-gl ()
+  (let ((program (gl-create-program)))
+    (gl-attach-shader program (make-shader +gl-vertex-shader+ +vertex-shader-source+))
+    (gl-attach-shader program (make-shader +gl-fragment-shader+ +fragment-shader-source+))
+    (gl-link-program program)
+    (unless (gl-program-linked-p program +gl-link-status+)
+      (fail (gl-program-info-log program)))
+    (gl-use-program program)
+    (setq *u-dpr* (gl-get-uniform-location program "uDpr"))
+    ;; additive blending: overlapping stars glow
+    (gl-enable +gl-blend+)
+    (gl-blend-func +gl-one+ +gl-one+)
+    ;; one interleaved vertex buffer: x, y, hue, size = 16 bytes per star
+    (gl-bind-vertex-array (gl-create-vertex-array))
+    (gl-bind-buffer +gl-array-buffer+ (gl-create-buffer))
+    (gl-enable-vertex-attrib-array 0)
+    (gl-vertex-attrib-pointer 0 2 +gl-float+ nil 16 0)
+    (gl-enable-vertex-attrib-array 1)
+    (gl-vertex-attrib-pointer 1 1 +gl-float+ nil 16 8)
+    (gl-enable-vertex-attrib-array 2)
+    (gl-vertex-attrib-pointer 2 1 +gl-float+ nil 16 12)))
+
+;; --- the galaxy -------------------------------------------------------------
 
 ;; Per-star orbit parameters, filled by `init`.
 (defvar *n* 0)
@@ -60,6 +227,8 @@
   (setq *phase* (make-array n))
   (setq *speed* (make-array n))
   (setq *tilt* (make-array n))
+  ;; size the GPU buffer (and the page's staging array) for n stars
+  (gl-buffer-data +gl-array-buffer+ (* n 16) +gl-dynamic-draw+)
   (dotimes (i n)
     (let* ((u (frac (* (+ i 1) +radius-step+)))
            ;; sqrt biases the stars toward the bright core
@@ -72,7 +241,13 @@
       (setf (aref *tilt* i) (* r +twist+)))))
 
 (defun frame (tm)
-  (let ((aspect (aspect-ratio)))
+  (let* ((w (canvas-width))
+         (h (canvas-height))
+         (aspect (/ w h)))
+    (gl-viewport 0 0 (floor w) (floor h))
+    (gl-uniform1f *u-dpr* (device-pixel-ratio))
+    (gl-clear-color 0.012 0.016 0.045 1.0)
+    (gl-clear +gl-color-buffer-bit+)
     (dotimes (i *n*)
       (let* ((r (aref *radius* i))
              (theta (+ (aref *phase* i) (* tm (aref *speed* i))))
@@ -85,10 +260,16 @@
              (s (sin rot))
              (x (- (* ex c) (* ey s)))
              (y (+ (* ex s) (* ey c)))
-             ;; the page maps 0 -> warm core white, 1 -> violet rim
+             ;; the fragment shader maps 0 -> warm core white, 1 -> violet rim
              (hue (+ r (* 0.1 (frac (* i 0.754877666)))))
              (size (+ 1.8 (* 3.4 (- 1.0 r) (- 1.0 r)))))
-        (draw-particle (/ x aspect) y hue size)))))
+        (set-vertex i (/ x aspect) y hue size)))
+    (gl-buffer-sub-data +gl-array-buffer+ 0 (* *n* 4))
+    (gl-draw-arrays +gl-points+ 0 *n*)))
+
+;; Build the pipeline at load time: this runs inside _initialize, after the
+;; page has created the WebGL2 context and instantiated the module.
+(setup-gl)
 
 (rontolisp:wasm-export 'init :params '(:int) :returns :void)
 (rontolisp:wasm-export 'frame :params '(:float) :returns :void)

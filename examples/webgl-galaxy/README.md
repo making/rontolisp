@@ -1,11 +1,13 @@
-# galaxy.lisp — a spiral galaxy computed in Lisp, drawn by WebGL
+# galaxy.lisp — a spiral galaxy: the WebGL pipeline driven from Lisp
 
 This example is the `rontolisp:wasm-import` showcase: a Lisp program that
-*calls into the browser*. The physics of a spiral galaxy (the classic
-density-wave toy model) runs in Lisp compiled to WebAssembly; the rendering is
-WebGL2. The two sides meet through four imported host functions — including
-`sin` and `cos`, which the WASM backend does not provide and Lisp simply
-borrows from JavaScript's `Math`.
+*calls into the browser*. Not just the physics — the whole WebGL2 pipeline
+runs from Lisp compiled to WebAssembly. The GLSL shader sources live in the
+Lisp file as string constants; Lisp compiles and links them, sets up the
+vertex buffer, attributes and blending, and issues every clear and draw call.
+JavaScript supplies the WebGL2 API as a table of one-line bindings (a handle
+table maps `:int` handles to GL objects) plus the page UI — it contains no
+rendering logic of its own.
 
 **Live demo:** <https://making.github.io/rontolisp/webgl-galaxy/> (this
 directory is published as a subpath of the GitHub Pages site by
@@ -13,52 +15,71 @@ directory is published as a subpath of the GitHub Pages site by
 
 ## What's in here
 
-| File          | Purpose                                                        |
-| ------------- | -------------------------------------------------------------- |
-| `galaxy.lisp` | The simulation: orbits, spiral-arm twist, per-star hue/size.    |
-| `index.html`  | The host page: WebGL2 point renderer + the import object.      |
-| `galaxy.wasm` | The compiled `--no-wasi` reactor (checked in, ~5 KB).           |
-| `build.sh`    | Recompiles `galaxy.lisp` to `galaxy.wasm`.                      |
+| File          | Purpose                                                            |
+| ------------- | ------------------------------------------------------------------ |
+| `galaxy.lisp` | Everything: GLSL shaders, pipeline setup, orbits, per-star drawing. |
+| `index.html`  | The host page: one-line WebGL2 bindings + the HUD.                 |
+| `galaxy.wasm` | The compiled `--no-wasi` reactor (checked in, ~10 KB).             |
+| `build.sh`    | Recompiles `galaxy.lisp` to `galaxy.wasm`.                         |
 
 ## How the boundary works
 
-`galaxy.lisp` declares what it needs from the host:
+`galaxy.lisp` declares 34 host functions. Most are literal WebGL2 API entries,
+imported one at a time:
 
 ```lisp
-(rontolisp:wasm-import 'draw-particle :from "gl" :as "drawParticle"
-                       :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'aspect-ratio :from "gl" :as "aspectRatio"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
-(rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
+(rontolisp:wasm-import 'gl-create-shader :from "gl" :as "createShader"
+                       :params '(:int) :returns :int)
+(rontolisp:wasm-import 'gl-shader-source :from "gl" :as "shaderSource"
+                       :params '(:int :string) :returns :void)
+(rontolisp:wasm-import 'gl-draw-arrays :from "gl" :as "drawArrays"
+                       :params '(:int :int :int) :returns :void)
+;; ... plus canvas metrics, Math.sin / Math.cos, and an error reporter
 ```
 
-and exports its entry points:
-
-```lisp
-(rontolisp:wasm-export 'init  :params '(:int)   :returns :void)
-(rontolisp:wasm-export 'frame :params '(:float) :returns :void)
-```
-
-`index.html` supplies the entire host side as a plain import object:
+and the JavaScript side is nothing but one-liners over a handle table:
 
 ```js
+const handles = [];
+const H = (obj) => handles.push(obj) - 1;
+
 const imports = {
-  gl:   { drawParticle(x, y, hue, size) { /* append to a Float32Array */ },
-          aspectRatio: () => canvas.width / canvas.height },
+  gl: {
+    createShader: (type) => H(gl2.createShader(type)),
+    shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
+    drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
+    // ...
+  },
   math: { sin: Math.sin, cos: Math.cos },
 };
-const { instance } = await WebAssembly.instantiate(bytes, imports);
-instance.exports._initialize();      // --no-wasi reactor init
-instance.exports.init(16000);
 ```
 
-Each `requestAnimationFrame` tick, the page calls `exports.frame(t)`. Lisp
-computes every star's position on its slowly precessing ellipse and answers
-with one `draw-particle` call per star; the page batches those into a single
-additive-blended `gl.POINTS` draw. At 16,000 stars and 60 fps that is about a
-million Lisp-to-JavaScript calls per second — the counter in the corner keeps
-score.
+Every type designator crosses the boundary somewhere in this example:
+
+- `:int` — GL enums, sizes, and the handles for shaders/programs/buffers.
+- `:float` — star positions, uniforms, canvas metrics.
+- `:bool` — `vertexAttribPointer`'s `normalized` flag, compile/link status.
+- `:string` *parameter* — the GLSL source and uniform names travel from Lisp
+  to `shaderSource`/`getUniformLocation` as `(ptr,len)` into the module's
+  exported linear memory.
+- `:string` *result* — on a shader compile error, `getShaderInfoLog` writes
+  the log back through the exported `__ronto_alloc` allocator and Lisp hands
+  it to the imported `fail` to show the page's error box.
+
+Startup order matters and is pleasingly simple: the page creates the WebGL2
+context, instantiates the module, and calls `_initialize()` — which runs the
+top-level `(setup-gl)`, so the shaders compile and the pipeline is configured
+*from Lisp* before the first frame. Each `requestAnimationFrame` tick then
+calls `exports.frame(t)`: Lisp sets the viewport, clears, computes every
+star's position on its slowly precessing ellipse, stages it with `set-vertex`,
+uploads with `gl-buffer-sub-data` and draws with `gl-draw-arrays`. At 16,000
+stars and 60 fps that is several million Lisp-to-JavaScript calls per second —
+the counter in the corner keeps score.
+
+The two staging imports (`setVertex`, `bufferSubData`) are the only ones that
+are not literal WebGL2 entries: per-star floats cannot cross into GPU memory
+one call at a time, so the page keeps a single `Float32Array` that Lisp fills
+and uploads. That array and the handle table are the host's entire state.
 
 There is no randomness: a `--no-wasi` reactor has no entropy source, so the
 stars are scattered with low-discrepancy sequences (the golden angle for orbit
@@ -86,10 +107,10 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 
 ## Notes
 
-- The module is compiled with `--no-wasi`, so its *only* imports are the four
+- The module is compiled with `--no-wasi`, so its *only* imports are the 34
   functions above — the import object is the whole embedding API.
 - `--optimize` tree-shakes the runtime: the shipped `galaxy.wasm` is about
-  5 KB.
+  10 KB (the GLSL sources account for a third of it).
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
   define stubs that signal an error when called, so this program is
   WASM-only by nature (there is no host to draw with elsewhere).

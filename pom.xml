@@ -453,6 +453,21 @@ public final class Version {
 												<include name="galaxy.wasm"/>
 											</fileset>
 										</copy>
+										<!-- Stage the WebGL hello-world triangle and the rotating cube as
+											 further subpaths (/webgl-triangle/, /webgl-cube/), same shape as
+											 the galaxy demo above. -->
+										<copy todir="${web.dist}/webgl-triangle">
+											<fileset dir="${project.basedir}/examples/webgl-triangle">
+												<include name="index.html"/>
+												<include name="triangle.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-cube">
+											<fileset dir="${project.basedir}/examples/webgl-cube">
+												<include name="index.html"/>
+												<include name="cube.wasm"/>
+											</fileset>
+										</copy>
 										<!-- Stage the Minesweeper demo as another subpath (/minesweeper/).
 											 Its .wasm is checked in, so no compilation is needed here. The
 											 page is copied to index.html so the demo is reachable at

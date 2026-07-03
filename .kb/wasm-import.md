@@ -44,5 +44,10 @@ Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in
 `WasmLispCompilerIntegrationTest` (`wasmtime run --preload host=... main.wasm`, host
 module itself compiled from Lisp with `:as` aliases), stub tests in
-`LispEvaluatorTest`/`JvmLispCompilerTest`. Showcase: `examples/webgl-galaxy/` (browser
-WebGL host; imports `drawParticle` and Math.sin/cos, staged to Pages via pom.xml).
+`LispEvaluatorTest`/`JvmLispCompilerTest`. Showcases: `examples/webgl-triangle/` (hello
+world: 10 imports, no exports, whole program in top-level forms run by `_initialize`),
+`examples/webgl-cube/` (3D: mat4 math in Lisp, bulk floats via a `setFloat` staging
+array) and `examples/webgl-galaxy/` (browser
+host; the whole WebGL pipeline is driven from Lisp through 34 imports -- GLSL sources as
+Lisp strings via `:string` params, handle-table one-liner JS bindings, `:string` results
+for shader info logs, Math.sin/cos -- staged to Pages via pom.xml).

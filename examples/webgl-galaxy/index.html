@@ -186,19 +186,22 @@
     <header class="hud top-left">
       <h1><span class="lisp">galaxy.lisp</span> → WebGL</h1>
       <p class="tagline">
-        Every star's position is computed <em>in Lisp</em>, compiled to WebAssembly.
-        Each frame, Lisp calls the imported <em>drawParticle</em> host function once per
-        star — even <em>sin</em> and <em>cos</em> are borrowed from JavaScript's
-        <em>Math</em> via <em>rontolisp:wasm-import</em>.
+        The whole WebGL pipeline runs <em>in Lisp</em>, compiled to WebAssembly:
+        the GLSL shaders live in the Lisp source, and Lisp compiles, links, buffers
+        and issues every draw call through <em>rontolisp:wasm-import</em> — even
+        <em>sin</em> and <em>cos</em> are borrowed from JavaScript's <em>Math</em>.
+        JavaScript is just one-line bindings and this HUD.
       </p>
     </header>
 
     <aside class="hud bottom-left" aria-label="The Lisp import directives driving this page">
       <div class="repl" id="repl"><span class="cm">; the Lisp side of the boundary (galaxy.lisp)</span>
-(<span class="kw">rontolisp:wasm-import</span> 'draw-particle :from <span class="str">"gl"</span> :as <span class="str">"drawParticle"</span>
-                       :params '(:float :float :float :float) :returns :void)
+(<span class="kw">rontolisp:wasm-import</span> 'gl-shader-source :from <span class="str">"gl"</span> :as <span class="str">"shaderSource"</span>
+                       :params '(:int :string) :returns :void)
+(<span class="kw">rontolisp:wasm-import</span> 'gl-draw-arrays :from <span class="str">"gl"</span> :as <span class="str">"drawArrays"</span>
+                       :params '(:int :int :int) :returns :void)
 (<span class="kw">rontolisp:wasm-import</span> 'sin :from <span class="str">"math"</span> :params '(:float) :returns :float)
-<span class="cm">; <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>
+<span class="cm">; ...31 more · <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>
     </aside>
 
     <aside class="hud bottom-right">
@@ -233,7 +236,7 @@
         errorBox.style.display = "grid";
       }
 
-      // ---- WebGL2: one additive point draw per frame -----------------------
+      // ---- the WebGL2 context: created here, driven entirely from Lisp -----
 
       const gl2 = canvas.getContext("webgl2", { antialias: false });
       if (!gl2) {
@@ -241,115 +244,113 @@
         throw new Error("no webgl2");
       }
 
-      const VERT = `#version 300 es
-      layout(location=0) in vec2 aPos;    // clip-space position from Lisp
-      layout(location=1) in float aHue;   // 0..1 hue from Lisp
-      layout(location=2) in float aSize;  // point size from Lisp
-      uniform float uDpr;
-      out float vHue;
-      void main() {
-        gl_Position = vec4(aPos, 0.0, 1.0);
-        gl_PointSize = aSize * uDpr;
-        vHue = aHue;
-      }`;
+      // ---- the import object: everything Lisp asked for --------------------
+      //
+      // galaxy.lisp declares 34 (rontolisp:wasm-import ...) directives; this
+      // object is their entire JavaScript implementation. GL objects cross the
+      // boundary as integer handles into `handles`; the bindings are one line
+      // each and contain no rendering logic — the shaders, the pipeline setup
+      // and every draw call live in the Lisp source.
 
-      const FRAG = `#version 300 es
-      precision mediump float;
-      in float vHue;
-      out vec4 color;
-      // Lisp sends hue = 0 at the core, 1 at the rim: warm white -> ice blue
-      // -> violet, the classic stellar-population gradient.
-      vec3 tint(float h) {
-        vec3 core = vec3(1.00, 0.93, 0.78);
-        vec3 mid  = vec3(0.62, 0.78, 1.00);
-        vec3 rim  = vec3(0.66, 0.47, 1.00);
-        return h < 0.5 ? mix(core, mid, h * 2.0) : mix(mid, rim, h * 2.0 - 1.0);
-      }
-      void main() {
-        // a soft round sprite: bright center, glow falloff, additive blending
-        float d = length(gl_PointCoord - 0.5) * 2.0;
-        float a = exp(-3.2 * d * d) * (1.0 - smoothstep(0.8, 1.0, d));
-        color = vec4(tint(vHue) * a, a);
-      }`;
+      let lisp; // the module's exports, assigned after instantiation below
 
-      function shader(type, src) {
-        const s = gl2.createShader(type);
-        gl2.shaderSource(s, src);
-        gl2.compileShader(s);
-        if (!gl2.getShaderParameter(s, gl2.COMPILE_STATUS)) {
-          throw new Error(gl2.getShaderInfoLog(s));
+      const handles = [];
+      const H = (obj) => handles.push(obj) - 1;
+
+      // A :string parameter arrives as (ptr, len) into the module's exported
+      // linear memory; a :string result is written back through the module's
+      // exported __ronto_alloc bump allocator and returned as [ptr, len].
+      const utf8 = new TextDecoder();
+      const str = (ptr, len) => utf8.decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+      const retStr = (s) => {
+        const bytes = new TextEncoder().encode(s);
+        const ptr = lisp.__ronto_alloc(bytes.length);
+        new Uint8Array(lisp.memory.buffer).set(bytes, ptr);
+        return [ptr, bytes.length];
+      };
+
+      // The vertex staging array: Lisp fills it one star at a time through
+      // setVertex and uploads it with bufferSubData; bufferData (re)sizes it
+      // alongside the GPU buffer. These two lines are the only host state.
+      let staging = new Float32Array(0);
+
+      const imports = {
+        gl: {
+          createShader: (type) => H(gl2.createShader(type)),
+          shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
+          compileShader: (sh) => gl2.compileShader(handles[sh]),
+          getShaderParameter: (sh, pname) => gl2.getShaderParameter(handles[sh], pname),
+          getShaderInfoLog: (sh) => retStr(gl2.getShaderInfoLog(handles[sh]) ?? ""),
+          createProgram: () => H(gl2.createProgram()),
+          attachShader: (pr, sh) => gl2.attachShader(handles[pr], handles[sh]),
+          linkProgram: (pr) => gl2.linkProgram(handles[pr]),
+          getProgramParameter: (pr, pname) => gl2.getProgramParameter(handles[pr], pname),
+          getProgramInfoLog: (pr) => retStr(gl2.getProgramInfoLog(handles[pr]) ?? ""),
+          useProgram: (pr) => gl2.useProgram(handles[pr]),
+          getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
+          uniform1f: (loc, x) => gl2.uniform1f(handles[loc], x),
+          enable: (cap) => gl2.enable(cap),
+          blendFunc: (src, dst) => gl2.blendFunc(src, dst),
+          createBuffer: () => H(gl2.createBuffer()),
+          bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),
+          bufferData: (target, size, usage) => {
+            gl2.bufferData(target, size, usage);
+            staging = new Float32Array(size / 4);
+          },
+          bufferSubData: (target, off, count) => gl2.bufferSubData(target, off, staging, 0, count),
+          createVertexArray: () => H(gl2.createVertexArray()),
+          bindVertexArray: (vao) => gl2.bindVertexArray(handles[vao]),
+          enableVertexAttribArray: (i) => gl2.enableVertexAttribArray(i),
+          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
+            gl2.vertexAttribPointer(i, sz, ty, norm, stride, off),
+          viewport: (x, y, w, h) => gl2.viewport(x, y, w, h),
+          clearColor: (r, g, b, a) => gl2.clearColor(r, g, b, a),
+          clear: (mask) => gl2.clear(mask),
+          drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
+          setVertex: (i, x, y, hue, size) => {
+            const o = i * 4;
+            staging[o] = x;
+            staging[o + 1] = y;
+            staging[o + 2] = hue;
+            staging[o + 3] = size;
+          },
+        },
+        canvas: {
+          width: () => canvas.width,
+          height: () => canvas.height,
+          devicePixelRatio: () => Math.min(window.devicePixelRatio || 1, 2),
+        },
+        math: { sin: Math.sin, cos: Math.cos },
+        ui: {
+          fail: (p, n) => {
+            fail(str(p, n));
+            throw new Error("galaxy.lisp failed");
+          },
+        },
+      };
+
+      // Count every Lisp -> JavaScript call for the HUD meter.
+      let totalCalls = 0;
+      for (const module of Object.values(imports)) {
+        for (const [name, fn] of Object.entries(module)) {
+          module[name] = (...args) => (totalCalls++, fn(...args));
         }
-        return s;
       }
 
-      const program = gl2.createProgram();
-      gl2.attachShader(program, shader(gl2.VERTEX_SHADER, VERT));
-      gl2.attachShader(program, shader(gl2.FRAGMENT_SHADER, FRAG));
-      gl2.linkProgram(program);
-      if (!gl2.getProgramParameter(program, gl2.LINK_STATUS)) {
-        fail("WebGL shader link failed: " + gl2.getProgramInfoLog(program));
-        throw new Error("link failed");
-      }
-      gl2.useProgram(program);
-      const uDpr = gl2.getUniformLocation(program, "uDpr");
-
-      gl2.enable(gl2.BLEND);
-      gl2.blendFunc(gl2.ONE, gl2.ONE); // additive: overlapping stars glow
-
-      // Interleaved batch: x, y, hue, size per star. Lisp fills it through the
-      // imported drawParticle; JS uploads it as one buffer and draws once.
-      const MAX_STARS = 40000;
-      const batch = new Float32Array(MAX_STARS * 4);
-      let batched = 0;
-
-      const vao = gl2.createVertexArray();
-      gl2.bindVertexArray(vao);
-      const vbo = gl2.createBuffer();
-      gl2.bindBuffer(gl2.ARRAY_BUFFER, vbo);
-      gl2.bufferData(gl2.ARRAY_BUFFER, batch.byteLength, gl2.DYNAMIC_DRAW);
-      gl2.enableVertexAttribArray(0);
-      gl2.vertexAttribPointer(0, 2, gl2.FLOAT, false, 16, 0);
-      gl2.enableVertexAttribArray(1);
-      gl2.vertexAttribPointer(1, 1, gl2.FLOAT, false, 16, 8);
-      gl2.enableVertexAttribArray(2);
-      gl2.vertexAttribPointer(2, 1, gl2.FLOAT, false, 16, 12);
+      // ---- UI: canvas sizing ------------------------------------------------
+      // The page owns the backing-store size; Lisp reads it back every frame
+      // (canvas.width / canvas.height) and sets the GL viewport itself.
 
       function resize() {
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         canvas.width = Math.round(canvas.clientWidth * dpr);
         canvas.height = Math.round(canvas.clientHeight * dpr);
-        gl2.viewport(0, 0, canvas.width, canvas.height);
-        gl2.uniform1f(uDpr, dpr);
       }
       window.addEventListener("resize", resize);
       resize();
 
-      // ---- the import object: everything Lisp asked for --------------------
-      //
-      // galaxy.lisp declares four (rontolisp:wasm-import ...) directives; this
-      // object is their entire JavaScript implementation.
-
-      let totalCalls = 0;
-
-      const imports = {
-        gl: {
-          drawParticle(x, y, hue, size) {
-            const o = batched * 4;
-            batch[o] = x;
-            batch[o + 1] = y;
-            batch[o + 2] = hue;
-            batch[o + 3] = size;
-            batched++;
-            totalCalls++;
-          },
-          aspectRatio: () => canvas.width / canvas.height,
-        },
-        math: { sin: Math.sin, cos: Math.cos },
-      };
-
       // ---- load the reactor and run the frame loop -------------------------
 
-      let lisp;
       try {
         const bytes = await (await fetch("./galaxy.wasm")).arrayBuffer();
         ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
@@ -361,7 +362,10 @@
         );
         throw e;
       }
-      lisp._initialize(); // --no-wasi reactor init (runs the top-level defvars)
+      // --no-wasi reactor init: runs the top-level forms, including (setup-gl),
+      // so the shaders compile and the pipeline is configured — from Lisp —
+      // before this line returns.
+      lisp._initialize();
 
       let stars = Number(countSelect.value);
       lisp.init(stars);
@@ -378,17 +382,8 @@
       let lastFpsUpdate = 0;
       let framesSince = 0;
 
-      function renderFrame(now) {
-        batched = 0;
-        lisp.frame((now - start) / 1000); // Lisp computes and "draws" every star
-        gl2.clearColor(0.012, 0.016, 0.045, 1);
-        gl2.clear(gl2.COLOR_BUFFER_BIT);
-        gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, batch, 0, batched * 4);
-        gl2.drawArrays(gl2.POINTS, 0, batched);
-      }
-
       function tick(now) {
-        renderFrame(now);
+        lisp.frame((now - start) / 1000); // Lisp clears, computes, uploads, draws
         framesSince++;
         if (now - lastFpsUpdate > 500) {
           mFps.textContent = Math.round((framesSince * 1000) / (now - lastFpsUpdate));
@@ -403,7 +398,7 @@
 
       if (reducedMotion.matches) {
         // Reduced motion: draw a single still frame of the galaxy.
-        renderFrame(start + 20000);
+        lisp.frame(20);
         mFps.textContent = "still";
         mCalls.textContent = totalCalls.toLocaleString("en-US");
         reducedMotion.addEventListener("change", () => {

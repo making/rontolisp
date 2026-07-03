@@ -168,9 +168,16 @@ const imports = { math: { sin: Math.sin, cos: Math.cos } };
 const { instance } = await WebAssembly.instantiate(bytes, imports);
 ```
 
-The [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
-is a complete browser program built this way: the galaxy physics run in Lisp, and each
-frame Lisp calls an imported `drawParticle` once per star.
+The [WebGL triangle example](https://github.com/making/rontolisp/tree/develop/examples/webgl-triangle)
+is the hello world of this pattern: ten imported functions, no exports, and a colored
+triangle drawn entirely from Lisp. The
+[WebGL cube example](https://github.com/making/rontolisp/tree/develop/examples/webgl-cube)
+adds 3D: the perspective and rotation matrices are computed in Lisp every frame. The
+[WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+is the same idea grown into a complete browser program: the entire WebGL pipeline is driven from
+Lisp -- the GLSL shaders live in the Lisp source, and Lisp compiles, links, buffers and
+issues every draw call through 34 imported host functions, while JavaScript supplies
+only one-line bindings over a handle table.
 
 Boundary details beyond the scalar types:
 

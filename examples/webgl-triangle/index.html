@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>triangle.lisp — the WebGL hello world, driven from Lisp</title>
+    <style>
+      :root {
+        --space: #0b0d14;
+        --ink: #e8ecff;
+        --muted: #737a94;
+        --cyan: #6fe0cf;
+        --line: #23273d;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--space);
+        color: var(--ink);
+        font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      }
+
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+
+      h1 .lisp { color: var(--cyan); }
+
+      p {
+        margin: 0;
+        font-size: 0.8rem;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      p em { font-style: normal; color: var(--ink); }
+
+      canvas {
+        width: 100%;
+        max-width: 40rem;
+        aspect-ratio: 4 / 3;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+
+      a { color: var(--cyan); }
+
+      a:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+
+      #error {
+        display: none;
+        font-size: 0.8rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><span class="lisp">triangle.lisp</span> → WebGL</h1>
+      <p>
+        The WebGL hello world: this triangle is drawn by a Lisp program compiled to
+        WebAssembly. Lisp compiles the shaders (the GLSL lives in the Lisp source),
+        links the program and issues the draw call through ten
+        <em>rontolisp:wasm-import</em> host functions — one line of JavaScript each.
+        There is no frame loop and no exports: the page calls
+        <em>_initialize()</em> and the triangle is there.
+      </p>
+      <canvas id="stage" width="640" height="480"
+              aria-label="A triangle with red, green and blue corners"></canvas>
+      <p>
+        <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-triangle">source</a> ·
+        next step: <a href="../webgl-cube/">webgl-cube</a> (3D: matrices in Lisp) ·
+        then: <a href="../webgl-galaxy/">webgl-galaxy</a> (a full pipeline)
+      </p>
+      <p id="error" role="alert"></p>
+    </main>
+
+    <script type="module">
+      const canvas = document.getElementById("stage");
+      const errorBox = document.getElementById("error");
+
+      function fail(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = "block";
+      }
+
+      const gl = canvas.getContext("webgl2");
+      if (!gl) {
+        fail("This page needs WebGL2. Any current Chrome, Firefox, Safari or Edge has it.");
+        throw new Error("no webgl2");
+      }
+
+      // The entire host side: GL objects cross the boundary as indices into
+      // `handles`; a :string parameter arrives as (ptr, len) into the module's
+      // exported linear memory.
+      let lisp;
+      const handles = [];
+      const H = (obj) => handles.push(obj) - 1;
+      const str = (ptr, len) =>
+        new TextDecoder().decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+
+      const imports = {
+        gl: {
+          createShader: (type) => H(gl.createShader(type)),
+          shaderSource: (sh, p, n) => gl.shaderSource(handles[sh], str(p, n)),
+          compileShader: (sh) => gl.compileShader(handles[sh]),
+          createProgram: () => H(gl.createProgram()),
+          attachShader: (pr, sh) => gl.attachShader(handles[pr], handles[sh]),
+          linkProgram: (pr) => gl.linkProgram(handles[pr]),
+          useProgram: (pr) => gl.useProgram(handles[pr]),
+          clearColor: (r, g, b, a) => gl.clearColor(r, g, b, a),
+          clear: (mask) => gl.clear(mask),
+          drawArrays: (mode, first, count) => gl.drawArrays(mode, first, count),
+        },
+      };
+
+      try {
+        const bytes = await (await fetch("./triangle.wasm")).arrayBuffer();
+        ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
+      }
+      catch (e) {
+        fail(
+          "Could not instantiate triangle.wasm — this page needs WebAssembly GC support " +
+          "(Chrome 119+, Firefox 120+, Safari 18.2+, Edge 119+).\n" + e
+        );
+        throw e;
+      }
+
+      // Runs the whole Lisp program: shaders compile, the triangle draws.
+      lisp._initialize();
+    </script>
+  </body>
+</html>

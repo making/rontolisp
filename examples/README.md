@@ -50,7 +50,9 @@ These are directories rather than single files: a Lisp program is compiled to
 | [`wasm-browser/`](wasm-browser) | Running a rontolisp-compiled `.wasm` in the browser from plain HTML + JavaScript, including feeding stdin from the page |
 | [`minesweeper/`](minesweeper) | A playable Minesweeper: the rules (flood fill, win/lose) live in a shared `minesweeper-core.lisp` that both a browser build (compiled to a `--no-wasi` WebAssembly reactor, HTML rendering) and a [Swing build](minesweeper/minesweeper-swing.lisp) load -- only the drawing differs |
 | [`hiragana/`](hiragana) | A 46-class handwritten-hiragana recognizer (the full gojuon): a small MLP trained offline in Lisp, baked into an inference `.wasm`, and driven from a `<canvas>` you draw on |
-| [`webgl-galaxy/`](webgl-galaxy) | A spiral galaxy animated in WebGL whose physics run in Lisp: the page exposes `drawParticle` (and even `Math.sin`/`Math.cos`) as host functions via `rontolisp:wasm-import`, and Lisp calls them once per star per frame |
+| [`webgl-triangle/`](webgl-triangle) | The WebGL hello world and the smallest `rontolisp:wasm-import` program: Lisp compiles two shaders and draws one colored triangle through ten imported host functions -- no exports, no frame loop; the page just calls `_initialize()` |
+| [`webgl-cube/`](webgl-cube) | Hello 3D: a rotating cube whose perspective projection and rotation matrices are computed in Lisp every frame (4x4 matrix math on `make-array`s); bulk floats (geometry, the mat4 uniform) cross the boundary through a small staging array |
+| [`webgl-galaxy/`](webgl-galaxy) | A spiral galaxy whose WebGL pipeline is driven entirely from Lisp: the GLSL shaders live in the Lisp source, and Lisp compiles, links, buffers and issues every draw call through 34 `rontolisp:wasm-import` host functions (even `Math.sin`/`Math.cos`) — JavaScript is one-line bindings and the HUD |
 
 ## Running
 
