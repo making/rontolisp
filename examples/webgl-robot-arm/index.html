@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>robot-arm.lisp — 3D inverse kinematics with minimum-jerk motion, in Lisp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --space: #05060e;
+        --ink: #e8ecff;
+        --muted: #737a94;
+        --ember: #ff8a3d;
+        --cyan: #6fe0cf;
+        --panel: #0b0d1acc;
+        --line: #23273d;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--space);
+        color: var(--ink);
+        font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+      }
+
+      /* The arm is the page: the canvas fills the viewport and everything
+         else floats over it as a thin instrument HUD. */
+      #stage {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: crosshair;
+        touch-action: none;
+      }
+
+      #stage.dragging { cursor: grabbing; }
+
+      .hud {
+        position: fixed;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        padding: 1rem 1.15rem;
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .hud > * { pointer-events: auto; }
+
+      /* -- top left: what this is ------------------------------------------ */
+      .hud.top-left { top: 0; left: 0; max-width: 34rem; }
+
+      h1 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+
+      h1 .lisp { color: var(--ember); }
+
+      .tagline {
+        margin: 0;
+        font-size: 0.78rem;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+
+      .tagline em { font-style: normal; color: var(--ink); }
+
+      /* -- bottom left: the lines that make it work ------------------------- */
+      .hud.bottom-left { bottom: 0; left: 0; max-width: min(46rem, 92vw); }
+
+      .repl {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.7rem 0.9rem;
+        font-size: 0.72rem;
+        line-height: 1.7;
+        white-space: pre;
+        overflow-x: auto;
+        backdrop-filter: blur(6px);
+      }
+
+      .repl .kw { color: var(--ember); }
+      .repl .str { color: var(--cyan); }
+      .repl .cm { color: var(--muted); }
+
+      .repl .cursor {
+        display: inline-block;
+        width: 0.55em;
+        height: 1em;
+        vertical-align: -0.15em;
+        background: var(--ember);
+        animation: blink 1.1s steps(1) infinite;
+      }
+
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* -- bottom right: live instruments ----------------------------------- */
+      .hud.bottom-right { bottom: 0; right: 0; align-items: flex-end; }
+
+      .meters {
+        display: flex;
+        gap: 1.4rem;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.55rem 0.9rem;
+        backdrop-filter: blur(6px);
+      }
+
+      .meter { text-align: right; }
+
+      .meter b {
+        display: block;
+        font-size: 0.9rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .meter span {
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .controls {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+
+      .controls select {
+        font: inherit;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0.25rem 0.4rem;
+      }
+
+      .controls select:focus-visible,
+      .repl a:focus-visible {
+        outline: 2px solid var(--ember);
+        outline-offset: 2px;
+      }
+
+      .repl a { color: var(--cyan); }
+
+      #error {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 2rem;
+        text-align: center;
+        font-size: 0.85rem;
+        line-height: 1.7;
+        color: var(--ink);
+        background: var(--space);
+        z-index: 3;
+      }
+
+      @media (max-width: 640px) {
+        .hud.top-left { max-width: 100vw; }
+        .repl { font-size: 0.6rem; }
+        .meters { gap: 0.9rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage" aria-label="A 3D robot arm that reaches for wherever you click; drag to orbit the camera"></canvas>
+
+    <header class="hud top-left">
+      <h1><span class="lisp">robot-arm.lisp</span> → WebGL</h1>
+      <p class="tagline">
+        <em>Click to reach, drag to orbit, scroll to zoom.</em> Lisp unprojects
+        the click into 3D, glides the hand there along a <em>minimum-jerk</em>
+        trajectory (the classic model of smooth human reaching), solves the
+        joints each frame with <em>damped-least-squares Jacobian IK</em>
+        (linalg:matmul / solve; or FABRIK / analytic 2R + matrix forward
+        kinematics — toggle below right) — gripper
+        open in flight, closing on the target on arrival — and tessellates
+        every cylinder and sphere, camera matrices included. JavaScript is
+        one-line WebGL bindings, pointer gestures and this HUD.
+      </p>
+    </header>
+
+    <aside class="hud bottom-left" aria-label="The Lisp forms driving this page">
+      <div class="repl" id="repl"><span class="cm">; the whole controller (robot-arm.lisp)</span>
+(<span class="kw">defun</span> min-jerk (u) (* u u u (+ 10.0 (* u (+ -15.0 (* u 6.0))))))
+(<span class="kw">linalg:matmul</span> (<span class="kw">linalg:transpose</span> jac) (<span class="kw">linalg:solve</span> a e)) <span class="cm">; d&#952; = J&#7488;(JJ&#7488;+&#955;&#178;I)&#8315;&#185;e</span>
+<span class="cm">; <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-robot-arm">source</a> · same host boundary as webgl-galaxy</span> <span class="cursor"></span></div>
+    </aside>
+
+    <aside class="hud bottom-right">
+      <div class="meters" role="status">
+        <div class="meter"><b id="m-error">0.000</b><span>to target</span></div>
+        <div class="meter"><b id="m-moves">0</b><span>moves</span></div>
+        <div class="meter"><b id="m-calls">0</b><span>lisp→js calls</span></div>
+        <div class="meter"><b id="m-fps">—</b><span>fps</span></div>
+      </div>
+      <div class="controls">
+        <label for="solver">ik</label>
+        <select id="solver">
+          <option value="0" selected>jacobian (DLS)</option>
+          <option value="1">FABRIK</option>
+          <option value="2">analytic (FK)</option>
+        </select>
+        <label for="links">links</label>
+        <select id="links">
+          <option value="3">3</option>
+          <option value="4" selected>4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+        </select>
+      </div>
+    </aside>
+
+    <div id="error" role="alert"></div>
+
+    <script type="module">
+      const canvas = document.getElementById("stage");
+      const errorBox = document.getElementById("error");
+      const mError = document.getElementById("m-error");
+      const mMoves = document.getElementById("m-moves");
+      const mCalls = document.getElementById("m-calls");
+      const mFps = document.getElementById("m-fps");
+      const linksSelect = document.getElementById("links");
+      const solverSelect = document.getElementById("solver");
+
+      function fail(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = "grid";
+      }
+
+      // ---- the WebGL2 context: created here, driven entirely from Lisp -----
+
+      const gl2 = canvas.getContext("webgl2", { antialias: true });
+      if (!gl2) {
+        fail("This page needs WebGL2. Any current Chrome, Firefox, Safari or Edge has it.");
+        throw new Error("no webgl2");
+      }
+
+      // ---- the import object: everything Lisp asked for --------------------
+      //
+      // robot-arm.lisp declares the same host boundary as webgl-galaxy and
+      // webgl-heat3d: GL objects cross as integer handles into `handles`, the
+      // bindings are one line each, and the kinematics, the camera matrices
+      // and every triangle live in the Lisp source.
+
+      let lisp; // the module's exports, assigned after instantiation below
+
+      const handles = [];
+      const H = (obj) => handles.push(obj) - 1;
+
+      // A :string parameter arrives as (ptr, len) into the module's exported
+      // linear memory; a :string result is written back through the module's
+      // exported __ronto_alloc bump allocator and returned as [ptr, len].
+      const utf8 = new TextDecoder();
+      const str = (ptr, len) => utf8.decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+      const retStr = (s) => {
+        const bytes = new TextEncoder().encode(s);
+        const ptr = lisp.__ronto_alloc(bytes.length);
+        new Uint8Array(lisp.memory.buffer).set(bytes, ptr);
+        return [ptr, bytes.length];
+      };
+
+      // The staging arrays: Lisp fills them one vertex/sprite/float at a time
+      // and uploads slices with uploadVertices / uploadSprites /
+      // uniformMatrix4fv. Lit-triangle vertices are 9 floats (position,
+      // normal, color), sprites are 5 (position, tone, size), and `floats`
+      // carries mat4 uniforms — the same staging idea as webgl-cube.
+      const solidStaging = new Float32Array(9 * 8192);
+      const spriteStaging = new Float32Array(5 * 2048);
+      const floats = new Float32Array(16);
+      const curColor = [1, 1, 1]; // latched by setColor, stamped by setVertex
+
+      const imports = {
+        gl: {
+          createShader: (type) => H(gl2.createShader(type)),
+          shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
+          compileShader: (sh) => gl2.compileShader(handles[sh]),
+          getShaderParameter: (sh, pname) => gl2.getShaderParameter(handles[sh], pname),
+          getShaderInfoLog: (sh) => retStr(gl2.getShaderInfoLog(handles[sh]) ?? ""),
+          createProgram: () => H(gl2.createProgram()),
+          attachShader: (pr, sh) => gl2.attachShader(handles[pr], handles[sh]),
+          linkProgram: (pr) => gl2.linkProgram(handles[pr]),
+          getProgramParameter: (pr, pname) => gl2.getProgramParameter(handles[pr], pname),
+          getProgramInfoLog: (pr) => retStr(gl2.getProgramInfoLog(handles[pr]) ?? ""),
+          useProgram: (pr) => gl2.useProgram(handles[pr]),
+          getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
+          uniform1f: (loc, x) => gl2.uniform1f(handles[loc], x),
+          uniform3f: (loc, x, y, z) => gl2.uniform3f(handles[loc], x, y, z),
+          uniformMatrix4fv: (loc) => gl2.uniformMatrix4fv(handles[loc], false, floats),
+          enable: (cap) => gl2.enable(cap),
+          disable: (cap) => gl2.disable(cap),
+          depthMask: (flag) => gl2.depthMask(!!flag),
+          blendFunc: (src, dst) => gl2.blendFunc(src, dst),
+          createBuffer: () => H(gl2.createBuffer()),
+          bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),
+          bufferData: (target, size, usage) => gl2.bufferData(target, size, usage),
+          uploadVertices: (off, count) =>
+            gl2.bufferSubData(gl2.ARRAY_BUFFER, off * 4, solidStaging, off, count),
+          uploadSprites: (count) =>
+            gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, spriteStaging, 0, count),
+          createVertexArray: () => H(gl2.createVertexArray()),
+          bindVertexArray: (vao) => gl2.bindVertexArray(handles[vao]),
+          enableVertexAttribArray: (i) => gl2.enableVertexAttribArray(i),
+          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
+            gl2.vertexAttribPointer(i, sz, ty, norm, stride, off),
+          viewport: (x, y, w, h) => gl2.viewport(x, y, w, h),
+          clearColor: (r, g, b, a) => gl2.clearColor(r, g, b, a),
+          clear: (mask) => gl2.clear(mask),
+          drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
+          setColor: (r, g, b) => { curColor[0] = r; curColor[1] = g; curColor[2] = b; },
+          setVertex: (i, x, y, z, nx, ny, nz) => {
+            const o = i * 9;
+            solidStaging[o] = x;
+            solidStaging[o + 1] = y;
+            solidStaging[o + 2] = z;
+            solidStaging[o + 3] = nx;
+            solidStaging[o + 4] = ny;
+            solidStaging[o + 5] = nz;
+            solidStaging[o + 6] = curColor[0];
+            solidStaging[o + 7] = curColor[1];
+            solidStaging[o + 8] = curColor[2];
+          },
+          setSprite: (i, x, y, z, tone, size) => {
+            const o = i * 5;
+            spriteStaging[o] = x;
+            spriteStaging[o + 1] = y;
+            spriteStaging[o + 2] = z;
+            spriteStaging[o + 3] = tone;
+            spriteStaging[o + 4] = size;
+          },
+          setFloat: (i, v) => { floats[i] = v; },
+        },
+        canvas: {
+          width: () => canvas.width,
+          height: () => canvas.height,
+          devicePixelRatio: () => Math.min(window.devicePixelRatio || 1, 2),
+        },
+        math: { sin: Math.sin, cos: Math.cos, atan2: Math.atan2, acos: Math.acos },
+        ui: {
+          fail: (p, n) => {
+            fail(str(p, n));
+            throw new Error("robot-arm.lisp failed");
+          },
+        },
+      };
+
+      // Count every Lisp -> JavaScript call for the HUD meter.
+      let totalCalls = 0;
+      for (const module of Object.values(imports)) {
+        for (const [name, fn] of Object.entries(module)) {
+          module[name] = (...args) => (totalCalls++, fn(...args));
+        }
+      }
+
+      // ---- UI: canvas sizing ------------------------------------------------
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(canvas.clientWidth * dpr);
+        canvas.height = Math.round(canvas.clientHeight * dpr);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      // ---- load the reactor and run the frame loop -------------------------
+
+      try {
+        const bytes = await (await fetch("./robot-arm.wasm")).arrayBuffer();
+        ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
+      }
+      catch (e) {
+        fail(
+          "Could not instantiate robot-arm.wasm — this page needs WebAssembly GC support " +
+          "(Chrome 119+, Firefox 120+, Safari 18.2+, Edge 119+).\n" + e
+        );
+        throw e;
+      }
+      // --no-wasi reactor init: runs the top-level forms, including (setup-gl),
+      // so the shaders compile and the pipeline is configured — from Lisp —
+      // before this line returns.
+      lisp._initialize();
+
+      lisp.init(Number(linksSelect.value));
+
+      let moves = 0;
+      let lastClip = null; // the last click, replayed after a link-count change
+
+      function pointTo(cx, cy) {
+        lastClip = [cx, cy];
+        lisp.pointer(cx, cy);
+        moves++;
+        mMoves.textContent = moves.toLocaleString("en-US");
+      }
+
+      // ---- pointer gestures: click = reach, drag = orbit --------------------
+      //
+      // The page only classifies the gesture; the camera itself lives in
+      // Lisp (`orbit` and `zoom` are exported Lisp functions).
+
+      let dragging = false;
+      let movedPx = 0;
+      let downX = 0, downY = 0;
+      let lastX = 0, lastY = 0;
+
+      canvas.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        movedPx = 0;
+        downX = lastX = e.clientX;
+        downY = lastY = e.clientY;
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+      });
+
+      canvas.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        movedPx += Math.abs(dx) + Math.abs(dy);
+        if (movedPx > 4) {
+          canvas.classList.add("dragging");
+          lisp.orbit(dx / canvas.clientHeight, dy / canvas.clientHeight);
+        }
+      });
+
+      canvas.addEventListener("pointerup", (e) => {
+        dragging = false;
+        canvas.classList.remove("dragging");
+        if (movedPx <= 4) {
+          const r = canvas.getBoundingClientRect();
+          pointTo(
+            ((downX - r.left) / r.width) * 2 - 1,
+            1 - ((downY - r.top) / r.height) * 2
+          );
+          if (reducedMotion.matches) settle();
+        }
+      });
+
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        lisp.zoom(e.deltaY * 0.002);
+      }, { passive: false });
+
+      linksSelect.addEventListener("change", () => {
+        lisp.init(Number(linksSelect.value));
+        if (lastClip) lisp.pointer(...lastClip); // reach for the same point again
+        if (reducedMotion.matches) settle();
+      });
+
+      solverSelect.addEventListener("change", () => {
+        lisp.setSolver(Number(solverSelect.value));
+        if (reducedMotion.matches) settle();
+      });
+
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const start = performance.now();
+      let lastFpsUpdate = 0;
+      let framesSince = 0;
+
+      function updateMeters(now) {
+        mFps.textContent = Math.round((framesSince * 1000) / (now - lastFpsUpdate));
+        mError.textContent = lisp.ikError().toFixed(3);
+        mCalls.textContent = totalCalls.toLocaleString("en-US");
+        lastFpsUpdate = now;
+        framesSince = 0;
+      }
+
+      function tick(now) {
+        lisp.frame((now - start) / 1000); // Lisp interpolates, solves, draws
+        framesSince++;
+        if (now - lastFpsUpdate > 500) {
+          updateMeters(now);
+        }
+        if (!reducedMotion.matches) {
+          requestAnimationFrame(tick);
+        }
+      }
+
+      // A scripted first reach, so the arm moves the moment the page loads.
+      setTimeout(() => { if (moves === 0) pointTo(0.42, 0.18); }, 600);
+
+      // Reduced motion: no frame loop; every click runs the whole move to
+      // completion off-screen and draws the settled pose once.
+      let vt = 0;
+      function settle() {
+        for (let i = 0; i < 180; i++) {
+          vt += 1 / 60;
+          lisp.frame(vt);
+        }
+        mFps.textContent = "still";
+        mError.textContent = lisp.ikError().toFixed(3);
+        mCalls.textContent = totalCalls.toLocaleString("en-US");
+      }
+
+      if (reducedMotion.matches) {
+        settle();
+        reducedMotion.addEventListener("change", () => {
+          if (!reducedMotion.matches) requestAnimationFrame(tick);
+        });
+      }
+      else {
+        requestAnimationFrame(tick);
+      }
+    </script>
+  </body>
+</html>
