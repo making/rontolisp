@@ -4,10 +4,13 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -36,6 +39,19 @@ import org.jspecify.annotations.Nullable;
  * of the file doing the load (the entry source for top-level loads), matching the runtime
  * {@code load} (see {@link SourceLoader#resolve}); the resolved path is then read by the
  * supplied {@link SourceLoader}.
+ *
+ * <p>
+ * The same pass implements the compile-time side of {@code require}/{@code provide}
+ * (idempotent module loading). A top-level {@code (provide NAME)} records the module name
+ * and is consumed (replaced by a quoted symbol, like {@code in-package}); a top-level
+ * {@code (require NAME)} splices {@code NAME.lisp} exactly like {@code load} -- unless
+ * the name was already provided, in which case it is consumed without loading. An
+ * explicit second argument {@code (require NAME "path.lisp")} overrides the file mapping.
+ * The provided-module set is threaded through the whole inline recursion, so the diamond
+ * case (two files both requiring the same module) loads the module once. Unlike
+ * {@code load}, a {@code require}/{@code provide} that is not a literal top-level form
+ * cannot be deferred to runtime (the compiled runtime reader does not know them), so the
+ * compilers reject any occurrence left after this pass.
  */
 public final class LoadInliner {
 
@@ -66,18 +82,40 @@ public final class LoadInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir) {
 		List<LispVal> result = new ArrayList<>();
-		expandInto(program, result, loader, new ArrayDeque<>(), baseDir);
+		expandInto(program, result, loader, new ArrayDeque<>(), new HashSet<>(), baseDir);
 		return result;
 	}
 
 	private static void expandInto(List<LispVal> forms, List<LispVal> out, SourceLoader loader, Deque<String> loading,
-			@Nullable String baseDir) {
+			Set<String> provided, @Nullable String baseDir) {
 		for (LispVal form : forms) {
-			String rawPath = loadPath(form);
+			String provideName = provideName(form);
+			if (provideName != null) {
+				// Record the module and consume the directive (a duplicate provide is a
+				// no-op, like Common Lisp).
+				provided.add(provideName);
+				out.add(quotedSymbol(provideName));
+				continue;
+			}
+			RequireForm require = requireForm(form);
+			String rawPath;
+			if (require != null) {
+				if (provided.contains(require.name())) {
+					// Already provided: consume without loading (this is the whole point
+					// of require over load).
+					out.add(quotedSymbol(require.name()));
+					continue;
+				}
+				rawPath = require.path() != null ? require.path() : require.name() + ".lisp";
+			}
+			else {
+				rawPath = loadPath(form);
+			}
 			if (rawPath == null) {
 				out.add(form);
 				continue;
 			}
+			String operator = require != null ? LispNames.REQUIRE : LispNames.LOAD;
 			// Resolve relative to the loading file's directory (the entry source at the
 			// top level), the same rule the runtime load uses.
 			String path = SourceLoader.resolve(baseDir, rawPath);
@@ -90,12 +128,12 @@ public final class LoadInliner {
 				source = loader.load(path);
 			}
 			catch (IOException ex) {
-				throw new IllegalStateException(LispNames.LOAD + ": cannot read file " + path + ": " + ex.getMessage(),
-						ex);
+				throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
 			}
 			loading.addLast(path);
 			// A nested load inside this file resolves relative to this file's directory.
-			expandInto(LispReader.readAllFromString(source), out, loader, loading, SourceLoader.parentDir(path));
+			expandInto(LispReader.readAllFromString(source), out, loader, loading, provided,
+					SourceLoader.parentDir(path));
 			loading.removeLast();
 		}
 	}
@@ -119,6 +157,85 @@ public final class LoadInliner {
 			return null;
 		}
 		return path.value();
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (provide NAME)}, returns the module name;
+	 * otherwise returns {@code null}. A {@code provide} whose argument is not a literal
+	 * designator is a hard error: unlike {@code load}, the compiled runtime reader does
+	 * not know {@code provide}, so it cannot be deferred to runtime.
+	 */
+	@Nullable private static String provideName(LispVal form) {
+		List<LispVal> items = operatorForm(form, LispNames.PROVIDE);
+		if (items == null) {
+			return null;
+		}
+		if (items.size() != 2) {
+			throw new IllegalStateException(LispNames.PROVIDE + " expects exactly one argument: " + form.print());
+		}
+		return moduleDesignator(LispNames.PROVIDE, items.get(1), form);
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (require NAME)} or
+	 * {@code (require NAME "path.lisp")}, returns the parsed directive; otherwise returns
+	 * {@code null}. Like {@code provide}, a non-literal argument is a hard error.
+	 */
+	@Nullable private static RequireForm requireForm(LispVal form) {
+		List<LispVal> items = operatorForm(form, LispNames.REQUIRE);
+		if (items == null) {
+			return null;
+		}
+		if (items.size() != 2 && items.size() != 3) {
+			throw new IllegalStateException(
+					LispNames.REQUIRE + " expects a module name and an optional file path: " + form.print());
+		}
+		String name = moduleDesignator(LispNames.REQUIRE, items.get(1), form);
+		String path = null;
+		if (items.size() == 3) {
+			if (!(items.get(2) instanceof LispString str)) {
+				throw new IllegalStateException(
+						LispNames.REQUIRE + " expects a string-literal file path: " + form.print());
+			}
+			path = str.value();
+		}
+		return new RequireForm(name, path);
+	}
+
+	@Nullable private static List<LispVal> operatorForm(LispVal form, String operator) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !operator.equals(op.name())) {
+			return null;
+		}
+		return cons.toList();
+	}
+
+	/**
+	 * Parses a literal module-name designator: a keyword ({@code :util}), a quoted symbol
+	 * ({@code 'util}) or a string ({@code "util"}). Anything else (a bare symbol would be
+	 * a variable reference at runtime, a computed expression cannot be evaluated here) is
+	 * a hard error.
+	 */
+	private static String moduleDesignator(String operator, LispVal designator, LispVal form) {
+		if (designator instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
+				&& datumCell.car() instanceof LispSymbol datum) {
+			return datum.name();
+		}
+		if (designator instanceof LispSymbol sym && sym.isKeyword()) {
+			return sym.name().substring(1);
+		}
+		if (designator instanceof LispString str) {
+			return str.value();
+		}
+		throw new IllegalStateException(
+				operator + " expects a literal module name (keyword, quoted symbol or string), got " + form.print());
+	}
+
+	private static LispVal quotedSymbol(String name) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+	}
+
+	private record RequireForm(String name, @Nullable String path) {
 	}
 
 }

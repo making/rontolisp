@@ -74,6 +74,80 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void requireSplicesTheModuleFile() {
+		List<LispVal> result = inline("(require :util) (print (u-sq 5))",
+				Map.of("util.lisp", "(provide :util) (defun u-sq (x) (* x x))"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote util)", "(defun u-sq (x) (* x x))",
+				"(print (u-sq 5))");
+	}
+
+	@Test
+	void requireIsIdempotentAcrossDiamondDependencies() {
+		// a.lisp and b.lisp both require utils; the provide inside utils.lisp marks the
+		// module, so the second require is consumed without splicing again.
+		List<LispVal> result = inline("(require :a) (require :b)",
+				Map.of("a.lisp", "(provide :a) (require :utils) (defun a () (u 1))", //
+						"b.lisp", "(provide :b) (require :utils) (defun b () (u 2))", //
+						"utils.lisp", "(provide :utils) (defun u (x) x)"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote a)", "(quote utils)", "(defun u (x) x)",
+				"(defun a nil (u 1))", "(quote b)", "(quote utils)", "(defun b nil (u 2))");
+	}
+
+	@Test
+	void provideFirstConsumesALaterRequire() {
+		List<LispVal> result = inline("(provide :util) (require :util)", Map.of());
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote util)", "(quote util)");
+	}
+
+	@Test
+	void requireAcceptsAnExplicitPathAndAllDesignatorSpellings() {
+		Map<String, String> files = Map.of("lib/util-v2.lisp", "(provide :util) (defun u () 1)", //
+				"util.lisp", "(provide :util) (defun u () 2)");
+		List<LispVal> result = inline("(require :util \"lib/util-v2.lisp\") (require 'util) (require \"util\")", files);
+		// The explicit path wins; the later requires (quoted-symbol and string
+		// designators) see the module as provided and are consumed.
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote util)", "(defun u nil 1)",
+				"(quote util)", "(quote util)");
+	}
+
+	@Test
+	void requireMissingModuleFileThrows() {
+		assertThatThrownBy(() -> inline("(require :nope)", Map.of())).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("require: cannot read file nope.lisp");
+	}
+
+	@Test
+	void requireNonLiteralModuleNameThrows() {
+		// Unlike load, require cannot be deferred to runtime (the compiled runtime
+		// reader does not know it), so a non-literal designator is a hard error.
+		assertThatThrownBy(() -> inline("(require (concatenate 'string \"u\" \"til\"))", Map.of()))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("literal module name");
+		assertThatThrownBy(() -> inline("(provide some-variable)", Map.of())).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("literal module name");
+	}
+
+	@Test
+	void requireResolvesRelativeToTheRequiringFile() {
+		// The entry requires proj/core, whose own require of util resolves against
+		// proj/, not the working directory.
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("(require :core)"),
+				loaderOf(Map.of("proj/core.lisp", "(provide :core) (require :util) (defun c () (u))", //
+						"proj/util.lisp", "(provide :util) (defun u () 42)")),
+				"proj");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote core)", "(quote util)",
+				"(defun u nil 42)", "(defun c nil (u))");
+	}
+
+	@Test
+	void requiredProgramCompilesAndRunsOnJvm() throws Exception {
+		List<LispVal> program = inline("(require :util) (require :util) (print (u-sq 7))",
+				Map.of("util.lisp", "(provide :util) (defun u-sq (x) (* x x))"));
+		byte[] classBytes = new JvmLispCompiler("TestRequire").compile(program);
+		assertThat(runMain(classBytes, "TestRequire")).isEqualTo("49");
+	}
+
+	@Test
 	void splitProgramCompilesAndRunsOnJvm() throws Exception {
 		// This is the regression: before compile-time inlining, a console driver that
 		// (load "core.lisp")s its functions failed to compile on the JVM backend because

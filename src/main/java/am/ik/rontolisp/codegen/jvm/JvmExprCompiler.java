@@ -326,6 +326,11 @@ final class JvmExprCompiler {
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
 				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);
 				case LispNames.LOAD -> JvmLoadCompiler.compile(cons, ctx, className);
+				// A literal top-level require/provide was consumed by the compile-time
+				// LoadInliner pass; anything left is nested or non-literal, which the
+				// compiled runtime reader cannot execute (unlike a runtime load).
+				case LispNames.REQUIRE, LispNames.PROVIDE -> throw new UnsupportedOperationException(
+						sym.name() + " is only supported as a literal top-level form on the compile path");
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);

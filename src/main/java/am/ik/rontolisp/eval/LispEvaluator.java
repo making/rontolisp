@@ -79,6 +79,13 @@ public final class LispEvaluator {
 	private final java.util.Deque<String> loadDirStack = new java.util.ArrayDeque<>();
 
 	/**
+	 * The modules marked loaded by {@code provide}: a {@code require} of a member is a
+	 * no-op (the Common Lisp {@code *modules*} set, kept per evaluator so REPL state
+	 * persists across inputs like the resolver's current package).
+	 */
+	private final java.util.Set<String> providedModules = new java.util.HashSet<>();
+
+	/**
 	 * Create a new evaluator with the given output stream.
 	 * @param out the output stream for print operations
 	 */
@@ -350,35 +357,87 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString path)) {
 				throw new LispEvalException(LispNames.LOAD + " expects a string argument");
 			}
-			// Resolve a relative path against the directory of the file doing the load
-			// (the top of loadDirStack), so a program run from any working directory can
-			// (load "sibling.lisp") its companions, matching the compile-time include.
-			String baseDir = this.loadDirStack.peekLast();
-			String resolved = SourceLoader.resolve(baseDir, path.value());
-			String source;
-			try {
-				source = this.sourceLoader.load(resolved);
-			}
-			catch (IOException ex) {
-				throw new LispEvalException(LispNames.LOAD + ": cannot read file " + resolved + ": " + ex.getMessage());
-			}
-			// Evaluate every top-level form in the global environment so that
-			// definitions become reusable after load returns. Route through the
-			// top-level entry so package directives in the loaded file are processed.
-			// Push the loaded file's directory so a nested load resolves relative to it.
-			String childDir = SourceLoader.parentDir(resolved);
-			this.loadDirStack.addLast(childDir == null ? "" : childDir);
-			try {
-				for (LispVal form : LispReader.readAllFromString(source)) {
-					eval(form);
-				}
-			}
-			finally {
-				this.loadDirStack.removeLast();
-			}
+			loadFile(LispNames.LOAD, path.value());
 			return LispTrue.INSTANCE;
 		}));
+		this.globalEnv.defineFunction(LispNames.PROVIDE, new LispFunction(LispNames.PROVIDE, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.PROVIDE + " expects 1 argument, got " + args.size());
+			}
+			String name = moduleDesignator(LispNames.PROVIDE, args.get(0));
+			// A duplicate provide is a no-op, like Common Lisp.
+			this.providedModules.add(name);
+			return new LispSymbol(name);
+		}));
+		this.globalEnv.defineFunction(LispNames.REQUIRE, new LispFunction(LispNames.REQUIRE, args -> {
+			if (args.size() != 1 && args.size() != 2) {
+				throw new LispEvalException(LispNames.REQUIRE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String name = moduleDesignator(LispNames.REQUIRE, args.get(0));
+			if (!this.providedModules.contains(name)) {
+				String path;
+				if (args.size() == 2) {
+					if (!(args.get(1) instanceof LispString str)) {
+						throw new LispEvalException(
+								LispNames.REQUIRE + " expects a string file path, got " + args.get(1).print());
+					}
+					path = str.value();
+				}
+				else {
+					path = name + ".lisp";
+				}
+				// The required file is expected to (provide name) itself, which marks
+				// the module; requiring loads the file either way (like Common Lisp).
+				loadFile(LispNames.REQUIRE, path);
+			}
+			return new LispSymbol(name);
+		}));
 		registerJava();
+	}
+
+	/**
+	 * Reads and evaluates every top-level form of the given file in the global
+	 * environment, the shared machinery behind {@code load} and {@code require}. A
+	 * relative path resolves against the directory of the file doing the load (the top of
+	 * {@code loadDirStack}), so a program run from any working directory can
+	 * {@code (load "sibling.lisp")} its companions, matching the compile-time include.
+	 * Forms route through the top-level entry so package directives in the loaded file
+	 * are processed; the loaded file's directory is pushed so a nested load resolves
+	 * relative to it.
+	 */
+	private void loadFile(String operator, String rawPath) {
+		String baseDir = this.loadDirStack.peekLast();
+		String resolved = SourceLoader.resolve(baseDir, rawPath);
+		String source;
+		try {
+			source = this.sourceLoader.load(resolved);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(operator + ": cannot read file " + resolved + ": " + ex.getMessage());
+		}
+		String childDir = SourceLoader.parentDir(resolved);
+		this.loadDirStack.addLast(childDir == null ? "" : childDir);
+		try {
+			for (LispVal form : LispReader.readAllFromString(source)) {
+				eval(form);
+			}
+		}
+		finally {
+			this.loadDirStack.removeLast();
+		}
+	}
+
+	/**
+	 * Parses a runtime module-name designator: a symbol (a keyword {@code :util} or a
+	 * quoted symbol evaluating to {@code util}) or a string.
+	 */
+	private static String moduleDesignator(String operator, LispVal designator) {
+		return switch (designator) {
+			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			case LispString str -> str.value();
+			default -> throw new LispEvalException(
+					operator + " expects a module name (symbol or string), got " + designator.print());
+		};
 	}
 
 	// Registers the interpreter side of the `java` interop package (a reflection

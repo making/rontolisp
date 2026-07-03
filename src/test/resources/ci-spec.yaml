@@ -974,7 +974,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)
-      190
+      192
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn

@@ -25,6 +25,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `declare` / `the` / `typep` / `coerce` | not available |
 | `defpackage` (user packages) | partial (`:use`/`:export` only; see [`defpackage`](../reference/special-forms/defpackage.md)) |
 | `make-package` / `export` / `use-package` (runtime) | not available |
+| `require` / `provide` | available (see [`require`](../reference/functions/require.md)); the `*modules*` variable is not available |
 | dynamic (special) binding via `let` | lexical only |
 | complex numbers | not available |
 

@@ -2824,6 +2824,34 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunLoad(code, lib)).isEqualTo("10");
 	}
 
+	@Test
+	void requireSplicedByLoadInlinerCompilesAndRuns() throws Exception {
+		// require/provide are consumed by the compile-time LoadInliner pass (cli), so
+		// the WASM module contains the spliced defuns natively; the duplicate require
+		// is consumed without splicing again.
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner
+			.inline(LispReader.readAllFromString("(require :util) (require :util) (print (u-sq 8))"), path -> {
+				if (!"util.lisp".equals(path)) {
+					throw new java.io.FileNotFoundException(path);
+				}
+				return "(provide :util) (defun u-sq (x) (* x x))";
+			});
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("64");
+	}
+
+	@Test
+	void requireNotConsumedByInlinerThrows() {
+		// One that reaches the compiler (nested, or a unit test bypassing the pass) is
+		// a hard error -- unlike load, the compiled runtime reader cannot execute it.
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(if t (require :util))")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("require is only supported as a literal top-level form");
+	}
+
 	// dynamic mode (late binding) tests
 
 	private static String compileAndRunLoadDynamic(String lispCode, String libContent) throws Exception {
@@ -3306,7 +3334,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("190");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("192");
 	}
 
 	@Test

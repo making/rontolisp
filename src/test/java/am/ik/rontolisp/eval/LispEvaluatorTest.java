@@ -2759,6 +2759,70 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void requireLoadsTheModuleFileOnce(@TempDir Path tempDir) throws Exception {
+		// The provide inside the required file marks the module, so the second require
+		// (the diamond-dependency case) does not evaluate the file again.
+		Files.writeString(tempDir.resolve("util.lisp"),
+				"(provide :util)\n(setq util-count (+ util-count 1))\n(defun util-sq (x) (* x x))\n");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.setLoadBaseDir(tempDir.toString());
+		evaluator.eval(LispReader.readFromString("(setq util-count 0)"));
+		assertThat(evaluator.eval(LispReader.readFromString("(require :util)"))).isEqualTo(new LispSymbol("util"));
+		assertThat(evaluator.eval(LispReader.readFromString("(require :util)"))).isEqualTo(new LispSymbol("util"));
+		assertThat(evaluator.eval(LispReader.readFromString("util-count"))).isEqualTo(new LispInteger(1));
+		assertThat(evaluator.eval(LispReader.readFromString("(util-sq 6)"))).isEqualTo(new LispInteger(36));
+	}
+
+	@Test
+	void requireAcceptsAnExplicitPathAndAllDesignatorSpellings(@TempDir Path tempDir) throws Exception {
+		Files.writeString(tempDir.resolve("util-v2.lisp"), "(provide :util)\n(defun util-version () 2)\n");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.setLoadBaseDir(tempDir.toString());
+		assertThat(evaluator.eval(LispReader.readFromString("(require :util \"util-v2.lisp\")")))
+			.isEqualTo(new LispSymbol("util"));
+		assertThat(evaluator.eval(LispReader.readFromString("(util-version)"))).isEqualTo(new LispInteger(2));
+		// Symbol and string designators name the same (already provided) module.
+		assertThat(evaluator.eval(LispReader.readFromString("(require 'util)"))).isEqualTo(new LispSymbol("util"));
+		assertThat(evaluator.eval(LispReader.readFromString("(require \"util\")"))).isEqualTo(new LispSymbol("util"));
+	}
+
+	@Test
+	void provideMarksTheModuleAndDuplicateProvideIsANoOp() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		assertThat(evaluator.eval(LispReader.readFromString("(provide :mod)"))).isEqualTo(new LispSymbol("mod"));
+		assertThat(evaluator.eval(LispReader.readFromString("(provide :mod)"))).isEqualTo(new LispSymbol("mod"));
+		// A require of the provided module returns the name without touching any file.
+		assertThat(evaluator.eval(LispReader.readFromString("(require :mod)"))).isEqualTo(new LispSymbol("mod"));
+	}
+
+	@Test
+	void requireMissingModuleFileThrows(@TempDir Path tempDir) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.setLoadBaseDir(tempDir.toString());
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(require :nope)")))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("require: cannot read file");
+	}
+
+	@Test
+	void requireAndProvideRejectNonDesignatorArguments() {
+		assertThatThrownBy(() -> eval("(require 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("module name");
+		assertThatThrownBy(() -> eval("(provide 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("module name");
+	}
+
+	@Test
+	void requireAndProvideAreFirstClassFunctions() {
+		// Being cl functions (not special forms), #'require / #'provide are valid.
+		assertThat(eval("(funcall #'provide :fc-mod)")).isEqualTo(new LispSymbol("fc-mod"));
+	}
+
+	@Test
 	void rontolispVersionReturnsPlist() {
 		assertThat(eval("(car (rontolisp:version))")).isEqualTo(new LispSymbol(":version"));
 		assertThat(eval("(cadr (rontolisp:version))")).isEqualTo(new LispString(am.ik.rontolisp.Version.getVersion()));
@@ -2831,9 +2895,10 @@ class LispEvaluatorTest {
 			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
 			.contains("make-array", "aref")
 			.contains("gensym", "macroexpand", "macroexpand-1")
+			.contains("require", "provide")
 			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(190);
+			.hasSize(192);
 	}
 
 	@Test

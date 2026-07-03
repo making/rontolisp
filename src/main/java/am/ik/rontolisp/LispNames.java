@@ -1000,6 +1000,21 @@ public final class LispNames {
 	/** The {@code load} built-in function (interpreter only). */
 	public static final String LOAD = "load";
 
+	/**
+	 * The {@code require} built-in function: loads a module once. A runtime function on
+	 * the interpreter; a literal, top-level compile-time directive on the compile path
+	 * (consumed by {@code LoadInliner}).
+	 */
+	public static final String REQUIRE = "require";
+
+	/**
+	 * The {@code provide} built-in function: marks a module as loaded so a later
+	 * {@code require} of the same name is a no-op. A runtime function on the interpreter;
+	 * a literal, top-level compile-time directive on the compile path (consumed by
+	 * {@code LoadInliner}).
+	 */
+	public static final String PROVIDE = "provide";
+
 	// File I/O
 
 	/** The {@code open} built-in function. */

@@ -25,6 +25,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `declare` / `the` / `typep` / `coerce` | 利用不可 |
 | `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export` のみ。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
 | `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
+| `require` / `provide` | 利用可能（[`require`](../reference/functions/require.md) 参照）。`*modules*` 変数は利用不可 |
 | `let` による動的（special）束縛 | レキシカルのみ |
 | 複素数 | 利用不可 |
 

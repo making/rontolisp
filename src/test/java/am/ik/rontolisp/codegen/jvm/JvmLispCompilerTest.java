@@ -2275,6 +2275,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileRequireOrProvideNotConsumedByInlinerThrows() {
+		// A literal top-level require/provide is consumed by the compile-time
+		// LoadInliner pass (cli); one that reaches the compiler (nested, or a unit test
+		// bypassing the pass) is a hard error -- unlike load, the compiled runtime
+		// reader cannot execute it.
+		assertThatThrownBy(() -> compileAndRun("(if t (require :util))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("require is only supported as a literal top-level form");
+		assertThatThrownBy(() -> compileAndRun("(if t (provide :util))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("provide is only supported as a literal top-level form");
+	}
+
+	@Test
 	void compileRatioLiteral() throws Exception {
 		assertThat(compileAndRun("(print 1/3)")).isEqualTo("1/3");
 		assertThat(compileAndRun("(print -2/4)")).isEqualTo("-1/2");
@@ -2918,12 +2932,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("190");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("192");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("190");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("192");
 	}
 
 	@Test

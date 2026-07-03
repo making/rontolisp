@@ -206,6 +206,8 @@ categories:
       - { slug: parse-integer, name: "parse-integer" }
       - { slug: eval, name: "eval" }
       - { slug: load, name: "load" }
+      - { slug: require, name: "require" }
+      - { slug: provide, name: "provide" }
   - title: "シンボルとマクロ"
     functions:
       - { slug: gensym, name: "gensym" }
