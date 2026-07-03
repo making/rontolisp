@@ -52,10 +52,13 @@ reason.)
 
 ## A note on the names
 
-`rontolisp:wasm-import` registers the function under the exact quoted name
-it is given, and quoted symbols are not package-resolved, so the directives
-in `gl.lisp` spell the canonical qualified name explicitly
-(`'gl:create-shader`, and `'gl::fail` for the one internal helper).
+The quoted name of a `rontolisp:wasm-import` directive resolves in the
+current package like a defun name, so the directives in `gl.lisp` are
+written with plain unqualified names (`'create-shader`): under
+`(in-package gl)` each one canonicalizes to `gl:create-shader` (or
+`gl::fail` for the one unexported helper), which is exactly what call sites
+resolve to. The host-facing import field still defaults to the bare name —
+a package qualifier never leaks into the page's import object.
 
 `examples/webgl-triangle` deliberately does not use this package: it is the
 smallest complete `rontolisp:wasm-import` program, and staying a single

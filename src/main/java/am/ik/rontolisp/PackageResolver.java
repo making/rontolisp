@@ -181,12 +181,44 @@ public final class PackageResolver {
 		LispVal car = resolveForm(cons.car());
 		if (car instanceof LispSymbol op) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && isIntrospectionMember(qn.member())) {
-				return resolveIntrospection(op, qn.member(), cons);
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
+				if (isIntrospectionMember(qn.member())) {
+					return resolveIntrospection(op, qn.member(), cons);
+				}
+				if (LispNames.WASM_IMPORT.equals(qn.member()) || LispNames.WASM_EXPORT.equals(qn.member())) {
+					return resolveWasmDirective(op, cons);
+				}
 			}
 		}
 		LispVal cdr = resolveForm(cons.cdr());
 		return new LispCons(car, cdr);
+	}
+
+	/**
+	 * Resolves a {@code rontolisp:wasm-import}/{@code rontolisp:wasm-export} directive.
+	 * The quoted first argument names a Lisp function -- the synthetic defun an import
+	 * creates, or the existing defun an export wraps -- so unlike ordinary quoted data it
+	 * is package-scoped and resolves like a defun name against the current package (a
+	 * canonical qualified name re-resolves to itself). The remaining options resolve
+	 * normally: the {@code :params} keyword list and a lenient quoted-symbol {@code :as}
+	 * alias stay untouched under the quote exemption.
+	 */
+	private LispVal resolveWasmDirective(LispSymbol op, LispCons cons) {
+		if (cons.cdr() instanceof LispCons nameCell) {
+			LispVal nameArg = nameCell.car();
+			LispVal resolvedName;
+			if (nameArg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+					&& LispNames.QUOTE.equals(operatorMember(quoteOp)) && quoted.cdr() instanceof LispCons datumCell
+					&& datumCell.car() instanceof LispSymbol nameSym && !nameSym.isKeyword()) {
+				resolvedName = new LispCons(new LispSymbol(LispNames.QUOTE),
+						new LispCons(resolveSymbol(nameSym), LispNil.INSTANCE));
+			}
+			else {
+				resolvedName = resolveForm(nameArg);
+			}
+			return new LispCons(op, new LispCons(resolvedName, resolveForm(nameCell.cdr())));
+		}
+		return new LispCons(op, resolveForm(cons.cdr()));
 	}
 
 	private static boolean isIntrospectionMember(String member) {

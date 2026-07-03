@@ -196,9 +196,9 @@
 
     <aside class="hud bottom-left" aria-label="The Lisp import directives driving this page">
       <div class="repl" id="repl"><span class="cm">; the Lisp side of the boundary (the shared gl package)</span>
-(<span class="kw">rontolisp:wasm-import</span> 'gl:shader-source :from <span class="str">"gl"</span> :as <span class="str">"shaderSource"</span>
+(<span class="kw">rontolisp:wasm-import</span> 'shader-source :from <span class="str">"gl"</span> :as <span class="str">"shaderSource"</span>
                        :params '(:int :string) :returns :void)
-(<span class="kw">rontolisp:wasm-import</span> 'gl:draw-arrays :from <span class="str">"gl"</span> :as <span class="str">"drawArrays"</span>
+(<span class="kw">rontolisp:wasm-import</span> 'draw-arrays :from <span class="str">"gl"</span> :as <span class="str">"drawArrays"</span>
                        :params '(:int :int :int) :returns :void)
 (<span class="kw">rontolisp:wasm-import</span> 'sin :from <span class="str">"math"</span> :params '(:float) :returns :float)
 <span class="cm">; ...31 more · <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>

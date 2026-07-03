@@ -1,25 +1,26 @@
 ;;;; Conway's Game of Life -- Swing front-end.
 ;;;;
 ;;;; Loads the rendering-free core (life-core.lisp) and the reusable grid view
-;;;; (swing.lisp), then animates successive generations: each timer tick advances
+;;;; (the `swing` package, swing.lisp), then animates successive generations:
+;;;; each timer tick advances
 ;;;; the world one step, repaints every cell, and updates the status line. A small
 ;;;; toroidal Life world decays to a stable "ash" of still lifes and blinkers
 ;;;; after a couple hundred generations, so once it has run long enough this demo
 ;;;; reseeds with the classic patterns plus a fresh random soup to stay lively.
 ;;;; Close the window to stop. JVM only (Swing), and needs a display.
 ;;;;
-;;;; Run from anywhere (the loads resolve relative to this file; the compile
-;;;; path inlines them):
+;;;; Run from anywhere (the load and the require resolve relative to this file;
+;;;; the compile path inlines them):
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/life-gui.lisp
 ;;;;   java -jar ...-exec.jar examples/life-gui.lisp -o Life.class && java Life
 
 (load "life-core.lisp")
-(load "swing.lisp")
+(require :swing "swing.lisp")
 
-(defparameter *color-alive* (swing-rgb 90 200 250))
-(defparameter *color-dead* (swing-rgb 28 30 36))
+(defparameter *color-alive* (swing:rgb 90 200 250))
+(defparameter *color-dead* (swing:rgb 28 30 36))
 
-(defparameter *win* (swing-grid-window "rontolisp life" *rows* *cols* 18))
+(defparameter *win* (swing:grid-window "rontolisp life" *rows* *cols* 18))
 
 ;; The current world and generation counter, advanced by the animation tick.
 (defparameter *g* (life-seed))
@@ -31,7 +32,7 @@
     (while (< r *rows*)
       (let ((c 0))
         (while (< c *cols*)
-          (swing-paint *win* r c
+          (swing:paint *win* r c
                        (if (= (aref grid r c) 1) *color-alive* *color-dead*))
           (setq c (+ c 1))))
       (setq r (+ r 1)))))
@@ -48,13 +49,13 @@
 
 (render-life *g*)
 
-(swing-animate 120
+(swing:animate 120
   (lambda ()
     (when (>= *gen* *reseed-at*)
       (setq *g* (life-seed))
       (sprinkle *g* 140)
       (setq *gen* 0))
-    (swing-status *win*
+    (swing:status *win*
                   (concatenate 'string "  generation: " (princ-to-string *gen*)
                                "   population: "
                                (princ-to-string (population *g* *rows* *cols*))))

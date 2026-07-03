@@ -33,8 +33,9 @@ compile it to a `.class` (`-o Minesweeper.class`; WASM cannot lower a Java
 object) -- and needs a display. Unlike the
 entropy-free browser reactor, this build has `random`, so it lays
 its own mines -- keeping them off the first click. The rendering layer reuses the
-reusable [`../swing.lisp`](../swing.lisp) grid helpers (extended here with a
-clickable, text-capable label grid).
+[`../swing.lisp`](../swing.lisp) `swing` package (spliced in with
+`(require :swing "../swing.lisp")`), whose clickable, text-capable label grid
+(`swing:label-grid-window`) was built for this game.
 
 ## Play it in the browser (WebAssembly)
 

@@ -62,6 +62,19 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void defaultFieldOfPackageQualifiedNameIsTheUnqualifiedMember() {
+		// A directive inside a user package resolves its name to pkg:name; the
+		// host-facing import field must default to the bare member name, not the
+		// package-qualified spelling.
+		WasmImportCompiler.Decl decl = parse("(rontolisp:wasm-import 'gl:enable :params '(:int) :returns :void)");
+		assertThat(decl.name()).isEqualTo("gl:enable");
+		assertThat(decl.field()).isEqualTo("enable");
+		WasmImportCompiler.Decl internal = parse("(rontolisp:wasm-import 'gl::fail :params '(:string))");
+		assertThat(internal.name()).isEqualTo("gl::fail");
+		assertThat(internal.field()).isEqualTo("fail");
+	}
+
+	@Test
 	void treatsOmittedReturnsAsVoid() {
 		assertThat(parse("(rontolisp:wasm-import 'go :params '(:int))").returnType())
 			.isEqualTo(WasmExportCompiler.T_VOID);

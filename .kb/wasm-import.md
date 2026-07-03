@@ -40,13 +40,18 @@ old `exportUsesMemory`); an `:s-expr` result forces `usesRead`.
 `Decl.exportName()` defaults to the Lisp name; used by both the GC backend export
 section and `ScalarWasmCompiler`.
 
-**wasm-import inside a user `defpackage` (the shared `gl` package)**: the quoted name
-argument is NOT package-resolved (quoted data passes through `PackageResolver`
-untouched), so a directive inside `(in-package gl)` must spell the canonical qualified
-name explicitly — `(rontolisp:wasm-import 'gl:create-shader ...)` for an exported
-symbol, `'gl::fail` for an internal one — or call sites (canonicalized to `gl:name`)
-won't find the synthetic defun ("Cannot compile: gl:create-shader").
-`examples/webgl-common/gl.lisp` does exactly this: one `defpackage gl` holding the
+**wasm-import/wasm-export inside a user `defpackage` (the shared `gl` package)**: unlike
+ordinary quoted data (which passes through `PackageResolver` untouched), the quoted name
+argument of both directives IS package-resolved — `PackageResolver.resolveWasmDirective`
+resolves it like a defun name against the current package, so
+`(rontolisp:wasm-import 'create-shader ...)` under `(in-package gl)` registers the
+synthetic defun as `gl:create-shader` (or `gl::name` for an unexported symbol), matching
+what call sites canonicalize to; an explicitly qualified name is a fixed point. Only the
+name argument is special: the `:params` keyword list and a lenient quoted-symbol `:as`
+alias stay untouched under the quote exemption. The host-facing default (`:as` omitted:
+import field / export name) is the bare member name, never the qualified spelling
+(`WasmImportDirective`/`WasmExportCompiler.unqualifiedMember`).
+`examples/webgl-common/gl.lisp` is the showcase: one `defpackage gl` holding the
 WebGL2 API union + enum constants + `gl:make-shader`/`gl:build-program`, spliced into
 each webgl demo by a compile-time `(require :gl "../webgl-common/gl.lisp")`; `--optimize`
 shakes the entries a demo never calls, so declaring the union is free. Caveat: a program

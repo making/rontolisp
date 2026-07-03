@@ -124,8 +124,16 @@ final class WasmExportCompiler {
 			i += 2;
 		}
 		// Omitted :returns (like nil / '() / :void) means a void result.
-		return new Decl(name, exportName == null ? name : exportName, params == null ? List.of() : params,
-				returns == null ? T_VOID : returns);
+		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName,
+				params == null ? List.of() : params, returns == null ? T_VOID : returns);
+	}
+
+	// The host-facing default export name is the symbol's bare member name; a package
+	// qualifier (pkg:name from a directive inside a user package) is Lisp-side spelling
+	// only.
+	private static String unqualifiedMember(String name) {
+		var qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 	// An :as value is a string literal (or, leniently, a quoted symbol) naming the WASM

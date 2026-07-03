@@ -45,9 +45,9 @@ display. See the
 | File | What it demonstrates |
 | --- | --- |
 | [`java-interop.lisp`](java-interop.lisp) | A minimal Swing window built directly through `java:new`/`java:call`/`java:field`/`java:proxy` -- a button whose `ActionListener` is a rontolisp lambda wrapped in a dynamic proxy |
-| [`swing.lisp`](swing.lisp) | A small reusable Swing grid-window helper library, written entirely on top of `java:` (no bespoke Java class); reused as the rendering layer by the GUI demos |
-| [`life-gui.lisp`](life-gui.lisp) | Conway's Game of Life animated in a Swing window: loads the same `life-core.lisp` as `life.lisp` plus `swing.lisp`, and steps the world on a `javax.swing.Timer` |
-| [`minesweeper/minesweeper-swing.lisp`](minesweeper/minesweeper-swing.lisp) | Minesweeper on the desktop: loads the same `minesweeper-core.lisp` as the browser build (only the drawing differs) and paints a clickable Swing label grid via `swing.lisp` |
+| [`swing.lisp`](swing.lisp) | A small reusable Swing grid-window helper library, written entirely on top of `java:` (no bespoke Java class) and wrapped in its own `swing` package; the GUI demos splice it in with `(require :swing "swing.lisp")` and call the qualified names (`swing:grid-window`, `swing:paint`, ...) |
+| [`life-gui.lisp`](life-gui.lisp) | Conway's Game of Life animated in a Swing window: loads the same `life-core.lisp` as `life.lisp` plus the `swing` package, and steps the world on a `javax.swing.Timer` |
+| [`minesweeper/minesweeper-swing.lisp`](minesweeper/minesweeper-swing.lisp) | Minesweeper on the desktop: loads the same `minesweeper-core.lisp` as the browser build (only the drawing differs) and paints a clickable Swing label grid via the `swing` package |
 
 ## Browser demos (compile to WASM, run in a page)
 

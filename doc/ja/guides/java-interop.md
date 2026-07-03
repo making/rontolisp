@@ -134,7 +134,7 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (java:call *frame* "setVisible" t)
 ```
 
-`examples/swing.lisp` はこの 5 つの関数の上に再利用可能なグリッドウィンドウのヘルパーを構築し、`examples/life-gui.lisp` はそれを使ってライフゲームをアニメーション表示します。
+`examples/swing.lisp` はこの 5 つの関数の上に再利用可能なグリッドウィンドウのヘルパーを構築しています。ヘルパーは独自の `swing` [パッケージ](../reference/packages.md)にまとめられており、`(require :swing "swing.lisp")` で取り込みます。`examples/life-gui.lisp` はこれを使って (`swing:grid-window`、`swing:paint`、...) ライフゲームをアニメーション表示します。
 
 ## 制限
 

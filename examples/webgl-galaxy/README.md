@@ -33,11 +33,11 @@ shader helpers) lives in the shared `gl` package,
 entries, imported one at a time in the shared `gl` package:
 
 ```lisp
-(rontolisp:wasm-import 'gl:create-shader :from "gl" :as "createShader"
+(rontolisp:wasm-import 'create-shader :from "gl" :as "createShader"
                        :params '(:int) :returns :int)
-(rontolisp:wasm-import 'gl:shader-source :from "gl" :as "shaderSource"
+(rontolisp:wasm-import 'shader-source :from "gl" :as "shaderSource"
                        :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'gl:draw-arrays :from "gl" :as "drawArrays"
+(rontolisp:wasm-import 'draw-arrays :from "gl" :as "drawArrays"
                        :params '(:int :int :int) :returns :void)
 ;; ... plus canvas metrics, Math.sin / Math.cos, and an error reporter
 ```

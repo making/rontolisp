@@ -105,6 +105,54 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void wasmImportQuotedNameResolvesInCurrentPackage() {
+		// The quoted name of a wasm-import directive is a function name, not inert
+		// data: inside a user package it must resolve like a defun name so call
+		// sites (canonicalized to pkg:name) find the synthetic defun.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
+		resolve(resolver, "(in-package :gl)");
+		assertThat(resolve(resolver,
+				"(rontolisp:wasm-import 'create-shader :from \"gl\" :as \"createShader\" :params '(:int) :returns :int)"))
+			.isEqualTo("(rontolisp:wasm-import (quote gl:create-shader) :from \"gl\" :as \"createShader\""
+					+ " :params (quote (:int)) :returns :int)");
+		// An unexported name is internal to the package.
+		assertThat(resolve(resolver, "(rontolisp:wasm-import 'fail :from \"ui\" :params '(:string) :returns :void)"))
+			.isEqualTo(
+					"(rontolisp:wasm-import (quote gl::fail) :from \"ui\" :params (quote (:string)) :returns :void)");
+	}
+
+	@Test
+	void wasmImportQualifiedQuotedNameIsAFixedPoint() {
+		// An explicitly qualified name (the pre-resolution workaround spelling)
+		// re-resolves to itself, from any current package.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
+		assertThat(resolve(resolver, "(rontolisp:wasm-import 'gl:create-shader :params '(:int) :returns :int)"))
+			.isEqualTo("(rontolisp:wasm-import (quote gl:create-shader) :params (quote (:int)) :returns :int)");
+	}
+
+	@Test
+	void wasmExportQuotedNameResolvesInCurrentPackage() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :gl (:use :cl) (:export :frame))");
+		resolve(resolver, "(in-package :gl)");
+		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as \"frame\" :params '(:float))"))
+			.isEqualTo("(rontolisp:wasm-export (quote gl:frame) :as \"frame\" :params (quote (:float)))");
+	}
+
+	@Test
+	void wasmExportQuotedSymbolAliasIsLeftUntouched() {
+		// The :as value may leniently be a quoted symbol naming the WASM export
+		// field; it is host-facing data, not a package-scoped symbol.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :gl (:use :cl) (:export :frame))");
+		resolve(resolver, "(in-package :gl)");
+		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as 'tick :params '(:float))"))
+			.isEqualTo("(rontolisp:wasm-export (quote gl:frame) :as (quote tick) :params (quote (:float)))");
+	}
+
+	@Test
 	void packageVarExpandsToQuotedCurrentPackage() {
 		assertThat(resolve("*package*")).isEqualTo("(quote cl-user)");
 	}

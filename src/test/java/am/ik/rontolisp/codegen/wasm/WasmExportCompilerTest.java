@@ -85,6 +85,14 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void defaultExportNameOfPackageQualifiedNameIsTheUnqualifiedMember() {
+		// An export declared inside a user package resolves its name to pkg:name; the
+		// host-facing export name must default to the bare member name.
+		assertThat(parse("(rontolisp:wasm-export 'app:frame :params '(:float))").exportName()).isEqualTo("frame");
+		assertThat(parse("(rontolisp:wasm-export 'app::tick :params '(:float))").exportName()).isEqualTo("tick");
+	}
+
+	@Test
 	void parsesAsAlias() {
 		assertThat(parse("(rontolisp:wasm-export 'fact :as \"fibonacci\" :params '(:int) :returns :int)").exportName())
 			.isEqualTo("fibonacci");

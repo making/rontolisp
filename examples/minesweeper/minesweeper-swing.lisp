@@ -3,12 +3,13 @@
 ;;;; The rules are shared verbatim with the browser build: this file loads the
 ;;;; same minesweeper-core.lisp, so ONLY the drawing differs. Where the WASM
 ;;;; front-end (minesweeper-wasm.lisp) renders the board to HTML, this one paints a
-;;;; Swing grid of clickable labels through the reusable helpers in swing.lisp.
+;;;; Swing grid of clickable labels through the reusable `swing` package
+;;;; (../swing.lisp).
 ;;;;
 ;;;; Swing runs on the JVM -- interpret this file, or compile it to a .class (the
 ;;;; WASM backend cannot lower a java object) -- and needs a display. Run it from
-;;;; anywhere; the loads resolve relative to this file (the compile path inlines
-;;;; them):
+;;;; anywhere; the load and the require resolve relative to this file (the
+;;;; compile path inlines them):
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/minesweeper/minesweeper-swing.lisp
 ;;;;   java -jar ...-exec.jar examples/minesweeper/minesweeper-swing.lisp -o Minesweeper.class && java Minesweeper
 ;;;;
@@ -18,7 +19,7 @@
 ;;;; them off the very first click so the opening move is always safe.
 
 (load "minesweeper-core.lisp")
-(load "../swing.lisp")
+(require :swing "../swing.lisp")
 
 ;;; --- board configuration (Beginner) ------------------------------------------
 
@@ -34,13 +35,13 @@
 
 ;;; --- palette -----------------------------------------------------------------
 
-(defparameter *c-hidden* (swing-rgb 188 192 200))   ; a covered cell
-(defparameter *c-open*   (swing-rgb 225 227 232))    ; an uncovered cell
-(defparameter *c-boom*   (swing-rgb 214 69 65))      ; the mine you stepped on
+(defparameter *c-hidden* (swing:rgb 188 192 200))   ; a covered cell
+(defparameter *c-open*   (swing:rgb 225 227 232))    ; an uncovered cell
+(defparameter *c-boom*   (swing:rgb 214 69 65))      ; the mine you stepped on
 
-(defparameter *fg-mine*  (swing-rgb 24 24 28))
-(defparameter *fg-flag*  (swing-rgb 200 44 44))
-(defparameter *fg-wrong* (swing-rgb 150 44 44))
+(defparameter *fg-mine*  (swing:rgb 24 24 28))
+(defparameter *fg-flag*  (swing:rgb 200 44 44))
+(defparameter *fg-wrong* (swing:rgb 150 44 44))
 
 (defparameter *glyph-mine*  "✸")
 (defparameter *glyph-flag*  "⚑")
@@ -49,21 +50,21 @@
 ;;; Classic per-number text colours (1 blue, 2 green, 3 red, ...).
 (defun number-color (n)
   (cond
-    ((= n 1) (swing-rgb 25 60 210))
-    ((= n 2) (swing-rgb 20 130 40))
-    ((= n 3) (swing-rgb 210 40 40))
-    ((= n 4) (swing-rgb 20 20 140))
-    ((= n 5) (swing-rgb 140 30 30))
-    ((= n 6) (swing-rgb 20 130 130))
-    ((= n 7) (swing-rgb 24 24 28))
-    (t (swing-rgb 90 90 90))))
+    ((= n 1) (swing:rgb 25 60 210))
+    ((= n 2) (swing:rgb 20 130 40))
+    ((= n 3) (swing:rgb 210 40 40))
+    ((= n 4) (swing:rgb 20 20 140))
+    ((= n 5) (swing:rgb 140 30 30))
+    ((= n 6) (swing:rgb 20 130 130))
+    ((= n 7) (swing:rgb 24 24 28))
+    (t (swing:rgb 90 90 90))))
 
 ;;; --- the drawing layer (the only part that differs from the WASM build) ------
 
 ;; The window: rows = height, cols = width. Created up front so the drawing
 ;; functions can refer to it.
 (defparameter *win*
-  (swing-label-grid-window "rontolisp minesweeper" *h* *w* *cell-size*))
+  (swing:label-grid-window "rontolisp minesweeper" *h* *w* *cell-size*))
 
 ;; Paint one cell from the current state. This mirrors the WASM front-end's
 ;; cell-html, but sets a Swing label's background / colour / text instead of
@@ -74,42 +75,42 @@
          (is-mine (= (nth i (st-mines state)) 1))
          (is-rev  (= (nth i (st-revealed state)) 1))
          (is-flag (= (nth i (st-flags state)) 1)))
-    (swing-cell-text *win* r c "")
+    (swing:cell-text *win* r c "")
     (cond
       ;; The mine you actually stepped on.
       ((and is-rev is-mine)
-       (swing-paint *win* r c *c-boom*)
-       (swing-cell-fg *win* r c *fg-mine*)
-       (swing-cell-text *win* r c *glyph-mine*))
+       (swing:paint *win* r c *c-boom*)
+       (swing:cell-fg *win* r c *fg-mine*)
+       (swing:cell-text *win* r c *glyph-mine*))
       ;; A normally revealed cell: blank, or a neighbour count 1..8.
       (is-rev
-       (swing-paint *win* r c *c-open*)
+       (swing:paint *win* r c *c-open*)
        (let ((cnt (adjacent-count (st-mines state) i *w* *h*)))
          (when (> cnt 0)
-           (swing-cell-fg *win* r c (number-color cnt))
-           (swing-cell-text *win* r c (princ-to-string cnt)))))
+           (swing:cell-fg *win* r c (number-color cnt))
+           (swing:cell-text *win* r c (princ-to-string cnt)))))
       ;; Game over: reveal every remaining mine.
       ((and over is-mine)
-       (swing-paint *win* r c *c-open*)
-       (swing-cell-fg *win* r c *fg-mine*)
-       (swing-cell-text *win* r c *glyph-mine*))
+       (swing:paint *win* r c *c-open*)
+       (swing:cell-fg *win* r c *fg-mine*)
+       (swing:cell-text *win* r c *glyph-mine*))
       ;; Game over: a flag that turned out to be wrong.
       ((and over is-flag)
-       (swing-paint *win* r c *c-open*)
-       (swing-cell-fg *win* r c *fg-wrong*)
-       (swing-cell-text *win* r c *glyph-wrong*))
+       (swing:paint *win* r c *c-open*)
+       (swing:cell-fg *win* r c *fg-wrong*)
+       (swing:cell-text *win* r c *glyph-wrong*))
       ;; A flag still standing.
       (is-flag
-       (swing-paint *win* r c *c-hidden*)
-       (swing-cell-fg *win* r c *fg-flag*)
-       (swing-cell-text *win* r c *glyph-flag*))
+       (swing:paint *win* r c *c-hidden*)
+       (swing:cell-fg *win* r c *fg-flag*)
+       (swing:cell-text *win* r c *glyph-flag*))
       ;; An ordinary covered cell.
       (t
-       (swing-paint *win* r c *c-hidden*)))))
+       (swing:paint *win* r c *c-hidden*)))))
 
 (defun update-status ()
   (let ((s (game-status *state*)))
-    (swing-status *win*
+    (swing:status *win*
                   (cond
                     ((= s 1) "  You win!  Click any cell for a new game.")
                     ((= s 2) "  Boom!  Click any cell for a new game.")
@@ -178,7 +179,7 @@
 
 ;;; --- wire it up --------------------------------------------------------------
 
-(swing-on-cell-click *win* (function on-click))
+(swing:on-cell-click *win* (function on-click))
 (reset)
 
 (print "minesweeper window is open; close it to quit")

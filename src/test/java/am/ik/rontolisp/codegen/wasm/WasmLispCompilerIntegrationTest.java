@@ -272,6 +272,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void importedHostFunctionInsideUserPackageResolvesUnqualifiedName() throws Exception {
+		// A wasm-import declared inside a user package with a plain unqualified quoted
+		// name registers under the canonical qualified name (PackageResolver resolves
+		// the name argument like a defun name), so pkg:name call sites -- direct and
+		// from a package-local helper -- find the synthetic defun.
+		String host = """
+				(defun host-add (a b) (+ a b))
+				(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+				""";
+		String main = """
+				(defpackage :hostapi (:use :cl) (:export :add :add3))
+				(in-package :hostapi)
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
+				(defun add3 (a b c) (add (add a b) c))
+				(in-package :cl-user)
+				(print (hostapi:add 40 2))
+				(print (hostapi:add3 1 2 3))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, false)).isEqualTo("""
+				42
+				6""");
+	}
+
+	@Test
 	void importedHostFunctionSurvivesTheTreeShaker() throws Exception {
 		// --optimize runs after import injection; the used import must survive and stay
 		// correctly renumbered.

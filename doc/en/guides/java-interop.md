@@ -175,7 +175,9 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 ```
 
 `examples/swing.lisp` builds a reusable grid-window helper on top of these five
-functions, and `examples/life-gui.lisp` animates Conway's Game of Life with it.
+functions -- wrapped in a `swing` [package](../reference/packages.md) of its own,
+spliced in with `(require :swing "swing.lisp")` -- and `examples/life-gui.lisp`
+animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...).
 
 ## Limitations
 

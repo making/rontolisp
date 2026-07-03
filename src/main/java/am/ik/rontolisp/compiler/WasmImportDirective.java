@@ -84,8 +84,16 @@ public record WasmImportDirective(String name, String module, String field, List
 			}
 			i += 2;
 		}
-		return new WasmImportDirective(name, module, field == null ? name : field, params == null ? List.of() : params,
-				returns);
+		return new WasmImportDirective(name, module, field == null ? unqualifiedMember(name) : field,
+				params == null ? List.of() : params, returns);
+	}
+
+	// The host-facing default field is the symbol's bare member name; a package
+	// qualifier (pkg:name from a directive inside a user package) is Lisp-side
+	// spelling only.
+	private static String unqualifiedMember(String name) {
+		var qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 	private static String quotedSymbolName(LispVal value, LispCons form) {

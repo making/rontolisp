@@ -16,10 +16,11 @@ source runs on every backend. See
 
 ## Arguments
 
-- A quoted symbol naming the top-level `defun` to export.
+- A quoted symbol naming the top-level `defun` to export. It resolves in the
+  current [package](../packages.md) like a `defun` name.
 - `:as` — the WASM export name, as a string (e.g. `"factorial"`, or a
   camelCase name for a JavaScript-facing API). Defaults to the bare Lisp name
-  (`fact`).
+  (`fact`, without any package qualifier).
 - `:params` — a list of boundary type designators, one per parameter. Omitted,
   `nil` or `'()` means no arguments.
 - `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or

@@ -20,9 +20,10 @@
 ;;;; demo keeps its own staging imports (setVertex, setFloat, ...), which are
 ;;;; page-specific by design.
 ;;;;
-;;;; wasm-import registers the function under the exact (quoted) name it is
-;;;; given, and quoted symbols are not package-resolved, so every name below
-;;;; is written in its canonical package-qualified form.
+;;;; The quoted name of a wasm-import directive resolves in the current
+;;;; package like a defun name, so the names below are written unqualified:
+;;;; under (in-package gl) each one canonicalizes to gl:name (or gl::name for
+;;;; the unexported fail helper), which is what call sites resolve to.
 
 (provide :gl)
 
@@ -50,69 +51,69 @@
 
 ;; --- the WebGL2 API, one entry point at a time --------------------------------
 
-(rontolisp:wasm-import 'gl:create-shader :from "gl" :as "createShader"
+(rontolisp:wasm-import 'create-shader :from "gl" :as "createShader"
                        :params '(:int) :returns :int)
-(rontolisp:wasm-import 'gl:shader-source :from "gl" :as "shaderSource"
+(rontolisp:wasm-import 'shader-source :from "gl" :as "shaderSource"
                        :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'gl:compile-shader :from "gl" :as "compileShader"
+(rontolisp:wasm-import 'compile-shader :from "gl" :as "compileShader"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:shader-compiled-p :from "gl" :as "getShaderParameter"
+(rontolisp:wasm-import 'shader-compiled-p :from "gl" :as "getShaderParameter"
                        :params '(:int :int) :returns :bool)
-(rontolisp:wasm-import 'gl:shader-info-log :from "gl" :as "getShaderInfoLog"
+(rontolisp:wasm-import 'shader-info-log :from "gl" :as "getShaderInfoLog"
                        :params '(:int) :returns :string)
-(rontolisp:wasm-import 'gl:create-program :from "gl" :as "createProgram"
+(rontolisp:wasm-import 'create-program :from "gl" :as "createProgram"
                        :params '() :returns :int)
-(rontolisp:wasm-import 'gl:attach-shader :from "gl" :as "attachShader"
+(rontolisp:wasm-import 'attach-shader :from "gl" :as "attachShader"
                        :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl:link-program :from "gl" :as "linkProgram"
+(rontolisp:wasm-import 'link-program :from "gl" :as "linkProgram"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:program-linked-p :from "gl" :as "getProgramParameter"
+(rontolisp:wasm-import 'program-linked-p :from "gl" :as "getProgramParameter"
                        :params '(:int :int) :returns :bool)
-(rontolisp:wasm-import 'gl:program-info-log :from "gl" :as "getProgramInfoLog"
+(rontolisp:wasm-import 'program-info-log :from "gl" :as "getProgramInfoLog"
                        :params '(:int) :returns :string)
-(rontolisp:wasm-import 'gl:use-program :from "gl" :as "useProgram"
+(rontolisp:wasm-import 'use-program :from "gl" :as "useProgram"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:get-uniform-location :from "gl" :as "getUniformLocation"
+(rontolisp:wasm-import 'get-uniform-location :from "gl" :as "getUniformLocation"
                        :params '(:int :string) :returns :int)
-(rontolisp:wasm-import 'gl:uniform1f :from "gl" :as "uniform1f"
+(rontolisp:wasm-import 'uniform1f :from "gl" :as "uniform1f"
                        :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'gl:uniform3f :from "gl" :as "uniform3f"
+(rontolisp:wasm-import 'uniform3f :from "gl" :as "uniform3f"
                        :params '(:int :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl:enable :from "gl" :as "enable"
+(rontolisp:wasm-import 'enable :from "gl" :as "enable"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:disable :from "gl" :as "disable"
+(rontolisp:wasm-import 'disable :from "gl" :as "disable"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:depth-mask :from "gl" :as "depthMask"
+(rontolisp:wasm-import 'depth-mask :from "gl" :as "depthMask"
                        :params '(:bool) :returns :void)
-(rontolisp:wasm-import 'gl:blend-func :from "gl" :as "blendFunc"
+(rontolisp:wasm-import 'blend-func :from "gl" :as "blendFunc"
                        :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl:create-buffer :from "gl" :as "createBuffer"
+(rontolisp:wasm-import 'create-buffer :from "gl" :as "createBuffer"
                        :params '() :returns :int)
-(rontolisp:wasm-import 'gl:bind-buffer :from "gl" :as "bindBuffer"
+(rontolisp:wasm-import 'bind-buffer :from "gl" :as "bindBuffer"
                        :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl:buffer-data :from "gl" :as "bufferData"
+(rontolisp:wasm-import 'buffer-data :from "gl" :as "bufferData"
                        :params '(:int :int :int) :returns :void)
-(rontolisp:wasm-import 'gl:create-vertex-array :from "gl" :as "createVertexArray"
+(rontolisp:wasm-import 'create-vertex-array :from "gl" :as "createVertexArray"
                        :params '() :returns :int)
-(rontolisp:wasm-import 'gl:bind-vertex-array :from "gl" :as "bindVertexArray"
+(rontolisp:wasm-import 'bind-vertex-array :from "gl" :as "bindVertexArray"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:enable-vertex-attrib-array :from "gl" :as "enableVertexAttribArray"
+(rontolisp:wasm-import 'enable-vertex-attrib-array :from "gl" :as "enableVertexAttribArray"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:vertex-attrib-pointer :from "gl" :as "vertexAttribPointer"
+(rontolisp:wasm-import 'vertex-attrib-pointer :from "gl" :as "vertexAttribPointer"
                        :params '(:int :int :int :bool :int :int) :returns :void)
-(rontolisp:wasm-import 'gl:viewport :from "gl" :as "viewport"
+(rontolisp:wasm-import 'viewport :from "gl" :as "viewport"
                        :params '(:int :int :int :int) :returns :void)
-(rontolisp:wasm-import 'gl:clear-color :from "gl" :as "clearColor"
+(rontolisp:wasm-import 'clear-color :from "gl" :as "clearColor"
                        :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl:clear :from "gl" :as "clear"
+(rontolisp:wasm-import 'clear :from "gl" :as "clear"
                        :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl:draw-arrays :from "gl" :as "drawArrays"
+(rontolisp:wasm-import 'draw-arrays :from "gl" :as "drawArrays"
                        :params '(:int :int :int) :returns :void)
 
 ;; Fatal-error reporting for the shader helpers below: shows the page's error
 ;; box (and stops the program by throwing on the JavaScript side). Internal to
 ;; this package -- demos report their own errors through their own imports.
-(rontolisp:wasm-import 'gl::fail :from "ui" :as "fail"
+(rontolisp:wasm-import 'fail :from "ui"
                        :params '(:string) :returns :void)
 
 ;; --- WebGL constants -----------------------------------------------------------

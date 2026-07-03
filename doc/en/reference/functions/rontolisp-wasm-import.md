@@ -19,11 +19,13 @@ for a complete browser program.
 
 ## Arguments
 
-- A quoted symbol naming the Lisp-visible function.
+- A quoted symbol naming the Lisp-visible function. It resolves in the
+  current [package](../packages.md) like a `defun` name, so a directive after
+  `(in-package mylib)` defines `mylib:name`.
 - `:from` — the import module name (the import-object key on the JavaScript
   side, or the `--preload` name in wasmtime). Defaults to `"env"`.
 - `:as` — the import field name (the property inside that module object).
-  Defaults to the Lisp name.
+  Defaults to the bare Lisp name (without any package qualifier).
 - `:params` — a list of boundary type designators, one per parameter. Omitted,
   `nil` or `'()` means no arguments.
 - `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or
