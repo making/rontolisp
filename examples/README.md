@@ -30,6 +30,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`l-system.lisp`](l-system.lisp) | L-system (Lindenmayer system) fractal generator: string-rewriting via hash-table rule dispatch, `&rest` variadic arguments, and character-frequency analysis (Sierpinski triangle, Koch curve, Dragon curve) |
 | [`linear-regression.lisp`](linear-regression.lisp) | Least-squares polynomial fitting with the `linalg` package: a Vandermonde matrix built with `make-array`/`expt`, the normal equations solved via `linalg:transpose`/`matmul`/`solve`, and exact rational coefficients and residuals (identical on every backend) verified with `linalg:array-equal` |
 | [`deep-digits.lisp`](deep-digits.lisp) | A small deep neural network, numpy-style: a 15 -> 16 -> 16 -> 10 leaky-ReLU MLP classifying 5x3 pixel digit bitmaps, trained by full-batch matrix backpropagation (`linalg:matmul`/`transpose`/`emap`) with 1/t learning-rate decay -- fully deterministic (fixed-seed LCG init, no transcendental functions, integer-scaled loss output), so all backends print identical output |
+| [`heat3d.lisp`](heat3d.lisp) | Heat diffusion in a 5x5x5 voxel grid with rank-3 arrays: 3-subscript `make-array`/`aref`, the `#nA` printed syntax, `row-major-aref` flat scans (with flat-index decoding and `array-row-major-index`), rank-generic `linalg` operations (`reshape`/`add`/`sum`/`amax`/`array-equal`) over rank-3 tensors, and exact rational arithmetic that conserves the total heat as *exactly* 1000 on every backend |
 
 ## Java interop / GUI (JVM only)
 
