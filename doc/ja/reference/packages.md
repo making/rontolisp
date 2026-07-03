@@ -7,7 +7,9 @@ rontolispには、4つの組み込みパッケージを持つ小さな名前空�
 - **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`cl` を **使用しません**。`version`、`list-functions`、`list-macros`、`list-special-forms` の各関数を所有します。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
 
-シンボルはパッケージ修飾子 `package:symbol`(例: `cl:car`、`rontolisp:version`)で参照できます。`*package*`
+シンボルはパッケージ修飾子で参照できます: `package:symbol`(例: `cl:car`、`rontolisp:version`)はパッケージの
+external(export 済み)シンボルに届き、`package::symbol` は internal を含む任意のシンボルに届きます —
+Common Lisp と同じシングル/ダブルコロンの区別です([external シンボルと internal シンボル](#external-シンボルと-internal-シンボル)を参照)。`*package*`
 はカレントパッケージの名前に評価され、`(in-package name)`
 はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。
 
@@ -28,6 +30,41 @@ rontolispには、4つの組み込みパッケージを持つ小さな名前空�
 ```
 
 デフォルトパッケージ `cl-user` は空で `cl` を使用するため、通常のプログラムでは修飾子は不要です。
+
+## external シンボルと internal シンボル
+
+Common Lisp と同様、各パッケージは external(export 済み)シンボルと
+internal シンボルを区別し、2 つの修飾子の綴りで届く範囲が異なります:
+
+- `package:symbol`(シングルコロン)は **external** シンボルのみを参照します。
+- `package::symbol`(ダブルコロン)は internal を含むパッケージの **任意の**
+  シンボルを参照します。
+
+組み込みパッケージはドキュメント化された API 全体を export しています:
+標準の `cl` シンボルはすべて external で、本マニュアルに載っている
+`rontolisp`・`java` の関数もすべて external です(そのためダブルコロンが
+*必須* になることはありませんが、`rontolisp::version` も受け付けられ、
+`rontolisp:version` と同じ意味になります)。internal シンボルは `%`
+プレフィックス規約に従います — 例えば
+[`rontolisp:json-parse`](functions/rontolisp-json-parse.md) の背後にある
+固定引数ヘルパー `rontolisp::%json-parse` — これらは実装詳細であり、予告なく
+変わることがあります。`cl-user` は Common Lisp の `COMMON-LISP-USER`
+パッケージと同じく何も export しないため、まれに `cl-user` のシンボルに
+修飾子が必要な場合は `cl-user::name` と書きます。
+
+external でないシンボルへのシングルコロンでの参照は read/コンパイル時に
+エラーになります:
+
+```console
+> (rontolisp:%json-parse "1" nil)
+Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
+```
+
+`export` 関数はありません — 各組み込みパッケージの export セットは固定です
+([未対応の機能](../guides/missing-features.md)を参照)。`(in-package rontolisp)`
+が有効な間に定義されたシンボルは `rontolisp` パッケージに internal
+シンボルとして intern されるため、他のパッケージからはダブルコロンで参照する
+必要があります。
 
 ## パッケージのイントロスペクション
 

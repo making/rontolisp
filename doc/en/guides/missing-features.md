@@ -118,7 +118,10 @@ rontolisp has exactly three built-in packages — `cl`, `cl-user`, and `rontolis
 (see [Packages](../reference/packages.md)). You cannot create new ones:
 `defpackage`, `make-package`, `export`, `import`, and `use-package` are not
 available. `in-package` only switches the current package among the three
-built-ins.
+built-ins. Each built-in package's set of exported (external) symbols is fixed;
+the single/double colon qualifiers (`pkg:name` for external symbols,
+`pkg::name` for internal ones) work as in Common Lisp (see
+[Packages](../reference/packages.md#external-and-internal-symbols)).
 
 ## Dynamic (special) variable binding
 

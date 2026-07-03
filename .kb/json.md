@@ -7,8 +7,11 @@
 
 **Single Lisp-source implementation.** The parser/serializer is hand-written
 in rontolisp itself: `src/main/resources/am/ik/rontolisp/eval/json.lisp`
-(fixed-arity `rontolisp:%json-*` helper defuns, written in already-canonical
-package shape). One implementation runs on every backend:
+(fixed-arity `rontolisp::%json-*` helper defuns — double colon, internal
+symbols — written in already-canonical package shape; `PackageResolverTest.
+jsonLibraryFormsAreAResolverFixedPoint` pins that resolving the library is a
+no-op, which is what makes splicing it both before and after resolution
+sound). One implementation runs on every backend:
 
 - **Interpreter** — `LispEvaluator` registers variadic dispatcher
   `LispFunction`s for the public names and lazily evaluates
@@ -17,8 +20,9 @@ package shape). One implementation runs on every backend:
   `LoadInliner`/`UserMacroExpander` in `RontoLispCli.compileToFile` (and in
   the web playground's `RontoPlayground.compileJvm/Wasm`; compiler unit tests
   call it explicitly, like `UserMacroExpander`). When the program references
-  the public names (qualified anywhere, bare under `(in-package rontolisp)`,
-  quoted mentions and `#'` count as usage), it rewrites call sites to the
+  the public names (qualified anywhere — either colon spelling — bare under
+  `(in-package rontolisp)`, quoted mentions and `#'` count as usage), it
+  rewrites call sites to the
   fixed-arity helpers — `(rontolisp:json-parse s)` gains a trailing `nil`;
   a wrong arity is a compile-time error — and prepends the library defuns
   plus one-argument `#'` wrapper defuns

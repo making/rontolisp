@@ -12,15 +12,19 @@ import java.util.List;
  * <ul>
  * <li>{@code cl} standard symbols and {@code cl-user} user symbols become bare names (so
  * the existing evaluator/compilers handle them unchanged);</li>
- * <li>symbols of non-default packages become qualified {@code pkg:name} names (e.g.
- * {@code rontolisp:version});</li>
+ * <li>symbols of non-default packages become qualified names: {@code pkg:name} for an
+ * external symbol (e.g. {@code rontolisp:version}), {@code pkg::name} for an internal one
+ * (e.g. {@code rontolisp::%json-parse}), so the canonical form re-resolves to
+ * itself;</li>
  * <li>{@code *package*} is replaced by a quoted symbol naming the current package;</li>
  * <li>{@code (in-package P)} is consumed and replaced by a quoted package symbol.</li>
  * </ul>
  *
- * An unqualified {@code cl} symbol used in a package that does not use {@code cl} (such
- * as {@code rontolisp}) is the single hard error. The instance keeps the current-package
- * state across calls, so a REPL session keeps {@code in-package} in effect across inputs.
+ * Mirroring Common Lisp, a single-colon qualifier only reaches external (exported)
+ * symbols; internal symbols require the double colon. The other hard error is an
+ * unqualified {@code cl} symbol used in a package that does not use {@code cl} (such as
+ * {@code rontolisp}). The instance keeps the current-package state across calls, so a
+ * REPL session keeps {@code in-package} in effect across inputs.
  */
 public final class PackageResolver {
 
@@ -174,12 +178,25 @@ public final class PackageResolver {
 		if (LispNames.CL_PKG.equals(pkg) && LispNames.PACKAGE_VAR.equals(member)) {
 			return quotedSymbol(this.currentPackage);
 		}
+		// A single colon only reaches external (exported) symbols, like Common Lisp; a
+		// double colon reaches (and interns) any symbol.
+		if (!qn.internal() && !isExternal(pkg, member)) {
+			throw new LispPackageException("The symbol " + member + " is not external in the " + pkg + " package (use "
+					+ PackageRegistry.qualifyInternal(pkg, member) + ")");
+		}
 		// cl and cl-user are normalized to bare names; other packages keep the qualified
 		// canonical name.
 		if (LispNames.CL_PKG.equals(pkg) || LispNames.CL_USER_PKG.equals(pkg)) {
 			return new LispSymbol(member);
 		}
-		return new LispSymbol(PackageRegistry.qualify(pkg, member));
+		return canonical(pkg, member);
+	}
+
+	private boolean isExternal(String pkg, String member) {
+		if (LispNames.CL_PKG.equals(pkg) && LispMacroExpander.isCarCdrComposition(member)) {
+			return true;
+		}
+		return this.registry.get(pkg).exports(member);
 	}
 
 	private LispVal resolveUnqualified(String name) {
@@ -221,11 +238,19 @@ public final class PackageResolver {
 		return current != null && current.uses(LispNames.CL_PKG);
 	}
 
-	private static LispSymbol canonical(String pkg, String name) {
+	/**
+	 * The canonical spelling of a resolved symbol: bare for {@code cl-user}, and
+	 * qualified otherwise -- single colon for an external symbol, double colon for an
+	 * internal one (so the canonical form re-resolves to itself).
+	 */
+	private LispSymbol canonical(String pkg, String name) {
 		if (LispNames.CL_USER_PKG.equals(pkg)) {
 			return new LispSymbol(name);
 		}
-		return new LispSymbol(PackageRegistry.qualify(pkg, name));
+		if (isExternal(pkg, name)) {
+			return new LispSymbol(PackageRegistry.qualify(pkg, name));
+		}
+		return new LispSymbol(PackageRegistry.qualifyInternal(pkg, name));
 	}
 
 	private static String operatorMember(LispSymbol op) {

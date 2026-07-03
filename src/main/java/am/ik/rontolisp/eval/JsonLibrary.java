@@ -22,8 +22,9 @@ import org.jspecify.annotations.Nullable;
  * implemented once in rontolisp itself ({@code json.lisp} on the classpath) so a single
  * hand-written parser/serializer runs on every backend. The public functions cannot be
  * plain {@code defun}s because user lambda lists have no {@code &optional} yet
- * ({@code .todo/31}): the fixed-arity entry points are {@code rontolisp:%json-parse} (two
- * arguments) and {@code rontolisp:%json-stringify} (one argument).
+ * ({@code .todo/31}): the fixed-arity entry points are the internal (double-colon)
+ * symbols {@code rontolisp::%json-parse} (two arguments) and
+ * {@code rontolisp::%json-stringify} (one argument).
  *
  * <p>
  * Consumers:
@@ -41,11 +42,11 @@ import org.jspecify.annotations.Nullable;
 public final class JsonLibrary {
 
 	/** The canonical name of the fixed-arity parse helper. */
-	public static final String HELPER_PARSE = PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
+	public static final String HELPER_PARSE = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 			"%" + LispNames.JSON_PARSE);
 
 	/** The canonical name of the fixed-arity stringify helper. */
-	public static final String HELPER_STRINGIFY = PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
+	public static final String HELPER_STRINGIFY = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 			"%" + LispNames.JSON_STRINGIFY);
 
 	private static final String QUALIFIED_PARSE = PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
@@ -59,8 +60,8 @@ public final class JsonLibrary {
 	// reached through (function ...) / symbol-function / funcall). Single arity,
 	// like the BuiltinFunctionWrappers entries for optional-argument built-ins.
 	private static final String WRAPPER_SOURCE = """
-			(defun rontolisp:json-parse (s) (rontolisp:%json-parse s nil))
-			(defun rontolisp:json-stringify (v) (rontolisp:%json-stringify v))
+			(defun rontolisp:json-parse (s) (rontolisp::%json-parse s nil))
+			(defun rontolisp:json-stringify (v) (rontolisp::%json-stringify v))
 			""";
 
 	@Nullable private static volatile List<LispVal> forms;
@@ -72,7 +73,7 @@ public final class JsonLibrary {
 
 	/**
 	 * Returns the parsed library definitions ({@code %json-*} helper defuns). The source
-	 * is written in canonical shape (qualified {@code rontolisp:%json-*} names, bare
+	 * is written in canonical shape (internal {@code rontolisp::%json-*} names, bare
 	 * {@code cl} names), so it needs no package resolution and re-resolving it is a
 	 * no-op. Parsed once and cached.
 	 * @return the library forms
@@ -248,8 +249,11 @@ public final class JsonLibrary {
 		}
 
 		private boolean matches(String symbolName, String publicName) {
-			if (symbolName.equals(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, publicName))) {
-				return true;
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
+			if (qn != null) {
+				// Both spellings name the same symbol; the resolver later rejects a
+				// single-colon reference to a non-external member, not this pre-pass.
+				return LispNames.RONTOLISP_PKG.equals(qn.pkg()) && publicName.equals(qn.member());
 			}
 			return LispNames.RONTOLISP_PKG.equals(this.currentPackage) && symbolName.equals(publicName);
 		}

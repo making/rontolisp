@@ -99,6 +99,13 @@ public final class PackageRegistry {
 	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
 			CL_INTERNALS);
 
+	/**
+	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
+	 * (car/cdr compositions are recognized separately by
+	 * {@link LispMacroExpander#isCarCdrComposition} and are also external).
+	 */
+	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES);
+
 	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
 
 	private static final List<String> CL_MACRO_NAMES = sorted(CL_MACROS);
@@ -113,8 +120,10 @@ public final class PackageRegistry {
 	 * Creates a registry seeded with the built-in packages.
 	 */
 	public PackageRegistry() {
-		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS));
-		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>()));
+		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS, CL_EXTERNALS));
+		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
+		// symbols are reachable as cl-user::name, never cl-user:name.
+		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
 		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
 						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.PROMISEP,
@@ -215,7 +224,7 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Composes a package-qualified symbol name, e.g.
+	 * Composes a package-qualified symbol name for an external symbol, e.g.
 	 * {@code qualify("rontolisp", "version")} yields {@code "rontolisp:version"}.
 	 * @param pkg the package name
 	 * @param member the member symbol name
@@ -226,8 +235,22 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Splits a package-qualified symbol name into its package and member parts. Returns
-	 * {@code null} for unqualified names and for keywords (a leading {@code :}).
+	 * Composes a package-qualified symbol name for an internal (non-exported) symbol,
+	 * e.g. {@code qualifyInternal("rontolisp", "%json-parse")} yields
+	 * {@code "rontolisp::%json-parse"}.
+	 * @param pkg the package name
+	 * @param member the member symbol name
+	 * @return the qualified name
+	 */
+	public static String qualifyInternal(String pkg, String member) {
+		return pkg + "::" + member;
+	}
+
+	/**
+	 * Splits a package-qualified symbol name into its package and member parts. A single
+	 * colon ({@code pkg:name}) references an external symbol, a double colon
+	 * ({@code pkg::name}) an internal one, mirroring Common Lisp. Returns {@code null}
+	 * for unqualified names and for keywords (a leading {@code :}).
 	 * @param name the symbol name
 	 * @return the split parts, or {@code null} if the name is not package-qualified
 	 */
@@ -241,7 +264,11 @@ public final class PackageRegistry {
 			// No colon, or a leading colon (keyword): not package-qualified.
 			return null;
 		}
-		return new QualifiedName(name.substring(0, idx), name.substring(idx + 1));
+		String pkg = name.substring(0, idx);
+		if (idx + 1 < name.length() && name.charAt(idx + 1) == ':') {
+			return new QualifiedName(pkg, name.substring(idx + 2), true);
+		}
+		return new QualifiedName(pkg, name.substring(idx + 1), false);
 	}
 
 	/**
@@ -249,8 +276,10 @@ public final class PackageRegistry {
 	 *
 	 * @param pkg the package part
 	 * @param member the member symbol part
+	 * @param internal whether the double-colon qualifier was used ({@code pkg::member}),
+	 * granting access to internal (non-exported) symbols
 	 */
-	public record QualifiedName(String pkg, String member) {
+	public record QualifiedName(String pkg, String member, boolean internal) {
 	}
 
 }

@@ -25,8 +25,60 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void clUserQualifiedSymbolNormalizesToBare() {
-		assertThat(resolve("cl-user:foo")).isEqualTo("foo");
+	void clUserSingleColonIsRejectedBecauseNothingIsExported() {
+		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package.
+		assertThatThrownBy(() -> resolve("cl-user:foo")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("The symbol foo is not external in the cl-user package")
+			.hasMessageContaining("use cl-user::foo");
+	}
+
+	@Test
+	void clUserDoubleColonNormalizesToBare() {
+		assertThat(resolve("cl-user::foo")).isEqualTo("foo");
+	}
+
+	@Test
+	void clDoubleColonNormalizesToBare() {
+		assertThat(resolve("(cl::car x)")).isEqualTo("(car x)");
+	}
+
+	@Test
+	void clCarCdrCompositionIsExternal() {
+		assertThat(resolve("(cl:cadr x)")).isEqualTo("(cadr x)");
+	}
+
+	@Test
+	void clInternalHelperRequiresDoubleColon() {
+		assertThatThrownBy(() -> resolve("(cl:%remf-tail x y)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("The symbol %remf-tail is not external in the cl package")
+			.hasMessageContaining("use cl::%remf-tail");
+		assertThat(resolve("(cl::%remf-tail x y)")).isEqualTo("(%remf-tail x y)");
+	}
+
+	@Test
+	void rontolispInternalSingleColonIsRejected() {
+		assertThatThrownBy(() -> resolve("(rontolisp:%json-parse s nil)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("The symbol %json-parse is not external in the rontolisp package")
+			.hasMessageContaining("use rontolisp::%json-parse");
+	}
+
+	@Test
+	void rontolispInternalDoubleColonIsKept() {
+		assertThat(resolve("(rontolisp::%json-parse s nil)")).isEqualTo("(rontolisp::%json-parse s nil)");
+	}
+
+	@Test
+	void rontolispExternalDoubleColonNormalizesToSingleColon() {
+		assertThat(resolve("(rontolisp::version)")).isEqualTo("(rontolisp:version)");
+	}
+
+	@Test
+	void unqualifiedInternalInRontolispCanonicalizesToDoubleColon() {
+		// An unregistered (user-defined) symbol is internal to its package, so the
+		// canonical spelling uses the double colon.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(in-package :rontolisp)");
+		assertThat(resolve(resolver, "(%my-helper x)")).isEqualTo("(rontolisp::%my-helper rontolisp::x)");
 	}
 
 	@Test
@@ -157,6 +209,18 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void jsonLibraryFormsAreAResolverFixedPoint() {
+		// JsonLibrary splices its forms into programs both before resolution (the
+		// compile-path pre-pass) and after it (the interpreter's lazy load), which is
+		// only sound while json.lisp and the wrappers are written in canonical shape:
+		// resolving them must be a no-op.
+		PackageResolver resolver = new PackageResolver();
+		for (LispVal form : am.ik.rontolisp.eval.JsonLibrary.forms()) {
+			assertThat(resolver.resolve(form).print()).isEqualTo(form.print());
+		}
+	}
+
+	@Test
 	void newPackageInRegistryResolvesViaUseListAndQualifiesOwnSymbols() {
 		// Extensibility: registering a package that uses rontolisp makes its symbols
 		// (version) visible unqualified, and the resolution logic is unchanged.
@@ -166,7 +230,9 @@ class PackageResolverTest {
 		resolve(resolver, "(in-package mypkg)");
 		assertThat(resolve(resolver, "(version)")).isEqualTo("(rontolisp:version)");
 		assertThat(resolve(resolver, "(greet)")).isEqualTo("(mypkg:greet)");
-		assertThat(resolve(resolver, "(cl:car x)")).isEqualTo("(car mypkg:x)");
+		// x is not registered in mypkg, so it is internal: the canonical spelling is
+		// mypkg::x.
+		assertThat(resolve(resolver, "(cl:car x)")).isEqualTo("(car mypkg::x)");
 	}
 
 }

@@ -3607,6 +3607,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void jsonDoubleColonQualifierNamesTheSameFunctions() {
+		// pkg::name also reaches external symbols, like Common Lisp.
+		assertThat(eval("(rontolisp::json-stringify (list 1 2 3))").print()).isEqualTo("\"[1,2,3]\"");
+		assertThat(eval("(getf (rontolisp::json-parse \"{\\\"n\\\": 5}\") :n)").print()).isEqualTo("5");
+	}
+
+	@Test
+	void jsonSingleColonAccessToInternalHelperIsRejected() {
+		// %json-parse is internal to the rontolisp package: a single colon only
+		// reaches external symbols.
+		assertThatThrownBy(() -> eval("(rontolisp:%json-parse \"1\" nil)"))
+			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
+			.hasMessageContaining("The symbol %json-parse is not external in the rontolisp package");
+	}
+
+	@Test
 	void jsonParseParsesScalarsArraysAndEscapes() {
 		assertThat(eval("(rontolisp:json-parse \"42\")").print()).isEqualTo("42");
 		assertThat(eval("(rontolisp:json-parse \"-3.5\")").print()).isEqualTo("-3.5");

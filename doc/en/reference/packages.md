@@ -7,7 +7,7 @@ rontolisp has a small namespace (package) system with four built-in packages:
 - **`rontolisp`** — a package for implementation-specific symbols. It does **not** use `cl`. It owns the `version`, `list-functions`, `list-macros` and `list-special-forms` functions.
 - **`java`** — Java interop by reflection, usable only under the JVM interpreter (`java -jar rontolisp.jar`), not the compilers or the native binary. It does **not** use `cl`. It owns `new`, `call`, `static`, `field` and `proxy`; see the [Java interop guide](../guides/java-interop.md).
 
-A symbol can be referenced with a package qualifier, `package:symbol` (e.g. `cl:car`, `rontolisp:version`). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`).
+A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`).
 
 ```lisp
 (print *package*)              ; => cl-user
@@ -26,6 +26,40 @@ Because the `rontolisp` package does not use `cl`, standard symbols must be qual
 ```
 
 The default package `cl-user` is empty and uses `cl`, so ordinary programs do not need any qualifiers.
+
+## External and internal symbols
+
+As in Common Lisp, each package distinguishes its external (exported) symbols
+from its internal ones, and the two qualifier spellings differ in reach:
+
+- `package:symbol` (single colon) references an **external** symbol only.
+- `package::symbol` (double colon) references **any** symbol of the package,
+  internal ones included.
+
+The built-in packages export their entire documented API: every standard `cl`
+symbol is external, and so are all the `rontolisp` and `java` functions in this
+manual (so the double colon is never *required* for them, though
+`rontolisp::version` is also accepted and means the same as
+`rontolisp:version`). Internal symbols follow the `%` prefix convention — for
+example `rontolisp::%json-parse`, the fixed-arity helper behind
+[`rontolisp:json-parse`](functions/rontolisp-json-parse.md) — and are
+implementation details that may change without notice. `cl-user` exports
+nothing, like the Common Lisp `COMMON-LISP-USER` package, so on the rare
+occasion a `cl-user` symbol needs a qualifier it is written `cl-user::name`.
+
+A single-colon reference to a non-external symbol is an error at read/compile
+time:
+
+```console
+> (rontolisp:%json-parse "1" nil)
+Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
+```
+
+There is no `export` function — each built-in package's export set is fixed
+(see [Missing features](../guides/missing-features.md)). A symbol defined
+while `(in-package rontolisp)` is in effect is interned into the `rontolisp`
+package as an internal symbol, so from other packages it must be referenced
+with the double colon.
 
 ## Package introspection
 

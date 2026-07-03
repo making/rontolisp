@@ -62,7 +62,7 @@ eval, reader -> rontolisp (AST types only)
 - **`%` prefix convention**: internal helpers not part of the public API use a `%` prefix (e.g. `%remf-tail`).
 - **Built-in function wrappers**: `BuiltinFunctionWrappers` synthesizes `(setq name (lambda ...))` defuns so `#'+`/`#'car` etc. work as first-class values; this shape is internal encoding, not a real user function definition (Lisp-2).
 - **JVM method name mangling**: `JvmLispCompiler.mangleMethodName()` maps `/`, `<`, `>`, `:` (forbidden in JVM method names) to `$div`/`$lt`/`$gt`/`$le`/`$ge`/`$colon`.
-- **Packages**: a `cl`/`cl-user`/`rontolisp` namespace system resolved by a single `PackageResolver` pass before the evaluator/compilers run. Details: `.kb/packages.md`.
+- **Packages**: a `cl`/`cl-user`/`rontolisp` namespace system resolved by a single `PackageResolver` pass before the evaluator/compilers run; CL colon semantics (`pkg:name` = external symbols only, `pkg::name` = any, canonical form matches externality so it re-resolves to itself). Details: `.kb/packages.md`.
 - **`read`/`load`/`read-line`/file streams in all three backends**: a runtime reader/parser is emitted into compiled output, mirroring `eval`; a stream is an opaque, backend-local integer handle. Details: `.kb/read-load-streams.md`.
 - **Compile-time `load` inlining (`LoadInliner`)**: a literal, top-level `(load "file.lisp")` is spliced in at compile time so JVM/WASM see the loaded defuns natively; paths resolve relative to the loading file. Details: `.kb/load-inliner.md`.
 - **`--dynamic` (late binding)**: opt-in; unresolvable calls/variables fall back to the embedded `eval` at those call sites instead of a compile error. Details: `.kb/dynamic-late-binding.md`.

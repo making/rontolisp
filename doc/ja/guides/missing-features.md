@@ -119,7 +119,10 @@ rontolisp にはちょうど 3 つの組み込みパッケージ — `cl`、`cl-
 があります（[パッケージ](../reference/packages.md)を参照）。新しいパッケージは
 作成できません。`defpackage`、`make-package`、`export`、`import`、`use-package`
 は利用できません。`in-package` は 3 つの組み込みパッケージの間で現在のパッケージ
-を切り替えるだけです。
+を切り替えるだけです。各組み込みパッケージの export(external)シンボルの
+集合は固定です。シングル/ダブルコロンの修飾子(external シンボルには
+`pkg:name`、internal シンボルには `pkg::name`)は Common Lisp と同様に
+機能します([パッケージ](../reference/packages.md#external-シンボルと-internal-シンボル)を参照)。
 
 ## 動的（special）変数束縛
 

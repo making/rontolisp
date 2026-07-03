@@ -1817,6 +1817,18 @@ cases:
       "{"deep":{"list":[{"k":"v"},2.5,true]}}"
       "[7]"
 
+  # Double-colon package qualifiers, mirroring Common Lisp: pkg::name also
+  # reaches external symbols, so rontolisp::json-parse names the same function
+  # as rontolisp:json-parse (a single colon reaches external symbols only and
+  # is rejected for internals like rontolisp::%json-parse at read/compile time).
+  - name: json-double-colon-qualifier
+    source: |
+      (print (rontolisp::json-stringify (list 1 2 3)))
+      (print (getf (rontolisp::json-parse "{\"n\": 5}") :n))
+    expected: |
+      "[1,2,3]"
+      5
+
   # equal on strings compares content on every backend (the WASM _equal/_hash
   # runtime folds string bytes), so runtime-built strings work as hash-table
   # keys and equal partners of interned literals.

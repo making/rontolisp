@@ -3398,6 +3398,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunJsonDoubleColonQualifierNamesTheSameFunctions() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (rontolisp::json-stringify (list 1 2 3)))
+				(print (getf (rontolisp::json-parse "{\\"n\\": 5}") :n))
+				""")).isEqualTo("\"[1,2,3]\"\n5");
+	}
+
+	@Test
 	void compileAndRunJsonSplicedLibraryStaysOutOfClUserIntrospection() throws Exception {
 		assertThat(compileAndRunJson("""
 				(defun my-fn (x) x)
