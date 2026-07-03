@@ -12,42 +12,14 @@
 ;;;; geometry -- then calls the exported `frame` once per animation tick.
 
 ;; --- the host boundary ------------------------------------------------------
-;; :as maps the Lisp name to the JavaScript property; :from names the
-;; import-object key. GL objects cross the boundary as :int handles into a
-;; table the page keeps; the GLSL source crosses as :string.
+;; The WebGL2 API itself -- the wasm-import directives, the enum constants and
+;; the shader helpers -- lives in the shared gl package
+;; (../webgl-common/gl.lisp), spliced in here at compile time; --optimize
+;; drops the entries this demo never calls. Only the imports specific to this
+;; page stay below. GL objects cross the boundary as :int handles into a table
+;; the page keeps; the GLSL source crosses as :string.
 
-(rontolisp:wasm-import 'gl-create-shader :from "gl" :as "createShader"
-                       :params '(:int) :returns :int)
-(rontolisp:wasm-import 'gl-shader-source :from "gl" :as "shaderSource"
-                       :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'gl-compile-shader :from "gl" :as "compileShader"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-create-program :from "gl" :as "createProgram"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'gl-attach-shader :from "gl" :as "attachShader"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-link-program :from "gl" :as "linkProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-use-program :from "gl" :as "useProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-get-uniform-location :from "gl" :as "getUniformLocation"
-                       :params '(:int :string) :returns :int)
-(rontolisp:wasm-import 'gl-enable :from "gl" :as "enable"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-create-buffer :from "gl" :as "createBuffer"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'gl-bind-buffer :from "gl" :as "bindBuffer"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-enable-vertex-attrib-array :from "gl" :as "enableVertexAttribArray"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-vertex-attrib-pointer :from "gl" :as "vertexAttribPointer"
-                       :params '(:int :int :int :bool :int :int) :returns :void)
-(rontolisp:wasm-import 'gl-clear-color :from "gl" :as "clearColor"
-                       :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-clear :from "gl" :as "clear"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-draw-arrays :from "gl" :as "drawArrays"
-                       :params '(:int :int :int) :returns :void)
+(require :gl "../webgl-common/gl.lisp")
 
 ;; Bulk floats (vertex data, matrices) cannot cross the boundary one WASM value
 ;; at a time, so the page keeps one small Float32Array. set-float writes one
@@ -71,19 +43,6 @@
 ;; these two lines are literally Math.sin / Math.cos on the JavaScript side.
 (rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
 (rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
-
-;; --- WebGL constants --------------------------------------------------------
-;; The numeric enum values from the WebGL specification.
-
-(defconstant +gl-vertex-shader+ 35633)          ; 0x8B31
-(defconstant +gl-fragment-shader+ 35632)        ; 0x8B30
-(defconstant +gl-array-buffer+ 34962)           ; 0x8892
-(defconstant +gl-static-draw+ 35044)            ; 0x88E4
-(defconstant +gl-float+ 5126)                   ; 0x1406
-(defconstant +gl-depth-test+ 2929)              ; 0x0B71
-(defconstant +gl-color-buffer-bit+ 16384)       ; 0x4000
-(defconstant +gl-depth-buffer-bit+ 256)         ; 0x0100
-(defconstant +gl-triangles+ 4)
 
 ;; --- shaders ----------------------------------------------------------------
 
@@ -220,30 +179,21 @@ void main() {
 (defvar *u-mvp* 0)                      ; uniform location handle for uMvp
 (defvar *projection* nil)               ; fixed: the canvas size does not change
 
-(defun make-shader (type source)
-  (let ((shader (gl-create-shader type)))
-    (gl-shader-source shader source)
-    (gl-compile-shader shader)
-    shader))
-
 (defun setup-gl ()
-  (let ((program (gl-create-program)))
-    (gl-attach-shader program (make-shader +gl-vertex-shader+ +vertex-shader-source+))
-    (gl-attach-shader program (make-shader +gl-fragment-shader+ +fragment-shader-source+))
-    (gl-link-program program)
-    (gl-use-program program)
-    (setq *u-mvp* (gl-get-uniform-location program "uMvp"))
-    (gl-enable +gl-depth-test+)
+  (let ((program (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
+    (gl:use-program program)
+    (setq *u-mvp* (gl:get-uniform-location program "uMvp"))
+    (gl:enable gl:+depth-test+)
     ;; fill the staging array with the 216 floats of cube geometry and upload
-    (gl-bind-buffer +gl-array-buffer+ (gl-create-buffer))
+    (gl:bind-buffer gl:+array-buffer+ (gl:create-buffer))
     (setq *float-index* 0)
     (dolist (face +faces+) (push-face face))
-    (gl-buffer-data-floats +gl-array-buffer+ *float-index* +gl-static-draw+)
+    (gl-buffer-data-floats gl:+array-buffer+ *float-index* gl:+static-draw+)
     ;; interleaved layout: vec3 position + vec3 color = 24 bytes per vertex
-    (gl-enable-vertex-attrib-array 0)
-    (gl-vertex-attrib-pointer 0 3 +gl-float+ nil 24 0)
-    (gl-enable-vertex-attrib-array 1)
-    (gl-vertex-attrib-pointer 1 3 +gl-float+ nil 24 12)
+    (gl:enable-vertex-attrib-array 0)
+    (gl:vertex-attrib-pointer 0 3 gl:+float+ nil 24 0)
+    (gl:enable-vertex-attrib-array 1)
+    (gl:vertex-attrib-pointer 1 3 gl:+float+ nil 24 12)
     (setq *projection*
           (mat4-perspective (/ +pi+ 4.0) (/ (canvas-width) (canvas-height)) 0.1 100.0))))
 
@@ -255,9 +205,9 @@ void main() {
          (mvp (mat4-mul *projection* (mat4-mul view model))))
     (dotimes (i 16) (set-float i (aref mvp i)))
     (gl-uniform-matrix4fv *u-mvp*)
-    (gl-clear-color 0.05 0.06 0.1 1.0)
-    (gl-clear (+ +gl-color-buffer-bit+ +gl-depth-buffer-bit+))
-    (gl-draw-arrays +gl-triangles+ 0 36)))
+    (gl:clear-color 0.05 0.06 0.1 1.0)
+    (gl:clear (+ gl:+color-buffer-bit+ gl:+depth-buffer-bit+))
+    (gl:draw-arrays gl:+triangles+ 0 36)))
 
 ;; Build the pipeline and upload the geometry at load time: this runs inside
 ;; _initialize, after the page has created the WebGL2 context.

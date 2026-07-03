@@ -40,14 +40,31 @@ old `exportUsesMemory`); an `:s-expr` result forces `usesRead`.
 `Decl.exportName()` defaults to the Lisp name; used by both the GC backend export
 section and `ScalarWasmCompiler`.
 
+**wasm-import inside a user `defpackage` (the shared `gl` package)**: the quoted name
+argument is NOT package-resolved (quoted data passes through `PackageResolver`
+untouched), so a directive inside `(in-package gl)` must spell the canonical qualified
+name explicitly — `(rontolisp:wasm-import 'gl:create-shader ...)` for an exported
+symbol, `'gl::fail` for an internal one — or call sites (canonicalized to `gl:name`)
+won't find the synthetic defun ("Cannot compile: gl:create-shader").
+`examples/webgl-common/gl.lisp` does exactly this: one `defpackage gl` holding the
+WebGL2 API union + enum constants + `gl:make-shader`/`gl:build-program`, spliced into
+each webgl demo by a compile-time `(require :gl "../webgl-common/gl.lisp")`; `--optimize`
+shakes the entries a demo never calls, so declaring the union is free. Caveat: a program
+that takes functions as values (e.g. via the spliced linalg library) keeps same-arity
+import wrappers reachable through the funcall dispatcher — webgl-heat3d ends up
+importing `disable`/`depthMask` it never calls, and its page provides those two
+bindings for that reason.
+
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in
 `WasmLispCompilerIntegrationTest` (`wasmtime run --preload host=... main.wasm`, host
 module itself compiled from Lisp with `:as` aliases), stub tests in
 `LispEvaluatorTest`/`JvmLispCompilerTest`. Showcases: `examples/webgl-triangle/` (hello
-world: 10 imports, no exports, whole program in top-level forms run by `_initialize`),
+world: 10 imports, no exports, whole program in top-level forms run by `_initialize`;
+deliberately self-contained, does not use the shared package),
 `examples/webgl-cube/` (3D: mat4 math in Lisp, bulk floats via a `setFloat` staging
 array) and `examples/webgl-galaxy/` (browser
 host; the whole WebGL pipeline is driven from Lisp through 34 imports -- GLSL sources as
 Lisp strings via `:string` params, handle-table one-liner JS bindings, `:string` results
-for shader info logs, Math.sin/cos -- staged to Pages via pom.xml).
+for shader info logs, Math.sin/cos -- staged to Pages via pom.xml); cube, galaxy,
+heat3d and robot-arm all pull the WebGL2 boundary from `examples/webgl-common/gl.lisp`.

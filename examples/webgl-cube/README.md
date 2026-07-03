@@ -19,11 +19,16 @@ directory is published as a subpath of the GitHub Pages site by
 | `cube.wasm`  | The compiled `--no-wasi` reactor (checked in, ~9 KB).             |
 | `build.sh`   | Recompiles `cube.lisp` to `cube.wasm`.                            |
 
+The WebGL2 API boundary itself (the imports, the enum constants and the
+shader helpers) lives in the shared `gl` package,
+[`../webgl-common/gl.lisp`](../webgl-common), spliced in at compile time by
+`(require :gl "../webgl-common/gl.lisp")`.
+
 ## How it works
 
 Beyond the triangle's ten imports, the cube needs a uniform, a buffer,
-attributes and a depth test — 23 host functions in total, still one line of
-JavaScript each. Bulk floats are the interesting part: neither the 216 floats
+attributes and a depth test — still one line of JavaScript each. Bulk floats
+are the interesting part: neither the 216 floats
 of cube geometry nor the 16 of the model-view-projection matrix can cross the
 boundary as one WASM value, so the page keeps a small staging `Float32Array`
 and three non-WebGL imports move data through it:
@@ -82,12 +87,14 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 
 ## Notes
 
-- The module is compiled with `--no-wasi`, so its *only* imports are the 23
-  functions above — the import object is the whole embedding API. With
-  `--optimize` the shipped `cube.wasm` is about 9 KB.
-- For brevity there is no shader-compile error check; see
-  [`webgl-galaxy/`](../webgl-galaxy) for the error-reporting pattern
-  (`getShaderParameter` / `getShaderInfoLog` as a `:string` result).
+- The module is compiled with `--no-wasi`, so its *only* imports are the
+  host functions the program reaches — the import object is the whole
+  embedding API. With `--optimize` the shipped `cube.wasm` is about 9 KB
+  (entries of the shared `gl` package the cube never calls are tree-shaken
+  away).
+- Shader compile/link errors are reported by the shared `gl:build-program`
+  (`getShaderParameter` / `getShaderInfoLog` as a `:string` result, shown
+  through the page's `ui.fail` binding).
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
   define stubs that signal an error when called, so this program is
   WASM-only by nature (there is no host to draw with elsewhere).

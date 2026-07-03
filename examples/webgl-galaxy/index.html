@@ -195,10 +195,10 @@
     </header>
 
     <aside class="hud bottom-left" aria-label="The Lisp import directives driving this page">
-      <div class="repl" id="repl"><span class="cm">; the Lisp side of the boundary (galaxy.lisp)</span>
-(<span class="kw">rontolisp:wasm-import</span> 'gl-shader-source :from <span class="str">"gl"</span> :as <span class="str">"shaderSource"</span>
+      <div class="repl" id="repl"><span class="cm">; the Lisp side of the boundary (the shared gl package)</span>
+(<span class="kw">rontolisp:wasm-import</span> 'gl:shader-source :from <span class="str">"gl"</span> :as <span class="str">"shaderSource"</span>
                        :params '(:int :string) :returns :void)
-(<span class="kw">rontolisp:wasm-import</span> 'gl-draw-arrays :from <span class="str">"gl"</span> :as <span class="str">"drawArrays"</span>
+(<span class="kw">rontolisp:wasm-import</span> 'gl:draw-arrays :from <span class="str">"gl"</span> :as <span class="str">"drawArrays"</span>
                        :params '(:int :int :int) :returns :void)
 (<span class="kw">rontolisp:wasm-import</span> 'sin :from <span class="str">"math"</span> :params '(:float) :returns :float)
 <span class="cm">; ...31 more · <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>
@@ -246,7 +246,8 @@
 
       // ---- the import object: everything Lisp asked for --------------------
       //
-      // galaxy.lisp declares 34 (rontolisp:wasm-import ...) directives; this
+      // galaxy.lisp declares 34 (rontolisp:wasm-import ...) directives (most
+      // through the shared gl package in ../webgl-common/gl.lisp); this
       // object is their entire JavaScript implementation. GL objects cross the
       // boundary as integer handles into `handles`; the bindings are one line
       // each and contain no rendering logic — the shaders, the pipeline setup

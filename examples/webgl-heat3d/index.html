@@ -290,6 +290,8 @@
           getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
           uniform1f: (loc, x) => gl2.uniform1f(handles[loc], x),
           enable: (cap) => gl2.enable(cap),
+          disable: (cap) => gl2.disable(cap),
+          depthMask: (flag) => gl2.depthMask(!!flag),
           blendFunc: (src, dst) => gl2.blendFunc(src, dst),
           createBuffer: () => H(gl2.createBuffer()),
           bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),

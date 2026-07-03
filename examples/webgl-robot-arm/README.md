@@ -85,7 +85,10 @@ literal top-level `(load "ik-....lisp")` forms, which the compiler splices
 in **at compile time** (paths resolve relative to the loading file), so the
 `.wasm` sees the definitions natively — the same mechanism the
 [Minesweeper example](../minesweeper) uses to share its core between the
-browser and Swing builds.
+browser and Swing builds. The WebGL2 API boundary itself (the imports, the
+enum constants and the shader helpers) is spliced in the same way from the
+shared `gl` package, [`../webgl-common/gl.lisp`](../webgl-common), by
+`(require :gl "../webgl-common/gl.lisp")`.
 
 ## The controller is three small functions
 
@@ -134,10 +137,10 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 ## Notes
 
 - The module is compiled with `--no-wasi`, so its *only* imports are the host
-  functions declared in `robot-arm.lisp` — the import object is the whole
-  embedding API. `--optimize` tree-shakes the runtime down to what the
-  program reaches (the array runtime and the reachable `linalg` definitions
-  ship with it, as in `webgl-heat3d`).
+  functions declared in `robot-arm.lisp` and the shared `gl` package — the
+  import object is the whole embedding API. `--optimize` tree-shakes the
+  runtime down to what the program reaches (the array runtime and the
+  reachable `linalg` definitions ship with it, as in `webgl-heat3d`).
 - Input is delivered through exported functions (`pointer`, `orbit`, `zoom`),
   not imports: the page classifies the gesture (a sub-4-pixel press is a
   click, anything longer is an orbit drag) and pushes it in; the camera

@@ -111,13 +111,21 @@
 
       // The entire host side: GL objects cross the boundary as indices into
       // `handles`; a :string parameter arrives as (ptr, len) into the module's
-      // exported linear memory; bulk floats (vertex data, the mat4 uniform)
-      // travel through the `staging` array one setFloat at a time.
+      // exported linear memory; a :string result is written back through the
+      // module's exported __ronto_alloc bump allocator and returned as
+      // [ptr, len]; bulk floats (vertex data, the mat4 uniform) travel through
+      // the `staging` array one setFloat at a time.
       let lisp;
       const handles = [];
       const H = (obj) => handles.push(obj) - 1;
       const str = (ptr, len) =>
         new TextDecoder().decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+      const retStr = (s) => {
+        const bytes = new TextEncoder().encode(s);
+        const ptr = lisp.__ronto_alloc(bytes.length);
+        new Uint8Array(lisp.memory.buffer).set(bytes, ptr);
+        return [ptr, bytes.length];
+      };
       const staging = new Float32Array(256);
 
       const imports = {
@@ -125,9 +133,13 @@
           createShader: (type) => H(gl.createShader(type)),
           shaderSource: (sh, p, n) => gl.shaderSource(handles[sh], str(p, n)),
           compileShader: (sh) => gl.compileShader(handles[sh]),
+          getShaderParameter: (sh, pname) => gl.getShaderParameter(handles[sh], pname),
+          getShaderInfoLog: (sh) => retStr(gl.getShaderInfoLog(handles[sh]) ?? ""),
           createProgram: () => H(gl.createProgram()),
           attachShader: (pr, sh) => gl.attachShader(handles[pr], handles[sh]),
           linkProgram: (pr) => gl.linkProgram(handles[pr]),
+          getProgramParameter: (pr, pname) => gl.getProgramParameter(handles[pr], pname),
+          getProgramInfoLog: (pr) => retStr(gl.getProgramInfoLog(handles[pr]) ?? ""),
           useProgram: (pr) => gl.useProgram(handles[pr]),
           getUniformLocation: (pr, p, n) => H(gl.getUniformLocation(handles[pr], str(p, n))),
           enable: (cap) => gl.enable(cap),
@@ -150,6 +162,12 @@
           height: () => canvas.height,
         },
         math: { sin: Math.sin, cos: Math.cos },
+        ui: {
+          fail: (p, n) => {
+            fail(str(p, n));
+            throw new Error("cube.lisp failed");
+          },
+        },
       };
 
       try {

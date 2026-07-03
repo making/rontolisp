@@ -29,6 +29,11 @@ directory is published as a subpath of the GitHub Pages site by
 | `heat3d.wasm` | The compiled `--no-wasi` reactor (checked in).                           |
 | `build.sh`    | Recompiles `heat3d.lisp` to `heat3d.wasm`.                               |
 
+The WebGL2 API boundary itself (the imports, the enum constants and the
+shader helpers) lives in the shared `gl` package,
+[`../webgl-common/gl.lisp`](../webgl-common), spliced in at compile time by
+`(require :gl "../webgl-common/gl.lisp")`.
+
 ## The rank-3 array is the program
 
 Everything interesting happens against one array (and its double buffer):
@@ -53,7 +58,7 @@ the Lisp file, Lisp compiles and links them at `_initialize` time, and each
 `requestAnimationFrame` tick calls `exports.frame(t)` — Lisp injects,
 diffuses, rotates and perspective-projects every voxel, stages it with
 `set-vertex`, uploads with `gl-buffer-sub-data` and draws with
-`gl-draw-arrays` (additive blending, so no depth sorting). The HUD's "total
+`gl:draw-arrays` (additive blending, so no depth sorting). The HUD's "total
 heat" meter polls the exported `totalHeat` (a `rontolisp:wasm-export ... :as`
 alias for `total-heat`). At the 20×20×20 setting that is 8,000 voxels
 simulated and projected in Lisp per frame.
@@ -78,9 +83,10 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 ## Notes
 
 - The module is compiled with `--no-wasi`, so its *only* imports are the host
-  functions declared in `heat3d.lisp` — the import object is the whole
-  embedding API. `--optimize` tree-shakes the runtime, including the unused
-  parts of the spliced `linalg` library.
+  functions declared in `heat3d.lisp` and the shared `gl` package — the
+  import object is the whole embedding API. `--optimize` tree-shakes the
+  runtime, including the unused parts of the spliced `linalg` library and
+  the `gl` entries this demo never calls.
 - The `.wasm` is larger than the galaxy's (~60 KB vs ~10 KB) because the
   array runtime and the reachable `linalg` definitions ship with it.
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives

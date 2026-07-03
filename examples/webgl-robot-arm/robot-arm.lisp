@@ -26,68 +26,14 @@
 
 ;; --- the host boundary ------------------------------------------------------
 ;;
-;; WebGL2, imported one entry point at a time (the same boundary as
-;; webgl-galaxy). GL objects cross as :int handles into a table the page
+;; The WebGL2 API itself -- the wasm-import directives, the enum constants and
+;; the shader helpers -- lives in the shared gl package
+;; (../webgl-common/gl.lisp), spliced in here at compile time; --optimize
+;; drops the entries this demo never calls. Only the imports specific to this
+;; page stay below. GL objects cross as :int handles into a table the page
 ;; keeps; strings (GLSL source, info logs) cross as :string.
 
-(rontolisp:wasm-import 'gl-create-shader :from "gl" :as "createShader"
-                       :params '(:int) :returns :int)
-(rontolisp:wasm-import 'gl-shader-source :from "gl" :as "shaderSource"
-                       :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'gl-compile-shader :from "gl" :as "compileShader"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-shader-compiled-p :from "gl" :as "getShaderParameter"
-                       :params '(:int :int) :returns :bool)
-(rontolisp:wasm-import 'gl-shader-info-log :from "gl" :as "getShaderInfoLog"
-                       :params '(:int) :returns :string)
-(rontolisp:wasm-import 'gl-create-program :from "gl" :as "createProgram"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'gl-attach-shader :from "gl" :as "attachShader"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-link-program :from "gl" :as "linkProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-program-linked-p :from "gl" :as "getProgramParameter"
-                       :params '(:int :int) :returns :bool)
-(rontolisp:wasm-import 'gl-program-info-log :from "gl" :as "getProgramInfoLog"
-                       :params '(:int) :returns :string)
-(rontolisp:wasm-import 'gl-use-program :from "gl" :as "useProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-get-uniform-location :from "gl" :as "getUniformLocation"
-                       :params '(:int :string) :returns :int)
-(rontolisp:wasm-import 'gl-uniform1f :from "gl" :as "uniform1f"
-                       :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'gl-uniform3f :from "gl" :as "uniform3f"
-                       :params '(:int :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-enable :from "gl" :as "enable"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-disable :from "gl" :as "disable"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-depth-mask :from "gl" :as "depthMask"
-                       :params '(:bool) :returns :void)
-(rontolisp:wasm-import 'gl-blend-func :from "gl" :as "blendFunc"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-create-buffer :from "gl" :as "createBuffer"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'gl-bind-buffer :from "gl" :as "bindBuffer"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-buffer-data :from "gl" :as "bufferData"
-                       :params '(:int :int :int) :returns :void)
-(rontolisp:wasm-import 'gl-create-vertex-array :from "gl" :as "createVertexArray"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'gl-bind-vertex-array :from "gl" :as "bindVertexArray"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-enable-vertex-attrib-array :from "gl" :as "enableVertexAttribArray"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-vertex-attrib-pointer :from "gl" :as "vertexAttribPointer"
-                       :params '(:int :int :int :bool :int :int) :returns :void)
-(rontolisp:wasm-import 'gl-viewport :from "gl" :as "viewport"
-                       :params '(:int :int :int :int) :returns :void)
-(rontolisp:wasm-import 'gl-clear-color :from "gl" :as "clearColor"
-                       :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-clear :from "gl" :as "clear"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-draw-arrays :from "gl" :as "drawArrays"
-                       :params '(:int :int :int) :returns :void)
+(require :gl "../webgl-common/gl.lisp")
 
 ;; The bulk-float staging path (see webgl-galaxy / webgl-cube): per-vertex
 ;; floats cannot cross into GPU memory one WASM value at a time, so the page
@@ -126,26 +72,6 @@
 (rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
 (rontolisp:wasm-import 'atan2 :from "math" :params '(:float :float) :returns :float)
 (rontolisp:wasm-import 'acos :from "math" :params '(:float) :returns :float)
-
-;; Fatal-error reporting: shows the page's error box.
-(rontolisp:wasm-import 'fail :from "ui" :params '(:string) :returns :void)
-
-;; --- WebGL constants --------------------------------------------------------
-
-(defconstant +gl-vertex-shader+ 35633)          ; 0x8B31
-(defconstant +gl-fragment-shader+ 35632)        ; 0x8B30
-(defconstant +gl-compile-status+ 35713)         ; 0x8B81
-(defconstant +gl-link-status+ 35714)            ; 0x8B82
-(defconstant +gl-array-buffer+ 34962)           ; 0x8892
-(defconstant +gl-dynamic-draw+ 35048)           ; 0x88E8
-(defconstant +gl-float+ 5126)                   ; 0x1406
-(defconstant +gl-blend+ 3042)                   ; 0x0BE2
-(defconstant +gl-depth-test+ 2929)              ; 0x0B71
-(defconstant +gl-one+ 1)
-(defconstant +gl-color-buffer-bit+ 16384)       ; 0x4000
-(defconstant +gl-depth-buffer-bit+ 256)         ; 0x0100
-(defconstant +gl-points+ 0)
-(defconstant +gl-triangles+ 4)
 
 (defconstant +pi+ 3.141592653589793)
 (defconstant +two-pi+ 6.283185307179586)
@@ -347,56 +273,39 @@ void main() {
 (defconstant +max-verts+ 8192)          ; lit-triangle vertex capacity
 (defconstant +max-sprites+ 2048)        ; glow sprite capacity
 
-(defun make-shader (type source)
-  (let ((shader (gl-create-shader type)))
-    (gl-shader-source shader source)
-    (gl-compile-shader shader)
-    (unless (gl-shader-compiled-p shader +gl-compile-status+)
-      (fail (gl-shader-info-log shader)))
-    shader))
-
-(defun make-program (vs fs)
-  (let ((program (gl-create-program)))
-    (gl-attach-shader program (make-shader +gl-vertex-shader+ vs))
-    (gl-attach-shader program (make-shader +gl-fragment-shader+ fs))
-    (gl-link-program program)
-    (unless (gl-program-linked-p program +gl-link-status+)
-      (fail (gl-program-info-log program)))
-    program))
-
 (defun setup-gl ()
-  (setq *prog-solid* (make-program +solid-vs+ +solid-fs+))
-  (setq *u-vp-solid* (gl-get-uniform-location *prog-solid* "uVP"))
-  (setq *u-eye* (gl-get-uniform-location *prog-solid* "uEye"))
-  (setq *prog-sprite* (make-program +sprite-vs+ +sprite-fs+))
-  (setq *u-vp-sprite* (gl-get-uniform-location *prog-sprite* "uVP"))
-  (setq *u-dpr* (gl-get-uniform-location *prog-sprite* "uDpr"))
-  (gl-enable +gl-depth-test+)
+  (setq *prog-solid* (gl:build-program +solid-vs+ +solid-fs+))
+  (setq *u-vp-solid* (gl:get-uniform-location *prog-solid* "uVP"))
+  (setq *u-eye* (gl:get-uniform-location *prog-solid* "uEye"))
+  (setq *prog-sprite* (gl:build-program +sprite-vs+ +sprite-fs+))
+  (setq *u-vp-sprite* (gl:get-uniform-location *prog-sprite* "uVP"))
+  (setq *u-dpr* (gl:get-uniform-location *prog-sprite* "uDpr"))
+  (gl:enable gl:+depth-test+)
   ;; solid VAO: position + normal + color, 36 bytes per vertex
-  (setq *vao-solid* (gl-create-vertex-array))
-  (gl-bind-vertex-array *vao-solid*)
-  (setq *buf-solid* (gl-create-buffer))
-  (gl-bind-buffer +gl-array-buffer+ *buf-solid*)
-  (gl-buffer-data +gl-array-buffer+ (* +max-verts+ 36) +gl-dynamic-draw+)
-  (gl-enable-vertex-attrib-array 0)
-  (gl-vertex-attrib-pointer 0 3 +gl-float+ nil 36 0)
-  (gl-enable-vertex-attrib-array 1)
-  (gl-vertex-attrib-pointer 1 3 +gl-float+ nil 36 12)
-  (gl-enable-vertex-attrib-array 2)
-  (gl-vertex-attrib-pointer 2 3 +gl-float+ nil 36 24)
+  (setq *vao-solid* (gl:create-vertex-array))
+  (gl:bind-vertex-array *vao-solid*)
+  (setq *buf-solid* (gl:create-buffer))
+  (gl:bind-buffer gl:+array-buffer+ *buf-solid*)
+  (gl:buffer-data gl:+array-buffer+ (* +max-verts+ 36) gl:+dynamic-draw+)
+  (gl:enable-vertex-attrib-array 0)
+  (gl:vertex-attrib-pointer 0 3 gl:+float+ nil 36 0)
+  (gl:enable-vertex-attrib-array 1)
+  (gl:vertex-attrib-pointer 1 3 gl:+float+ nil 36 12)
+  (gl:enable-vertex-attrib-array 2)
+  (gl:vertex-attrib-pointer 2 3 gl:+float+ nil 36 24)
   ;; sprite VAO: position + tone + size, 20 bytes per sprite
-  (setq *vao-sprite* (gl-create-vertex-array))
-  (gl-bind-vertex-array *vao-sprite*)
-  (setq *buf-sprite* (gl-create-buffer))
-  (gl-bind-buffer +gl-array-buffer+ *buf-sprite*)
-  (gl-buffer-data +gl-array-buffer+ (* +max-sprites+ 20) +gl-dynamic-draw+)
-  (gl-enable-vertex-attrib-array 0)
-  (gl-vertex-attrib-pointer 0 3 +gl-float+ nil 20 0)
-  (gl-enable-vertex-attrib-array 1)
-  (gl-vertex-attrib-pointer 1 1 +gl-float+ nil 20 12)
-  (gl-enable-vertex-attrib-array 2)
-  (gl-vertex-attrib-pointer 2 1 +gl-float+ nil 20 16)
-  (gl-blend-func +gl-one+ +gl-one+))
+  (setq *vao-sprite* (gl:create-vertex-array))
+  (gl:bind-vertex-array *vao-sprite*)
+  (setq *buf-sprite* (gl:create-buffer))
+  (gl:bind-buffer gl:+array-buffer+ *buf-sprite*)
+  (gl:buffer-data gl:+array-buffer+ (* +max-sprites+ 20) gl:+dynamic-draw+)
+  (gl:enable-vertex-attrib-array 0)
+  (gl:vertex-attrib-pointer 0 3 gl:+float+ nil 20 0)
+  (gl:enable-vertex-attrib-array 1)
+  (gl:vertex-attrib-pointer 1 1 gl:+float+ nil 20 12)
+  (gl:enable-vertex-attrib-array 2)
+  (gl:vertex-attrib-pointer 2 1 gl:+float+ nil 20 16)
+  (gl:blend-func gl:+one+ gl:+one+))
 
 ;; --- mesh emitters ------------------------------------------------------------
 ;;
@@ -701,7 +610,7 @@ void main() {
   (setq *v* 0)
   (emit-static-scene)
   (setq *static-verts* *v*)
-  (gl-bind-buffer +gl-array-buffer+ *buf-solid*)
+  (gl:bind-buffer gl:+array-buffer+ *buf-solid*)
   (gl-upload-vertices 0 (* *static-verts* 9)))
 
 (defun pointer (cx cy)
@@ -978,33 +887,33 @@ void main() {
   (update-camera)
   (let ((w (canvas-width))
         (h (canvas-height)))
-    (gl-viewport 0 0 (floor w) (floor h)))
-  (gl-clear-color 0.012 0.016 0.045 1.0)
-  (gl-clear (+ +gl-color-buffer-bit+ +gl-depth-buffer-bit+))
+    (gl:viewport 0 0 (floor w) (floor h)))
+  (gl:clear-color 0.012 0.016 0.045 1.0)
+  (gl:clear (+ gl:+color-buffer-bit+ gl:+depth-buffer-bit+))
   ;; solid pass: the machine, lit and depth-tested
-  (gl-disable +gl-blend+)
-  (gl-depth-mask t)
-  (gl-use-program *prog-solid*)
+  (gl:disable gl:+blend+)
+  (gl:depth-mask t)
+  (gl:use-program *prog-solid*)
   (upload-vp *u-vp-solid*)
-  (gl-uniform3f *u-eye* *ex* *ey* *ez*)
+  (gl:uniform3f *u-eye* *ex* *ey* *ez*)
   (setq *v* *static-verts*)
   (emit-arm)
-  (gl-bind-buffer +gl-array-buffer+ *buf-solid*)
+  (gl:bind-buffer gl:+array-buffer+ *buf-solid*)
   (gl-upload-vertices (* *static-verts* 9) (* (- *v* *static-verts*) 9))
-  (gl-bind-vertex-array *vao-solid*)
-  (gl-draw-arrays +gl-triangles+ 0 *v*)
+  (gl:bind-vertex-array *vao-solid*)
+  (gl:draw-arrays gl:+triangles+ 0 *v*)
   ;; glow pass: additive sprites that read depth but do not write it
-  (gl-enable +gl-blend+)
-  (gl-depth-mask nil)
-  (gl-use-program *prog-sprite*)
+  (gl:enable gl:+blend+)
+  (gl:depth-mask nil)
+  (gl:use-program *prog-sprite*)
   (upload-vp *u-vp-sprite*)
-  (gl-uniform1f *u-dpr* (device-pixel-ratio))
+  (gl:uniform1f *u-dpr* (device-pixel-ratio))
   (setq *s* 0)
   (emit-glow tm)
-  (gl-bind-buffer +gl-array-buffer+ *buf-sprite*)
+  (gl:bind-buffer gl:+array-buffer+ *buf-sprite*)
   (gl-upload-sprites (* *s* 5))
-  (gl-bind-vertex-array *vao-sprite*)
-  (gl-draw-arrays +gl-points+ 0 *s*))
+  (gl:bind-vertex-array *vao-sprite*)
+  (gl:draw-arrays gl:+points+ 0 *s*))
 
 (defun frame (tm)
   (setq *aspect* (/ (canvas-width) (canvas-height)))

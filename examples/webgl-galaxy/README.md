@@ -22,17 +22,22 @@ directory is published as a subpath of the GitHub Pages site by
 | `galaxy.wasm` | The compiled `--no-wasi` reactor (checked in, ~10 KB).             |
 | `build.sh`    | Recompiles `galaxy.lisp` to `galaxy.wasm`.                         |
 
+The WebGL2 API boundary itself (the imports, the enum constants and the
+shader helpers) lives in the shared `gl` package,
+[`../webgl-common/gl.lisp`](../webgl-common), spliced in at compile time by
+`(require :gl "../webgl-common/gl.lisp")`.
+
 ## How the boundary works
 
-`galaxy.lisp` declares 34 host functions. Most are literal WebGL2 API entries,
-imported one at a time:
+`galaxy.lisp` declares 34 host functions. Most are literal WebGL2 API
+entries, imported one at a time in the shared `gl` package:
 
 ```lisp
-(rontolisp:wasm-import 'gl-create-shader :from "gl" :as "createShader"
+(rontolisp:wasm-import 'gl:create-shader :from "gl" :as "createShader"
                        :params '(:int) :returns :int)
-(rontolisp:wasm-import 'gl-shader-source :from "gl" :as "shaderSource"
+(rontolisp:wasm-import 'gl:shader-source :from "gl" :as "shaderSource"
                        :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'gl-draw-arrays :from "gl" :as "drawArrays"
+(rontolisp:wasm-import 'gl:draw-arrays :from "gl" :as "drawArrays"
                        :params '(:int :int :int) :returns :void)
 ;; ... plus canvas metrics, Math.sin / Math.cos, and an error reporter
 ```
@@ -63,8 +68,9 @@ Every type designator crosses the boundary somewhere in this example:
   to `shaderSource`/`getUniformLocation` as `(ptr,len)` into the module's
   exported linear memory.
 - `:string` *result* — on a shader compile error, `getShaderInfoLog` writes
-  the log back through the exported `__ronto_alloc` allocator and Lisp hands
-  it to the imported `fail` to show the page's error box.
+  the log back through the exported `__ronto_alloc` allocator and the shared
+  `gl:make-shader` hands it to the imported `fail` to show the page's error
+  box.
 
 Startup order matters and is pleasingly simple: the page creates the WebGL2
 context, instantiates the module, and calls `_initialize()` — which runs the
@@ -72,7 +78,7 @@ top-level `(setup-gl)`, so the shaders compile and the pipeline is configured
 *from Lisp* before the first frame. Each `requestAnimationFrame` tick then
 calls `exports.frame(t)`: Lisp sets the viewport, clears, computes every
 star's position on its slowly precessing ellipse, stages it with `set-vertex`,
-uploads with `gl-buffer-sub-data` and draws with `gl-draw-arrays`. At 16,000
+uploads with `gl-buffer-sub-data` and draws with `gl:draw-arrays`. At 16,000
 stars and 60 fps that is several million Lisp-to-JavaScript calls per second —
 the counter in the corner keeps score.
 
