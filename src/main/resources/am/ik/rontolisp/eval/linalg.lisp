@@ -1,5 +1,5 @@
 ;; The linalg package: numpy-style vector/matrix operations over the built-in
-;; rank-1/rank-2 arrays, written in rontolisp itself so a single implementation
+;; arrays, written in rontolisp itself so a single implementation
 ;; runs on every backend: the interpreter loads these definitions lazily on
 ;; first use of a linalg: function, and the compile path splices them into the
 ;; program when it references the package (see LinalgLibrary.java).
@@ -11,27 +11,11 @@
 ;;   det/inv/solve of an integer matrix are exact; double inputs propagate.
 ;;
 ;; Internal helpers use the linalg::%la- prefix. An array is walked with a
-;; flat index k; cols = 0 marks a rank-1 array, otherwise the element lives at
-;; row (k - k mod cols) / cols, column k mod cols.
+;; flat row-major index k via row-major-aref, so the elementwise operations
+;; (add/sub/mul/div/emap/reductions/reshape/array-equal) work for any rank;
+;; dot/matmul/outer/det/inv/solve/trace/transpose stay defined for rank <= 2.
 
 ;; --- internal helpers --------------------------------------------------------
-
-(defun linalg::%la-cols (a)
-  ;; The column count used for flat indexing: 0 for a rank-1 array.
-  (let ((d (array-dimensions a)))
-    (if (cdr d) (car (cdr d)) 0)))
-
-(defun linalg::%la-fref (a cols k)
-  ;; The element at flat (row-major) index k.
-  (if (= cols 0)
-      (aref a k)
-      (aref a (/ (- k (mod k cols)) cols) (mod k cols))))
-
-(defun linalg::%la-fset (a cols k v)
-  ;; Stores v at flat (row-major) index k.
-  (if (= cols 0)
-      (setf (aref a k) v)
-      (setf (aref a (/ (- k (mod k cols)) cols) (mod k cols)) v)))
 
 (defun linalg::%la-like (a)
   ;; A fresh zero-filled array with the same shape as a.
@@ -40,9 +24,9 @@
 (defun linalg::%la-bcast (%la-op %la-x %la-y)
   ;; Applies the binary function %la-op elementwise, broadcasting a scalar
   ;; operand over the other operand's shape. Array operands must have equal
-  ;; shapes. The parameters use %la- names because the inner lambdas capture
-  ;; them: the compiled backends resolve a captured name against a same-named
-  ;; user global first (.todo/47), so short names like f would collide.
+  ;; shapes. The parameters keep their %la- names from when the compiled
+  ;; backends resolved a captured name against a same-named user global
+  ;; (fixed 2026-07-03); the prefix is harmless and stays.
   (cond ((and (numberp %la-x) (numberp %la-y)) (funcall %la-op %la-x %la-y))
         ((numberp %la-x)
          (linalg:emap (lambda (v) (funcall %la-op %la-x v)) %la-y))
@@ -52,22 +36,20 @@
              (unless (equal (array-dimensions %la-x) (array-dimensions %la-y))
                (error "linalg: shape mismatch"))
              (let ((n (array-total-size %la-x))
-                   (cols (linalg::%la-cols %la-x))
                    (out (linalg::%la-like %la-x)))
                (do ((k 0 (+ k 1)))
                    ((>= k n) out)
-                 (linalg::%la-fset out cols k
-                                   (funcall %la-op (linalg::%la-fref %la-x cols k)
-                                            (linalg::%la-fref %la-y cols k)))))))))
+                 (setf (row-major-aref out k)
+                       (funcall %la-op (row-major-aref %la-x k)
+                                (row-major-aref %la-y k)))))))))
 
 (defun linalg::%la-reduce (f a init)
   ;; Folds f over every element of a (row-major), starting from init.
   (let ((n (array-total-size a))
-        (cols (linalg::%la-cols a))
         (acc init))
     (do ((k 0 (+ k 1)))
         ((>= k n) acc)
-      (setq acc (funcall f acc (linalg::%la-fref a cols k))))))
+      (setq acc (funcall f acc (row-major-aref a k))))))
 
 (defun linalg::%la-copy (a)
   ;; A fresh array with the same shape and elements as a.
@@ -262,14 +244,12 @@
 (defun linalg:reshape (a shape)
   ;; A fresh array with the given shape and the same row-major elements.
   (let* ((out (make-array shape :initial-element 0))
-         (n (array-total-size a))
-         (ca (linalg::%la-cols a))
-         (co (linalg::%la-cols out)))
+         (n (array-total-size a)))
     (unless (= n (array-total-size out))
       (error "linalg: reshape size mismatch"))
     (do ((k 0 (+ k 1)))
         ((>= k n) out)
-      (linalg::%la-fset out co k (linalg::%la-fref a ca k)))))
+      (setf (row-major-aref out k) (row-major-aref a k)))))
 
 (defun linalg:flatten (a)
   ;; The elements of a as a fresh rank-1 vector (row-major).
@@ -311,11 +291,10 @@
 (defun linalg:emap (f a)
   ;; A fresh array with f applied to every element of a.
   (let ((n (array-total-size a))
-        (cols (linalg::%la-cols a))
         (out (linalg::%la-like a)))
     (do ((k 0 (+ k 1)))
         ((>= k n) out)
-      (linalg::%la-fset out cols k (funcall f (linalg::%la-fref a cols k))))))
+      (setf (row-major-aref out k) (funcall f (row-major-aref a k))))))
 
 ;; --- products ----------------------------------------------------------------
 
@@ -362,27 +341,25 @@
 
 (defun linalg:amax (a)
   ;; The largest element.
-  (let ((n (array-total-size a))
-        (cols (linalg::%la-cols a)))
+  (let ((n (array-total-size a)))
     (when (= n 0)
       (error "linalg: amax of an empty array"))
-    (let ((best (linalg::%la-fref a cols 0)))
+    (let ((best (row-major-aref a 0)))
       (do ((k 1 (+ k 1)))
           ((>= k n) best)
-        (let ((x (linalg::%la-fref a cols k)))
+        (let ((x (row-major-aref a k)))
           (when (> x best)
             (setq best x)))))))
 
 (defun linalg:amin (a)
   ;; The smallest element.
-  (let ((n (array-total-size a))
-        (cols (linalg::%la-cols a)))
+  (let ((n (array-total-size a)))
     (when (= n 0)
       (error "linalg: amin of an empty array"))
-    (let ((best (linalg::%la-fref a cols 0)))
+    (let ((best (row-major-aref a 0)))
       (do ((k 1 (+ k 1)))
           ((>= k n) best)
-        (let ((x (linalg::%la-fref a cols k)))
+        (let ((x (row-major-aref a k)))
           (when (< x best)
             (setq best x)))))))
 
@@ -495,12 +472,11 @@
   ;; (like numpy array_equal: 1 and 1.0 compare equal).
   (if (equal (array-dimensions a) (array-dimensions b))
       (let ((n (array-total-size a))
-            (cols (linalg::%la-cols a))
             (ok t))
         (do ((k 0 (+ k 1)))
             ((or (>= k n) (null ok)) ok)
-          (let ((x (linalg::%la-fref a cols k))
-                (y (linalg::%la-fref b cols k)))
+          (let ((x (row-major-aref a k))
+                (y (row-major-aref b k)))
             (unless (if (and (numberp x) (numberp y)) (= x y) (equal x y))
               (setq ok nil)))))
       nil))

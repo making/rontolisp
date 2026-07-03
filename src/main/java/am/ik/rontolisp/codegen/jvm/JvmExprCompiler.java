@@ -340,6 +340,10 @@ final class JvmExprCompiler {
 				case LispNames.AREF -> JvmArrayCompiler.compileAref(cons, ctx, className);
 				case LispNames.ASET -> JvmArrayCompiler.compileAset(cons, ctx, className);
 				case LispNames.ARRAY_DIMENSIONS -> JvmArrayCompiler.compileDims(cons, ctx, className);
+				case LispNames.ROW_MAJOR_AREF -> JvmArrayCompiler.compileRowMajorAref(cons, ctx, className);
+				case LispNames.ROW_MAJOR_ASET -> JvmArrayCompiler.compileRowMajorAset(cons, ctx, className);
+				case LispNames.ARRAY_ROW_MAJOR_INDEX ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
 				case LispNames.VECTOR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
 				case LispNames.SVREF ->

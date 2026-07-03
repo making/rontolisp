@@ -20,8 +20,8 @@ import org.jspecify.annotations.Nullable;
  * float, a {@code String} with surrounding quotes = string, any other {@code String} =
  * symbol ({@code "t"} = true), {@code Character} = character, an exact {@code Object[]} =
  * cons cell or (with an {@code Integer} head) a function value, an {@code ArrayList} with
- * a leading {@code Long} column count = array); the overload selection costs and
- * tie-breaking are identical, so a program behaves the same interpreted and compiled.
+ * a leading {@code Object[]} of dimension sizes = array); the overload selection costs
+ * and tie-breaking are identical, so a program behaves the same interpreted and compiled.
  *
  * <p>
  * The class is never referenced by the rontolisp code base at runtime. Its compiled
@@ -461,9 +461,9 @@ final class JavaBridgeTemplate {
 		if (value instanceof BigInteger || value instanceof BigInteger[]) {
 			return NO_MATCH; // bignums and ratios are not bridged (as interpreted)
 		}
-		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Long cols) {
-			// The compiled Lisp array representation: slot 0 = column count.
-			if (cols != 0L) {
+		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] dims) {
+			// The compiled Lisp array representation: slot 0 = the dimension sizes.
+			if (dims.length != 1) {
 				return NO_MATCH; // only rank-1 vectors are bridged
 			}
 			return marshalSequence(new ArrayList<>(list.subList(1, list.size())), target, out, index);

@@ -4,10 +4,10 @@ package am.ik.rontolisp;
  * An array value (Common Lisp {@code array}/{@code simple-array}).
  *
  * <p>
- * Only arrays of rank 1 (vectors) and rank 2 are supported, matching the compiled
- * backends. Elements are stored row-major in a flat {@link LispVal} array; a rank-2
- * element {@code (i, j)} lives at flat index {@code i * cols + j}, where {@code cols} is
- * the second dimension.
+ * Arrays of any rank {@code >= 1} are supported, matching the compiled backends. Elements
+ * are stored row-major in a flat {@link LispVal} array; the flat index is the Horner fold
+ * over the subscripts (a rank-2 element {@code (i, j)} lives at {@code i * cols + j},
+ * where {@code cols} is the second dimension).
  *
  * <p>
  * Arrays are compared by identity ({@code eq}); two distinct arrays are never
@@ -21,7 +21,7 @@ public final class LispArray implements LispVal {
 
 	/**
 	 * Creates an array with the given dimensions backed by {@code data} (row-major).
-	 * @param dimensions the dimension sizes (length 1 or 2)
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 1})
 	 * @param data the flat backing store (length = product of dimensions)
 	 */
 	public LispArray(int[] dimensions, LispVal[] data) {
@@ -31,7 +31,7 @@ public final class LispArray implements LispVal {
 
 	/**
 	 * Returns the dimension sizes.
-	 * @return the dimensions (length 1 or 2)
+	 * @return the dimensions (length = rank)
 	 */
 	public int[] dimensions() {
 		return this.dimensions;
@@ -89,38 +89,42 @@ public final class LispArray implements LispVal {
 	}
 
 	// Renders the readable vector/array syntax: a rank-1 array as #(e1 e2 ...) and a
-	// rank-2 array as #2A((row) (row) ...). Each element is rendered with the supplied
+	// rank-n array as #nA((...) ...). Each element is rendered with the supplied
 	// function (print for prin1, display for princ), so princ propagates to the elements
-	// the way Common Lisp's *print-escape* does.
+	// the way Common Lisp's *print-escape* does. A nested group paren opens where the
+	// flat index is a multiple of that dimension's stride and closes where the next
+	// index is.
 	private String render(java.util.function.Function<LispVal, String> renderElement) {
+		int rank = this.dimensions.length;
 		StringBuilder sb = new StringBuilder();
-		if (this.dimensions.length == 1) {
-			sb.append("#(");
-			for (int i = 0; i < this.data.length; i++) {
-				if (i > 0) {
-					sb.append(' ');
-				}
-				sb.append(renderElement.apply(elementOrNil(i)));
-			}
-			return sb.append(')').toString();
-		}
-		int rows = this.dimensions[0];
-		int cols = this.dimensions[1];
-		sb.append("#2A(");
-		for (int i = 0; i < rows; i++) {
-			if (i > 0) {
+		sb.append(rank == 1 ? "#(" : "#" + rank + "A(");
+		for (int k = 0; k < this.data.length; k++) {
+			if (k > 0) {
 				sb.append(' ');
 			}
-			sb.append('(');
-			for (int j = 0; j < cols; j++) {
-				if (j > 0) {
-					sb.append(' ');
+			for (int j = 1; j < rank; j++) {
+				if (k % stride(j) == 0) {
+					sb.append('(');
 				}
-				sb.append(renderElement.apply(elementOrNil(i * cols + j)));
 			}
-			sb.append(')');
+			sb.append(renderElement.apply(elementOrNil(k)));
+			for (int j = rank - 1; j >= 1; j--) {
+				if ((k + 1) % stride(j) == 0) {
+					sb.append(')');
+				}
+			}
 		}
 		return sb.append(')').toString();
+	}
+
+	// The flat-index span of one step of dimension j-1: the product of the dimension
+	// sizes from j to the last.
+	private int stride(int j) {
+		int s = 1;
+		for (int m = j; m < this.dimensions.length; m++) {
+			s *= this.dimensions[m];
+		}
+		return s;
 	}
 
 	private LispVal elementOrNil(int flat) {

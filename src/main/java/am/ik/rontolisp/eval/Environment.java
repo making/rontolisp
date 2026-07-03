@@ -308,19 +308,39 @@ public final class Environment implements Scope {
 			array.aset(value, subs);
 			return value;
 		}));
+		env.defineFunction(LispNames.ROW_MAJOR_AREF, new LispFunction(LispNames.ROW_MAJOR_AREF, args -> {
+			requireArgCount(LispNames.ROW_MAJOR_AREF, args, 2);
+			LispArray array = requireArray(LispNames.ROW_MAJOR_AREF, args.get(0));
+			return array.data()[rowMajorIndex(LispNames.ROW_MAJOR_AREF, array, args.get(1))];
+		}));
+		env.defineFunction(LispNames.ROW_MAJOR_ASET, new LispFunction(LispNames.ROW_MAJOR_ASET, args -> {
+			// (%row-major-aset array index value)
+			requireArgCount(LispNames.ROW_MAJOR_ASET, args, 3);
+			LispArray array = requireArray(LispNames.ROW_MAJOR_ASET, args.get(0));
+			LispVal value = args.get(2);
+			array.data()[rowMajorIndex(LispNames.ROW_MAJOR_ASET, array, args.get(1))] = value;
+			return value;
+		}));
 	}
 
-	// Parses a make-array dimensions argument (an integer for rank 1, or a list of 1 or 2
-	// integers) into a dimension-size array. Only rank 1 and 2 are supported.
+	private static int rowMajorIndex(String fn, LispArray array, LispVal indexVal) {
+		int index = (int) asLong(indexVal);
+		if (index < 0 || index >= array.data().length) {
+			throw new LispEvalException(fn + ": index out of bounds");
+		}
+		return index;
+	}
+
+	// Parses a make-array dimensions argument (an integer for rank 1, or a non-empty
+	// list of integers) into a dimension-size array. Any rank >= 1 is supported.
 	private static int[] parseDimensions(LispVal dimsVal) {
 		if (dimsVal instanceof LispInteger n) {
 			return new int[] { (int) n.value() };
 		}
 		if (dimsVal instanceof LispCons || dimsVal instanceof LispNil) {
 			List<LispVal> list = (dimsVal instanceof LispCons cons) ? cons.toList() : List.of();
-			if (list.isEmpty() || list.size() > 2) {
-				throw new LispEvalException(
-						LispNames.MAKE_ARRAY + " supports rank 1 and 2 only, got rank " + list.size());
+			if (list.isEmpty()) {
+				throw new LispEvalException(LispNames.MAKE_ARRAY + " expects at least one dimension");
 			}
 			int[] dims = new int[list.size()];
 			for (int i = 0; i < list.size(); i++) {

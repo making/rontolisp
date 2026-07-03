@@ -715,6 +715,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandArrayDimension(cons), env);
 				case LispNames.ARRAY_TOTAL_SIZE:
 					return eval(LispMacroExpander.expandArrayTotalSize(cons), env);
+				case LispNames.ARRAY_ROW_MAJOR_INDEX:
+					return eval(LispMacroExpander.expandArrayRowMajorIndex(cons), env);
 				case LispNames.COERCE:
 					return eval(LispMacroExpander.expandCoerce(cons), env);
 				case LispNames.RASSOC:

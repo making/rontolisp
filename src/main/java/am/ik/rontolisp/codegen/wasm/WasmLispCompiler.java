@@ -2104,11 +2104,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry promiseStr;
 
-		// Vector/array literal printing: the "#(" prefix for rank-1 and "#2A(" for
-		// rank-2.
+		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
+		// prints "#", the rank as an integer, then "A(".
 		final StringEntry vecPrefix;
 
-		final StringEntry vec2Prefix;
+		final StringEntry hashPrefix;
+
+		final StringEntry rankAOpen;
 
 		final StringEntry minus;
 
@@ -2147,7 +2149,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.funcStr = addString("#<function>");
 			this.promiseStr = addString("#<PROMISE>");
 			this.vecPrefix = addString("#(");
-			this.vec2Prefix = addString("#2A(");
+			this.hashPrefix = addString("#");
+			this.rankAOpen = addString("A(");
 			this.minus = addString("-");
 			this.period = addString(".");
 			this.slash = addString("/");

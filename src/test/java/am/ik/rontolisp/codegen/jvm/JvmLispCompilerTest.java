@@ -282,6 +282,42 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRankThreeArrayRefSetAndPrint() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 0 0 0) 1)
+				(setf (aref *t* 0 1 1) 4)
+				(setf (aref *t* 1 0 1) 6)
+				(print (list (aref *t* 0 0 0) (aref *t* 0 1 1) (aref *t* 1 0 1) (aref *t* 1 1 0)))
+				(print *t*)
+				""")).isEqualTo("(1 4 6 0)\n#3A(((1 0) (0 4)) ((0 6) (0 0)))");
+	}
+
+	@Test
+	void compileAndRunRankNArrayDimensionsAndIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *t4* (make-array (list 2 3 4 5) :initial-element 0))
+				(print (array-dimensions *t4*))
+				(print (array-rank *t4*))
+				(print (array-dimension *t4* 2))
+				(print (array-total-size *t4*))
+				""")).isEqualTo("(2 3 4 5)\n4\n4\n120");
+	}
+
+	@Test
+	void compileAndRunRowMajorArefReadsAndWritesFlat() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 0))
+				(setf (row-major-aref *m* 4) 9)
+				(print (list (row-major-aref *m* 4) (aref *m* 1 1) (array-row-major-index *m* 1 1)))
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 1 0 1) 7)
+				(print (list (row-major-aref *t* 5) (array-row-major-index *t* 1 0 1)
+				             (row-major-aref #(10 20 30) 2)))
+				""")).isEqualTo("(9 9 4)\n(7 5 30)");
+	}
+
+	@Test
 	void compileAndRunClosureReadsLetVarShadowingGlobal() throws Exception {
 		// A lambda capturing a let variable must read the captured binding, not a
 		// same-named top-level global.
@@ -3108,12 +3144,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("205");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("207");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("205");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("207");
 	}
 
 	@Test
@@ -3626,6 +3662,21 @@ class JvmLispCompilerTest {
 				                                          (linalg:inv (linalg:from-list '((1 2) (3 4)))))
 				                           (linalg:eye 2)))
 				""")).isEqualTo("-2\n0\n#2A((-2 1) (3/2 -1/2))\n#(4/5 7/5)\nt");
+	}
+
+	@Test
+	void compileAndRunLinalgRankThreeElementwise() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(defparameter *c* (linalg:reshape (linalg:arange 8) '(2 2 2)))
+				(print *c*)
+				(print (linalg:add *c* 10))
+				(print (linalg:mul *c* *c*))
+				(print (linalg:sum *c*))
+				(print (linalg:amax *c*))
+				(print (linalg:array-equal (linalg:flatten *c*) (linalg:arange 8)))
+				(print (linalg:zeros '(2 2 2)))
+				""")).isEqualTo("#3A(((0 1) (2 3)) ((4 5) (6 7)))\n#3A(((10 11) (12 13)) ((14 15) (16 17)))\n"
+				+ "#3A(((0 1) (4 9)) ((16 25) (36 49)))\n28\n7\nt\n#3A(((0 0) (0 0)) ((0 0) (0 0)))");
 	}
 
 	@Test

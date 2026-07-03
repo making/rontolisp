@@ -974,7 +974,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      205
+      207
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn
@@ -1676,6 +1676,48 @@ cases:
       128
       (nil nil)
 
+  # Rank-n arrays: make-array with 3+ dimensions, per-call-site static-rank
+  # aref/(setf aref), #nA printing, and the rank-generic introspection expansions.
+  - name: rank-n-arrays-cross-backend
+    source: |
+      (defun ci-rank-n ()
+        (let ((cube (make-array (list 2 2 2) :initial-element 0)))
+          (setf (aref cube 0 0 0) 1)
+          (setf (aref cube 0 1 1) 4)
+          (setf (aref cube 1 0 1) 6)
+          (print (list (aref cube 0 0 0) (aref cube 0 1 1) (aref cube 1 0 1) (aref cube 1 1 0)))
+          (print cube))
+        (let ((t4 (make-array (list 2 3 4 5) :initial-element 0)))
+          (print (array-dimensions t4))
+          (print (array-rank t4))
+          (print (array-dimension t4 2))
+          (print (array-total-size t4))))
+      (ci-rank-n)
+    expected: |
+      (1 4 6 0)
+      #3A(((1 0) (0 4)) ((0 6) (0 0)))
+      (2 3 4 5)
+      4
+      4
+      120
+
+  # row-major-aref (flat access independent of rank, + its setf place) and
+  # array-row-major-index (the Horner-fold expansion over array-dimensions).
+  - name: row-major-aref-cross-backend
+    source: |
+      (defun ci-row-major ()
+        (let ((m (make-array (list 2 3) :initial-element 0)))
+          (setf (row-major-aref m 4) 9)
+          (print (list (row-major-aref m 4) (aref m 1 1) (array-row-major-index m 1 1))))
+        (let ((cube (make-array (list 2 2 2) :initial-element 0)))
+          (setf (aref cube 1 0 1) 7)
+          (print (list (row-major-aref cube 5) (array-row-major-index cube 1 0 1)
+                       (row-major-aref #(10 20 30) 2)))))
+      (ci-row-major)
+    expected: |
+      (9 9 4)
+      (7 5 30)
+
   - name: vector-literals-cross-backend
     source: |
       (defun ci-vectors ()
@@ -1780,6 +1822,14 @@ cases:
         (print (linalg:array-equal (linalg:eye 2) (linalg:from-list '((1 0) (0 1)))))
         (print (funcall #'linalg:norm (linalg:from-list '(3 4)))))
       (ci-linalg)
+      (defun ci-linalg-rank-n ()
+        ;; The elementwise operations work for any rank (flat row-major walk).
+        (let ((cube (linalg:reshape (linalg:arange 8) '(2 2 2))))
+          (print (linalg:add cube 10))
+          (print (linalg:sum cube))
+          (print (linalg:amax cube))
+          (print (linalg:array-equal (linalg:flatten cube) (linalg:arange 8)))))
+      (ci-linalg-rank-n)
     expected: |
       #2A((1 0) (0 1))
       #(2 4 6 8)
@@ -1807,6 +1857,10 @@ cases:
       #(4/5 7/5)
       t
       5.0
+      #3A(((10 11) (12 13)) ((14 15) (16 17)))
+      28
+      7
+      t
 
   # length is a sequence operation: it returns the element count of a vector (rank-1
   # array) just as for a list or string. A rank-2 array is not a sequence, so length

@@ -16,10 +16,10 @@ import am.ik.jvm.Opcode;
  * <p>
  * A string returns its character count (the stored length minus the two surrounding
  * quotes); a vector (rank-1 array) returns its element count; any other value is treated
- * as a list and its cons cells are counted (Common Lisp sequences). A rank-2 array is not
- * a sequence, so it throws. An array is an {@link java.util.ArrayList} whose slot 0 holds
- * the column count (a {@code Long}; 0 for rank 1), so its element count is
- * {@code size() - 1}.
+ * as a list and its cons cells are counted (Common Lisp sequences). A rank-2+ array is
+ * not a sequence, so it throws. An array is an {@link java.util.ArrayList} whose slot 0
+ * holds the dimension sizes (an {@code Object[]}; length 1 for rank 1), so its element
+ * count is {@code size() - 1}.
  *
  * <p>
  * The whole computation lives in this single helper (emitted once) rather than inline at
@@ -43,7 +43,6 @@ final class JvmLengthRuntimeBuilder {
 	static LengthMethod build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
 			MethodrefConstant longValueOf) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
 		MethodrefConstant stringLength = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
@@ -51,8 +50,6 @@ final class JvmLengthRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
 		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
 				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant longIntValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
 		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
@@ -78,7 +75,7 @@ final class JvmLengthRuntimeBuilder {
 		a.areturn();
 		a.bind(notString);
 
-		// Array: an ArrayList whose slot 0 is the column count (0 => rank 1).
+		// Array: an ArrayList whose slot 0 is the Object[] of dimension sizes.
 		a.aload(0);
 		a.instanceOf(arrayListClass);
 		a.branch(Opcode.IFEQ, notArray);
@@ -86,13 +83,14 @@ final class JvmLengthRuntimeBuilder {
 		a.checkcast(arrayListClass);
 		a.iconst(0);
 		a.invokevirtual(alGet);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.branch(Opcode.IFEQ, rank1);
-		// rank 2: not a sequence.
+		a.checkcast(objectArrayClass);
+		a.arraylength();
+		a.iconst(1);
+		a.branch(Opcode.IF_ICMPEQ, rank1);
+		// rank 2+: not a sequence.
 		a.anew(rtExClass);
 		a.dup();
-		a.ldcString(cp.addString("length: argument is not a sequence (rank-2 array)"));
+		a.ldcString(cp.addString("length: argument is not a sequence (multidimensional array)"));
 		a.invokespecial(rtExInit);
 		a.op(Opcode.ATHROW);
 		a.bind(rank1);

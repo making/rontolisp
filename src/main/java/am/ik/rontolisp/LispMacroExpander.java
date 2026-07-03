@@ -1949,6 +1949,11 @@ public final class LispMacroExpander {
 					asetParts.add(value);
 					yield listToCons(asetParts);
 				}
+				case LispNames.ROW_MAJOR_AREF ->
+					// (setf (row-major-aref array k) val) -> (%row-major-aset array k
+					// val).
+					listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), placeParts.get(1), placeParts.get(2),
+							value));
 				case LispNames.NTH -> {
 					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
 					// __setf) __setf)
@@ -5146,20 +5151,64 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (array-total-size array) into the product of the dimension sizes returned
-	 * by {@code array-dimensions}.
+	 * Expands (array-total-size array) into a {@code do} loop multiplying every dimension
+	 * size returned by {@code array-dimensions}, so it works for any rank.
 	 * @param cons the array-total-size expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandArrayTotalSize(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol dims = new LispSymbol("__arraysize_dims");
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(dims, callOf(LispNames.ARRAY_DIMENSIONS, parts.get(1))))));
-		LispVal rank2 = listToCons(List.of(new LispSymbol(LispNames.MUL), callOf(LispNames.CAR, dims),
-				callOf(LispNames.CAR, callOf(LispNames.CDR, dims))));
-		LispVal body = makeIf(callOf(LispNames.CDR, dims), rank2, callOf(LispNames.CAR, dims));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+		LispSymbol d = new LispSymbol("__arraysize_d");
+		LispSymbol n = new LispSymbol("__arraysize_n");
+		// (do ((d (array-dimensions a) (cdr d)) (n 1 (* n (car d)))) ((null d) n))
+		LispVal dSpec = listToCons(
+				List.of(d, callOf(LispNames.ARRAY_DIMENSIONS, parts.get(1)), callOf(LispNames.CDR, d)));
+		LispVal nSpec = listToCons(List.of(n, new LispInteger(1),
+				listToCons(List.of(new LispSymbol(LispNames.MUL), n, callOf(LispNames.CAR, d)))));
+		LispVal end = listToCons(List.of(callOf(LispNames.NULL, d), n));
+		return listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(dSpec, nSpec)), end));
+	}
+
+	/**
+	 * Expands (array-row-major-index array sub...) into the Horner fold of the subscripts
+	 * over {@code array-dimensions}: {@code ((s0 * d1 + s1) * d2 + s2) ...}, so any
+	 * static subscript count works. The array's dimensions and the subscripts are bound
+	 * in a {@code let*} first (left-to-right, single evaluation).
+	 * @param cons the array-row-major-index expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandArrayRowMajorIndex(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new UnsupportedOperationException(
+					LispNames.ARRAY_ROW_MAJOR_INDEX + " expects an array and at least one subscript");
+		}
+		int rank = parts.size() - 2;
+		LispSymbol dims = new LispSymbol("__rmindex_dims");
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(dims, callOf(LispNames.ARRAY_DIMENSIONS, parts.get(1)))));
+		List<LispSymbol> subs = new java.util.ArrayList<>();
+		for (int i = 0; i < rank; i++) {
+			LispSymbol sub = new LispSymbol("__rmindex_s" + i);
+			subs.add(sub);
+			bindings.add(listToCons(List.of(sub, parts.get(2 + i))));
+		}
+		LispVal flat = subs.get(0);
+		for (int k = 1; k < rank; k++) {
+			LispVal dimK = callOf(LispNames.CAR, nthCdrOf(dims, k));
+			flat = listToCons(List.of(new LispSymbol(LispNames.ADD),
+					listToCons(List.of(new LispSymbol(LispNames.MUL), flat, dimK)), subs.get(k)));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), flat));
+	}
+
+	// (cdr (cdr ... expr)) applied n times.
+	private static LispVal nthCdrOf(LispVal expr, int n) {
+		LispVal result = expr;
+		for (int i = 0; i < n; i++) {
+			result = callOf(LispNames.CDR, result);
+		}
+		return result;
 	}
 
 	/**

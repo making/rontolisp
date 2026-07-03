@@ -3104,13 +3104,13 @@ class LispEvaluatorTest {
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
 					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
 			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
-			.contains("make-array", "aref")
+			.contains("make-array", "aref", "row-major-aref", "array-row-major-index")
 			.contains("gensym", "macroexpand", "macroexpand-1")
 			.contains("require", "provide")
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
-			.doesNotContain("%puthash", "%aset")
+			.doesNotContain("%puthash", "%aset", "%row-major-aset")
 			.isSorted()
-			.hasSize(205);
+			.hasSize(207);
 	}
 
 	@Test
@@ -3762,6 +3762,78 @@ class LispEvaluatorTest {
 				*m*
 				""");
 		assertThat(result.print()).isEqualTo("#2A((1 0 0) (0 0 9))");
+	}
+
+	@Test
+	void makeArrayRankThreeRefAndSet() {
+		LispVal result = evalMulti("""
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 0 0 0) 1)
+				(setf (aref *t* 0 1 1) 4)
+				(setf (aref *t* 1 0 1) 6)
+				(list (aref *t* 0 0 0) (aref *t* 0 1 1) (aref *t* 1 0 1) (aref *t* 1 1 0))
+				""");
+		assertThat(result.print()).isEqualTo("(1 4 6 0)");
+	}
+
+	@Test
+	void rankThreeArrayPrintsAsHash3A() {
+		LispVal result = evalMulti("""
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 0 0 0) 1)
+				(setf (aref *t* 0 1 1) 4)
+				(setf (aref *t* 1 0 1) 6)
+				*t*
+				""");
+		assertThat(result.print()).isEqualTo("#3A(((1 0) (0 4)) ((0 6) (0 0)))");
+	}
+
+	@Test
+	void rankNArrayDimensionsAndIntrospection() {
+		LispVal result = evalMulti("""
+				(defparameter *t4* (make-array (list 2 3 4 5) :initial-element 0))
+				(list (array-dimensions *t4*) (array-rank *t4*) (array-dimension *t4* 2)
+				      (array-total-size *t4*))
+				""");
+		assertThat(result.print()).isEqualTo("((2 3 4 5) 4 4 120)");
+	}
+
+	@Test
+	void linalgRankThreeElementwise() {
+		LispVal result = evalMulti("""
+				(defparameter *c* (linalg:reshape (linalg:arange 8) '(2 2 2)))
+				(list (linalg:sum *c*) (linalg:amax *c*)
+				      (linalg:array-equal (linalg:add *c* 10) (linalg:reshape (linalg:arange 10 18) '(2 2 2))))
+				""");
+		assertThat(result.print()).isEqualTo("(28 7 t)");
+	}
+
+	@Test
+	void rowMajorArefReadsAndWritesFlat() {
+		LispVal result = evalMulti("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 0))
+				(setf (row-major-aref *m* 4) 9)
+				(list (row-major-aref *m* 4) (aref *m* 1 1) (array-row-major-index *m* 1 1)
+				      (array-row-major-index *m* 0 2))
+				""");
+		assertThat(result.print()).isEqualTo("(9 9 4 2)");
+	}
+
+	@Test
+	void rowMajorArefWorksOnRankThree() {
+		LispVal result = evalMulti("""
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 1 0 1) 7)
+				(list (row-major-aref *t* 5) (array-row-major-index *t* 1 0 1)
+				      (row-major-aref #(10 20 30) 2))
+				""");
+		assertThat(result.print()).isEqualTo("(7 5 30)");
+	}
+
+	@Test
+	void makeArrayRejectsEmptyDimensionList() {
+		assertThatThrownBy(() -> eval("(make-array (list))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("dimension");
 	}
 
 	// --- defmacro (user macros) ---

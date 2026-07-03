@@ -58,13 +58,12 @@ final class JvmQuoteCompiler {
 		}
 	}
 
-	// Builds the runtime array representation (a java.util.ArrayList whose slot 0 is the
-	// column count and slots 1.. are the row-major elements), matching
-	// JvmArrayRuntimeBuilder. The list reference is kept on the stack and DUPed for each
-	// add, so the operand stack stays shallow regardless of the element count.
+	// Builds the runtime array representation (a java.util.ArrayList whose slot 0 is an
+	// Object[] of Long dimension sizes and slots 1.. are the row-major elements),
+	// matching JvmArrayRuntimeBuilder. The list reference is kept on the stack and DUPed
+	// for each add, so the operand stack stays shallow regardless of the element count.
 	private static void compileQuotedArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
 		int[] dims = array.dimensions();
-		long cols = dims.length >= 2 ? dims[dims.length - 1] : 0;
 		ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
 		MethodrefConstant alInit = ctx.cp.addMethodref(arrayListClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
@@ -75,7 +74,17 @@ final class JvmQuoteCompiler {
 		ctx.emit(Opcode.DUP);
 		ctx.emit(Opcode.INVOKESPECIAL);
 		ctx.emitU2(alInit.index());
-		addElement(ctx, alAdd, () -> JvmEmitHelper.compileLong(cols, ctx));
+		addElement(ctx, alAdd, () -> {
+			JvmEmitHelper.emitIntConst(ctx, dims.length);
+			ctx.emit(Opcode.ANEWARRAY);
+			ctx.emitU2(ctx.objectClass.index());
+			for (int d = 0; d < dims.length; d++) {
+				ctx.emit(Opcode.DUP);
+				JvmEmitHelper.emitIntConst(ctx, d);
+				JvmEmitHelper.compileLong(dims[d], ctx);
+				ctx.emit(Opcode.AASTORE);
+			}
+		});
 		for (LispVal element : array.data()) {
 			LispVal value = (element == null) ? LispNil.INSTANCE : element;
 			addElement(ctx, alAdd, () -> compileQuotedVal(value, ctx, className));

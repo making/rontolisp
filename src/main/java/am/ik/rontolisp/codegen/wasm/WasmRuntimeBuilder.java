@@ -1414,9 +1414,9 @@ final class WasmRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: slot 1 = (ref null eq) cons cursor, slot 2 = i32 cons first-flag (both
-		// used by the list printer); slots 3-4 = (ref null eq) array dims/data, slots 5-7
-		// =
-		// i32 array index/cols/length (used by the array printer).
+		// used by the list printer); slots 3-4 = (ref null eq) array dims/data, slots
+		// 5-10 = i32 array index/length/rank/dimension/stride/scratch (used by the array
+		// printer).
 		w.write(4);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1426,7 +1426,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(3);
+		w.write(6);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1539,7 +1539,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1646,8 +1646,8 @@ final class WasmRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 
 		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
-		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-8 = i32 (array
-		// index/cols/length).
+		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-11 = i32 (array
+		// index/length/rank/dimension/stride/scratch).
 		w.write(5);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1659,7 +1659,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(3);
+		w.write(6);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1806,7 +1806,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1996,15 +1996,15 @@ final class WasmRuntimeBuilder {
 	}
 
 	// Emits the array branch shared by _print_val and _princ_val: if param 0 is a
-	// TYPE_CELL
-	// box whose header car is a TYPE_HASH_BUCKETS array (i.e. an array, not a hash
-	// table),
-	// prints it as #(...) (rank 1) or #2A((row) ...) (rank 2) and returns. elementFunc is
-	// the per-element printer (FUNC_PRINT_VAL for prin1, FUNC_PRINC_VAL for princ).
-	// Slots:
-	// dims/data = (ref null eq) locals; idx/cols/len = i32 locals.
+	// TYPE_CELL box whose header car is a TYPE_HASH_BUCKETS array (i.e. an array, not a
+	// hash table), prints it as #(...) (rank 1) or #nA((...) ...) (rank n) and returns.
+	// elementFunc is the per-element printer (FUNC_PRINT_VAL for prin1, FUNC_PRINC_VAL
+	// for princ). A nested group paren opens where the flat index is a multiple of that
+	// dimension's stride (the product of the trailing dimension sizes) and closes where
+	// the next index is. Slots: dims/data = (ref null eq) locals; idx/len/rank/j/stride/m
+	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
-			int dataSlot, int idxSlot, int colsSlot, int lenSlot) {
+			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot) {
 		// if (param0 is TYPE_CELL)
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2038,40 +2038,27 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		setLocal(w, dataSlot);
 
-		// cols = (len(dims) == 1) ? 0 : i31get(dims[1])
+		// rank = len(dims); len = len(data)
 		getBucketsLocal(w, dimsSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		setLocal(w, colsSlot);
-		w.write(Instruction.ELSE);
-		getBucketsLocal(w, dimsSlot);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-		setLocal(w, colsSlot);
-		w.write(Instruction.END);
-
-		// len = len(data)
+		setLocal(w, rankSlot);
 		getBucketsLocal(w, dataSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 		setLocal(w, lenSlot);
 
-		// prefix: "#(" for rank 1 (cols == 0), "#2A(" for rank 2
-		getLocal(w, colsSlot);
-		w.write(Instruction.I32_EQZ);
+		// prefix: "#(" for rank 1, "#" + rank + "A(" for rank n
+		getLocal(w, rankSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
 		writeStr(w, st.vecPrefix);
 		w.write(Instruction.ELSE);
-		writeStr(w, st.vec2Prefix);
+		writeStr(w, st.hashPrefix);
+		getLocal(w, rankSlot);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		writeStr(w, st.rankAOpen);
 		w.write(Instruction.END);
 
 		// idx = 0
@@ -2087,31 +2074,39 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
 
-		// separators / row-open paren
-		getLocal(w, colsSlot);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		// rank 1: a space before every element except the first
+		// a space before every element except the first (group closes/opens sit
+		// around it)
 		getLocal(w, idxSlot);
 		w.write(Instruction.IF, 0x40);
 		writeStr(w, st.space);
 		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		// rank 2: at a row start emit (space then) "(", otherwise a space
+
+		// opens (outermost first): for j in 1..rank-1: if (idx % stride(j) == 0) "("
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		setLocal(w, jSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, jSlot);
+		getLocal(w, rankSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		emitPrintArrayStride(w, dimsSlot, jSlot, strideSlot, mSlot, rankSlot);
 		getLocal(w, idxSlot);
-		getLocal(w, colsSlot);
+		getLocal(w, strideSlot);
 		w.write(Instruction.I32_REM_S);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
-		getLocal(w, idxSlot);
-		w.write(Instruction.IF, 0x40);
-		writeStr(w, st.space);
-		w.write(Instruction.END);
 		writeStr(w, st.lparen);
-		w.write(Instruction.ELSE);
-		writeStr(w, st.space);
 		w.write(Instruction.END);
-		w.write(Instruction.END);
+		getLocal(w, jSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, jSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
 
 		// element: elementFunc(data[idx])
 		getBucketsLocal(w, dataSlot);
@@ -2121,21 +2116,39 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(elementFunc);
 
-		// rank 2 row close: at the last column emit ")"
-		getLocal(w, colsSlot);
-		w.write(Instruction.IF, 0x40);
-		getLocal(w, idxSlot);
-		getLocal(w, colsSlot);
-		w.write(Instruction.I32_REM_S);
-		getLocal(w, colsSlot);
+		// closes (innermost first): for j in rank-1..1: if ((idx+1) % stride(j) == 0)
+		// ")"
+		getLocal(w, rankSlot);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_EQ);
+		setLocal(w, jSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, jSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 1);
+		emitPrintArrayStride(w, dimsSlot, jSlot, strideSlot, mSlot, rankSlot);
+		getLocal(w, idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, strideSlot);
+		w.write(Instruction.I32_REM_S);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
 		writeStr(w, st.rparen);
 		w.write(Instruction.END);
-		w.write(Instruction.END);
+		getLocal(w, jSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, jSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
 
 		// idx++
 		getLocal(w, idxSlot);
@@ -2151,6 +2164,42 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // is-array if
 		w.write(Instruction.END); // is-cell if
+	}
+
+	// stride = the product of the i31 dimension sizes dims[j..rank-1] (the flat-index
+	// span of one step of dimension j-1), computed into strideSlot with mSlot as the
+	// scratch index.
+	private static void emitPrintArrayStride(WasmWriter w, int dimsSlot, int jSlot, int strideSlot, int mSlot,
+			int rankSlot) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		setLocal(w, strideSlot);
+		getLocal(w, jSlot);
+		setLocal(w, mSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, mSlot);
+		getLocal(w, rankSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, strideSlot);
+		getBucketsLocal(w, dimsSlot);
+		getLocal(w, mSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_MUL);
+		setLocal(w, strideSlot);
+		getLocal(w, mSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, mSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
 	}
 
 	// Emits the ratio branch shared by _print_val and _princ_val: if the value in

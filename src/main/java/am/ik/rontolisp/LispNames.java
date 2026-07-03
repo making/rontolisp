@@ -504,8 +504,8 @@ public final class LispNames {
 	// Arrays
 
 	/**
-	 * The {@code make-array} built-in function. Supports arrays of rank 1 and 2 and the
-	 * {@code :initial-element} keyword.
+	 * The {@code make-array} built-in function. Supports arrays of any rank {@code >= 1}
+	 * and the {@code :initial-element} keyword.
 	 */
 	public static final String MAKE_ARRAY = "make-array";
 
@@ -518,6 +518,27 @@ public final class LispNames {
 	 * value.
 	 */
 	public static final String ASET = "%aset";
+
+	/**
+	 * The {@code row-major-aref} built-in function (flat row-major element access,
+	 * independent of rank); also a {@code setf} place.
+	 */
+	public static final String ROW_MAJOR_AREF = "row-major-aref";
+
+	/**
+	 * The {@code %row-major-aset} internal built-in function. The target of the
+	 * {@code row-major-aref} {@code setf} place:
+	 * {@code (%row-major-aset array index value)} stores and returns the value.
+	 */
+	public static final String ROW_MAJOR_ASET = "%row-major-aset";
+
+	/**
+	 * The {@code array-row-major-index} built-in function (the flat row-major index of
+	 * the given subscripts). Expanded by
+	 * {@link LispMacroExpander#expandArrayRowMajorIndex} into a Horner fold over
+	 * {@code array-dimensions}.
+	 */
+	public static final String ARRAY_ROW_MAJOR_INDEX = "array-row-major-index";
 
 	/** The {@code :initial-element} keyword accepted by {@code make-array}. */
 	public static final String INITIAL_ELEMENT_KEYWORD = ":initial-element";
