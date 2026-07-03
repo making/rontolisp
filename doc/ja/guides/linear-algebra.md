@@ -6,7 +6,7 @@ JSON ライブラリと同様に、`linalg` は Lisp ソース（`linalg.lisp`�
 
 ## データ表現
 
-linalg の配列は `make-array` で作られる組み込みの配列です。ベクタはランク 1 の配列で `#(...)` と印字され、行列はランク 2 の配列で `#2A(...)` と印字されます。個々の要素は `aref` で読み書きでき、プログラムの他の場所で構築された配列も linalg 関数に渡せます。[`linalg:from-list`](../reference/functions/linalg-from-list.md) / [`linalg:to-list`](../reference/functions/linalg-to-list.md) は配列とリストを相互に変換します。
+linalg の配列は `make-array` で作られる組み込みの配列です。ベクタはランク 1 の配列で `#(...)` と印字され、行列はランク 2 の配列で `#2A(...)` と印字されます。個々の要素は `aref` で読み書きでき、プログラムの他の場所で構築された配列も linalg 関数に渡せます。より高いランクの配列も扱えます。要素ごとの演算、リダクション、`reshape`/`flatten`、`array-equal` はフラットな行優先順で要素を走査するため任意のランクを受け付けます。一方 `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` は numpy の専用ルーチンと同様、ベクタと行列 (ランク 2 以下) に対して定義されたままです。[`linalg:from-list`](../reference/functions/linalg-from-list.md) / [`linalg:to-list`](../reference/functions/linalg-to-list.md) は配列とリストを相互に変換します。
 
 算術演算は汎用かつ厳密です。整数の入力は浮動小数点数に落ちることなく整数と比のまま保たれるため、整数行列に対する [`linalg:det`](../reference/functions/linalg-det.md)、[`linalg:inv`](../reference/functions/linalg-inv.md)、[`linalg:solve`](../reference/functions/linalg-solve.md) は厳密です。特異行列の行列式は浮動小数点の微小値ではなく厳密に `0` になります。浮動小数点の入力は浮動小数点数のまま伝播し、[`linalg:norm`](../reference/functions/linalg-norm.md) は `sqrt` が浮動小数点数を返すため浮動小数点数を返します。
 

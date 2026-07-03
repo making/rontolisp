@@ -82,8 +82,8 @@ stays an opaque `java` object whose methods you call:
 (java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
 ```
 
-Symbols, hash tables, dotted (improper) lists and rank-2 arrays are **not**
-bridged.
+Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
+arrays are **not** bridged.
 
 ## Overload resolution
 
@@ -189,8 +189,8 @@ functions, and `examples/life-gui.lisp` animates Conway's Game of Life with it.
   compile error (wrap them in your own `defun` instead), and the embedded
   `eval` runtime does not know them either. A compiled program that uses
   `java:` needs a JRE at least as new as the one rontolisp was built with.
-- Symbols, hash tables, dotted (improper) lists and rank-2 arrays are not
-  marshalled — pass them as Java collections you build with
+- Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
+  arrays are not marshalled — pass them as Java collections you build with
   `java:new`/`java:call` instead.
 - A returned `java.util.List` (unlike a Java array) stays an opaque `java`
   object: it keeps its identity and mutability, so read it with

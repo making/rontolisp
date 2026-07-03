@@ -200,6 +200,8 @@ categories:
     functions:
       - { slug: make-array, name: "make-array" }
       - { slug: aref, name: "aref" }
+      - { slug: row-major-aref, name: "row-major-aref" }
+      - { slug: array-row-major-index, name: "array-row-major-index" }
       - { slug: vector, name: "vector" }
       - { slug: svref, name: "svref" }
       - { slug: array-dimensions, name: "array-dimensions" }

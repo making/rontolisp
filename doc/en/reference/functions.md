@@ -195,15 +195,17 @@ its own page.
 | `hash-table-count` | `(hash-table-count table)` | The number of entries |
 | `hash-table-p` | `(hash-table-p x)` | `t` if `x` is a hash table, else `nil` |
 | `maphash` | `(maphash (lambda (k v) ...) table)` | Call the function on each key/value pair for effect; returns nil |
-| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | Create an array of rank 1 or 2; `:initial-element` sets every cell (nil if omitted) |
+| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | Create an array of any rank; `:initial-element` sets every cell (nil if omitted) |
 | `aref` | `(aref a i)`, `(aref a i j)` | Return the element at the given subscripts |
 | `(setf (aref a i j) v)` | `(setf (aref a 0 0) 1)` | Store `v` at the subscripts; works with `incf`/`decf`/`push` on the place |
 | `vector` | `(vector 1 2 3)` | `#(1 2 3)` (a fresh rank-1 array of the arguments) |
 | `svref` | `(svref (vector 10 20 30) 1)` | `20` (vector element access; also a `setf` place) |
 | `array-dimensions` | `(array-dimensions (make-array (list 2 3)))` | `(2 3)` (the dimension sizes as a list) |
 | `array-dimension` | `(array-dimension (make-array (list 2 3)) 1)` | `3` (the size of one axis, 0-based) |
-| `array-rank` | `(array-rank (vector 1 2))` | `1` (`2` for a rank-2 array) |
+| `array-rank` | `(array-rank (vector 1 2))` | `1` (`2` for a rank-2 array, and so on) |
 | `array-total-size` | `(array-total-size (make-array (list 2 3)))` | `6` (the total element count) |
+| `row-major-aref` | `(row-major-aref (make-array (list 2 3)) 4)` | The element at a flat row-major index, independent of rank; also a `setf` place |
+| `array-row-major-index` | `(array-row-major-index (make-array (list 2 3)) 1 1)` | `4` (the flat row-major index of the subscripts) |
 | `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`, `(#\a #\b)` (only the literal `'list`/`'vector`/`'string` result types) |
 
 ## rontolisp Package Functions
@@ -251,7 +253,8 @@ their [wasm-export](functions/rontolisp-wasm-export.md) and
 ## linalg Package Functions
 
 The `linalg` package provides numpy-style vector and matrix operations over
-the built-in rank-1/rank-2 arrays. It is **not part of Common Lisp**;
+the built-in arrays (the elementwise operations and reductions work for any
+rank). It is **not part of Common Lisp**;
 reference its functions with the `linalg:` qualifier (the package does not use
 `cl`, so most programs stay in `cl-user` and call the qualified names). The
 package is implemented once in Lisp source and behaves identically on every

@@ -14,7 +14,7 @@
 | Pi | `pi` | The constant π, read as the double `3.141592653589793` |
 | Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
-| Array | `#(1 2 3)`, `(make-array 3)` | Fixed-size vector (rank 1) or rank-2 array; `#(...)` is a self-evaluating vector literal |
+| Array | `#(1 2 3)`, `(make-array 3)` | Fixed-size array of any rank (rank 1 = vector); `#(...)` is a self-evaluating vector literal |
 | Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
 
 Numeric literals may use `,` as a grouping separator between digits in the
@@ -124,16 +124,19 @@ list, e.g. by prepending with `list*`:
 
 ## Arrays
 
-`make-array`, `aref` and `(setf (aref ...))` work in all three backends. Only
-arrays of **rank 1 (vectors) and rank 2** are supported; the dimensions argument
-is an integer (rank 1) or a list of one or two integers, and `:initial-element`
-sets every cell (defaulting to nil). Elements are stored row-major with O(1)
-access, and arrays are compared by identity (`eq`), so two distinct arrays are
-never `equal`. `length` returns the element count of a vector (rank-1 array); a
-rank-2 array is not a sequence, so `length` signals an error on it. Unlike the
-hash-table operators, the array operators are not exposed as first-class function
-values, so `#'aref` and `#'make-array` are not available (call them directly).
-Vectors can also be built with [`vector`](functions/vector.md) and read with
+`make-array`, `aref` and `(setf (aref ...))` work in all three backends. Arrays
+of **any rank >= 1** are supported; the dimensions argument is an integer
+(rank 1) or a non-empty list of integers, and `:initial-element` sets every
+cell (defaulting to nil). Elements are stored row-major with O(1) access
+(flat rank-independent access via
+[`row-major-aref`](functions/row-major-aref.md) /
+[`array-row-major-index`](functions/array-row-major-index.md)), and arrays are
+compared by identity (`eq`), so two distinct arrays are never `equal`. `length`
+returns the element count of a vector (rank-1 array); a multidimensional array
+is not a sequence, so `length` signals an error on it. Unlike the hash-table
+operators, the array operators are not exposed as first-class function values,
+so `#'aref` and `#'make-array` are not available (call them directly). Vectors
+can also be built with [`vector`](functions/vector.md) and read with
 [`svref`](functions/svref.md), array shapes are inspected with
 [`array-dimensions`](functions/array-dimensions.md) /
 [`array-rank`](functions/array-rank.md) /
@@ -153,8 +156,8 @@ For numpy-style vector/matrix math on top of arrays, see the
 The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose
 elements are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. Arrays
 print in the same readable syntax across all backends: a rank-1 array as `#(...)`
-and a rank-2 array as `#2A((row) ...)`, with `prin1` quoting string elements and
-`princ` not:
+and a rank-n array as `#nA((...) ...)` (`#2A` for a matrix, `#3A` for a rank-3
+array, ...), with `prin1` quoting string elements and `princ` not:
 
 ```lisp
 (print #(1 2 3))                          ; #(1 2 3)

@@ -192,15 +192,17 @@
 | `hash-table-count` | `(hash-table-count table)` | エントリ数 |
 | `hash-table-p` | `(hash-table-p x)` | `x` がハッシュテーブルなら `t`、そうでなければ `nil` |
 | `maphash` | `(maphash (lambda (k v) ...) table)` | 副作用のために各キー/値ペアに関数を呼びます。nilを返します |
-| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | 階数1または2の配列を作成します。`:initial-element` はすべてのセルを設定します(省略時はnil) |
+| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | 任意の階数の配列を作成します。`:initial-element` はすべてのセルを設定します(省略時はnil) |
 | `aref` | `(aref a i)`, `(aref a i j)` | 指定した添字の要素を返します |
 | `(setf (aref a i j) v)` | `(setf (aref a 0 0) 1)` | 添字の位置に `v` を格納します。placeに対する `incf`/`decf`/`push` と組み合わせて使えます |
 | `vector` | `(vector 1 2 3)` | `#(1 2 3)`(引数からなる新しい階数1の配列) |
 | `svref` | `(svref (vector 10 20 30) 1)` | `20`(ベクタの要素アクセス。`setf` のplaceとしても使えます) |
 | `array-dimensions` | `(array-dimensions (make-array (list 2 3)))` | `(2 3)`(各次元のサイズのリスト) |
 | `array-dimension` | `(array-dimension (make-array (list 2 3)) 1)` | `3`(指定した軸のサイズ。0始まり) |
-| `array-rank` | `(array-rank (vector 1 2))` | `1`(階数2の配列では `2`) |
+| `array-rank` | `(array-rank (vector 1 2))` | `1`(階数2の配列では `2`、以降も同様) |
 | `array-total-size` | `(array-total-size (make-array (list 2 3)))` | `6`(要素の総数) |
+| `row-major-aref` | `(row-major-aref (make-array (list 2 3)) 4)` | フラットな行優先インデックスの要素。階数に依存せず、`setf` の場所としても使えます |
+| `array-row-major-index` | `(array-row-major-index (make-array (list 2 3)) 1 1)` | `4`(添字のフラットな行優先インデックス) |
 | `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`、`(#\a #\b)`(結果型はリテラルの `'list`/`'vector`/`'string` のみ) |
 
 ## rontolisp パッケージの関数
@@ -243,8 +245,8 @@
 
 ## linalg パッケージの関数
 
-`linalg` パッケージは、組み込みの階数1/階数2の配列に対する numpy
-スタイルのベクトル・行列演算を提供します。**Common Lispの一部ではありません**。
+`linalg` パッケージは、組み込みの配列に対する numpy
+スタイルのベクトル・行列演算を提供します(要素ごとの演算とリダクションは任意の階数で動作します)。**Common Lispの一部ではありません**。
 関数は `linalg:` 修飾子で参照してください(このパッケージは `cl` を使用しないため、
 通常は `cl-user` に留まり修飾名で呼び出します)。パッケージはLispソースで一度だけ
 実装されており、すべてのバックエンドで同一に動作します。算術は整数・有理数入力に
