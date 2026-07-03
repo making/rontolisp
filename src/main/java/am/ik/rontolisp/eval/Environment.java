@@ -1106,6 +1106,17 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.POSITION, new LispFunction(LispNames.POSITION, args -> {
 			requireArgCount(LispNames.POSITION, args, 2);
 			LispVal item = args.get(0);
+			// position applies to strings as well as lists (Common Lisp sequences);
+			// string elements are characters, indexed like char/length.
+			if (args.get(1) instanceof LispString str) {
+				String s = str.value();
+				for (int i = 0; i < s.length(); i++) {
+					if (isEq(item, new LispChar(s.charAt(i)))) {
+						return new LispInteger(i);
+					}
+				}
+				return LispNil.INSTANCE;
+			}
 			LispVal cur = args.get(1);
 			long index = 0;
 			while (cur instanceof LispCons cell) {

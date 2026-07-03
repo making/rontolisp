@@ -38,17 +38,10 @@
 (defun crlf (s)
   (concatenate 'string s (format nil "~a" (code-char 13))))
 
-;; Index of the first space in s, or nil (position does not search strings).
-(defun space-pos (s)
-  (let ((n (length s)))
-    (do ((i 0 (+ i 1)))
-        ((or (>= i n) (char= (char s i) #\space))
-         (if (>= i n) nil i)))))
-
 ;; "SET key value" -> ("SET" "key" "value")
 (defun split-words (s)
   (cond ((string= s "") nil)
-        (t (let ((p (space-pos s)))
+        (t (let ((p (position #\space s)))
              (if p
                  (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
                  (list s))))))

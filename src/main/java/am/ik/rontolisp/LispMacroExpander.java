@@ -2411,29 +2411,49 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (position item lst) into a do/return scan returning the 0-based index of
-	 * the first element {@code eql} to the item, or nil. Like {@code find} but yields the
-	 * position rather than the element.
+	 * Expands (position item seq) into a stringp-dispatched do/return scan returning the
+	 * 0-based index of the first element {@code eql} to the item, or nil. A string
+	 * sequence is scanned by index with {@code char} (its elements are characters); any
+	 * other sequence is scanned as a list. Like {@code find} but yields the position
+	 * rather than the element.
 	 * @param cons the position expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandPosition(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol item = new LispSymbol("__pos_item");
+		LispSymbol seq = new LispSymbol("__pos_seq");
+		LispSymbol len = new LispSymbol("__pos_len");
 		LispSymbol idx = new LispSymbol("__pos_idx");
 		LispSymbol cur = new LispSymbol("__pos_cur");
-		// (do ((__pos_item item) (__pos_idx 0 (+ __pos_idx 1))
-		// (__pos_cur lst (cdr __pos_cur)))
+		// (let ((__pos_item item))
+		// (let ((__pos_seq seq))
+		// (if (stringp __pos_seq)
+		// (let ((__pos_len (length __pos_seq)))
+		// (do ((__pos_idx 0 (+ __pos_idx 1)))
+		// ((>= __pos_idx __pos_len) nil)
+		// (if (eql __pos_item (char __pos_seq __pos_idx)) (return __pos_idx) nil)))
+		// (do ((__pos_idx 0 (+ __pos_idx 1)) (__pos_cur __pos_seq (cdr __pos_cur)))
 		// ((atom __pos_cur) nil)
-		// (if (eql __pos_item (car __pos_cur)) (return __pos_idx) nil))
+		// (if (eql __pos_item (car __pos_cur)) (return __pos_idx) nil)))))
 		LispVal idxStep = listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(idx, new LispInteger(0), idxStep)),
-						listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
-		LispVal body = makeIf(match, makeReturn(idx), LispNil.INSTANCE);
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		LispVal strBindings = listToCons(List.of(listToCons(List.of(idx, new LispInteger(0), idxStep))));
+		LispVal strEndClause = listToCons(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.GE), idx, len)), LispNil.INSTANCE));
+		LispVal charAt = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
+		LispVal strMatch = listToCons(List.of(new LispSymbol(LispNames.EQL), item, charAt));
+		LispVal strBody = makeIf(strMatch, makeReturn(idx), LispNil.INSTANCE);
+		LispVal strScan = makeLet(len.name(), callOf(LispNames.LENGTH, seq), expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), strBindings, strEndClause, strBody))));
+		LispVal listBindings = listToCons(List.of(listToCons(List.of(idx, new LispInteger(0), idxStep)),
+				listToCons(List.of(cur, seq, callOf(LispNames.CDR, cur)))));
+		LispVal listEndClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal listMatch = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
+		LispVal listBody = makeIf(listMatch, makeReturn(idx), LispNil.INSTANCE);
+		LispVal listScan = expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), listBindings, listEndClause, listBody)));
+		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seq), strScan, listScan);
+		return makeLet(item.name(), parts.get(1), makeLet(seq.name(), parts.get(2), dispatch));
 	}
 
 	/**

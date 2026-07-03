@@ -2041,6 +2041,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPositionOnString() throws Exception {
+		assertThat(compileAndRun(
+				"(print (position #\\space \"hello world\")) (print (position #\\z \"abc\")) (print (funcall #'position #\\l \"hello\"))"))
+			.isEqualTo("5\nnil\n2");
+	}
+
+	@Test
 	void compileAndRunPositionIf() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position-if #'evenp '(1 3 5 6 7))) (print (position-if #'plusp '(-1 -2 -3))) (print (funcall #'position-if #'oddp '(2 4 5)))"))

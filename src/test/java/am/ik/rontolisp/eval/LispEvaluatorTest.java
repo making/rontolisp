@@ -1954,6 +1954,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalPositionOnString() {
+		assertThat(eval("(position #\\space \"hello world\")").print()).isEqualTo("5");
+		assertThat(eval("(position #\\h \"hello\")").print()).isEqualTo("0");
+		assertThat(eval("(position #\\z \"abc\")")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(position #\\a \"\")")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'position #\\l \"hello\")").print()).isEqualTo("2");
+	}
+
+	@Test
 	void evalPositionIf() {
 		assertThat(eval("(position-if #'evenp '(1 3 5 6 7))").print()).isEqualTo("3");
 		assertThat(eval("(position-if #'oddp '(2 4 5))").print()).isEqualTo("2");

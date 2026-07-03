@@ -904,6 +904,15 @@ cases:
       (2 1 3)
       (1 2)
       (1 2 3 4)
+  - name: position-on-strings
+    source: |
+      (print (position #\space "hello world"))
+      (print (position #\z "abc"))
+      (print (funcall #'position #\l "hello"))
+    expected: |
+      5
+      nil
+      2
   # Wrapped in a defun (rather than bare top-level prints) so its body compiles into its own
   # JVM method; the cross-backend driver concatenates every case into one program and the JVM
   # caps a single method at 64 KiB, which the bare top-level forms were near.
