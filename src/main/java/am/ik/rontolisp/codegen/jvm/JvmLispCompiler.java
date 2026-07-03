@@ -250,6 +250,32 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addUtf8(JvmFetchRuntimeBuilder.AWAIT_METHOD_DESC)))
 				: null;
 
+		// TCP socket helpers: emitted only when the program uses a rontolisp:tcp-*
+		// built-in. A socket handle shares the _streams table with file streams, so the
+		// stream built-ins grow socket branches (JvmIoRuntimeBuilder) when this is set.
+		boolean usesTcp = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT));
+		MethodrefConstant tcpConnectHelperMethod = usesTcp
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
+				: null;
+		MethodrefConstant tcpListenHelperMethod = usesTcp
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LISTEN_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LISTEN_DESC)))
+				: null;
+		MethodrefConstant tcpAcceptHelperMethod = usesTcp
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_ACCEPT_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_ACCEPT_DESC)))
+				: null;
+		MethodrefConstant tcpLocalPortHelperMethod = usesTcp ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_DESC)))
+				: null;
+
 		// java: interop runtime: emitted only when the program uses one of the five
 		// java: functions. It embeds the (renamed) JavaBridgeTemplate bytecode and
 		// forces the eval runtime (the bridge applies Lisp callables through _apply).
@@ -452,6 +478,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			.readLineHelper(readLineHelperMethod)
 			.fetchHelper(fetchHelperMethod)
 			.awaitHelper(awaitHelperMethod)
+			.tcpConnectHelper(tcpConnectHelperMethod)
+			.tcpListenHelper(tcpListenHelperMethod)
+			.tcpAcceptHelper(tcpAcceptHelperMethod)
+			.tcpLocalPortHelper(tcpLocalPortHelperMethod)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.className(this.className)
@@ -785,9 +815,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// File-stream runtime (open/close/write-line/read-line with a stream)
 		MethodrefConstant stringLengthForIo = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+		// TCP socket runtime (only when the program uses a rontolisp:tcp-* built-in);
+		// built before the IO runtime so the stream built-ins can grow socket branches.
+		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesTcp
+				? JvmSocketRuntimeBuilder.build(cp, thisClass, objectClass, stringClass, longClass, longValueOf,
+						longValue, stringLengthForIo, stringSubstring, stringConcat)
+				: null;
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
-					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod)
+					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -1015,6 +1051,18 @@ public final class JvmLispCompiler implements LispCompiler {
 									attr.writeU2(fm.maxStack())
 										.writeU2(fm.maxLocals())
 										.writeCode((Object[]) fm.code().toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0);
+								})));
+					}
+				}
+				if (socketRuntime != null) {
+					for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
+						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
+								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+									attr.writeU2(sm.maxStack())
+										.writeU2(sm.maxLocals())
+										.writeCode((Object[]) sm.code().toArray(new Integer[0]))
 										.writeU2(0)
 										.writeU2(0);
 								})));
@@ -1482,6 +1530,14 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant awaitHelper;
 
+		final @Nullable MethodrefConstant tcpConnectHelper;
+
+		final @Nullable MethodrefConstant tcpListenHelper;
+
+		final @Nullable MethodrefConstant tcpAcceptHelper;
+
+		final @Nullable MethodrefConstant tcpLocalPortHelper;
+
 		/**
 		 * The {@code java:} interop bridge references ({@code init}/{@code new}/
 		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
@@ -1617,6 +1673,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.readLineHelper = Objects.requireNonNull(builder.readLineHelper);
 			this.fetchHelper = builder.fetchHelper;
 			this.awaitHelper = builder.awaitHelper;
+			this.tcpConnectHelper = builder.tcpConnectHelper;
+			this.tcpListenHelper = builder.tcpListenHelper;
+			this.tcpAcceptHelper = builder.tcpAcceptHelper;
+			this.tcpLocalPortHelper = builder.tcpLocalPortHelper;
 			this.javaOps = builder.javaOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
@@ -1702,6 +1762,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant fetchHelper;
 
 			private @Nullable MethodrefConstant awaitHelper;
+
+			private @Nullable MethodrefConstant tcpConnectHelper;
+
+			private @Nullable MethodrefConstant tcpListenHelper;
+
+			private @Nullable MethodrefConstant tcpAcceptHelper;
+
+			private @Nullable MethodrefConstant tcpLocalPortHelper;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
 
@@ -1903,6 +1971,26 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder awaitHelper(@Nullable MethodrefConstant awaitHelper) {
 				this.awaitHelper = awaitHelper;
+				return this;
+			}
+
+			Builder tcpConnectHelper(@Nullable MethodrefConstant tcpConnectHelper) {
+				this.tcpConnectHelper = tcpConnectHelper;
+				return this;
+			}
+
+			Builder tcpListenHelper(@Nullable MethodrefConstant tcpListenHelper) {
+				this.tcpListenHelper = tcpListenHelper;
+				return this;
+			}
+
+			Builder tcpAcceptHelper(@Nullable MethodrefConstant tcpAcceptHelper) {
+				this.tcpAcceptHelper = tcpAcceptHelper;
+				return this;
+			}
+
+			Builder tcpLocalPortHelper(@Nullable MethodrefConstant tcpLocalPortHelper) {
+				this.tcpLocalPortHelper = tcpLocalPortHelper;
 				return this;
 			}
 

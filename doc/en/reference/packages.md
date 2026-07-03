@@ -115,7 +115,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
+; => (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```

@@ -150,6 +150,11 @@ final class WasmExprCompiler {
 					WasmPromisepCompiler.compile(cons, ctx);
 					return;
 				}
+				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
+						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())) {
+					WasmTcpCompiler.compile(qn.member(), cons, ctx);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {

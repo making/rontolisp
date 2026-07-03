@@ -892,6 +892,39 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end loop
 		w.write(Instruction.END); // end block
 
+		// if pos > 1 && memory[heap_ptr + pos - 1] == 0x0D: pos-- -- strip one
+		// trailing carriage return for CRLF parity with BufferedReader.readLine
+		// (the interpreter and JVM backends strip it the same way; without this,
+		// CRLF-terminated socket lines -- e.g. HTTP -- keep a trailing \r and a
+		// blank CRLF line never compares string= to "").
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x0D);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.END);
+
 		// if pos == 1 && eof_flag: return ref.null eq (nil)
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(2);

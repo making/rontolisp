@@ -18,7 +18,8 @@ public final class PackageIntrospection {
 	 */
 	public static final List<String> RONTOLISP_FUNCTION_NAMES = List.of(LispNames.AWAIT, LispNames.FETCH,
 			LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
-			LispNames.LIST_SPECIAL_FORMS, LispNames.PROMISEP, LispNames.THEN, LispNames.VERSION);
+			LispNames.LIST_SPECIAL_FORMS, LispNames.PROMISEP, LispNames.TCP_ACCEPT, LispNames.TCP_CONNECT,
+			LispNames.TCP_LISTEN, LispNames.TCP_LOCAL_PORT, LispNames.THEN, LispNames.VERSION);
 
 	/**
 	 * The functions owned by the {@code java} interop package, sorted alphabetically.

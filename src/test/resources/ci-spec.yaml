@@ -975,7 +975,7 @@ cases:
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       207
-      (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
+      (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)
       (call field new proxy static)
       ci-intro-fn
       nil
@@ -2185,6 +2185,17 @@ cases:
       34
       255
       -1
+  - name: read-line-strips-one-trailing-carriage-return
+    source: |
+      (with-open-file (out "crlf.dat" :direction :output :element-type '(unsigned-byte 8))
+        (write-byte 104 out) (write-byte 105 out) (write-byte 13 out) (write-byte 10 out)
+        (write-byte 13 out) (write-byte 10 out))
+      (with-open-file (in "crlf.dat")
+        (print (read-line in))
+        (print (string= (read-line in) "")))
+    expected: |
+      "hi"
+      t
   - name: read-sequence-and-write-sequence-round-trip
     source: |
       (let ((buf (make-array 4)))

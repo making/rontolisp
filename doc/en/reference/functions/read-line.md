@@ -2,7 +2,7 @@
 
 `(read-line &optional stream)`
 
-Reads one line of text and returns it as a string with the trailing newline removed. With no argument it reads from standard input; given a stream opened by `open` or `with-open-file` it reads the next line from that stream. At end of input it returns `nil` rather than signalling an error. Works in all three backends; unlike `read`, it returns the raw line without parsing it as an S-expression.
+Reads one line of text and returns it as a string with the trailing newline removed (a CRLF line ending also loses its carriage return, like Java's `BufferedReader.readLine` -- so CRLF-terminated input such as HTTP over a [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) socket reads as plain lines). With no argument it reads from standard input; given a stream opened by `open` or `with-open-file` it reads the next line from that stream. At end of input it returns `nil` rather than signalling an error. Works in all three backends; unlike `read`, it returns the raw line without parsing it as an S-expression.
 
 ```console
 (print (read-line))

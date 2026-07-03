@@ -48,6 +48,64 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void tcpBuiltinsInPreview1ModeAreCompileErrors() {
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-connect \"127.0.0.1\" 7777)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-listen 7777)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-accept 0)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-local-port 0)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+	}
+
+	@Test
+	void tcpBuiltinsCompileInComponentMode() {
+		assertThat(compileComponent("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-line "hi" client)
+				  (print (read-line server))
+				  (close server)
+				  (close client)
+				  (close listener))
+				""")).isNotEmpty();
+		// tcp-listen without a host (bind all interfaces) compiles too
+		assertThat(compileComponent("(rontolisp:tcp-listen 7777)")).isNotEmpty();
+	}
+
+	@Test
+	void tcpRejectsWrongArgCounts() {
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-connect \"127.0.0.1\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-connect expects 2 arguments");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-listen)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-listen expects 1 or 2 arguments");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-accept)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-accept expects 1 arguments");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-local-port 1 2)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-local-port expects 1 arguments");
+	}
+
+	@Test
+	void fetchAndTcpInOneComponentProgramIsCompileError() {
+		// fetch (a wasi:http 0.2 hybrid) and tcp sockets (wasi:sockets 0.3) need
+		// different component blob variants; combining them is not supported yet.
+		assertThatThrownBy(
+				() -> compileComponent("(rontolisp:fetch \"http://x/\") (rontolisp:tcp-connect \"127.0.0.1\" 7777)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cannot be combined");
+	}
+
+	@Test
 	void fetchWithLiteralUnsupportedMethodIsCompileError() {
 		// A method outside the supported set is rejected at compile time (only literal
 		// methods are checked; a runtime-computed one is treated as GET).

@@ -149,17 +149,31 @@ public final class WasmLispCompiler implements LispCompiler {
 	/** Number of preview1-style imported functions (fd_write..environ_get). */
 	static final int IMPORT_FUNC_COUNT = 8;
 
-	// Function indices 8 and 9 are reserved for rontolisp:fetch / rontolisp:await in
-	// BOTH modes so the defined-function indices stay identical across modes: in
-	// component mode they are the imported http.fetch-start / http.fetch-await; in
-	// Preview 1 mode they are unused trap stubs (fetch/await raise a compile error
-	// there). This keeps FUNC_START at 10 uniformly, so all the static FUNC_* constants
-	// below are stable.
-	static final int FUNC_FETCH_START = IMPORT_FUNC_COUNT; // 8
+	// Function indices 8-13 are reserved for the rontolisp:tcp-* built-ins (8-11) and
+	// rontolisp:fetch / rontolisp:await (12-13) in BOTH modes so the defined-function
+	// indices stay identical across modes. Imports always precede defined functions,
+	// so a slot can be an import in one mode only if every EARLIER slot is an import in
+	// that mode too. The combinations (fetch + sockets together is a compile error):
+	// - sockets component: sock.* imported at 8-11, fetch trap stubs defined at 12-13.
+	// - fetch component: sock.* imported at 8-11 FROM THE HTTP ADAPTER (four tiny
+	// errno-returning stub exports in adapter-http.wat), http.* imported at 12-13.
+	// - plain component / Preview 1 / no-wasi: all six are defined trap stubs.
+	// This keeps FUNC_START at 14 uniformly, so all the static FUNC_* constants below
+	// are stable. The tcp/fetch built-ins raise a compile error in Preview 1 mode, so
+	// the stubs are never called.
+	static final int FUNC_TCP_CONNECT = IMPORT_FUNC_COUNT; // 8
 
-	static final int FUNC_FETCH_AWAIT = FUNC_FETCH_START + 1; // 9
+	static final int FUNC_TCP_LISTEN = FUNC_TCP_CONNECT + 1; // 9
 
-	static final int FUNC_START = FUNC_FETCH_AWAIT + 1; // 10
+	static final int FUNC_TCP_ACCEPT = FUNC_TCP_LISTEN + 1; // 10
+
+	static final int FUNC_TCP_LOCAL_PORT = FUNC_TCP_ACCEPT + 1; // 11
+
+	static final int FUNC_FETCH_START = FUNC_TCP_LOCAL_PORT + 1; // 12
+
+	static final int FUNC_FETCH_AWAIT = FUNC_FETCH_START + 1; // 13
+
+	static final int FUNC_START = FUNC_FETCH_AWAIT + 1; // 14
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -524,6 +538,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// handle) here; the compiler boxes it as an i31 integer -- the promise value.
 	static final int FETCH_HANDLE_ADDR = 0x40014;
 
+	// sock.tcp-connect / tcp-listen / tcp-accept write the preview1-style socket fd
+	// (>= 200, serviced by the sockets adapter's fd_read/fd_write/fd_close branches)
+	// through this out-pointer; the compiler boxes it as an i31 integer -- the stream
+	// handle. Component mode only.
+	static final int SOCK_FD_ADDR = 0x40018;
+
 	static final int REQ_HDR_BUF = 0x40100;
 
 	static final int RT_INTERN_BASE = 8192;
@@ -580,6 +600,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesFetch = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
 		boolean emitHttpImport = this.component && usesFetch;
+		// The rontolisp:tcp-* built-ins are component-only the same way: in component
+		// mode they drive the sock.* imports (function indices FUNC_TCP_CONNECT ..
+		// FUNC_TCP_LOCAL_PORT) implemented by the sockets adapter over
+		// wasi:sockets@0.3.0; in Preview 1 mode those indices are unused trap stubs and
+		// the built-ins raise a compile error (WasmTcpCompiler).
+		boolean usesTcp = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT));
+		boolean emitSockImport = this.component && usesTcp;
+		// fetch and tcp sockets need different component blob variants (wasi:http 0.2
+		// hybrid vs wasi:sockets 0.3); a combined variant does not exist yet.
+		if (emitHttpImport && emitSockImport) {
+			throw new UnsupportedOperationException(
+					"rontolisp:fetch and rontolisp:tcp-* cannot be combined in one --component program yet");
+		}
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -1359,10 +1397,26 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
 						.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
-				// 9th/10th function imports (indices FUNC_FETCH_START / FUNC_FETCH_AWAIT)
+				// Function imports at indices FUNC_TCP_CONNECT .. FUNC_TCP_LOCAL_PORT
+				// (8-11): the sockets adapter's exports over wasi:sockets@0.3.0 when the
+				// program uses a tcp built-in in component mode, or the http adapter's
+				// errno-returning stub exports when the program uses fetch (imports must
+				// precede defined functions, so the sock slots cannot be defined stubs
+				// while the http slots at 12-13 are imports). Otherwise (Preview 1, or a
+				// component using neither) they are defined trap stubs.
+				// tcp-connect/tcp-listen(hostPtr, hostLen, port, fdOut) -> errno share
+				// fd_write's (4x i32) -> i32 shape; tcp-accept(fd, fdOut) -> errno and
+				// tcp-local-port(fd, portOut) -> errno are (2x i32) -> i32 like _intern.
+				if (emitSockImport || emitHttpImport) {
+					imports.addImport("sock", "tcp-connect", ExternalKind.FUNCTION, TYPE_FD_WRITE);
+					imports.addImport("sock", "tcp-listen", ExternalKind.FUNCTION, TYPE_FD_WRITE);
+					imports.addImport("sock", "tcp-accept", ExternalKind.FUNCTION, TYPE_INTERN);
+					imports.addImport("sock", "tcp-local-port", ExternalKind.FUNCTION, TYPE_INTERN);
+				}
+				// Function imports at indices FUNC_FETCH_START / FUNC_FETCH_AWAIT (12-13)
 				// when the program calls fetch/await in component mode: the adapter's
 				// exported http.fetch-start / http.fetch-await. In Preview 1 mode (or a
-				// component without fetch) indices 8/9 are defined trap stubs instead.
+				// component without fetch) those indices are defined trap stubs instead.
 				if (emitHttpImport) {
 					imports.addImport("http", "fetch-start", ExternalKind.FUNCTION, TYPE_FETCH_START);
 					imports.addImport("http", "fetch-await", ExternalKind.FUNCTION, TYPE_FETCH_AWAIT);
@@ -1397,14 +1451,25 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
 						.addFunction(TYPE_INTERN); // 7: environ_get
 				}
-				// Reserve function indices FUNC_FETCH_START (8) / FUNC_FETCH_AWAIT (9):
+				// Reserve function indices FUNC_TCP_CONNECT (8) .. FUNC_TCP_LOCAL_PORT
+				// (11): sock.* imports when the program uses tcp OR fetch in component
+				// mode (the fetch case binds the http adapter's errno stubs); otherwise
+				// defined trap stubs so the following defined-function indices line up
+				// with the FUNC_* constants.
+				if (!(emitSockImport || emitHttpImport)) {
+					fnDef.addFunction(TYPE_FD_WRITE); // index 8: unused tcp-connect stub
+					fnDef.addFunction(TYPE_FD_WRITE); // index 9: unused tcp-listen stub
+					fnDef.addFunction(TYPE_INTERN); // index 10: unused tcp-accept stub
+					fnDef.addFunction(TYPE_INTERN); // index 11: unused tcp-local-port
+													// stub
+				}
+				// Reserve function indices FUNC_FETCH_START (12) / FUNC_FETCH_AWAIT (13):
 				// in component+fetch they are the http.fetch-start / http.fetch-await
-				// imports (emitted above); otherwise defined trap stubs so the following
-				// defined-function indices line up with the FUNC_* constants.
+				// imports (emitted above); otherwise defined trap stubs.
 				if (!emitHttpImport) {
-					fnDef.addFunction(TYPE_FETCH_START); // index 8: unused fetch-start
+					fnDef.addFunction(TYPE_FETCH_START); // index 12: unused fetch-start
 															// stub
-					fnDef.addFunction(TYPE_FETCH_AWAIT); // index 9: unused fetch-await
+					fnDef.addFunction(TYPE_FETCH_AWAIT); // index 13: unused fetch-await
 															// stub
 				}
 				fnDef.addFunction(TYPE_START) // _start
@@ -1596,6 +1661,15 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
+				// tcp-connect / tcp-listen / tcp-accept / tcp-local-port trap stubs at
+				// function indices FUNC_TCP_CONNECT .. FUNC_TCP_LOCAL_PORT (only when
+				// they are not the sock.* imports): no locals, unreachable, end. Never
+				// called.
+				if (!(emitSockImport || emitHttpImport)) {
+					for (int i = 0; i < 4; i++) {
+						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
+					}
+				}
 				// fetch-start / fetch-await trap stubs at function indices
 				// FUNC_FETCH_START / FUNC_FETCH_AWAIT (only when they are not the http
 				// imports): no locals, unreachable, end. They are never called.
@@ -1725,7 +1799,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// layout,
 			// so tree-shaking the core is unsafe here; leave the component path
 			// untouched.
-			return WasmComponentBuilder.build(coreModule, emitHttpImport);
+			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}

@@ -147,7 +147,8 @@ public final class PackageRegistry {
 				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
 						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.PROMISEP,
 						LispNames.THEN, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.WASM_EXPORT,
-						LispNames.WASM_IMPORT))));
+						LispNames.WASM_IMPORT, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
+						LispNames.TCP_LOCAL_PORT))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external.

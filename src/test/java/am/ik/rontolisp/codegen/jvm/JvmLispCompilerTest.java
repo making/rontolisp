@@ -3171,7 +3171,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -3301,6 +3301,84 @@ class JvmLispCompilerTest {
 			.isEqualTo("t");
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/x\"))"))
 			.hasStackTraceContaining("java.net.ConnectException");
+	}
+
+	@Test
+	void compileAndRunTcpEchoRoundTripOnLoopback() throws Exception {
+		// Single-threaded choreography on port 0: connect before accept (the connection
+		// sits in the listen backlog) and write before the peer reads (small payloads
+		// sit in the kernel socket buffers), so nothing deadlocks.
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (write-line "hello" client)
+				  (let* ((server (rontolisp:tcp-accept listener))
+				         (line (read-line server)))
+				    (write-line line server)
+				    (let ((reply (read-line client)))
+				      (close server)
+				      (close client)
+				      (close listener)
+				      (print reply))))
+				""")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunTcpByteOpsOnSocket() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (write-byte 65 client)
+				  (let* ((server (rontolisp:tcp-accept listener))
+				         (b (read-byte server)))
+				    (close server)
+				    (close client)
+				    (close listener)
+				    (print b)))
+				""")).isEqualTo("65");
+	}
+
+	@Test
+	void compileAndRunTcpReadLineReturnsNilAfterPeerClose() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (let ((line (read-line server)))
+				    (close server)
+				    (close listener)
+				    (print line)))
+				""")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunTcpConnectRefusedThrows() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener)))
+				  (close listener)
+				  (rontolisp:tcp-connect "127.0.0.1" port))
+				""")).hasStackTraceContaining("java.net.ConnectException");
+	}
+
+	@Test
+	void compileTcpRejectsWrongArgCount() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-connect \"127.0.0.1\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-connect expects 2 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-listen)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-listen expects 1 or 2 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-accept)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-accept expects 1 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-local-port 1 2)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-local-port expects 1 arguments");
 	}
 
 	@Test

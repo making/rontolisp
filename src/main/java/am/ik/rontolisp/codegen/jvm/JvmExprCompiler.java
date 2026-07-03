@@ -131,6 +131,11 @@ final class JvmExprCompiler {
 					JvmPromisepCompiler.compile(cons, ctx, className);
 					return;
 				}
+				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
+						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())) {
+					JvmTcpCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
 				if (LispNames.WASM_EXPORT.equals(qn.member())) {
 					// rontolisp:wasm-export marks a function for direct WASM export; the
 					// JVM

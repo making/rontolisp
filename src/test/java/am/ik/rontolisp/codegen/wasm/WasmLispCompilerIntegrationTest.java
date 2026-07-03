@@ -3557,7 +3557,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -3636,6 +3636,68 @@ class WasmLispCompilerIntegrationTest {
 				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
 				"/tmp/fetch-noflag.component.wasm");
 		assertThat(result.getExitCode()).isNotZero();
+	}
+
+	@Test
+	void componentTcpLoopbackEcho() throws Exception {
+		// Full echo round trip over the container's loopback, single-threaded
+		// choreography (connect before accept, write before the peer reads): listen on
+		// port 0, read the ephemeral port back, connect, exchange a line and a byte,
+		// then read-line after the peer closes returns nil. Deterministic -- no
+		// external network. Requires -S tcp=y -S inherit-network=y.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (write-line "hello" client)
+				  (write-byte 65 client)
+				  (let* ((server (rontolisp:tcp-accept listener))
+				         (line (read-line server)))
+				    (write-line line server)
+				    (print (read-line client))
+				    (print (read-byte server))
+				    (close client)
+				    (print (read-line server))
+				    (close server)
+				    (close listener)))
+				""";
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-echo.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
+				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "-S", "tcp=y",
+				"-S", "inherit-network=y", "/tmp/tcp-echo.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n65\nnil");
+	}
+
+	@Test
+	void componentTcpConnectRefusedReturnsNil() throws Exception {
+		// Connecting to a closed port returns nil instead of trapping (the fetch error
+		// convention). Deterministic, no server.
+		String program = "(print (rontolisp:tcp-connect \"127.0.0.1\" 1))";
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-refused.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
+				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "-S", "tcp=y",
+				"-S", "inherit-network=y", "/tmp/tcp-refused.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("nil");
+	}
+
+	@Test
+	void componentTcpWithoutNetworkFlagsReturnsNil() throws Exception {
+		// Unlike wasi:http (whose absence fails instantiation without -S http=y),
+		// wasmtime always hosts wasi:sockets and gates it by permission: a socket
+		// component still instantiates without -S tcp / -S inherit-network, and the
+		// socket operations fail, so the built-ins yield nil.
+		String program = "(print (rontolisp:tcp-listen 0 \"127.0.0.1\"))";
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-noflag.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
+				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
+				"/tmp/tcp-noflag.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("nil");
 	}
 
 	@Test

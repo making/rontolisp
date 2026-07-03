@@ -1236,6 +1236,39 @@ public final class LispNames {
 	 */
 	public static final String JSON_STRINGIFY = "json-stringify";
 
+	/**
+	 * The {@code tcp-connect} function provided by the {@code rontolisp} package. Opens a
+	 * blocking TCP connection to {@code host} (a hostname or IP literal; the WASM
+	 * component backend supports IPv4 literals only) and {@code port}, and returns a
+	 * bidirectional stream handle usable with {@code read-line}, {@code write-line},
+	 * {@code read-byte}, {@code write-byte} and {@code close}.
+	 */
+	public static final String TCP_CONNECT = "tcp-connect";
+
+	/**
+	 * The {@code tcp-listen} function provided by the {@code rontolisp} package. Binds a
+	 * listening TCP socket on {@code port} (0 picks an ephemeral port, see
+	 * {@code rontolisp:tcp-local-port}) and an optional {@code host} (default: all
+	 * interfaces) and returns a listener handle for {@code rontolisp:tcp-accept} /
+	 * {@code close}.
+	 */
+	public static final String TCP_LISTEN = "tcp-listen";
+
+	/**
+	 * The {@code tcp-accept} function provided by the {@code rontolisp} package. Blocks
+	 * until a client connects to the given listener handle and returns a bidirectional
+	 * stream handle for the accepted connection (same stream operations as
+	 * {@code rontolisp:tcp-connect}).
+	 */
+	public static final String TCP_ACCEPT = "tcp-accept";
+
+	/**
+	 * The {@code tcp-local-port} function provided by the {@code rontolisp} package.
+	 * Returns the local port number bound to a listener or socket handle (useful after
+	 * listening on port 0).
+	 */
+	public static final String TCP_LOCAL_PORT = "tcp-local-port";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";
 

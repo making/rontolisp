@@ -505,4 +505,16 @@
   (export "environ_sizes_get" (func $environ_sizes_get))
   (export "environ_get" (func $environ_get))
   (export "fetch-start" (func $fetch_start))
-  (export "fetch-await" (func $fetch_await)))
+  (export "fetch-await" (func $fetch_await))
+
+  ;; errno-returning stubs satisfying the rontolisp core's "sock" imports in a fetch
+  ;; component: imports precede defined functions, so the sock slots (core function
+  ;; indices 8-11) must be imports whenever the http slots (12-13) are. rontolisp:tcp-*
+  ;; in a fetch component is a compile error, so these are never called -- they only
+  ;; have to exist and link. 52 = ENOSYS.
+  (func $tcp_stub4 (param i32 i32 i32 i32) (result i32) (i32.const 52))
+  (func $tcp_stub2 (param i32 i32) (result i32) (i32.const 52))
+  (export "tcp-connect" (func $tcp_stub4))
+  (export "tcp-listen" (func $tcp_stub4))
+  (export "tcp-accept" (func $tcp_stub2))
+  (export "tcp-local-port" (func $tcp_stub2)))

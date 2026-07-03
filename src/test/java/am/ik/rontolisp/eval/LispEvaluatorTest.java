@@ -3141,7 +3141,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
 	}
 
 	@Test
@@ -3185,7 +3185,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
 	}
 
 	@Test
@@ -3365,6 +3365,93 @@ class LispEvaluatorTest {
 		finally {
 			server.stop(0);
 		}
+	}
+
+	@Test
+	void tcpEchoRoundTripOnLoopback() {
+		// Single-threaded choreography: connect before accept (the connection sits in
+		// the listen backlog) and write before the peer reads (small payloads sit in
+		// the kernel socket buffers), so nothing deadlocks.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (write-line "hello" client)
+				  (let* ((server (rontolisp:tcp-accept listener))
+				         (line (read-line server)))
+				    (write-line line server)
+				    (let ((reply (read-line client)))
+				      (close server)
+				      (close client)
+				      (close listener)
+				      reply)))
+				""";
+		assertThat(eval(program)).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void tcpByteOpsOnSocket() {
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (write-byte 65 client)
+				  (let* ((server (rontolisp:tcp-accept listener))
+				         (b (read-byte server)))
+				    (close server)
+				    (close client)
+				    (close listener)
+				    b))
+				""";
+		assertThat(eval(program)).isEqualTo(new LispInteger(65));
+	}
+
+	@Test
+	void tcpReadLineReturnsNilAfterPeerClose() {
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (let ((line (read-line server)))
+				    (close server)
+				    (close listener)
+				    line))
+				""";
+		assertThat(eval(program)).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void tcpConnectRefusedSignalsError() {
+		// Listen on an ephemeral port, close it, then connect to the now-free port.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener)))
+				  (close listener)
+				  (rontolisp:tcp-connect "127.0.0.1" port))
+				""";
+		assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tcp-connect");
+	}
+
+	@Test
+	void tcpArgumentValidation() {
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tcp-connect");
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect 80 80)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string host");
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-listen \"nope\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects an integer port");
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-accept 12345)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a listener handle");
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-local-port 12345)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a socket or listener handle");
+		// tcp-local-port on a file stream handle is rejected too
+		assertThatThrownBy(() -> evalMulti("""
+				(setq h (open "/dev/null" :input))
+				(rontolisp:tcp-local-port h)
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a socket or listener handle");
 	}
 
 	@Test

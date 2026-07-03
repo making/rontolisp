@@ -121,6 +121,41 @@ wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-mo
 wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . prog.wasm
 ```
 
+## Sockets variant (`rontolisp:tcp-*`) — pure WASI 0.3
+
+A program using a `rontolisp:tcp-*` built-in compiles to the sockets variant:
+unlike fetch, `wasi:sockets@0.3.0` exists upstream and wasmtime 46 hosts it, so
+the variant stays pure WASI 0.3 (the tcp send/receive plumbing flows through the
+same built-in `stream<u8>` machinery as the base I/O). The parallel blob set is:
+
+```
+src/wasm-component/
+  uni-sock.wit  core-sock.wat  adapter-sock.wat   (sockets sources; mem.wat is shared)
+
+src/main/resources/.../component/
+  import-block-sock.bin  adapter-sock.wasm
+```
+
+`uni-sock.wit` (world `uni-sock`) is the base 0.3 surface plus
+`import wasi:sockets/types@0.3.0;` appended last (import instance 9; next free
+component type 13). `WasmComponentBuilder.buildSock` wires the variant:
+alongside the shared `stream<u8>`/future built-ins it defines `own<tcp-socket>`
+and the element-typed `stream<own tcp-socket>` accept stream (its own
+`stream.read`/`drop-readable` built-ins) plus a drop-only sockets-error-code
+future. `adapter-sock.wat` is `adapter.wat` plus a 32-slot socket table (fd =
+200 + slot; `fd_write`/`fd_read`/`fd_close` dispatch on fd >= 200, so the
+rontolisp core's stream built-ins work on sockets unchanged) and the
+`tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` exports (the
+core's `"sock"` import seam). Run a socket component with
+`-S tcp=y -S inherit-network=y` in addition to the async flags; IPv4 literals
+only (`wasi:sockets/ip-name-lookup` is not wired yet). Because imports precede
+defined functions and the sock slots (core function indices 8-11) sit before
+the http slots (12-13), `adapter-http.wat` exports four errno-returning tcp
+stubs that satisfy the sock imports of a fetch component; combining fetch and
+tcp in one component is a compile error (see
+`../../.todo/49-combine-fetch-and-sockets-component.md`). Details:
+`../../.kb/tcp-sockets.md`.
+
 ## HTTP variant (`rontolisp:fetch`) — hybrid
 
 A `fetch` program compiles to a **hybrid** component: the base I/O stays WASI 0.3, but

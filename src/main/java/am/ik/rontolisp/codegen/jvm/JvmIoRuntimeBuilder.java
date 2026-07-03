@@ -10,6 +10,8 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Builds the JVM bytecode for the file-stream runtime used by the {@code open},
  * {@code close}, {@code write-line} and stream-taking {@code read-line} built-ins (and
@@ -159,11 +161,20 @@ final class JvmIoRuntimeBuilder {
 
 	private final ConstantPool.StringConstant eofStr;
 
+	/**
+	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
+	 * stream built-ins then grow socket branches (a socket entry is a raw
+	 * {@code java.net.Socket}/{@code ServerSocket}, not a reader/writer). Non-socket
+	 * programs keep their original bytes.
+	 */
+	private final JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets;
+
 	private JvmIoRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant readLineHelper) {
+			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets) {
+		this.sockets = sockets;
 		this.cp = cp;
 		this.objectClass = objectClass;
 		this.stringClass = stringClass;
@@ -238,9 +249,9 @@ final class JvmIoRuntimeBuilder {
 			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant readLineHelper) {
+			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
-				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper);
+				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets);
 	}
 
 	/** Returns all stream-runtime method bodies to emit. */
@@ -430,6 +441,42 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ILOAD_1);
 		code.add(Opcode.AALOAD);
 		code.add(Opcode.ASTORE_2);
+		// Socket entries first (only when the program uses tcp built-ins): a Socket /
+		// ServerSocket is neither a reader/writer nor a raw byte stream, so the chain
+		// below would fail on it.
+		List<Integer> socketGotoDones = new ArrayList<>();
+		if (this.sockets != null) {
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.socketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.sockets.socketClose().index());
+			socketGotoDones.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotSocketPos, code.size());
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.serverSocketClass().index());
+			int ifNotListenerPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.serverSocketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.sockets.serverSocketClose().index());
+			socketGotoDones.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotListenerPos, code.size());
+		}
 		// if (stream instanceof BufferedReader) ((BufferedReader) stream).close();
 		// else if (stream instanceof InputStream) ((InputStream) stream).close();
 		// else if (stream instanceof OutputStream) ((OutputStream) stream).close();
@@ -487,6 +534,9 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, gotoDonePos, code.size());
 		patchBranch(code, gotoDonePos1, code.size());
 		patchBranch(code, gotoDonePos2, code.size());
+		for (int socketGotoDone : socketGotoDones) {
+			patchBranch(code, socketGotoDone, code.size());
+		}
 		// _streams[idx] = null; return "t";
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
@@ -544,6 +594,23 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
 		code.add(Opcode.AALOAD);
+		if (this.sockets != null) {
+			// if (entry instanceof Socket) return _sockWriteLine(str, entry);
+			code.add(Opcode.ASTORE_3);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.sockets.sockWriteLine().index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotSocketPos, code.size());
+			code.add(Opcode.ALOAD_3);
+		}
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.writerClass.index());
 		code.add(Opcode.ASTORE_3);
@@ -588,6 +655,22 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
 		code.add(Opcode.AALOAD);
+		if (this.sockets != null) {
+			// if (entry instanceof Socket) return _sockReadLine(entry);
+			code.add(Opcode.ASTORE_1);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.sockets.sockReadLine().index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotSocketPos, code.size());
+			code.add(Opcode.ALOAD_1);
+		}
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.bufferedReaderClass.index());
 		code.add(Opcode.INVOKEVIRTUAL);
@@ -623,6 +706,7 @@ final class JvmIoRuntimeBuilder {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=in (InputStream), 4=b (int)
 		List<Integer> code = new ArrayList<>();
 		// in = (InputStream) _streams[(int) ((Long) handle).longValue()];
+		// (a Socket entry contributes its input stream instead)
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
 		code.add(Opcode.ALOAD_0);
@@ -632,9 +716,35 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
 		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.inputStreamClass.index());
-		code.add(Opcode.ASTORE_3);
+		if (this.sockets != null) {
+			code.add(Opcode.ASTORE_3);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.socketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.sockets.socketGetInputStream().index());
+			code.add(Opcode.ASTORE_3);
+			int gotoReadPos = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotSocketPos, code.size());
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.inputStreamClass.index());
+			code.add(Opcode.ASTORE_3);
+			patchBranch(code, gotoReadPos, code.size());
+		}
+		else {
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.inputStreamClass.index());
+			code.add(Opcode.ASTORE_3);
+		}
 		// b = in.read();
 		code.add(Opcode.ALOAD_3);
 		code.add(Opcode.INVOKEVIRTUAL);
@@ -681,6 +791,7 @@ final class JvmIoRuntimeBuilder {
 		// Slots: 0=byteObj, 1=handle, 2=out (OutputStream)
 		List<Integer> code = new ArrayList<>();
 		// out = (OutputStream) _streams[(int) ((Long) handle).longValue()];
+		// (a Socket entry contributes its output stream instead)
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
 		code.add(Opcode.ALOAD_1);
@@ -690,9 +801,35 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
 		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.outputStreamClass.index());
-		code.add(Opcode.ASTORE_2);
+		if (this.sockets != null) {
+			code.add(Opcode.ASTORE_2);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.socketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.sockets.socketGetOutputStream().index());
+			code.add(Opcode.ASTORE_2);
+			int gotoWritePos = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotSocketPos, code.size());
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.outputStreamClass.index());
+			code.add(Opcode.ASTORE_2);
+			patchBranch(code, gotoWritePos, code.size());
+		}
+		else {
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.outputStreamClass.index());
+			code.add(Opcode.ASTORE_2);
+		}
 		// out.write((int) ((Long) byteObj).longValue()); return byteObj;
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.ALOAD_0);

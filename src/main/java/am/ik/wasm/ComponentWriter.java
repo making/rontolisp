@@ -525,6 +525,27 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode the defined value type {@code stream<elem>} where the element is a defined
+	 * type referenced by index (e.g. {@code own<tcp-socket>} for the wasi:sockets accept
+	 * stream) rather than a primitive value type.
+	 * @param elemTypeIndex the component type index of the element type
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedStreamOfType(int elemTypeIndex) {
+		return enc(w -> w.write(0x66).write(0x01).writeSignedLeb128(elemTypeIndex));
+	}
+
+	/**
+	 * Encode the defined value type {@code own<resource>} (component type tag
+	 * {@code 0x69}), e.g. the element type of the wasi:sockets accept stream.
+	 * @param resourceTypeIndex the component type index of the resource type
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedOwn(int resourceTypeIndex) {
+		return enc(w -> w.write(0x69).writeUnsignedLeb128(resourceTypeIndex));
+	}
+
+	/**
 	 * Encode the defined value type {@code future<T>} where {@code T} is a defined type
 	 * referenced by index (component type tag {@code 0x65}).
 	 * @param payloadTypeIndex the component type index of the future payload type

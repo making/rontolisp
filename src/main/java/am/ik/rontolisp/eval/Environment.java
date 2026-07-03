@@ -12,6 +12,8 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -1759,8 +1761,16 @@ public final class Environment implements Scope {
 				out.println(str.value());
 				return str;
 			}
-			if (!(args.get(1) instanceof LispInteger handle)
-					|| !(streams.get(handle.value()) instanceof BufferedWriter writer)) {
+			if (!(args.get(1) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.WRITE_LINE + " expects an output stream");
+			}
+			Closeable entry = streams.get(handle.value());
+			if (entry instanceof Socket socket) {
+				// Socket writes are unbuffered: the line goes out immediately.
+				SocketSupport.writeLine(socket, str.value());
+				return str;
+			}
+			if (!(entry instanceof BufferedWriter writer)) {
 				throw new LispEvalException(LispNames.WRITE_LINE + " expects an output stream");
 			}
 			try {
@@ -1782,8 +1792,15 @@ public final class Environment implements Scope {
 					return line == null ? LispNil.INSTANCE : new LispString(line);
 				}
 				requireArgCount(LispNames.READ_LINE, args, 1);
-				if (!(args.get(0) instanceof LispInteger handle)
-						|| !(streams.get(handle.value()) instanceof BufferedReader reader)) {
+				if (!(args.get(0) instanceof LispInteger handle)) {
+					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
+				}
+				Closeable entry = streams.get(handle.value());
+				if (entry instanceof Socket socket) {
+					String socketLine = SocketSupport.readLine(socket);
+					return socketLine == null ? LispNil.INSTANCE : new LispString(socketLine);
+				}
+				if (!(entry instanceof BufferedReader reader)) {
 					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
 				}
 				String line = reader.readLine();
@@ -1798,16 +1815,24 @@ public final class Environment implements Scope {
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.READ_BYTE + " expects 1 to 3 arguments");
 			}
-			if (!(args.get(0) instanceof LispInteger handle)
-					|| !(streams.get(handle.value()) instanceof InputStream in2)) {
+			if (!(args.get(0) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
 			}
+			Closeable byteEntry = streams.get(handle.value());
 			int b;
-			try {
-				b = in2.read();
+			if (byteEntry instanceof Socket socket) {
+				b = SocketSupport.readByte(socket);
 			}
-			catch (IOException ex) {
-				throw new UncheckedIOException(ex);
+			else if (byteEntry instanceof InputStream in2) {
+				try {
+					b = in2.read();
+				}
+				catch (IOException ex) {
+					throw new UncheckedIOException(ex);
+				}
+			}
+			else {
+				throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
 			}
 			if (b < 0) {
 				boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
@@ -1823,8 +1848,15 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispInteger value) || value.value() < 0 || value.value() > 255) {
 				throw new LispEvalException(LispNames.WRITE_BYTE + " expects an integer between 0 and 255");
 			}
-			if (!(args.get(1) instanceof LispInteger handle)
-					|| !(streams.get(handle.value()) instanceof OutputStream out2)) {
+			if (!(args.get(1) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.WRITE_BYTE + " expects a binary output stream");
+			}
+			Closeable byteEntry = streams.get(handle.value());
+			if (byteEntry instanceof Socket socket) {
+				SocketSupport.writeByte(socket, (int) value.value());
+				return value;
+			}
+			if (!(byteEntry instanceof OutputStream out2)) {
 				throw new LispEvalException(LispNames.WRITE_BYTE + " expects a binary output stream");
 			}
 			try {
@@ -1834,6 +1866,75 @@ public final class Environment implements Scope {
 				throw new UncheckedIOException(ex);
 			}
 			return value;
+		}));
+		// TCP sockets (rontolisp package). A socket or listener handle lives in the same
+		// stream table as file streams: read-line/write-line/read-byte/write-byte
+		// dispatch on the entry type above, and close works unchanged (Socket and
+		// ServerSocket are Closeable). Sockets are bidirectional and mode-less -- they
+		// never go through open. The functions are registered here (not in
+		// registerPackages) because they share the stream table local to this method.
+		String tcpConnectName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT);
+		env.defineFunction(tcpConnectName, new LispFunction(tcpConnectName, args -> {
+			requireArgCount(LispNames.TCP_CONNECT, args, 2);
+			if (!(args.get(0) instanceof LispString host)) {
+				throw new LispEvalException(
+						LispNames.TCP_CONNECT + " expects a string host, got: " + args.get(0).print());
+			}
+			if (!(args.get(1) instanceof LispInteger port)) {
+				throw new LispEvalException(
+						LispNames.TCP_CONNECT + " expects an integer port, got: " + args.get(1).print());
+			}
+			Socket socket = SocketSupport.connect(host.value(), (int) port.value());
+			long handle = nextStreamHandle[0]++;
+			streams.put(handle, socket);
+			return new LispInteger(handle);
+		}));
+		String tcpListenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN);
+		env.defineFunction(tcpListenName, new LispFunction(tcpListenName, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.TCP_LISTEN + " expects 1 or 2 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(
+						LispNames.TCP_LISTEN + " expects an integer port, got: " + args.get(0).print());
+			}
+			String host = null;
+			if (args.size() == 2) {
+				if (!(args.get(1) instanceof LispString hostString)) {
+					throw new LispEvalException(
+							LispNames.TCP_LISTEN + " expects a string host, got: " + args.get(1).print());
+				}
+				host = hostString.value();
+			}
+			ServerSocket listener = SocketSupport.listen((int) port.value(), host);
+			long handle = nextStreamHandle[0]++;
+			streams.put(handle, listener);
+			return new LispInteger(handle);
+		}));
+		String tcpAcceptName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT);
+		env.defineFunction(tcpAcceptName, new LispFunction(tcpAcceptName, args -> {
+			requireArgCount(LispNames.TCP_ACCEPT, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof ServerSocket listener)) {
+				throw new LispEvalException(LispNames.TCP_ACCEPT + " expects a listener handle");
+			}
+			Socket socket = SocketSupport.accept(listener);
+			long acceptedHandle = nextStreamHandle[0]++;
+			streams.put(acceptedHandle, socket);
+			return new LispInteger(acceptedHandle);
+		}));
+		String tcpLocalPortName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT);
+		env.defineFunction(tcpLocalPortName, new LispFunction(tcpLocalPortName, args -> {
+			requireArgCount(LispNames.TCP_LOCAL_PORT, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.TCP_LOCAL_PORT + " expects a socket or listener handle");
+			}
+			Closeable entry = streams.get(handle.value());
+			long port = (entry == null) ? -1 : SocketSupport.localPort(entry);
+			if (port < 0) {
+				throw new LispEvalException(LispNames.TCP_LOCAL_PORT + " expects a socket or listener handle");
+			}
+			return new LispInteger(port);
 		}));
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			try {
