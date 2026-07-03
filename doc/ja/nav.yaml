@@ -37,15 +37,15 @@ sections:
         title: 関数名前空間
   - title: ガイド
     pages:
+      - file: guides/linear-algebra.md
+        title: ベクトルと行列（linalg）
       - file: guides/java-interop.md
         title: Java 連携
+      - file: guides/math-backends.md
+        title: 数学関数のバックエンド
       - file: guides/missing-features.md
         title: 未対応のCL機能
       - file: guides/eval-limitations.md
         title: コンパイル時evalの制限
       - file: guides/read-load-limitations.md
         title: コンパイル時read/loadの制限
-      - file: guides/math-backends.md
-        title: 数学関数のバックエンド
-      - file: guides/linear-algebra.md
-        title: ベクトルと行列（linalg）

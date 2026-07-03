@@ -37,15 +37,15 @@ sections:
         title: Function Namespace
   - title: Guides
     pages:
+      - file: guides/linear-algebra.md
+        title: Vectors & Matrices (linalg)
       - file: guides/java-interop.md
         title: Java Interop
+      - file: guides/math-backends.md
+        title: Math Function Backends
       - file: guides/missing-features.md
         title: Unsupported CL Features
       - file: guides/eval-limitations.md
         title: Compiled eval Limitations
       - file: guides/read-load-limitations.md
         title: Compiled read/load Limitations
-      - file: guides/math-backends.md
-        title: Math Function Backends
-      - file: guides/linear-algebra.md
-        title: Vectors & Matrices (linalg)
