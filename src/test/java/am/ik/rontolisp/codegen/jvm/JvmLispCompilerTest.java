@@ -2927,7 +2927,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -3506,6 +3506,57 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(defun f (a &rest r) r) (print (f))"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("expects at least 1 argument, got 0");
+	}
+
+	@Test
+	void compileAndRunDefstructBasics() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x (y 10))
+				(setq p (make-point :x 1))
+				(print (point-x p))
+				(print (point-y p))
+				(print (point-p p))
+				(print (point-p '(1 2)))
+				(setq q (copy-point p))
+				(setf (point-x q) 100)
+				(print (point-x p))
+				(print (point-x q))
+				""")).isEqualTo("1\n10\nt\nnil\n1\n100");
+	}
+
+	@Test
+	void compileAndRunDefstructSetfPlacesAndFirstClassAccessors() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (make-point :x 1 :y 2))
+				(setf (point-x p) 99)
+				(incf (point-y p) 5)
+				(print (list (point-x p) (point-y p)))
+				(print (mapcar #'point-x (list (make-point :x 10) (make-point :x 20))))
+				(defun shift (pt dx) (incf (point-x pt) dx) pt)
+				(print (point-x (shift p 1)))
+				""")).isEqualTo("(99 7)\n(10 20)\n100");
+	}
+
+	@Test
+	void compileAndRunDefstructInUserPackage() throws Exception {
+		assertThat(compileAndRun("""
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defstruct pt x y)
+				(defun dist2 (p) (+ (* (pt-x p) (pt-x p)) (* (pt-y p) (pt-y p))))
+				(in-package :cl-user)
+				(setq p (geo::make-pt :x 3 :y 4))
+				(print (geo::dist2 p))
+				(print (geo::pt-p p))
+				""")).isEqualTo("25\nt");
+	}
+
+	@Test
+	void compileNestedDefstructFails() {
+		assertThatThrownBy(() -> compileAndRun("(defun f () (defstruct point x y)) (f)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("defstruct is only supported as a top-level form");
 	}
 
 }

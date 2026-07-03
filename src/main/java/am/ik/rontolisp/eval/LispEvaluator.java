@@ -86,6 +86,13 @@ public final class LispEvaluator {
 	private final java.util.Set<String> providedModules = new java.util.HashSet<>();
 
 	/**
+	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
+	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
+	 * as places. Kept per evaluator, like the user macro table.
+	 */
+	private final java.util.Map<String, Integer> structAccessors = new java.util.HashMap<>();
+
+	/**
 	 * Create a new evaluator with the given output stream.
 	 * @param out the output stream for print operations
 	 */
@@ -539,6 +546,8 @@ public final class LispEvaluator {
 					return evalDefun(cons, env);
 				case LispNames.DEFMACRO:
 					return evalDefmacro(cons, env);
+				case LispNames.DEFSTRUCT:
+					return evalDefstruct(cons, env);
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
@@ -615,7 +624,7 @@ public final class LispEvaluator {
 				case LispNames.FOURTH:
 					return eval(LispMacroExpander.expandFourth(cons), env);
 				case LispNames.SETF:
-					return eval(LispMacroExpander.expandSetf(cons), env);
+					return eval(LispMacroExpander.expandSetf(cons, this.structAccessors), env);
 				case LispNames.PUSH:
 					return eval(LispMacroExpander.expandPush(cons), env);
 				case LispNames.POP:
@@ -697,6 +706,16 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(name.name(),
 				new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
 		return name;
+	}
+
+	private LispVal evalDefstruct(LispCons cons, Environment env) {
+		// Expand into the generated defuns (constructor, predicate, copier, accessors)
+		// and evaluate each; the accessor registry makes them setf-able places.
+		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors)) {
+			eval(form, env);
+		}
+		// defstruct returns the structure name, like Common Lisp.
+		return cons.toList().get(1);
 	}
 
 	private LispVal evalDefmacro(LispCons cons, Environment env) {

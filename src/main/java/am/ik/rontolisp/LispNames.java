@@ -601,6 +601,14 @@ public final class LispNames {
 	 */
 	public static final String DEFMACRO = "defmacro";
 
+	/**
+	 * The {@code defstruct} special form. Expanded into the defuns it generates
+	 * (constructor, predicate, copier, accessors) by
+	 * {@code LispMacroExpander.expandDefstruct}: the interpreter expands at evaluation
+	 * time, the compilers splice top-level forms before Pass 1.
+	 */
+	public static final String DEFSTRUCT = "defstruct";
+
 	/** The {@code &rest} lambda-list keyword. */
 	public static final String LAMBDA_REST = "&rest";
 

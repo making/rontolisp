@@ -535,6 +535,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so
 		// the rest of compilation sees canonical names.
 		program = new PackageResolver().resolveProgram(program);
+		// Splice top-level defstructs into their generated defuns before lambda-list
+		// desugaring (the generated constructor uses &key) so Pass 1 collects them as
+		// ordinary functions; the registry makes accessors setf-able places.
+		Map<String, Integer> structAccessors = new HashMap<>();
+		program = LispMacroExpander.expandTopLevelDefstructs(program, structAccessors);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -719,6 +724,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.dynamic(this.dynamic)
 			.component(this.component)
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.structAccessors(structAccessors)
 			.globals(globals)
 			.globalIndices(globalIndices);
 
@@ -1881,6 +1887,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * {@code defstruct} accessor names to their 1-based slot position, collected by
+		 * the pre-pass in {@link WasmLispCompiler#compile}; {@code setf} expansion treats
+		 * these as places. Shared across every context.
+		 */
+		Map<String, Integer> structAccessors = Map.of();
+
+		/**
 		 * Names of top-level global variables; each has a wasm global in
 		 * {@link #globalIndices}.
 		 */
@@ -1924,6 +1937,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.component = builder.component;
 			this.userDefunNames = builder.userDefunNames;
+			this.structAccessors = builder.structAccessors;
 			this.globals = builder.globals;
 			this.globalIndices = builder.globalIndices;
 		}
@@ -1953,6 +1967,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean component = false;
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Map<String, Integer> structAccessors = Map.of();
 
 			private Set<String> globals = Set.of();
 
@@ -2005,6 +2021,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder structAccessors(Map<String, Integer> structAccessors) {
+				this.structAccessors = structAccessors;
 				return this;
 			}
 

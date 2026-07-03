@@ -973,7 +973,7 @@ cases:
       (print (rontolisp:list-macros :cl-user))
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
-      (defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)
+      (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       192
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
@@ -1915,3 +1915,41 @@ cases:
       (101 102 103)
       (1 (2 3))
       (1 (2 3))
+  - name: defstruct-constructor-accessors-predicate-copier
+    source: |
+      (defstruct cs-point x (y 10))
+      (setq cs-p (make-cs-point :x 1))
+      (print (cs-point-x cs-p))
+      (print (cs-point-y cs-p))
+      (print (cs-point-p cs-p))
+      (print (cs-point-p (list 1 2)))
+      (setq cs-q (copy-cs-point cs-p))
+      (setf (cs-point-x cs-q) 100)
+      (print (cs-point-x cs-p))
+      (print (cs-point-x cs-q))
+    expected: |
+      1
+      10
+      t
+      nil
+      1
+      100
+  - name: defstruct-setf-places-and-first-class-accessors
+    source: |
+      (setf (cs-point-x cs-p) 99)
+      (incf (cs-point-y cs-p) 5)
+      (print (list (cs-point-x cs-p) (cs-point-y cs-p)))
+      (print (mapcar #'cs-point-x (list (make-cs-point :x 10) (make-cs-point :x 20))))
+      (defpackage :cs-geo (:use :cl))
+      (in-package :cs-geo)
+      (defstruct cs-pt x y)
+      (defun cs-dist2 (p) (+ (* (cs-pt-x p) (cs-pt-x p)) (* (cs-pt-y p) (cs-pt-y p))))
+      (in-package :cl-user)
+      (setq cs-gp (cs-geo::make-cs-pt :x 3 :y 4))
+      (print (cs-geo::cs-dist2 cs-gp))
+      (print (list (cs-geo::cs-pt-p cs-gp) (cs-geo::cs-pt-p cs-p)))
+    expected: |
+      (99 15)
+      (10 20)
+      25
+      (t nil)

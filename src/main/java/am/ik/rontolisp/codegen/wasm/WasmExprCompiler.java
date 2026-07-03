@@ -217,6 +217,11 @@ final class WasmExprCompiler {
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
 				case LispNames.DEFUN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx);
+				case LispNames.DEFSTRUCT ->
+					// Top-level defstructs are spliced into defuns before Pass 1; one
+					// reaching this compiler is nested inside another form.
+					throw new UnsupportedOperationException(
+							LispNames.DEFSTRUCT + " is only supported as a top-level form");
 				case LispNames.DEFVAR -> WasmDefvarCompiler.compile(cons, ctx, false);
 				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> WasmDefvarCompiler.compile(cons, ctx, true);
 				case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
@@ -226,7 +231,8 @@ final class WasmExprCompiler {
 				case LispNames.NTHCDR -> WasmNthcdrCompiler.compile(cons, ctx);
 				case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
 				case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
-				case LispNames.SETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons), ctx);
+				case LispNames.SETF ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors), ctx);
 				case LispNames.PUSH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx);
 				case LispNames.POP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx);
 				case LispNames.REMF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx);

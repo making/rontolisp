@@ -107,6 +107,28 @@ public final class UserMacroExpander {
 					return rebuild(parts, 2, macroEval, parts.get(1));
 				case LispNames.DEFUN:
 					return rebuild(parts, 3, macroEval, parts.get(1), parts.get(2));
+				case LispNames.DEFSTRUCT: {
+					// (defstruct name (slot default)...): the struct and slot names stay,
+					// only slot defaults are expressions.
+					List<LispVal> newParts = new ArrayList<>();
+					newParts.add(parts.get(0));
+					newParts.add(parts.get(1));
+					for (int i = 2; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons slotCons) {
+							List<LispVal> slotParts = slotCons.toList();
+							List<LispVal> newSlot = new ArrayList<>();
+							newSlot.add(slotParts.get(0));
+							for (int j = 1; j < slotParts.size(); j++) {
+								newSlot.add(expandAll(slotParts.get(j), macroEval));
+							}
+							newParts.add(properList(newSlot));
+						}
+						else {
+							newParts.add(parts.get(i));
+						}
+					}
+					return properList(newParts);
+				}
 				case LispNames.DOLIST, LispNames.DOTIMES: {
 					// (dolist (var listform result) body...): var stays.
 					LispVal spec = parts.get(1);

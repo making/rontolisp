@@ -21,7 +21,8 @@ This page lists the most notable omissions. For what **is** available, see the
 | conditions & restarts (`handler-case`, ...) | not available |
 | `flet` / `labels` / `macrolet` | not available |
 | `loop` (extended) | partial (simple-loop subset) |
-| `defstruct`, CLOS | not available |
+| `defstruct` | available (see [`defstruct`](../reference/special-forms/defstruct.md)); options/`:include` are not |
+| CLOS | not available |
 | `declare` / `the` / `typep` / `coerce` | not available |
 | `defpackage` (user packages) | partial (`:use`/`:export` only; see [`defpackage`](../reference/special-forms/defpackage.md)) |
 | `make-package` / `export` / `use-package` (runtime) | not available |
@@ -106,8 +107,12 @@ anaphoric `it`, `named`/`loop-finish`, and `thereis`/`always`/`never`. The other
 
 ## Structures and objects (`defstruct`, CLOS)
 
-There are no structures (`defstruct`) and no object system (`defclass`,
-`defgeneric`, `defmethod`, `make-instance`).
+Structures **are** available with
+[`defstruct`](../reference/special-forms/defstruct.md), which generates a
+keyword constructor, a predicate, a copier and `setf`-able accessors. The
+`defstruct` options syntax (`:conc-name`, `:constructor`, ...), `:include`
+inheritance, and the `#S(...)` print/read syntax are not supported. There is no
+object system (`defclass`, `defgeneric`, `defmethod`, `make-instance`).
 
 ## Type declarations, `typep`, and `coerce`
 

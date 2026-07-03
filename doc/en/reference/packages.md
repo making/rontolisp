@@ -107,7 +107,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-macros))
 ; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
-; => (defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)
+; => (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
 ; => 192
 (defun square (x) (* x x))

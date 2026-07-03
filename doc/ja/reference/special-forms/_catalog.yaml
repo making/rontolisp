@@ -12,6 +12,7 @@ categories:
       - { slug: return, name: return }
       - { slug: defun, name: defun }
       - { slug: defmacro, name: defmacro }
+      - { slug: defstruct, name: defstruct }
       - { slug: defvar, name: defvar }
       - { slug: defparameter, name: defparameter }
       - { slug: defconstant, name: defconstant }

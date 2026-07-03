@@ -95,6 +95,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// so
 		// the rest of compilation sees canonical names.
 		program = new PackageResolver().resolveProgram(program);
+		// Splice top-level defstructs into their generated defuns before lambda-list
+		// desugaring (the generated constructor uses &key) so Pass 1 collects them as
+		// ordinary functions; the registry makes accessors setf-able places.
+		Map<String, Integer> structAccessors = new HashMap<>();
+		program = LispMacroExpander.expandTopLevelDefstructs(program, structAccessors);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -452,7 +457,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.globals(globals)
-			.globalFields(globalFields);
+			.globalFields(globalFields)
+			.structAccessors(structAccessors);
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -1523,6 +1529,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * {@code defstruct} accessor names to their 1-based slot position, collected by
+		 * the pre-pass in {@link JvmLispCompiler#compile}; {@code setf} expansion treats
+		 * these as places. Shared across every context.
+		 */
+		Map<String, Integer> structAccessors = Map.of();
+
+		/**
 		 * Names of top-level global variables (defvar/defparameter/defconstant and
 		 * top-level setq/setf places). Each has a dedicated static field in
 		 * {@link #globalFields}; a reference compiles to a {@code getstatic} from any
@@ -1554,6 +1567,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
+			this.structAccessors = builder.structAccessors;
 			this.globals = builder.globals;
 			this.globalFields = builder.globalFields;
 			this.cp = Objects.requireNonNull(builder.cp);
@@ -1692,6 +1706,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Map<String, Integer> structAccessors = Map.of();
 
 			private Set<String> globals = Set.of();
 
@@ -1915,6 +1931,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder structAccessors(Map<String, Integer> structAccessors) {
+				this.structAccessors = structAccessors;
 				return this;
 			}
 

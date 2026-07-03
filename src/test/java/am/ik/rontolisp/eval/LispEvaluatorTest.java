@@ -2874,7 +2874,7 @@ class LispEvaluatorTest {
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -3901,6 +3901,97 @@ class LispEvaluatorTest {
 			.hasMessageContaining("expects 2 arguments, got 3");
 		assertThatThrownBy(() -> evalMulti("(defun f (a &rest r) r) (f)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects at least 1 argument, got 0");
+	}
+
+	@Test
+	void defstructConstructorAccessorsAndDefaults() {
+		assertThat(evalMulti("""
+				(defstruct point x (y 10))
+				(setq p (make-point :x 1))
+				(list (point-x p) (point-y p))
+				""").print()).isEqualTo("(1 10)");
+	}
+
+	@Test
+	void defstructReturnsStructName() {
+		assertThat(eval("(defstruct point x y)").print()).isEqualTo("point");
+	}
+
+	@Test
+	void defstructPredicate() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(defstruct circle r)
+				(list (point-p (make-point :x 1 :y 2)) (point-p (make-circle :r 3)) (point-p '(1 2)) (point-p 42))
+				""").print()).isEqualTo("(t nil nil nil)");
+	}
+
+	@Test
+	void defstructAccessorIsASetfPlace() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(setq p (make-point :x 1 :y 2))
+				(setf (point-x p) 99)
+				(incf (point-y p) 5)
+				(list (point-x p) (point-y p))
+				""").print()).isEqualTo("(99 7)");
+	}
+
+	@Test
+	void defstructCopierIsShallowAndIndependent() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(setq p (make-point :x 1 :y 2))
+				(setq q (copy-point p))
+				(setf (point-x q) 100)
+				(list (point-x p) (point-x q) (point-p q))
+				""").print()).isEqualTo("(1 100 t)");
+	}
+
+	@Test
+	void defstructAccessorsAreFirstClassFunctions() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(mapcar #'point-x (list (make-point :x 1) (make-point :x 2)))
+				""").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void defstructSlotDefaultsEvaluatedAtConstructionTime() {
+		assertThat(evalMulti("""
+				(setq counter 0)
+				(defstruct item (id (incf counter)))
+				(make-item)
+				(make-item)
+				(list (item-id (make-item)) (item-id (make-item :id 100)))
+				""").print()).isEqualTo("(3 100)");
+	}
+
+	@Test
+	void defstructInUserPackage() {
+		assertThat(evalMulti("""
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defstruct pt x y)
+				(in-package :cl-user)
+				(setq p (geo::make-pt :x 3 :y 4))
+				(setf (geo::pt-y p) 5)
+				(list (geo::pt-x p) (geo::pt-y p) (geo::pt-p p))
+				""").print()).isEqualTo("(3 5 t)");
+	}
+
+	@Test
+	void defstructOptionsAreNotSupported() {
+		assertThatThrownBy(() -> eval("(defstruct (point (:conc-name pt-)) x y)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("defstruct options are not supported");
+	}
+
+	@Test
+	void defstructUnknownKeywordSignals() {
+		assertThatThrownBy(() -> evalMulti("(defstruct point x y) (make-point :z 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Unknown keyword argument: :z");
 	}
 
 }

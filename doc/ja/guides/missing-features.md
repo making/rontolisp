@@ -21,7 +21,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | 条件とリスタート（`handler-case` など） | 利用不可 |
 | `flet` / `labels` / `macrolet` | 利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
-| `defstruct`、CLOS | 利用不可 |
+| `defstruct` | 利用可能（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。オプション/`:include` は利用不可 |
+| CLOS | 利用不可 |
 | `declare` / `the` / `typep` / `coerce` | 利用不可 |
 | `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export` のみ。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
 | `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
@@ -107,8 +108,12 @@ The function ignore-errors is undefined
 
 ## 構造体とオブジェクト（`defstruct`、CLOS）
 
-構造体（`defstruct`）はなく、オブジェクトシステム（`defclass`、`defgeneric`、
-`defmethod`、`make-instance`）もありません。
+構造体は [`defstruct`](../reference/special-forms/defstruct.md) で **利用可能**
+です。キーワードコンストラクタ、述語、コピー関数、`setf` 可能なアクセサを
+生成します。`defstruct` のオプション構文（`:conc-name`、`:constructor` など）、
+`:include` による継承、`#S(...)` の印字/読み取り構文はサポートされません。
+オブジェクトシステム（`defclass`、`defgeneric`、`defmethod`、`make-instance`）は
+ありません。
 
 ## 型宣言、`typep`、`coerce`
 

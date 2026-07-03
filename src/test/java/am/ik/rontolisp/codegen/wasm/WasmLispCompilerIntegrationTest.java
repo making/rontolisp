@@ -3329,7 +3329,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defmacro defpackage defparameter defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -3902,6 +3902,40 @@ class WasmLispCompilerIntegrationTest {
 				(print (mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)))
 				(print ((lambda (a &rest r) (list a r)) 1 2 3))
 				""")).isEqualTo("(1 2 3)\n(1 (2 3))\n(1 (2 3))\n(101 102 103)\n(1 (2 3))");
+	}
+
+	@Test
+	void compileAndRunDefstructBasics() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x (y 10))
+				(setq p (make-point :x 1))
+				(print (point-x p))
+				(print (point-y p))
+				(print (point-p p))
+				(print (point-p '(1 2)))
+				(setq q (copy-point p))
+				(setf (point-x q) 100)
+				(print (point-x p))
+				(print (point-x q))
+				""")).isEqualTo("1\n10\nt\nnil\n1\n100");
+	}
+
+	@Test
+	void compileAndRunDefstructSetfPlacesAndFirstClassAccessors() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (make-point :x 1 :y 2))
+				(setf (point-x p) 99)
+				(incf (point-y p) 5)
+				(print (list (point-x p) (point-y p)))
+				(print (mapcar #'point-x (list (make-point :x 10) (make-point :x 20))))
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defstruct pt x y)
+				(in-package :cl-user)
+				(setq gp (geo::make-pt :x 3 :y 4))
+				(print (list (geo::pt-x gp) (geo::pt-p gp) (geo::pt-p p)))
+				""")).isEqualTo("(99 7)\n(10 20)\n(3 t nil)");
 	}
 
 }

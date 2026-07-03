@@ -1891,6 +1891,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons) {
+		return expandSetf(cons, java.util.Map.of());
+	}
+
+	/**
+	 * Like {@link #expandSetf(LispCons)}, but additionally treats registered
+	 * {@code defstruct} accessors as places: {@code (setf (point-x p) val)} expands like
+	 * {@code (setf (nth <position> p) val)}. The evaluator and the compilers pass their
+	 * accessor registry (built by {@link #expandDefstruct}) here; {@code push}/
+	 * {@code pop}/{@code incf}/... expand into {@code setf} forms that are re-dispatched
+	 * through the caller, so struct places work with them too.
+	 * @param cons the setf expression
+	 * @param structAccessors accessor name to 1-based slot position
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() > 3) {
 			if (parts.size() % 2 == 0) {
@@ -1898,8 +1913,9 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> forms = new java.util.ArrayList<>();
 			for (int i = 1; i < parts.size(); i += 2) {
-				forms.add(expandSetf((LispCons) listToCons(
-						List.of(new LispSymbol(LispNames.SETF), parts.get(i), parts.get(i + 1)))));
+				forms.add(expandSetf(
+						(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), parts.get(i), parts.get(i + 1))),
+						structAccessors));
 			}
 			return makeProgn(forms);
 		}
@@ -1968,6 +1984,13 @@ public final class LispMacroExpander {
 				default ->
 
 				{
+					Integer structSlot = structAccessors.get(accessor);
+					if (structSlot != null) {
+						// (setf (point-x p) val) -> (setf (nth <position> p) val)
+						LispVal nthcdrExpr = listToCons(List.of(new LispSymbol(LispNames.NTHCDR),
+								new LispInteger(structSlot), placeParts.get(1)));
+						yield expandSetfWithRplaca(nthcdrExpr, value);
+					}
 					if (isCarCdrComposition(accessor)) {
 
 						yield expandSetfCarCdr(accessor, placeParts.get(1), value);
@@ -3238,6 +3261,149 @@ public final class LispMacroExpander {
 		lambdaParts.addAll(parts.subList(3, parts.size()));
 		LispVal lambda = listToCons(lambdaParts);
 		return listToCons(List.of(new LispSymbol(LispNames.SETQ), name, lambda));
+	}
+
+	/**
+	 * Expands {@code (defstruct name slot...)} into the defuns it generates -- a keyword
+	 * constructor, a predicate, a copier and one accessor per slot -- and records each
+	 * accessor's slot position in {@code structAccessors} so
+	 * {@link #expandSetf(LispCons, java.util.Map)} treats accessor calls as places. An
+	 * instance is a tagged proper list {@code (%struct-<name> value...)}.
+	 *
+	 * <pre>
+	 * (defstruct point x (y 10)) ->
+	 * (defun make-point (&amp;key ((:x x) nil) ((:y y) 10)) (list '%struct-point x y))
+	 * (defun point-p (__struct) (if (consp __struct) (equal (car __struct) '%struct-point) nil))
+	 * (defun copy-point (__struct) (copy-list __struct))
+	 * (defun point-x (__struct) (nth 1 __struct))
+	 * (defun point-y (__struct) (nth 2 __struct))
+	 * </pre>
+	 *
+	 * The form is expected in its canonical (package-resolved) spelling; a qualified
+	 * struct name derives internal (double-colon) generated names, e.g.
+	 * {@code (defstruct foo::point x)} defines {@code foo::make-point},
+	 * {@code foo::point-p}, {@code foo::copy-point} and {@code foo::point-x}, and the
+	 * constructor keywords come from the unqualified slot names ({@code :x}). defstruct
+	 * options ({@code (defstruct (name (:conc-name ...) ...) ...)}) are not supported.
+	 * @param cons the defstruct expression
+	 * @param structAccessors mutated: accessor name to 1-based slot position in the
+	 * tagged list
+	 * @return the generated top-level forms, in definition order
+	 */
+	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(LispNames.DEFSTRUCT + " expects a struct name: " + cons.print());
+		}
+		if (!(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new UnsupportedOperationException(
+					LispNames.DEFSTRUCT + " options are not supported: " + parts.get(1).print());
+		}
+		String structName = nameSym.name();
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
+		// Generated names of a qualified struct are interned as internal symbols
+		// (double colon), matching how the resolver canonicalizes their call sites.
+		String prefix = qn == null ? "" : qn.pkg() + "::";
+		String base = qn == null ? structName : qn.member();
+		LispVal quotedTag = listToCons(
+				List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%struct-" + structName)));
+		List<LispSymbol> slotSyms = new java.util.ArrayList<>();
+		List<String> slotBases = new java.util.ArrayList<>();
+		List<LispVal> slotDefaults = new java.util.ArrayList<>();
+		for (LispVal spec : parts.subList(2, parts.size())) {
+			LispSymbol slot;
+			LispVal dflt = LispNil.INSTANCE;
+			if (spec instanceof LispSymbol s) {
+				slot = s;
+			}
+			else if (spec instanceof LispCons specCons && specCons.car() instanceof LispSymbol s
+					&& specCons.toList().size() <= 2) {
+				slot = s;
+				List<LispVal> specParts = specCons.toList();
+				if (specParts.size() == 2) {
+					dflt = specParts.get(1);
+				}
+			}
+			else {
+				throw new IllegalArgumentException(
+						LispNames.DEFSTRUCT + " expects a slot name or (name default), got " + spec.print());
+			}
+			PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(slot.name());
+			slotSyms.add(slot);
+			slotBases.add(slotQn == null ? slot.name() : slotQn.member());
+			slotDefaults.add(dflt);
+		}
+		List<LispVal> forms = new java.util.ArrayList<>();
+		// (defun make-<base> (&key ((:slot slot) default)...) (list '%struct-<name>
+		// slot...))
+		List<LispVal> lambdaList = new java.util.ArrayList<>();
+		if (!slotSyms.isEmpty()) {
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_KEY));
+			for (int i = 0; i < slotSyms.size(); i++) {
+				LispVal keywordAndVar = listToCons(List.of(new LispSymbol(":" + slotBases.get(i)), slotSyms.get(i)));
+				lambdaList.add(listToCons(List.of(keywordAndVar, slotDefaults.get(i))));
+			}
+		}
+		List<LispVal> listCall = new java.util.ArrayList<>();
+		listCall.add(new LispSymbol(LispNames.LIST));
+		listCall.add(quotedTag);
+		listCall.addAll(slotSyms);
+		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + "make-" + base),
+				listToCons(lambdaList), listToCons(listCall))));
+		// (defun <base>-p (__struct) (if (consp __struct) (equal (car __struct)
+		// '%struct-<name>) nil))
+		LispSymbol obj = new LispSymbol(STRUCT_VAR);
+		LispVal params = listToCons(List.<LispVal>of(obj));
+		LispVal tagCheck = makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), obj)), listToCons(List
+			.of(new LispSymbol(LispNames.EQUAL), listToCons(List.of(new LispSymbol(LispNames.CAR), obj)), quotedTag)),
+				LispNil.INSTANCE);
+		forms.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + base + "-p"), params, tagCheck)));
+		// (defun copy-<base> (__struct) (copy-list __struct))
+		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + "copy-" + base), params,
+				listToCons(List.of(new LispSymbol(LispNames.COPY_LIST), obj)))));
+		// (defun <base>-<slot> (__struct) (nth <position> __struct))
+		for (int i = 0; i < slotSyms.size(); i++) {
+			String accessor = prefix + base + "-" + slotBases.get(i);
+			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params,
+					listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i + 1), obj)))));
+			structAccessors.put(accessor, i + 1);
+		}
+		return forms;
+	}
+
+	private static final String STRUCT_VAR = "__struct";
+
+	/**
+	 * Splices every top-level {@code (defstruct ...)} of a program into its generated
+	 * defuns (see {@link #expandDefstruct}). The compilers run this after package
+	 * resolution and before lambda-list desugaring, so Pass 1 collects the generated
+	 * defuns as ordinary top-level functions; a defstruct anywhere else is rejected by
+	 * the expression compilers. Returns the program unchanged when it has no defstruct.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @return the program with each defstruct replaced by its generated defuns
+	 */
+	public static List<LispVal> expandTopLevelDefstructs(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors) {
+		if (program.stream().noneMatch(LispMacroExpander::isDefstructForm)) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		for (LispVal form : program) {
+			if (isDefstructForm(form)) {
+				out.addAll(expandDefstruct((LispCons) form, structAccessors));
+			}
+			else {
+				out.add(form);
+			}
+		}
+		return out;
+	}
+
+	private static boolean isDefstructForm(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& LispNames.DEFSTRUCT.equals(sym.name());
 	}
 
 	/**

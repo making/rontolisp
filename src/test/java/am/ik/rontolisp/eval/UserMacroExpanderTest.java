@@ -119,6 +119,25 @@ class UserMacroExpanderTest {
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects 2 arguments");
 	}
 
+	@Test
+	void defstructNamesAreNotMistakenForMacroCallsButSlotDefaultsExpand() {
+		// The struct name and slot names stay verbatim even when a user macro shares
+		// their name; a slot default is an expression and is expanded.
+		assertThat(expand("""
+				(defmacro pt () '(f))
+				(defmacro x (v) `(g ,v))
+				(defstruct pt (x 1) (y (x 2)))
+				""")).isEqualTo("(defstruct pt (x 1) (y (g 2)))");
+	}
+
+	@Test
+	void macroExpandingToDefstructIsKept() {
+		assertThat(expand("""
+				(defmacro defpair (name) (list 'defstruct name 'left 'right))
+				(defpair pair)
+				""")).isEqualTo("(defstruct pair left right)");
+	}
+
 	// --- macroexpand / macroexpand-1 folding ---
 
 	@Test
