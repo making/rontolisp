@@ -8,8 +8,9 @@ import am.ik.wasm.WasmWriter;
 
 /**
  * Builds the WASM bodies of the file-stream runtime used by the {@code open},
- * {@code close}, {@code write-line} and stream-taking {@code read-line} built-ins (and
- * therefore by the {@code with-open-file} macro).
+ * {@code close}, {@code write-line}, {@code read-byte}, {@code write-byte} and
+ * stream-taking {@code read-line} built-ins (and therefore by the {@code with-open-file}
+ * macro).
  *
  * <p>
  * A stream value is the WASI file descriptor returned by {@code path_open}, boxed as an
@@ -198,6 +199,113 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.DROP);
 		// return the string
 		getLocal(w, STR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _read_byte(stream, eof-error-p, eof-value) function body. Reads one raw
+	 * byte from the stream's file descriptor via fd_read into the BYTE_SCRATCH_ADDR
+	 * scratch cell -- no quote framing, no newline scan -- and returns it as an i31
+	 * integer. On EOF returns eof-value when eof-error-p is nil, otherwise traps.
+	 * @return the function body bytes
+	 */
+	static byte[] buildReadByteBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 local:
+		// FD=3
+		w.write(1);
+		w.write(1);
+		w.write(Type.I32);
+		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3;
+		final int IOV = WasmLispCompiler.IOV_OFFSET;
+		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
+		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
+
+		// fd = i31.get_s(stream)
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// iov.ptr = BYTE_SCRATCH_ADDR ; iov.len = 1
+		i32(w, IOV);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		i32(w, 1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd_read(fd, IOV, 1, NWRITTEN) ; drop errno
+		getLocal(w, FD);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.write(Instruction.DROP);
+		// if (mem[NWRITTEN] == 0): EOF -- return eof-value when eof-error-p is nil,
+		// trap otherwise
+		loadMem32(w, NWRITTEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, EOF_ERROR_P);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, EOF_VALUE);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// return ref.i31(mem_u8[BYTE_SCRATCH_ADDR])
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _write_byte(byte, stream) function body. Writes the byte's low 8 bits as
+	 * one raw byte to the stream's file descriptor via fd_write -- no quote framing, no
+	 * newline -- and returns the byte.
+	 * @return the function body bytes
+	 */
+	static byte[] buildWriteByteBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: BYTE=0 (ref), STREAM=1 (ref) ; no locals
+		w.write(0);
+		final int BYTE = 0, STREAM = 1;
+		final int IOV = WasmLispCompiler.IOV_OFFSET;
+		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
+		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
+
+		// mem_u8[BYTE_SCRATCH_ADDR] = i31.get_s(byte)
+		i32(w, SCRATCH);
+		getLocal(w, BYTE);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// iov.ptr = BYTE_SCRATCH_ADDR ; iov.len = 1
+		i32(w, IOV);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		i32(w, 1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd_write(i31.get_s(stream), IOV, 1, NWRITTEN) ; drop errno
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.write(Instruction.DROP);
+		// return the byte
+		getLocal(w, BYTE);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

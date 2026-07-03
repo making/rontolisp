@@ -1066,6 +1066,31 @@ public final class LispNames {
 	/** The {@code :output} keyword (open a file for writing). */
 	public static final String OUTPUT_KEYWORD = ":output";
 
+	/**
+	 * The {@code :element-type} keyword recognized by {@code with-open-file} (and as the
+	 * optional third {@code open} argument): the literal {@code '(unsigned-byte 8)}
+	 * selects a binary stream, the literal {@code 'character} the default text stream.
+	 */
+	public static final String ELEMENT_TYPE_KEYWORD = ":element-type";
+
+	/** The {@code unsigned-byte} type specifier symbol used in {@code :element-type}. */
+	public static final String UNSIGNED_BYTE = "unsigned-byte";
+
+	/** The {@code character} type specifier symbol used in {@code :element-type}. */
+	public static final String CHARACTER_TYPE = "character";
+
+	/** The {@code read-byte} built-in function (binary streams only). */
+	public static final String READ_BYTE = "read-byte";
+
+	/** The {@code write-byte} built-in function (binary streams only). */
+	public static final String WRITE_BYTE = "write-byte";
+
+	/** The {@code read-sequence} macro (fills a vector from a binary stream). */
+	public static final String READ_SEQUENCE = "read-sequence";
+
+	/** The {@code write-sequence} macro (writes a vector to a binary stream). */
+	public static final String WRITE_SEQUENCE = "write-sequence";
+
 	// Packages
 
 	/** The {@code in-package} directive that switches the current package. */

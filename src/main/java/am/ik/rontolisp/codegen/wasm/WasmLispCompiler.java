@@ -315,9 +315,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// than inline code at each await site.
 	static final int FUNC_PROMISE_AWAIT = FUNC_GENSYM + 1;
 
+	// Binary stream runtime: read-byte / write-byte move one raw byte through the
+	// BYTE_SCRATCH_ADDR scratch cell via fd_read / fd_write (no quote framing, no
+	// newline). Appended before FUNC_USER_BASE like the mod/rem helpers, so no
+	// import/FUNC_START index shifts and the component blobs are unaffected.
+	static final int FUNC_READ_BYTE = FUNC_PROMISE_AWAIT + 1;
+
+	static final int FUNC_WRITE_BYTE = FUNC_READ_BYTE + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
-	// hash-table runtime helpers, the two mod/rem helpers, and the gensym helper.
-	static final int FUNC_USER_BASE = FUNC_PROMISE_AWAIT + 1;
+	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
+	// promise-await helper, and the two binary stream helpers.
+	static final int FUNC_USER_BASE = FUNC_WRITE_BYTE + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -487,6 +496,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// "#:g1").
 	static final int GENSYM_CTR_ADDR = 144;
 
+	// One-byte scratch cell moved through fd_read / fd_write by the read-byte /
+	// write-byte runtime helpers (below the DATA_BASE_OFFSET=256 headroom, so no
+	// interned string bytes are clobbered).
+	static final int BYTE_SCRATCH_ADDR = 148;
+
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
@@ -521,8 +535,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	// or the host/adapter writes for getenv (ENV_COUNT_ADDR=136 .. ENV_BUFSIZE_ADDR=143)
 	// and
 	// the time built-ins (TIME_SCRATCH_ADDR=128 .. 135) would clobber shared string bytes
-	// (notably the newline at the old base+9). The highest scratch word
-	// (GENSYM_CTR_ADDR=144) ends at 147, so 256
+	// (notably the newline at the old base+9). The highest scratch byte
+	// (BYTE_SCRATCH_ADDR=148) ends at 148, so 256
 	// gives headroom; the next fixed region (RT_INTERN_BASE=8192) is far above realistic
 	// string-segment sizes. Shifting this base does not move any function/import index,
 	// so
@@ -1470,6 +1484,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_NEW); // _gensym (i32, i32) -> (ref null eq)
 				// promise-await runtime helper
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _promise_await
+				// binary stream runtime helpers
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_byte (stream,
+															// eof-error-p, eof-value) ->
+															// (ref null eq)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _write_byte (byte, stream)
+															// -> (ref null eq)
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1649,6 +1669,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmGensymRuntimeBuilder.build());
 				// promise-await runtime helper body (FUNC_PROMISE_AWAIT)
 				code.addFunction(WasmPromiseRuntimeBuilder.buildAwait(stringTable));
+				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
+				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());
+				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);

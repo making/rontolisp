@@ -3210,20 +3210,36 @@ public final class LispMacroExpander {
 		LispVal var = specParts.get(0);
 		LispVal filename = specParts.get(1);
 		String direction = LispNames.INPUT_KEYWORD;
+		boolean binary = false;
 		for (int i = 2; i < specParts.size(); i += 2) {
-			if (!(specParts.get(i) instanceof LispSymbol key) || !LispNames.DIRECTION_KEYWORD.equals(key.name())) {
-				throw new UnsupportedOperationException(
-						LispNames.WITH_OPEN_FILE + " supports only the :direction option");
+			if (specParts.get(i) instanceof LispSymbol key && LispNames.DIRECTION_KEYWORD.equals(key.name())) {
+				if (i + 1 >= specParts.size() || !(specParts.get(i + 1) instanceof LispSymbol dir)
+						|| !(LispNames.INPUT_KEYWORD.equals(dir.name())
+								|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+					throw new UnsupportedOperationException(
+							LispNames.WITH_OPEN_FILE + " :direction must be the literal :input or :output");
+				}
+				direction = dir.name();
 			}
-			if (i + 1 >= specParts.size() || !(specParts.get(i + 1) instanceof LispSymbol dir)
-					|| !(LispNames.INPUT_KEYWORD.equals(dir.name()) || LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
-				throw new UnsupportedOperationException(
-						LispNames.WITH_OPEN_FILE + " :direction must be the literal :input or :output");
+			else if (specParts.get(i) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+				if (i + 1 >= specParts.size()) {
+					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE
+							+ " :element-type must be the literal 'character or '(unsigned-byte 8)");
+				}
+				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
 			}
-			direction = dir.name();
+			else {
+				throw new UnsupportedOperationException(
+						LispNames.WITH_OPEN_FILE + " supports only the :direction and :element-type options");
+			}
 		}
 		List<LispVal> body = parts.subList(2, parts.size());
-		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
+		List<LispVal> openParts = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
+		if (binary) {
+			openParts.add(unsignedByte8Literal());
+		}
+		LispVal openCall = listToCons(openParts);
 		// (progn body...) -- nil for an empty body (a body-less progn does not compile)
 		LispVal bodyExpr;
 		if (body.isEmpty()) {
@@ -3246,6 +3262,163 @@ public final class LispMacroExpander {
 	}
 
 	private static final String WOF_RESULT_VAR = "__wof_result";
+
+	/**
+	 * Classifies a literal {@code :element-type} argument: {@code '(unsigned-byte 8)} is
+	 * binary, {@code 'character} is text; anything else (including a non-literal
+	 * expression) is rejected so the compilers can resolve the file mode at compile time.
+	 * @param val the element-type argument as it appears in the source
+	 * @return true for the binary element type
+	 */
+	private static boolean isBinaryElementTypeLiteral(LispVal val) {
+		if (val instanceof LispCons quoteForm) {
+			List<LispVal> quoteParts = quoteForm.toList();
+			if (quoteParts.size() == 2 && quoteParts.get(0) instanceof LispSymbol q
+					&& LispNames.QUOTE.equals(q.name())) {
+				LispVal spec = quoteParts.get(1);
+				if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
+					return false;
+				}
+				if (spec instanceof LispCons specCons) {
+					List<LispVal> specParts = specCons.toList();
+					if (specParts.size() == 2 && specParts.get(0) instanceof LispSymbol ub
+							&& LispNames.UNSIGNED_BYTE.equals(ub.name()) && specParts.get(1) instanceof LispInteger bits
+							&& bits.value() == 8) {
+						return true;
+					}
+				}
+			}
+		}
+		throw new UnsupportedOperationException(
+				LispNames.WITH_OPEN_FILE + " :element-type must be the literal 'character or '(unsigned-byte 8)");
+	}
+
+	/**
+	 * Builds the {@code (quote (unsigned-byte 8))} literal appended to a binary
+	 * {@code open} call.
+	 * @return the quoted type specifier
+	 */
+	private static LispVal unsignedByte8Literal() {
+		LispVal spec = listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(8)));
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), spec));
+	}
+
+	/**
+	 * Expands {@code (read-sequence seq stream [:start s] [:end e])} into a
+	 * {@code read-byte} loop over the vector, yielding the position of the first element
+	 * not filled (the fill position). The keywords must be literal; their values are
+	 * arbitrary expressions. The sequence must be a rank-1 array.
+	 *
+	 * <pre>
+	 * (read-sequence seq stream) ->
+	 * (let ((__rseq_seq seq) (__rseq_st stream))
+	 *   (let ((__rseq_i 0) (__rseq_end (length __rseq_seq)) (__rseq_b nil) (__rseq_eof nil))
+	 *     (while (if __rseq_eof nil (&lt; __rseq_i __rseq_end))
+	 *       (setq __rseq_b (read-byte __rseq_st nil nil))
+	 *       (if __rseq_b
+	 *           (progn (%aset __rseq_seq __rseq_i __rseq_b) (setq __rseq_i (+ __rseq_i 1)))
+	 *           (setq __rseq_eof t)))
+	 *     __rseq_i))
+	 * </pre>
+	 * @param cons the read-sequence expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReadSequence(LispCons cons) {
+		SequenceArgs args = parseSequenceArgs(cons, LispNames.READ_SEQUENCE);
+		LispSymbol seq = new LispSymbol("__rseq_seq");
+		LispSymbol st = new LispSymbol("__rseq_st");
+		LispSymbol i = new LispSymbol("__rseq_i");
+		LispSymbol end = new LispSymbol("__rseq_end");
+		LispSymbol b = new LispSymbol("__rseq_b");
+		LispSymbol eof = new LispSymbol("__rseq_eof");
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.IF), eof, LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.LT), i, end))));
+		LispVal readByte = listToCons(
+				List.of(new LispSymbol(LispNames.READ_BYTE), st, LispNil.INSTANCE, LispNil.INSTANCE));
+		LispVal store = listToCons(
+				List.of(new LispSymbol(LispNames.PROGN), listToCons(List.of(new LispSymbol(LispNames.ASET), seq, i, b)),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
+								listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), b, readByte)),
+				listToCons(List.of(new LispSymbol(LispNames.IF), b, store,
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), eof, LispTrue.INSTANCE))))));
+		LispVal innerBindings = listToCons(
+				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end())),
+						listToCons(List.of(b, LispNil.INSTANCE)), listToCons(List.of(eof, LispNil.INSTANCE))));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, i));
+		LispVal outerBindings = listToCons(
+				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
+	}
+
+	/**
+	 * Expands {@code (write-sequence seq stream [:start s] [:end e])} into a
+	 * {@code write-byte} loop over the vector, yielding the sequence. The keywords must
+	 * be literal; their values are arbitrary expressions. The sequence must be a rank-1
+	 * array.
+	 *
+	 * <pre>
+	 * (write-sequence seq stream) ->
+	 * (let ((__wseq_seq seq) (__wseq_st stream))
+	 *   (let ((__wseq_i 0) (__wseq_end (length __wseq_seq)))
+	 *     (while (&lt; __wseq_i __wseq_end)
+	 *       (write-byte (aref __wseq_seq __wseq_i) __wseq_st)
+	 *       (setq __wseq_i (+ __wseq_i 1)))
+	 *     __wseq_seq))
+	 * </pre>
+	 * @param cons the write-sequence expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWriteSequence(LispCons cons) {
+		SequenceArgs args = parseSequenceArgs(cons, LispNames.WRITE_SEQUENCE);
+		LispSymbol seq = new LispSymbol("__wseq_seq");
+		LispSymbol st = new LispSymbol("__wseq_st");
+		LispSymbol i = new LispSymbol("__wseq_i");
+		LispSymbol end = new LispSymbol("__wseq_end");
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), i, end));
+		LispVal writeByte = listToCons(List.of(new LispSymbol(LispNames.WRITE_BYTE),
+				listToCons(List.of(new LispSymbol(LispNames.AREF), seq, i)), st));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
+				listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, writeByte, step));
+		LispVal innerBindings = listToCons(
+				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, seq));
+		LispVal outerBindings = listToCons(
+				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
+	}
+
+	/**
+	 * The parsed {@code (op seq stream [:start s] [:end e])} arguments. {@code start}
+	 * defaults to {@code 0} and {@code end} to {@code (length <seq-temp>)} over the
+	 * expander's own sequence temp binding.
+	 */
+	private record SequenceArgs(LispVal seq, LispVal stream, LispVal start, LispVal end) {
+	}
+
+	private static SequenceArgs parseSequenceArgs(LispCons cons, String op) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() % 2 == 0) {
+			throw new IllegalArgumentException(op + " expects (sequence stream [:start s] [:end e])");
+		}
+		LispVal start = new LispInteger(0);
+		String seqVar = LispNames.READ_SEQUENCE.equals(op) ? "__rseq_seq" : "__wseq_seq";
+		LispVal end = callOf(LispNames.LENGTH, new LispSymbol(seqVar));
+		for (int i = 3; i < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol key && LispNames.START_KEYWORD.equals(key.name())) {
+				start = parts.get(i + 1);
+			}
+			else if (parts.get(i) instanceof LispSymbol key && LispNames.END_KEYWORD.equals(key.name())) {
+				end = parts.get(i + 1);
+			}
+			else {
+				throw new UnsupportedOperationException(op + " supports only the literal :start and :end keywords");
+			}
+		}
+		return new SequenceArgs(parts.get(1), parts.get(2), start, end);
+	}
 
 	private static LispVal callOf(String op, LispVal arg) {
 		return listToCons(List.of(new LispSymbol(op), arg));

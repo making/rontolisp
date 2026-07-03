@@ -30,8 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * whole {@code ci-spec.yaml} corpus (the cross-backend feature catalogue) with
  * {@code --optimize} and asserts that shaking never throws, strictly shrinks the class,
  * and that the optimized class runs with output identical to the unoptimized one (the
- * corpus is deterministic: no file I/O, and its random/getenv cases assert only
- * deterministic properties).
+ * corpus is deterministic: its random/getenv cases assert only deterministic properties,
+ * and its file-stream cases write scratch files relative to the process working
+ * directory, which this test deletes afterwards -- see {@code CORPUS_SCRATCH_FILES}).
  */
 class JvmClassShakerCorpusTest {
 
@@ -60,6 +61,12 @@ class JvmClassShakerCorpusTest {
 		}
 	}
 
+	// Scratch files the ci-spec file-stream cases create relative to the process
+	// working directory (the corpus main runs in-process, so relative paths resolve
+	// against the project dir, not the @TempDir). Keep in sync with the file names
+	// used by the ci-spec.yaml binary/stream cases.
+	private static final List<String> CORPUS_SCRATCH_FILES = List.of("bin.dat", "seq.dat");
+
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
 		// Mirror the CLI compile path: user macros (defmacro) are expanded and the
@@ -73,7 +80,14 @@ class JvmClassShakerCorpusTest {
 		byte[] optimized = new JvmLispCompiler("Test", false, true).compile(program);
 
 		assertThat(optimized.length).as("optimized should shrink the class").isLessThan(plain.length);
-		assertThat(run(optimized)).isEqualTo(run(plain));
+		try {
+			assertThat(run(optimized)).isEqualTo(run(plain));
+		}
+		finally {
+			for (String name : CORPUS_SCRATCH_FILES) {
+				Files.deleteIfExists(Path.of(name));
+			}
+		}
 	}
 
 	// Loads the class in a fresh loader (the JVM verifier checks the shaken bytecode),

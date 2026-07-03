@@ -683,6 +683,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandFormat(cons), env);
 				case LispNames.WITH_OPEN_FILE:
 					return eval(LispMacroExpander.expandWithOpenFile(cons), env);
+				case LispNames.READ_SEQUENCE:
+					return eval(LispMacroExpander.expandReadSequence(cons), env);
+				case LispNames.WRITE_SEQUENCE:
+					return eval(LispMacroExpander.expandWriteSequence(cons), env);
 				case LispNames.PROG2:
 					return eval(LispMacroExpander.expandProg2(cons), env);
 				case LispNames.PSETQ:

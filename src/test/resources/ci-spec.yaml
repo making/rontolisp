@@ -974,7 +974,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      194
+      198
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn
@@ -1987,3 +1987,33 @@ cases:
       (10 20)
       25
       (t nil)
+  - name: binary-file-round-trip-with-read-byte-write-byte
+    source: |
+      (with-open-file (out "bin.dat" :direction :output :element-type '(unsigned-byte 8))
+        (write-byte 0 out) (write-byte 10 out) (write-byte 34 out) (write-byte 255 out))
+      (with-open-file (in "bin.dat" :element-type '(unsigned-byte 8))
+        (print (read-byte in)) (print (read-byte in))
+        (print (read-byte in)) (print (read-byte in))
+        (print (read-byte in nil -1)))
+    expected: |
+      0
+      10
+      34
+      255
+      -1
+  - name: read-sequence-and-write-sequence-round-trip
+    source: |
+      (let ((buf (make-array 4)))
+        (setf (aref buf 0) 65) (setf (aref buf 1) 0)
+        (setf (aref buf 2) 10) (setf (aref buf 3) 34)
+        (with-open-file (out "seq.dat" :direction :output :element-type '(unsigned-byte 8))
+          (write-sequence buf out)))
+      (let ((buf (make-array 8 :initial-element 99)))
+        (with-open-file (in "seq.dat" :element-type '(unsigned-byte 8))
+          (print (read-sequence buf in)))
+        (print (aref buf 2))
+        (print (aref buf 4)))
+    expected: |
+      4
+      10
+      99

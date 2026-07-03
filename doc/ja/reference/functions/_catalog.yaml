@@ -220,6 +220,10 @@ categories:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
       - { slug: write-line, name: "write-line" }
+      - { slug: read-byte, name: "read-byte" }
+      - { slug: write-byte, name: "write-byte" }
+      - { slug: read-sequence, name: "read-sequence" }
+      - { slug: write-sequence, name: "write-sequence" }
   - title: "システムと時間"
     functions:
       - { slug: get-universal-time, name: "get-universal-time" }

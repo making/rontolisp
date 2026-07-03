@@ -1,11 +1,14 @@
 package am.ik.rontolisp.eval;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
@@ -1675,9 +1678,22 @@ public final class Environment implements Scope {
 				}
 				output = LispNames.OUTPUT_KEYWORD.equals(dir.name());
 			}
+			// The optional third argument is the element type: '(unsigned-byte 8) opens a
+			// binary stream, 'character (the default) a text stream.
+			boolean binary = false;
+			if (args.size() > 2) {
+				binary = isBinaryElementType(args.get(2));
+			}
 			try {
-				Closeable stream = output ? Files.newBufferedWriter(Path.of(path.value()))
-						: Files.newBufferedReader(Path.of(path.value()));
+				Closeable stream;
+				if (binary) {
+					stream = output ? new BufferedOutputStream(Files.newOutputStream(Path.of(path.value())))
+							: new BufferedInputStream(Files.newInputStream(Path.of(path.value())));
+				}
+				else {
+					stream = output ? Files.newBufferedWriter(Path.of(path.value()))
+							: Files.newBufferedReader(Path.of(path.value()));
+				}
 				long handle = nextStreamHandle[0]++;
 				streams.put(handle, stream);
 				return new LispInteger(handle);
@@ -1746,6 +1762,48 @@ public final class Environment implements Scope {
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
 			}
+		}));
+		env.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
+			requireMinArgCount(LispNames.READ_BYTE, args, 1);
+			if (args.size() > 3) {
+				throw new LispEvalException(LispNames.READ_BYTE + " expects 1 to 3 arguments");
+			}
+			if (!(args.get(0) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof InputStream in2)) {
+				throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
+			}
+			int b;
+			try {
+				b = in2.read();
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+			if (b < 0) {
+				boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+				if (eofError) {
+					throw new LispEvalException(LispNames.READ_BYTE + ": end of file on stream " + handle.value());
+				}
+				return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+			}
+			return new LispInteger(b);
+		}));
+		env.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, args -> {
+			requireArgCount(LispNames.WRITE_BYTE, args, 2);
+			if (!(args.get(0) instanceof LispInteger value) || value.value() < 0 || value.value() > 255) {
+				throw new LispEvalException(LispNames.WRITE_BYTE + " expects an integer between 0 and 255");
+			}
+			if (!(args.get(1) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof OutputStream out2)) {
+				throw new LispEvalException(LispNames.WRITE_BYTE + " expects a binary output stream");
+			}
+			try {
+				out2.write((int) value.value());
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+			return value;
 		}));
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			try {
@@ -2536,6 +2594,29 @@ public final class Environment implements Scope {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Classifies an evaluated {@code open} element-type argument: the list
+	 * {@code (unsigned-byte 8)} is binary, the symbol {@code character} is text; anything
+	 * else is rejected.
+	 * @param spec the evaluated element type specifier
+	 * @return true for the binary element type
+	 */
+	private static boolean isBinaryElementType(LispVal spec) {
+		if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
+			return false;
+		}
+		if (spec instanceof LispCons cons) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() == 2 && parts.get(0) instanceof LispSymbol sym
+					&& LispNames.UNSIGNED_BYTE.equals(sym.name()) && parts.get(1) instanceof LispInteger bits
+					&& bits.value() == 8) {
+				return true;
+			}
+		}
+		throw new LispEvalException(
+				LispNames.OPEN + " supports only the 'character or '(unsigned-byte 8) element type");
 	}
 
 	private static void requireArgCount(String name, List<LispVal> args, int expected) {

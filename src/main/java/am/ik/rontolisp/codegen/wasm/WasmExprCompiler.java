@@ -184,6 +184,12 @@ final class WasmExprCompiler {
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
 				case LispNames.WITH_OPEN_FILE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx);
+				case LispNames.READ_BYTE -> WasmReadByteCompiler.compile(cons, ctx);
+				case LispNames.WRITE_BYTE -> WasmWriteByteCompiler.compile(cons, ctx);
+				case LispNames.READ_SEQUENCE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx);
+				case LispNames.WRITE_SEQUENCE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx);
 				case LispNames.STRING_UPCASE -> WasmStringUpcaseCompiler.compileUpcase(cons, ctx);
 				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler.compileDowncase(cons, ctx);
 				case LispNames.STRING_CAPITALIZE -> WasmStringCapitalizeCompiler.compile(cons, ctx);

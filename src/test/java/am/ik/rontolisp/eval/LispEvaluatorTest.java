@@ -2810,7 +2810,154 @@ class LispEvaluatorTest {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
 		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :append) s)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("supports only the :direction option");
+			.hasMessageContaining("supports only the :direction and :element-type options");
+	}
+
+	@Test
+	void withOpenFileBinaryRoundTrip(@TempDir Path tempDir) {
+		String file = tempDir.resolve("bin.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 0 out)
+				  (write-byte 10 out)
+				  (write-byte 34 out)
+				  (write-byte 255 out))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (list (read-byte in) (read-byte in) (read-byte in) (read-byte in) (read-byte in nil nil)))
+				""".formatted(file, file));
+		assertThat(result.print()).isEqualTo("(0 10 34 255 nil)");
+	}
+
+	@Test
+	void withOpenFileCharacterElementTypeIsText(@TempDir Path tempDir) {
+		String file = tempDir.resolve("chr.txt").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type 'character)
+				  (write-line "hello" out))
+				(with-open-file (in "%s" :element-type 'character)
+				  (read-line in))
+				""".formatted(file, file));
+		assertThat(result).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void withOpenFileNonLiteralElementTypeThrows(@TempDir Path tempDir) {
+		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :element-type (list 'unsigned-byte 8)) s)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":element-type must be the literal");
+	}
+
+	@Test
+	void readByteEofSignalsErrorByDefault(@TempDir Path tempDir) {
+		String file = tempDir.resolve("eof.dat").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (read-byte in))
+				""".formatted(file, file))).isInstanceOf(LispEvalException.class).hasMessageContaining("end of file");
+		assertThatThrownBy(() -> evalMulti("""
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (read-byte in t))
+				""".formatted(file))).isInstanceOf(LispEvalException.class).hasMessageContaining("end of file");
+	}
+
+	@Test
+	void readByteEofValueReturned(@TempDir Path tempDir) {
+		String file = tempDir.resolve("eofv.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (read-byte in nil -1))
+				""".formatted(file, file));
+		assertThat(result).isEqualTo(new LispInteger(-1));
+	}
+
+	@Test
+	void writeByteReturnsByteAndValidatesRange(@TempDir Path tempDir) {
+		String file = tempDir.resolve("wb.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 65 out))
+				""".formatted(file));
+		assertThat(result).isEqualTo(new LispInteger(65));
+		assertThatThrownBy(() -> evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 256 out))
+				""".formatted(file))).isInstanceOf(LispEvalException.class).hasMessageContaining("between 0 and 255");
+	}
+
+	@Test
+	void readByteOnTextStreamThrows(@TempDir Path tempDir) {
+		String file = tempDir.resolve("txt.txt").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> evalMulti("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line "x" out))
+				(with-open-file (in "%s")
+				  (read-byte in))
+				""".formatted(file, file))).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("binary input stream");
+	}
+
+	@Test
+	void readWriteSequenceRoundTrip(@TempDir Path tempDir) {
+		String file = tempDir.resolve("seq.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(setq buf (make-array 4))
+				(setf (aref buf 0) 65)
+				(setf (aref buf 1) 0)
+				(setf (aref buf 2) 10)
+				(setf (aref buf 3) 34)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence buf out))
+				(setq buf2 (make-array 4 :initial-element nil))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (list (read-sequence buf2 in) (aref buf2 0) (aref buf2 1) (aref buf2 2) (aref buf2 3)))
+				""".formatted(file, file));
+		assertThat(result.print()).isEqualTo("(4 65 0 10 34)");
+	}
+
+	@Test
+	void writeSequenceReturnsSequence(@TempDir Path tempDir) {
+		String file = tempDir.resolve("wsr.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(setq buf (make-array 2 :initial-element 7))
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (eq (write-sequence buf out) buf))
+				""".formatted(file));
+		assertThat(result).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void readSequenceShortReadReturnsFillPosition(@TempDir Path tempDir) {
+		String file = tempDir.resolve("short.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 1 out)
+				  (write-byte 2 out))
+				(setq buf (make-array 8 :initial-element 99))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (list (read-sequence buf in) (aref buf 0) (aref buf 1) (aref buf 2)))
+				""".formatted(file, file));
+		assertThat(result.print()).isEqualTo("(2 1 2 99)");
+	}
+
+	@Test
+	void readWriteSequenceStartEnd(@TempDir Path tempDir) {
+		String file = tempDir.resolve("se.dat").toString().replace("\\", "\\\\");
+		LispVal result = evalMulti("""
+				(setq buf (make-array 4))
+				(setf (aref buf 0) 1)
+				(setf (aref buf 1) 2)
+				(setf (aref buf 2) 3)
+				(setf (aref buf 3) 4)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence buf out :start 1 :end 3))
+				(setq buf2 (make-array 4 :initial-element 0))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (list (read-sequence buf2 in :start 2) (aref buf2 0) (aref buf2 1) (aref buf2 2) (aref buf2 3)))
+				""".formatted(file, file));
+		assertThat(result.print()).isEqualTo("(4 0 0 2 3)");
 	}
 
 	@Test
@@ -2960,9 +3107,10 @@ class LispEvaluatorTest {
 			.contains("make-array", "aref")
 			.contains("gensym", "macroexpand", "macroexpand-1")
 			.contains("require", "provide")
+			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
 			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(194);
+			.hasSize(198);
 	}
 
 	@Test

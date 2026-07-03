@@ -464,6 +464,92 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void withOpenFileBinaryRoundTrip() throws Exception {
+		String file = tempDir.resolve("bin.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 0 out)
+				  (write-byte 10 out)
+				  (write-byte 34 out)
+				  (write-byte 255 out))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in nil nil)))
+				""".formatted(file, file))).isEqualTo("0\n10\n34\n255\nnil");
+	}
+
+	@Test
+	void readByteEofValueReturned() throws Exception {
+		String file = tempDir.resolve("eofv.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-byte in nil -1)))
+				""".formatted(file, file))).isEqualTo("-1");
+	}
+
+	@Test
+	void writeByteReturnsByte() throws Exception {
+		String file = tempDir.resolve("wb.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (print (write-byte 65 out)))
+				""".formatted(file))).isEqualTo("65");
+	}
+
+	@Test
+	void readWriteSequenceRoundTrip() throws Exception {
+		String file = tempDir.resolve("seq.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(setq buf (make-array 4))
+				(setf (aref buf 0) 65)
+				(setf (aref buf 1) 0)
+				(setf (aref buf 2) 10)
+				(setf (aref buf 3) 34)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence buf out))
+				(setq buf2 (make-array 8 :initial-element 99))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-sequence buf2 in)))
+				(print (aref buf2 0))
+				(print (aref buf2 1))
+				(print (aref buf2 2))
+				(print (aref buf2 3))
+				(print (aref buf2 4))
+				""".formatted(file, file))).isEqualTo("4\n65\n0\n10\n34\n99");
+	}
+
+	@Test
+	void readWriteSequenceStartEnd() throws Exception {
+		String file = tempDir.resolve("se.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(setq buf (make-array 4))
+				(setf (aref buf 0) 1)
+				(setf (aref buf 1) 2)
+				(setf (aref buf 2) 3)
+				(setf (aref buf 3) 4)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence buf out :start 1 :end 3))
+				(setq buf2 (make-array 4 :initial-element 0))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-sequence buf2 in :start 2)))
+				(print (aref buf2 2))
+				(print (aref buf2 3))
+				""".formatted(file, file))).isEqualTo("4\n2\n3");
+	}
+
+	@Test
+	void openNonLiteralElementTypeThrows() {
+		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> compileAndRun("(open \"" + file + "\" :input (list 'unsigned-byte 8))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("element type");
+	}
+
+	@Test
 	void compileAndRunMultiplication() throws Exception {
 		assertThat(compileAndRun("(print (* 3 4))")).isEqualTo("12");
 	}
@@ -2992,12 +3078,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("194");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("198");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("194");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("198");
 	}
 
 	@Test

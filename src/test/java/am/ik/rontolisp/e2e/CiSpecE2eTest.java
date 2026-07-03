@@ -147,12 +147,13 @@ class CiSpecE2eTest {
 			}
 			case WASM -> {
 				exec(List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
-				yield exec(List.of("wasmtime", "--wasm", "gc", "test.wasm"));
+				// --dir . preopens the work dir so the file-stream cases can open files
+				yield exec(List.of("wasmtime", "--wasm", "gc", "--dir", ".", "test.wasm"));
 			}
 			case WASM_COMPONENT -> {
 				exec(List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
 				yield exec(List.of("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y", "-W",
-						"component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
+						"component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "--dir", ".",
 						"test.component.wasm"));
 			}
 		};

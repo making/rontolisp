@@ -19,9 +19,11 @@ import am.ik.jvm.Opcode;
  * A stream value is a {@code Long} handle indexing the static {@code _streams} table
  * (mirroring the WASM backend, where the handle is the WASI file descriptor). An entry is
  * a {@code BufferedReader} for {@code :input} or a {@code BufferedWriter} for
- * {@code :output}; {@code close} nulls the entry out. {@code _writeLine} and
- * {@code _readLineStream} treat a {@code null} stream as standard output / standard
- * input.
+ * {@code :output}; a binary stream ({@code :element-type '(unsigned-byte 8)}) is a
+ * {@code BufferedInputStream} or {@code BufferedOutputStream} served by
+ * {@code _readByte}/{@code _writeByte}. {@code close} nulls the entry out.
+ * {@code _writeLine} and {@code _readLineStream} treat a {@code null} stream as standard
+ * output / standard input.
  */
 final class JvmIoRuntimeBuilder {
 
@@ -53,6 +55,14 @@ final class JvmIoRuntimeBuilder {
 
 	static final String READ_LINE_STREAM_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String READ_BYTE_METHOD = "_readByte";
+
+	static final String READ_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String WRITE_BYTE_METHOD = "_writeByte";
+
+	static final String WRITE_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	private final ConstantPool cp;
 
 	private final FieldrefConstant streamsField;
@@ -74,6 +84,20 @@ final class JvmIoRuntimeBuilder {
 	private final ClassConstant fileWriterClass;
 
 	private final ClassConstant writerClass;
+
+	private final ClassConstant bufferedInputStreamClass;
+
+	private final ClassConstant bufferedOutputStreamClass;
+
+	private final ClassConstant fileInputStreamClass;
+
+	private final ClassConstant fileOutputStreamClass;
+
+	private final ClassConstant inputStreamClass;
+
+	private final ClassConstant outputStreamClass;
+
+	private final ClassConstant runtimeExceptionClass;
 
 	private final MethodrefConstant arraysCopyOf;
 
@@ -103,6 +127,24 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodrefConstant writerClose;
 
+	private final MethodrefConstant bufferedInputStreamInit;
+
+	private final MethodrefConstant bufferedOutputStreamInit;
+
+	private final MethodrefConstant fileInputStreamInit;
+
+	private final MethodrefConstant fileOutputStreamInit;
+
+	private final MethodrefConstant inputStreamRead;
+
+	private final MethodrefConstant inputStreamClose;
+
+	private final MethodrefConstant outputStreamWrite;
+
+	private final MethodrefConstant outputStreamClose;
+
+	private final MethodrefConstant runtimeExceptionInit;
+
 	private final FieldrefConstant systemOut;
 
 	private final MethodrefConstant printlnStr;
@@ -114,6 +156,8 @@ final class JvmIoRuntimeBuilder {
 	private final ConstantPool.StringConstant quoteStr;
 
 	private final ConstantPool.StringConstant newlineStr;
+
+	private final ConstantPool.StringConstant eofStr;
 
 	private JvmIoRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
@@ -159,9 +203,35 @@ final class JvmIoRuntimeBuilder {
 		this.writerWrite = cp.addMethodref(this.writerClass,
 				cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(Ljava/lang/String;)V")));
 		this.writerClose = cp.addMethodref(this.writerClass, cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
+		this.bufferedInputStreamClass = cp.addClass(cp.addUtf8("java/io/BufferedInputStream"));
+		this.bufferedOutputStreamClass = cp.addClass(cp.addUtf8("java/io/BufferedOutputStream"));
+		this.fileInputStreamClass = cp.addClass(cp.addUtf8("java/io/FileInputStream"));
+		this.fileOutputStreamClass = cp.addClass(cp.addUtf8("java/io/FileOutputStream"));
+		this.inputStreamClass = cp.addClass(cp.addUtf8("java/io/InputStream"));
+		this.outputStreamClass = cp.addClass(cp.addUtf8("java/io/OutputStream"));
+		this.runtimeExceptionClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		this.bufferedInputStreamInit = cp.addMethodref(this.bufferedInputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
+		this.bufferedOutputStreamInit = cp.addMethodref(this.bufferedOutputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/OutputStream;)V")));
+		this.fileInputStreamInit = cp.addMethodref(this.fileInputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.fileOutputStreamInit = cp.addMethodref(this.fileOutputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.inputStreamRead = cp.addMethodref(this.inputStreamClass,
+				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
+		this.inputStreamClose = cp.addMethodref(this.inputStreamClass,
+				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
+		this.outputStreamWrite = cp.addMethodref(this.outputStreamClass,
+				cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(I)V")));
+		this.outputStreamClose = cp.addMethodref(this.outputStreamClass,
+				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
+		this.runtimeExceptionInit = cp.addMethodref(this.runtimeExceptionClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		this.tStr = cp.addString("t");
 		this.quoteStr = cp.addString("\"");
 		this.newlineStr = cp.addString("\n");
+		this.eofStr = cp.addString("read-byte: end of file");
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -182,14 +252,18 @@ final class JvmIoRuntimeBuilder {
 				buildWriteLine()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
 				buildReadLineStream()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
+				buildWriteByte()));
 		return ms;
 	}
 
 	/**
 	 * {@code _open(Object path, int mode) -> Long handle}. Strips the surrounding quotes
-	 * from the path string, opens a {@code BufferedReader} (mode 0) or
-	 * {@code BufferedWriter} (mode 1), stores it in the (lazily created, growable)
-	 * {@code _streams} table, and returns the index as the stream handle.
+	 * from the path string, opens a {@code BufferedReader} (mode 0), a
+	 * {@code BufferedWriter} (mode 1), a {@code BufferedInputStream} (mode 2, binary) or
+	 * a {@code BufferedOutputStream} (mode 3, binary), stores it in the (lazily created,
+	 * growable) {@code _streams} table, and returns the index as the stream handle.
 	 */
 	private List<Integer> buildOpen() {
 		// Slots: 0=path (Object), 1=mode (int), 2=arr, 3=count, 4=p (String), 5=stream
@@ -252,45 +326,47 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.stringSubstring.index());
 		code.add(Opcode.ASTORE);
 		code.add(4);
-		// stream = mode == 0 ? new BufferedReader(new FileReader(p))
-		// : new BufferedWriter(new FileWriter(p));
+		// stream = switch (mode) { case 0 -> new BufferedReader(new FileReader(p));
+		// case 1 -> new BufferedWriter(new FileWriter(p));
+		// case 2 -> new BufferedInputStream(new FileInputStream(p));
+		// default -> new BufferedOutputStream(new FileOutputStream(p)); };
 		code.add(Opcode.ILOAD_1);
 		int ifModePos = code.size();
 		code.add(Opcode.IFNE);
 		emitU2(code, 0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileReaderInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.bufferedReaderInit.index());
-		code.add(Opcode.ASTORE);
-		code.add(5);
+		emitOpenStream(code, this.bufferedReaderClass, this.fileReaderClass, this.fileReaderInit,
+				this.bufferedReaderInit);
 		int gotoStorePos = code.size();
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
 		patchBranch(code, ifModePos, code.size());
-		code.add(Opcode.NEW);
-		emitU2(code, this.bufferedWriterClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileWriterClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileWriterInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.bufferedWriterInit.index());
-		code.add(Opcode.ASTORE);
-		code.add(5);
+		code.add(Opcode.ILOAD_1);
+		code.add(Opcode.ICONST_1);
+		int ifMode1Pos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterInit,
+				this.bufferedWriterInit);
+		int gotoStorePos1 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifMode1Pos, code.size());
+		code.add(Opcode.ILOAD_1);
+		code.add(Opcode.ICONST_2);
+		int ifMode2Pos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		emitOpenStream(code, this.bufferedInputStreamClass, this.fileInputStreamClass, this.fileInputStreamInit,
+				this.bufferedInputStreamInit);
+		int gotoStorePos2 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifMode2Pos, code.size());
+		emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass, this.fileOutputStreamInit,
+				this.bufferedOutputStreamInit);
 		patchBranch(code, gotoStorePos, code.size());
+		patchBranch(code, gotoStorePos1, code.size());
+		patchBranch(code, gotoStorePos2, code.size());
 		// arr[count] = stream; _streamCount = count + 1;
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.ILOAD_3);
@@ -309,6 +385,28 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValueOf.index());
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * Emits {@code slot5 = new <buffered>(new <file>(p))} where {@code p} is the path in
+	 * slot 4 -- one arm of the {@code _open} mode branch.
+	 */
+	private void emitOpenStream(List<Integer> code, ClassConstant bufferedClass, ClassConstant fileClass,
+			MethodrefConstant fileInit, MethodrefConstant bufferedInit) {
+		code.add(Opcode.NEW);
+		emitU2(code, bufferedClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.NEW);
+		emitU2(code, fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, fileInit.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, bufferedInit.index());
+		code.add(Opcode.ASTORE);
+		code.add(5);
 	}
 
 	/**
@@ -333,11 +431,13 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.AALOAD);
 		code.add(Opcode.ASTORE_2);
 		// if (stream instanceof BufferedReader) ((BufferedReader) stream).close();
+		// else if (stream instanceof InputStream) ((InputStream) stream).close();
+		// else if (stream instanceof OutputStream) ((OutputStream) stream).close();
 		// else ((Writer) stream).close();
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, this.bufferedReaderClass.index());
-		int ifWriterPos = code.size();
+		int ifNotReaderPos = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		code.add(Opcode.ALOAD_2);
@@ -348,13 +448,45 @@ final class JvmIoRuntimeBuilder {
 		int gotoDonePos = code.size();
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
-		patchBranch(code, ifWriterPos, code.size());
+		patchBranch(code, ifNotReaderPos, code.size());
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.inputStreamClass.index());
+		int ifNotInputPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.inputStreamClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inputStreamClose.index());
+		int gotoDonePos1 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotInputPos, code.size());
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.outputStreamClass.index());
+		int ifNotOutputPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.outputStreamClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.outputStreamClose.index());
+		int gotoDonePos2 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotOutputPos, code.size());
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.writerClass.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.writerClose.index());
 		patchBranch(code, gotoDonePos, code.size());
+		patchBranch(code, gotoDonePos1, code.size());
+		patchBranch(code, gotoDonePos2, code.size());
 		// _streams[idx] = null; return "t";
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
@@ -477,6 +609,101 @@ final class JvmIoRuntimeBuilder {
 		emitLdc(code, this.quoteStr.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringConcat.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _readByte(Object handle, Object eofErrorP, Object eofValue) -> Object}.
+	 * Reads one byte from the binary input stream in the table; on EOF returns
+	 * {@code eofValue} when {@code eofErrorP} is nil, otherwise throws. A byte is a boxed
+	 * {@code Long} 0-255.
+	 */
+	private List<Integer> buildReadByte() {
+		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=in (InputStream), 4=b (int)
+		List<Integer> code = new ArrayList<>();
+		// in = (InputStream) _streams[(int) ((Long) handle).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.inputStreamClass.index());
+		code.add(Opcode.ASTORE_3);
+		// b = in.read();
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inputStreamRead.index());
+		code.add(Opcode.ISTORE);
+		code.add(4);
+		// if (b >= 0) return Long.valueOf((long) b);
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		int ifEofPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		code.add(Opcode.I2L);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.longValueOf.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifEofPos, code.size());
+		// if (eofErrorP == null) return eofValue;
+		code.add(Opcode.ALOAD_1);
+		int ifThrowPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifThrowPos, code.size());
+		// throw new RuntimeException("read-byte: end of file");
+		code.add(Opcode.NEW);
+		emitU2(code, this.runtimeExceptionClass.index());
+		code.add(Opcode.DUP);
+		emitLdc(code, this.eofStr.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.runtimeExceptionInit.index());
+		code.add(Opcode.ATHROW);
+		return code;
+	}
+
+	/**
+	 * {@code _writeByte(Object byteObj, Object handle) -> byteObj}. Writes one raw byte
+	 * to the binary output stream in the table.
+	 */
+	private List<Integer> buildWriteByte() {
+		// Slots: 0=byteObj, 1=handle, 2=out (OutputStream)
+		List<Integer> code = new ArrayList<>();
+		// out = (OutputStream) _streams[(int) ((Long) handle).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.outputStreamClass.index());
+		code.add(Opcode.ASTORE_2);
+		// out.write((int) ((Long) byteObj).longValue()); return byteObj;
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.outputStreamWrite.index());
+		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		return code;
 	}
