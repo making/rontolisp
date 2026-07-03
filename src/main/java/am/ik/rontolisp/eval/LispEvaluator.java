@@ -6,6 +6,7 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -631,11 +632,11 @@ public final class LispEvaluator {
 	private LispVal evalDefun(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
-		List<LispSymbol> params = extractParams(parts.get(2));
-		List<LispVal> body = parts.subList(3, parts.size());
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()));
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
-		this.globalEnv.defineFunction(name.name(), new LispLambda(params, body, env));
+		this.globalEnv.defineFunction(name.name(),
+				new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
 		return name;
 	}
 
@@ -910,9 +911,8 @@ public final class LispEvaluator {
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		List<LispSymbol> params = extractParams(parts.get(1));
-		List<LispVal> body = parts.subList(2, parts.size());
-		return new LispLambda(params, body, env);
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), parts.subList(2, parts.size()));
+		return new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env);
 	}
 
 	// The map* family (mapcar/mapc/mapcan/maplist/mapcon) operates on lists; passing a
@@ -1253,9 +1253,25 @@ public final class LispEvaluator {
 			return builtIn.body().apply(args);
 		}
 		if (function instanceof LispLambda lambda) {
+			int required = lambda.params().size();
+			if (args.size() < required) {
+				throw new LispEvalException("Function expects " + (lambda.rest() == null ? "" : "at least ") + required
+						+ " argument" + (required == 1 ? "" : "s") + ", got " + args.size());
+			}
+			if (lambda.rest() == null && args.size() > required) {
+				throw new LispEvalException("Function expects " + required + " argument" + (required == 1 ? "" : "s")
+						+ ", got " + args.size());
+			}
 			Environment lambdaEnv = new Environment((Environment) lambda.closure());
-			for (int i = 0; i < lambda.params().size(); i++) {
+			for (int i = 0; i < required; i++) {
 				lambdaEnv.define(lambda.params().get(i).name(), args.get(i));
+			}
+			if (lambda.rest() != null) {
+				LispVal restList = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= required; i--) {
+					restList = new LispCons(args.get(i), restList);
+				}
+				lambdaEnv.define(lambda.rest().name(), restList);
 			}
 			LispVal result = LispNil.INSTANCE;
 			for (LispVal bodyExpr : lambda.body()) {
@@ -1276,16 +1292,6 @@ public final class LispEvaluator {
 			}
 		}
 		return fallback;
-	}
-
-	private List<LispSymbol> extractParams(LispVal paramList) {
-		List<LispSymbol> params = new ArrayList<>();
-		if (paramList instanceof LispCons paramCons) {
-			for (LispVal p : paramCons.toList()) {
-				params.add((LispSymbol) p);
-			}
-		}
-		return params;
 	}
 
 	private boolean isTruthy(LispVal val) {

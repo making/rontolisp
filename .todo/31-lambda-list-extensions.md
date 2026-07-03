@@ -1,37 +1,21 @@
 # Lambda list extensions (`&optional`, `&rest`, `&key`, `&aux`, `&whole`, `&allow-other-keys`)
 
-**Status:** not implemented. HIGH priority — without these, every `defun` is fixed-arity with no flexibility.
+**Status:** mostly DONE (2026-07-03). `&optional`, `&rest`, `&key`,
+`&allow-other-keys`, and `&aux` work in `defun`/`lambda` on all four backends
+(interpreter, JVM, WASM Preview 1, WASM component), including `funcall`/`apply`/
+`mapcar` and calls from the runtime `eval`. Implementation notes:
+`.kb/lambda-lists.md`; user docs: `doc/en/reference/special-forms/defun.md`.
 
-## What's missing
+## Remaining follow-ups
 
-Currently `lambda` and `defun` accept only a plain parameter list `(a b c)` — fixed arity, no defaults, no rest, no keywords. The `LispLambda` record holds `List<LispVal> params` (bare symbols) and the evaluator/compilers check exact arity.
-
-### Missing lambda list keywords
-
-| Keyword | Purpose | Difficulty |
-|---------|---------|------------|
-| `&optional` | Parameters with defaults, e.g. `(defun f (x &optional (y 0)) ...)` | Medium |
-| `&rest` | Variable tail, e.g. `(defun f (&rest xs) ...)` | Medium |
-| `&key` | Keyword arguments, e.g. `(defun f (&key (x 0)) ...)` | Hard |
-| `&aux` | Auxiliary (local) variables | Easy |
-| `&whole` | Bind the entire argument list | Easy |
-| `&allow-other-keys` | Suppress unknown-key error | Easy (with `&key`) |
-
-### What needs to change
-
-- **Reader/AST**: `LispLambda` needs richer structure (or the params list carries the lambda-list metadata).
-- **Interpreter** (`LispEvaluator.evalLambda`): Currently matches param count exactly. Needs to handle optional defaults, collect rest into a list, and parse keyword args.
-- **JVM compiler** (`JvmLambdaCompiler`): Emits fixed-arity dispatch. Needs runtime argument list construction for `&rest`/`&optional`/`&key`.
-- **WASM compiler** (`WasmLambdaCompiler`): Same.
-- **`--no-gc` scalar WASM**: The export boundary is already fixed-arity; internal lambdas with extensions should work once the core supports them.
-- **`BuiltinFunctionWrappers`**: Wrappers that use `&rest`/`&key` need the lambda body to work.
-
-### Implementation approach
-
-1. Extend `LispLambda` (or add a companion structure) to represent the parsed lambda list.
-2. Implement in interpreter first (`evalLambda` argument binding).
-3. Thread through JVM and WASM compilers.
-4. Many existing built-ins (`+`, `-`, `list`, `cons`, `format`, `loop`, etc.) are already variadic at the builtin level — `&rest` in user `defun` is the new piece.
+| Item | Notes |
+|------|-------|
+| `&whole` | Not implemented (rejected with an error). Only meaningful once `defmacro` gets full lambda lists / destructuring. |
+| `defmacro` extended lambda lists | `defmacro` still takes required params + one `&rest`/`&body` only (`LispEvaluator.evalDefmacro`). Reusing `LambdaLists.expand` there needs care: macro parameters bind unevaluated forms, so the generated defaulting prologue must run in the macro-expansion environment. |
+| Runtime-`eval` lambdas | A `lambda` living inside a quoted form evaluated by the compiled `eval` binds positionally; the emitted interpreters (`Jvm/WasmEvalRuntimeBuilder` `_apply` interpreted-closure branch) do not parse `&` keywords. Documented in `doc/en/guides/eval-limitations.md`. |
+| `--no-gc` | Lambda-list keywords are a compile error under `--no-gc` (rest list is a cons; the scalar lowering has none). |
+| Variadic `BuiltinFunctionWrappers` | `#'+`, `#'list`, etc. still pin one arity as first-class values. They could now be `(&rest r)` wrappers, but each change shifts the wrapper's physical arity (dispatch membership, eval registry) and cross-backend output, so do it deliberately with ci-spec coverage. |
+| funcall/apply >7 args | Dispatchers exist for arities 0..7 only; a variadic function called through funcall/apply with more than 7 total arguments is unsupported (direct calls are unlimited). |
 
 ### Related
 

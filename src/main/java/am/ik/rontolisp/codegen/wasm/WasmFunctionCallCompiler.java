@@ -49,11 +49,46 @@ final class WasmFunctionCallCompiler {
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
 			List<LispVal> args = cons.toList();
+			int supplied = args.size() - 1;
+			int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+			if (supplied < required || (!fi.variadic() && supplied > required)) {
+				throw new UnsupportedOperationException(name + " expects " + (fi.variadic() ? "at least " : "")
+						+ required + " argument" + (required == 1 ? "" : "s") + ", got " + supplied);
+			}
 			// Push null env (defun functions ignore it)
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
-			for (int i = 1; i < args.size(); i++) {
+			for (int i = 1; i <= required; i++) {
 				WasmExprCompiler.compileExpr(args.get(i), ctx);
+			}
+			if (fi.variadic()) {
+				// Evaluate the surplus arguments left to right into temps, then link
+				// them into a cons list passed as the trailing rest parameter.
+				List<Integer> extraSlots = new java.util.ArrayList<>();
+				for (int i = required + 1; i < args.size(); i++) {
+					WasmExprCompiler.compileExpr(args.get(i), ctx);
+					int s = ctx.allocTemp();
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeSignedLeb128(s);
+					extraSlots.add(s);
+				}
+				int restSlot = ctx.allocTemp();
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(restSlot);
+				for (int k = extraSlots.size() - 1; k >= 0; k--) {
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeSignedLeb128(extraSlots.get(k));
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeSignedLeb128(restSlot);
+					ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+					ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeSignedLeb128(restSlot);
+				}
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(restSlot);
 			}
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(fi.funcIndex());

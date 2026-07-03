@@ -8,9 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispNil;
-import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.wasm.Instruction;
@@ -29,15 +28,9 @@ final class WasmLambdaCompiler {
 	 */
 	static void compileValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
-		LispVal paramsVal = parts.get(1);
-		List<String> paramNames;
-		if (paramsVal instanceof LispNil) {
-			paramNames = List.of();
-		}
-		else {
-			paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
-		}
-		List<LispVal> bodyExprs = parts.subList(2, parts.size());
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()));
+		List<String> paramNames = nf.paramNames();
+		List<LispVal> bodyExprs = nf.body();
 
 		// Free variable analysis
 		Set<String> boundVars = new HashSet<>(paramNames);
@@ -51,7 +44,7 @@ final class WasmLambdaCompiler {
 		int funcId = ctx.nextFuncId[0]++;
 		String methodName = "_lambda_" + funcId;
 		int funcIndex = WasmLispCompiler.FUNC_USER_BASE + ctx.functions.size() + ctx.lambdaDecls.size();
-		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, bodyExprs,
+		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
 				new ArrayList<>(freeVars), funcIndex));
 
 		// Emit closure creation: {funcId, env}
@@ -103,24 +96,52 @@ final class WasmLambdaCompiler {
 	 */
 	static void compileCall(LispCons lambda, LispCons call, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> lambdaParts = lambda.toList();
-		LispVal paramsVal = lambdaParts.get(1);
-		List<String> paramNames;
-		if (paramsVal instanceof LispNil) {
-			paramNames = List.of();
-		}
-		else {
-			paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
-		}
-		List<LispVal> bodyExprs = lambdaParts.subList(2, lambdaParts.size());
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
+				lambdaParts.subList(2, lambdaParts.size()));
+		List<String> paramNames = nf.paramNames();
+		List<LispVal> bodyExprs = nf.body();
 		List<LispVal> callArgs = call.toList();
+		int required = paramNames.size() - (nf.variadic() ? 1 : 0);
+		int supplied = callArgs.size() - 1;
+		if (supplied < required || (!nf.variadic() && supplied > required)) {
+			throw new UnsupportedOperationException("lambda expects " + (nf.variadic() ? "at least " : "") + required
+					+ " argument" + (required == 1 ? "" : "s") + ", got " + supplied);
+		}
 
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 
-		for (int i = 0; i < paramNames.size(); i++) {
+		for (int i = 0; i < required; i++) {
 			WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
 			int slot = ctx.allocLocal(paramNames.get(i));
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeSignedLeb128(slot);
+		}
+		if (nf.variadic()) {
+			// Evaluate the surplus arguments left to right into temps, then link them
+			// into a cons list bound to the rest parameter.
+			List<Integer> extraSlots = new ArrayList<>();
+			for (int i = required; i < supplied; i++) {
+				WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
+				int s = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(s);
+				extraSlots.add(s);
+			}
+			int restSlot = ctx.allocLocal(paramNames.get(required));
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(restSlot);
+			for (int k = extraSlots.size() - 1; k >= 0; k--) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(extraSlots.get(k));
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(restSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(restSlot);
+			}
 		}
 
 		for (int i = 0; i < bodyExprs.size(); i++) {

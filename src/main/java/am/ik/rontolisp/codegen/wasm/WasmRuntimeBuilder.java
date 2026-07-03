@@ -570,19 +570,26 @@ final class WasmRuntimeBuilder {
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval) {
-		// Collect all functions with matching arity
-		record Target(int funcId, int funcIndex) {
+		// Collect all functions with matching arity. A variadic function (physical
+		// params = required + rest list) matches every dispatch arity >= required; its
+		// case links the surplus args into a cons list before the call.
+		record Target(int funcId, int funcIndex, int required, boolean variadic) {
 		}
 		List<Target> targets = new ArrayList<>();
 		for (int i = 0; i < defuns.size(); i++) {
-			if (defuns.get(i).paramNames().size() == arity) {
-				targets.add(new Target(i, WasmLispCompiler.FUNC_USER_BASE + i));
+			WasmLispCompiler.DefunDecl defun = defuns.get(i);
+			int paramCount = defun.paramNames().size();
+			if (defun.variadic() ? arity >= paramCount - 1 : paramCount == arity) {
+				targets.add(new Target(i, WasmLispCompiler.FUNC_USER_BASE + i,
+						defun.variadic() ? paramCount - 1 : paramCount, defun.variadic()));
 			}
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			WasmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
-			if (lambda.paramNames().size() == arity) {
-				targets.add(new Target(lambda.funcId(), lambda.funcIndex()));
+			int paramCount = lambda.paramNames().size();
+			if (lambda.variadic() ? arity >= paramCount - 1 : paramCount == arity) {
+				targets.add(new Target(lambda.funcId(), lambda.funcIndex(),
+						lambda.variadic() ? paramCount - 1 : paramCount, lambda.variadic()));
 			}
 		}
 
@@ -698,6 +705,23 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.END); // end of $case_{numCases-1-k}
 			int targetIdx = numCases - 1 - k;
 			Target target = targets.get(targetIdx);
+			if (target.variadic) {
+				// Link args required+1..arity into a cons list (right to left)
+				w.write(Instruction.REF_NULL);
+				w.writeHeapType(Type.EQ.code());
+				w.write(Instruction.SET_LOCAL);
+				w.writeSignedLeb128(argListLocal);
+				for (int a = arity; a >= target.required + 1; a--) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeSignedLeb128(a);
+					w.write(Instruction.GET_LOCAL);
+					w.writeSignedLeb128(argListLocal);
+					w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+					w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+					w.write(Instruction.SET_LOCAL);
+					w.writeSignedLeb128(argListLocal);
+				}
+			}
 			// Extract env from closure struct
 			w.write(Instruction.GET_LOCAL);
 			w.writeSignedLeb128(0); // funcval
@@ -706,10 +730,20 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 			w.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 			w.writeSignedLeb128(1); // field 1: env
-			// Push args
-			for (int a = 1; a <= arity; a++) {
+			// Push args (for a variadic target, the required ones plus the rest list)
+			for (int a = 1; a <= target.required; a++) {
 				w.write(Instruction.GET_LOCAL);
 				w.writeSignedLeb128(a);
+			}
+			if (target.variadic) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeSignedLeb128(argListLocal);
+			}
+			else {
+				for (int a = target.required + 1; a <= arity; a++) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeSignedLeb128(a);
+				}
 			}
 			// Call target function
 			w.write(Instruction.CALL);

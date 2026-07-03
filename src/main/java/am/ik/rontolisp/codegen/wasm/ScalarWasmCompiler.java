@@ -1975,6 +1975,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		String name = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
 		LispVal paramsVal = lambdaParts.get(1);
+		// Lambda-list keywords need cons lists at runtime, which the scalar (non-GC)
+		// lowering does not have; reject them with a clear error.
+		if (am.ik.rontolisp.LambdaLists.usesLambdaListKeywords(paramsVal)) {
+			throw new UnsupportedOperationException("Cannot compile function '" + name
+					+ "': lambda-list keywords (&optional/&rest/&key) are not supported with --no-gc");
+		}
 		List<String> params = paramsVal instanceof LispNil ? List.of()
 				: ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
 		return new Defun(name, params, lambdaParts.subList(2, lambdaParts.size()));

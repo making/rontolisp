@@ -25,7 +25,9 @@ Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 On the WASM backend a function (`defun` or `lambda`) may take at most **seven
 parameters**; a larger arity is a compile error (the interpreter and JVM backends have no
-such limit). Bundle the extra arguments into a list to stay within it.
+such limit). Bundle the extra arguments into a list to stay within it. The rest list of a
+variadic function counts as one parameter, so a `&rest` function may declare at most six
+required parameters while accepting any number of arguments at a direct call site.
 
 A float with magnitude 2³¹ or larger computes and compares correctly but
 cannot be printed (`print`/`princ-to-string` trap with an integer overflow);
@@ -288,7 +290,8 @@ subset:
 
 Anything else that would allocate a heap object (cons/list, characters, symbols, vectors,
 hash tables, `eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment to
-a global) makes the function ineligible. Rather than miscompile silently, that is a
+a global, a lambda-list keyword such as `&optional`/`&rest`/`&key` — the rest list is a
+cons) makes the function ineligible. Rather than miscompile silently, that is a
 **compile error** naming the offending operation, so the boundary stays explicit.
 
 The supported boundary designators are `:int`, `:float`, `:bool`, `:string` (and

@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispMacroExpander;
@@ -534,6 +535,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so
 		// the rest of compilation sees canonical names.
 		program = new PackageResolver().resolveProgram(program);
+		// Desugar extended lambda lists (&optional/&key/&aux) into the native
+		// "required + &rest" shape so the passes below only see that shape.
+		program = LambdaLists.desugarProgram(program);
 		// Detect whether the program uses (eval ...). When it does, a runtime
 		// interpreter (_eval) and a function-name registry are emitted, and dispatch
 		// functions are generated for every registered arity so _eval can apply them.
@@ -609,7 +613,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				paramNames.add("%wasm-import-p" + i);
 			}
 			importWrappers.put(decl.name(), decl);
-			defuns.add(new DefunDecl(decl.name(), paramNames, List.of()));
+			defuns.add(new DefunDecl(decl.name(), paramNames, false, List.of()));
 		}
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
@@ -678,8 +682,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ "': the WASM backend " + "supports at most " + MAX_CALLABLE_ARITY + " parameters, got "
 						+ arity + " (bundle the extra arguments into a list)");
 			}
-			functions.put(defun.name,
-					new WasmFunctionInfo(defun.name, arity, funcId, TYPE_CALLABLE_BASE + arity, FUNC_USER_BASE + i));
+			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, funcId,
+					TYPE_CALLABLE_BASE + arity, FUNC_USER_BASE + i));
 		}
 
 		// Shared state for lambda discovery
@@ -688,10 +692,19 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// When eval is used, _eval applies any registered function via the dispatch
 		// functions, so ensure a real dispatch body exists for every registered arity.
+		// A variadic function is reachable from every dispatch arity >= its required
+		// count, so all of those need real bodies.
 		if (usesEval) {
 			for (WasmFunctionInfo fi : functions.values()) {
 				if (fi.paramCount() <= MAX_CALLABLE_ARITY) {
-					indirectCallArities.add(fi.paramCount());
+					if (fi.variadic()) {
+						for (int a = fi.paramCount() - 1; a <= MAX_CALLABLE_ARITY; a++) {
+							indirectCallArities.add(a);
+						}
+					}
+					else {
+						indirectCallArities.add(fi.paramCount());
+					}
 				}
 			}
 		}
@@ -1050,7 +1063,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				int nameOffset = stringTable.addString(defun.name).offset();
 				writeLittleEndian32(registry, nameOffset);
 				writeLittleEndian32(registry, i); // funcId == defun index
-				writeLittleEndian32(registry, defun.paramNames.size()); // arity
+				// arity; a variadic function is encoded as -physicalParamCount so the
+				// eval call path evaluates every argument instead of exactly arity
+				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
 			}
 			int registryBase = stringTable.appendBlob(registry.toByteArray());
 			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
@@ -1784,18 +1799,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
-		LispVal paramsVal = lambdaParts.get(1);
-		List<String> paramNames;
-		if (paramsVal instanceof LispNil) {
-			paramNames = List.of();
-		}
-		else {
-			paramNames = ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
-		}
-		return new DefunDecl(funcName, paramNames, lambdaParts.subList(2, lambdaParts.size()));
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
+				lambdaParts.subList(2, lambdaParts.size()));
+		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.body());
 	}
 
-	record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
+	/**
+	 * A parsed defun. {@code paramNames} are the physical parameters (when
+	 * {@code variadic}, the last one is the {@code &rest} parameter receiving the
+	 * remaining arguments as a cons list).
+	 */
+	record DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
 	}
 
 	/**
@@ -1810,10 +1824,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	record ExportPlan(WasmExportCompiler.Decl decl, int targetFuncIndex, int typeIndex, int funcIndex) {
 	}
 
-	record WasmFunctionInfo(String name, int paramCount, int funcId, int typeIndex, int funcIndex) {
+	/**
+	 * Registry entry for a compiled function. {@code paramCount} is the physical WASM
+	 * parameter count (excluding the closure env); when {@code variadic}, the last
+	 * parameter is the rest list and the callable minimum is {@code paramCount - 1}
+	 * arguments.
+	 */
+	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int funcId, int typeIndex, int funcIndex) {
 	}
 
-	record LambdaInfo(int funcId, String methodName, List<String> paramNames, List<LispVal> bodyExprs,
+	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
 			List<String> freeVarNames, int funcIndex) {
 	}
 

@@ -1836,3 +1836,53 @@ cases:
       1
       2
       1
+
+  # Lambda-list extensions: &optional/&key/&aux/&allow-other-keys are desugared
+  # (LambdaLists) into the native "required + &rest" shape shared by all
+  # backends; funcall/apply/eval dispatch packages surplus args into the rest
+  # list.
+  - name: lambda-list-extensions
+    source: |
+      (defun ll-rest (a &rest r) (list a r))
+      (print (ll-rest 1 2 3))
+      (print (ll-rest 1))
+      (defun ll-opt (x &optional (y 10) (z (* y 2) zp)) (list x y z zp))
+      (print (ll-opt 1))
+      (print (ll-opt 1 2))
+      (print (ll-opt 1 2 3))
+      (defun ll-key (a &key (k 1 kp) m) (list a k kp m))
+      (print (ll-key 0))
+      (print (ll-key 0 :k 5))
+      (print (ll-key 0 :m 7 :k 9))
+      (print (ll-key 0 :other 1 :allow-other-keys t))
+      (defun ll-mix (a &optional b &rest r &key c &allow-other-keys) (list a b r c))
+      (print (ll-mix 1 2 :c 3 :d 4))
+      (defun ll-aux (x &aux (y (+ x 1)) z) (list x y z))
+      (print (ll-aux 5))
+    expected: |
+      (1 (2 3))
+      (1 nil)
+      (1 10 20 nil)
+      (1 2 4 nil)
+      (1 2 3 t)
+      (0 1 nil nil)
+      (0 5 t nil)
+      (0 9 t 7)
+      (0 1 nil nil)
+      (1 2 (:c 3 :d 4) 3)
+      (5 6 nil)
+  - name: lambda-list-first-class-and-eval
+    source: |
+      (print (funcall (lambda (&rest xs) xs) 1 2 3))
+      (print (funcall #'ll-rest 1 2 3))
+      (print (apply #'ll-rest 1 (list 2 3)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)))
+      (print ((lambda (a &rest r) (list a r)) 1 2 3))
+      (print (eval (quote (ll-rest 1 2 3))))
+    expected: |
+      (1 2 3)
+      (1 (2 3))
+      (1 (2 3))
+      (101 102 103)
+      (1 (2 3))
+      (1 (2 3))

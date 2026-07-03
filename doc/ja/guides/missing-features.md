@@ -13,7 +13,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | 機能 | 状況 |
 | --- | --- |
 | `defmacro`（ユーザーマクロ） | 利用可能（[`defmacro`](../reference/special-forms/defmacro.md) 参照） |
-| `&optional` / `&rest` / `&key` / `&aux` | 利用不可（`defmacro` の `&rest`/`&body` を除く） |
+| `&optional` / `&rest` / `&key` / `&aux` | `defun`/`lambda` で利用可能（[`defun`](../reference/special-forms/defun.md) を参照）。`defmacro` は `&rest`/`&body` のみ |
+| `&whole` | 利用不可 |
 | `values` / `multiple-value-bind` | 利用不可 |
 | `block` / `return-from` / `tagbody` / `go` | 利用不可 |
 | `catch` / `throw` / `unwind-protect` | 利用不可 |
@@ -39,14 +40,14 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 ## ラムダリストキーワード（`&optional`、`&rest`、`&key`、`&aux`）
 
-**関数**は固定数の位置パラメータを取ります。オプション引数、レスト引数、
-キーワード引数はありません（`defmacro` は例外で、ラムダリストの末尾に
-`&rest`/`&body` パラメータを 1 つ取れます）。
-
-これは陥りやすい落とし穴です。`defun` では `&rest` のようなラムダリストキーワードは
-拒否されず、`&rest` という**名前**の通常のパラメータとして黙って扱われます。
-そのため `(defun f (a &rest r) ...)` は可変長関数ではなく、3 パラメータの関数
-（`a`、`&rest`、`r`）を定義します。
+`defun` と `lambda` は `&optional`、`&rest`、`&key`、`&allow-other-keys`、
+`&aux` をサポートします。詳細は [`defun`](../reference/special-forms/defun.md)
+を参照してください。残る制限は次のとおりです: `&whole` は利用できません。
+`defmacro` のラムダリストは引き続き必須パラメータと末尾の `&rest`/`&body`
+1 つのみを取ります。funcall/apply 経由の呼び出しでは関数の物理パラメータは
+7 個までです。コンパイル済み `eval` がランタイムに構築する `lambda` は
+ラムダリストキーワードを解釈しません（[コンパイル済み eval の制限](eval-limitations.md)
+を参照）。
 
 ## 多値（`values`、`multiple-value-bind`）
 

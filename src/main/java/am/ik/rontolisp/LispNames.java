@@ -609,6 +609,21 @@ public final class LispNames {
 	 */
 	public static final String LAMBDA_BODY = "&body";
 
+	/** The {@code &optional} lambda-list keyword. */
+	public static final String LAMBDA_OPTIONAL = "&optional";
+
+	/** The {@code &key} lambda-list keyword. */
+	public static final String LAMBDA_KEY = "&key";
+
+	/** The {@code &aux} lambda-list keyword. */
+	public static final String LAMBDA_AUX = "&aux";
+
+	/** The {@code &allow-other-keys} lambda-list keyword. */
+	public static final String LAMBDA_ALLOW_OTHER_KEYS = "&allow-other-keys";
+
+	/** The {@code :allow-other-keys} call-site keyword argument. */
+	public static final String ALLOW_OTHER_KEYS_KEYWORD = ":allow-other-keys";
+
 	/**
 	 * The {@code gensym} function. Returns a fresh symbol named
 	 * {@code #:<prefix><counter>} (default prefix {@code g}). rontolisp symbols are plain

@@ -7,6 +7,7 @@ cases, and the tests that pin the behavior. Read the CLAUDE.md summary first;
 come here only when you need the "why exactly" behind a constraint.
 
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split across all backends
+- [lambda-lists.md](lambda-lists.md) -- lambda list extensions (`&optional`/`&rest`/`&key`/`&aux`) desugared to "required + `&rest`"
 - [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time macro expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`

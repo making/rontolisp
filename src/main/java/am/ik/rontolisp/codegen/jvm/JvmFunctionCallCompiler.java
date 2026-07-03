@@ -59,8 +59,49 @@ final class JvmFunctionCallCompiler {
 		JvmLispCompiler.FunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
 			List<LispVal> args = cons.toList();
-			for (int i = 1; i < args.size(); i++) {
+			int supplied = args.size() - 1;
+			int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+			if (supplied < required || (!fi.variadic() && supplied > required)) {
+				throw new UnsupportedOperationException(name + " expects " + (fi.variadic() ? "at least " : "")
+						+ required + " argument" + (required == 1 ? "" : "s") + ", got " + supplied);
+			}
+			for (int i = 1; i <= required; i++) {
 				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			}
+			if (fi.variadic()) {
+				// Evaluate the surplus arguments left to right into temps, then link
+				// them into a cons list passed as the trailing rest parameter.
+				List<Integer> extraSlots = new java.util.ArrayList<>();
+				for (int i = required + 1; i < args.size(); i++) {
+					JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+					int s = ctx.allocTemp();
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(s);
+					extraSlots.add(s);
+				}
+				int restSlot = ctx.allocTemp();
+				ctx.emit(Opcode.ACONST_NULL);
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(restSlot);
+				for (int k = extraSlots.size() - 1; k >= 0; k--) {
+					ctx.emit(Opcode.ICONST_2);
+					ctx.emit(Opcode.ANEWARRAY);
+					ctx.emitU2(ctx.objectClass.index());
+					ctx.emit(Opcode.DUP);
+					ctx.emit(Opcode.ICONST_0);
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(extraSlots.get(k));
+					ctx.emit(Opcode.AASTORE);
+					ctx.emit(Opcode.DUP);
+					ctx.emit(Opcode.ICONST_1);
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(restSlot);
+					ctx.emit(Opcode.AASTORE);
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(restSlot);
+				}
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(restSlot);
 			}
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(fi.methodref().index());

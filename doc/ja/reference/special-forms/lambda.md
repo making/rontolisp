@@ -7,3 +7,13 @@
 ```lisp
 (funcall (lambda (x) (* x x)) 5) ; => 25
 ```
+
+パラメータリストは [`defun`](defun.md) と同じラムダリストキーワード(`&optional`、`&rest`、`&key`、`&allow-other-keys`、`&aux`)をサポートします。
+
+```lisp
+(funcall (lambda (&rest xs) xs) 1 2 3) ; => (1 2 3)
+```
+
+```lisp
+(mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)) ; => (101 102 103)
+```

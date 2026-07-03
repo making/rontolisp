@@ -7,3 +7,13 @@ Creates an anonymous function with the given parameter list and body, closing ov
 ```lisp
 (funcall (lambda (x) (* x x)) 5) ; => 25
 ```
+
+The parameter list supports the same lambda-list keywords as [`defun`](defun.md) (`&optional`, `&rest`, `&key`, `&allow-other-keys`, `&aux`):
+
+```lisp
+(funcall (lambda (&rest xs) xs) 1 2 3) ; => (1 2 3)
+```
+
+```lisp
+(mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)) ; => (101 102 103)
+```

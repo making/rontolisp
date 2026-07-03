@@ -92,56 +92,86 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.ARETURN);
 			patchBranch(code, ifPos, code.size());
 		}
-		// Generate if-else chain for each function with matching arity
+		// Generate if-else chain for each function with matching arity. A variadic
+		// function (physical params = required + rest list) matches every dispatch
+		// arity >= required; its case links the surplus args into a cons list.
 		// Named functions (non-closure)
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {
 			JvmLispCompiler.FunctionInfo fi = entry.getValue();
-			if (fi.paramCount() == arity && !fi.isClosure()) {
-				code.add(Opcode.ILOAD);
-				code.add(idSlot);
-				emitIntConstStatic(code, fi.funcId());
-				int ifPos = code.size();
-				code.add(Opcode.IF_ICMPNE);
-				emitU2(code, 0);
-				// Load args and call
-				for (int i = 0; i < arity; i++) {
-					code.add(Opcode.ALOAD);
-					code.add(i + 1);
-				}
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, fi.methodref().index());
-				code.add(Opcode.ARETURN);
-				patchBranch(code, ifPos, code.size());
+			if (!fi.isClosure() && dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
+				emitDispatchCase(code, fi, arity, idSlot, restSlot, -1, objectClass);
 			}
 		}
-		// Lambda functions (closure)
+		// Lambda functions (closure): the closure env is passed as the first argument
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			JvmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
 			JvmLispCompiler.FunctionInfo fi = lambdaFuncInfos.get(i);
-			if (lambda.paramNames().size() == arity) {
-				code.add(Opcode.ILOAD);
-				code.add(idSlot);
-				emitIntConstStatic(code, fi.funcId());
-				int ifPos = code.size();
-				code.add(Opcode.IF_ICMPNE);
-				emitU2(code, 0);
-				// Load fv (closure env), then args
-				code.add(Opcode.ALOAD);
-				code.add(fvSlot);
-				for (int j = 0; j < arity; j++) {
-					code.add(Opcode.ALOAD);
-					code.add(j + 1);
-				}
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, fi.methodref().index());
-				code.add(Opcode.ARETURN);
-				patchBranch(code, ifPos, code.size());
+			if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
+				emitDispatchCase(code, fi, arity, idSlot, restSlot, fvSlot, objectClass);
 			}
 		}
 		// Default: return null
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.ARETURN);
 		return new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals);
+	}
+
+	private static boolean dispatchMatches(int paramCount, boolean variadic, int arity) {
+		return variadic ? arity >= paramCount - 1 : paramCount == arity;
+	}
+
+	// Emits one "if (id == funcId) { ...; return f(...); }" dispatch case. For a
+	// variadic target the args beyond the required count are linked into a cons list
+	// (built in restSlot) passed as the trailing rest parameter; fvSlot >= 0 marks a
+	// closure whose env array is passed first.
+	private static void emitDispatchCase(List<Integer> code, JvmLispCompiler.FunctionInfo fi, int arity, int idSlot,
+			int restSlot, int fvSlot, ClassConstant objectClass) {
+		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+		code.add(Opcode.ILOAD);
+		code.add(idSlot);
+		emitIntConstStatic(code, fi.funcId());
+		int ifPos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		if (fi.variadic()) {
+			// rest = null; for (j = arity-1 .. required) rest = new Object[]{a_j, rest}
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.ASTORE);
+			code.add(restSlot);
+			for (int j = arity - 1; j >= required; j--) {
+				code.add(Opcode.ICONST_2);
+				code.add(Opcode.ANEWARRAY);
+				emitU2(code, objectClass.index());
+				code.add(Opcode.DUP);
+				code.add(Opcode.ICONST_0);
+				code.add(Opcode.ALOAD);
+				code.add(j + 1);
+				code.add(Opcode.AASTORE);
+				code.add(Opcode.DUP);
+				code.add(Opcode.ICONST_1);
+				code.add(Opcode.ALOAD);
+				code.add(restSlot);
+				code.add(Opcode.AASTORE);
+				code.add(Opcode.ASTORE);
+				code.add(restSlot);
+			}
+		}
+		if (fvSlot >= 0) {
+			code.add(Opcode.ALOAD);
+			code.add(fvSlot);
+		}
+		for (int i = 0; i < required; i++) {
+			code.add(Opcode.ALOAD);
+			code.add(i + 1);
+		}
+		if (fi.variadic()) {
+			code.add(Opcode.ALOAD);
+			code.add(restSlot);
+		}
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, fi.methodref().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifPos, code.size());
 	}
 
 	/**

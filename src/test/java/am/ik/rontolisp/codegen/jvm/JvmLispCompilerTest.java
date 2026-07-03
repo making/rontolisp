@@ -3406,4 +3406,66 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("1\n(my-fn)");
 	}
 
+	@Test
+	void compileAndRunDefunRest() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &rest r) (list a r))
+				(print (f 1 2 3))
+				(print (f 1))
+				""")).isEqualTo("(1 (2 3))\n(1 nil)");
+	}
+
+	@Test
+	void compileAndRunDefunOptional() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (x &optional (y 10) (z (* y 2) zp)) (list x y z zp))
+				(print (f 1))
+				(print (f 1 2))
+				(print (f 1 2 3))
+				""")).isEqualTo("(1 10 20 nil)\n(1 2 4 nil)\n(1 2 3 t)");
+	}
+
+	@Test
+	void compileAndRunDefunKeywordArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &key (k 1 kp) m) (list a k kp m))
+				(print (f 0))
+				(print (f 0 :k 5))
+				(print (f 0 :m 7 :k 9))
+				(print (f 0 :bogus 1 :allow-other-keys t))
+				""")).isEqualTo("(0 1 nil nil)\n(0 5 t nil)\n(0 9 t 7)\n(0 1 nil nil)");
+	}
+
+	@Test
+	void compileAndRunDefunOptionalRestKeyCombined() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &optional b &rest r &key c &allow-other-keys) (list a b r c))
+				(print (f 1 2 :c 3 :d 4))
+				(defun g (x &aux (y (+ x 1)) z) (list x y z))
+				(print (g 5))
+				""")).isEqualTo("(1 2 (:c 3 :d 4) 3)\n(5 6 nil)");
+	}
+
+	@Test
+	void compileAndRunVariadicFirstClass() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &rest r) (list a r))
+				(print (funcall (lambda (&rest xs) xs) 1 2 3))
+				(print (funcall #'f 1 2 3))
+				(print (apply #'f 1 (list 2 3)))
+				(print (mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)))
+				(print ((lambda (a &rest r) (list a r)) 1 2 3))
+				""")).isEqualTo("(1 2 3)\n(1 (2 3))\n(1 (2 3))\n(101 102 103)\n(1 (2 3))");
+	}
+
+	@Test
+	void compileDefunArityMismatchFails() {
+		assertThatThrownBy(() -> compileAndRun("(defun f (a b) (+ a b)) (print (f 1))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expects 2 arguments, got 1");
+		assertThatThrownBy(() -> compileAndRun("(defun f (a &rest r) r) (print (f))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expects at least 1 argument, got 0");
+	}
+
 }

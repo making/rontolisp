@@ -1412,7 +1412,17 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x08);
 		setLocal(w, ARITY);
+		// A negative arity marks a variadic function: evaluate every argument form
+		// (the _apply dispatch links the surplus into the rest list); a non-negative
+		// arity evaluates exactly that many, padding missing arguments with nil.
+		getLocal(w, ARITY);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		w.write(Instruction.ELSE);
 		emitBuildNArgs(w, REST, ENV, ARITY, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		w.write(Instruction.END);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);

@@ -152,6 +152,11 @@ public final class PackageResolver {
 		if (sym.isKeyword()) {
 			return sym;
 		}
+		// Lambda-list keywords (&rest, &optional, &key, ...) are structural markers,
+		// not package-scoped symbols; they pass through like keywords.
+		if (sym.name().startsWith("&")) {
+			return sym;
+		}
 		String name = sym.name();
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn != null) {

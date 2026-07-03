@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispMacroExpander;
@@ -94,6 +95,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// so
 		// the rest of compilation sees canonical names.
 		program = new PackageResolver().resolveProgram(program);
+		// Desugar extended lambda lists (&optional/&key/&aux) into the native
+		// "required + &rest" shape so the passes below only see that shape.
+		program = LambdaLists.desugarProgram(program);
 		ConstantPool cp = new ConstantPool();
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
 		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
@@ -366,8 +370,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8 = cp.addUtf8(mangleMethodName(defun.name));
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
-			functions.put(defun.name,
-					new FunctionInfo(funcId, defun.paramNames.size(), false, methodref, nameUtf8, descUtf8));
+			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, false,
+					methodref, nameUtf8, descUtf8));
 		}
 
 		// Shared state for lambda discovery
@@ -555,8 +559,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8 = cp.addUtf8(lambda.methodName);
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
-			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), true, methodref, nameUtf8,
-					descUtf8);
+			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic, true,
+					methodref, nameUtf8, descUtf8);
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = ctxBuilder.build();
@@ -1300,19 +1304,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	static List<String> extractParamNames(LispVal paramsVal) {
-		if (paramsVal instanceof LispNil) {
-			return List.of();
-		}
-		return ((LispCons) paramsVal).toList().stream().map(p -> ((LispSymbol) p).name()).toList();
-	}
-
 	static DefunDecl extractSetqLambda(LispVal expr) {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
-		List<String> paramNames = extractParamNames(lambdaParts.get(1));
-		return new DefunDecl(funcName, paramNames, lambdaParts.subList(2, lambdaParts.size()));
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
+				lambdaParts.subList(2, lambdaParts.size()));
+		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.body());
 	}
 
 	// A (rontolisp:wasm-import ...) stub: a defun of the declared arity whose body
@@ -1327,7 +1325,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						directive.name() + " is a host function declared by rontolisp:wasm-import; "
 								+ "it can only be called from a compiled WASM module"),
 						LispNil.INSTANCE));
-		return new DefunDecl(directive.name(), paramNames, List.of(body));
+		return new DefunDecl(directive.name(), paramNames, false, List.of(body));
 	}
 
 	/**
@@ -1361,14 +1359,24 @@ public final class JvmLispCompiler implements LispCompiler {
 		return mangled;
 	}
 
-	record DefunDecl(String name, List<String> paramNames, List<LispVal> bodyExprs) {
+	/**
+	 * A parsed defun. {@code paramNames} are the physical parameters (when
+	 * {@code variadic}, the last one is the {@code &rest} parameter receiving the
+	 * remaining arguments as a cons list).
+	 */
+	record DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
 	}
 
-	record FunctionInfo(int funcId, int paramCount, boolean isClosure, MethodrefConstant methodref,
+	/**
+	 * Registry entry for a compiled function. {@code paramCount} is the physical JVM
+	 * parameter count; when {@code variadic}, the last parameter is the rest list and the
+	 * callable minimum is {@code paramCount - 1} arguments.
+	 */
+	record FunctionInfo(int funcId, int paramCount, boolean variadic, boolean isClosure, MethodrefConstant methodref,
 			Utf8Constant nameUtf8, Utf8Constant descUtf8) {
 	}
 
-	record LambdaInfo(int funcId, String methodName, List<String> paramNames, List<LispVal> bodyExprs,
+	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
 			List<String> freeVarNames) {
 	}
 

@@ -3678,4 +3678,70 @@ class LispEvaluatorTest {
 		assertThat(eval("(funcall #'rontolisp:json-parse \"[7]\")").print()).isEqualTo("(7)");
 	}
 
+	@Test
+	void defunRestCollectsSurplusArguments() {
+		assertThat(evalMulti("(defun f (a &rest r) (list a r)) (f 1 2 3)").print()).isEqualTo("(1 (2 3))");
+		assertThat(evalMulti("(defun f (a &rest r) (list a r)) (f 1)").print()).isEqualTo("(1 nil)");
+	}
+
+	@Test
+	void defunOptionalDefaultsAndSuppliedP() {
+		String def = "(defun f (x &optional (y 10) (z (* y 2) zp)) (list x y z zp)) ";
+		assertThat(evalMulti(def + "(f 1)").print()).isEqualTo("(1 10 20 nil)");
+		assertThat(evalMulti(def + "(f 1 2)").print()).isEqualTo("(1 2 4 nil)");
+		assertThat(evalMulti(def + "(f 1 2 3)").print()).isEqualTo("(1 2 3 t)");
+	}
+
+	@Test
+	void defunKeywordArguments() {
+		String def = "(defun f (a &key (k 1 kp) m) (list a k kp m)) ";
+		assertThat(evalMulti(def + "(f 0)").print()).isEqualTo("(0 1 nil nil)");
+		assertThat(evalMulti(def + "(f 0 :k 5)").print()).isEqualTo("(0 5 t nil)");
+		assertThat(evalMulti(def + "(f 0 :m 7 :k 9)").print()).isEqualTo("(0 9 t 7)");
+	}
+
+	@Test
+	void defunKeywordRenamedIndicator() {
+		assertThat(evalMulti("(defun f (&key ((:in x) 0)) x) (f :in 42)").print()).isEqualTo("42");
+	}
+
+	@Test
+	void defunUnknownKeywordSignals() {
+		assertThatThrownBy(() -> evalMulti("(defun f (&key k) k) (f :bogus 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Unknown keyword argument: :bogus");
+		assertThat(evalMulti("(defun f (&key k) k) (f :bogus 1 :allow-other-keys t)").print()).isEqualTo("nil");
+		assertThat(evalMulti("(defun f (&key k &allow-other-keys) k) (f :bogus 1 :k 2)").print()).isEqualTo("2");
+	}
+
+	@Test
+	void defunOptionalRestKeyCombined() {
+		assertThat(evalMulti(
+				"(defun f (a &optional b &rest r &key c &allow-other-keys) (list a b r c))" + " (f 1 2 :c 3 :d 4)")
+			.print()).isEqualTo("(1 2 (:c 3 :d 4) 3)");
+	}
+
+	@Test
+	void defunAuxVariables() {
+		assertThat(evalMulti("(defun f (x &aux (y (+ x 1)) z) (list x y z)) (f 5)").print()).isEqualTo("(5 6 nil)");
+	}
+
+	@Test
+	void lambdaRestWithFuncallAndApply() {
+		assertThat(eval("(funcall (lambda (&rest xs) xs) 1 2 3)").print()).isEqualTo("(1 2 3)");
+		assertThat(evalMulti("(defun f (a &rest r) (list a r)) (apply #'f 1 (list 2 3))").print())
+			.isEqualTo("(1 (2 3))");
+		assertThat(eval("(mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3))").print())
+			.isEqualTo("(101 102 103)");
+	}
+
+	@Test
+	void defunArityMismatchSignals() {
+		assertThatThrownBy(() -> evalMulti("(defun f (a b) (+ a b)) (f 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 2 arguments, got 1");
+		assertThatThrownBy(() -> evalMulti("(defun f (a b) (+ a b)) (f 1 2 3)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects 2 arguments, got 3");
+		assertThatThrownBy(() -> evalMulti("(defun f (a &rest r) r) (f)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects at least 1 argument, got 0");
+	}
+
 }

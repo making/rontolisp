@@ -919,7 +919,9 @@ final class JvmEvalRuntimeBuilder {
 			ldcStr(a, e.getKey());
 			a.invokevirtual(this.k.objectEquals());
 			a.branch(Opcode.IFEQ, next);
-			// return new Object[]{ Integer.valueOf(funcId), Integer.valueOf(arity) }
+			// return new Object[]{ Integer.valueOf(funcId), Integer.valueOf(arity) };
+			// a variadic function is encoded as a negative arity (-physicalParamCount)
+			// so the eval call path evaluates every argument instead of exactly arity
 			a.iconst(2);
 			a.anewarray(this.k.objectClass());
 			a.dup();
@@ -929,7 +931,7 @@ final class JvmEvalRuntimeBuilder {
 			a.aastore();
 			a.dup();
 			a.iconst(1);
-			a.iconst(fi.paramCount());
+			a.iconst(fi.variadic() ? -fi.paramCount() : fi.paramCount());
 			a.invokestatic(this.k.integerValueOf());
 			a.aastore();
 			a.areturn();
@@ -2430,7 +2432,18 @@ final class JvmEvalRuntimeBuilder {
 		a.checkcast(this.k.integerClass());
 		a.invokevirtual(this.k.integerValue());
 		a.istore(ARITY);
+		// A negative arity marks a variadic function: evaluate every argument form
+		// (the _apply dispatch links the surplus into the rest list); a non-negative
+		// arity evaluates exactly that many, padding missing arguments with nil.
+		int fixedArity = a.label();
+		int applyCall = a.label();
+		a.iload(ARITY);
+		a.branch(Opcode.IFGE, fixedArity);
+		buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		a.branch(Opcode.GOTO, applyCall);
+		a.bind(fixedArity);
 		buildNArgs(a, REST, ENV, ARITY, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+		a.bind(applyCall);
 		a.aload(FN);
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());

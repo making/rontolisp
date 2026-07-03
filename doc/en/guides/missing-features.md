@@ -13,7 +13,8 @@ This page lists the most notable omissions. For what **is** available, see the
 | Feature | Status |
 | --- | --- |
 | `defmacro` (user macros) | available (see [`defmacro`](../reference/special-forms/defmacro.md)) |
-| `&optional` / `&rest` / `&key` / `&aux` | not available (except `&rest`/`&body` in `defmacro`) |
+| `&optional` / `&rest` / `&key` / `&aux` | available in `defun`/`lambda` (see [`defun`](../reference/special-forms/defun.md)); `defmacro` takes `&rest`/`&body` only |
+| `&whole` | not available |
 | `values` / `multiple-value-bind` | not available |
 | `block` / `return-from` / `tagbody` / `go` | not available |
 | `catch` / `throw` / `unwind-protect` | not available |
@@ -37,14 +38,13 @@ compiled programs). The built-in macro set (`cond`, `case`, `when`, `unless`,
 
 ## Lambda list keywords (`&optional`, `&rest`, `&key`, `&aux`)
 
-A **function** takes a fixed number of positional parameters. There are no
-optional, rest, or keyword parameters (`defmacro` is the exception: its lambda
-list accepts one trailing `&rest`/`&body` parameter).
-
-This is an easy trap: in a `defun` a lambda-list keyword like `&rest` is not
-rejected — it is silently treated as an ordinary parameter **named** `&rest`, so
-`(defun f (a &rest r) ...)` defines a three-parameter function (`a`, `&rest`, `r`)
-rather than a variadic one.
+`defun` and `lambda` support `&optional`, `&rest`, `&key`, `&allow-other-keys`,
+and `&aux` — see [`defun`](../reference/special-forms/defun.md) for the details.
+The remaining gaps: `&whole` is not available, a `defmacro` lambda list still
+accepts only required parameters plus one trailing `&rest`/`&body`, a function
+is limited to 7 physical parameters on the funcall/apply path, and a `lambda`
+built at runtime by the compiled `eval` does not parse lambda-list keywords
+(see [Compiled eval Limitations](eval-limitations.md)).
 
 ## Multiple values (`values`, `multiple-value-bind`)
 

@@ -3822,4 +3822,40 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("t\nnil\n1\n2\n1");
 	}
 
+	@Test
+	void compileAndRunDefunRestAndOptional() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &rest r) (list a r))
+				(print (f 1 2 3))
+				(print (f 1))
+				(defun g (x &optional (y 10) (z (* y 2) zp)) (list x y z zp))
+				(print (g 1))
+				(print (g 1 2 3))
+				""")).isEqualTo("(1 (2 3))\n(1 nil)\n(1 10 20 nil)\n(1 2 3 t)");
+	}
+
+	@Test
+	void compileAndRunDefunKeywordArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &key (k 1 kp) m) (list a k kp m))
+				(print (f 0))
+				(print (f 0 :k 5))
+				(print (f 0 :m 7 :k 9))
+				(defun g (a &optional b &rest r &key c &allow-other-keys) (list a b r c))
+				(print (g 1 2 :c 3 :d 4))
+				""")).isEqualTo("(0 1 nil nil)\n(0 5 t nil)\n(0 9 t 7)\n(1 2 (:c 3 :d 4) 3)");
+	}
+
+	@Test
+	void compileAndRunVariadicFirstClass() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &rest r) (list a r))
+				(print (funcall (lambda (&rest xs) xs) 1 2 3))
+				(print (funcall #'f 1 2 3))
+				(print (apply #'f 1 (list 2 3)))
+				(print (mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)))
+				(print ((lambda (a &rest r) (list a r)) 1 2 3))
+				""")).isEqualTo("(1 2 3)\n(1 (2 3))\n(1 (2 3))\n(101 102 103)\n(1 (2 3))");
+	}
+
 }

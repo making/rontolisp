@@ -50,6 +50,7 @@ eval, reader -> rontolisp (AST types only)
 ## Key Design Constraints
 
 - **Lisp-2 (separate function/variable namespaces) in all three backends**: a bare symbol is a variable reference only; a symbol in call position resolves in the function namespace only; a function value comes from `(function name)`/`#'name`/`symbol-function`. Details: `.kb/lisp2-namespaces.md`.
+- **Lambda list extensions (`&optional`/`&rest`/`&key`/`&aux`/`&allow-other-keys`)**: `LambdaLists` desugars everything to the one native shape "required + `&rest`" (a `let*` prologue wrapped around the body); only `&rest` has per-backend support (variadic flag on the function records, surplus-arg packaging at call sites/dispatchers, negative arity in the eval registry). Not supported: `&whole`, `defmacro` lambda lists beyond `&rest`/`&body`, runtime-`eval` lambdas, `--no-gc`. Details: `.kb/lambda-lists.md`.
 - **JVM Class Version 50 (Java 6)**: avoids mandatory StackMapTable (required from version 51+); the lenient version-50 verifier is relied on throughout.
 - **WASM function types outside rec group**: wasmtime's WASI host requires plain `(func ...)` types for imports; only the cons struct goes inside a rec group.
 - **symbolp/stringp**: quoted symbols and string literals share runtime representation, distinguished by a leading `"`.
