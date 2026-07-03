@@ -19,21 +19,22 @@ import com.oracle.svm.core.annotate.TargetClass;
 @TargetClass(SocketSupport.class)
 final class Target_SocketSupport {
 
-	private static final String MESSAGE = "TCP sockets are not supported in the browser playground";
+	// No fields here: every member of a @TargetClass substitution must carry
+	// @Delete/@Alias/@Inject, so the shared message is inlined at each use.
 
 	@Substitute
 	static Socket connect(String host, int port) {
-		throw new LispEvalException("tcp-connect: " + MESSAGE);
+		throw new LispEvalException("tcp-connect: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute
 	static ServerSocket listen(int port, String host) {
-		throw new LispEvalException("tcp-listen: " + MESSAGE);
+		throw new LispEvalException("tcp-listen: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute
 	static Socket accept(ServerSocket listener) {
-		throw new LispEvalException("tcp-accept: " + MESSAGE);
+		throw new LispEvalException("tcp-accept: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute
@@ -43,22 +44,22 @@ final class Target_SocketSupport {
 
 	@Substitute
 	static String readLine(Socket socket) {
-		throw new LispEvalException("read-line: " + MESSAGE);
+		throw new LispEvalException("read-line: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute
 	static void writeLine(Socket socket, String line) {
-		throw new LispEvalException("write-line: " + MESSAGE);
+		throw new LispEvalException("write-line: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute
 	static int readByte(Socket socket) {
-		throw new LispEvalException("read-byte: " + MESSAGE);
+		throw new LispEvalException("read-byte: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute
 	static void writeByte(Socket socket, int value) {
-		throw new LispEvalException("write-byte: " + MESSAGE);
+		throw new LispEvalException("write-byte: TCP sockets are not supported in the browser playground");
 	}
 
 }
