@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.reader.LispReader;
 
@@ -96,7 +97,7 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a JVM class, returned as Base64. */
 	static String compileJvm(String source, String className) {
 		try {
-			List<LispVal> program = JsonLibrary.process(LispReader.readAllFromString(source));
+			List<LispVal> program = LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source)));
 			String name = (className == null || className.isBlank()) ? "Main" : className;
 			byte[] bytes = new JvmLispCompiler(name).compile(program);
 			return Base64.getEncoder().encodeToString(bytes);
@@ -109,7 +110,7 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a WebAssembly module, returned as Base64. */
 	static String compileWasm(String source) {
 		try {
-			List<LispVal> program = JsonLibrary.process(LispReader.readAllFromString(source));
+			List<LispVal> program = LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source)));
 			byte[] bytes = new WasmLispCompiler().compile(program);
 			return Base64.getEncoder().encodeToString(bytes);
 		}

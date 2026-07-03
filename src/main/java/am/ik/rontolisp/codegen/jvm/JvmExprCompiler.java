@@ -339,6 +339,19 @@ final class JvmExprCompiler {
 				case LispNames.MAKE_ARRAY -> JvmArrayCompiler.compileMake(cons, ctx, className);
 				case LispNames.AREF -> JvmArrayCompiler.compileAref(cons, ctx, className);
 				case LispNames.ASET -> JvmArrayCompiler.compileAset(cons, ctx, className);
+				case LispNames.ARRAY_DIMENSIONS -> JvmArrayCompiler.compileDims(cons, ctx, className);
+				case LispNames.VECTOR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
+				case LispNames.SVREF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSvref(cons), ctx, className);
+				case LispNames.ARRAY_RANK ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRank(cons), ctx, className);
+				case LispNames.ARRAY_DIMENSION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDimension(cons), ctx, className);
+				case LispNames.ARRAY_TOTAL_SIZE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayTotalSize(cons), ctx, className);
+				case LispNames.COERCE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
 				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);

@@ -1204,8 +1204,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean programUsesAnyArrayOp(List<LispVal> program) {
+		// vector/svref/coerce/array-rank/array-dimension/array-total-size expand into
+		// make-array/aref/%aset/array-dimensions during compileExpr, after this scan
+		// runs, so the derived names gate the helpers too.
 		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.AREF)
-				|| programUsesSymbol(program, LispNames.ASET) || programContainsArrayLiteral(program);
+				|| programUsesSymbol(program, LispNames.ASET) || programUsesSymbol(program, LispNames.ARRAY_DIMENSIONS)
+				|| programUsesSymbol(program, LispNames.VECTOR) || programUsesSymbol(program, LispNames.SVREF)
+				|| programUsesSymbol(program, LispNames.ARRAY_RANK)
+				|| programUsesSymbol(program, LispNames.ARRAY_DIMENSION)
+				|| programUsesSymbol(program, LispNames.ARRAY_TOTAL_SIZE)
+				|| programUsesSymbol(program, LispNames.COERCE) || programContainsArrayLiteral(program);
 	}
 
 	// True when a self-evaluating array literal (#(...)) appears anywhere in the program,

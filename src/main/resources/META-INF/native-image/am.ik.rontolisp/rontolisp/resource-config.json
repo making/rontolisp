@@ -24,6 +24,12 @@
           "typeReachable": "am.ik.rontolisp.eval.JsonLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/json\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LinalgLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/linalg\\.lisp"
       }
     ]
   }

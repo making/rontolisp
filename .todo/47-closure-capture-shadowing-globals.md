@@ -50,7 +50,10 @@ Params and plain lets outside closures are fine:
 ## Workaround in the tree
 
 `json.lisp`'s only closure (the maphash callback in `%json-out-hash`) uses
-`%json-`-prefixed capture variable names so user globals cannot collide. Once
-this bug is fixed that rename can stay (harmless) and the pinning test should
-be the three snippets above (add a ci-spec case: interpreter vs compiled
-outputs must agree).
+`%json-`-prefixed capture variable names so user globals cannot collide, and
+`linalg.lisp`'s `%la-bcast` (whose broadcast lambdas capture the operator and
+the scalar operand) uses `%la-`-prefixed parameter names for the same reason
+(hit 2026-07-03 by the ci-spec `dynamic-function-selection` case, which
+defines a global `f`). Once this bug is fixed those renames can stay
+(harmless) and the pinning test should be the three snippets above (add a
+ci-spec case: interpreter vs compiled outputs must agree).

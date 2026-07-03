@@ -522,6 +522,42 @@ public final class LispNames {
 	/** The {@code :initial-element} keyword accepted by {@code make-array}. */
 	public static final String INITIAL_ELEMENT_KEYWORD = ":initial-element";
 
+	/**
+	 * The {@code vector} built-in function (build a fresh rank-1 array from the
+	 * arguments). Expanded by {@link LispMacroExpander#expandVector} into
+	 * {@code make-array} + {@code %aset}.
+	 */
+	public static final String VECTOR = "vector";
+
+	/**
+	 * The {@code svref} built-in function (simple-vector element access). Expanded by
+	 * {@link LispMacroExpander#expandSvref} into {@code aref}; also a {@code setf} place.
+	 */
+	public static final String SVREF = "svref";
+
+	/**
+	 * The {@code array-dimensions} built-in function (the dimension sizes as a list). The
+	 * only array introspection primitive with per-backend support;
+	 * {@code array-rank}/{@code array-dimension}/{@code array-total-size} expand onto it.
+	 */
+	public static final String ARRAY_DIMENSIONS = "array-dimensions";
+
+	/** The {@code array-dimension} built-in function (one dimension size). */
+	public static final String ARRAY_DIMENSION = "array-dimension";
+
+	/** The {@code array-rank} built-in function (1 for vectors, 2 for matrices). */
+	public static final String ARRAY_RANK = "array-rank";
+
+	/** The {@code array-total-size} built-in function (the element count). */
+	public static final String ARRAY_TOTAL_SIZE = "array-total-size";
+
+	/**
+	 * The {@code coerce} built-in function. Supports the literal result types
+	 * {@code 'list}, {@code 'vector}, and {@code 'string}; expanded by
+	 * {@link LispMacroExpander#expandCoerce}.
+	 */
+	public static final String COERCE = "coerce";
+
 	// Higher-order functions
 
 	/** The {@code mapcar} built-in function. */
@@ -1187,6 +1223,15 @@ public final class LispNames {
 
 	/** The {@code rontolisp} package name (does not use {@code cl}). */
 	public static final String RONTOLISP_PKG = "rontolisp";
+
+	/**
+	 * The {@code linalg} package name (numpy-style vector/matrix operations). Like the
+	 * JSON functions, the package is implemented once in rontolisp itself
+	 * ({@code linalg.lisp}, see {@code LinalgLibrary}) so a single implementation runs on
+	 * every backend; the exported function names live in
+	 * {@code PackageRegistry#linalgFunctionNames()}.
+	 */
+	public static final String LINALG_PKG = "linalg";
 
 	/**
 	 * The {@code wasm-export} directive provided by the {@code rontolisp} package. Used

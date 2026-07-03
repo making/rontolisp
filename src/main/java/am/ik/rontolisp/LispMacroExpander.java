@@ -1938,8 +1938,9 @@ public final class LispMacroExpander {
 					// The optional default in the place is only used by gethash in read
 					// position, so it is dropped here.
 					listToCons(List.of(new LispSymbol(LispNames.PUTHASH), placeParts.get(1), placeParts.get(2), value));
-				case LispNames.AREF -> {
-					// (setf (aref array sub...) val) -> (%aset array sub... val)
+				case LispNames.AREF, LispNames.SVREF -> {
+					// (setf (aref array sub...) val) -> (%aset array sub... val);
+					// svref is aref restricted to one subscript, so it shares the place.
 					List<LispVal> asetParts = new java.util.ArrayList<>();
 					asetParts.add(new LispSymbol(LispNames.ASET));
 					for (int i = 1; i < placeParts.size(); i++) {
@@ -5083,6 +5084,169 @@ public final class LispMacroExpander {
 		LispVal listCase = listToCons(List.of(new LispSymbol(LispNames.NTH), idx, seq));
 		LispVal body = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), seq)), stringCase, listCase);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	/**
+	 * Expands (vector e1 ... en) into a {@code make-array} + {@code %aset} sequence
+	 * building a fresh rank-1 array, evaluating the elements left to right.
+	 * @param cons the vector expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandVector(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		int n = parts.size() - 1;
+		LispSymbol v = new LispSymbol("__vector_v");
+		LispVal make = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispInteger(n)));
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(listToCons(List.of(listToCons(List.of(v, make)))));
+		for (int i = 0; i < n; i++) {
+			letParts.add(listToCons(List.of(new LispSymbol(LispNames.ASET), v, new LispInteger(i), parts.get(i + 1))));
+		}
+		letParts.add(v);
+		return listToCons(letParts);
+	}
+
+	/**
+	 * Expands (svref vec i) into (aref vec i): a simple vector is a rank-1 array, so
+	 * svref is aref restricted to one subscript.
+	 * @param cons the svref expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSvref(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return listToCons(List.of(new LispSymbol(LispNames.AREF), parts.get(1), parts.get(2)));
+	}
+
+	/**
+	 * Expands (array-rank array) into (length (array-dimensions array)).
+	 * @param cons the array-rank expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandArrayRank(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return callOf(LispNames.LENGTH, callOf(LispNames.ARRAY_DIMENSIONS, parts.get(1)));
+	}
+
+	/**
+	 * Expands (array-dimension array axis) into an (nth axis (array-dimensions array))
+	 * lookup, evaluating the array before the axis.
+	 * @param cons the array-dimension expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandArrayDimension(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol dims = new LispSymbol("__arraydim_dims");
+		LispSymbol axis = new LispSymbol("__arraydim_axis");
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(dims, callOf(LispNames.ARRAY_DIMENSIONS, parts.get(1)))),
+						listToCons(List.of(axis, parts.get(2)))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.NTH), axis, dims));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	/**
+	 * Expands (array-total-size array) into the product of the dimension sizes returned
+	 * by {@code array-dimensions}.
+	 * @param cons the array-total-size expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandArrayTotalSize(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol dims = new LispSymbol("__arraysize_dims");
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(dims, callOf(LispNames.ARRAY_DIMENSIONS, parts.get(1))))));
+		LispVal rank2 = listToCons(List.of(new LispSymbol(LispNames.MUL), callOf(LispNames.CAR, dims),
+				callOf(LispNames.CAR, callOf(LispNames.CDR, dims))));
+		LispVal body = makeIf(callOf(LispNames.CDR, dims), rank2, callOf(LispNames.CAR, dims));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	/**
+	 * Expands (coerce value 'type) for the literal result types {@code 'list},
+	 * {@code 'vector}, and {@code 'string} into a runtime dispatch on the value's actual
+	 * type (list, vector, or string), converting only when needed. A non-literal or
+	 * unsupported result type is rejected at expansion time, like {@code map} and
+	 * {@code concatenate}.
+	 * @param cons the coerce expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCoerce(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new UnsupportedOperationException("coerce expects a value and a result type");
+		}
+		String type = quotedSymbolName(parts.get(2));
+		LispSymbol x = new LispSymbol("__coerce_x");
+		LispVal stringToList = listToCons(List.of(new LispSymbol(LispNames.MAP),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("list"))),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), x));
+		LispVal body;
+		if ("list".equals(type)) {
+			// (if (listp x) x (if (stringp x) (map 'list #'identity x) <vector scan>))
+			body = makeIf(callOf(LispNames.LISTP, x), x,
+					makeIf(callOf(LispNames.STRINGP, x), stringToList, coerceVectorToList(x)));
+		}
+		else if ("vector".equals(type)) {
+			// (if (or (listp x) (stringp x))
+			// (let ((__coerce_l (if (stringp x) (map 'list #'identity x) x))) <fill>)
+			// x)
+			LispSymbol l = new LispSymbol("__coerce_l");
+			LispVal asList = makeIf(callOf(LispNames.STRINGP, x), stringToList, x);
+			LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
+					listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToVector(l)));
+			LispVal sequencep = listToCons(
+					List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
+			body = makeIf(sequencep, fill, x);
+		}
+		else if ("string".equals(type)) {
+			// (if (stringp x) x (map 'string #'identity (if (listp x) x <vector scan>)))
+			LispVal chars = makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x));
+			LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("string"))),
+					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))),
+					chars));
+			body = makeIf(callOf(LispNames.STRINGP, x), x, build);
+		}
+		else {
+			throw new UnsupportedOperationException(
+					"coerce supports only the 'list, 'vector, or 'string result types, got: " + parts.get(2).print());
+		}
+		LispVal bindings = listToCons(List.of(listToCons(List.of(x, parts.get(1)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	// Builds a (do ...) form collecting the elements of the vector named by {@code vec}
+	// into a fresh list, scanning backwards so the conses come out in order.
+	private static LispVal coerceVectorToList(LispSymbol vec) {
+		LispSymbol i = new LispSymbol("__coerce_i");
+		LispSymbol acc = new LispSymbol("__coerce_acc");
+		LispVal iInit = listToCons(
+				List.of(new LispSymbol(LispNames.SUB), callOf(LispNames.LENGTH, vec), new LispInteger(1)));
+		LispVal iStep = listToCons(List.of(new LispSymbol(LispNames.SUB), i, new LispInteger(1)));
+		LispVal accStep = listToCons(List.of(new LispSymbol(LispNames.CONS),
+				listToCons(List.of(new LispSymbol(LispNames.AREF), vec, i)), acc));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(i, iInit, iStep)), listToCons(List.of(acc, LispNil.INSTANCE, accStep))));
+		LispVal endClause = listToCons(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.LT), i, new LispInteger(0))), acc));
+		return listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause));
+	}
+
+	// Builds a form filling a fresh rank-1 array from the list named by {@code list}.
+	private static LispVal coerceListToVector(LispSymbol list) {
+		LispSymbol v = new LispSymbol("__coerce_v");
+		LispSymbol cur = new LispSymbol("__coerce_cur");
+		LispSymbol i = new LispSymbol("__coerce_i");
+		LispVal make = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), callOf(LispNames.LENGTH, list)));
+		LispVal doBindings = listToCons(List.of(listToCons(List.of(cur, list, callOf(LispNames.CDR, cur))),
+				listToCons(List.of(i, new LispInteger(0),
+						listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.NULL, cur), v));
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.ASET), v, i, callOf(LispNames.CAR, cur)));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), doBindings, endClause, store));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(v, make)))), loop));
 	}
 
 	/**

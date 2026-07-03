@@ -58,6 +58,15 @@ final class JvmArrayCompiler {
 		}
 	}
 
+	static void compileDims(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.DIMS, JvmArrayRuntimeBuilder.DIMS_DESC);
+	}
+
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();

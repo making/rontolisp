@@ -35,6 +35,12 @@ class JvmLispCompilerTest {
 		return compileAndRun(am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// linalg tests pre-process with LinalgLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunLinalg(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
 	private String compileAndRun(List<LispVal> program) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
@@ -3078,12 +3084,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("198");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("205");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("198");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("205");
 	}
 
 	@Test
@@ -3522,6 +3528,80 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");
 		assertThat(compileAndRun("(print (length #(10 20 30)))")).isEqualTo("3");
 		assertThat(compileAndRun("(print (length #()))")).isEqualTo("0");
+	}
+
+	@Test
+	void compileVectorSvrefAndArrayIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(print (vector 1 2 3))
+				(print (svref (vector 10 20 30) 1))
+				(defparameter *v* (vector 1 2 3))
+				(setf (svref *v* 0) 99)
+				(print *v*)
+				(print (array-dimensions (make-array '(2 3) :initial-element 0)))
+				(print (array-dimensions (vector 1 2)))
+				(print (array-rank (make-array '(2 3))))
+				(print (array-rank (vector 1)))
+				(print (array-dimension (make-array '(2 3)) 1))
+				(print (array-total-size (make-array '(2 3))))
+				(print (array-total-size (vector 1 2 3)))
+				""")).isEqualTo("#(1 2 3)\n20\n#(99 2 3)\n(2 3)\n(2)\n2\n1\n3\n6\n3");
+	}
+
+	@Test
+	void compileCoerceConversions() throws Exception {
+		assertThat(compileAndRun("""
+				(print (coerce '(1 2 3) 'vector))
+				(print (coerce (vector 1 2 3) 'list))
+				(print (coerce "ab" 'list))
+				(print (coerce '(#\\a #\\b) 'string))
+				(print (coerce '(1 2) 'list))
+				(print (coerce "hi" 'string))
+				""")).isEqualTo("#(1 2 3)\n(1 2 3)\n(#\\a #\\b)\n\"ab\"\n(1 2)\n\"hi\"");
+	}
+
+	@Test
+	void compileAndRunLinalgConstructorsAndShape() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:zeros 3))
+				(print (linalg:eye 2))
+				(print (linalg:arange 2 10 2))
+				(print (linalg:linspace 0 1 5))
+				(print (linalg:from-list '((1 2) (3 4))))
+				(print (linalg:shape (linalg:from-list '((1 2 3) (4 5 6)))))
+				(print (linalg:reshape (linalg:arange 6) '(2 3)))
+				(print (linalg:transpose (linalg:from-list '((1 2 3) (4 5 6)))))
+				""")).isEqualTo("#(0 0 0)\n#2A((1 0) (0 1))\n#(2 4 6 8)\n#(0 1/4 1/2 3/4 1)\n"
+				+ "#2A((1 2) (3 4))\n(2 3)\n#2A((0 1 2) (3 4 5))\n#2A((1 4) (2 5) (3 6))");
+	}
+
+	@Test
+	void compileAndRunLinalgArithmeticAndReductions() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:add (linalg:from-list '(1 2 3)) 10))
+				(print (linalg:mul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8)))))
+				(print (linalg:emap (lambda (x) (* x x)) (linalg:arange 4)))
+				(print (linalg:dot (linalg:from-list '(1 2 3)) (linalg:from-list '(4 5 6))))
+				(print (linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8)))))
+				(print (linalg:sum (linalg:from-list '((1 2) (3 4)))))
+				(print (linalg:mean (linalg:from-list '(1 2 3 4))))
+				(print (linalg:argmax (linalg:from-list '(1 9 3))))
+				(print (linalg:norm (linalg:from-list '(3 4))))
+				"""))
+			.isEqualTo("#(11 12 13)\n#2A((5 12) (21 32))\n#(0 1 4 9)\n32\n#2A((19 22) (43 50))\n10\n5/2\n1\n5.0");
+	}
+
+	@Test
+	void compileAndRunLinalgLinearAlgebraIsExact() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:det (linalg:from-list '((1 2) (3 4)))))
+				(print (linalg:det (linalg:from-list '((1 2) (2 4)))))
+				(print (linalg:inv (linalg:from-list '((1 2) (3 4)))))
+				(print (linalg:solve (linalg:from-list '((2 1) (1 3))) (linalg:from-list '(3 5))))
+				(print (linalg:array-equal (linalg:matmul (linalg:from-list '((1 2) (3 4)))
+				                                          (linalg:inv (linalg:from-list '((1 2) (3 4)))))
+				                           (linalg:eye 2)))
+				""")).isEqualTo("-2\n0\n#2A((-2 1) (3/2 -1/2))\n#(4/5 7/5)\nt");
 	}
 
 	@Test

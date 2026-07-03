@@ -134,6 +134,43 @@ final class WasmArrayCompiler {
 		arrayGet(ctx);
 	}
 
+	static void compileDims(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
+		}
+		// arr -> header (the (dims . data) cons) -> the dims buckets array in a temp.
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		castCellGet0(ctx);
+		castConsGet(ctx, 0);
+		int dimsSlot = setTemp(ctx);
+		int cdrSlot = ctx.allocTemp();
+		// cdr = (array.len dims == 1) ? null : cons(dims[1], null)
+		getBuckets(ctx, dimsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.IF, 0x40);
+		refNull(ctx);
+		setLocal(ctx, cdrSlot);
+		ctx.writer.write(Instruction.ELSE);
+		getBuckets(ctx, dimsSlot);
+		i32Const(ctx, 1);
+		arrayGet(ctx);
+		refNull(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		setLocal(ctx, cdrSlot);
+		ctx.writer.write(Instruction.END);
+		// result = cons(dims[0], cdr); the dims elements are already i31 integers.
+		getBuckets(ctx, dimsSlot);
+		i32Const(ctx, 0);
+		arrayGet(ctx);
+		getLocal(ctx, cdrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+	}
+
 	static void compileAset(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();

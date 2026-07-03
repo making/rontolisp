@@ -22,6 +22,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.ScalarWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UserMacroExpander;
@@ -166,10 +167,11 @@ public final class RontoLispCli {
 		// evaluation time instead.
 		// Then splice the Lisp-source JSON library when the program references
 		// rontolisp:json-parse / rontolisp:json-stringify, rewriting the call sites
-		// to the fixed-arity helpers (the interpreter path instead loads the library
-		// lazily inside LispEvaluator).
-		List<LispVal> program = JsonLibrary.process(UserMacroExpander
-			.expand(LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(), baseDir)));
+		// to the fixed-arity helpers, and the Lisp-source linalg library when the
+		// program references the linalg package (the interpreter path instead loads
+		// both libraries lazily inside LispEvaluator).
+		List<LispVal> program = LinalgLibrary.process(JsonLibrary.process(UserMacroExpander
+			.expand(LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(), baseDir))));
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {

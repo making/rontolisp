@@ -3110,7 +3110,7 @@ class LispEvaluatorTest {
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
 			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(198);
+			.hasSize(205);
 	}
 
 	@Test
@@ -3950,6 +3950,49 @@ class LispEvaluatorTest {
 	@Test
 	void macroexpandWorksThroughRuntimeEval() {
 		assertThat(evalMulti("(eval '(macroexpand-1 '(unless c x)))").print()).isEqualTo("(if c nil x)");
+	}
+
+	@Test
+	void vectorSvrefAndArrayIntrospection() {
+		assertThat(eval("(vector 1 2 3)").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(vector)").print()).isEqualTo("#()");
+		assertThat(eval("(svref (vector 10 20 30) 1)").print()).isEqualTo("20");
+		assertThat(evalMulti("(defparameter *v* (vector 1 2 3)) (setf (svref *v* 0) 99) *v*").print())
+			.isEqualTo("#(99 2 3)");
+		assertThat(eval("(array-dimensions (make-array '(2 3) :initial-element 0))").print()).isEqualTo("(2 3)");
+		assertThat(eval("(array-dimensions (vector 1 2))").print()).isEqualTo("(2)");
+		assertThat(eval("(array-rank (make-array '(2 3)))").print()).isEqualTo("2");
+		assertThat(eval("(array-rank (vector 1))").print()).isEqualTo("1");
+		assertThat(eval("(array-dimension (make-array '(2 3)) 1)").print()).isEqualTo("3");
+		assertThat(eval("(array-total-size (make-array '(2 3)))").print()).isEqualTo("6");
+		assertThat(eval("(array-total-size (vector 1 2 3))").print()).isEqualTo("3");
+	}
+
+	@Test
+	void coerceConvertsBetweenListVectorAndString() {
+		assertThat(eval("(coerce '(1 2 3) 'vector)").print()).isEqualTo("#(1 2 3)");
+		assertThat(eval("(coerce (vector 1 2 3) 'list)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(coerce \"ab\" 'list)").print()).isEqualTo("(#\\a #\\b)");
+		assertThat(eval("(coerce '(#\\a #\\b) 'string)").print()).isEqualTo("\"ab\"");
+		assertThat(eval("(coerce \"ab\" 'vector)").print()).isEqualTo("#(#\\a #\\b)");
+		// A value already of the requested type is returned unchanged.
+		assertThat(eval("(coerce '(1 2) 'list)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(coerce \"hi\" 'string)").print()).isEqualTo("\"hi\"");
+	}
+
+	@Test
+	void linalgFunctionsLoadLazilyOnFirstUse() {
+		assertThat(eval("(linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8))))").print())
+			.isEqualTo("#2A((19 22) (43 50))");
+		assertThat(eval("(linalg:det (linalg:from-list '((1 2) (3 4))))").print()).isEqualTo("-2");
+		assertThat(eval("(linalg:inv (linalg:from-list '((1 2) (3 4))))").print()).isEqualTo("#2A((-2 1) (3/2 -1/2))");
+		assertThat(eval("(linalg:solve (linalg:from-list '((2 1) (1 3))) (linalg:from-list '(3 5)))").print())
+			.isEqualTo("#(4/5 7/5)");
+		assertThat(eval("(linalg:dot (linalg:arange 3) (linalg:from-list '(4 5 6)))").print()).isEqualTo("17");
+		assertThat(eval("(linalg:add 10 (linalg:from-list '(1 2)))").print()).isEqualTo("#(11 12)");
+		assertThat(eval("(linalg:argmax (linalg:from-list '(1 9 3)))").print()).isEqualTo("1");
+		// #'linalg:norm resolves through the same lazy load.
+		assertThat(eval("(funcall #'linalg:norm (linalg:from-list '(3 4)))").print()).isEqualTo("5.0");
 	}
 
 	@Test

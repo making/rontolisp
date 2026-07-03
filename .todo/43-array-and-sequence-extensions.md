@@ -1,6 +1,14 @@
 # Array and sequence extensions (`arrayp`, `array-rank`, `array-dimensions`, `array-total-size`, `array-element-type`, `array-row-major-index`, `row-major-aref`, `adjustable-array-p`, `adjust-array`, `make-array` (done, basic), `vector-push`, `vector-push-extend`, `svref`, `sset`, `simple-array`, `simple-vector`, `simple-bit-vector`, `simple-string`, `simple-string-bounds`, `vectorp`, `stringp` (done), `bit-vector-p`, `stringp` (done), `array-in-bounds-p`, `long-string-p`, `short-string-p`, `long-float` (see #37), `short-float` (see #37), `bit`, `logbit`, `booleanp`, `bool`, `copy-seq`, `fill`, `stable-sort` (see #33), `merge` (see #33), `coerce` (see #35), `count-if-not` (see #33), `position-if-not` (see #33), `substitute-if` (see #33), `substitute-if-not` (see #33), `mismatch` (see #33), `search` (see #33), `tree-equal` (see #33), `set-exclusive-or` (see #33), `count-if` (missing!), `remove-if-not` (done), `delete-if-not` (done))
 
-**Status:** not implemented. Medium priority — extends the array system beyond basic `make-array`/`aref`.
+**Status:** partially implemented (2026-07-03). Done: `vector`, `svref` (incl.
+the `setf` place), `array-dimensions` (the one new backend primitive),
+`array-rank`, `array-dimension`, `array-total-size` (macro expansions over
+`array-dimensions`), and `coerce` for the literal `'list`/`'vector`/`'string`
+result types — see `.kb/linalg.md` (which also covers the new numpy-style
+`linalg` package built on top). Still missing: `arrayp`/`vectorp` (the WASM
+value representation cannot cheaply distinguish an array cell from a hash-table
+cell — needs a tag), `row-major-aref`, `array-in-bounds-p`, `copy-seq`,
+`fill`, adjustable arrays / fill pointers, bit vectors, and the rest below.
 
 ## What's missing
 

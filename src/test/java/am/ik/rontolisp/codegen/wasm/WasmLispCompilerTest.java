@@ -214,4 +214,16 @@ class WasmLispCompilerTest {
 		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
 	}
 
+	@Test
+	void linalgOpsCompileInEveryMode() {
+		// The spliced linalg library compiles in Preview 1 and component modes (it is
+		// plain Lisp source over the array built-ins, so no backend-specific lowering
+		// is involved).
+		String source = "(print (linalg:solve (linalg:from-list '((2 1) (1 3))) (linalg:from-list '(3 5))))";
+		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
+			.process(LispReader.readAllFromString(source));
+		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+	}
+
 }

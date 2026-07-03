@@ -284,6 +284,16 @@ public final class Environment implements Scope {
 			}
 			return array.aref(subs);
 		}));
+		env.defineFunction(LispNames.ARRAY_DIMENSIONS, new LispFunction(LispNames.ARRAY_DIMENSIONS, args -> {
+			requireArgCount(LispNames.ARRAY_DIMENSIONS, args, 1);
+			LispArray array = requireArray(LispNames.ARRAY_DIMENSIONS, args.get(0));
+			LispVal dims = LispNil.INSTANCE;
+			int[] sizes = array.dimensions();
+			for (int i = sizes.length - 1; i >= 0; i--) {
+				dims = new LispCons(new LispInteger(sizes[i]), dims);
+			}
+			return dims;
+		}));
 		env.defineFunction(LispNames.ASET, new LispFunction(LispNames.ASET, args -> {
 			// (%aset array subscript... value)
 			if (args.size() < 3) {

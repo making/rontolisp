@@ -974,7 +974,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      198
+      205
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn
@@ -1699,6 +1699,114 @@ cases:
       20
       #(7 7 7)
       #2A((1 0 0) (0 0 9))
+
+  - name: vector-svref-and-array-introspection-cross-backend
+    source: |
+      (defun ci-array-intro ()
+        (print (vector 1 2 3))
+        (print (svref (vector 10 20 30) 1))
+        (let ((v (vector 1 2 3)))
+          (setf (svref v 0) 99)
+          (print v))
+        (print (array-dimensions (make-array (list 2 3) :initial-element 0)))
+        (print (array-dimensions (vector 1 2)))
+        (print (array-rank (make-array (list 2 3))))
+        (print (array-rank (vector 1)))
+        (print (array-dimension (make-array (list 2 3)) 1))
+        (print (array-total-size (make-array (list 2 3))))
+        (print (array-total-size (vector 1 2 3))))
+      (ci-array-intro)
+    expected: |
+      #(1 2 3)
+      20
+      #(99 2 3)
+      (2 3)
+      (2)
+      2
+      1
+      3
+      6
+      3
+
+  - name: coerce-cross-backend
+    source: |
+      (defun ci-coerce ()
+        (print (coerce (list 1 2 3) 'vector))
+        (print (coerce (vector 1 2 3) 'list))
+        (print (coerce "ab" 'list))
+        (print (coerce (list #\a #\b) 'string))
+        (print (coerce (list 1 2) 'list))
+        (print (coerce "hi" 'string)))
+      (ci-coerce)
+    expected: |
+      #(1 2 3)
+      (1 2 3)
+      (#\a #\b)
+      "ab"
+      (1 2)
+      "hi"
+
+  # The linalg package is a Lisp-source library (linalg.lisp) spliced by
+  # LinalgLibrary.process on the compile path and loaded lazily by the interpreter,
+  # so one implementation must behave identically on every backend. Integer inputs
+  # stay exact (ratios), so det/inv/solve results are deterministic.
+  - name: linalg-package-cross-backend
+    source: |
+      (defun ci-linalg ()
+        (print (linalg:eye 2))
+        (print (linalg:arange 2 10 2))
+        (print (linalg:linspace 0 1 5))
+        (print (linalg:from-list '((1 2) (3 4))))
+        (print (linalg:to-list (linalg:from-list '((1 2) (3 4)))))
+        (print (linalg:shape (linalg:from-list '((1 2 3) (4 5 6)))))
+        (print (linalg:reshape (linalg:arange 6) (list 2 3)))
+        (print (linalg:transpose (linalg:from-list '((1 2 3) (4 5 6)))))
+        (print (linalg:add (linalg:from-list '(1 2 3)) 10))
+        (print (linalg:mul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8)))))
+        (print (linalg:emap (lambda (x) (* x x)) (linalg:arange 4)))
+        (print (linalg:dot (linalg:from-list '(1 2 3)) (linalg:from-list '(4 5 6))))
+        (print (linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8)))))
+        (print (linalg:dot (linalg:from-list '((1 2) (3 4))) (linalg:from-list '(1 1))))
+        (print (linalg:outer (linalg:from-list '(1 2)) (linalg:from-list '(3 4 5))))
+        (print (linalg:sum (linalg:from-list '((1 2) (3 4)))))
+        (print (linalg:mean (linalg:from-list '(1 2 3 4))))
+        (print (linalg:amax (linalg:from-list '((1 9) (3 4)))))
+        (print (linalg:argmax (linalg:from-list '(1 9 3))))
+        (print (linalg:norm (linalg:from-list '(3 4))))
+        (print (linalg:trace (linalg:from-list '((1 2) (3 4)))))
+        (print (linalg:det (linalg:from-list '((1 2) (3 4)))))
+        (print (linalg:inv (linalg:from-list '((1 2) (3 4)))))
+        (print (linalg:solve (linalg:from-list '((2 1) (1 3))) (linalg:from-list '(3 5))))
+        (print (linalg:array-equal (linalg:eye 2) (linalg:from-list '((1 0) (0 1)))))
+        (print (funcall #'linalg:norm (linalg:from-list '(3 4)))))
+      (ci-linalg)
+    expected: |
+      #2A((1 0) (0 1))
+      #(2 4 6 8)
+      #(0 1/4 1/2 3/4 1)
+      #2A((1 2) (3 4))
+      ((1 2) (3 4))
+      (2 3)
+      #2A((0 1 2) (3 4 5))
+      #2A((1 4) (2 5) (3 6))
+      #(11 12 13)
+      #2A((5 12) (21 32))
+      #(0 1 4 9)
+      32
+      #2A((19 22) (43 50))
+      #(3 7)
+      #2A((3 4 5) (6 8 10))
+      10
+      5/2
+      9
+      1
+      5.0
+      5
+      -2
+      #2A((-2 1) (3/2 -1/2))
+      #(4/5 7/5)
+      t
+      5.0
 
   # length is a sequence operation: it returns the element count of a vector (rank-1
   # array) just as for a list or string. A rank-2 array is not a sequence, so length

@@ -317,6 +317,15 @@ final class WasmExprCompiler {
 				case LispNames.MAKE_ARRAY -> WasmArrayCompiler.compileMake(cons, ctx);
 				case LispNames.AREF -> WasmArrayCompiler.compileAref(cons, ctx);
 				case LispNames.ASET -> WasmArrayCompiler.compileAset(cons, ctx);
+				case LispNames.ARRAY_DIMENSIONS -> WasmArrayCompiler.compileDims(cons, ctx);
+				case LispNames.VECTOR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx);
+				case LispNames.SVREF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSvref(cons), ctx);
+				case LispNames.ARRAY_RANK -> WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayRank(cons), ctx);
+				case LispNames.ARRAY_DIMENSION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDimension(cons), ctx);
+				case LispNames.ARRAY_TOTAL_SIZE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayTotalSize(cons), ctx);
+				case LispNames.COERCE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);

@@ -82,7 +82,9 @@ public final class PackageRegistry {
 			LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP,
 			LispNames.ALPHA_CHAR_P, LispNames.DIGIT_CHAR_P, LispNames.MAKE_HASH_TABLE, LispNames.GETHASH,
 			LispNames.REMHASH, LispNames.CLRHASH, LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_P, LispNames.MAPHASH,
-			LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.GENSYM, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1);
+			LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_DIMENSIONS,
+			LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE, LispNames.COERCE,
+			LispNames.GENSYM, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
@@ -108,6 +110,19 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES);
 
+	/**
+	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix
+	 * operations), implemented in {@code linalg.lisp} (see {@code LinalgLibrary}). The
+	 * names are plain strings rather than {@link LispNames} constants because they exist
+	 * only as Lisp-source defuns -- no evaluator or compiler dispatches on them.
+	 */
+	private static final Set<String> LINALG_FUNCTIONS = Set.of("zeros", "ones", "full", "eye", "arange", "linspace",
+			"from-list", "to-list", "shape", "size", "reshape", "flatten", "transpose", "add", "sub", "mul", "div",
+			"emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm", "trace", "det",
+			"inv", "solve", "array-equal");
+
+	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
+
 	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
 
 	private static final List<String> CL_MACRO_NAMES = sorted(CL_MACROS);
@@ -131,6 +146,10 @@ public final class PackageRegistry {
 						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.PROMISEP,
 						LispNames.THEN, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.WASM_EXPORT,
 						LispNames.WASM_IMPORT))));
+		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
+		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
+		// is external.
+		define(new LispPackage(LispNames.LINALG_PKG, List.of(), new HashSet<>(LINALG_FUNCTIONS)));
 		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
 		// run on the JVM interpreter only -- the compilers cannot lower them.
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
@@ -168,6 +187,15 @@ public final class PackageRegistry {
 	 */
 	public static Set<String> specialOperatorNames() {
 		return SPECIAL_OPERATOR_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code linalg} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> linalgFunctionNames() {
+		return LINALG_FUNCTION_NAMES;
 	}
 
 	@SafeVarargs

@@ -47,6 +47,10 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String ASET2_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String DIMS = "_arrayDims";
+
+	static final String DIMS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String TO_STRING = "_arrayToString";
 
 	static final String TO_DISPLAY_STRING = "_arrayToDisplayString";
@@ -75,6 +79,8 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
 		MethodrefConstant longValueOf = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
+		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
 
 		List<ArrayMethod> methods = new ArrayList<>();
 
@@ -202,6 +208,76 @@ final class JvmArrayRuntimeBuilder {
 		s1.aload(2);
 		s1.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), 4, 3, s1.finish()));
+
+		// _arrayDims(arr): the dimension sizes as a fresh cons list. cols (slot 0) == 0
+		// means rank 1: (n); otherwise rank 2: (n/cols cols), where n = size() - 1 is
+		// the element count. A cons is an Object[]{car, cdr} and nil is null, matching
+		// the compiled cons representation.
+		JvmAsm d = new JvmAsm();
+		int dArr = 0, dList = 1, dCols = 2, dN = 3, dInner = 4;
+		d.aload(dArr);
+		d.checkcast(arrayListClass);
+		d.astore(dList);
+		d.aload(dList);
+		d.iconst(0);
+		d.invokevirtual(alGet);
+		d.checkcast(longClass);
+		d.invokevirtual(longIntValue);
+		d.istore(dCols);
+		d.aload(dList);
+		d.invokevirtual(alSize);
+		d.iconst(1);
+		d.op(Opcode.ISUB);
+		d.istore(dN);
+		int rank2 = d.label();
+		d.iload(dCols);
+		d.branch(Opcode.IFNE, rank2);
+		// rank 1: return new Object[]{Long.valueOf(n), null}
+		d.iconst(2);
+		d.anewarray(objectClass);
+		d.dup();
+		d.iconst(0);
+		d.iload(dN);
+		d.op(Opcode.I2L);
+		d.invokestatic(longValueOf);
+		d.aastore();
+		d.dup();
+		d.iconst(1);
+		d.aconstNull();
+		d.aastore();
+		d.areturn();
+		// rank 2: inner = new Object[]{Long.valueOf(cols), null};
+		// return new Object[]{Long.valueOf(n / cols), inner}
+		d.bind(rank2);
+		d.iconst(2);
+		d.anewarray(objectClass);
+		d.dup();
+		d.iconst(0);
+		d.iload(dCols);
+		d.op(Opcode.I2L);
+		d.invokestatic(longValueOf);
+		d.aastore();
+		d.dup();
+		d.iconst(1);
+		d.aconstNull();
+		d.aastore();
+		d.astore(dInner);
+		d.iconst(2);
+		d.anewarray(objectClass);
+		d.dup();
+		d.iconst(0);
+		d.iload(dN);
+		d.iload(dCols);
+		d.op(Opcode.IDIV);
+		d.op(Opcode.I2L);
+		d.invokestatic(longValueOf);
+		d.aastore();
+		d.dup();
+		d.iconst(1);
+		d.aload(dInner);
+		d.aastore();
+		d.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(DIMS_DESC), 6, 5, d.finish()));
 
 		// _aset2(arr, i, j, val): list.set(1 + i * cols + j, val); return val
 		JvmAsm s2 = new JvmAsm();

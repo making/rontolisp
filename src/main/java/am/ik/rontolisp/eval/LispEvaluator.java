@@ -50,6 +50,8 @@ public final class LispEvaluator {
 
 	private boolean jsonLibraryLoaded = false;
 
+	private boolean linalgLibraryLoaded = false;
+
 	/**
 	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
 	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
@@ -703,6 +705,18 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandEndp(cons), env);
 				case LispNames.ELT:
 					return eval(LispMacroExpander.expandElt(cons), env);
+				case LispNames.VECTOR:
+					return eval(LispMacroExpander.expandVector(cons), env);
+				case LispNames.SVREF:
+					return eval(LispMacroExpander.expandSvref(cons), env);
+				case LispNames.ARRAY_RANK:
+					return eval(LispMacroExpander.expandArrayRank(cons), env);
+				case LispNames.ARRAY_DIMENSION:
+					return eval(LispMacroExpander.expandArrayDimension(cons), env);
+				case LispNames.ARRAY_TOTAL_SIZE:
+					return eval(LispMacroExpander.expandArrayTotalSize(cons), env);
+				case LispNames.COERCE:
+					return eval(LispMacroExpander.expandCoerce(cons), env);
 				case LispNames.RASSOC:
 					return eval(LispMacroExpander.expandRassoc(cons), env);
 				case LispNames.REVAPPEND:
@@ -924,6 +938,19 @@ public final class LispEvaluator {
 		LispVal fn = this.globalEnv.lookupFunctionOrNull(name);
 		if (fn != null) {
 			return fn;
+		}
+		// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
+		// definitions into the global environment the first time a linalg:-qualified
+		// function is resolved, then retry the lookup.
+		if (!this.linalgLibraryLoaded && LinalgLibrary.isLinalgQualified(name)) {
+			this.linalgLibraryLoaded = true;
+			for (LispVal form : LinalgLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
 		}
 		if (LispMacroExpander.isCarCdrComposition(name)) {
 			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class.

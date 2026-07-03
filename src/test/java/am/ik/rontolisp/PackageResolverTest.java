@@ -221,6 +221,18 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void linalgLibraryFormsAreAResolverFixedPoint() {
+		// LinalgLibrary splices its forms into programs both before resolution (the
+		// compile-path pre-pass) and after it (the interpreter's lazy load), which is
+		// only sound while linalg.lisp is written in canonical shape: resolving it
+		// must be a no-op.
+		PackageResolver resolver = new PackageResolver();
+		for (LispVal form : am.ik.rontolisp.eval.LinalgLibrary.forms()) {
+			assertThat(resolver.resolve(form).print()).isEqualTo(form.print());
+		}
+	}
+
+	@Test
 	void defpackageRegistersPackageAndResolvesQuoted() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("(quote mypkg)");
