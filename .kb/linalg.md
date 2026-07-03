@@ -8,6 +8,46 @@ runs identically on all backends. 33 exported functions (constructors `zeros`/
 and exact Gaussian-elimination `det`/`inv`/`solve`) over the built-in
 rank-1/rank-2 arrays.
 
+## API quick reference (enough to write linalg programs)
+
+Values are the ordinary built-in arrays: a vector is a rank-1 array `#(...)`,
+a matrix rank-2 `#2A(...)`; read/write elements with `aref` / `(setf (aref ...))`.
+`shape` below means an integer `n` (vector) or a list `(n)` / `(rows cols)`.
+Stay in `cl-user` and call qualified names (the package does not use `cl`).
+`#'linalg:name` works (they are plain defuns). Errors signal via `error`.
+
+| Function | Semantics |
+| --- | --- |
+| `(linalg:zeros shape)` / `(linalg:ones shape)` / `(linalg:full shape v)` | new array filled with 0 / 1 / v |
+| `(linalg:eye n)` | n x n identity matrix |
+| `(linalg:arange stop)` / `(arange start stop)` / `(arange start stop step)` | vector, stop exclusive, step may be negative |
+| `(linalg:linspace start stop n)` | n evenly spaced values inclusive; integer endpoints give exact ratios |
+| `(linalg:from-list lst)` | flat list -> vector; list of equal-length rows -> matrix |
+| `(linalg:to-list a)` | inverse of from-list |
+| `(linalg:shape a)` / `(linalg:size a)` | dims list `(n)` or `(rows cols)` / total element count |
+| `(linalg:reshape a shape)` | row-major copy; error if sizes differ |
+| `(linalg:flatten a)` | rank-1 row-major copy |
+| `(linalg:transpose a)` | matrix transpose; a vector is returned unchanged |
+| `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise; a scalar operand on either side broadcasts; two arrays must have equal shapes; `mul` is Hadamard (NOT matrix product); integer `div` gives ratios |
+| `(linalg:emap f a)` | fresh array with f applied to every element |
+| `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
+| `(linalg:matmul a b)` | matrix product (also mat.vec); rejects scalar operands |
+| `(linalg:outer u v)` | outer product (inputs flattened first) |
+| `(linalg:sum a)` / `(linalg:mean a)` | sum / mean over all elements (mean of ints is an exact ratio) |
+| `(linalg:amax a)` / `(linalg:amin a)` | largest / smallest element; error on empty |
+| `(linalg:argmax v)` / `(linalg:argmin v)` | index in a VECTOR (first on ties) |
+| `(linalg:norm a)` | Euclidean / Frobenius norm (a float, via sqrt) |
+| `(linalg:trace a)` | main-diagonal sum; square matrices only |
+| `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting; EXACT (ratios) for integer/rational inputs; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
+| `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
+
+Gotchas when writing programs: no numpy-style row/column broadcasting (scalar
+only); rank 1 and 2 only; results are fresh arrays (inputs are never mutated);
+`norm`/non-terminating floats print differently on WASM, so deterministic
+cross-backend output should print exact ratios or scaled integers (see
+`examples/linear-regression.lisp` and `examples/deep-digits.lisp` for the
+idioms, incl. an i31-safe fixed-seed LCG and matrix backpropagation).
+
 ## Wiring
 
 - **Package**: `linalg` is a built-in package registered in the
