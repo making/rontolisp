@@ -235,4 +235,98 @@ class LispReaderTest {
 			.hasMessageContaining("Nested backquote");
 	}
 
+	// --- Dotted pairs: (a . b) reads as a cons with a non-list cdr ---
+
+	@Test
+	void readDottedPair() {
+		LispVal result = LispReader.readFromString("(a . 1)");
+		assertThat(result).isInstanceOf(LispCons.class);
+		LispCons cons = (LispCons) result;
+		assertThat(cons.car()).isEqualTo(new LispSymbol("a"));
+		assertThat(cons.cdr()).isEqualTo(new LispInteger(1));
+		assertThat(result.print()).isEqualTo("(a . 1)");
+	}
+
+	@Test
+	void readDottedListWithMultipleElements() {
+		LispVal result = LispReader.readFromString("(a b . c)");
+		assertThat(result.print()).isEqualTo("(a b . c)");
+	}
+
+	@Test
+	void readDottedNilTailIsProperList() {
+		LispVal result = LispReader.readFromString("(a . nil)");
+		assertThat(result.print()).isEqualTo("(a)");
+	}
+
+	@Test
+	void readQuotedAlist() {
+		LispVal result = LispReader.readFromString("'((a . 1) (b . 2))");
+		assertThat(result.print()).isEqualTo("(quote ((a . 1) (b . 2)))");
+	}
+
+	@Test
+	void readNestedDottedPair() {
+		LispVal result = LispReader.readFromString("(a . (b . 1))");
+		assertThat(result.print()).isEqualTo("(a b . 1)");
+	}
+
+	@Test
+	void readDotWithoutCarFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("(. 1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("before '.'");
+	}
+
+	@Test
+	void readDotWithMultipleTailsFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("(a . 1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("follows '.'");
+	}
+
+	@Test
+	void readDotWithoutTailFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("(a .)")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void readLoneDotFails() {
+		assertThatThrownBy(() -> LispReader.readFromString(".")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unexpected '.'");
+	}
+
+	// --- Dotted tails in backquote templates: `(a . ,b) lowers to cons chains ---
+
+	@Test
+	void readBackquoteDottedUnquoteTail() {
+		assertThat(LispReader.readFromString("`(a . ,b)").print()).isEqualTo("(cons (quote a) b)");
+	}
+
+	@Test
+	void readBackquoteDottedSymbolTail() {
+		assertThat(LispReader.readFromString("`(a . b)").print()).isEqualTo("(cons (quote a) (quote b))");
+	}
+
+	@Test
+	void readBackquoteDottedTailAfterMultipleElements() {
+		assertThat(LispReader.readFromString("`(a ,b . ,c)").print()).isEqualTo("(cons (quote a) (cons b c))");
+	}
+
+	@Test
+	void readBackquoteDottedPairInsideList() {
+		assertThat(LispReader.readFromString("`((a . ,x) (b . 2))").print())
+			.isEqualTo("(list (cons (quote a) x) (cons (quote b) 2))");
+	}
+
+	@Test
+	void readBackquoteSplicingWithDottedTailFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("`(,@xs . ,b)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining(",@");
+	}
+
+	@Test
+	void readBackquoteSplicingTailAfterDotFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("`(a . ,@xs)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining(",@");
+	}
+
 }

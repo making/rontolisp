@@ -1916,6 +1916,66 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAssocOnDottedAlistLiteral() throws Exception {
+		assertThat(compileAndRun(
+				"(print (assoc 'b '((a . 1) (b . 2) (c . 3)))) (print (cdr (assoc 'b '((a . 1) (b . 2)))))"))
+			.isEqualTo("(b . 2)\n2");
+	}
+
+	@Test
+	void compileAndRunAssocWithTest() throws Exception {
+		assertThat(compileAndRun("(print (assoc \"b\" '((\"a\" . 1) (\"b\" . 2)) :test #'equal)) "
+				+ "(print (assoc \"z\" '((\"a\" . 1)) :test 'equal)) (print (funcall #'assoc 'b '((a . 1) (b . 2))))"))
+			.isEqualTo("(\"b\" . 2)\nnil\n(b . 2)");
+	}
+
+	@Test
+	void compileAndRunRassocWithTest() throws Exception {
+		assertThat(compileAndRun("(print (rassoc \"x\" '((a . \"w\") (b . \"x\")) :test #'equal)) "
+				+ "(print (rassoc \"z\" '((a . \"w\")) :test 'equal)) (print (funcall #'rassoc 2 '((a . 1) (b . 2))))"))
+			.isEqualTo("(b . \"x\")\nnil\n(b . 2)");
+	}
+
+	@Test
+	void compileAndRunAconsAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'acons 'a 1 '((b . 2))))")).isEqualTo("((a . 1) (b . 2))");
+	}
+
+	@Test
+	void compileAndRunQuotedCharacterList() throws Exception {
+		assertThat(compileAndRun("(print '(#\\a #\\b)) (print (char= (car '(#\\a #\\b)) #\\a)) (print '(#\\a . #\\b))"))
+			.isEqualTo("(#\\a #\\b)\nt\n(#\\a . #\\b)");
+	}
+
+	@Test
+	void compileImproperCallFormFails() {
+		assertThatThrownBy(() -> compileAndRun("(+ 1 . 2)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Improper list in call position");
+		assertThatThrownBy(() -> compileAndRun("(print (list 1 . 2))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Improper list in call position");
+	}
+
+	@Test
+	void compileAndRunPairlis() throws Exception {
+		assertThat(compileAndRun("(print (pairlis '(a b c) '(1 2 3))) (print (pairlis '(a b) '(1 2) '((c . 3)))) "
+				+ "(print (pairlis nil nil)) (print (pairlis '(a b) '(1))) (print (funcall #'pairlis '(a) '(1)))"))
+			.isEqualTo("((a . 1) (b . 2) (c . 3))\n((a . 1) (b . 2) (c . 3))\nnil\n((a . 1))\n((a . 1))");
+	}
+
+	@Test
+	void compileAndRunCopyAlist() throws Exception {
+		assertThat(compileAndRun("""
+				(print (copy-alist '((a . 1) (b . 2))))
+				(print (copy-alist nil))
+				(let* ((orig (list (cons 'a 1) (cons 'b 2)))
+				       (copy (copy-alist orig)))
+				  (rplacd (assoc 'a copy) 99)
+				  (print (cdr (assoc 'a orig))))
+				(print (funcall #'copy-alist '((a . 1))))""")).isEqualTo("((a . 1) (b . 2))\nnil\n1\n((a . 1))");
+	}
+
+	@Test
 	void compileAndRunLast() throws Exception {
 		assertThat(compileAndRun("(print (last '(1 2 3))) (print (last nil))")).isEqualTo("(3)\nnil");
 	}
@@ -2932,12 +2992,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("192");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("194");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("192");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("194");
 	}
 
 	@Test
@@ -3183,6 +3243,13 @@ class JvmLispCompilerTest {
 	void compileReadFromString() throws Exception {
 		assertThat(compileAndRun("(print (read-from-string \"(+ 1 2)\")) (print (read-from-string \"42\"))"))
 			.isEqualTo("(+ 1 2)\n42");
+	}
+
+	@Test
+	void compileReadFromStringDottedPair() throws Exception {
+		assertThat(compileAndRun("(print (read-from-string \"(a . 1)\")) (print (read-from-string \"(a b . c)\")) "
+				+ "(print (read-from-string \"((a . 1) (b . 2))\")) (print (read-from-string \"3.5\"))"))
+			.isEqualTo("(a . 1)\n(a b . c)\n((a . 1) (b . 2))\n3.5");
 	}
 
 	@Test

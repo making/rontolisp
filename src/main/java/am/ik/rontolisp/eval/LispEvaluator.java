@@ -310,6 +310,41 @@ public final class LispEvaluator {
 			}
 			return assocIfValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.ASSOC, new LispFunction(LispNames.ASSOC, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.ASSOC + " expects at least 2 arguments, got " + args.size());
+			}
+			// (assoc key alist) compares with eql; (assoc key alist :test fn) applies fn
+			// as (funcall fn key (car pair)), mirroring member.
+			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			LispVal key = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (cell.car() instanceof LispCons pair
+						&& isTruthy(apply(test, List.of(key, pair.car()), this.globalEnv))) {
+					return pair;
+				}
+				cur = cell.cdr();
+			}
+			return LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.RASSOC, new LispFunction(LispNames.RASSOC, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.RASSOC + " expects at least 2 arguments, got " + args.size());
+			}
+			// The mirror of assoc: matches each pair's cdr instead of its car.
+			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			LispVal value = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (cell.car() instanceof LispCons pair
+						&& isTruthy(apply(test, List.of(value, pair.cdr()), this.globalEnv))) {
+					return pair;
+				}
+				cur = cell.cdr();
+			}
+			return LispNil.INSTANCE;
+		}));
 		this.globalEnv.defineFunction(LispNames.REMOVE_IF, new LispFunction(LispNames.REMOVE_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
@@ -534,6 +569,11 @@ public final class LispEvaluator {
 
 	private LispVal evalCons(LispCons cons, Environment env) {
 		LispVal head = cons.car();
+		// A dotted tail is only meaningful as data (inside quote); in call position it
+		// would otherwise be silently dropped by the toList() walks below.
+		if (!(head instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())) && !cons.isProperList()) {
+			throw new LispEvalException("Improper list in call position: " + cons.print());
+		}
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
 				case LispNames.QUOTE:

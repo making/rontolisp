@@ -94,10 +94,12 @@ public final class UserMacroExpander {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol sym) {
+			if (LispNames.QUOTE.equals(sym.name()) || LispNames.DEFMACRO.equals(sym.name())) {
+				return form;
+			}
+			requireProperCallForm(cons);
 			List<LispVal> parts = cons.toList();
 			switch (sym.name()) {
-				case LispNames.QUOTE, LispNames.DEFMACRO:
-					return form;
 				case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR:
 					// (let ((name init)...) body...) / (do ((var init step)...) (end
 					// result...) body...): binding names stay, init/step/end/result and
@@ -185,12 +187,21 @@ public final class UserMacroExpander {
 			}
 		}
 		// Non-symbol head, e.g. ((lambda (x) ...) arg...): walk every element.
+		requireProperCallForm(cons);
 		List<LispVal> parts = cons.toList();
 		List<LispVal> newParts = new ArrayList<>();
 		for (LispVal part : parts) {
 			newParts.add(expandAll(part, macroEval));
 		}
 		return properList(newParts);
+	}
+
+	// A dotted tail is only meaningful as data (inside quote); rebuilding a call form
+	// through toList() would silently drop it, so reject it here instead.
+	private static void requireProperCallForm(LispCons cons) {
+		if (!cons.isProperList()) {
+			throw new LispEvalException("Improper list in call position: " + cons.print());
+		}
 	}
 
 	// Rebuilds a form keeping parts[0] and the given fixed subforms verbatim, walking

@@ -2514,25 +2514,32 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
-	 * is {@code eql} to the key, or nil.
+	 * matches the key, or nil. The comparison is {@code eql} by default; with a
+	 * {@code :test} keyword ({@code (assoc key alist :test fn)}) it becomes
+	 * {@code (funcall fn key (car pair))}. Like {@code member}, the test designator is
+	 * inlined so a literal {@code 'name}/{@code #'name} resolves through the compilers'
+	 * function-designator normalization.
 	 * @param cons the assoc expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandAssoc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
 		LispSymbol key = new LispSymbol("__assoc_key");
 		LispSymbol cur = new LispSymbol("__assoc_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__assoc_key key) (__assoc_cur alist (cdr __assoc_cur)))
 		// ((atom __assoc_cur) nil)
-		// (if (and (consp (car __assoc_cur)) (eq __assoc_key (car (car __assoc_cur))))
+		// (if (and (consp (car __assoc_cur)) (eql __assoc_key (car (car __assoc_cur))))
 		// (return (car __assoc_cur))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal match = listToCons(
-				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
-						listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, pair)))));
+		LispVal comparison = (testForm == null)
+				? listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, pair)))
+				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, key, callOf(LispNames.CAR, pair)));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
+				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), comparison));
 		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
@@ -4907,23 +4914,93 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (rassoc value alist) into a do/return scan returning the first pair whose
-	 * cdr is {@code eql} to the value, or nil. The mirror of {@code assoc} (which matches
-	 * on the car).
+	 * cdr matches the value, or nil. The mirror of {@code assoc} (which matches on the
+	 * car). The comparison is {@code eql} by default; with a {@code :test} keyword
+	 * ({@code (rassoc value alist :test fn)}) it becomes
+	 * {@code (funcall fn value (cdr pair))}.
 	 * @param cons the rassoc expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRassoc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
 		LispSymbol key = new LispSymbol("__rassoc_key");
 		LispSymbol cur = new LispSymbol("__rassoc_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal match = listToCons(
-				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
-						listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CDR, pair)))));
+		LispVal comparison = (testForm == null)
+				? listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CDR, pair)))
+				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, key, callOf(LispNames.CDR, pair)));
+		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
+				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), comparison));
 		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (pairlis keys data) / (pairlis keys data alist) into a do/return scan that
+	 * conses each {@code (key . value)} pair, preserving key order, and appends the
+	 * optional existing alist as the tail.
+	 * @param cons the pairlis expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPairlis(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal alist = (parts.size() >= 4) ? parts.get(3) : LispNil.INSTANCE;
+		LispSymbol keys = new LispSymbol("__pairlis_keys");
+		LispSymbol data = new LispSymbol("__pairlis_data");
+		LispSymbol tail = new LispSymbol("__pairlis_tail");
+		LispSymbol acc = new LispSymbol("__pairlis_acc");
+		// (do ((__pairlis_keys keys (cdr __pairlis_keys))
+		// (__pairlis_data data (cdr __pairlis_data))
+		// (__pairlis_tail alist) (__pairlis_acc nil))
+		// ((or (atom __pairlis_keys) (atom __pairlis_data))
+		// (append (reverse __pairlis_acc) __pairlis_tail))
+		// (setq __pairlis_acc
+		// (cons (cons (car __pairlis_keys) (car __pairlis_data)) __pairlis_acc)))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(keys, parts.get(1), callOf(LispNames.CDR, keys))),
+				listToCons(List.of(data, parts.get(2), callOf(LispNames.CDR, data))), listToCons(List.of(tail, alist)),
+				listToCons(List.of(acc, LispNil.INSTANCE))));
+		LispVal endTest = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.ATOM, keys), callOf(LispNames.ATOM, data)));
+		LispVal endResult = listToCons(List.of(new LispSymbol(LispNames.APPEND), callOf(LispNames.REVERSE, acc), tail));
+		LispVal endClause = listToCons(List.of(endTest, endResult));
+		LispVal pair = listToCons(
+				List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, keys), callOf(LispNames.CAR, data)));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), pair, acc))));
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (copy-alist alist) into a do/return scan that copies the alist's spine and
+	 * each {@code (key . value)} pair cell; non-pair elements and the keys and values
+	 * themselves are shared with the original.
+	 * @param cons the copy-alist expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCopyAlist(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol cur = new LispSymbol("__copyalist_cur");
+		LispSymbol acc = new LispSymbol("__copyalist_acc");
+		LispVal element = callOf(LispNames.CAR, cur);
+		// (do ((__copyalist_cur alist (cdr __copyalist_cur)) (__copyalist_acc nil))
+		// ((atom __copyalist_cur) (reverse __copyalist_acc))
+		// (setq __copyalist_acc
+		// (cons (if (consp (car __copyalist_cur))
+		// (cons (car (car __copyalist_cur)) (cdr (car __copyalist_cur)))
+		// (car __copyalist_cur))
+		// __copyalist_acc)))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
+				listToCons(List.of(acc, LispNil.INSTANCE))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.REVERSE, acc)));
+		LispVal copiedPair = listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, element),
+				callOf(LispNames.CDR, element)));
+		LispVal copied = makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), element)), copiedPair, element);
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), copied, acc))));
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
 

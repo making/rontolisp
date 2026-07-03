@@ -98,6 +98,11 @@ final class JvmExprCompiler {
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal head = cons.car();
+		// A dotted tail is only meaningful as data (inside quote); in call position it
+		// would otherwise be silently dropped by the toList() walks below.
+		if (!(head instanceof LispSymbol qhead && LispNames.QUOTE.equals(qhead.name())) && !cons.isProperList()) {
+			throw new UnsupportedOperationException("Improper list in call position: " + cons.print());
+		}
 		if (head instanceof LispSymbol sym) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
@@ -475,6 +480,10 @@ final class JvmExprCompiler {
 				case LispNames.ELT -> JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx, className);
 				case LispNames.RASSOC ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx, className);
+				case LispNames.PAIRLIS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPairlis(cons), ctx, className);
+				case LispNames.COPY_ALIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyAlist(cons), ctx, className);
 				case LispNames.REVAPPEND ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRevappend(cons), ctx, className);
 				case LispNames.NRECONC ->

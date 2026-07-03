@@ -56,6 +56,19 @@ public final class LispCons implements LispVal {
 	}
 
 	/**
+	 * Returns whether this cons cell chain is a proper list, i.e. the chain of cdrs ends
+	 * in nil rather than a dotted tail.
+	 * @return true when the list is nil-terminated
+	 */
+	public boolean isProperList() {
+		LispVal current = this;
+		while (current instanceof LispCons cons) {
+			current = cons.cdr();
+		}
+		return current instanceof LispNil;
+	}
+
+	/**
 	 * Converts this cons cell chain into a Java list. Assumes proper list (terminated by
 	 * nil).
 	 * @return the elements as a list

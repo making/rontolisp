@@ -62,6 +62,12 @@ final class WasmQuoteCompiler {
 			}
 			case LispTrue ignored -> WasmEmitHelper.emitTrue(ctx);
 			case LispString s -> WasmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case am.ik.rontolisp.LispChar c -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(c.codePoint());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+			}
 			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx);
 			case LispArray array -> compileQuotedArray(array, ctx);

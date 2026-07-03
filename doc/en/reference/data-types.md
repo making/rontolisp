@@ -12,7 +12,7 @@
 | Nil | `nil` | False / empty list |
 | T | `t` | True |
 | Pi | `pi` | The constant π, read as the double `3.141592653589793` |
-| Cons | `(1 2 3)` | Linked list built from cons cells |
+| Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
 | Array | `#(1 2 3)`, `(make-array 3)` | Fixed-size vector (rank 1) or rank-2 array; `#(...)` is a self-evaluating vector literal |
 | Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
@@ -78,6 +78,49 @@ in the 31-bit `i31` range with no overflow promotion, like all of its integer
 arithmetic. The runtime reader emitted for compiled `read`/`load` does not
 parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 `evenp`/`oddp`, `gcd`/`lcm` and `isqrt` remain integer-only.
+
+## Dotted pairs, association lists and property lists
+
+The reader supports Common Lisp dotted-pair notation: `(a . b)` denotes a
+single cons cell whose car is `a` and whose cdr is `b`, and `(a b . c)` is a
+list whose final cdr is `c` instead of `nil`. This is how association-list
+(alist) literals are written:
+
+```lisp
+(cdr (assoc 'b '((a . 1) (b . 2)))) ; => 2
+```
+
+Dotted tails also work in backquote templates (`` `(a . ,x) `` expands to a
+`cons` chain), and the runtime reader of compiled programs parses the same
+notation, so a `read`/`read-from-string` of `"(a . 1)"` behaves identically in
+all backends. A standalone `.` outside a list is a read error, as in Common
+Lisp, and `,@` cannot be combined with a dotted tail in a backquote template.
+A dotted tail in **call position** (e.g. `(+ 1 . 2)`) is an error in all three
+backends -- a dotted pair is only meaningful as data.
+
+The alist function family -- `assoc`, `assoc-if`, `rassoc`, `acons`, `pairlis`
+and `copy-alist` -- works in all three backends. `assoc` and `rassoc` compare
+with `eql` by default and accept an optional `:test` keyword (a function
+designator, e.g. `#'equal` for string keys), like `member`:
+
+```lisp
+(assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal) ; => ("b" . 2)
+```
+
+Property lists (plists) -- flat lists of alternating indicator/value pairs
+like `(:a 1 :b 2)` -- are the keyword-based cousin of alists. `getf` reads the
+value for an indicator (two arguments only: no `&optional default`), the
+`remf` macro removes an indicator/value pair from a plist held in a variable
+or other `setf` place, and `&key` parameters in lambda lists are parsed from
+the same shape. `(setf (getf ...))` is not a supported place and there are no
+symbol plists (`get`/`symbol-plist`); to add or update an entry, rebuild the
+list, e.g. by prepending with `list*`:
+
+```lisp
+(let ((p (list :a 1 :b 2)))
+  (remf p :a)
+  (getf (list* :c 3 p) :c)) ; => 3
+```
 
 ## Arrays
 

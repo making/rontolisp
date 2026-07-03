@@ -179,4 +179,21 @@ class UserMacroExpanderTest {
 			.isEqualTo("(setq f (quote (when a b)))\n(print (macroexpand-1 f))");
 	}
 
+	@Test
+	void improperCallFormIsRejectedNotTruncated() {
+		// The rebuild walk must not silently drop a dotted tail in call position.
+		assertThatThrownBy(() -> expand("""
+				(defmacro twice (x) `(* 2 ,x))
+				(print (+ 1 . 2))
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("Improper list in call position");
+	}
+
+	@Test
+	void improperQuotedDataIsLeftAlone() {
+		assertThat(expand("""
+				(defmacro twice (x) `(* 2 ,x))
+				(print (twice (car '((a . 1)))))
+				""")).isEqualTo("(print (* 2 (car (quote ((a . 1))))))");
+	}
+
 }

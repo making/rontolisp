@@ -974,7 +974,7 @@ cases:
     expected: |
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      192
+      194
       (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep then version)
       (call field new proxy static)
       ci-intro-fn
@@ -1319,6 +1319,40 @@ cases:
       (1 2 3)
       t
       nil
+  - name: alist-operations
+    source: |
+      (print '(a . 1))
+      (print (assoc 'b '((a . 1) (b . 2) (c . 3))))
+      (print (cdr (assoc 'b '((a . 1) (b . 2)))))
+      (print (assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal))
+      (print (rassoc "x" '((a . "w") (b . "x")) :test 'equal))
+      (print (funcall #'rassoc 2 '((a . 1) (b . 2))))
+      (print (funcall #'acons 'a 1 '((b . 2))))
+      (print (pairlis '(a b) '(1 2) '((c . 3))))
+      (print (copy-alist '((a . 1) (b . 2))))
+      (print `((a . 1) (b . ,(+ 1 1))))
+      (print (read-from-string "(x . 9)"))
+    expected: |
+      (a . 1)
+      (b . 2)
+      2
+      ("b" . 2)
+      (b . "x")
+      (b . 2)
+      ((a . 1) (b . 2))
+      ((a . 1) (b . 2) (c . 3))
+      ((a . 1) (b . 2))
+      ((a . 1) (b . 2))
+      (x . 9)
+  - name: quoted-character-list
+    source: |
+      (print '(#\a #\b))
+      (print (char= (car '(#\a #\b)) #\a))
+      (print '(#\a . #\b))
+    expected: |
+      (#\a #\b)
+      t
+      (#\a . #\b)
   - name: control-macros-prog2-psetq-typecase
     source: |
       (print (prog2 1 2 3))

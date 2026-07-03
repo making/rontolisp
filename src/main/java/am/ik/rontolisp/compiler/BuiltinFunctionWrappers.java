@@ -144,6 +144,7 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND), binary(LispNames.FIND_IF),
 			binary(LispNames.FIND_IF_NOT), binary(LispNames.POSITION), binary(LispNames.POSITION_IF),
 			binary(LispNames.COUNT), binary(LispNames.COUNT_IF), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
+			binary(LispNames.RASSOC), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS), unary(LispNames.COPY_ALIST),
 			binary(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES), binary(LispNames.NCONC),
 			unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE),
 			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),

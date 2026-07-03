@@ -3,6 +3,8 @@ package am.ik.rontolisp.reader;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
+
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -119,7 +121,20 @@ public final class LispReader {
 			return LispNil.INSTANCE;
 		}
 		List<LispVal> elements = new ArrayList<>();
+		LispVal tail = LispNil.INSTANCE;
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			if (this.tokens.get(this.pos) instanceof Token.Dot) {
+				// Dotted pair: (a . b) puts b directly in the final cdr.
+				if (elements.isEmpty()) {
+					throw new LispReadException("Nothing appears before '.' in list");
+				}
+				this.pos++; // consume '.'
+				tail = readExpr();
+				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+					throw new LispReadException("More than one object follows '.' in list");
+				}
+				break;
+			}
 			elements.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
@@ -127,7 +142,7 @@ public final class LispReader {
 		}
 		this.pos++; // consume ')'
 		// Build cons chain from right to left
-		LispVal result = LispNil.INSTANCE;
+		LispVal result = tail;
 		for (int i = elements.size() - 1; i >= 0; i--) {
 			result = new LispCons(elements.get(i), result);
 		}
@@ -230,17 +245,44 @@ public final class LispReader {
 
 	private LispVal readTemplateList() {
 		List<TemplateElement> elements = new ArrayList<>();
+		TemplateElement tail = null;
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			if (this.tokens.get(this.pos) instanceof Token.Dot) {
+				// Dotted tail: `(a . ,b) lowers to nested cons forms.
+				if (elements.isEmpty()) {
+					throw new LispReadException("Nothing appears before '.' in backquote template");
+				}
+				this.pos++; // consume '.'
+				tail = readTemplateElement();
+				if (tail.splicing()) {
+					throw new LispReadException(",@ cannot follow '.' in a backquote template");
+				}
+				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+					throw new LispReadException("More than one object follows '.' in backquote template");
+				}
+				break;
+			}
 			elements.add(readTemplateElement());
 		}
 		if (this.pos >= this.tokens.size()) {
 			throw new LispReadException("Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
-		return buildTemplateList(elements);
+		return buildTemplateList(elements, tail);
 	}
 
-	private static LispVal buildTemplateList(List<TemplateElement> elements) {
+	private static LispVal buildTemplateList(List<TemplateElement> elements, @Nullable TemplateElement tail) {
+		if (tail != null) {
+			if (elements.stream().anyMatch(TemplateElement::splicing)) {
+				throw new LispReadException(",@ cannot be combined with a dotted tail in a backquote template");
+			}
+			// (cons f1 (cons f2 ... tail))
+			LispVal result = tail.form();
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				result = properList(new LispSymbol(LispNames.CONS), List.of(elements.get(i).form(), result));
+			}
+			return result;
+		}
 		if (elements.isEmpty()) {
 			return LispNil.INSTANCE;
 		}

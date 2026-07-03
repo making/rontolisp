@@ -1985,6 +1985,69 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalAssocOnDottedAlistLiteral() {
+		assertThat(eval("(assoc 'b '((a . 1) (b . 2) (c . 3)))").print()).isEqualTo("(b . 2)");
+		assertThat(eval("(cdr (assoc 'b '((a . 1) (b . 2))))").print()).isEqualTo("2");
+	}
+
+	@Test
+	void evalAssocWithTest() {
+		assertThat(eval("(assoc \"b\" '((\"a\" . 1) (\"b\" . 2)) :test #'equal)").print()).isEqualTo("(\"b\" . 2)");
+		assertThat(eval("(assoc \"z\" '((\"a\" . 1)) :test 'equal)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'assoc 'b '((a . 1) (b . 2)))").print()).isEqualTo("(b . 2)");
+	}
+
+	@Test
+	void evalRassocWithTest() {
+		assertThat(eval("(rassoc \"x\" '((a . \"w\") (b . \"x\")) :test #'equal)").print()).isEqualTo("(b . \"x\")");
+		assertThat(eval("(rassoc \"z\" '((a . \"w\")) :test 'equal)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'rassoc 2 '((a . 1) (b . 2)))").print()).isEqualTo("(b . 2)");
+	}
+
+	@Test
+	void evalAconsAsFunctionValue() {
+		assertThat(eval("(funcall #'acons 'a 1 '((b . 2)))").print()).isEqualTo("((a . 1) (b . 2))");
+	}
+
+	@Test
+	void evalQuotedCharacterList() {
+		assertThat(eval("'(#\\a #\\b)").print()).isEqualTo("(#\\a #\\b)");
+		assertThat(eval("(car '(#\\a #\\b))").print()).isEqualTo("#\\a");
+		assertThat(eval("'(#\\a . #\\b)").print()).isEqualTo("(#\\a . #\\b)");
+	}
+
+	@Test
+	void evalImproperCallFormSignalsError() {
+		assertThatThrownBy(() -> eval("(+ 1 . 2)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Improper list in call position");
+		assertThatThrownBy(() -> eval("(print (list 1 . 2))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Improper list in call position");
+	}
+
+	@Test
+	void evalPairlis() {
+		assertThat(eval("(pairlis '(a b c) '(1 2 3))").print()).isEqualTo("((a . 1) (b . 2) (c . 3))");
+		assertThat(eval("(pairlis '(a b) '(1 2) '((c . 3)))").print()).isEqualTo("((a . 1) (b . 2) (c . 3))");
+		assertThat(eval("(pairlis nil nil)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(pairlis '(a b) '(1))").print()).isEqualTo("((a . 1))");
+		assertThat(eval("(funcall #'pairlis '(a) '(1))").print()).isEqualTo("((a . 1))");
+	}
+
+	@Test
+	void evalCopyAlist() {
+		assertThat(eval("(copy-alist '((a . 1) (b . 2)))").print()).isEqualTo("((a . 1) (b . 2))");
+		assertThat(eval("(copy-alist nil)")).isSameAs(LispNil.INSTANCE);
+		// The pair cells are copied: mutating a copied pair leaves the original alist
+		// intact.
+		assertThat(eval("""
+				(let* ((orig (list (cons 'a 1) (cons 'b 2)))
+				       (copy (copy-alist orig)))
+				  (rplacd (assoc 'a copy) 99)
+				  (cdr (assoc 'a orig)))""").print()).isEqualTo("1");
+		assertThat(eval("(funcall #'copy-alist '((a . 1)))").print()).isEqualTo("((a . 1))");
+	}
+
+	@Test
 	void evalLast() {
 		assertThat(eval("(last '(1 2 3))").print()).isEqualTo("(3)");
 		assertThat(eval("(last nil)")).isSameAs(LispNil.INSTANCE);
@@ -2886,8 +2949,9 @@ class LispEvaluatorTest {
 					"position", "position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if",
 					"getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list",
 					"union", "intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash",
-					"list*", "acons", "endp", "elt", "rassoc", "revappend", "nreconc", "maplist", "mapcon", "notany",
-					"notevery", "delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
+					"list*", "acons", "endp", "elt", "rassoc", "pairlis", "copy-alist", "revappend", "nreconc",
+					"maplist", "mapcon", "notany", "notevery", "delete", "delete-if", "delete-if-not", "substitute",
+					"nsubstitute", "fresh-line")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
@@ -2898,7 +2962,7 @@ class LispEvaluatorTest {
 			.contains("require", "provide")
 			.doesNotContain("%puthash", "%aset")
 			.isSorted()
-			.hasSize(192);
+			.hasSize(194);
 	}
 
 	@Test

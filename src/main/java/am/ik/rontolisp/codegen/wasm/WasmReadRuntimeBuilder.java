@@ -965,12 +965,14 @@ final class WasmReadRuntimeBuilder {
 	static byte[] buildReadListBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// ref locals: CAR=0, CDR=1
-		w.write(1);
+		// ref locals: CAR=0, CDR=1 ; i32 locals: ISDOT=2, CH2=3
+		w.write(2);
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		final int CAR = 0, CDR = 1;
+		w.write(2);
+		w.write(Type.I32);
+		final int CAR = 0, CDR = 1, ISDOT = 2, CH2 = 3;
 
 		emitSkipWs(w);
 		// if cursor >= end: return null
@@ -994,10 +996,89 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		setLocal(w, CAR);
-		// cdr = _read_list
+		// Dotted pair: a standalone '.' token (followed by a delimiter or the end of
+		// input) puts the next datum directly in the final cdr, mirroring the
+		// compile-time reader: (a . b). Symbols and floats containing '.' are
+		// untouched.
+		emitSkipWs(w);
+		loadMem32(w, CURSOR);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		curByte(w);
+		i32(w, '.');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		// ch2 = the byte after '.', with end-of-input treated as a delimiter
+		i32(w, 32);
+		setLocal(w, CH2);
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, CH2);
+		end(w);
+		// isdot = ch2 <= 32 || ch2 in { ')' '(' '\'' '"' ';' }
+		getLocal(w, CH2);
+		i32(w, 32);
+		w.write(Instruction.I32_LE_S);
+		getLocal(w, CH2);
+		i32(w, ')');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, CH2);
+		i32(w, '(');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, CH2);
+		i32(w, '\'');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, CH2);
+		i32(w, '"');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, CH2);
+		i32(w, ';');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		setLocal(w, ISDOT);
+		end(w);
+		end(w);
+		// if isdot: consume '.', cdr = _read_expr, then consume the closing ')'
+		getLocal(w, ISDOT);
+		ifVoid(w);
+		advanceCursor(w);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		setLocal(w, CDR);
+		emitSkipWs(w);
+		loadMem32(w, CURSOR);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		curByte(w);
+		i32(w, ')');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		advanceCursor(w);
+		end(w);
+		end(w);
+		end(w);
+		// else: cdr = _read_list
+		getLocal(w, ISDOT);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LIST);
 		setLocal(w, CDR);
+		end(w);
 		// cons(car, cdr)
 		getLocal(w, CAR);
 		getLocal(w, CDR);

@@ -405,6 +405,9 @@ final class JvmReadRuntimeBuilder {
 		JvmAsm a = new JvmAsm();
 		int retNull = a.label();
 		int cont = a.label();
+		int notDot = a.label();
+		int isDot = a.label();
+		int build = a.label();
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
@@ -418,8 +421,64 @@ final class JvmReadRuntimeBuilder {
 		a.bind(cont);
 		a.invokestatic(this.readExpr);
 		a.astore(0); // car
+		// Dotted pair: a standalone '.' token puts the next datum directly in the
+		// final cdr, mirroring the compile-time reader: (a . b). The '.' counts as a
+		// token of its own only when followed by a delimiter or the end of input, so
+		// symbols and floats containing '.' are untouched.
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, notDot);
+		charAtPos(a);
+		a.iconst('.');
+		a.branch(Opcode.IF_ICMPNE, notDot);
+		pos(a);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, isDot);
+		a.getstatic(this.readSrc);
+		pos(a);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.invokevirtual(this.stringCharAt);
+		a.istore(1); // ch2 (slot reused; overwritten by the cdr below)
+		a.iload(1);
+		a.invokestatic(this.isWhitespace);
+		a.branch(Opcode.IFNE, isDot);
+		a.iload(1);
+		a.iconst(')');
+		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.iload(1);
+		a.iconst('(');
+		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.iload(1);
+		a.iconst('\'');
+		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.iload(1);
+		a.iconst('"');
+		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.iload(1);
+		a.iconst(';');
+		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.branch(Opcode.GOTO, notDot);
+		a.bind(isDot);
+		advance(a); // consume '.'
+		a.invokestatic(this.readExpr);
+		a.astore(1); // cdr = the dotted tail
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, build);
+		charAtPos(a);
+		a.iconst(')');
+		a.branch(Opcode.IF_ICMPNE, build);
+		advance(a); // consume ')'
+		a.branch(Opcode.GOTO, build);
+		a.bind(notDot);
 		a.invokestatic(this.readList);
 		a.astore(1); // cdr
+		a.bind(build);
 		a.iconst(2);
 		a.anewarray(this.objectClass);
 		a.dup();

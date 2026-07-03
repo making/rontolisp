@@ -424,6 +424,18 @@ public final class LispNames {
 	public static final String RASSOC = "rassoc";
 
 	/**
+	 * The {@code pairlis} built-in function (pair up a list of keys and a list of values
+	 * into an association list, prepended to an optional existing alist).
+	 */
+	public static final String PAIRLIS = "pairlis";
+
+	/**
+	 * The {@code copy-alist} built-in function (copy an association list's spine and its
+	 * {@code (key . value)} pair cells; the keys and values themselves are shared).
+	 */
+	public static final String COPY_ALIST = "copy-alist";
+
+	/**
 	 * The {@code revappend} built-in function (reverse the first list and append the
 	 * second: {@code (revappend x y) -> (append (reverse x) y)}).
 	 */

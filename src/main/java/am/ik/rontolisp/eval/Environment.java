@@ -1095,17 +1095,48 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(count);
 		}));
-		env.defineFunction(LispNames.ASSOC, new LispFunction(LispNames.ASSOC, args -> {
-			requireArgCount(LispNames.ASSOC, args, 2);
-			LispVal key = args.get(0);
-			LispVal cur = args.get(1);
+		// assoc/rassoc are registered in LispEvaluator: their :test keyword needs
+		// `apply`.
+		env.defineFunction(LispNames.ACONS, new LispFunction(LispNames.ACONS, args -> {
+			requireArgCount(LispNames.ACONS, args, 3);
+			return new LispCons(new LispCons(args.get(0), args.get(1)), args.get(2));
+		}));
+		env.defineFunction(LispNames.PAIRLIS, new LispFunction(LispNames.PAIRLIS, args -> {
+			if (args.size() < 2 || args.size() > 3) {
+				throw new LispEvalException(LispNames.PAIRLIS + " expects 2 or 3 arguments, got " + args.size());
+			}
+			LispVal keys = args.get(0);
+			LispVal data = args.get(1);
+			LispVal result = (args.size() == 3) ? args.get(2) : LispNil.INSTANCE;
+			// Collect pairs front-to-back, then prepend in reverse to preserve key
+			// order.
+			List<LispCons> pairs = new ArrayList<>();
+			while (keys instanceof LispCons keyCell && data instanceof LispCons dataCell) {
+				pairs.add(new LispCons(keyCell.car(), dataCell.car()));
+				keys = keyCell.cdr();
+				data = dataCell.cdr();
+			}
+			for (int i = pairs.size() - 1; i >= 0; i--) {
+				result = new LispCons(pairs.get(i), result);
+			}
+			return result;
+		}));
+		env.defineFunction(LispNames.COPY_ALIST, new LispFunction(LispNames.COPY_ALIST, args -> {
+			requireArgCount(LispNames.COPY_ALIST, args, 1);
+			// Copy the spine and each (key . value) pair cell; keys and values are
+			// shared.
+			List<LispVal> elements = new ArrayList<>();
+			LispVal cur = args.get(0);
 			while (cur instanceof LispCons cell) {
-				if (cell.car() instanceof LispCons pair && isEq(key, pair.car())) {
-					return pair;
-				}
+				LispVal element = cell.car();
+				elements.add((element instanceof LispCons pair) ? new LispCons(pair.car(), pair.cdr()) : element);
 				cur = cell.cdr();
 			}
-			return LispNil.INSTANCE;
+			LispVal result = LispNil.INSTANCE;
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				result = new LispCons(elements.get(i), result);
+			}
+			return result;
 		}));
 		env.defineFunction(LispNames.LAST, new LispFunction(LispNames.LAST, args -> {
 			requireArgCount(LispNames.LAST, args, 1);
