@@ -113,7 +113,16 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 `equal` になることはありません。`length`
 はベクタ(階数1の配列)の要素数を返します。階数2の配列はシーケンスではないため、`length`
 はエラーを通知します。ハッシュテーブル演算子とは異なり、配列演算子は第一級の関数値として公開されないため、`#'aref`
-と `#'make-array` は利用できません(直接呼び出してください)。ネストしたループでインデックス参照する2次元配列:
+と `#'make-array` は利用できません(直接呼び出してください)。
+ベクタは [`vector`](functions/vector.md) で構築し、[`svref`](functions/svref.md)
+で読み取ることもできます。配列の形状は
+[`array-dimensions`](functions/array-dimensions.md) /
+[`array-rank`](functions/array-rank.md) /
+[`array-total-size`](functions/array-total-size.md) で調べられ、
+[`coerce`](functions/coerce.md) はリスト・ベクタ・文字列を相互に変換します。
+配列の上で numpy スタイルのベクトル・行列演算を行うには
+[`linalg` パッケージ](../guides/linear-algebra.md)を参照してください。
+ネストしたループでインデックス参照する2次元配列:
 
 ```lisp
 (let ((m (make-array (list 2 3) :initial-element 0)))

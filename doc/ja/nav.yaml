@@ -47,3 +47,5 @@ sections:
         title: コンパイル時read/loadの制限
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
+      - file: guides/linear-algebra.md
+        title: ベクトルと行列（linalg）

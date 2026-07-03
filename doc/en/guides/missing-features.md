@@ -23,7 +23,8 @@ This page lists the most notable omissions. For what **is** available, see the
 | `loop` (extended) | partial (simple-loop subset) |
 | `defstruct` | available (see [`defstruct`](../reference/special-forms/defstruct.md)); options/`:include` are not |
 | CLOS | not available |
-| `declare` / `the` / `typep` / `coerce` | not available |
+| `declare` / `the` / `typep` | not available |
+| `coerce` | partial (literal `'list` / `'vector` / `'string` result types; see [`coerce`](../reference/functions/coerce.md)) |
 | `defpackage` (user packages) | partial (`:use`/`:export` only; see [`defpackage`](../reference/special-forms/defpackage.md)) |
 | `make-package` / `export` / `use-package` (runtime) | not available |
 | `require` / `provide` | available (see [`require`](../reference/functions/require.md)); the `*modules*` variable is not available |
@@ -117,7 +118,10 @@ object system (`defclass`, `defgeneric`, `defmethod`, `make-instance`).
 ## Type declarations, `typep`, and `coerce`
 
 Type declarations are not parsed: `declare`, `declaim`, `proclaim`, and `the` are
-not available, and neither are the runtime helpers `typep` and `coerce`.
+not available, and neither is the runtime helper `typep`.
+[`coerce`](../reference/functions/coerce.md) **is** available for the literal
+result types `'list`, `'vector` and `'string` (the result type must be a quoted
+literal, like `map`'s); other result types are not supported.
 
 ## User-defined packages
 

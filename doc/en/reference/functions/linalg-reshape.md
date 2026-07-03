@@ -1,0 +1,9 @@
+# linalg:reshape
+
+`(linalg:reshape array shape)`
+
+Returns a fresh array with the given shape and the same elements in row-major order. `shape` is an integer for a vector or a list `(rows cols)` for a matrix, and its total size must match the input's [`linalg:size`](linalg-size.md) -- a mismatch signals an error. [`linalg:flatten`](linalg-flatten.md) is the common special case of reshaping to a vector.
+
+```lisp
+(linalg:reshape (linalg:arange 6) '(2 3)) ; => #2A((0 1 2) (3 4 5))
+```

@@ -23,7 +23,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
 | `defstruct` | 利用可能（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。オプション/`:include` は利用不可 |
 | CLOS | 利用不可 |
-| `declare` / `the` / `typep` / `coerce` | 利用不可 |
+| `declare` / `the` / `typep` | 利用不可 |
+| `coerce` | 部分対応(リテラルの `'list` / `'vector` / `'string` 結果型。[`coerce`](../reference/functions/coerce.md) を参照) |
 | `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export` のみ。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
 | `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
 | `require` / `provide` | 利用可能（[`require`](../reference/functions/require.md) 参照）。`*modules*` 変数は利用不可 |
@@ -118,7 +119,10 @@ The function ignore-errors is undefined
 ## 型宣言、`typep`、`coerce`
 
 型宣言は解析されません。`declare`、`declaim`、`proclaim`、`the` は利用できず、
-ランタイムヘルパーの `typep` と `coerce` も利用できません。
+ランタイムヘルパーの `typep` も利用できません。
+[`coerce`](../reference/functions/coerce.md) はリテラルの結果型 `'list`、`'vector`、
+`'string` に限り **利用できます**(結果型は `map` と同様、クォートされたリテラルで
+なければなりません)。その他の結果型はサポートされません。
 
 ## ユーザー定義パッケージ
 

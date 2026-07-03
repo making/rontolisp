@@ -47,3 +47,5 @@ sections:
         title: Compiled read/load Limitations
       - file: guides/math-backends.md
         title: Math Function Backends
+      - file: guides/linear-algebra.md
+        title: Vectors & Matrices (linalg)

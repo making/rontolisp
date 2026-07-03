@@ -1,10 +1,11 @@
 # パッケージ
 
-rontolispには、4つの組み込みパッケージと[`defpackage` によるユーザー定義パッケージ](#ユーザー定義パッケージdefpackage)を持つ小さな名前空間(パッケージ)システムがあります:
+rontolispには、5つの組み込みパッケージと[`defpackage` によるユーザー定義パッケージ](#ユーザー定義パッケージdefpackage)を持つ小さな名前空間(パッケージ)システムがあります:
 
 - **`cl`** — 標準パッケージ。すべての組み込み関数、マクロ、特殊形式、および `*package*` 変数がここに属します。
 - **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
 - **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`cl` を **使用しません**。`version`、`list-functions`、`list-macros`、`list-special-forms` の各関数を所有します。
+- **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
 
 シンボルはパッケージ修飾子で参照できます: `package:symbol`(例: `cl:car`、`rontolisp:version`)はパッケージの

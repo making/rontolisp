@@ -132,7 +132,15 @@ access, and arrays are compared by identity (`eq`), so two distinct arrays are
 never `equal`. `length` returns the element count of a vector (rank-1 array); a
 rank-2 array is not a sequence, so `length` signals an error on it. Unlike the
 hash-table operators, the array operators are not exposed as first-class function
-values, so `#'aref` and `#'make-array` are not available (call them directly). A
+values, so `#'aref` and `#'make-array` are not available (call them directly).
+Vectors can also be built with [`vector`](functions/vector.md) and read with
+[`svref`](functions/svref.md), array shapes are inspected with
+[`array-dimensions`](functions/array-dimensions.md) /
+[`array-rank`](functions/array-rank.md) /
+[`array-total-size`](functions/array-total-size.md), and
+[`coerce`](functions/coerce.md) converts between lists, vectors and strings.
+For numpy-style vector/matrix math on top of arrays, see the
+[`linalg` package](../guides/linear-algebra.md). A
 2-D array indexed in nested loops:
 
 ```lisp

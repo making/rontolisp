@@ -200,6 +200,13 @@ categories:
     functions:
       - { slug: make-array, name: "make-array" }
       - { slug: aref, name: "aref" }
+      - { slug: vector, name: "vector" }
+      - { slug: svref, name: "svref" }
+      - { slug: array-dimensions, name: "array-dimensions" }
+      - { slug: array-dimension, name: "array-dimension" }
+      - { slug: array-rank, name: "array-rank" }
+      - { slug: array-total-size, name: "array-total-size" }
+      - { slug: coerce, name: "coerce" }
   - title: "Reader & Evaluation"
     functions:
       - { slug: read, name: "read" }
@@ -244,6 +251,41 @@ categories:
       - { slug: rontolisp-json-stringify, name: "rontolisp:json-stringify" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
       - { slug: rontolisp-wasm-import, name: "rontolisp:wasm-import" }
+  - title: "linalg Package"
+    functions:
+      - { slug: linalg-zeros, name: "linalg:zeros" }
+      - { slug: linalg-ones, name: "linalg:ones" }
+      - { slug: linalg-full, name: "linalg:full" }
+      - { slug: linalg-eye, name: "linalg:eye" }
+      - { slug: linalg-arange, name: "linalg:arange" }
+      - { slug: linalg-linspace, name: "linalg:linspace" }
+      - { slug: linalg-from-list, name: "linalg:from-list" }
+      - { slug: linalg-to-list, name: "linalg:to-list" }
+      - { slug: linalg-shape, name: "linalg:shape" }
+      - { slug: linalg-size, name: "linalg:size" }
+      - { slug: linalg-reshape, name: "linalg:reshape" }
+      - { slug: linalg-flatten, name: "linalg:flatten" }
+      - { slug: linalg-transpose, name: "linalg:transpose" }
+      - { slug: linalg-add, name: "linalg:add" }
+      - { slug: linalg-sub, name: "linalg:sub" }
+      - { slug: linalg-mul, name: "linalg:mul" }
+      - { slug: linalg-div, name: "linalg:div" }
+      - { slug: linalg-emap, name: "linalg:emap" }
+      - { slug: linalg-dot, name: "linalg:dot" }
+      - { slug: linalg-matmul, name: "linalg:matmul" }
+      - { slug: linalg-outer, name: "linalg:outer" }
+      - { slug: linalg-sum, name: "linalg:sum" }
+      - { slug: linalg-mean, name: "linalg:mean" }
+      - { slug: linalg-amax, name: "linalg:amax" }
+      - { slug: linalg-amin, name: "linalg:amin" }
+      - { slug: linalg-argmax, name: "linalg:argmax" }
+      - { slug: linalg-argmin, name: "linalg:argmin" }
+      - { slug: linalg-norm, name: "linalg:norm" }
+      - { slug: linalg-trace, name: "linalg:trace" }
+      - { slug: linalg-det, name: "linalg:det" }
+      - { slug: linalg-inv, name: "linalg:inv" }
+      - { slug: linalg-solve, name: "linalg:solve" }
+      - { slug: linalg-array-equal, name: "linalg:array-equal" }
   - title: "java Package (JVM only)"
     functions:
       - { slug: java-new, name: "java:new" }
