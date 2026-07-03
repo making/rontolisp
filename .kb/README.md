@@ -16,6 +16,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
+- [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import` (host functions callable from Lisp) + export `:as` aliases
 - [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- `--optimize` tree-shaking (WASM + JVM)
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins

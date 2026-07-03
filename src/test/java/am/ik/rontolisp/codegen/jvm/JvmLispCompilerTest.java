@@ -71,6 +71,23 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunWasmImportDirectiveIsNoOpUntilCalled() throws Exception {
+		// The directive registers an error-signalling stub; a program that never calls
+		// the import still compiles and runs.
+		assertThat(compileAndRun(
+				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(print (+ 1 2))"))
+			.isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunWasmImportStubSignalsErrorWhenCalled() {
+		assertThatThrownBy(() -> compileAndRun(
+				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(print (add 1 2))"))
+			.hasRootCauseMessage(
+					"add is a host function declared by rontolisp:wasm-import; it can only be called from a compiled WASM module");
+	}
+
+	@Test
 	void compileAndRunAddition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}

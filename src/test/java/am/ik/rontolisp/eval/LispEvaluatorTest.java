@@ -2780,6 +2780,18 @@ class LispEvaluatorTest {
 			.isEqualTo(new LispSymbol("fact"));
 	}
 
+	@Test
+	void wasmImportDefinesAnErrorSignallingStub() {
+		// The directive returns the named symbol; the imported host function only
+		// exists in compiled WASM output, so calling the stub signals an error.
+		assertThat(eval("(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)"))
+			.isEqualTo(new LispSymbol("add"));
+		assertThatThrownBy(() -> evalMulti(
+				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(add 1 2)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("rontolisp:wasm-import");
+	}
+
 	private static java.util.List<String> symbolNames(LispVal val) {
 		java.util.List<String> names = new java.util.ArrayList<>();
 		while (val instanceof LispCons cons) {

@@ -211,6 +211,7 @@ package system. Each name below links to its own page.
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string: objects become keyword plists, or hash tables with `:hash-table` |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | serialize a value (plists and hash tables become objects) to a JSON string |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
+| `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | declare a host function callable from Lisp when compiling to a WASM core module |
 
 The introspection functions (`list-functions` / `list-macros` /
 `list-special-forms`) are described in detail under
@@ -226,10 +227,10 @@ result plist, backend support, and limitations. `rontolisp:json-parse` and
 fetch response body; see the
 [json-parse](functions/rontolisp-json-parse.md) and
 [json-stringify](functions/rontolisp-json-stringify.md) reference pages for
-the value mapping and limitations. `rontolisp:wasm-export` is a
-compile-time directive
-for the WASM backend; see its [reference
-page](functions/rontolisp-wasm-export.md) and the
+the value mapping and limitations. `rontolisp:wasm-export` and
+`rontolisp:wasm-import` are compile-time directives for the WASM backend; see
+their [wasm-export](functions/rontolisp-wasm-export.md) and
+[wasm-import](functions/rontolisp-wasm-import.md) reference pages and the
 [Compiling to WebAssembly](../compiling/wasm.md) guide.
 
 ## java Package Functions

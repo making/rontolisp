@@ -235,6 +235,7 @@ categories:
       - { slug: rontolisp-json-parse, name: "rontolisp:json-parse" }
       - { slug: rontolisp-json-stringify, name: "rontolisp:json-stringify" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
+      - { slug: rontolisp-wasm-import, name: "rontolisp:wasm-import" }
   - title: "java Package (JVM only)"
     functions:
       - { slug: java-new, name: "java:new" }

@@ -15,6 +15,7 @@ on:
     - examples/wasm-browser/**
     - examples/hiragana/**
     - examples/minesweeper/**
+    - examples/webgl-galaxy/**
     - src/**
     - pom.xml
     - doc/**

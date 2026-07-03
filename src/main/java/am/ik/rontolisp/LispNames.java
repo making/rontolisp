@@ -1108,6 +1108,15 @@ public final class LispNames {
 	public static final String WASM_EXPORT = "wasm-export";
 
 	/**
+	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used
+	 * as {@code (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...)
+	 * :returns ...)} to declare a host function imported into the compiled WASM module
+	 * and callable from Lisp like a top-level defun. On the interpreter and the JVM
+	 * backend it defines a stub that signals an error when called.
+	 */
+	public static final String WASM_IMPORT = "wasm-import";
+
+	/**
 	 * The {@code java} package name (interpreter-only Java interop by reflection). It
 	 * does not use {@code cl}; its functions wrap arbitrary host objects as
 	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and

@@ -359,6 +359,23 @@ public final class Environment implements Scope {
 		String exportName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT);
 		env.defineFunction(exportName,
 				new LispFunction(exportName, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
+		// rontolisp:wasm-import declares a host function imported into a compiled WASM
+		// module (see the WASM compiler). The host does not exist on the interpreter
+		// (or the JVM backend), so the directive defines a stub under the declared name
+		// that signals an error when called -- the same source still loads on every
+		// backend, and only actually calling the import is WASM-specific.
+		String importDirective = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_IMPORT);
+		env.defineFunction(importDirective, new LispFunction(importDirective, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispSymbol target)) {
+				throw new LispEvalException(importDirective + " expects a quoted function name, got: "
+						+ (args.isEmpty() ? "nothing" : args.get(0).print()));
+			}
+			env.defineFunction(target.name(), new LispFunction(target.name(), stubArgs -> {
+				throw new LispEvalException(target.name() + " is a host function declared by " + importDirective
+						+ "; it can only be called from a compiled WASM module");
+			}));
+			return target;
+		}));
 		// fetch starts an outgoing HTTP request, JavaScript fetch-style, and immediately
 		// returns a promise (a LispPromise wrapping the future, which settles with the
 		// result property list) while the request runs on a background thread. It

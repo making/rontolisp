@@ -68,9 +68,10 @@ rontolisp hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
 ```
 
 For the REPL, file interpretation, JVM/WASM compilation (including
-`rontolisp:wasm-export`, `--no-wasi`, `--optimize`, `--component`, and
-`--dynamic`), the full language reference, and the `rontolisp` extensions
-(`fetch`), see the [documentation site](https://making.github.io/rontolisp/docs/).
+`rontolisp:wasm-export`, `rontolisp:wasm-import`, `--no-wasi`, `--optimize`,
+`--component`, and `--dynamic`), the full language reference, and the
+`rontolisp` extensions (`fetch`), see the
+[documentation site](https://making.github.io/rontolisp/docs/).
 
 ## Project Structure
 

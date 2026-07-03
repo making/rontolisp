@@ -1,6 +1,6 @@
 # rontolisp:wasm-export
 
-`(rontolisp:wasm-export 'name :params '(type...) :returns type)`
+`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type)`
 
 Marks a top-level `defun` as host-callable when compiling to a WebAssembly core
 module, declaring the WASM-boundary types of its parameters and result. It is a
@@ -16,8 +16,10 @@ source runs on every backend. See
 
 ## Arguments
 
-- A quoted symbol naming the top-level `defun` to export. The exported name is
-  the bare Lisp name (`fact`).
+- A quoted symbol naming the top-level `defun` to export.
+- `:as` — the WASM export name, as a string (e.g. `"factorial"`, or a
+  camelCase name for a JavaScript-facing API). Defaults to the bare Lisp name
+  (`fact`).
 - `:params` — a list of boundary type designators, one per parameter. Omitted,
   `nil` or `'()` means no arguments.
 - `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or

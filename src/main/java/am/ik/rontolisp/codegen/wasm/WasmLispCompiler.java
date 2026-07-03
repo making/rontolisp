@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -568,6 +569,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// ignored
 		// in component mode).
 		List<WasmExportCompiler.Decl> exportDecls = new ArrayList<>();
+		// (rontolisp:wasm-import ...) directives: each becomes a Lisp-callable wrapper
+		// registered like a top-level defun (Preview 1 only; rejected in component
+		// mode), calling the imported host function through a placeholder index that
+		// the WasmImportInjector post-pass resolves.
+		List<WasmImportCompiler.Decl> importDecls = new ArrayList<>();
 		for (LispVal expr : program) {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
@@ -576,16 +582,43 @@ public final class WasmLispCompiler implements LispCompiler {
 			else if (WasmExportCompiler.isExportForm(expr)) {
 				exportDecls.add(WasmExportCompiler.parse((LispCons) expr));
 			}
+			else if (WasmImportCompiler.isImportForm(expr)) {
+				importDecls.add(WasmImportCompiler.parse((LispCons) expr));
+			}
 			else {
 				topLevelExprs.add(expr);
 			}
+		}
+		if (!importDecls.isEmpty() && this.component) {
+			throw new UnsupportedOperationException(
+					"rontolisp:wasm-import is not supported with --component (Preview 1 core modules only)");
+		}
+		// Register each import as a synthetic defun so ordinary calls, #'name, funcall
+		// and eval all reach it through the regular defun machinery; Pass 2a swaps in
+		// the marshalling wrapper body instead of compiling the (empty) Lisp body.
+		Map<String, WasmImportCompiler.Decl> importWrappers = new LinkedHashMap<>();
+		for (WasmImportCompiler.Decl decl : importDecls) {
+			boolean duplicate = importWrappers.containsKey(decl.name())
+					|| defuns.stream().anyMatch(d -> d.name.equals(decl.name()));
+			if (duplicate) {
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-import name collides with an existing function: " + decl.name());
+			}
+			List<String> paramNames = new ArrayList<>();
+			for (int i = 0; i < decl.paramTypes().size(); i++) {
+				paramNames.add("%wasm-import-p" + i);
+			}
+			importWrappers.put(decl.name(), decl);
+			defuns.add(new DefunDecl(decl.name(), paramNames, List.of()));
 		}
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
 		boolean exportNeedsReader = (!this.component)
 				&& exportDecls.stream().anyMatch(d -> d.paramTypes().contains(WasmExportCompiler.T_S_EXPR));
-		if (exportNeedsReader) {
+		// An :s-expr import result likewise parses host-provided text at runtime.
+		boolean importNeedsReader = importDecls.stream().anyMatch(WasmImportCompiler::needsReader);
+		if (exportNeedsReader || importNeedsReader) {
 			usesRead = true;
 		}
 
@@ -678,7 +711,15 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
+		// Import wrapper bodies are deferred until after the lambda pass: a :string
+		// result calls the _str_from_mem helper, whose index follows the lambdas.
+		Map<String, Integer> importBodySlots = new HashMap<>();
 		for (DefunDecl defun : defuns) {
+			if (importWrappers.containsKey(defun.name)) {
+				importBodySlots.put(defun.name, userFunctionBodies.size());
+				userFunctionBodies.add(null); // filled in below
+				continue;
+			}
 			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
 			WasmWriter funcWriter = new WasmWriter(funcBody);
 			Ctx funcCtx = ctxBuilder.writer(funcWriter).bodyStream(funcBody).build();
@@ -861,10 +902,23 @@ public final class WasmLispCompiler implements LispCompiler {
 		// exports whose body allocates internally (e.g. via princ-to-string).
 		boolean exportsPresent = (!this.component) && !exportDecls.isEmpty();
 		int exportHelperBase = FUNC_USER_BASE + numDefuns + numLambdas;
-		int allocFuncIndex = exportUsesMemory ? exportHelperBase : -1;
-		int strFromMemFuncIndex = exportUsesMemory ? exportHelperBase + 1 : -1;
+		// A :string import result is written into linear memory by the host and boxed
+		// with the same _str_from_mem helper, so it forces the helper pair on too.
+		boolean importUsesStrFromMem = importDecls.stream().anyMatch(WasmImportCompiler::usesStrFromMem);
+		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem;
+		int allocFuncIndex = memoryHelpers ? exportHelperBase : -1;
+		int strFromMemFuncIndex = memoryHelpers ? exportHelperBase + 1 : -1;
+		// Fill in the deferred import wrapper bodies now that the helper indices are
+		// known (their positions in userFunctionBodies were reserved in Pass 2a).
+		{
+			int ordinal = 0;
+			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal++, strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
+			}
+		}
 		if (!this.component && !exportDecls.isEmpty()) {
-			int wrapperFuncIndex = exportHelperBase + (exportUsesMemory ? 2 : 0);
+			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
 			int wrapperTypeIndex = TYPE_PROMISE + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				WasmFunctionInfo target = functions.get(decl.name());
@@ -902,6 +956,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				exportBodies.add(finalBody.toByteArray());
 				exportPlans.add(new ExportPlan(decl, target.funcIndex(), wrapperTypeIndex++, wrapperFuncIndex++));
 			}
+		}
+
+		// Host-ABI type entries for the imported functions follow the export wrapper
+		// types; the WasmImportInjector post-pass prepends the matching import entries
+		// and resolves the placeholder call indices after the module is assembled.
+		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
+		int importTypeIndex = TYPE_PROMISE + 1 + exportPlans.size();
+		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
 		}
 
 		List<byte[]> dispatchBodies = new ArrayList<>();
@@ -1226,6 +1290,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
 							WasmExportCompiler.resultWasmTypes(p.decl()));
 				}
+				// Host-ABI signatures of the imported functions, one per
+				// (rontolisp:wasm-import ...), in ordinal order after the export
+				// wrapper types (matching the indices recorded in hostImports).
+				for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+					types.addFunc(WasmImportCompiler.hostParamTypes(decl), WasmImportCompiler.hostResultTypes(decl));
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -1390,7 +1460,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Memory-export helpers: __ronto_alloc ((i32)->i32, reuses TYPE_LOOKUP)
 				// and
 				// _str_from_mem ((i32,i32)->(ref null eq), reuses TYPE_RAT_NEW).
-				if (exportUsesMemory) {
+				if (memoryHelpers) {
 					fnDef.addFunction(TYPE_LOOKUP);
 					fnDef.addFunction(TYPE_RAT_NEW);
 				}
@@ -1462,16 +1532,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					exports.addExport("memory", ExternalKind.MEMORY, 0)
 						.addExport(initExport, ExternalKind.FUNCTION, FUNC_START);
 					// The host-facing bump allocator, when any memory-typed export is
-					// present
-					// (a host calls it to reserve a scratch buffer for string/sexpr
-					// inputs).
-					if (exportUsesMemory) {
+					// present (a host calls it to reserve a scratch buffer for
+					// string/sexpr inputs) or an import returns a :string the host must
+					// write into linear memory.
+					if (memoryHelpers) {
 						exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, allocFuncIndex);
 					}
 					// Host-callable Lisp functions requested via (rontolisp:wasm-export
-					// ...).
+					// ...), each under its :as alias (default: the Lisp name).
 					for (ExportPlan p : exportPlans) {
-						exports.addExport(p.decl().name(), ExternalKind.FUNCTION, p.funcIndex());
+						exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION, p.funcIndex());
 					}
 				}
 			})
@@ -1569,7 +1639,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Memory-export helper bodies (must precede the wrapper bodies to match
 				// the
 				// function-section order).
-				if (exportUsesMemory) {
+				if (memoryHelpers) {
 					code.addFunction(WasmExportRuntimeBuilder.buildAllocBody());
 					code.addFunction(WasmExportRuntimeBuilder.buildStrFromMemBody());
 				}
@@ -1599,6 +1669,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			});
 		byte[] coreModule = out.toByteArray();
+		// Resolve (rontolisp:wasm-import ...) directives: prepend the host imports and
+		// renumber every function reference (incl. the placeholder call indices). Must
+		// run before the tree shaker -- the module is not valid until then.
+		if (!hostImports.isEmpty()) {
+			coreModule = am.ik.wasm.WasmImportInjector.inject(coreModule, hostImports,
+					WasmImportCompiler.PLACEHOLDER_FUNC_BASE);
+		}
 		if (this.component) {
 			// The WASI 0.3 adapter binds the core's imports/exports by their fixed
 			// layout,

@@ -23,7 +23,7 @@ WASM バックエンドでは、関数（`defun` または `lambda`）が取れ�
 
 絶対値が 2³¹ 以上の浮動小数点数は、計算と比較は正しく行えますが印字できません（`print`/`princ-to-string` が整数オーバーフローでトラップします）。この制限は `rontolisp:json-stringify` にも及びます。
 
-デフォルトの出力は、WASI の `_start` エントリーポイントのみを公開する Preview 1 コアモジュールです。以下のセクションでは、WASM 固有のオプションを扱います。個々の関数をホストから呼び出し可能にする（`rontolisp:wasm-export`）、リアクター/ライブラリモジュールのために WASI インポートを除去する（`--no-wasi`）、ツリーシェイキングによってモジュールを縮小する（`--optimize`）、任意のエンジンで動作する素の非 wasm-GC モジュールを出力する（`--no-gc`）、WASI 0.3 コンポーネントを出力する（`--component`）。
+デフォルトの出力は、WASI の `_start` エントリーポイントのみを公開する Preview 1 コアモジュールです。以下のセクションでは、WASM 固有のオプションを扱います。個々の関数をホストから呼び出し可能にする（`rontolisp:wasm-export`）、Lisp からホスト関数を呼び出す（`rontolisp:wasm-import`）、リアクター/ライブラリモジュールのために WASI インポートを除去する（`--no-wasi`）、ツリーシェイキングによってモジュールを縮小する（`--optimize`）、任意のエンジンで動作する素の非 wasm-GC モジュールを出力する（`--no-gc`）、WASI 0.3 コンポーネントを出力する（`--component`）。
 
 ## Lisp 関数のエクスポート
 
@@ -62,6 +62,14 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 (rontolisp:wasm-export 'log-it :params '(:int))           ; (i32) -> () , prints n
 ```
 
+`:as` はエクスポート名を変更します。ホスト向け API に Lisp シンボルとして自然でない名前
+（例えば JavaScript 向けの camelCase）を付けたいときに使います。
+
+```lisp
+(defun draw-board (w h) (* w h))
+(rontolisp:wasm-export 'draw-board :as "drawBoard" :params '(:int :int) :returns :int)
+```
+
 パラメータと結果がすべてスカラー（`:int`/`:float`/`:bool`）である関数は素の数値シグネチャを持つため、`wasmtime --invoke` から直接呼び出せます。メモリを介する `:string` および `:s-expr` 指定子は、モジュールがエクスポートする `memory` を通じてポインタ/長さのペアを受け渡すため、それを読み書きできるホスト（例えば JavaScript）が必要です。入力用に、モジュールはバンプアロケータ `__ronto_alloc(size)` もエクスポートします。これは引数のバイト列を書き込むためのスクラッチ領域のオフセットを返します。
 
 ```js
@@ -78,8 +86,79 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 
 - このディレクティブは Preview 1 コアモジュールにのみ適用されます。`--component` のもとでは no-op です（ラッパーは出力されません）。インタプリタおよび JVM バックエンドでも no-op です（指定されたシンボルを返すだけです）。そのため、同じソースがすべてのバックエンドで動作します。
 - エクスポートできるのはトップレベルの `defun` のみで、宣言されたパラメータ数はそのアリティと一致しなければならず、関数値を受け取ったり返したりする関数は対象外です。
-- エクスポート名は裸の Lisp 名（`fact`）です。引数の書き方はホストに依存します（`wasmtime --invoke fact module.wasm 5`、`instance.exports.fact(5)` など）。
+- エクスポート名はデフォルトで裸の Lisp 名（`fact`）で、`:as` で変更できます。引数の書き方はホストに依存します（`wasmtime --invoke fact module.wasm 5`、`instance.exports.fact(5)` など）。
 - デフォルトでは、モジュールのインスタンス化には依然として 8 つの `wasi_snapshot_preview1` インポートを満たす必要があります。`wasmtime run` はそれらを自動的に提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。それらを除去するには `--no-wasi`（[後述](#no-wasi-reactor-mode)）を追加します。
+
+## ホスト関数のインポート
+
+`rontolisp:wasm-import` はその逆方向です。**ホスト** が提供する関数を宣言し、指定した
+名前でトップレベルの `defun` とまったく同じように Lisp から呼び出せるようにします —
+`#'name`、`funcall`、`mapcar`、`eval` も使えます。`:from` はインポートモジュール名
+（デフォルト `"env"`）、`:as` はその中のフィールド名（デフォルト: Lisp 名）を指定し、
+型指定子は上と同じ表です。
+
+```lisp
+; main.lisp
+(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
+(defun add10 (n) (add n 10))
+(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
+```
+
+wasmtime では、インポートをエクスポートする別モジュールをプリロードして解決します。
+ここではホストモジュール自体も Lisp で書かれており、`:as` エイリアス `add` で関数を
+エクスポートしています。
+
+```console
+$ cat host.lisp
+(defun host-add (a b) (+ a b))
+(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+$ rontolisp host.lisp -o host.wasm --no-wasi
+$ rontolisp main.lisp -o main.wasm --no-wasi
+$ wasmtime run -W gc --preload host=host.wasm --invoke add10 main.wasm 32
+42
+```
+
+ブラウザ（または Node）では、インポートオブジェクトがそのままモジュール表になります —
+`:from` 名ごとに 1 つのキー、`:as` 名ごとに 1 つのプロパティです。これは WASM
+バックエンドが提供しない機能への抜け道でもあります。例えば三角関数の組み込みは
+ないため、JavaScript から借りられます。
+
+```lisp
+(rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
+(rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
+```
+
+```js
+const imports = { math: { sin: Math.sin, cos: Math.cos } };
+const { instance } = await WebAssembly.instantiate(bytes, imports);
+```
+
+[WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+はこの方法で作られた完全なブラウザプログラムです。銀河の物理は Lisp で動き、毎フレーム
+Lisp が星ごとに 1 回、インポートした `drawParticle` を呼び出します。
+
+スカラー型以外の境界の詳細:
+
+- `:string`/`:s-expr` の **引数** は、モジュールがエクスポートする `memory` 内の
+  `(ptr, len)` ペアとしてホストに渡ります（`:s-expr` 引数は先に読み取り可能な
+  テキストとして印字されます）。
+- `:string` の **戻り値** は、ホストがリニアメモリに書き込む必要があります —
+  エクスポートされた `__ronto_alloc` でバッファを確保し、`(ptr, len)` のペア
+  （JavaScript では要素数 2 の配列）を返します。
+- `:s-expr` の **戻り値** は組み込みリーダで解析されるため、ホストはリスト構造全体を
+  テキストとして返せます。
+
+制限事項:
+
+- デフォルトの（wasm-GC）Preview 1 出力専用です。`--component` と `--no-gc` はこの
+  ディレクティブをエラーで拒否します。
+- インタプリタおよび JVM バックエンドでは、このディレクティブは呼び出すとエラーを
+  通知するスタブを定義します。共有ソースはどこでもロードできますが、実際に
+  インポートを呼び出すには WASM ホストが必要です。
+- インポートした関数にも他の関数と同じ引数 7 個までのアリティ制限があります。
+- モジュールのインスタンス化には宣言済みのすべてのインポートの提供が必要です。
+  `wasmtime run` ではインポートモジュール名ごとに `--preload <module>=<file>.wasm`
+  が必要で、JavaScript ホストはインポートオブジェクトを渡します。
 
 ## No-WASI（リアクター）モード
 

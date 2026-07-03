@@ -50,6 +50,7 @@ These are directories rather than single files: a Lisp program is compiled to
 | [`wasm-browser/`](wasm-browser) | Running a rontolisp-compiled `.wasm` in the browser from plain HTML + JavaScript, including feeding stdin from the page |
 | [`minesweeper/`](minesweeper) | A playable Minesweeper: the rules (flood fill, win/lose) live in a shared `minesweeper-core.lisp` that both a browser build (compiled to a `--no-wasi` WebAssembly reactor, HTML rendering) and a [Swing build](minesweeper/minesweeper-swing.lisp) load -- only the drawing differs |
 | [`hiragana/`](hiragana) | A 46-class handwritten-hiragana recognizer (the full gojuon): a small MLP trained offline in Lisp, baked into an inference `.wasm`, and driven from a `<canvas>` you draw on |
+| [`webgl-galaxy/`](webgl-galaxy) | A spiral galaxy animated in WebGL whose physics run in Lisp: the page exposes `drawParticle` (and even `Math.sin`/`Math.cos`) as host functions via `rontolisp:wasm-import`, and Lisp calls them once per star per frame |
 
 ## Running
 

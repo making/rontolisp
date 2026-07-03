@@ -215,6 +215,92 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoWasiAndInvoke(program, "fact", "10")).isEqualTo("3628800");
 	}
 
+	// Compiles a "host" module (whose wasm-exports play the imported host functions)
+	// and a main module using (rontolisp:wasm-import ... :from "host"), then runs the
+	// main module with the host instance preloaded (`wasmtime run --preload host=...`).
+	private static String compileAndRunWithPreload(String hostCode, String mainCode, boolean optimize)
+			throws Exception {
+		byte[] host = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(hostCode));
+		byte[] main = new WasmLispCompiler(false, false, false, optimize)
+			.compile(LispReader.readAllFromString(mainCode));
+		wasmtime.copyFileToContainer(Transferable.of(host), "/tmp/host.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(main), "/tmp/main.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "--preload", "host=/tmp/host.wasm",
+				"/tmp/main.wasm");
+		assertThat(result.getExitCode()).as("exit code for preload run: %s\nstderr: %s", mainCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void importedHostFunctionIsCallableLikeADefun() throws Exception {
+		// The host module exports its functions under :as aliases; the main module
+		// imports them (one under its own :as alias) and calls them directly, as a
+		// first-class #'value, from a closure, and through eval.
+		String host = """
+				(defun host-add (a b) (+ a b))
+				(defun host-scale (x) (* x 2.5))
+				(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'host-scale :as "scale" :params '(:float) :returns :float)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-import 'scale-it :from "host" :as "scale" :params '(:float) :returns :float)
+				(print (add 20 22))
+				(print (funcall #'add 1 2))
+				(print (scale-it 4.0))
+				(print (mapcar (lambda (x) (add x 100)) (list 1 2 3)))
+				(print (eval '(add 5 6)))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, false)).isEqualTo("""
+				42
+				3
+				10.0
+				(101 102 103)
+				11""");
+	}
+
+	@Test
+	void importedHostFunctionSurvivesTheTreeShaker() throws Exception {
+		// --optimize runs after import injection; the used import must survive and stay
+		// correctly renumbered.
+		String host = """
+				(defun host-add (a b) (+ a b))
+				(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
+				(print (add 40 2))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, true)).isEqualTo("42");
+	}
+
+	@Test
+	void importedBoolAndSexprRoundTripThroughTheHost() throws Exception {
+		// :bool crosses as i32 (0 = nil); :s-expr crosses as (ptr,len) of readable
+		// text -- but only within one module's memory, so here the host takes ints and
+		// the main module exercises :bool marshalling.
+		String host = """
+				(defun host-big (n) (> n 100))
+				(rontolisp:wasm-export 'host-big :as "big" :params '(:int) :returns :bool)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'big :from "host" :params '(:int) :returns :bool)
+				(print (big 200))
+				(print (big 3))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, false)).isEqualTo("t\nnil");
+	}
+
+	@Test
+	void exportAliasIsInvokableUnderTheAliasName() throws Exception {
+		String program = """
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(rontolisp:wasm-export 'fact :as "fibonacci-ish" :params '(:int) :returns :int)
+				""";
+		assertThat(compileAndInvoke(program, "fibonacci-ish", "5")).isEqualTo("120");
+	}
+
 	// Compiles with --no-gc (the scalar non-GC lowering) and invokes an export
 	// WITHOUT `-W gc`, proving the module runs on a plain MVP runtime with no wasm-GC and
 	// no import object.

@@ -67,11 +67,12 @@ final class WasmExportCompiler {
 	/**
 	 * A parsed {@code rontolisp:wasm-export} directive.
 	 *
-	 * @param name the exported function name (an existing top-level defun)
+	 * @param name the Lisp function name (an existing top-level defun)
+	 * @param exportName the WASM export name ({@code :as} alias, default the Lisp name)
 	 * @param paramTypes the declared parameter type designators, in order
 	 * @param returnType the declared return type designator
 	 */
-	record Decl(String name, List<String> paramTypes, String returnType) {
+	record Decl(String name, String exportName, List<String> paramTypes, String returnType) {
 	}
 
 	/**
@@ -88,9 +89,9 @@ final class WasmExportCompiler {
 	}
 
 	/**
-	 * Parses a {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)}
-	 * directive (in the canonical post-resolution shape
-	 * {@code (rontolisp:wasm-export (quote name) :params (quote (...))
+	 * Parses a {@code (rontolisp:wasm-export 'name :as "alias" :params '(...) :returns
+	 * ...)} directive (in the canonical post-resolution shape
+	 * {@code (rontolisp:wasm-export (quote name) :as "alias" :params (quote (...))
 	 * :returns :type)}).
 	 * @param form the directive form
 	 * @return the parsed declaration
@@ -103,6 +104,7 @@ final class WasmExportCompiler {
 			throw new UnsupportedOperationException("Malformed rontolisp:wasm-export: " + form.print());
 		}
 		String name = quotedSymbolName(items.get(1));
+		String exportName = null;
 		List<String> params = null;
 		String returns = null;
 		int i = 2;
@@ -113,6 +115,7 @@ final class WasmExportCompiler {
 			}
 			LispVal value = items.get(i + 1);
 			switch (keyword) {
+				case ":as" -> exportName = exportAlias(value, form);
 				case ":params" -> params = quotedTypeList(value, form);
 				case ":returns" -> returns = returnDesignator(value, form);
 				default -> throw new UnsupportedOperationException(
@@ -121,7 +124,22 @@ final class WasmExportCompiler {
 			i += 2;
 		}
 		// Omitted :returns (like nil / '() / :void) means a void result.
-		return new Decl(name, params == null ? List.of() : params, returns == null ? T_VOID : returns);
+		return new Decl(name, exportName == null ? name : exportName, params == null ? List.of() : params,
+				returns == null ? T_VOID : returns);
+	}
+
+	// An :as value is a string literal (or, leniently, a quoted symbol) naming the WASM
+	// export.
+	private static String exportAlias(LispVal value, LispCons form) {
+		if (value instanceof am.ik.rontolisp.LispString str) {
+			return str.value();
+		}
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export :as expects a string in " + form.print() + ", got: " + value.print());
 	}
 
 	/** Returns the number of WASM parameter slots a declaration occupies. */
@@ -265,7 +283,7 @@ final class WasmExportCompiler {
 	// Returns a Lisp string value (a TYPE_STRING on the stack) to the host as two i32
 	// results (content pointer, content length), stripping the internal surrounding
 	// quotes.
-	private static void emitStringResult(WasmLispCompiler.Ctx ctx) {
+	static void emitStringResult(WasmLispCompiler.Ctx ctx) {
 		int tmp = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmp);
@@ -294,7 +312,7 @@ final class WasmExportCompiler {
 	// Stores ptr (addEnd=false) or ptr+len (addEnd=true) for the s-expression parameter
 	// at
 	// the given slot pair into a fixed reader-control word in linear memory.
-	private static void storeWord(WasmLispCompiler.Ctx ctx, int address, int slot, boolean addEnd) {
+	static void storeWord(WasmLispCompiler.Ctx ctx, int address, int slot, boolean addEnd) {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(address);
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -307,7 +325,7 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 	}
 
-	private static int slotsForType(String type) {
+	static int slotsForType(String type) {
 		return isMemoryType(type) ? 2 : 1;
 	}
 
@@ -315,7 +333,7 @@ final class WasmExportCompiler {
 		return T_STRING.equals(type) || T_S_EXPR.equals(type);
 	}
 
-	private static void appendWasmTypes(List<Type> types, String type) {
+	static void appendWasmTypes(List<Type> types, String type) {
 		switch (type) {
 			case T_INT, T_BOOL -> types.add(Type.I32);
 			case T_FLOAT -> types.add(Type.F64);
@@ -348,7 +366,7 @@ final class WasmExportCompiler {
 				"Expected a keyword option in " + form.print() + ", got: " + value.print());
 	}
 
-	private static String typeDesignator(LispVal value, LispCons form) {
+	static String typeDesignator(LispVal value, LispCons form) {
 		if (value instanceof LispSymbol sym && sym.isKeyword() && KNOWN_TYPES.contains(sym.name())) {
 			return sym.name();
 		}

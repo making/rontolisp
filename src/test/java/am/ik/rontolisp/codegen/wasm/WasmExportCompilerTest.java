@@ -80,6 +80,33 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void defaultsExportNameToTheLispName() {
+		assertThat(parse("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)").exportName()).isEqualTo("fact");
+	}
+
+	@Test
+	void parsesAsAlias() {
+		assertThat(parse("(rontolisp:wasm-export 'fact :as \"fibonacci\" :params '(:int) :returns :int)").exportName())
+			.isEqualTo("fibonacci");
+		// Leniently, a quoted symbol names the export too.
+		assertThat(parse("(rontolisp:wasm-export 'fact :as 'fib :params '(:int) :returns :int)").exportName())
+			.isEqualTo("fib");
+	}
+
+	@Test
+	void rejectsNonStringAsAlias() {
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'fact :as 42 :params '(:int) :returns :int)"))
+			.hasMessageContaining(":as");
+	}
+
+	@Test
+	void compiledModuleExportsUnderTheAlias() {
+		byte[] bytes = compile("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(rontolisp:wasm-export 'fact :as \"fibonacci\" :params '(:int) :returns :int)");
+		assertThat(containsAscii(bytes, "fibonacci")).isTrue();
+	}
+
+	@Test
 	void treatsNilParamsAsNoArguments() {
 		assertThat(parse("(rontolisp:wasm-export 'go :params nil :returns :int)").paramTypes()).isEmpty();
 		assertThat(parse("(rontolisp:wasm-export 'go :returns :int)").paramTypes()).isEmpty();

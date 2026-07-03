@@ -171,6 +171,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			else if (WasmExportCompiler.isExportForm(expr)) {
 				exportDecls.add(WasmExportCompiler.parse((LispCons) expr));
 			}
+			else if (WasmImportCompiler.isImportForm(expr)) {
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-import is not supported with --no-gc (use the default GC backend)");
+			}
 			else {
 				throw new UnsupportedOperationException("--no-gc supports only (defun ...) and "
 						+ "(rontolisp:wasm-export ...) at top level, got: " + expr.print());
@@ -725,12 +729,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 						init -> init.write(Instruction.I32_CONST).writeSignedLeb128(mem.heapBase())));
 		}
 		w
-			// Export section: each directive exports its wrapper under the function name.
-			// When memory is used, also export the linear memory and the bump allocator
-			// so a host can write :string inputs and read :string results.
+			// Export section: each directive exports its wrapper under its :as alias
+			// (default: the function name). When memory is used, also export the linear
+			// memory and the bump allocator so a host can write :string inputs and read
+			// :string results.
 			.writeExport(exports -> {
 				for (int j = 0; j < exportDecls.size(); j++) {
-					exports.addExport(exportDecls.get(j).name(), ExternalKind.FUNCTION, internalCount + j);
+					exports.addExport(exportDecls.get(j).exportName(), ExternalKind.FUNCTION, internalCount + j);
 				}
 				if (mem.used()) {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);

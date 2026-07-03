@@ -57,14 +57,14 @@ public final class WasmTreeShaker {
 
 	private static final int KIND_GLOBAL = 0x03;
 
-	private record Section(int id, byte[] payload) {
+	record Section(int id, byte[] payload) {
 	}
 
 	/**
 	 * A {@code call}/{@code ref.func} site within a function body: the operand byte range
 	 * and its old target.
 	 */
-	private record CallSite(int operandStart, int operandEnd, int target) {
+	record CallSite(int operandStart, int operandEnd, int target) {
 	}
 
 	/**
@@ -166,7 +166,7 @@ public final class WasmTreeShaker {
 
 	// --- Section framing ---
 
-	private static List<Section> parseSections(byte[] module) {
+	static List<Section> parseSections(byte[] module) {
 		List<Section> sections = new ArrayList<>();
 		int[] p = { 8 }; // skip "\0asm" + version
 		while (p[0] < module.length) {
@@ -179,7 +179,7 @@ public final class WasmTreeShaker {
 		return sections;
 	}
 
-	private static byte[] assemble(List<Section> sections) {
+	static byte[] assemble(List<Section> sections) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		out.write('\0');
 		writeRaw(out, "asm".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -284,7 +284,7 @@ public final class WasmTreeShaker {
 
 	// --- Code section ---
 
-	private static List<byte[]> parseCodeEntries(byte[] payload) {
+	static List<byte[]> parseCodeEntries(byte[] payload) {
 		List<byte[]> entries = new ArrayList<>();
 		int[] p = { 0 };
 		int count = readU(payload, p);
@@ -382,7 +382,7 @@ public final class WasmTreeShaker {
 	// --- Instruction scanning ---
 
 	// Walks one code entry (locals + body) and returns every call/ref.func site.
-	private static List<CallSite> scanCallSites(byte[] entry) {
+	static List<CallSite> scanCallSites(byte[] entry) {
 		List<CallSite> sites = new ArrayList<>();
 		int[] p = { 0 };
 		// Local declarations: count, then (count, valtype) pairs.
@@ -501,7 +501,7 @@ public final class WasmTreeShaker {
 		}
 	}
 
-	private static void skipName(byte[] buf, int[] p) {
+	static void skipName(byte[] buf, int[] p) {
 		int len = readU(buf, p);
 		p[0] += len;
 	}
@@ -515,7 +515,7 @@ public final class WasmTreeShaker {
 
 	// --- LEB128 + byte helpers ---
 
-	private static int readU(byte[] buf, int[] p) {
+	static int readU(byte[] buf, int[] p) {
 		int result = 0;
 		int shift = 0;
 		while (true) {
@@ -529,7 +529,7 @@ public final class WasmTreeShaker {
 		return result;
 	}
 
-	private static void writeU(ByteArrayOutputStream out, int value) {
+	static void writeU(ByteArrayOutputStream out, int value) {
 		int v = value;
 		do {
 			int b = v & 0x7f;
@@ -542,13 +542,13 @@ public final class WasmTreeShaker {
 		while (v != 0);
 	}
 
-	private static byte[] slice(byte[] src, int from, int to) {
+	static byte[] slice(byte[] src, int from, int to) {
 		byte[] dst = new byte[to - from];
 		System.arraycopy(src, from, dst, 0, to - from);
 		return dst;
 	}
 
-	private static void writeRaw(ByteArrayOutputStream out, byte[] bytes) {
+	static void writeRaw(ByteArrayOutputStream out, byte[] bytes) {
 		out.write(bytes, 0, bytes.length);
 	}
 

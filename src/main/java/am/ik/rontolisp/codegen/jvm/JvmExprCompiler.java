@@ -133,6 +133,13 @@ final class JvmExprCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 					return;
 				}
+				if (LispNames.WASM_IMPORT.equals(qn.member())) {
+					// rontolisp:wasm-import declares a host function imported into WASM
+					// output; on the JVM the error-signalling stub defun was registered
+					// in pass 1, so the directive itself is a no-op that yields nil.
+					ctx.emit(Opcode.ACONST_NULL);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {

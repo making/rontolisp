@@ -208,6 +208,7 @@
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします: オブジェクトはキーワードのplist（`:hash-table` 指定でハッシュテーブル）になります |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | 値（plistとハッシュテーブルはオブジェクト）をJSON文字列にシリアライズします |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
+| `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | WASMコアモジュールへのコンパイル時に、ホスト関数をLispから呼び出し可能として宣言します |
 
 イントロスペクション関数(`list-functions` / `list-macros` /
 `list-special-forms`)については
@@ -219,9 +220,10 @@
 [then](functions/rontolisp-then.md)、
 [promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（JavaScriptの `JSON.parse`/`JSON.stringify` 相当。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](functions/rontolisp-json-parse.md) と
-[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。`rontolisp:wasm-export`
+[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。`rontolisp:wasm-export` と `rontolisp:wasm-import`
 はWASMバックエンド向けのコンパイル時ディレクティブです。
-[リファレンスページ](functions/rontolisp-wasm-export.md) および
+[wasm-export](functions/rontolisp-wasm-export.md) と
+[wasm-import](functions/rontolisp-wasm-import.md) のリファレンスページ、および
 [WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。
 
 ## java パッケージの関数

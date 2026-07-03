@@ -215,8 +215,9 @@ public final class RontoLispCli {
 		this.out.println("  --component        Emit a WASI 0.2 component (run with: wasmtime run)");
 		this.out.println("                     WASM only; print works, reading/file I/O not yet supported");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
-		this.out.println("                     Preview 1 only; instantiates without an import object,");
-		this.out.println("                     only pure-compute rontolisp:wasm-export functions work (I/O traps)");
+		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
+		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");
+		this.out.println("                     rontolisp:wasm-export functions work (I/O traps)");
 		this.out.println("  --optimize         Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start; great");
 		this.out.println("                     with --no-wasi. No effect in --component mode.");

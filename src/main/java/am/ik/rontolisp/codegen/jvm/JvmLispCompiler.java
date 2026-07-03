@@ -25,6 +25,7 @@ import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.WasmImportDirective;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ByteCodeWriter;
@@ -277,6 +278,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
 				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
+			}
+			else if (WasmImportDirective.isImportForm(expr)) {
+				// rontolisp:wasm-import declares a host function that only exists in a
+				// compiled WASM module. The JVM backend defines a stub of the declared
+				// arity that signals an error when called, so the same source still
+				// compiles (the directive itself is a no-op yielding nil).
+				defuns.add(wasmImportStub(WasmImportDirective.parse((LispCons) expr)));
+				topLevelExprs.add(expr);
 			}
 			else {
 				topLevelExprs.add(expr);
@@ -1304,6 +1313,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
 		List<String> paramNames = extractParamNames(lambdaParts.get(1));
 		return new DefunDecl(funcName, paramNames, lambdaParts.subList(2, lambdaParts.size()));
+	}
+
+	// A (rontolisp:wasm-import ...) stub: a defun of the declared arity whose body
+	// signals an error, since the imported host function only exists in WASM output.
+	private static DefunDecl wasmImportStub(WasmImportDirective directive) {
+		List<String> paramNames = new ArrayList<>();
+		for (int i = 0; i < directive.paramTypes().size(); i++) {
+			paramNames.add("%wasm-import-p" + i);
+		}
+		LispVal body = new LispCons(new LispSymbol(LispNames.ERROR),
+				new LispCons(new am.ik.rontolisp.LispString(
+						directive.name() + " is a host function declared by rontolisp:wasm-import; "
+								+ "it can only be called from a compiled WASM module"),
+						LispNil.INSTANCE));
+		return new DefunDecl(directive.name(), paramNames, List.of(body));
 	}
 
 	/**

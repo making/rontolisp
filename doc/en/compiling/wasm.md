@@ -33,7 +33,8 @@ this also limits `rontolisp:json-stringify` for such values.
 
 The default output is a Preview 1 core module that exposes only the WASI `_start` entry
 point. The sections below cover the WASM-specific options: marking individual functions as
-host-callable (`rontolisp:wasm-export`), dropping the WASI imports for a reactor/library
+host-callable (`rontolisp:wasm-export`), calling host functions from Lisp
+(`rontolisp:wasm-import`), dropping the WASI imports for a reactor/library
 module (`--no-wasi`), shrinking the module by tree shaking (`--optimize`), emitting a plain
 non-wasm-GC module that runs on any engine (`--no-gc`), and emitting a WASI 0.3 component
 (`--component`).
@@ -83,6 +84,14 @@ result. Likewise an omitted, `nil` or `'()` `:params` means no arguments.
 (rontolisp:wasm-export 'log-it :params '(:int))           ; (i32) -> () , prints n
 ```
 
+`:as` renames the export — useful when the host-facing API wants a name that is not an
+idiomatic Lisp symbol, e.g. camelCase for JavaScript:
+
+```lisp
+(defun draw-board (w h) (* w h))
+(rontolisp:wasm-export 'draw-board :as "drawBoard" :params '(:int :int) :returns :int)
+```
+
 Functions whose parameters and result are all scalar (`:int`/`:float`/`:bool`) get a plain
 numeric signature, so they can be called straight from `wasmtime --invoke`. The
 memory-backed `:string` and `:s-expr` designators pass a pointer/length pair through the
@@ -107,12 +116,83 @@ Limitations:
   (it just returns the named symbol), so the same source runs on every backend.
 - Only a top-level `defun` can be exported, the declared parameter count must match its
   arity, and functions that take or return function values are out of scope.
-- The exported name is the bare Lisp name (`fact`); how arguments are written depends on
-  the host (`wasmtime --invoke fact module.wasm 5`, `instance.exports.fact(5)`, ...).
+- The exported name defaults to the bare Lisp name (`fact`) and can be renamed with
+  `:as`; how arguments are written depends on the host
+  (`wasmtime --invoke fact module.wasm 5`, `instance.exports.fact(5)`, ...).
 - By default, instantiating the module still needs the eight `wasi_snapshot_preview1`
   imports satisfied; `wasmtime run` provides them automatically, and a browser host can
   supply no-op stubs for a pure-compute function. Add `--no-wasi`
   ([below](#no-wasi-reactor-mode)) to drop them.
+
+## Importing Host Functions
+
+`rontolisp:wasm-import` is the reverse direction: it declares a function the **host**
+provides and makes it callable from Lisp under the given name exactly like a top-level
+`defun` — including `#'name`, `funcall`, `mapcar` and `eval`. `:from` names the import
+module (default `"env"`), `:as` names the field inside it (default: the Lisp name), and
+the type designators are the same table as above:
+
+```lisp
+; main.lisp
+(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
+(defun add10 (n) (add n 10))
+(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
+```
+
+In wasmtime, satisfy the imports by preloading another module that exports them — here a
+host module that is itself written in Lisp, exporting its function under the `:as` alias
+`add`:
+
+```console
+$ cat host.lisp
+(defun host-add (a b) (+ a b))
+(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+$ rontolisp host.lisp -o host.wasm --no-wasi
+$ rontolisp main.lisp -o main.wasm --no-wasi
+$ wasmtime run -W gc --preload host=host.wasm --invoke add10 main.wasm 32
+42
+```
+
+In a browser (or Node) the import object *is* the module table — one key per `:from`
+name, one property per `:as` name. This is also the escape hatch for anything the WASM
+backend does not provide; for example it has no trigonometric built-ins, so borrow
+JavaScript's:
+
+```lisp
+(rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
+(rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
+```
+
+```js
+const imports = { math: { sin: Math.sin, cos: Math.cos } };
+const { instance } = await WebAssembly.instantiate(bytes, imports);
+```
+
+The [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+is a complete browser program built this way: the galaxy physics run in Lisp, and each
+frame Lisp calls an imported `drawParticle` once per star.
+
+Boundary details beyond the scalar types:
+
+- A `:string`/`:s-expr` **argument** reaches the host as a `(ptr, len)` pair into the
+  module's exported `memory` (an `:s-expr` argument is printed to readable text first).
+- A `:string` **result** must be written into linear memory by the host — reserve the
+  buffer with the exported `__ronto_alloc`, then return the `(ptr, len)` pair (a
+  two-element array in JavaScript).
+- An `:s-expr` **result** is parsed with the embedded reader, so the host can hand back
+  a whole list structure as text.
+
+Limitations:
+
+- Default (wasm-GC) Preview 1 output only: `--component` and `--no-gc` reject the
+  directive with an error.
+- On the interpreter and JVM backends the directive defines a stub that signals an
+  error when called, so a shared source still loads everywhere, but actually calling an
+  import needs the WASM host.
+- Imported functions have the same 7-parameter arity limit as other functions.
+- Instantiating the module requires every declared import to be provided: `wasmtime
+  run` needs a `--preload <module>=<file>.wasm` per import module name, and a
+  JavaScript host passes an import object.
 
 ## No-WASI (Reactor) Mode
 

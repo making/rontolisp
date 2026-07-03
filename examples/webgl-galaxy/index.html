@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>galaxy.lisp — a spiral galaxy computed in Lisp, drawn by WebGL</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --space: #05060e;
+        --ink: #e8ecff;
+        --muted: #737a94;
+        --violet: #8f7bff;
+        --cyan: #6fe0cf;
+        --panel: #0b0d1acc;
+        --line: #23273d;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--space);
+        color: var(--ink);
+        font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+      }
+
+      /* The galaxy is the page: the canvas fills the viewport and everything
+         else floats over it as a thin instrument HUD. */
+      #stage {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .hud {
+        position: fixed;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        padding: 1rem 1.15rem;
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .hud > * { pointer-events: auto; }
+
+      /* -- top left: what this is ------------------------------------------ */
+      .hud.top-left { top: 0; left: 0; max-width: 34rem; }
+
+      h1 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+
+      h1 .lisp { color: var(--cyan); }
+
+      .tagline {
+        margin: 0;
+        font-size: 0.78rem;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+
+      .tagline em { font-style: normal; color: var(--ink); }
+
+      /* -- bottom left: the two lines that make it work --------------------- */
+      .hud.bottom-left { bottom: 0; left: 0; max-width: min(46rem, 92vw); }
+
+      .repl {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.7rem 0.9rem;
+        font-size: 0.72rem;
+        line-height: 1.7;
+        white-space: pre;
+        overflow-x: auto;
+        backdrop-filter: blur(6px);
+      }
+
+      .repl .kw { color: var(--violet); }
+      .repl .str { color: var(--cyan); }
+      .repl .cm { color: var(--muted); }
+
+      .repl .cursor {
+        display: inline-block;
+        width: 0.55em;
+        height: 1em;
+        vertical-align: -0.15em;
+        background: var(--cyan);
+        animation: blink 1.1s steps(1) infinite;
+      }
+
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* -- bottom right: live instruments ----------------------------------- */
+      .hud.bottom-right { bottom: 0; right: 0; align-items: flex-end; }
+
+      .meters {
+        display: flex;
+        gap: 1.4rem;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.55rem 0.9rem;
+        backdrop-filter: blur(6px);
+      }
+
+      .meter { text-align: right; }
+
+      .meter b {
+        display: block;
+        font-size: 0.9rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .meter span {
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .controls {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+
+      .controls select {
+        font: inherit;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0.25rem 0.4rem;
+      }
+
+      .controls select:focus-visible,
+      .repl a:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+
+      .repl a { color: var(--cyan); }
+
+      #error {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 2rem;
+        text-align: center;
+        font-size: 0.85rem;
+        line-height: 1.7;
+        color: var(--ink);
+        background: var(--space);
+        z-index: 3;
+      }
+
+      @media (max-width: 640px) {
+        .hud.top-left { max-width: 100vw; }
+        .repl { font-size: 0.6rem; }
+        .meters { gap: 0.9rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage" aria-label="A slowly rotating spiral galaxy of particles"></canvas>
+
+    <header class="hud top-left">
+      <h1><span class="lisp">galaxy.lisp</span> → WebGL</h1>
+      <p class="tagline">
+        Every star's position is computed <em>in Lisp</em>, compiled to WebAssembly.
+        Each frame, Lisp calls the imported <em>drawParticle</em> host function once per
+        star — even <em>sin</em> and <em>cos</em> are borrowed from JavaScript's
+        <em>Math</em> via <em>rontolisp:wasm-import</em>.
+      </p>
+    </header>
+
+    <aside class="hud bottom-left" aria-label="The Lisp import directives driving this page">
+      <div class="repl" id="repl"><span class="cm">; the Lisp side of the boundary (galaxy.lisp)</span>
+(<span class="kw">rontolisp:wasm-import</span> 'draw-particle :from <span class="str">"gl"</span> :as <span class="str">"drawParticle"</span>
+                       :params '(:float :float :float :float) :returns :void)
+(<span class="kw">rontolisp:wasm-import</span> 'sin :from <span class="str">"math"</span> :params '(:float) :returns :float)
+<span class="cm">; <a href="https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>
+    </aside>
+
+    <aside class="hud bottom-right">
+      <div class="meters" role="status">
+        <div class="meter"><b id="m-stars">0</b><span>stars</span></div>
+        <div class="meter"><b id="m-calls">0</b><span>lisp→js calls</span></div>
+        <div class="meter"><b id="m-fps">—</b><span>fps</span></div>
+      </div>
+      <div class="controls">
+        <label for="count">stars</label>
+        <select id="count">
+          <option value="2000">2,000</option>
+          <option value="6000">6,000</option>
+          <option value="16000" selected>16,000</option>
+          <option value="40000">40,000</option>
+        </select>
+      </div>
+    </aside>
+
+    <div id="error" role="alert"></div>
+
+    <script type="module">
+      const canvas = document.getElementById("stage");
+      const errorBox = document.getElementById("error");
+      const mStars = document.getElementById("m-stars");
+      const mCalls = document.getElementById("m-calls");
+      const mFps = document.getElementById("m-fps");
+      const countSelect = document.getElementById("count");
+
+      function fail(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = "grid";
+      }
+
+      // ---- WebGL2: one additive point draw per frame -----------------------
+
+      const gl2 = canvas.getContext("webgl2", { antialias: false });
+      if (!gl2) {
+        fail("This page needs WebGL2. Any current Chrome, Firefox, Safari or Edge has it.");
+        throw new Error("no webgl2");
+      }
+
+      const VERT = `#version 300 es
+      layout(location=0) in vec2 aPos;    // clip-space position from Lisp
+      layout(location=1) in float aHue;   // 0..1 hue from Lisp
+      layout(location=2) in float aSize;  // point size from Lisp
+      uniform float uDpr;
+      out float vHue;
+      void main() {
+        gl_Position = vec4(aPos, 0.0, 1.0);
+        gl_PointSize = aSize * uDpr;
+        vHue = aHue;
+      }`;
+
+      const FRAG = `#version 300 es
+      precision mediump float;
+      in float vHue;
+      out vec4 color;
+      // Lisp sends hue = 0 at the core, 1 at the rim: warm white -> ice blue
+      // -> violet, the classic stellar-population gradient.
+      vec3 tint(float h) {
+        vec3 core = vec3(1.00, 0.93, 0.78);
+        vec3 mid  = vec3(0.62, 0.78, 1.00);
+        vec3 rim  = vec3(0.66, 0.47, 1.00);
+        return h < 0.5 ? mix(core, mid, h * 2.0) : mix(mid, rim, h * 2.0 - 1.0);
+      }
+      void main() {
+        // a soft round sprite: bright center, glow falloff, additive blending
+        float d = length(gl_PointCoord - 0.5) * 2.0;
+        float a = exp(-3.2 * d * d) * (1.0 - smoothstep(0.8, 1.0, d));
+        color = vec4(tint(vHue) * a, a);
+      }`;
+
+      function shader(type, src) {
+        const s = gl2.createShader(type);
+        gl2.shaderSource(s, src);
+        gl2.compileShader(s);
+        if (!gl2.getShaderParameter(s, gl2.COMPILE_STATUS)) {
+          throw new Error(gl2.getShaderInfoLog(s));
+        }
+        return s;
+      }
+
+      const program = gl2.createProgram();
+      gl2.attachShader(program, shader(gl2.VERTEX_SHADER, VERT));
+      gl2.attachShader(program, shader(gl2.FRAGMENT_SHADER, FRAG));
+      gl2.linkProgram(program);
+      if (!gl2.getProgramParameter(program, gl2.LINK_STATUS)) {
+        fail("WebGL shader link failed: " + gl2.getProgramInfoLog(program));
+        throw new Error("link failed");
+      }
+      gl2.useProgram(program);
+      const uDpr = gl2.getUniformLocation(program, "uDpr");
+
+      gl2.enable(gl2.BLEND);
+      gl2.blendFunc(gl2.ONE, gl2.ONE); // additive: overlapping stars glow
+
+      // Interleaved batch: x, y, hue, size per star. Lisp fills it through the
+      // imported drawParticle; JS uploads it as one buffer and draws once.
+      const MAX_STARS = 40000;
+      const batch = new Float32Array(MAX_STARS * 4);
+      let batched = 0;
+
+      const vao = gl2.createVertexArray();
+      gl2.bindVertexArray(vao);
+      const vbo = gl2.createBuffer();
+      gl2.bindBuffer(gl2.ARRAY_BUFFER, vbo);
+      gl2.bufferData(gl2.ARRAY_BUFFER, batch.byteLength, gl2.DYNAMIC_DRAW);
+      gl2.enableVertexAttribArray(0);
+      gl2.vertexAttribPointer(0, 2, gl2.FLOAT, false, 16, 0);
+      gl2.enableVertexAttribArray(1);
+      gl2.vertexAttribPointer(1, 1, gl2.FLOAT, false, 16, 8);
+      gl2.enableVertexAttribArray(2);
+      gl2.vertexAttribPointer(2, 1, gl2.FLOAT, false, 16, 12);
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(canvas.clientWidth * dpr);
+        canvas.height = Math.round(canvas.clientHeight * dpr);
+        gl2.viewport(0, 0, canvas.width, canvas.height);
+        gl2.uniform1f(uDpr, dpr);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      // ---- the import object: everything Lisp asked for --------------------
+      //
+      // galaxy.lisp declares four (rontolisp:wasm-import ...) directives; this
+      // object is their entire JavaScript implementation.
+
+      let totalCalls = 0;
+
+      const imports = {
+        gl: {
+          drawParticle(x, y, hue, size) {
+            const o = batched * 4;
+            batch[o] = x;
+            batch[o + 1] = y;
+            batch[o + 2] = hue;
+            batch[o + 3] = size;
+            batched++;
+            totalCalls++;
+          },
+          aspectRatio: () => canvas.width / canvas.height,
+        },
+        math: { sin: Math.sin, cos: Math.cos },
+      };
+
+      // ---- load the reactor and run the frame loop -------------------------
+
+      let lisp;
+      try {
+        const bytes = await (await fetch("./galaxy.wasm")).arrayBuffer();
+        ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
+      }
+      catch (e) {
+        fail(
+          "Could not instantiate galaxy.wasm — this page needs WebAssembly GC support " +
+          "(Chrome 119+, Firefox 120+, Safari 18.2+, Edge 119+).\n" + e
+        );
+        throw e;
+      }
+      lisp._initialize(); // --no-wasi reactor init (runs the top-level defvars)
+
+      let stars = Number(countSelect.value);
+      lisp.init(stars);
+      mStars.textContent = stars.toLocaleString("en-US");
+
+      countSelect.addEventListener("change", () => {
+        stars = Number(countSelect.value);
+        lisp.init(stars);
+        mStars.textContent = stars.toLocaleString("en-US");
+      });
+
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const start = performance.now();
+      let lastFpsUpdate = 0;
+      let framesSince = 0;
+
+      function renderFrame(now) {
+        batched = 0;
+        lisp.frame((now - start) / 1000); // Lisp computes and "draws" every star
+        gl2.clearColor(0.012, 0.016, 0.045, 1);
+        gl2.clear(gl2.COLOR_BUFFER_BIT);
+        gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, batch, 0, batched * 4);
+        gl2.drawArrays(gl2.POINTS, 0, batched);
+      }
+
+      function tick(now) {
+        renderFrame(now);
+        framesSince++;
+        if (now - lastFpsUpdate > 500) {
+          mFps.textContent = Math.round((framesSince * 1000) / (now - lastFpsUpdate));
+          mCalls.textContent = totalCalls.toLocaleString("en-US");
+          lastFpsUpdate = now;
+          framesSince = 0;
+        }
+        if (!reducedMotion.matches) {
+          requestAnimationFrame(tick);
+        }
+      }
+
+      if (reducedMotion.matches) {
+        // Reduced motion: draw a single still frame of the galaxy.
+        renderFrame(start + 20000);
+        mFps.textContent = "still";
+        mCalls.textContent = totalCalls.toLocaleString("en-US");
+        reducedMotion.addEventListener("change", () => {
+          if (!reducedMotion.matches) requestAnimationFrame(tick);
+        });
+      }
+      else {
+        requestAnimationFrame(tick);
+      }
+    </script>
+  </body>
+</html>

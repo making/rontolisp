@@ -1,6 +1,6 @@
 # rontolisp:wasm-export
 
-`(rontolisp:wasm-export 'name :params '(type...) :returns type)`
+`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type)`
 
 WebAssembly コアモジュールへコンパイルする際に、トップレベルの `defun` を
 ホストから呼び出し可能にし、その引数と戻り値の WASM 境界型を宣言します。これは
@@ -16,8 +16,9 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 
 ## 引数
 
-- エクスポートするトップレベル `defun` を指すクォートされたシンボル。エクスポート
-  名は素の Lisp 名 (`fact`) です。
+- エクスポートするトップレベル `defun` を指すクォートされたシンボル。
+- `:as` — WASM エクスポート名の文字列 (例: `"factorial"`、JavaScript 向け API の
+  camelCase 名など)。デフォルトは素の Lisp 名 (`fact`) です。
 - `:params` — 各引数に対応する境界型指定子のリスト。省略、`nil`、`'()` の場合は
   引数なしを意味します。
 - `:returns` — 戻り値の境界型指定子。省略、`nil`、`'()`、`:void` の場合は void の
