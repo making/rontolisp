@@ -187,7 +187,13 @@ public final class RontoLispCli {
 				bytes = new ScalarWasmCompiler(optimize).compile(program);
 			}
 			else {
-				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize).compile(program);
+				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
+				// component
+				// (--component only). The HttpHandlerInliner splices in a %http-dispatch
+				// wasm-export wrapper that the serve adapter calls per request.
+				boolean serve = component && HttpHandlerInliner.usesHttpHandler(program);
+				List<LispVal> wasmProgram = serve ? HttpHandlerInliner.inline(program) : program;
+				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve).compile(wasmProgram);
 			}
 		}
 		else {

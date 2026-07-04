@@ -209,6 +209,20 @@ public final class WasmComponentBuilder {
 	}
 
 	/**
+	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
+	 * wrap the rontolisp core (which exports {@code %http-dispatch},
+	 * {@code __ronto_alloc} and {@code run}) with the serve adapter
+	 * ({@code adapter-serve.wasm}) so the component exports
+	 * {@code wasi:http/incoming-handler@0.2.0} and runs under {@code wasmtime serve} and
+	 * Spin.
+	 * @param coreModule the rontolisp core module compiled in serve mode
+	 * @return the WASI 0.2 (http/incoming-handler) component binary
+	 */
+	public static byte[] buildServe(byte[] coreModule) {
+		return WasmServeComponentBuilder.build(coreModule);
+	}
+
+	/**
 	 * Assemble the base WASI 0.3 component (no {@code rontolisp:fetch}).
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @return the WASI 0.3 component binary

@@ -51,6 +51,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean optimize;
 
+	private final boolean serve;
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -112,12 +114,31 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * unchanged.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize) {
+		this(dynamic, component, noWasi, optimize, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
+	 * @param optimize see {@link #WasmLispCompiler(boolean, boolean, boolean, boolean)}
+	 * @param serve when {@code true} (implies {@code component}), the program serves HTTP
+	 * via {@code rontolisp:http-handler}: the {@code HttpHandlerInliner} has spliced in a
+	 * {@code %http-dispatch} {@code wasm-export} wrapper, so the wasm-export memory-ABI
+	 * machinery is enabled even in component mode, and the core is wrapped by
+	 * {@link WasmComponentBuilder#buildServe} into a {@code wasi:http/incoming-handler}
+	 * component (runnable under {@code wasmtime serve} and Spin) instead of the
+	 * {@code wasi:cli/run} component.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve) {
 		this.dynamic = dynamic;
 		this.component = component;
 		// no-wasi is a Preview 1-only mode; a component has its own (lowered) import
 		// story.
 		this.noWasi = noWasi && !component;
 		this.optimize = optimize;
+		this.serve = serve && component;
 	}
 
 	// Function indices (imports come first). Defined functions are indexed relative to
@@ -978,7 +999,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Memory-backed exports (:string/:s-expr) need two appended helper functions: the
 		// host-facing bump allocator __ronto_alloc and the _str_from_mem string builder.
 		// They precede the wrappers so the fixed FUNC_* constants are unaffected.
-		boolean exportUsesMemory = (!this.component) && exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
+		boolean exportUsesMemory = (!this.component || this.serve)
+				&& exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
 		int exportHelperBase = FUNC_USER_BASE + numDefuns + numLambdas;
 		// A :string import result is written into linear memory by the host and boxed
 		// with the same _str_from_mem helper, so it forces the helper pair on too.
@@ -995,7 +1017,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
 			}
 		}
-		if (!this.component && !exportDecls.isEmpty()) {
+		if ((!this.component || this.serve) && !exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
 			int wrapperTypeIndex = TYPE_PROMISE + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
@@ -1395,7 +1417,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// with internal trap stubs in the function/code sections below, keeping
 				// every
 				// FUNC_* constant valid.
-				if (!this.noWasi) {
+				// Serve mode stubs the WASI imports too (a pure http-handler does no
+				// base I/O); the serve adapter provides no wasi_snapshot_preview1
+				// functions, so the core fills indices 0-7 with internal trap stubs
+				// like no-wasi while still importing its memory (component mode).
+				if (!(this.noWasi || this.serve)) {
 					imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
 						.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
 						.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
@@ -1458,7 +1484,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// (fd_write, fd_read, path_open, fd_close, random_get, clock_time_get,
 				// environ_sizes_get, environ_get). This keeps every FUNC_* constant
 				// valid.
-				if (this.noWasi) {
+				if (this.noWasi || this.serve) {
 					fnDef.addFunction(TYPE_FD_WRITE) // 0: fd_write
 						.addFunction(TYPE_FD_WRITE) // 1: fd_read
 						.addFunction(TYPE_PATH_OPEN) // 2: path_open
@@ -1642,6 +1668,20 @@ public final class WasmLispCompiler implements LispCompiler {
 			.writeExport(exports -> {
 				if (this.component) {
 					exports.addExport("run", ExternalKind.FUNCTION, FUNC_START);
+					// Serve mode: the serve adapter calls the core's %http-dispatch (the
+					// wasm-export wrapper) per request and __ronto_alloc for its scratch,
+					// so
+					// export them alongside `run` (which the adapter runs once as init).
+					// The
+					// memory stays imported (from the shared mem module).
+					if (this.serve) {
+						if (memoryHelpers) {
+							exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, allocFuncIndex);
+						}
+						for (ExportPlan p : exportPlans) {
+							exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION, p.funcIndex());
+						}
+					}
 				}
 				else {
 					// A no-wasi module is a reactor/library, not a WASI command, so name
@@ -1676,7 +1716,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// No-wasi mode: bodies for the eight trap stubs at indices 0-7. Each is
 				// `unreachable; end` (no locals); unreachable is stack-polymorphic so one
 				// shape satisfies every WASI signature. Calling one (i.e. any I/O) traps.
-				if (this.noWasi) {
+				if (this.noWasi || this.serve) {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
@@ -1812,6 +1852,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			// layout,
 			// so tree-shaking the core is unsafe here; leave the component path
 			// untouched.
+			if (this.serve) {
+				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
+				// into
+				// a wasi:http/incoming-handler component (wasmtime serve / Spin).
+				return WasmComponentBuilder.buildServe(coreModule);
+			}
 			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
