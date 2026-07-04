@@ -1,0 +1,170 @@
+;; A linear-algebra web service on rontolisp:http-handler -- the numerical
+;; companion of httpbin.lisp. Two POST endpoints turn the linalg package into
+;; a JSON API (rontolisp:json-parse in, rontolisp:json-stringify out):
+;;
+;;   POST /solve  {"a": [[2,1],[1,3]], "b": [5,10]}
+;;     -> {"x": [1, 3], "det": 5}                      solves a.x = b
+;;   POST /fit    {"degree": 1, "points": [[0,1],[1,2],[2,5],[3,5]]}
+;;     -> {"coefficients": [1, 1.5], "fitted": [1, 2.5, 4, 5.5],
+;;         "residuals": [0, -0.5, 1, -0.5],
+;;         "squared-error": 1.5}                       least-squares polyfit
+;;   GET  /       -> a JSON usage document
+;;
+;; /fit solves the normal equations (A^T A) c = A^T y over the Vandermonde
+;; matrix of the xs, exactly like examples/linear-regression.lisp -- but here
+;; the samples arrive over HTTP. Integer inputs are solved exactly (ratios),
+;; so the same request gives the same answer on every backend; ratios reach
+;; the JSON as floats (json-stringify), e.g. 3/2 -> 1.5. Only the float
+;; *rendering* of a ratio that is not binary-exact can differ on WASM
+;; (33/10 prints as 3.3 on the interpreter/JVM but 3.299999 there).
+;;
+;; Invalid input (non-object body, a non-square or singular matrix, too few
+;; points) answers 400 with {"error": ...}; a wrong method 405, an unknown
+;; path 404. Because the service keeps no state between requests, it behaves
+;; identically on all three backends -- including under wasmtime serve, where
+;; each request runs in a fresh component instance.
+;;
+;; Run (interpreter, blocking server on :8080):
+;;   java -jar $JAR examples/linalg-api.lisp
+;; Run (JVM class; needs the rontolisp jar on the classpath):
+;;   java -jar $JAR examples/linalg-api.lisp -o LinalgApi.class && java -cp $JAR:. LinalgApi
+;; Run (WASI component under wasmtime serve):
+;;   java -jar $JAR examples/linalg-api.lisp -o linalg-api.wasm --component && \
+;;     wasmtime serve -W gc=y linalg-api.wasm
+;; Talk to it with:
+;;   curl -X POST -d '{"a": [[2,1],[1,3]], "b": [5,10]}' http://127.0.0.1:8080/solve
+;;   curl -X POST -d '{"degree": 1, "points": [[0,1],[1,2],[2,5],[3,5]]}' http://127.0.0.1:8080/fit
+
+;; --- JSON request/response helpers ---------------------------------------
+
+(defun json-response (status obj)
+  (list :status status
+        :headers (list (cons "content-type" "application/json"))
+        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+
+(defun bad-request (message)
+  (json-response 400 (list :error message)))
+
+(defun method-not-allowed ()
+  (json-response 405 (list :error "method not allowed" :allowed "POST")))
+
+;; Parse the body as a JSON object into a keyword plist, or nil when the
+;; body is not a JSON object (rontolisp has no condition handling, so a
+;; malformed object body still signals an error instead of answering 400).
+(defun body-object (body)
+  (if (and (stringp body) (> (length body) 0) (eql (char body 0) #\{))
+      (rontolisp:json-parse body)
+      nil))
+
+;; The path part of "path?query" (the query string is ignored here).
+(defun path-only (path)
+  (let ((q (position #\? path)))
+    (if q (subseq path 0 q) path)))
+
+;; --- input validation ------------------------------------------------------
+
+;; True when row is a list of exactly n numbers (n > 0).
+(defun number-row-p (row n)
+  (and (listp row)
+       row
+       (= (length row) n)
+       (every (lambda (v) (numberp v)) row)))
+
+;; True when rows is a non-empty list of equal-length number rows.
+(defun matrix-spec-p (rows)
+  (and (listp rows)
+       rows
+       (listp (first rows))
+       (first rows)
+       (every (lambda (row) (number-row-p row (length (first rows)))) rows)))
+
+;; --- POST /solve : solve a.x = b -------------------------------------------
+
+(defun handle-solve (request)
+  (let* ((spec (body-object (getf request :body)))
+         (a (getf spec :a))
+         (b (getf spec :b)))
+    (cond ((null spec) (bad-request "the body must be a JSON object"))
+          ((not (matrix-spec-p a))
+           (bad-request "a must be a non-empty array of equal-length number rows"))
+          ((not (= (length a) (length (first a))))
+           (bad-request "a must be square"))
+          ((not (number-row-p b (length a)))
+           (bad-request "b must be a number array as long as a"))
+          (t (let* ((m (linalg:from-list a))
+                    (det (linalg:det m)))
+               (if (= det 0)
+                   (bad-request "a is singular")
+                   (json-response 200
+                                  (list :x (linalg:to-list
+                                            (linalg:solve m (linalg:from-list b)))
+                                        :det det))))))))
+
+;; --- POST /fit : least-squares polynomial fitting ---------------------------
+
+;; One row per sample x: (1 x x^2 ... x^degree).
+(defun vandermonde (xs degree)
+  (let* ((n (length xs))
+         (m (make-array (list n (+ degree 1)))))
+    (do ((row 0 (+ row 1))
+         (rest xs (cdr rest)))
+        ((>= row n) m)
+      (do ((col 0 (+ col 1)))
+          ((> col degree))
+        (setf (aref m row col) (expt (car rest) col))))))
+
+(defun handle-fit (request)
+  (let* ((spec (body-object (getf request :body)))
+         (degree (getf spec :degree))
+         (points (getf spec :points)))
+    (cond ((null spec) (bad-request "the body must be a JSON object"))
+          ((not (and (integerp degree) (>= degree 0)))
+           (bad-request "degree must be a non-negative integer"))
+          ((not (and (listp points)
+                     points
+                     (every (lambda (p) (number-row-p p 2)) points)))
+           (bad-request "points must be a non-empty array of [x, y] pairs"))
+          ((< (length points) (+ degree 1))
+           (bad-request "need at least degree + 1 points"))
+          (t (let* ((xs (mapcar (lambda (p) (first p)) points))
+                    (ys (mapcar (lambda (p) (nth 1 p)) points))
+                    (a (vandermonde xs degree))
+                    (at (linalg:transpose a))
+                    (ata (linalg:matmul at a)))
+               (if (= (linalg:det ata) 0)
+                   (bad-request "points do not determine the polynomial (duplicate xs?)")
+                   (let* ((coeffs (linalg:solve ata (linalg:dot at (linalg:from-list ys))))
+                          (fitted (linalg:dot a coeffs))
+                          (residuals (linalg:sub (linalg:from-list ys) fitted)))
+                     (json-response 200
+                                    (list :coefficients (linalg:to-list coeffs)
+                                          :fitted (linalg:to-list fitted)
+                                          :residuals (linalg:to-list residuals)
+                                          :squared-error (linalg:dot residuals residuals))))))))))
+
+;; --- routing ----------------------------------------------------------------
+
+(defun usage ()
+  (json-response 200
+                 (list :service "linalg-api"
+                       :endpoints
+                       (list (list :method "POST"
+                                   :path "/solve"
+                                   :body "{\"a\": [[2,1],[1,3]], \"b\": [5,10]}")
+                             (list :method "POST"
+                                   :path "/fit"
+                                   :body "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))
+
+(defun handle (request)
+  (let ((path (path-only (getf request :path)))
+        (method (getf request :method)))
+    (cond ((string= path "/solve")
+           (if (string= method "POST") (handle-solve request) (method-not-allowed)))
+          ((string= path "/fit")
+           (if (string= method "POST") (handle-fit request) (method-not-allowed)))
+          ((string= path "/") (usage))
+          (t (json-response 404 (list :error "not found" :path path))))))
+
+;; On the interpreter / JVM this blocks and serves on port 8080; under
+;; --component the port argument is ignored (the host provides the socket).
+(rontolisp:http-handler 'handle 8080)
