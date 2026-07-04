@@ -8,7 +8,12 @@ Lisp のハンドラ関数で HTTP リクエストを処理します。`handler`
 レスポンスのプロパティリストを返します。形は [`rontolisp:fetch`](rontolisp-fetch.md)
 と対称で、送受信の HTTP を 1 つの値モデルで表します。
 
-- **リクエスト** — `(:method <string> :path <string> :headers <alist> :body <string>)`
+- **リクエスト** — `(:method <string> :path <string> :query <string-or-nil>
+  :headers <alist> :body <string>)`。`:path` はクエリ文字列を取り除いたパスのみ、
+  `:query` は先頭の `?` を除いた生のクエリ文字列（`/get?a=1&b=2` なら
+  `"a=1&b=2"`）で、クエリが無いリクエストでは `nil` です —
+  [`rontolisp:query-param`](rontolisp-query-param.md) /
+  [`rontolisp:query-params`](rontolisp-query-params.md) でパースしてください。
 - **レスポンス** — `(:status <integer> :headers <alist> :body <string>)`。キーが無い場合は
   `:status 200`、本文は空がデフォルトです。
 

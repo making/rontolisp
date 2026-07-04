@@ -8,7 +8,12 @@ The handler receives a request property list and returns a response property
 list, mirroring the shape of [`rontolisp:fetch`](rontolisp-fetch.md) so one HTTP
 value model spans incoming and outgoing requests:
 
-- **request** — `(:method <string> :path <string> :headers <alist> :body <string>)`
+- **request** — `(:method <string> :path <string> :query <string-or-nil>
+  :headers <alist> :body <string>)`. `:path` is the path only, with the query
+  string stripped; `:query` is the raw query string without the leading `?`
+  (`"a=1&b=2"` for `/get?a=1&b=2`), or `nil` when the request has none — parse
+  it with [`rontolisp:query-param`](rontolisp-query-param.md) /
+  [`rontolisp:query-params`](rontolisp-query-params.md).
 - **response** — `(:status <integer> :headers <alist> :body <string>)`. Missing
   keys default to `:status 200` and an empty body.
 

@@ -93,6 +93,19 @@ class HttpHandlerTest {
 	}
 
 	@Test
+	void requestOfSplitsPathAndQueryAtTheFirstQuestionMark() {
+		HttpHandlerSupport.Request withQuery = HttpHandlerSupport.Request.of("GET", "/get?a=1&b=?x", List.of(), "");
+		assertThat(withQuery.path()).isEqualTo("/get");
+		assertThat(withQuery.query()).isEqualTo("a=1&b=?x");
+		HttpHandlerSupport.Request without = HttpHandlerSupport.Request.of("GET", "/get", List.of(), "");
+		assertThat(without.path()).isEqualTo("/get");
+		assertThat(without.query()).isNull();
+		HttpHandlerSupport.Request emptyQuery = HttpHandlerSupport.Request.of("GET", "/get?", List.of(), "");
+		assertThat(emptyQuery.path()).isEqualTo("/get");
+		assertThat(emptyQuery.query()).isEmpty();
+	}
+
+	@Test
 	void directiveServesRequestPlist() throws Exception {
 		int port = freePort();
 		serveInBackground("""
@@ -106,6 +119,20 @@ class HttpHandlerTest {
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).isEqualTo("path=/hello");
 		assertThat(response.headers().firstValue("content-type")).hasValue("text/plain");
+	}
+
+	@Test
+	void directiveSplitsPathAndQuery() throws Exception {
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string "path=" (getf request :path)
+				                           " query=" (if (getf request :query) (getf request :query) "none"))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/hello?a=1&b=two").body()).isEqualTo("path=/hello query=a=1&b=two");
+		assertThat(get(port, "/hello").body()).isEqualTo("path=/hello query=none");
 	}
 
 	@Test

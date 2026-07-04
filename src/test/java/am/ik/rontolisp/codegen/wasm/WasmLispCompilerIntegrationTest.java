@@ -72,6 +72,17 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// URL tests pre-process with UrlLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private static String compileAndRunUrl(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UrlLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 	// Preview 1 variant that passes an environment variable and returns the raw
 	// (untrimmed)
 	// stdout, so callers can assert on exact bytes (e.g. that a newline stays 0x0a).
@@ -3819,7 +3830,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -4470,6 +4481,30 @@ class WasmLispCompilerIntegrationTest {
 				(print (funcall #'linalg:argmax (linalg:from-list '(1 9 3))))
 				""")).isEqualTo("#2A((1 0) (0 1))\n#(2 4 6 8)\n#2A((0 1 2) (3 4 5))\n#(11 12 13)\n32\n"
 				+ "#2A((19 22) (43 50))\n5/2\n5.0\n-2\n#2A((-2 1) (3/2 -1/2))\n#(4/5 7/5)\n1");
+	}
+
+	@Test
+	void urlOpsWorkInPreview1Mode() throws Exception {
+		// The Lisp-source URL library (spliced by UrlLibrary.process, mirroring the
+		// cli pre-pass) runs in Preview 1: multi-byte percent decoding/encoding over
+		// UTF-8 byte-indexed strings, query parsing and the splitting helpers.
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:url-decode "Will+it+work%3F"))
+				(print (rontolisp:url-decode "%E3%81%82%E3%81%84"))
+				(print (rontolisp:url-encode "a b/c~d"))
+				(print (rontolisp:url-encode "あ"))
+				(print (rontolisp:url-decode (rontolisp:url-encode "日本語 text?&=")))
+				(print (rontolisp:query-params "a=1&b=two&flag"))
+				(print (rontolisp:query-params nil))
+				(print (rontolisp:query-param "a=1&name=ronto%20lisp" "name"))
+				(print (rontolisp:query-param "a=1" "missing"))
+				(print (rontolisp:url-path "/get?a=1"))
+				(print (rontolisp:url-query "/get?a=1"))
+				(print (rontolisp:url-query "/get"))
+				(print (mapcar #'rontolisp:url-decode (list "a%2Bb" "1+2")))
+				""")).isEqualTo("\"Will it work?\"\n\"あい\"\n\"a%20b%2Fc~d\"\n\"%E3%81%82\"\n\"日本語 text?&=\"\n"
+				+ "((\"a\" . \"1\") (\"b\" . \"two\") (\"flag\" . \"\"))\nnil\n\"ronto lisp\"\nnil\n"
+				+ "\"/get\"\n\"a=1\"\nnil\n(\"a+b\" \"1 2\")");
 	}
 
 	@Test

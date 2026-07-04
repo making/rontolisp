@@ -123,7 +123,7 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)
+; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```

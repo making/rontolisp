@@ -19,11 +19,6 @@
 ;;   curl -X POST -d '{"payload":"Hello World"}' http://127.0.0.1:8080/task
 ;;   -> H3110 W0r1d
 
-;; The path part of "path?query" (up to the first ?).
-(defun path-only (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path 0 q) path)))
-
 ;; t when the body looks like a JSON object (json-parse signals on garbage,
 ;; and rontolisp has no condition handling to recover from that).
 (defun json-object-p (body)
@@ -60,8 +55,10 @@
 (defun home (request)
   (text-response 200 (format nil "POST /task with {\"payload\":\"...\"} to get it back in leet speak~%")))
 
+;; The request plist's :path carries the path only (any query string arrives
+;; separately as :query), so the comparisons are exact.
 (defun handle (request)
-  (let ((path (path-only (getf request :path))))
+  (let ((path (getf request :path)))
     (cond ((string= path "/") (home request))
           ((string= path "/task")
            (if (string= (getf request :method) "POST")

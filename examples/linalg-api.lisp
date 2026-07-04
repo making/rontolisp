@@ -56,11 +56,6 @@
       (rontolisp:json-parse body)
       nil))
 
-;; The path part of "path?query" (the query string is ignored here).
-(defun path-only (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path 0 q) path)))
-
 ;; --- input validation ------------------------------------------------------
 
 ;; True when row is a list of exactly n numbers (n > 0).
@@ -155,8 +150,10 @@
                                    :path "/fit"
                                    :body "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))
 
+;; The request plist's :path carries the path only (any query string arrives
+;; separately as :query), so the comparisons are exact.
 (defun handle (request)
-  (let ((path (path-only (getf request :path)))
+  (let ((path (getf request :path))
         (method (getf request :method)))
     (cond ((string= path "/solve")
            (if (string= method "POST") (handle-solve request) (method-not-allowed)))

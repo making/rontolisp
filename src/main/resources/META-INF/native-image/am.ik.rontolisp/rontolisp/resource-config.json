@@ -30,6 +30,12 @@
           "typeReachable": "am.ik.rontolisp.eval.LinalgLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/linalg\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/url\\.lisp"
       }
     ]
   }

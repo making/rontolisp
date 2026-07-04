@@ -3257,7 +3257,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 	}
 
 	@Test
@@ -3301,7 +3301,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 	}
 
 	@Test
@@ -4565,6 +4565,72 @@ class LispEvaluatorTest {
 	void jsonFunctionsAreFirstClass() {
 		assertThat(eval("(funcall #'rontolisp:json-stringify (list 1 2))").print()).isEqualTo("\"[1,2]\"");
 		assertThat(eval("(funcall #'rontolisp:json-parse \"[7]\")").print()).isEqualTo("(7)");
+	}
+
+	@Test
+	void urlDecodeDecodesEscapesAndPlus() {
+		assertThat(eval("(rontolisp:url-decode \"Will+it+work%3F\")").print()).isEqualTo("\"Will it work?\"");
+		assertThat(eval("(rontolisp:url-decode \"%E3%81%82%E3%81%84\")").print()).isEqualTo("\"あい\"");
+		assertThat(eval("(rontolisp:url-decode \"%F0%9F%98%80\")").print()).isEqualTo("\"😀\"");
+		assertThat(eval("(rontolisp:url-decode \"plain\")").print()).isEqualTo("\"plain\"");
+		assertThat(eval("(rontolisp:url-decode \"\")").print()).isEqualTo("\"\"");
+	}
+
+	@Test
+	void urlDecodeSignalsOnInvalidInput() {
+		assertThatThrownBy(() -> eval("(rontolisp:url-decode \"%2\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("unterminated percent escape");
+		assertThatThrownBy(() -> eval("(rontolisp:url-decode \"%GG\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("invalid hex digit");
+		assertThatThrownBy(() -> eval("(rontolisp:url-decode 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string");
+	}
+
+	@Test
+	void urlEncodeEncodesReservedAndMultibyte() {
+		assertThat(eval("(rontolisp:url-encode \"a b/c~d\")").print()).isEqualTo("\"a%20b%2Fc~d\"");
+		assertThat(eval("(rontolisp:url-encode \"あ\")").print()).isEqualTo("\"%E3%81%82\"");
+		assertThat(eval("(rontolisp:url-encode \"😀\")").print()).isEqualTo("\"%F0%9F%98%80\"");
+		assertThat(eval("(rontolisp:url-encode \"AZaz09-_.~\")").print()).isEqualTo("\"AZaz09-_.~\"");
+		assertThat(eval("(rontolisp:url-decode (rontolisp:url-encode \"日本語 text?&=\"))").print())
+			.isEqualTo("\"日本語 text?&=\"");
+	}
+
+	@Test
+	void queryParamsParsesIntoAlist() {
+		assertThat(eval("(rontolisp:query-params \"a=1&b=two&flag\")").print())
+			.isEqualTo("((\"a\" . \"1\") (\"b\" . \"two\") (\"flag\" . \"\"))");
+		assertThat(eval("(rontolisp:query-params \"q=%E3%81%82&q=2\")").print())
+			.isEqualTo("((\"q\" . \"あ\") (\"q\" . \"2\"))");
+		assertThat(eval("(rontolisp:query-params \"a=1&&b=2&\")").print())
+			.isEqualTo("((\"a\" . \"1\") (\"b\" . \"2\"))");
+		assertThat(eval("(rontolisp:query-params nil)").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:query-params \"\")").print()).isEqualTo("nil");
+	}
+
+	@Test
+	void queryParamReturnsFirstDecodedMatchOrNil() {
+		assertThat(eval("(rontolisp:query-param \"a=1&name=ronto%20lisp\" \"name\")").print())
+			.isEqualTo("\"ronto lisp\"");
+		assertThat(eval("(rontolisp:query-param \"q=1&q=2\" \"q\")").print()).isEqualTo("\"1\"");
+		assertThat(eval("(rontolisp:query-param \"a=1\" \"missing\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:query-param nil \"a\")").print()).isEqualTo("nil");
+	}
+
+	@Test
+	void urlPathAndUrlQuerySplitAtQuestionMark() {
+		assertThat(eval("(rontolisp:url-path \"/get?a=1\")").print()).isEqualTo("\"/get\"");
+		assertThat(eval("(rontolisp:url-path \"/get\")").print()).isEqualTo("\"/get\"");
+		assertThat(eval("(rontolisp:url-query \"/get?a=1\")").print()).isEqualTo("\"a=1\"");
+		assertThat(eval("(rontolisp:url-query \"/get\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:url-query \"/get?\")").print()).isEqualTo("\"\"");
+	}
+
+	@Test
+	void urlFunctionsAreFirstClass() {
+		assertThat(eval("(mapcar #'rontolisp:url-decode (list \"a%2Bb\" \"1+2\"))").print())
+			.isEqualTo("(\"a+b\" \"1 2\")");
+		assertThat(eval("(funcall #'rontolisp:url-encode \"x y\")").print()).isEqualTo("\"x%20y\"");
 	}
 
 	@Test

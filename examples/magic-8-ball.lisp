@@ -3,7 +3,7 @@
 ;; rontolisp:http-handler. Ask it a yes/no question and it answers with one
 ;; of the twenty canonical Magic 8 Ball replies, drawn at random, as JSON:
 ;;
-;;   GET  /?question=Will+it+work    -> {"question": "Will+it+work", "answer": "..."}
+;;   GET  /?question=Will+it+work    -> {"question": "Will it work", "answer": "..."}
 ;;   POST /  with body               -> the body is the question -- either raw
 ;;                                      text, or JSON {"question": "..."}
 ;;   (also served on /magic-8, the tutorial's path; other paths 404,
@@ -39,30 +39,11 @@
 
 ;; --- pulling the question out of the request --------------------------------
 
-(defun path-only (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path 0 q) path)))
-
-(defun query-of (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path (+ q 1)) "")))
-
-;; The value of name in an "a=1&b=2" query string, or nil.
-(defun query-param (query name)
-  (if (string= query "")
-      nil
-      (let* ((amp (position #\& query))
-             (pair (if amp (subseq query 0 amp) query))
-             (eq-pos (position #\= pair)))
-        (cond ((and eq-pos (string= (subseq pair 0 eq-pos) name))
-               (subseq pair (+ eq-pos 1)))
-              (amp (query-param (subseq query (+ amp 1)) name))
-              (t nil)))))
-
-;; ?question=... first; otherwise a JSON body's "question" field; otherwise
-;; a non-empty raw body is the question itself.
+;; ?question=... first (rontolisp:query-param url-decodes it, so + and %XX
+;; become the spoken question); otherwise a JSON body's "question" field;
+;; otherwise a non-empty raw body is the question itself.
 (defun question-of (request)
-  (let ((q (query-param (query-of (getf request :path)) "question"))
+  (let ((q (rontolisp:query-param (getf request :query) "question"))
         (body (getf request :body)))
     (cond ((and q (> (length q) 0)) q)
           ((and (stringp body) (> (length body) 0) (eql (char body 0) #\{))
@@ -77,8 +58,10 @@
 (defun consult ()
   (nth (random (length *answers*)) *answers*))
 
+;; The request plist's :path carries the path only (the query string arrives
+;; separately as :query), so the comparisons are exact.
 (defun handle (request)
-  (let ((path (path-only (getf request :path))))
+  (let ((path (getf request :path)))
     (if (or (string= path "/") (string= path "/magic-8"))
         (let ((question (question-of request)))
           (if question

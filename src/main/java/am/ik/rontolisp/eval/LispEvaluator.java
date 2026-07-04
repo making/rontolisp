@@ -52,6 +52,8 @@ public final class LispEvaluator {
 
 	private boolean linalgLibraryLoaded = false;
 
+	private boolean urlLibraryLoaded = false;
+
 	/**
 	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
 	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
@@ -187,7 +189,8 @@ public final class LispEvaluator {
 		// http-handler lives here rather than in Environment because serving a request
 		// applies the handler function, which needs the evaluator's apply. It runs a
 		// blocking embedded HTTP server; the handler receives a request property list
-		// (:method / :path / :headers / :body) and returns a response property list
+		// (:method / :path / :query / :headers / :body) and returns a response property
+		// list
 		// (:status / :headers / :body). When compiled with --component the same directive
 		// instead exports wasi:http/incoming-handler (see the WASM compiler).
 		String httpHandlerName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER);
@@ -1024,6 +1027,18 @@ public final class LispEvaluator {
 				return loaded;
 			}
 		}
+		// The URL library (url.lisp) loads the same way on the first resolution of one
+		// of its public rontolisp: functions.
+		if (!this.urlLibraryLoaded && UrlLibrary.isUrlFunction(name)) {
+			this.urlLibraryLoaded = true;
+			for (LispVal form : UrlLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
 		if (LispMacroExpander.isCarCdrComposition(name)) {
 			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class.
 			LispSymbol param = new LispSymbol("x");
@@ -1463,9 +1478,10 @@ public final class LispEvaluator {
 			headers = new LispCons(new LispCons(new LispString(header.name()), new LispString(header.value())),
 					headers);
 		}
+		LispVal query = request.query() == null ? LispNil.INSTANCE : new LispString(request.query());
 		LispVal requestPlist = plist(new LispSymbol(":method"), new LispString(request.method()),
-				new LispSymbol(":path"), new LispString(request.path()), new LispSymbol(":headers"), headers,
-				new LispSymbol(":body"), new LispString(request.body()));
+				new LispSymbol(":path"), new LispString(request.path()), new LispSymbol(":query"), query,
+				new LispSymbol(":headers"), headers, new LispSymbol(":body"), new LispString(request.body()));
 		LispVal result = apply(handler, List.of(requestPlist), this.globalEnv);
 		int status = 200;
 		if (httpPlistGet(result, ":status") instanceof LispInteger statusVal) {

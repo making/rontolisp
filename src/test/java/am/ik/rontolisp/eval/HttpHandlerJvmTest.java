@@ -116,6 +116,20 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
+	void compiledDirectiveSplitsPathAndQuery() throws Exception {
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string "path=" (getf request :path)
+				                           " query=" (if (getf request :query) (getf request :query) "none"))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/hello?a=1&b=two").body()).isEqualTo("path=/hello query=a=1&b=two");
+		assertThat(get(port, "/hello").body()).isEqualTo("path=/hello query=none");
+	}
+
+	@Test
 	void compiledDirectiveEchoesMethodAndBody() throws Exception {
 		int port = freePort();
 		compileAndServeInBackground("""

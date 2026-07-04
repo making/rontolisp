@@ -5,7 +5,7 @@
 素朴なリクエスト/レスポンス型のサーバであれば
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
 がパースを引き受けてくれます。ハンドラはリクエストのプロパティリスト
-（`:method` / `:path` / `:headers` / `:body`）を受け取り、レスポンスの
+（`:method` / `:path` / `:query` / `:headers` / `:body`）を受け取り、レスポンスの
 プロパティリスト（`:status` / `:headers` / `:body`）を返します。これは
 [`rontolisp:fetch`](http-fetch.md) と同じ値モデルで、送信ではなく受信側です。
 
@@ -115,6 +115,34 @@ GET /hello
 **Spin**（`spin up`）ではまだ動作しません。組み込み wasmtime が、rontolisp の
 すべてのコンポーネントが必要とする WebAssembly GC プロポーザルを有効化しておらず、
 有効化するフラグも提供されていないためです。
+
+## クエリ文字列
+
+`:path` はパスのみを保持するため、ルーティングの比較は完全一致で書けます。
+リクエストにクエリ文字列がある場合は、`?` より後ろの生のテキストが `:query`
+として別途渡されます（クエリが無ければ `nil`）。URL ライブラリの
+クエリ文字列関数
+[`rontolisp:query-param`](../reference/functions/rontolisp-query-param.md) と
+[`rontolisp:query-params`](../reference/functions/rontolisp-query-params.md)
+でパースしてください（どちらもキーと値を URL デコードし、`nil` も受け付け
+ます）:
+
+```console
+(defun handle (request)
+  (list :status 200
+        :body (format nil "Hello, ~a!~%"
+                      (or (rontolisp:query-param (getf request :query) "name")
+                          "world"))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+```console
+$ curl 'http://127.0.0.1:8080/greet?name=ronto%20lisp'
+Hello, ronto lisp!
+$ curl http://127.0.0.1:8080/greet
+Hello, world!
+```
 
 ## ハンドラから他のサービスを呼び出す
 

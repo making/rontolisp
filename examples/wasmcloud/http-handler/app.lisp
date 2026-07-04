@@ -26,26 +26,6 @@
 
 ;; --- request helpers --------------------------------------------------------
 
-;; The path part of "path?query" (up to the first ?).
-(defun path-only (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path 0 q) path)))
-
-;; The query part of "path?query", or "" when there is none.
-(defun query-of (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path (+ q 1)) "")))
-
-;; The value of `name` in "a=1&b=two", or nil (no %XX decoding).
-(defun query-param (query name)
-  (unless (string= query "")
-    (let* ((amp (position #\& query))
-           (pair (if amp (subseq query 0 amp) query))
-           (eq-pos (position #\= pair)))
-      (if (and eq-pos (string= (subseq pair 0 eq-pos) name))
-          (subseq pair (+ eq-pos 1))
-          (when amp (query-param (subseq query (+ amp 1)) name))))))
-
 ;; t when the body looks like a JSON object (json-parse signals on garbage,
 ;; and rontolisp has no condition handling to recover from that).
 (defun json-object-p (body)
@@ -68,8 +48,10 @@
 (defun hello (request)
   (text-response 200 (format nil "Hello from wasmCloud!~%")))
 
+;; The raw query string arrives as :query; rontolisp:query-param url-decodes
+;; the value.
 (defun greet (request)
-  (let ((name (query-param (query-of (getf request :path)) "name")))
+  (let ((name (rontolisp:query-param (getf request :query) "name")))
     (text-response 200 (format nil "Hello, ~a!~%" (if name name "world")))))
 
 (defun echo (request)
@@ -90,9 +72,10 @@
 ;; --- routing -----------------------------------------------------------------
 
 ;; Dispatch on (path, method), answering 405 when the path exists but the
-;; method does not match -- the same behavior as the axum Router.
+;; method does not match -- the same behavior as the axum Router. The request
+;; plist's :path carries the path only, so the comparisons are exact.
 (defun handle (request)
-  (let ((path (path-only (getf request :path)))
+  (let ((path (getf request :path))
         (method (getf request :method)))
     (cond ((string= path "/")
            (if (string= method "GET") (hello request) (method-not-allowed request)))

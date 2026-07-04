@@ -1023,7 +1023,7 @@ cases:
       (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       207
-      (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)
+      (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
       nil
@@ -2119,6 +2119,42 @@ cases:
       "{"x":[1,2]}"
       "{"deep":{"list":[{"k":"v"},2.5,true]}}"
       "[7]"
+
+  # The URL / query-string library (url.lisp, spliced by UrlLibrary): percent
+  # decoding/encoding must agree across the UTF-16-indexed backends
+  # (interpreter/JVM) and the UTF-8 byte-indexed WASM backends, including
+  # multi-byte %E3%81%82-style escapes and surrogate-pair code points.
+  - name: url-and-query-string-library
+    source: |
+      (print (rontolisp:url-decode "Will+it+work%3F"))
+      (print (rontolisp:url-decode "%E3%81%82%E3%81%84"))
+      (print (rontolisp:url-decode "%F0%9F%98%80"))
+      (print (rontolisp:url-encode "a b/c~d"))
+      (print (rontolisp:url-encode "あ"))
+      (print (rontolisp:url-decode (rontolisp:url-encode "日本語 text?&=")))
+      (print (rontolisp:query-params "a=1&b=two&flag"))
+      (print (rontolisp:query-params nil))
+      (print (rontolisp:query-param "a=1&name=ronto%20lisp" "name"))
+      (print (rontolisp:query-param "a=1" "missing"))
+      (print (rontolisp:url-path "/get?a=1"))
+      (print (rontolisp:url-query "/get?a=1"))
+      (print (rontolisp:url-query "/get"))
+      (print (mapcar #'rontolisp:url-decode (list "a%2Bb" "1+2")))
+    expected: |
+      "Will it work?"
+      "あい"
+      "😀"
+      "a%20b%2Fc~d"
+      "%E3%81%82"
+      "日本語 text?&="
+      (("a" . "1") ("b" . "two") ("flag" . ""))
+      nil
+      "ronto lisp"
+      nil
+      "/get"
+      "a=1"
+      nil
+      ("a+b" "1 2")
 
   # Double-colon package qualifiers, mirroring Common Lisp: pkg::name also
   # reaches external symbols, so rontolisp::json-parse names the same function

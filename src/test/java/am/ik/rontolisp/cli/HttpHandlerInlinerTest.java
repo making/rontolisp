@@ -28,11 +28,11 @@ class HttpHandlerInlinerTest {
 		String printed = out.stream().map(LispVal::print).reduce("", (a, b) -> a + "\n" + b);
 		// The http-handler directive is gone.
 		assertThat(printed).doesNotContain("http-handler");
-		// The dispatch wrapper (calling the user handler) and the wasm-export directive
-		// are
-		// spliced in.
+		// The dispatch wrapper (calling the user handler on the split request plist)
+		// and the wasm-export directive are spliced in.
 		assertThat(printed).contains("%http-dispatch");
-		assertThat(printed).contains("(handle (list");
+		assertThat(printed).contains("(handle (%http-request");
+		assertThat(printed).contains(":query");
 		assertThat(printed).contains("wasm-export");
 		// The user's own defun is preserved.
 		assertThat(printed).contains("(defun handle");

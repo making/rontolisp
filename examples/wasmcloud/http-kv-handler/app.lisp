@@ -29,21 +29,6 @@
 
 ;; --- request helpers --------------------------------------------------------
 
-;; The query part of "path?query", or "" when there is none.
-(defun query-of (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path (+ q 1)) "")))
-
-;; The value of `name` in "a=1&b=two", or nil (no %XX decoding).
-(defun query-param (query name)
-  (unless (string= query "")
-    (let* ((amp (position #\& query))
-           (pair (if amp (subseq query 0 amp) query))
-           (eq-pos (position #\= pair)))
-      (if (and eq-pos (string= (subseq pair 0 eq-pos) name))
-          (subseq pair (+ eq-pos 1))
-          (when amp (query-param (subseq query (+ amp 1)) name))))))
-
 ;; t when the body looks like a JSON object (json-parse signals on garbage,
 ;; and rontolisp has no condition handling to recover from that).
 (defun json-object-p (body)
@@ -71,8 +56,10 @@
         (text-response 400 (format nil "Invalid JSON (expected key and value string fields)~%")))))
 
 ;; GET /?key=<key> answers the stored value, or 404 when the key is unknown.
+;; The raw query string arrives as :query; rontolisp:query-param url-decodes
+;; the value.
 (defun handle-get (request)
-  (let ((key (query-param (query-of (getf request :path)) "key")))
+  (let ((key (rontolisp:query-param (getf request :query) "key")))
     (if key
         (let ((value (gethash key *store*)))
           (if value

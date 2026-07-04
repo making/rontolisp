@@ -1,5 +1,5 @@
 ;; An HTTP handler function. The handler receives a request property list
-;; (:method / :path / :headers / :body) and returns a response property list
+;; (:method / :path / :query / :headers / :body) and returns a response property list
 ;; (:status / :headers / :body). Unlike http-hello.lisp (a hand-rolled raw-TCP
 ;; server), rontolisp:http-handler adapts the request/response for you.
 ;;

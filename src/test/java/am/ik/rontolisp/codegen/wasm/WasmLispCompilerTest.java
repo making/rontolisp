@@ -360,4 +360,15 @@ class WasmLispCompilerTest {
 		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
 	}
 
+	@Test
+	void urlOpsCompileInEveryMode() {
+		// The spliced URL library compiles in Preview 1 and component modes (it is
+		// plain Lisp source, so no backend-specific lowering is involved).
+		String source = "(print (rontolisp:query-param (rontolisp:url-query \"/get?q=%E3%81%82\") \"q\"))";
+		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.UrlLibrary
+			.process(LispReader.readAllFromString(source));
+		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+	}
+
 }

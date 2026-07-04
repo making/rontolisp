@@ -146,10 +146,12 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
 						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.PROMISEP,
-						LispNames.THEN, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.WASM_EXPORT,
-						LispNames.WASM_IMPORT, LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
-						LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN,
-						LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12))));
+						LispNames.THEN, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.URL_DECODE,
+						LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH,
+						LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT, LispNames.HTTP_HANDLER,
+						LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
+						LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
+						LispNames.TLS_LISTEN_P12))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external.

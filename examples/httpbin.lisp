@@ -10,7 +10,8 @@
 ;;   DELETE /delete   -> ditto
 ;;
 ;; A wrong method answers 405, an unknown path 404. Query strings are parsed
-;; into "args" (no %XX decoding); "json" is filled only when the body starts
+;; into "args" with rontolisp:query-params (keys and values url-decoded);
+;; "json" is filled only when the body starts
 ;; with '{' or '[' (malformed JSON then signals an error -- rontolisp has no
 ;; condition handling to fall back to null like the real httpbin).
 ;; On the JVM and WASM component backends "headers" is always {} (request
@@ -30,34 +31,14 @@
 
 ;; --- request helpers ------------------------------------------------------
 
-;; The path part of "path?query" (up to the first ?).
-(defun path-only (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path 0 q) path)))
-
-;; The query part of "path?query", or "" when there is none.
-(defun query-of (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path (+ q 1)) "")))
-
-;; Parse "a=1&b=two&flag" into a hash table {"a" "1", "b" "two", "flag" ""}.
-;; A hash table (not a plist) so arbitrary key strings work and an empty
-;; query still serializes as {}.
-(defun parse-args (query)
+;; The query parameters (rontolisp:query-params' url-decoded alist) rebuilt
+;; as a hash table, so arbitrary key strings serialize as a JSON object and
+;; an empty (or missing) query still serializes as {}.
+(defun args-table (query)
   (let ((args (make-hash-table)))
-    (parse-args-into query args)
+    (dolist (pair (rontolisp:query-params query))
+      (setf (gethash (car pair) args) (cdr pair)))
     args))
-
-(defun parse-args-into (query args)
-  (unless (string= query "")
-    (let* ((amp (position #\& query))
-           (pair (if amp (subseq query 0 amp) query))
-           (eq-pos (position #\= pair)))
-      (if eq-pos
-          (setf (gethash (subseq pair 0 eq-pos) args) (subseq pair (+ eq-pos 1)))
-          (setf (gethash pair args) ""))
-      (when amp
-        (parse-args-into (subseq query (+ amp 1)) args)))))
 
 ;; Request headers arrive as an alist of (name . value); rebuild it as a hash
 ;; table so it serializes as a JSON object.
@@ -85,10 +66,10 @@
 ;; The common echo fields, as a plist (rontolisp:json-stringify serializes a
 ;; keyword plist as a JSON object, preserving this key order).
 (defun request-info (request)
-  (list :args (parse-args (query-of (getf request :path)))
+  (list :args (args-table (getf request :query))
         :headers (headers-table (getf request :headers))
         :method (getf request :method)
-        :path (path-only (getf request :path))))
+        :path (getf request :path)))
 
 (defun echo (request)
   (json-response 200 (request-info request)))
@@ -109,8 +90,10 @@
 
 ;; --- routing --------------------------------------------------------------
 
+;; The request plist's :path carries the path only (the query string arrives
+;; separately as :query), so the comparisons are exact.
 (defun handle (request)
-  (let ((path (path-only (getf request :path))))
+  (let ((path (getf request :path)))
     (cond ((string= path "/get") (echo-when request "GET" nil))
           ((string= path "/post") (echo-when request "POST" t))
           ((string= path "/put") (echo-when request "PUT" t))

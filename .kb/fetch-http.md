@@ -100,8 +100,14 @@ network-free `promise-generic-await-then-promisep` case covering all four backen
 
 The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
 (a quoted defun name, like `wasm-export`) takes a request plist
-`(:method :path :headers :body)` and returns a response plist
+`(:method :path :query :headers :body)` and returns a response plist
 `(:status :headers :body)`; missing keys default to `:status 200` / empty body.
+`:path` is the path only and `:query` the raw query string without the `?`
+(nil when the request has none; `""` for a bare trailing `?`): the split at
+the first `?` happens once in `HttpHandlerSupport.Request.of` (interpreter and
+JVM inherit it) and in the synthesized `%http-request` Lisp helper on the WASM
+component path. Decoding policy lives in the URL library (`.kb/url.md`), not
+here.
 
 - **Interpreter (implemented)** -- `HttpHandlerSupport` (eval pkg, `public` for
   the future web substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
@@ -124,7 +130,8 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   static field, and emits `HttpHandlerSupport.serve(port, new Prog())` (port
   default 8080; a non-literal port expression compiles as `(int) Long`). The
   injected `public handle(Request)` method (`JvmHttpHandlerRuntimeBuilder`)
-  builds the request plist `(:method m :path p :headers nil :body b)` as cons
+  builds the request plist `(:method m :path p :query q :headers <alist> :body b)`
+  (q is null = nil when `Request.query()` is null) as cons
   cells in the shared runtime value rep (quote-wrapped strings, like
   `JvmFetchRuntimeBuilder`), applies the handler via the `_invoke_1` dispatcher
   (arity 1 is force-registered like the fetch runtime does), reads
@@ -138,7 +145,9 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`.
 - **WASM component (implemented, `--component`)** -- a `HttpHandlerInliner` cli
   pre-pass rewrites the directive into a `%http-dispatch` wasm-export wrapper
-  (`"<status>\n<body>"` encoding), `WasmLispCompiler` serve mode un-gates
+  (`"<status>\n<body>"` encoding; a `%http-request` helper splits the adapter's
+  path-with-query at the first `?` into `:path`/`:query` before building the
+  request plist), `WasmLispCompiler` serve mode un-gates
   wasm-export in component mode, and `WasmServeComponentBuilder.buildServe`
   wires mem + `adapter-serve-p1.wasm` + core + `adapter-serve.wasm` into a
   `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve -W gc=y`.

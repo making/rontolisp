@@ -41,6 +41,12 @@ class JvmLispCompilerTest {
 		return compileAndRun(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// URL tests pre-process with UrlLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunUrl(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UrlLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
 	private String compileAndRun(List<LispVal> program) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
@@ -3254,7 +3260,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -4114,6 +4120,53 @@ class JvmLispCompilerTest {
 				(print (rontolisp:json-parse "1"))
 				(print (rontolisp:list-functions :cl-user))
 				""")).isEqualTo("1\n(my-fn)");
+	}
+
+	@Test
+	void compileAndRunUrlDecodeAndEncode() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:url-decode "Will+it+work%3F"))
+				(print (rontolisp:url-decode "%E3%81%82%E3%81%84"))
+				(print (rontolisp:url-encode "a b/c~d"))
+				(print (rontolisp:url-encode "あ"))
+				(print (rontolisp:url-decode (rontolisp:url-encode "日本語 text?&=")))
+				""")).isEqualTo("\"Will it work?\"\n\"あい\"\n\"a%20b%2Fc~d\"\n\"%E3%81%82\"\n\"日本語 text?&=\"");
+	}
+
+	@Test
+	void compileAndRunQueryParamsAndQueryParam() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:query-params "a=1&b=two&flag"))
+				(print (rontolisp:query-params nil))
+				(print (rontolisp:query-param "a=1&name=ronto%20lisp" "name"))
+				(print (rontolisp:query-param "a=1" "missing"))
+				""")).isEqualTo("((\"a\" . \"1\") (\"b\" . \"two\") (\"flag\" . \"\"))\nnil\n\"ronto lisp\"\nnil");
+	}
+
+	@Test
+	void compileAndRunUrlPathAndUrlQuery() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:url-path "/get?a=1"))
+				(print (rontolisp:url-query "/get?a=1"))
+				(print (rontolisp:url-query "/get"))
+				""")).isEqualTo("\"/get\"\n\"a=1\"\nnil");
+	}
+
+	@Test
+	void compileAndRunUrlFunctionsAreFirstClass() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (mapcar #'rontolisp:url-decode (list "a%2Bb" "1+2")))
+				(print (funcall #'rontolisp:url-encode "x y"))
+				""")).isEqualTo("(\"a+b\" \"1 2\")\n\"x%20y\"");
+	}
+
+	@Test
+	void compileAndRunUrlSplicedLibraryStaysOutOfClUserIntrospection() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(defun my-fn (x) x)
+				(print (rontolisp:url-decode "1"))
+				(print (rontolisp:list-functions :cl-user))
+				""")).isEqualTo("\"1\"\n(my-fn)");
 	}
 
 	@Test

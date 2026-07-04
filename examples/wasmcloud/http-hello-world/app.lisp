@@ -18,11 +18,6 @@
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 
-;; The path part of "path?query" (up to the first ?).
-(defun path-only (path)
-  (let ((q (position #\? path)))
-    (if q (subseq path 0 q) path)))
-
 (defun text-response (status body)
   (list :status status
         :headers (list (cons "content-type" "text/plain"))
@@ -34,8 +29,10 @@
 (defun not-found (request)
   (text-response 404 (format nil "Not found~%")))
 
+;; The request plist's :path carries the path only (any query string arrives
+;; separately as :query), so the comparison is exact.
 (defun handle (request)
-  (if (string= (path-only (getf request :path)) "/")
+  (if (string= (getf request :path) "/")
       (home request)
       (not-found request)))
 

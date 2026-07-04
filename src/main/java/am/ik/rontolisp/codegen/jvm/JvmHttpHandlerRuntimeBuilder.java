@@ -21,12 +21,12 @@ import am.ik.jvm.Opcode;
  * handler funcref in the {@code _httpHandlerFn} static field and calls
  * {@code HttpHandlerSupport.serve(port, new Prog())}, and the injected public
  * {@code handle(Request)} method adapts each incoming request: it builds the request
- * property list {@code (:method m :path p :headers <alist> :body b)} in the shared
- * runtime value representation (quote-wrapped strings, cons cells as {@code Object[2]}),
- * applies the handler through the {@code _invoke_1} dispatcher, and reads {@code :status}
- * (default 200), {@code :headers} (an alist of {@code (name . value)} string pairs;
- * malformed entries are skipped like the interpreter's) and {@code :body} (default empty)
- * back from the response property list.
+ * property list {@code (:method m :path p :query q :headers <alist> :body b)} in the
+ * shared runtime value representation (quote-wrapped strings, cons cells as
+ * {@code Object[2]}), applies the handler through the {@code _invoke_1} dispatcher, and
+ * reads {@code :status} (default 200), {@code :headers} (an alist of
+ * {@code (name . value)} string pairs; malformed entries are skipped like the
+ * interpreter's) and {@code :body} (default empty) back from the response property list.
  */
 final class JvmHttpHandlerRuntimeBuilder {
 
@@ -80,6 +80,8 @@ final class JvmHttpHandlerRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("method"), stringGetterDesc));
 		MethodrefConstant requestPath = cp.addMethodref(requestClass,
 				cp.addNameAndType(cp.addUtf8("path"), stringGetterDesc));
+		MethodrefConstant requestQuery = cp.addMethodref(requestClass,
+				cp.addNameAndType(cp.addUtf8("query"), stringGetterDesc));
 		MethodrefConstant requestBody = cp.addMethodref(requestClass,
 				cp.addNameAndType(cp.addUtf8("body"), stringGetterDesc));
 		MethodrefConstant requestHeaders = cp.addMethodref(requestClass,
@@ -117,6 +119,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		ConstantPool.StringConstant emptyStr = cp.addString("");
 		ConstantPool.StringConstant methodKey = cp.addString(":method");
 		ConstantPool.StringConstant pathKey = cp.addString(":path");
+		ConstantPool.StringConstant queryKey = cp.addString(":query");
 		ConstantPool.StringConstant headersKey = cp.addString(":headers");
 		ConstantPool.StringConstant bodyKey = cp.addString(":body");
 		ConstantPool.StringConstant statusKey = cp.addString(":status");
@@ -128,7 +131,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		// 7 plist-get cursor, 8 plist-get value, 9 status (int), 10 response body,
 		// 11 request-header List, 12 header loop index (int), 13 Header / pair scratch,
 		// 14 request-header alist, 15 response-header ArrayList, 16 response alist
-		// cursor.
+		// cursor, 17 query (quote-wrapped, or null = nil when the request has none).
 		Asm a = new Asm();
 		a.aload(1);
 		a.op(Opcode.INVOKEVIRTUAL);
@@ -145,6 +148,18 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.u2(requestBody.index());
 		quoteWrap(a, quote, stringConcat);
 		a.astore(4);
+		// query = request.query() quote-wrapped, or null (Lisp nil) when absent.
+		a.aload(1);
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(requestQuery.index());
+		a.astore(17);
+		int queryDone = a.label();
+		a.aload(17);
+		a.branch(Opcode.IFNULL, queryDone);
+		a.aload(17);
+		quoteWrap(a, quote, stringConcat);
+		a.astore(17);
+		a.bind(queryDone);
 
 		// alist = request.headers() as ((name . value) ...), built back-to-front in
 		// slot 14 so the plist below sees it in request order.
@@ -197,7 +212,8 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.branch(Opcode.GOTO, hLoop);
 		a.bind(hEnd);
 
-		// plist = (:method m :path p :headers alist :body b), built tail-first in slot 5.
+		// plist = (:method m :path p :query q :headers alist :body b), built tail-first
+		// in slot 5.
 		a.aconstNull();
 		a.astore(5);
 		consSlots(a, objectClass, 4, 5); // (b)
@@ -208,7 +224,11 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.astore(5);
 		consLdcCdr(a, objectClass, headersKey, 5); // (:headers nil ...)
 		a.astore(5);
-		consSlots(a, objectClass, 3, 5); // (p :headers ...)
+		consSlots(a, objectClass, 17, 5); // (q :headers ...)
+		a.astore(5);
+		consLdcCdr(a, objectClass, queryKey, 5); // (:query q ...)
+		a.astore(5);
+		consSlots(a, objectClass, 3, 5); // (p :query ...)
 		a.astore(5);
 		consLdcCdr(a, objectClass, pathKey, 5); // (:path p ...)
 		a.astore(5);
@@ -342,7 +362,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.areturn();
 
 		HandleMethod handle = new HandleMethod(cp.addUtf8("handle"),
-				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 8, 17, a.finish());
+				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 8, 18, a.finish());
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
 	}

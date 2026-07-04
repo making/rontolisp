@@ -65,15 +65,16 @@ class JvmClassShakerCorpusTest {
 	// working directory (the corpus main runs in-process, so relative paths resolve
 	// against the project dir, not the @TempDir). Keep in sync with the file names
 	// used by the ci-spec.yaml binary/stream cases.
-	private static final List<String> CORPUS_SCRATCH_FILES = List.of("bin.dat", "seq.dat");
+	private static final List<String> CORPUS_SCRATCH_FILES = List.of("bin.dat", "seq.dat", "crlf.dat");
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
 		// Mirror the CLI compile path: user macros (defmacro) are expanded and the
-		// JSON and linalg libraries are spliced by the pre-passes before the
+		// JSON, linalg and URL libraries are spliced by the pre-passes before the
 		// compiler ever sees the program.
-		List<LispVal> program = am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(corpusSource()))));
+		List<LispVal> program = am.ik.rontolisp.eval.UrlLibrary
+			.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
+				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(corpusSource())))));
 
 		byte[] plain = new JvmLispCompiler("Test", false, false).compile(program);
 		// A decoder gap (unrecognized opcode / constant tag) throws here, by design.

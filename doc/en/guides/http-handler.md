@@ -5,8 +5,9 @@ Hand-rolling HTTP over `read-line`/`write-line` (as the
 instructive, but for a plain request/response server
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
 does the parsing for you. You write a handler that takes a request property
-list (`:method` / `:path` / `:headers` / `:body`) and returns a response
-property list (`:status` / `:headers` / `:body`) — the same value model as
+list (`:method` / `:path` / `:query` / `:headers` / `:body`) and returns a
+response property list (`:status` / `:headers` / `:body`) — the same value
+model as
 [`rontolisp:fetch`](http-fetch.md), just incoming instead of outgoing:
 
 ```console
@@ -113,6 +114,33 @@ GET /hello
 **Spin** (`spin up`) cannot run the component yet: its embedded wasmtime does
 not enable the WebAssembly GC proposal that every rontolisp component needs,
 and it offers no flag to turn it on.
+
+## Query strings
+
+`:path` carries the path only, so route comparisons are exact. When the
+request has a query string it arrives separately under `:query` — the raw
+text after the `?`, or `nil` when there is none. Parse it with the
+query-string functions of the URL library,
+[`rontolisp:query-param`](../reference/functions/rontolisp-query-param.md) and
+[`rontolisp:query-params`](../reference/functions/rontolisp-query-params.md)
+(both url-decode keys and values, and both accept `nil`):
+
+```console
+(defun handle (request)
+  (list :status 200
+        :body (format nil "Hello, ~a!~%"
+                      (or (rontolisp:query-param (getf request :query) "name")
+                          "world"))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+```console
+$ curl 'http://127.0.0.1:8080/greet?name=ronto%20lisp'
+Hello, ronto lisp!
+$ curl http://127.0.0.1:8080/greet
+Hello, world!
+```
 
 ## Calling other services from a handler
 

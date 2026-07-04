@@ -1243,6 +1243,49 @@ public final class LispNames {
 	public static final String JSON_STRINGIFY = "json-stringify";
 
 	/**
+	 * The {@code url-decode} function provided by the {@code rontolisp} package. Decodes
+	 * a percent-encoded (URL-encoded) string: {@code %XX} byte sequences are decoded as
+	 * UTF-8 and {@code +} becomes a space.
+	 */
+	public static final String URL_DECODE = "url-decode";
+
+	/**
+	 * The {@code url-encode} function provided by the {@code rontolisp} package. Encodes
+	 * a string for use in a URL: unreserved characters (letters, digits, {@code -},
+	 * {@code _}, {@code .}, {@code ~}) pass through and everything else becomes
+	 * percent-encoded UTF-8 bytes (a space becomes {@code %20}).
+	 */
+	public static final String URL_ENCODE = "url-encode";
+
+	/**
+	 * The {@code query-params} function provided by the {@code rontolisp} package. Parses
+	 * a query string such as {@code "a=1&b=two&flag"} into an alist of
+	 * {@code (key . value)} string pairs with keys and values url-decoded, duplicates
+	 * preserved in order; {@code nil} yields {@code nil}.
+	 */
+	public static final String QUERY_PARAMS = "query-params";
+
+	/**
+	 * The {@code query-param} function provided by the {@code rontolisp} package. Returns
+	 * the url-decoded value of the first match of a name in a query string, or
+	 * {@code nil}; {@code nil}-safe in the query argument.
+	 */
+	public static final String QUERY_PARAM = "query-param";
+
+	/**
+	 * The {@code url-path} function provided by the {@code rontolisp} package. Returns
+	 * the part of a URL or request-target string before the first {@code ?}.
+	 */
+	public static final String URL_PATH = "url-path";
+
+	/**
+	 * The {@code url-query} function provided by the {@code rontolisp} package. Returns
+	 * the raw query-string part of a URL or request-target string (after the first
+	 * {@code ?}, possibly empty), or {@code nil} when there is no {@code ?}.
+	 */
+	public static final String URL_QUERY = "url-query";
+
+	/**
 	 * The {@code tcp-connect} function provided by the {@code rontolisp} package. Opens a
 	 * blocking TCP connection to {@code host} (a hostname or IP literal; the WASM
 	 * component backend supports IPv4 literals only) and {@code port}, and returns a

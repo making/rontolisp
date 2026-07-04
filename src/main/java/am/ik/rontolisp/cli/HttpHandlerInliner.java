@@ -74,15 +74,24 @@ public final class HttpHandlerInliner {
 		return rewritten;
 	}
 
-	// The synthesized %http-dispatch / %http-encode defuns + the wasm-export directive.
-	// %http-dispatch is a wasm-export :string*3 -> :string function; it runs the handler
-	// on
-	// a request plist and encodes the response as "<status>\n<body>". A newline byte is
-	// produced with (code-char 10) so no raw newline needs to survive the reader.
+	// The synthesized %http-dispatch / %http-request / %http-encode defuns + the
+	// wasm-export directive. %http-dispatch is a wasm-export :string*3 -> :string
+	// function; it runs the handler on a request plist and encodes the response as
+	// "<status>\n<body>". The serve adapter passes the request target with the query
+	// attached (wasi:http path-with-query), so %http-request splits it at the first ?
+	// into :path / :query (nil when there is none), matching the interpreter and JVM
+	// backends. A newline byte is produced with (code-char 10) so no raw newline needs
+	// to survive the reader.
 	private static List<LispVal> wrapperForms(String handler) {
 		String template = """
 				(defun %%http-dispatch (%%http-m %%http-p %%http-b)
-				  (%%http-encode (%s (list :method %%http-m :path %%http-p :headers nil :body %%http-b))))
+				  (%%http-encode (%s (%%http-request %%http-m %%http-p %%http-b))))
+				(defun %%http-request (%%http-m %%http-p %%http-b)
+				  (let ((%%http-q (position #\\? %%http-p)))
+				    (list :method %%http-m
+				          :path (if %%http-q (subseq %%http-p 0 %%http-q) %%http-p)
+				          :query (if %%http-q (subseq %%http-p (+ %%http-q 1)) nil)
+				          :headers nil :body %%http-b)))
 				(defun %%http-encode (%%http-r)
 				  (concatenate 'string
 				    (princ-to-string (or (getf %%http-r :status) 200))

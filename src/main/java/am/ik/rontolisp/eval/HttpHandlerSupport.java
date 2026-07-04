@@ -15,6 +15,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import am.ik.rontolisp.LispNames;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Runs a blocking embedded HTTP server for the {@code rontolisp:http-handler} directive
@@ -47,11 +48,32 @@ public final class HttpHandlerSupport {
 	 * An incoming HTTP request handed to the Lisp handler.
 	 *
 	 * @param method the HTTP method (e.g. {@code GET})
-	 * @param path the request path including any query string
+	 * @param path the request path with the query string stripped
+	 * @param query the raw query string without the leading {@code ?}, or {@code null}
+	 * when the request has none
 	 * @param headers the request headers
 	 * @param body the request body (empty string if none)
 	 */
-	public record Request(String method, String path, List<Header> headers, String body) {
+	public record Request(String method, String path, @Nullable String query, List<Header> headers, String body) {
+
+		/**
+		 * Creates a request from a path-with-query target, splitting at the first
+		 * {@code ?}: everything before it is the path, everything after it the query
+		 * (possibly empty); no {@code ?} means no query ({@code null}).
+		 * @param method the HTTP method
+		 * @param pathWithQuery the request target as sent (e.g. {@code /get?a=1})
+		 * @param headers the request headers
+		 * @param body the request body
+		 * @return the request with path and query split
+		 */
+		public static Request of(String method, String pathWithQuery, List<Header> headers, String body) {
+			int q = pathWithQuery.indexOf('?');
+			if (q < 0) {
+				return new Request(method, pathWithQuery, null, headers, body);
+			}
+			return new Request(method, pathWithQuery.substring(0, q), pathWithQuery.substring(q + 1), headers, body);
+		}
+
 	}
 
 	/**
@@ -161,7 +183,7 @@ public final class HttpHandlerSupport {
 			}
 		}
 		final byte[] body = exchange.getRequestBody().readAllBytes();
-		return new Request(method, path, headers, new String(body, StandardCharsets.UTF_8));
+		return Request.of(method, path, headers, new String(body, StandardCharsets.UTF_8));
 	}
 
 	private static void writeResponse(HttpExchange exchange, Response response) throws IOException {
