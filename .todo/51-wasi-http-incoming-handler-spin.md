@@ -44,6 +44,38 @@ Created 2026-07-04.
   The proof core-serve.wat / uni-serve.wit are in /tmp/serveprobe (ephemeral —
   the derived signatures above are the durable record).
 
+## Architecture decision (2026-07-04, after a deep memory-model review)
+
+Use the **component-mode core sharing the buildHttp memory model**, NOT a
+`--no-wasi` core:
+
+- A `--no-wasi` core exports its OWN memory, only **4 pages**, and `__ronto_alloc`
+  is a bump allocator that does NOT `memory.grow` (over `HEAP_PTR_ADDR`), and its
+  signature is `(i32)->i32` — it CANNOT serve as the canonical `cabi_realloc`
+  `(i32 i32 i32 i32)->i32`. 4 pages leaves no room for the 0x50000+ adapter
+  scratch either. So `--no-wasi` is unsuitable.
+- The proven model (buildHttp): a **separate 16-page `mem` module** exports
+  `memory` + a 4-arg `cabi_realloc`; the rontolisp core IMPORTS that memory. Core
+  linear usage (static data / interns / string content) grows up from
+  `rtInternBase` (~0x2000); the adapter uses fixed scratch at 0x50000-0x90000
+  (like `adapter-http.wat`). Collision-free for reasonable response sizes.
+- To make the component-mode core EXPORT `%http-dispatch`, wasm-export must be
+  UN-GATED for this "serve" mode. Today it is gated `!this.component` in
+  `WasmLispCompiler` (the `exportDecls` loop ~L998, `exportUsesMemory` ~L981, the
+  `__ronto_alloc`/`_str_from_mem` helper emission, and the export section ~L1592/
+  L1669). Add a `serve`/`httpHandler` flag (implies component) that flips those
+  `!this.component` guards to `(!this.component || serve)` and emits the
+  `%http-dispatch` wrapper + the two memory helpers even in component mode, while
+  keeping every `FUNC_*` index stable. Memory-layout constants:
+  `HEAP_PTR_ADDR=84`, `RT_INTERN_BASE_ADDR=152`, rtInternBase ~0x2000,
+  fetch/adapter scratch 0x40000+/0x50000+.
+
+This is delicate index/layout surgery in `WasmLispCompiler` plus a `buildServe`
+that mirrors `buildHttp` (~185 lines, constants from a `wasm-tools dump`), an
+`adapter-serve.wat` (the proven marshalling calling `%http-dispatch`), and the
+compiler integration. Best done as a focused session; iterate against
+`wasmtime serve` + curl at each step.
+
 ## Remaining WASM work (multi-module, programmatic — native image cannot run wasm-tools)
 
 1. `src/wasm-component/uni-serve.wit` (world `uni-serve`: import wasi:http/types@0.2

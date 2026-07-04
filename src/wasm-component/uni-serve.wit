@@ -1,0 +1,20 @@
+package local:uni;
+
+// The import surface for rontolisp's component output WHEN THE PROGRAM USES
+// rontolisp:http-handler (compile to a wasi:http/incoming-handler component runnable under
+// `wasmtime serve` and Spin).
+//
+// Unlike the base/fetch/sockets variants, a serve component needs NO WASI base I/O: the
+// rontolisp core is a pure request/response handler, so this world imports only the WASI
+// 0.2 http/io machinery the serve adapter (adapter-serve.wat) drives to read the incoming
+// request and write the outgoing response. The wasi:http/incoming-handler EXPORT is emitted
+// programmatically by WasmComponentBuilder.buildServe (like the `run` export of the other
+// variants), so it is not declared here; this world is imports-only.
+//
+// The interface order fixes the component import-instance indices buildServe assumes;
+// append new interfaces LAST. Re-derive the buildServe constants from a fresh
+// `wasm-tools dump` after changing this file or core-serve.wat.
+world uni-serve {
+  import wasi:http/types@0.2.0;
+  import wasi:io/streams@0.2.0;
+}

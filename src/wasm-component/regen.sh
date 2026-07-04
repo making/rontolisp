@@ -55,11 +55,13 @@ wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
 wasm-tools parse mem-http.wat     -o "$OUT/mem-http.wasm"
 wasm-tools parse adapter-http.wat -o "$OUT/adapter-http.wasm"
 wasm-tools parse adapter-sock.wat -o "$OUT/adapter-sock.wasm"
+wasm-tools parse adapter-serve.wat -o "$OUT/adapter-serve.wasm"
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
 wasm-tools validate "$OUT/mem-http.wasm"
 wasm-tools validate "$OUT/adapter-http.wasm"
 wasm-tools validate "$OUT/adapter-sock.wasm"
+wasm-tools validate "$OUT/adapter-serve.wasm"
 
 echo "== unified import block (base) =="
 wasm-tools parse core.wat -o core.wasm
@@ -82,6 +84,14 @@ wasm-tools component new embedded-sock.wasm -o uni-sock.wasm
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-sock.wasm
 slice_import_block uni-sock.wasm "$OUT/import-block-sock.bin"
 
+echo "== unified import block (serve variant: rontolisp:http-handler) =="
+wasm-tools parse core-serve.wat -o core-serve.wasm
+wasm-tools component embed . core-serve.wasm -o embedded-serve.wasm --world uni-serve
+wasm-tools component new embedded-serve.wasm -o uni-serve.wasm
+wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-serve.wasm
+slice_import_block uni-serve.wasm "$OUT/import-block-serve.bin"
+
 rm -f core.wasm embedded.wasm uni.wasm core-http.wasm embedded-http.wasm uni-http.wasm \
-      core-sock.wasm embedded-sock.wasm uni-sock.wasm
+      core-sock.wasm embedded-sock.wasm uni-sock.wasm \
+      core-serve.wasm embedded-serve.wasm uni-serve.wasm
 echo "== done =="
