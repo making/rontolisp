@@ -1117,6 +1117,12 @@ public final class LispNames {
 	 */
 	public static final String TEST_KEYWORD = ":test";
 
+	/**
+	 * The {@code :key} keyword recognized by the sequence and alist functions (a selector
+	 * applied to each element before the equality test).
+	 */
+	public static final String KEY_KEYWORD = ":key";
+
 	/** The {@code :input} keyword (open a file for reading). */
 	public static final String INPUT_KEYWORD = ":input";
 

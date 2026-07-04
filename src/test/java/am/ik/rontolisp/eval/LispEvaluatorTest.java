@@ -2048,6 +2048,79 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalAssocWithKey() {
+		// :key applies a selector to each pair's car before the test; it used to be
+		// silently ignored (this returned (2 . b) as if :key were absent).
+		assertThat(eval("(assoc 2 '((1 . a) (2 . b) (3 . c)) :key (lambda (k) (+ k 1)))").print()).isEqualTo("(1 . a)");
+		assertThat(eval("(assoc \"B\" '((\"a\" . 1) (\"b\" . 2)) :test #'string= :key #'string-upcase)").print())
+			.isEqualTo("(\"b\" . 2)");
+		assertThat(eval("(assoc 9 '((1 . a)) :key (lambda (k) (+ k 1)))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalMemberWithKey() {
+		assertThat(eval("(member 3 '((1 2) (3 4) (5 6)) :key #'car)").print()).isEqualTo("((3 4) (5 6))");
+		assertThat(eval("(member \"b\" '((\"a\") (\"b\")) :test #'string= :key #'car)").print()).isEqualTo("((\"b\"))");
+		assertThat(eval("(member 9 '((1 2)) :key #'car)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalRassocWithKey() {
+		assertThat(eval("(rassoc 2 '((a . 1) (b . 3)) :key (lambda (v) (- v 1)))").print()).isEqualTo("(b . 3)");
+		assertThat(eval("(rassoc 9 '((a . 1)) :key (lambda (v) (- v 1)))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalSequenceFunctionsWithTest() {
+		// :test on the sequence/set functions used to be rejected with an arity error.
+		assertThat(eval("(find \"b\" '(\"a\" \"b\" \"c\") :test #'string=)").print()).isEqualTo("\"b\"");
+		assertThat(eval("(position \"b\" '(\"a\" \"b\" \"c\") :test #'string=)").print()).isEqualTo("1");
+		assertThat(eval("(count \"a\" '(\"a\" \"b\" \"a\") :test #'string=)").print()).isEqualTo("2");
+		assertThat(eval("(remove \"b\" '(\"a\" \"b\" \"c\") :test #'string=)").print()).isEqualTo("(\"a\" \"c\")");
+		assertThat(eval("(delete \"b\" (list \"a\" \"b\" \"c\") :test #'string=)").print()).isEqualTo("(\"a\" \"c\")");
+		assertThat(eval("(remove-duplicates '(\"a\" \"b\" \"a\" \"c\") :test #'string=)").print())
+			.isEqualTo("(\"b\" \"a\" \"c\")");
+		assertThat(eval("(substitute \"X\" \"b\" '(\"a\" \"b\" \"c\") :test #'string=)").print())
+			.isEqualTo("(\"a\" \"X\" \"c\")");
+		assertThat(eval("(nsubstitute \"X\" \"b\" (list \"a\" \"b\") :test #'string=)").print())
+			.isEqualTo("(\"a\" \"X\")");
+		assertThat(eval("(union '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)").print())
+			.isEqualTo("(\"c\" \"a\" \"b\")");
+		assertThat(eval("(intersection '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)").print()).isEqualTo("(\"b\")");
+		assertThat(eval("(set-difference '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)").print()).isEqualTo("(\"a\")");
+		assertThat(eval("(adjoin \"a\" '(\"a\" \"b\") :test #'string=)").print()).isEqualTo("(\"a\" \"b\")");
+		assertThat(eval("(adjoin \"z\" '(\"a\" \"b\") :test #'string=)").print()).isEqualTo("(\"z\" \"a\" \"b\")");
+	}
+
+	@Test
+	void evalSequenceFunctionsWithKey() {
+		assertThat(eval("(find 4 '((1 2) (3 4)) :key #'cadr)").print()).isEqualTo("(3 4)");
+		assertThat(eval("(position 3 '(1 2 3 4) :key (lambda (x) (- x 1)))").print()).isEqualTo("3");
+		assertThat(eval("(count 2 '((1) (2) (2) (3)) :key #'car)").print()).isEqualTo("2");
+		assertThat(eval("(remove 1 '((1 a) (2 b) (1 c)) :key #'car)").print()).isEqualTo("((2 b))");
+		assertThat(eval("(delete 1 (list '(1 a) '(2 b)) :key #'car)").print()).isEqualTo("((2 b))");
+		assertThat(eval("(remove-duplicates '((1 a) (2 b) (1 c)) :key #'car)").print()).isEqualTo("((2 b) (1 c))");
+		assertThat(eval("(substitute 'x 2 '((1) (2) (3)) :key #'car)").print()).isEqualTo("((1) x (3))");
+		assertThat(eval("(nsubstitute 'x 2 (list '(1) '(2)) :key #'car)").print()).isEqualTo("((1) x)");
+		assertThat(eval("(union '((1)) '((1) (2)) :test #'equal :key #'car)").print()).isEqualTo("((2) (1))");
+		assertThat(eval("(intersection '((1) (2)) '((2) (3)) :key #'car)").print()).isEqualTo("((2))");
+		assertThat(eval("(set-difference '((1) (2)) '((2) (3)) :key #'car)").print()).isEqualTo("((1))");
+		assertThat(eval("(adjoin '(1 x) '((1 a) (2 b)) :key #'car)").print()).isEqualTo("((1 a) (2 b))");
+	}
+
+	@Test
+	void evalSequenceFunctionsRejectUnknownKeywords() {
+		// Unsupported keywords (:from-end, :start, ...) are rejected loudly rather than
+		// silently ignored.
+		assertThatThrownBy(() -> eval("(find 1 '(1 2) :from-end t)")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(":test/:key");
+		assertThatThrownBy(() -> eval("(assoc 1 '((1 . a)) :from-end t)")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(":test/:key");
+		assertThatThrownBy(() -> eval("(remove 1 '(1 2) :count 1)")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(":test/:key");
+	}
+
+	@Test
 	void evalAconsAsFunctionValue() {
 		assertThat(eval("(funcall #'acons 'a 1 '((b . 2)))").print()).isEqualTo("((a . 1) (b . 2))");
 	}

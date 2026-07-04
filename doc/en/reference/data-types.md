@@ -100,8 +100,9 @@ backends -- a dotted pair is only meaningful as data.
 
 The alist function family -- `assoc`, `assoc-if`, `rassoc`, `acons`, `pairlis`
 and `copy-alist` -- works in all three backends. `assoc` and `rassoc` compare
-with `eql` by default and accept an optional `:test` keyword (a function
-designator, e.g. `#'equal` for string keys), like `member`:
+with `eql` by default and accept optional `:test`/`:key` keywords (`:test` a
+function designator, e.g. `#'equal` for string keys; `:key` a selector applied
+to each pair's car/cdr before the comparison), like `member`:
 
 ```lisp
 (assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal) ; => ("b" . 2)

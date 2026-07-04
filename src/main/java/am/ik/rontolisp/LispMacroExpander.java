@@ -2399,7 +2399,8 @@ public final class LispMacroExpander {
 	 * Expands (member item lst) into a let/while scan returning the tail whose car is
 	 * {@code eql} to the item, or nil. With a {@code :test} keyword
 	 * ({@code (member item lst :test fn)}) the equality predicate is {@code fn} applied
-	 * as {@code (funcall fn item element)} instead of {@code eql}; the test designator is
+	 * as {@code (funcall fn item element)} instead of {@code eql}; with a {@code :key}
+	 * keyword the element side becomes {@code (funcall key element)}. The designators are
 	 * inlined so a literal {@code 'name}/{@code #'name} resolves through the compilers'
 	 * function-designator normalization.
 	 * @param cons the member expression
@@ -2407,19 +2408,21 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandMember(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.MEMBER, parts, 3);
 		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__member_item");
 		LispSymbol cur = new LispSymbol("__member_cur");
 		// (do ((__member_item item) (__member_cur lst (cdr __member_cur)))
 		// ((atom __member_cur) nil)
 		// (if (eql __member_item (car __member_cur)) (return __member_cur)))
-		// With :test fn, the match becomes (funcall fn __member_item (car __member_cur)).
+		// With :test fn, the match becomes (funcall fn __member_item <elem>); with :key
+		// fn, <elem> becomes (funcall fn (car __member_cur)).
 		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal element = callOf(LispNames.CAR, cur);
-		LispVal match = (testForm == null) ? listToCons(List.of(new LispSymbol(LispNames.EQL), item, element))
-				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, item, element));
+		LispVal element = keyedForm(keyForm, callOf(LispNames.CAR, cur));
+		LispVal match = testMatchForm(testForm, item, element);
 		LispVal body = makeIf(match, makeReturn(cur), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
@@ -2435,15 +2438,70 @@ public final class LispMacroExpander {
 		return null;
 	}
 
+	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
+	// every keyword must be :test or :key. Unsupported keywords (:from-end, :start, ...)
+	// are rejected loudly rather than silently ignored.
+	private static void requireTestKeyKeywords(String name, List<LispVal> parts, int start) {
+		for (int i = start; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol kw)
+					|| (!LispNames.TEST_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
+				throw new IllegalArgumentException(
+						name + " expects keyword arguments :test/:key, got: " + parts.get(i).print());
+			}
+			if (i + 1 >= parts.size()) {
+				throw new IllegalArgumentException(name + " expects a value after " + kw.name());
+			}
+		}
+	}
+
+	// Applies the :key selector form to an element form ((funcall key elem)), or returns
+	// the element form unchanged when no :key was given. Like the member/assoc :test
+	// designator, the key designator is inlined at each use site so a literal
+	// 'name/#'name resolves through the compilers' function-designator normalization.
+	private static LispVal keyedForm(@Nullable LispVal keyForm, LispVal elemForm) {
+		return keyForm == null ? elemForm : listToCons(List.of(new LispSymbol(LispNames.FUNCALL), keyForm, elemForm));
+	}
+
+	// Builds the equality form of a sequence/alist scan: (eql item elem) by default,
+	// (funcall test item elem) with a :test designator. The element side is expected to
+	// be pre-wrapped by keyedForm when a :key selector applies.
+	private static LispVal testMatchForm(@Nullable LispVal testForm, LispVal item, LispVal keyedElem) {
+		return testForm == null ? listToCons(List.of(new LispSymbol(LispNames.EQL), item, keyedElem))
+				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, item, keyedElem));
+	}
+
+	// Builds an inner (member item lst :test ... :key ...) call forwarding the given
+	// designator forms. The set-style functions (adjoin/union/intersection/
+	// set-difference/remove-duplicates) compare via member, so their item side must be
+	// pre-keyed by the caller while member's own :key covers the list side (CL applies
+	// :key to both operands for these functions).
+	private static LispVal memberCallForm(LispVal item, LispVal lst, @Nullable LispVal testForm,
+			@Nullable LispVal keyForm) {
+		List<LispVal> parts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MEMBER), item, lst));
+		if (testForm != null) {
+			parts.add(new LispSymbol(LispNames.TEST_KEYWORD));
+			parts.add(testForm);
+		}
+		if (keyForm != null) {
+			parts.add(new LispSymbol(LispNames.KEY_KEYWORD));
+			parts.add(keyForm);
+		}
+		return listToCons(parts);
+	}
+
 	/**
 	 * Expands (find item lst) into a do/return scan returning the first element
 	 * {@code eql} to the item, or nil. Like {@code member} but yields the element itself
-	 * rather than the tail.
+	 * rather than the tail. Accepts the same {@code :test}/{@code :key} keywords as
+	 * {@code member}; the returned element is the original one, not the keyed value.
 	 * @param cons the find expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFind(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.FIND, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__find_item");
 		LispSymbol cur = new LispSymbol("__find_cur");
 		// (do ((__find_item item) (__find_cur <seq-as-list lst> (cdr __find_cur)))
@@ -2453,7 +2511,7 @@ public final class LispMacroExpander {
 				listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
 		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, elem));
+		LispVal match = testMatchForm(testForm, item, keyedForm(keyForm, elem));
 		LispVal body = makeIf(match, makeReturn(elem), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
@@ -2519,6 +2577,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandPosition(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.POSITION, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__pos_item");
 		LispSymbol seq = new LispSymbol("__pos_seq");
 		LispSymbol len = new LispSymbol("__pos_len");
@@ -2539,14 +2600,14 @@ public final class LispMacroExpander {
 		LispVal strEndClause = listToCons(
 				List.of(listToCons(List.of(new LispSymbol(LispNames.GE), idx, len)), LispNil.INSTANCE));
 		LispVal charAt = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
-		LispVal strMatch = listToCons(List.of(new LispSymbol(LispNames.EQL), item, charAt));
+		LispVal strMatch = testMatchForm(testForm, item, keyedForm(keyForm, charAt));
 		LispVal strBody = makeIf(strMatch, makeReturn(idx), LispNil.INSTANCE);
 		LispVal strScan = makeLet(len.name(), callOf(LispNames.LENGTH, seq), expandDo(
 				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), strBindings, strEndClause, strBody))));
 		LispVal listBindings = listToCons(List.of(listToCons(List.of(idx, new LispInteger(0), idxStep)),
 				listToCons(List.of(cur, seq, callOf(LispNames.CDR, cur)))));
 		LispVal listEndClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal listMatch = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
+		LispVal listMatch = testMatchForm(testForm, item, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 		LispVal listBody = makeIf(listMatch, makeReturn(idx), LispNil.INSTANCE);
 		LispVal listScan = expandDo(
 				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), listBindings, listEndClause, listBody)));
@@ -2589,6 +2650,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandCount(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.COUNT, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__count_item");
 		LispSymbol n = new LispSymbol("__count_n");
 		LispSymbol cur = new LispSymbol("__count_cur");
@@ -2601,7 +2665,7 @@ public final class LispMacroExpander {
 				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(n, new LispInteger(0))),
 						listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), n));
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), item, callOf(LispNames.CAR, cur)));
+		LispVal match = testMatchForm(testForm, item, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.ADD), n, new LispInteger(1)));
 		LispVal incrementStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), n, increment));
 		LispVal body = makeIf(match, incrementStep, LispNil.INSTANCE);
@@ -2640,15 +2704,18 @@ public final class LispMacroExpander {
 	 * Expands (assoc key alist) into a let/while scan returning the first pair whose car
 	 * matches the key, or nil. The comparison is {@code eql} by default; with a
 	 * {@code :test} keyword ({@code (assoc key alist :test fn)}) it becomes
-	 * {@code (funcall fn key (car pair))}. Like {@code member}, the test designator is
-	 * inlined so a literal {@code 'name}/{@code #'name} resolves through the compilers'
+	 * {@code (funcall fn key (car pair))}, and a {@code :key} keyword applies a selector
+	 * to each pair's car first. Like {@code member}, the designators are inlined so a
+	 * literal {@code 'name}/{@code #'name} resolves through the compilers'
 	 * function-designator normalization.
 	 * @param cons the assoc expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandAssoc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.ASSOC, parts, 3);
 		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol key = new LispSymbol("__assoc_key");
 		LispSymbol cur = new LispSymbol("__assoc_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
@@ -2659,9 +2726,7 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal comparison = (testForm == null)
-				? listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, pair)))
-				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, key, callOf(LispNames.CAR, pair)));
+		LispVal comparison = testMatchForm(testForm, key, keyedForm(keyForm, callOf(LispNames.CAR, pair)));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), comparison));
 		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
@@ -2749,24 +2814,29 @@ public final class LispMacroExpander {
 	 * Expands (remove-duplicates lst) into a do scan that accumulates (in reverse) every
 	 * element that does not occur again later in the list, then reverses the accumulator
 	 * back to source order. Elements are compared with {@code eql} via {@code member}, so
-	 * the last occurrence of each element is kept (Common Lisp's default).
+	 * the last occurrence of each element is kept (Common Lisp's default). The
+	 * {@code :test}/{@code :key} keywords forward to the inner {@code member}; the
+	 * {@code :key} selector applies to both sides of the comparison (CL semantics).
 	 * @param cons the remove-duplicates expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemoveDuplicates(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.REMOVE_DUPLICATES, parts, 2);
+		LispVal testForm = keywordValue(parts, 2, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 2, LispNames.KEY_KEYWORD);
 		LispSymbol acc = new LispSymbol("__rd_acc");
 		LispSymbol cur = new LispSymbol("__rd_cur");
 		// (do ((__rd_acc nil) (__rd_cur lst (cdr __rd_cur)))
 		// ((atom __rd_cur) (reverse __rd_acc))
-		// (if (member (car __rd_cur) (cdr __rd_cur)) nil
+		// (if (member (car __rd_cur) (cdr __rd_cur) [:test fn] [:key fn]) nil
 		// (setq __rd_acc (cons (car __rd_cur) __rd_acc))))
 		return seqResultDispatchForm(parts.get(1), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
 			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
-			LispVal dup = listToCons(
-					List.of(new LispSymbol(LispNames.MEMBER), callOf(LispNames.CAR, cur), callOf(LispNames.CDR, cur)));
+			LispVal dup = memberCallForm(keyedForm(keyForm, callOf(LispNames.CAR, cur)), callOf(LispNames.CDR, cur),
+					testForm, keyForm);
 			LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 			LispVal body = makeIf(dup, LispNil.INSTANCE, keep);
@@ -2906,18 +2976,23 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (adjoin item lst) into a let/if that prepends the item to the list unless
 	 * it is already a member (compared with {@code eql}). Both operands are bound once to
-	 * avoid re-evaluation.
+	 * avoid re-evaluation. The {@code :test}/{@code :key} keywords forward to the inner
+	 * {@code member}; the {@code :key} selector applies to both the item and the list
+	 * elements (CL semantics), while the consed item stays unkeyed.
 	 * @param cons the adjoin expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandAdjoin(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.ADJOIN, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__adjoin_item");
 		LispSymbol lst = new LispSymbol("__adjoin_lst");
 		// (let ((__adjoin_item item) (__adjoin_lst lst))
-		// (if (member __adjoin_item __adjoin_lst) __adjoin_lst
+		// (if (member __adjoin_item __adjoin_lst [:test fn] [:key fn]) __adjoin_lst
 		// (cons __adjoin_item __adjoin_lst)))
-		LispVal memberTest = listToCons(List.of(new LispSymbol(LispNames.MEMBER), item, lst));
+		LispVal memberTest = memberCallForm(keyedForm(keyForm, item), lst, testForm, keyForm);
 		LispVal consCall = listToCons(List.of(new LispSymbol(LispNames.CONS), item, lst));
 		LispVal ifExpr = makeIf(memberTest, lst, consCall);
 		LispVal bindings = listToCons(
@@ -2928,23 +3003,28 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (union a b) into a do scan that starts from {@code a} and prepends each
 	 * element of {@code b} not already present (compared with {@code eql}). The result
-	 * order is implementation-defined (CL leaves it unspecified).
+	 * order is implementation-defined (CL leaves it unspecified). The
+	 * {@code :test}/{@code :key} keywords forward to the inner {@code member}; the
+	 * {@code :key} selector applies to both sides of the comparison (CL semantics).
 	 * @param cons the union expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUnion(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.UNION, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol cur = new LispSymbol("__un_cur");
 		LispSymbol acc = new LispSymbol("__un_acc");
 		// (do ((__un_cur b (cdr __un_cur)) (__un_acc a))
 		// ((atom __un_cur) __un_acc)
-		// (if (member (car __un_cur) __un_acc) nil
+		// (if (member (car __un_cur) __un_acc [:test fn] [:key fn]) nil
 		// (setq __un_acc (cons (car __un_cur) __un_acc))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur))),
 				listToCons(List.of(acc, parts.get(1)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
 		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.MEMBER), elem, acc));
+		LispVal match = memberCallForm(keyedForm(keyForm, elem), acc, testForm, keyForm);
 		LispVal prepend = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), elem, acc))));
 		LispVal body = makeIf(match, LispNil.INSTANCE, prepend);
@@ -2954,24 +3034,29 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (intersection a b) into a do scan that collects each element of {@code a}
 	 * that is a member of {@code b} (compared with {@code eql}). The result order is
-	 * implementation-defined (CL leaves it unspecified).
+	 * implementation-defined (CL leaves it unspecified). The {@code :test}/{@code :key}
+	 * keywords forward to the inner {@code member}; the {@code :key} selector applies to
+	 * both sides of the comparison (CL semantics).
 	 * @param cons the intersection expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandIntersection(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.INTERSECTION, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol cur = new LispSymbol("__in_cur");
 		LispSymbol b = new LispSymbol("__in_b");
 		LispSymbol acc = new LispSymbol("__in_acc");
 		// (do ((__in_cur a (cdr __in_cur)) (__in_b b) (__in_acc nil))
 		// ((atom __in_cur) __in_acc)
-		// (if (member (car __in_cur) __in_b)
+		// (if (member (car __in_cur) __in_b [:test fn] [:key fn])
 		// (setq __in_acc (cons (car __in_cur) __in_acc)) nil))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
 				listToCons(List.of(b, parts.get(2))), listToCons(List.of(acc, LispNil.INSTANCE))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
 		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.MEMBER), elem, b));
+		LispVal match = memberCallForm(keyedForm(keyForm, elem), b, testForm, keyForm);
 		LispVal collect = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), elem, acc))));
 		LispVal body = makeIf(match, collect, LispNil.INSTANCE);
@@ -2981,24 +3066,29 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (set-difference a b) into a do scan that collects each element of {@code a}
 	 * that is not a member of {@code b} (compared with {@code eql}). The result order is
-	 * implementation-defined (CL leaves it unspecified).
+	 * implementation-defined (CL leaves it unspecified). The {@code :test}/{@code :key}
+	 * keywords forward to the inner {@code member}; the {@code :key} selector applies to
+	 * both sides of the comparison (CL semantics).
 	 * @param cons the set-difference expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetDifference(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.SET_DIFFERENCE, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol cur = new LispSymbol("__sd_cur");
 		LispSymbol b = new LispSymbol("__sd_b");
 		LispSymbol acc = new LispSymbol("__sd_acc");
 		// (do ((__sd_cur a (cdr __sd_cur)) (__sd_b b) (__sd_acc nil))
 		// ((atom __sd_cur) __sd_acc)
-		// (if (member (car __sd_cur) __sd_b) nil
+		// (if (member (car __sd_cur) __sd_b [:test fn] [:key fn]) nil
 		// (setq __sd_acc (cons (car __sd_cur) __sd_acc))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, parts.get(1), callOf(LispNames.CDR, cur))),
 				listToCons(List.of(b, parts.get(2))), listToCons(List.of(acc, LispNil.INSTANCE))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
 		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.MEMBER), elem, b));
+		LispVal match = memberCallForm(keyedForm(keyForm, elem), b, testForm, keyForm);
 		LispVal collect = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), elem, acc))));
 		LispVal body = makeIf(match, LispNil.INSTANCE, collect);
@@ -3054,17 +3144,22 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (remove item lst) into a do scan that accumulates, then reverses, the
-	 * elements that are not {@code eql} to the item.
+	 * elements that are not {@code eql} to the item. Accepts the same
+	 * {@code :test}/{@code :key} keywords as {@code member}; the kept elements are the
+	 * original ones, not the keyed values.
 	 * @param cons the remove expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemove(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.REMOVE, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__remove_item");
 		// The item binds outside the string dispatch to keep the argument evaluation
 		// order (item, then sequence); the filter's do rebinds it to itself.
-		return makeLet(item.name(), parts.get(1), seqResultDispatchForm(parts.get(2),
-				lst -> expandFilter(item, item, lst, "__remove", LispNames.EQL, item, false)));
+		return makeLet(item.name(), parts.get(1), seqResultDispatchForm(parts.get(2), lst -> expandFilter(item, item,
+				lst, "__remove", elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false)));
 	}
 
 	/**
@@ -3076,8 +3171,8 @@ public final class LispMacroExpander {
 	public static LispVal expandRemoveIf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__removeif_pred");
-		return makeLet(pred.name(), parts.get(1), seqResultDispatchForm(parts.get(2),
-				lst -> expandFilter(pred, pred, lst, "__removeif", LispNames.FUNCALL, pred, false)));
+		return makeLet(pred.name(), parts.get(1), seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred,
+				lst, "__removeif", elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false)));
 	}
 
 	/**
@@ -3089,19 +3184,24 @@ public final class LispMacroExpander {
 	public static LispVal expandRemoveIfNot(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__removeifnot_pred");
-		return makeLet(pred.name(), parts.get(1), seqResultDispatchForm(parts.get(2),
-				lst -> expandFilter(pred, pred, lst, "__removeifnot", LispNames.FUNCALL, pred, true)));
+		return makeLet(pred.name(), parts.get(1),
+				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
+						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true)));
 	}
 
 	/**
 	 * Expands (substitute new old lst) into a do scan that accumulates, then reverses, a
 	 * copy of the list with every element {@code eql} to {@code old} replaced by
-	 * {@code new}.
+	 * {@code new}. Accepts the same {@code :test}/{@code :key} keywords as {@code member}
+	 * (the {@code :key} selector applies to the scanned elements only).
 	 * @param cons the substitute expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSubstitute(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.SUBSTITUTE, parts, 4);
+		LispVal testForm = keywordValue(parts, 4, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
 		LispSymbol newItem = new LispSymbol("__subst_new");
 		LispSymbol oldItem = new LispSymbol("__subst_old");
 		LispSymbol acc = new LispSymbol("__subst_acc");
@@ -3117,7 +3217,7 @@ public final class LispMacroExpander {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
 			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
-			LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), oldItem, callOf(LispNames.CAR, cur)));
+			LispVal match = testMatchForm(testForm, oldItem, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 			LispVal chosen = makeIf(match, newItem, callOf(LispNames.CAR, cur));
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
@@ -3130,12 +3230,16 @@ public final class LispMacroExpander {
 	 * Expands (nsubstitute new old lst) into an in-place scan that rewrites the
 	 * {@code car} of every cons whose value is {@code eql} to {@code old} with
 	 * {@code new}, returning the (possibly mutated) original list. This is destructive:
-	 * the argument's cons cells are reused (Common Lisp semantics).
+	 * the argument's cons cells are reused (Common Lisp semantics). Accepts the same
+	 * {@code :test}/{@code :key} keywords as {@code substitute}.
 	 * @param cons the nsubstitute expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNsubstitute(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.NSUBSTITUTE, parts, 4);
+		LispVal testForm = keywordValue(parts, 4, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
 		LispSymbol newItem = new LispSymbol("__nsub_new");
 		LispSymbol oldItem = new LispSymbol("__nsub_old");
 		LispSymbol lst = new LispSymbol("__nsub_lst");
@@ -3148,7 +3252,7 @@ public final class LispMacroExpander {
 		// __nsub_lst)
 		LispVal initCur = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, lst));
 		LispVal whileTest = listToCons(List.of(new LispSymbol(LispNames.CONSP), cur));
-		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), oldItem, callOf(LispNames.CAR, cur)));
+		LispVal match = testMatchForm(testForm, oldItem, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 		LispVal replace = listToCons(List.of(new LispSymbol(LispNames.RPLACA), cur, newItem));
 		LispVal ifExpr = makeIf(match, replace, LispNil.INSTANCE);
 		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
@@ -3162,13 +3266,18 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (delete item lst) into a destructive splice that removes every cons whose
 	 * {@code car} is {@code eql} to {@code item}, reusing the surviving cons cells.
+	 * Accepts the same {@code :test}/{@code :key} keywords as {@code member}.
 	 * @param cons the delete expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandDelete(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.DELETE, parts, 3);
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__delete_item");
-		return expandDeleteFilter(item, parts.get(1), parts.get(2), "__delete", LispNames.EQL, item, true);
+		return expandDeleteFilter(item, parts.get(1), parts.get(2), "__delete",
+				elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), true);
 	}
 
 	/**
@@ -3180,7 +3289,8 @@ public final class LispMacroExpander {
 	public static LispVal expandDeleteIf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__deleteif_pred");
-		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteif", LispNames.FUNCALL, pred, true);
+		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteif",
+				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true);
 	}
 
 	/**
@@ -3192,24 +3302,26 @@ public final class LispMacroExpander {
 	public static LispVal expandDeleteIfNot(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__deleteifnot_pred");
-		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteifnot", LispNames.FUNCALL, pred, false);
+		return expandDeleteFilter(pred, parts.get(1), parts.get(2), "__deleteifnot",
+				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false);
 	}
 
 	/**
 	 * Shared destructive expansion for
 	 * {@code delete}/{@code delete-if}/{@code delete-if-not}: bind the test operand once,
 	 * drop matching cons cells from the front by advancing the head, then splice out
-	 * matching cons cells in the interior with {@code rplacd}. The deletion test is
-	 * {@code (matchOp matchArg (car cursor))}; when {@code deleteWhenMatch} is false the
-	 * cons is deleted when the test is false ({@code delete-if-not}). The surviving cons
-	 * cells are reused (Common Lisp semantics; use the return value).
+	 * matching cons cells in the interior with {@code rplacd}. The deletion test is built
+	 * by {@code matchOf} from the {@code (car cursor)} element form; when
+	 * {@code deleteWhenMatch} is false the cons is deleted when the test is false
+	 * ({@code delete-if-not}). The surviving cons cells are reused (Common Lisp
+	 * semantics; use the return value).
 	 */
 	private static LispVal expandDeleteFilter(LispSymbol operand, LispVal operandInit, LispVal list, String prefix,
-			String matchOp, LispVal matchArg, boolean deleteWhenMatch) {
+			java.util.function.UnaryOperator<LispVal> matchOf, boolean deleteWhenMatch) {
 		LispSymbol head = new LispSymbol(prefix + "_head");
 		LispSymbol prev = new LispSymbol(prefix + "_prev");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
-		LispVal match = listToCons(List.of(new LispSymbol(matchOp), matchArg, callOf(LispNames.CAR, cur)));
+		LispVal match = matchOf.apply(callOf(LispNames.CAR, cur));
 		LispVal deleteForm = deleteWhenMatch ? match : listToCons(List.of(new LispSymbol(LispNames.NOT), match));
 		// (let ((operand operandInit) (head list) (prev nil) (cur nil))
 		// (while (and (consp head) deleteFormOnHead) (setq head (cdr head))) ; drop
@@ -3220,7 +3332,9 @@ public final class LispMacroExpander {
 		// (if deleteFormOnCur (rplacd prev (cdr cur)) (setq prev cur))
 		// (setq cur (cdr cur)))
 		// head)
-		LispVal deleteOnHead = substituteCursor(deleteForm, cur, head);
+		LispVal matchOnHead = matchOf.apply(callOf(LispNames.CAR, head));
+		LispVal deleteOnHead = deleteWhenMatch ? matchOnHead
+				: listToCons(List.of(new LispSymbol(LispNames.NOT), matchOnHead));
 		LispVal leadTest = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), head)), deleteOnHead));
 		LispVal leadStep = listToCons(List.of(new LispSymbol(LispNames.SETQ), head, callOf(LispNames.CDR, head)));
@@ -3243,43 +3357,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Returns a copy of {@code form} (a deletion test referencing {@code (car from)})
-	 * rebuilt to reference {@code (car to)} instead, so the same test can run against the
-	 * head cursor and the interior cursor. Only the {@code (car from)} subforms are
-	 * rewritten; everything else is shared.
-	 */
-	private static LispVal substituteCursor(LispVal form, LispSymbol from, LispSymbol to) {
-		if (form instanceof LispCons cell) {
-			List<LispVal> parts = cell.toList();
-			// Replace the exact subform (car from) with (car to).
-			if (parts.size() == 2 && parts.get(0) instanceof LispSymbol op && LispNames.CAR.equals(op.name())
-					&& parts.get(1) instanceof LispSymbol s && from.name().equals(s.name())) {
-				return callOf(LispNames.CAR, to);
-			}
-			List<LispVal> rebuilt = new java.util.ArrayList<>();
-			for (LispVal part : parts) {
-				rebuilt.add(substituteCursor(part, from, to));
-			}
-			return listToCons(rebuilt);
-		}
-		return form;
-	}
-
-	/**
 	 * Shared expansion for {@code remove}/{@code remove-if}/{@code remove-if-not}: bind
 	 * the test operand, walk the list, and accumulate (in reverse) every element to keep.
 	 * The result form reverses the accumulator back to source order. The match form is
-	 * {@code (matchOp matchArg (car cursor))}; for {@code remove} it is
-	 * {@code (eql item (car cursor))} and for the {@code -if} variants it is
+	 * built by {@code matchOf} from the {@code (car cursor)} element form; for
+	 * {@code remove} it is {@code (eql item (car cursor))} (with optional
+	 * {@code :test}/{@code :key} designators) and for the {@code -if} variants it is
 	 * {@code (funcall pred (car cursor))}. When {@code keepWhenMatch} is false an element
 	 * is kept when the match is false ({@code remove}/{@code remove-if}); when true it is
 	 * kept when the match is true ({@code remove-if-not}).
 	 */
 	private static LispVal expandFilter(LispSymbol operand, LispVal operandInit, LispVal list, String prefix,
-			String matchOp, LispVal matchArg, boolean keepWhenMatch) {
+			java.util.function.UnaryOperator<LispVal> matchOf, boolean keepWhenMatch) {
 		LispSymbol acc = new LispSymbol(prefix + "_acc");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
-		LispVal match = listToCons(List.of(new LispSymbol(matchOp), matchArg, callOf(LispNames.CAR, cur)));
+		LispVal match = matchOf.apply(callOf(LispNames.CAR, cur));
 		// (do ((operand operandInit) (acc nil) (cur list (cdr cur)))
 		// ((atom cur) (reverse acc))
 		// (if match nil (setq acc (cons (car cur) acc)))) ; keepWhenMatch swaps the
@@ -5431,22 +5523,23 @@ public final class LispMacroExpander {
 	 * cdr matches the value, or nil. The mirror of {@code assoc} (which matches on the
 	 * car). The comparison is {@code eql} by default; with a {@code :test} keyword
 	 * ({@code (rassoc value alist :test fn)}) it becomes
-	 * {@code (funcall fn value (cdr pair))}.
+	 * {@code (funcall fn value (cdr pair))}, and a {@code :key} keyword applies a
+	 * selector to each pair's cdr first.
 	 * @param cons the rassoc expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRassoc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		requireTestKeyKeywords(LispNames.RASSOC, parts, 3);
 		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol key = new LispSymbol("__rassoc_key");
 		LispSymbol cur = new LispSymbol("__rassoc_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal comparison = (testForm == null)
-				? listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CDR, pair)))
-				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, key, callOf(LispNames.CDR, pair)));
+		LispVal comparison = testMatchForm(testForm, key, keyedForm(keyForm, callOf(LispNames.CDR, pair)));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), comparison));
 		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);

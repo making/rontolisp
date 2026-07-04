@@ -85,8 +85,9 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 
 連想リスト関数群 -- `assoc`、`assoc-if`、`rassoc`、`acons`、`pairlis`、`copy-alist`
 -- は3つのバックエンドすべてで機能します。`assoc` と `rassoc` は既定では `eql`
-で比較し、`member` と同様に省略可能な `:test` キーワード(関数指定子。文字列キーには
-`#'equal` など)を受け付けます:
+で比較し、`member` と同様に省略可能な `:test`/`:key` キーワード(`:test` は関数指定子。
+文字列キーには `#'equal` など。`:key` は比較の前に各ペアの car/cdr へ適用される
+セレクタ)を受け付けます:
 
 ```lisp
 (assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal) ; => ("b" . 2)

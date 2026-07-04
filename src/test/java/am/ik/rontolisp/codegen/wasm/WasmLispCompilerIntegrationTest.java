@@ -2558,6 +2558,51 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void assocWithKey() throws Exception {
+		assertThat(compileAndRun("(print (assoc 2 '((1 . a) (2 . b) (3 . c)) :key (lambda (k) (+ k 1)))) "
+				+ "(print (member 3 '((1 2) (3 4) (5 6)) :key #'car)) "
+				+ "(print (rassoc 2 '((a . 1) (b . 3)) :key (lambda (v) (- v 1))))"))
+			.isEqualTo("(1 . a)\n((3 4) (5 6))\n(b . 3)");
+	}
+
+	@Test
+	void sequenceFunctionsWithTest() throws Exception {
+		assertThat(compileAndRun("(print (find \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (position \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (count \"a\" '(\"a\" \"b\" \"a\") :test #'string=)) "
+				+ "(print (remove \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (delete \"b\" (list \"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (remove-duplicates '(\"a\" \"b\" \"a\" \"c\") :test #'string=)) "
+				+ "(print (substitute \"X\" \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (nsubstitute \"X\" \"b\" (list \"a\" \"b\") :test #'string=)) "
+				+ "(print (union '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)) "
+				+ "(print (intersection '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)) "
+				+ "(print (set-difference '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)) "
+				+ "(print (adjoin \"a\" '(\"a\" \"b\") :test #'string=)) "
+				+ "(print (adjoin \"z\" '(\"a\" \"b\") :test #'string=))"))
+			.isEqualTo("\"b\"\n1\n2\n(\"a\" \"c\")\n(\"a\" \"c\")\n(\"b\" \"a\" \"c\")\n(\"a\" \"X\" \"c\")\n"
+					+ "(\"a\" \"X\")\n(\"c\" \"a\" \"b\")\n(\"b\")\n(\"a\")\n(\"a\" \"b\")\n(\"z\" \"a\" \"b\")");
+	}
+
+	@Test
+	void sequenceFunctionsWithKey() throws Exception {
+		assertThat(compileAndRun("(print (find 4 '((1 2) (3 4)) :key #'cadr)) "
+				+ "(print (position 3 '(1 2 3 4) :key (lambda (x) (- x 1)))) "
+				+ "(print (count 2 '((1) (2) (2) (3)) :key #'car)) "
+				+ "(print (remove 1 '((1 a) (2 b) (1 c)) :key #'car)) "
+				+ "(print (delete 1 (list '(1 a) '(2 b)) :key #'car)) "
+				+ "(print (remove-duplicates '((1 a) (2 b) (1 c)) :key #'car)) "
+				+ "(print (substitute 'x 2 '((1) (2) (3)) :key #'car)) "
+				+ "(print (nsubstitute 'x 2 (list '(1) '(2)) :key #'car)) "
+				+ "(print (union '((1)) '((1) (2)) :test #'equal :key #'car)) "
+				+ "(print (intersection '((1) (2)) '((2) (3)) :key #'car)) "
+				+ "(print (set-difference '((1) (2)) '((2) (3)) :key #'car)) "
+				+ "(print (adjoin '(1 x) '((1 a) (2 b)) :key #'car))"))
+			.isEqualTo("(3 4)\n3\n2\n((2 b))\n((2 b))\n((2 b) (1 c))\n((1) x (3))\n((1) x)\n((2) (1))\n"
+					+ "((2))\n((1))\n((1 a) (2 b))");
+	}
+
+	@Test
 	void aconsAsFunctionValue() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'acons 'a 1 '((b . 2))))")).isEqualTo("((a . 1) (b . 2))");
 	}

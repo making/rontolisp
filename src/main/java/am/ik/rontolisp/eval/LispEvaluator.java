@@ -318,13 +318,17 @@ public final class LispEvaluator {
 			}
 			// (member item list) compares with eql; (member item list :test fn) applies
 			// fn
-			// as (funcall fn item element). The default eql designator keeps the historic
-			// behavior of the eql-based scan.
+			// as (funcall fn item element), and :key applies a selector to each element
+			// before the test. The default eql designator keeps the historic behavior of
+			// the eql-based scan.
+			requireTestKeyKeywords(LispNames.MEMBER, args, 2);
 			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			LispVal keyFn = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
 			LispVal item = args.get(0);
 			LispVal cur = args.get(1);
 			while (cur instanceof LispCons cell) {
-				if (isTruthy(apply(test, List.of(item, cell.car()), this.globalEnv))) {
+				LispVal elem = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+				if (isTruthy(apply(test, List.of(item, elem), this.globalEnv))) {
 					return cell;
 				}
 				cur = cell.cdr();
@@ -342,14 +346,19 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.ASSOC + " expects at least 2 arguments, got " + args.size());
 			}
 			// (assoc key alist) compares with eql; (assoc key alist :test fn) applies fn
-			// as (funcall fn key (car pair)), mirroring member.
+			// as (funcall fn key (car pair)), and :key applies a selector to each pair's
+			// car before the test, mirroring member.
+			requireTestKeyKeywords(LispNames.ASSOC, args, 2);
 			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			LispVal keyFn = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
 			LispVal key = args.get(0);
 			LispVal cur = args.get(1);
 			while (cur instanceof LispCons cell) {
-				if (cell.car() instanceof LispCons pair
-						&& isTruthy(apply(test, List.of(key, pair.car()), this.globalEnv))) {
-					return pair;
+				if (cell.car() instanceof LispCons pair) {
+					LispVal elem = (keyFn == null) ? pair.car() : apply(keyFn, List.of(pair.car()), this.globalEnv);
+					if (isTruthy(apply(test, List.of(key, elem), this.globalEnv))) {
+						return pair;
+					}
 				}
 				cur = cell.cdr();
 			}
@@ -360,13 +369,17 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.RASSOC + " expects at least 2 arguments, got " + args.size());
 			}
 			// The mirror of assoc: matches each pair's cdr instead of its car.
+			requireTestKeyKeywords(LispNames.RASSOC, args, 2);
 			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			LispVal keyFn = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
 			LispVal value = args.get(0);
 			LispVal cur = args.get(1);
 			while (cur instanceof LispCons cell) {
-				if (cell.car() instanceof LispCons pair
-						&& isTruthy(apply(test, List.of(value, pair.cdr()), this.globalEnv))) {
-					return pair;
+				if (cell.car() instanceof LispCons pair) {
+					LispVal elem = (keyFn == null) ? pair.cdr() : apply(keyFn, List.of(pair.cdr()), this.globalEnv);
+					if (isTruthy(apply(test, List.of(value, elem), this.globalEnv))) {
+						return pair;
+					}
 				}
 				cur = cell.cdr();
 			}
@@ -750,6 +763,34 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCoerce(cons), env);
 				case LispNames.RASSOC:
 					return eval(LispMacroExpander.expandRassoc(cons), env);
+				// The sequence/alist functions taking :test/:key evaluate through the
+				// shared macro expansion (like rassoc) so keyword handling matches the
+				// compilers exactly; the Environment/LispEvaluator registrations remain
+				// for first-class use (#'find etc.).
+				case LispNames.FIND:
+					return eval(LispMacroExpander.expandFind(cons), env);
+				case LispNames.POSITION:
+					return eval(LispMacroExpander.expandPosition(cons), env);
+				case LispNames.COUNT:
+					return eval(LispMacroExpander.expandCount(cons), env);
+				case LispNames.REMOVE:
+					return eval(LispMacroExpander.expandRemove(cons), env);
+				case LispNames.DELETE:
+					return eval(LispMacroExpander.expandDelete(cons), env);
+				case LispNames.REMOVE_DUPLICATES:
+					return eval(LispMacroExpander.expandRemoveDuplicates(cons), env);
+				case LispNames.UNION:
+					return eval(LispMacroExpander.expandUnion(cons), env);
+				case LispNames.INTERSECTION:
+					return eval(LispMacroExpander.expandIntersection(cons), env);
+				case LispNames.SET_DIFFERENCE:
+					return eval(LispMacroExpander.expandSetDifference(cons), env);
+				case LispNames.ADJOIN:
+					return eval(LispMacroExpander.expandAdjoin(cons), env);
+				case LispNames.SUBSTITUTE:
+					return eval(LispMacroExpander.expandSubstitute(cons), env);
+				case LispNames.NSUBSTITUTE:
+					return eval(LispMacroExpander.expandNsubstitute(cons), env);
 				case LispNames.REVAPPEND:
 					return eval(LispMacroExpander.expandRevappend(cons), env);
 				case LispNames.NRECONC:
@@ -1522,12 +1563,36 @@ public final class LispEvaluator {
 	// keyword, returning the value following the first match, or the fallback when
 	// absent.
 	private static LispVal keywordArg(List<LispVal> args, int start, String keyword, LispVal fallback) {
+		LispVal value = optionalKeywordArg(args, start, keyword);
+		return value != null ? value : fallback;
+	}
+
+	// Like keywordArg but returns null when the keyword is absent (for keywords with no
+	// default designator, such as :key).
+	private static @Nullable LispVal optionalKeywordArg(List<LispVal> args, int start, String keyword) {
 		for (int i = start; i + 1 < args.size(); i += 2) {
 			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
 				return args.get(i + 1);
 			}
 		}
-		return fallback;
+		return null;
+	}
+
+	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
+	// every keyword must be :test or :key. Unsupported keywords (:from-end, :start, ...)
+	// are rejected loudly rather than silently ignored, mirroring the compile-time check
+	// in LispMacroExpander.
+	private static void requireTestKeyKeywords(String name, List<LispVal> args, int start) {
+		for (int i = start; i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol kw)
+					|| (!LispNames.TEST_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
+				throw new LispEvalException(
+						name + " expects keyword arguments :test/:key, got: " + args.get(i).print());
+			}
+			if (i + 1 >= args.size()) {
+				throw new LispEvalException(name + " expects a value after " + kw.name());
+			}
+		}
 	}
 
 	private boolean isTruthy(LispVal val) {
