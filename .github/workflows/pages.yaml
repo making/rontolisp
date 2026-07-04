@@ -18,6 +18,7 @@ on:
     - examples/webgl-galaxy/**
     - examples/webgl-heat3d/**
     - examples/webgl-robot-arm/**
+    - examples/webgl-platformer/**
     - examples/webgl-triangle/**
     - examples/webgl-cube/**
     - src/**

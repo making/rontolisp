@@ -35,6 +35,10 @@ The JavaScript side is the same one-line WebGL2 host boundary as the other
 forwarding — the page only maps key events to small integers; held state,
 buffering and coyote time are Lisp's business — and the HUD.
 
+**Live demo:** <https://making.github.io/rontolisp/webgl-platformer/> (this
+directory is published as a subpath of the GitHub Pages site by
+`.github/workflows/pages.yaml`).
+
 ## Building
 
 ```bash
