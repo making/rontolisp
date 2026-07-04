@@ -158,7 +158,26 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   wasm-GC in Spin's wasmtime and no flag to enable it -- exactly the gap
   wasmCloud's proposal switch fills); Preview-1 WASM output is a compile error
   ("requires --component").
-- **v1 limitations (JVM + WASM)** -- request/response headers are dropped (the
-  handler sees `:headers nil`, response `:headers` is ignored); only the
-  interpreter passes headers through. On WASM the bump allocators do not reset
-  per request.
+- **Serve adapter hardening (2026-07-04)** -- three fixes in `adapter-serve.wat`:
+  (1) response bodies are written in 4096-byte chunks (`blocking-write-and-flush`
+  rejects larger buffers, so any response > 4 KiB used to 500 on every host);
+  (2) `response-outparam.set` runs BEFORE the body writes -- the host only
+  consumes the body stream after the outparam is set, so set-after-write
+  deadlocks past one 4096-byte host buffer; (3) both bump allocators (mem
+  module `cabi_realloc` via the newly exported `"hp"` global, core
+  `__ronto_alloc` heap ptr @84) are reset per request to their post-init
+  snapshots -- `wasmtime serve` instantiates per request, but jco/wasmCloud
+  reuse one instance, where memory otherwise grew by ~response size per
+  request. The core-heap restore is guarded by the runtime intern count (@100):
+  if `_intern` appended records since the snapshot (their (off,len) reference
+  token bytes in place), the snapshot ratchets up instead. The init flag and
+  snapshots are ADAPTER-LOCAL GLOBALS, never linear memory -- a large response
+  sweeps the core bump heap across the 0x50000 scratch page and would corrupt
+  them (the response body sweeping that page is otherwise harmless: all
+  per-request scratch there is written before use).
+- **v1 limitations** -- on the WASM component, request/response headers are
+  dropped (the handler sees `:headers nil`, response `:headers` is ignored).
+  The interpreter and the JVM backend (since 2026-07-04,
+  `JvmHttpHandlerRuntimeBuilder`: request `List<Header>` -> `:headers` alist,
+  response alist -> `Response` headers, malformed entries skipped) pass headers
+  through.

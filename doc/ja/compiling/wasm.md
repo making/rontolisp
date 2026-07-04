@@ -212,9 +212,14 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 - 制御と束縛: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`、再帰、および他の対象関数への呼び出し。
 - 反復とローカルの変更: `dotimes`/`do`/`do*` とその基盤となる `while`/`setq`/`return`、および自由に再代入される let/`do` で束縛された変数。`loop` は cons を生成しない節（数値 `for`、`sum`/`count`/`maximize`/`minimize`、`repeat`/`while`/`until`/`do`/`return`）に限り対象です。`collect`/`append`/`nconc` や `for ... in`/`on` の節はリストを割り当てるため対象外です。
 - 浮動小数点/整数の変換: `float truncate floor ceiling round`。
-- 文字列: 文字列リテラルと `(concatenate 'string ...)`。
+- 文字列と文字: 文字列リテラル、文字リテラル、`(concatenate 'string ...)`、`length`、
+  `subseq`、`string=`、`char`、`char-code`/`code-char`、`char=`、および（整数と文字列に
+  対する）`princ-to-string`。独立した文字型はありません。文字はそのコードポイントで
+  表現されるため、ポータブルなイディオム `(char= (char s i) #\x)` や
+  `(char-code (char s i))` は他のバックエンドと完全に同じ振る舞いをします。一方、裸の
+  `(char s i)` が `:int` 境界を越えるとコードポイントが見えます。
 
-ヒープオブジェクトを割り当てるその他のもの（cons/リスト、文字、シンボル、ベクター、ハッシュテーブル、`eval`/`apply`、I/O、`dolist`/リスト反復、自由変数やグローバルへの代入、`&optional`/`&rest`/`&key` のようなラムダリストキーワード — レストリストは cons です）は、その関数を対象外にします。黙ってミスコンパイルするのではなく、これは違反した演算を名指しする **コンパイルエラー** になるため、境界は明示的なままです。
+ヒープオブジェクトを割り当てるその他のもの（cons/リスト、シンボル、ベクター、ハッシュテーブル、`eval`/`apply`、I/O、`dolist`/リスト反復、自由変数やグローバルへの代入、`&optional`/`&rest`/`&key` のようなラムダリストキーワード — レストリストは cons です）は、その関数を対象外にします。黙ってミスコンパイルするのではなく、これは違反した演算を名指しする **コンパイルエラー** になるため、境界は明示的なままです。
 
 サポートされる境界指定子は `:int`、`:float`、`:bool`、`:string`（および `:void`/省略）です。`:s-expr` は **サポートされません** — それには、このバックエンドが意図的に省略している cons/リーダー/プリンターのランタイムが必要だからです。
 
@@ -248,6 +253,18 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
       (setq out (concatenate 'string out "*")))
     out))
 (stars 5)  ; => "*****"
+```
+
+スライスと検査も同じ表現の上で動作します。`length` はヘッダーを読み、`subseq` は
+スライスを新しいバッファにコピーし、`string=` は内容をバイト単位で比較し、`char` は
+バイトをインデックスし、`princ-to-string` は整数を描画します — 蓄積だけでなく、
+ルーティング/パースのカーネルにも十分です。
+
+```lisp
+(defun describe-int (n)
+  (let ((s (princ-to-string n)))
+    (concatenate 'string s " has " (princ-to-string (length s)) " chars")))
+(describe-int -42)  ; => "-42 has 3 chars"
 ```
 
 文字列を使用するモジュールは（拡張可能な）リニアメモリを持ち、その `memory` と `__ronto_alloc(size)` バンプアロケータを関数とともにエクスポートします。`:string` パラメータはホストがメモリに書き込む `(ptr, len)` ペアとして渡され、`:string` の結果も同じ方法で返されます。そのため、文字列を返すエクスポートは、`wasmtime --invoke` だけではなく、エクスポートされたメモリを読み書きできるホスト（JavaScript、小さな Node スクリプト、ブラウザのプレイグラウンド）を必要とします。[付録](#passing-strings-string) で JS 側を詳しく説明します。
@@ -374,7 +391,7 @@ false
 
 上記のスカラーの例は、`:int`/`:float`/`:bool` が素の数値として境界を越えるため、メモリを必要としません。一方 `:string` は、モジュールがエクスポートする `memory` を通じて `(ptr, len)` ペアを受け渡します。ホストは引数のバイト列を（エクスポートされた `__ronto_alloc(size)` バンプアロケータが予約したオフセットに）メモリへ書き込み、`(ptr, len)` を渡し、その後エクスポートが返す `(ptr, len)` をデコードします。
 
-`:string` は `--no-gc` のもとで動作するため、関数が非 GC の文字列サブセット（文字列リテラルと `(concatenate 'string ...)`）に収まっている限り、モジュールは依然として **任意の** エンジンで動作します。プロトコルを示すには挨拶文ビルダーで十分です。
+`:string` は `--no-gc` のもとで動作するため、関数が非 GC の文字列サブセット（上記の[対象サブセット](#eligible-subset)を参照）に収まっている限り、モジュールは依然として **任意の** エンジンで動作します。プロトコルを示すには挨拶文ビルダーで十分です。
 
 ```lisp
 ;; greetkit.lisp

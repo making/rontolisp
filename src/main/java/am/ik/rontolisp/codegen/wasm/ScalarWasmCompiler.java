@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -125,12 +126,20 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	}
 
-	/** Operators handled directly as primitive numeric/boolean/bitwise operations. */
+	/**
+	 * Operators handled directly as primitive numeric/boolean/bitwise/string operations.
+	 * Characters have no separate runtime type here: a character IS its code point (an
+	 * INT), so {@code char} returns the code, {@code char-code}/{@code code-char} are
+	 * identities and {@code char=} is a numeric comparison -- the portable
+	 * {@code (char= (char s i) #\x)} idiom behaves exactly like the other backends.
+	 */
 	private static final Set<String> BUILTINS = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
 			LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOAT,
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.EQ, LispNames.LT,
 			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.SQRT, LispNames.LOGAND, LispNames.LOGIOR,
-			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE);
+			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE, LispNames.LENGTH,
+			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
+			LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING);
 
 	private final boolean optimize;
 
@@ -432,6 +441,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispInteger ignored -> Ty.INT;
 			case LispDouble ignored -> Ty.FLOAT;
 			case LispString ignored -> Ty.STRING;
+			case LispChar ignored -> Ty.INT;
 			case LispTrue ignored -> Ty.INT;
 			case LispNil ignored -> Ty.INT;
 			case LispSymbol sym -> env.getOrDefault(sym.name(), Ty.INT);
@@ -513,9 +523,19 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				}
 				return Ty.STRING;
 			}
-			// Comparisons, predicates, not and the bitwise operators yield an integer.
+			// subseq and princ-to-string always yield a string.
+			case LispNames.SUBSEQ, LispNames.PRINC_TO_STRING -> {
+				for (int i = 1; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.STRING;
+			}
+			// Comparisons, predicates, not, the bitwise operators and the string/char
+			// accessors (a character is its code point) yield an integer.
 			case LispNames.EQ, LispNames.LT, LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.LOGAND,
-					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH -> {
+					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.LENGTH,
+					LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
+					LispNames.CHAR_EQ -> {
 				for (int i = 1; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
@@ -621,10 +641,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	 * @param heapBase the initial bump-allocator pointer (just past the static data)
 	 * @param allocIndex the function index of the {@code __alloc} bump allocator
 	 * @param memcpyIndex the function index of the {@code __memcpy} byte-copy helper
+	 * @param streqIndex the function index of the {@code __streq} string-compare helper
+	 * @param itoaIndex the function index of the {@code __itoa} integer-to-string helper
 	 * @param used whether the module uses linear memory at all
 	 */
 	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int allocIndex,
-			int memcpyIndex, boolean used) {
+			int memcpyIndex, int streqIndex, int itoaIndex, boolean used) {
 	}
 
 	private static final int STR_DATA_BASE = 8;
@@ -660,10 +682,37 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				boundaryString = true;
 			}
 		}
-		boolean used = !literals.isEmpty() || boundaryString;
+		// A body can produce a string without any literal or :string boundary (e.g.
+		// (length (princ-to-string n)) on an :int export), so string-producing ops also
+		// flag the memory as used.
+		boolean stringOp = false;
+		for (String name : reachable) {
+			if (usesStringOp(progn(Objects.requireNonNull(defuns.get(name)).body()))) {
+				stringOp = true;
+				break;
+			}
+		}
+		boolean used = !literals.isEmpty() || boundaryString || stringOp;
 		int allocIndex = internalCount + exportDecls.size();
 		int memcpyIndex = allocIndex + 1;
-		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, allocIndex, memcpyIndex, used);
+		int streqIndex = memcpyIndex + 1;
+		int itoaIndex = streqIndex + 1;
+		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, allocIndex, memcpyIndex, streqIndex,
+				itoaIndex, used);
+	}
+
+	/** String-producing operators that require linear memory even with no literal. */
+	private static final Set<String> STRING_PRODUCING_OPS = Set.of(LispNames.CONCATENATE, LispNames.SUBSEQ,
+			LispNames.PRINC_TO_STRING);
+
+	private static boolean usesStringOp(LispVal v) {
+		if (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s && STRING_PRODUCING_OPS.contains(s.name())) {
+				return true;
+			}
+			return usesStringOp(c.car()) || usesStringOp(c.cdr());
+		}
+		return false;
 	}
 
 	private static void collectLiterals(LispVal v, Set<String> out) {
@@ -710,11 +759,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				if (mem.used()) {
 					typeSec.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 });
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32 }, new Type[0]);
+					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
+					typeSec.addFunc(new Type[] { Type.I64 }, new Type[] { Type.I32 });
 				}
 			})
 			// Function section: function index k uses type index k (1:1).
 			.writeFunction(func -> {
-				int total = helperTypeBase + (mem.used() ? 2 : 0);
+				int total = helperTypeBase + (mem.used() ? 4 : 0);
 				for (int k = 0; k < total; k++) {
 					func.addFunction(k);
 				}
@@ -755,6 +806,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				if (mem.used()) {
 					code.addFunction(allocBody());
 					code.addFunction(memcpyBody());
+					code.addFunction(streqBody());
+					code.addFunction(itoaBody(mem.allocIndex()));
 				}
 			});
 		// Data section: the string-literal headers, only when present.
@@ -830,6 +883,164 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // block
 		w.write(Instruction.END); // function
 		return withLocals(b.toByteArray(), List.of());
+	}
+
+	// __streq(a i32, b i32) -> i32: 1 iff the two [len][bytes] strings have identical
+	// content. Params 0=a, 1=b; locals 2=la (length of a), 3=i.
+	private static byte[] streqBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		// if a == b return 1 (same header address, e.g. the same interned literal)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// la = len(a); if la != len(b) return 0
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0).write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1).write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// byte loop
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// if a[4+i] != b[4+i] return 0
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING));
+	}
+
+	// __itoa(v i64) -> i32: render the integer as a fresh [len][bytes] decimal string
+	// (with a leading '-' when negative). Param 0=v; locals 1=t (i64 magnitude),
+	// 2=count (i32), 3=p (i32 result), 4=idx (i32 write cursor). Note: Long.MIN_VALUE
+	// negation wraps, matching the backend's documented 2^63 integer range.
+	private static byte[] itoaBody(int allocIndex) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		Runnable loadMagnitude = () -> {
+			// t = v < 0 ? -v : v
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+			w.write(Instruction.I64_CONST).writeSignedLeb128(0);
+			w.write(Instruction.I64_LT_S);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.I64_CONST).writeSignedLeb128(0);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+			w.write(Instruction.I64_SUB);
+			w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+			w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+			w.write(Instruction.END);
+		};
+		loadMagnitude.run();
+		// count the digits (a do-while, so 0 renders as "0")
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I64_DIV_S);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// the sign takes one more byte
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.END);
+		// p = __alloc(4 + count); store the length header
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL).writeSignedLeb128(allocIndex);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// idx = p + 3 + count (the last content byte)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(4);
+		// write digits backwards (again a do-while)
+		loadMagnitude.run();
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I64_REM_S);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(48);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(4).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB).write(Instruction.SET_LOCAL).writeSignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I64_DIV_S);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// the '-' sign
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(45);
+		w.write(Instruction.I32_STORE8, 0x00, 0x04);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.END); // function
+		return withLocals(b.toByteArray(), List.of(Ty.INT, Ty.STRING, Ty.STRING, Ty.STRING));
 	}
 
 	private static Type[] wasmParamTypes(String name, Types types) {
@@ -1035,6 +1246,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(off);
 				return Ty.STRING;
 			}
+			case LispChar c -> {
+				// A character is its code point (see the BUILTINS note).
+				i64Const(fn.writer, c.codePoint());
+				return Ty.INT;
+			}
 			case LispTrue ignored -> {
 				i64Const(fn.writer, 1);
 				return Ty.INT;
@@ -1124,6 +1340,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.FLOAT -> compileFloat(args, fn);
 			case LispNames.SQRT -> compileSqrt(args, fn);
 			case LispNames.CONCATENATE -> compileConcatenate(args, fn);
+			case LispNames.LENGTH -> compileLength(args, fn);
+			case LispNames.SUBSEQ -> compileSubseq(args, fn);
+			case LispNames.STRING_EQ -> compileStringEq(args, fn);
+			case LispNames.CHAR -> compileCharAt(args, fn);
+			case LispNames.CHAR_CODE, LispNames.CODE_CHAR -> compileCharIdentity(name, args, fn);
+			case LispNames.CHAR_EQ -> compileComparison(cons, args, fn, Instruction.I64_EQ, Instruction.F64_EQ);
+			case LispNames.PRINC_TO_STRING -> compilePrincToString(args, fn);
 			case LispNames.LOGAND -> compileBitwise(args, fn, -1L, Instruction.I64_AND);
 			case LispNames.LOGIOR -> compileBitwise(args, fn, 0L, Instruction.I64_OR);
 			case LispNames.LOGXOR -> compileBitwise(args, fn, 0L, Instruction.I64_XOR);
@@ -1616,6 +1839,128 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.STRING;
 	}
 
+	// (length s): the stored i32 length header, widened to the i64 integer type.
+	private Ty compileLength(List<LispVal> args, Fn fn) {
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("--no-gc: length takes one argument in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.STRING);
+		fn.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		fn.writer.write(Instruction.I64_EXTEND_U_I32);
+		return Ty.INT;
+	}
+
+	// (char s i): the byte at content offset i, as its code point (a character IS its
+	// code here). No bounds check, like the rest of the backend's lean lowering.
+	private Ty compileCharAt(List<LispVal> args, Fn fn) {
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("--no-gc: char takes a string and an index in '" + fn.fnName + "'");
+		}
+		WasmWriter w = fn.writer;
+		compileCoerced(args.get(1), fn, Ty.STRING);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		compileCoerced(args.get(2), fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		return Ty.INT;
+	}
+
+	// char-code / code-char: identities, since a character is its code point.
+	private Ty compileCharIdentity(String name, List<LispVal> args, Fn fn) {
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("--no-gc: " + name + " takes one argument in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.INT);
+		return Ty.INT;
+	}
+
+	// (string= a b): byte-wise content comparison via the __streq helper.
+	private Ty compileStringEq(List<LispVal> args, Fn fn) {
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("--no-gc: string= takes two arguments in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.STRING);
+		compileCoerced(args.get(2), fn, Ty.STRING);
+		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.streqIndex());
+		fn.writer.write(Instruction.I64_EXTEND_U_I32);
+		return Ty.INT;
+	}
+
+	// (subseq s start [end]): allocate a fresh [len][bytes] header holding the content
+	// slice [start, end) (end defaults to the length). No bounds check.
+	private Ty compileSubseq(List<LispVal> args, Fn fn) {
+		if (args.size() != 3 && args.size() != 4) {
+			throw new UnsupportedOperationException(
+					"--no-gc: subseq takes a string, a start and an optional end in '" + fn.fnName + "'");
+		}
+		WasmWriter w = fn.writer;
+		compileCoerced(args.get(1), fn, Ty.STRING);
+		int s = fn.allocLocal(Ty.STRING);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		compileCoerced(args.get(2), fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		int start = fn.allocLocal(Ty.STRING); // i32 scratch
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(start);
+		int len = fn.allocLocal(Ty.STRING); // i32 scratch: end - start
+		if (args.size() > 3) {
+			compileCoerced(args.get(3), fn, Ty.INT);
+			w.write(Instruction.I32_WRAP_I64);
+		}
+		else {
+			emitStrLen(w, s);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(start);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(len);
+		// dst = __alloc(4 + len); store the length header.
+		int dst = fn.allocLocal(Ty.STRING);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// __memcpy(dst + 4, s + 4 + start, len)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(start);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.memcpyIndex());
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.STRING;
+	}
+
+	// (princ-to-string x): an integer renders via the __itoa helper; a string passes
+	// through unchanged. Floats are not supported (no float printer in scalar mode).
+	private Ty compilePrincToString(List<LispVal> args, Fn fn) {
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(
+					"--no-gc: princ-to-string takes one argument in '" + fn.fnName + "'");
+		}
+		Ty argTy = staticType(args.get(1), fn);
+		if (argTy == Ty.STRING) {
+			compileCoerced(args.get(1), fn, Ty.STRING);
+			return Ty.STRING;
+		}
+		if (argTy == Ty.FLOAT) {
+			throw new UnsupportedOperationException(
+					"--no-gc: princ-to-string of a float is not supported in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.INT);
+		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.itoaIndex());
+		return Ty.STRING;
+	}
+
 	// Pushes the stored length (the i32 header word) of the string whose pointer is in
 	// the
 	// given local.
@@ -1772,6 +2117,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispDouble ignored -> {
 			}
 			case LispString ignored -> {
+			}
+			case LispChar ignored -> {
 			}
 			case LispTrue ignored -> {
 			}

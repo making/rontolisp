@@ -14,10 +14,24 @@
 ;;   0x50000  general lowering out-params (path option, consume/stream results, io results)
 ;;   0x50200  request method string ("GET" etc.)
 ;;   0x50210  dispatch return (ptr,len) pair
-;;   0x50300  init-once flag
 ;;   0x70000  request body bytes (read from the incoming-body stream)
+;;
+;; Per-request allocator reset: an instance-reusing host (jco serve, wasmCloud) calls
+;; `serve` many times on one instance, and neither bump allocator ever rewinds, so linear
+;; memory would grow by roughly the response size per request (the core's __ronto_alloc
+;; memory.grows). Each request therefore restores both bump pointers to their post-init
+;; snapshots. The core heap restore is guarded by the runtime intern count: _intern records
+;; reference the token bytes in place (possibly heap ones), so if interning happened since
+;; the snapshot, the snapshot is ratcheted up to the current pointer instead of restored.
+;; The init flag and the snapshots live in adapter-local GLOBALS, not linear memory: a
+;; response bigger than ~48 KiB sweeps the core bump heap straight across the 0x50000
+;; scratch page, so any state kept there would be clobbered by request N and misread by
+;; request N+1 (the historical 0x50300 init flag survived only by luck -- a nonzero body
+;; byte still read as "initialized").
 (module
   (import "mem" "memory" (memory (;0;) 16))
+  ;; The mem module's bump pointer (see the per-request reset above).
+  (import "mem" "hp" (global $hp (mut i32)))
   ;; The rontolisp core, instantiated first. `run` runs the top-level once (defun/intern
   ;; setup); `%http-dispatch` is the wasm-export wrapper running the Lisp handler.
   (import "core" "run" (func $core_init (result i32)))
@@ -41,6 +55,14 @@
   (import "w" "drop-req" (func $drop_req (param i32)))
   (import "w" "drop-in" (func $drop_in (param i32)))
   (import "w" "drop-body" (func $drop_body (param i32)))
+
+  ;; Init-once flag + post-init allocator snapshots (core heap ptr @84, runtime intern
+  ;; count @100, mem module's $hp). Adapter-local globals, NOT linear memory (see the
+  ;; header comment).
+  (global $inited (mut i32) (i32.const 0))
+  (global $save_heap (mut i32) (i32.const 0))
+  (global $save_intern (mut i32) (i32.const 0))
+  (global $save_hp (mut i32) (i32.const 0))
 
   ;; Write a fixed method string into scratch 0x50200 from the wasi method-variant
   ;; discriminant (0=get,1=head,2=post,3=put,4=delete,5=connect,6=options,7=trace,8=patch;
@@ -88,8 +110,23 @@
     (local $resp i32) (local $obody i32) (local $ostream i32)
 
     ;; --- init the rontolisp core once (top-level defun/intern setup) ---
-    (if (i32.eqz (i32.load (i32.const 0x50300)))
-      (then (drop (call $core_init)) (i32.store (i32.const 0x50300) (i32.const 1))))
+    (if (i32.eqz (global.get $inited))
+      (then
+        (drop (call $core_init))
+        (global.set $inited (i32.const 1))
+        ;; Snapshot the allocator state the reset below restores.
+        (global.set $save_heap (i32.load (i32.const 84)))
+        (global.set $save_intern (i32.load (i32.const 100)))
+        (global.set $save_hp (global.get $hp))))
+
+    ;; --- per-request allocator reset (see the header comment) ---
+    (global.set $hp (global.get $save_hp))
+    (if (i32.eq (i32.load (i32.const 100)) (global.get $save_intern))
+      (then (i32.store (i32.const 84) (global.get $save_heap)))
+      (else
+        ;; Runtime interning happened: keep its bytes, ratchet the snapshot up.
+        (global.set $save_heap (i32.load (i32.const 84)))
+        (global.set $save_intern (i32.load (i32.const 100)))))
 
     ;; --- method: variant disc @0x50000 -> fixed string @0x50200 ---
     (call $req_method (local.get $request) (i32.const 0x50000))
@@ -165,14 +202,25 @@
     (drop (call $set_status (local.get $resp) (local.get $status)))
     (call $resp_body (local.get $resp) (i32.const 0x50040))
     (local.set $obody (i32.load (i32.const 0x50044)))
+    ;; Hand the response to the host BEFORE streaming the body: the host only starts
+    ;; consuming the body stream once response-outparam.set has delivered the response,
+    ;; and blocking-write-and-flush blocks once its ~4096-byte buffer is full -- setting
+    ;; the outparam after the writes deadlocks on any response larger than one buffer.
+    (call $resp_set (local.get $respout) (i32.const 0) (local.get $resp)
+      (i32.const 0) (i64.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $body_write (local.get $obody) (i32.const 0x50050))
     (local.set $ostream (i32.load (i32.const 0x50054)))
-    (if (i32.lt_u (local.get $i) (local.get $ret_len))
-      (then
-        (call $io_write (local.get $ostream)
-          (i32.add (local.get $ret_ptr) (local.get $i)) (i32.sub (local.get $ret_len) (local.get $i))
-          (i32.const 0x50060))))
+    ;; blocking-write-and-flush accepts at most 4096 bytes per call, so chunk the body
+    ;; (mirrors adapter-http.wat's request-body write loop); bail out on a stream error.
+    (block $bwd (loop $bwl
+      (br_if $bwd (i32.ge_u (local.get $i) (local.get $ret_len)))
+      (local.set $n (i32.sub (local.get $ret_len) (local.get $i)))
+      (if (i32.gt_u (local.get $n) (i32.const 4096)) (then (local.set $n (i32.const 4096))))
+      (call $io_write (local.get $ostream)
+        (i32.add (local.get $ret_ptr) (local.get $i)) (local.get $n)
+        (i32.const 0x50060))
+      (br_if $bwd (i32.load8_u (i32.const 0x50060)))
+      (local.set $i (i32.add (local.get $i) (local.get $n)))
+      (br $bwl)))
     (call $drop_out (local.get $ostream))
-    (call $body_finish (local.get $obody) (i32.const 0) (i32.const 0) (i32.const 0x50070))
-    (call $resp_set (local.get $respout) (i32.const 0) (local.get $resp)
-      (i32.const 0) (i64.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (call $body_finish (local.get $obody) (i32.const 0) (i32.const 0) (i32.const 0x50070))))

@@ -157,6 +157,49 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
+	void compiledDirectiveMarshalsRequestHeaders() throws Exception {
+		// The JDK HttpServer normalizes header names (first letter upper, rest lower),
+		// so the handler looks the normalized name up in the :headers alist.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun header-value (headers name)
+				  (if headers
+				      (if (equal (car (car headers)) name)
+				          (cdr (car headers))
+				          (header-value (cdr headers) name))
+				      "missing"))
+				(defun handle (request)
+				  (list :status 200
+				        :body (header-value (getf request :headers) "X-token")))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/"))
+			.header("X-Token", "secret42")
+			.GET()
+			.build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		assertThat(response.body()).isEqualTo("secret42");
+	}
+
+	@Test
+	void compiledDirectiveMarshalsResponseHeaders() throws Exception {
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (request)
+				  (list :status 200
+				        :headers (list (cons "content-type" "text/plain") (cons "x-custom" "v1"))
+				        :body "ok"))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> response = get(port, "/");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.headers().firstValue("content-type")).hasValue("text/plain");
+		assertThat(response.headers().firstValue("x-custom")).hasValue("v1");
+		assertThat(response.body()).isEqualTo("ok");
+	}
+
+	@Test
 	void compiledDirectiveReturnsCustomStatusPerRequest() throws Exception {
 		int port = freePort();
 		compileAndServeInBackground("""

@@ -68,9 +68,9 @@ GET /hello
 rontolisp executable JAR, `rontolisp-0.1.0-SNAPSHOT-exec.jar`, on the
 classpath) and the **WASI component** backend
 (`--component`, a `wasi:http/incoming-handler` component for `wasmtime serve`).
-On the JVM and WASI component backends, request and response headers are not
-marshalled yet: the handler sees `:headers nil` and `:headers` in the response
-is ignored. Only the interpreter passes headers through.
+On the WASI component backend, request and response headers are not marshalled
+yet: the handler sees `:headers nil` and `:headers` in the response is ignored.
+The interpreter and the JVM backend pass headers through.
 
 The serve component is plain WASI 0.2, so it is not tied to wasmtime: any host
 that serves `wasi:http` 0.2 and enables the WebAssembly GC proposal can run it —

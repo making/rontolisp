@@ -116,9 +116,9 @@ and it offers no flag to turn it on.
 
 ## Limitations
 
-On the JVM and WASI component backends, request and response headers are not
-marshalled yet: the handler sees `:headers nil` and `:headers` in the response
-is ignored. Only the interpreter passes headers through. See the
+On the WASI component backend, request and response headers are not marshalled
+yet: the handler sees `:headers nil` and `:headers` in the response is ignored.
+The interpreter and the JVM backend pass headers through. See the
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
 reference page for the details.
 

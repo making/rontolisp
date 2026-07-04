@@ -4,6 +4,9 @@
   (global $hp (;0;) (mut i32) i32.const 65536)
   (export "memory" (memory 0))
   (export "cabi_realloc" (func 0))
+  ;; The bump pointer, exported so the serve adapter can reset it per request
+  ;; (an instance-reusing host would otherwise grow it without bound).
+  (export "hp" (global $hp))
   (func (;0;) (type 0) (param i32 i32 i32 i32) (result i32)
     (local $r i32)
     global.get $hp

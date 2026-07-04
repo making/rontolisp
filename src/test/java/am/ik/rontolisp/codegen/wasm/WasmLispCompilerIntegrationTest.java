@@ -512,6 +512,41 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(noGcStringLength(true, program, "band", "30")).isEqualTo(30);
 	}
 
+	@Test
+	void noGcSupportsStringPrimitives() throws Exception {
+		// The Phase-2b string primitives: length / subseq / string= / char (a character
+		// is its code point under --no-gc) / char-code / char= / princ-to-string. All
+		// exercised through scalar boundaries so wasmtime --invoke can drive them.
+		String program = """
+				(defun route (n)
+				  (let ((path (if (< n 0) "other" (subseq "/hello/world" 0 n))))
+				    (cond ((string= path "/hello") 1)
+				          ((char= (char path 1) #\\h) 2)
+				          (t 3))))
+				(rontolisp:wasm-export 'route :params '(:int) :returns :int)
+				(defun digits (n) (length (princ-to-string n)))
+				(rontolisp:wasm-export 'digits :params '(:int) :returns :int)
+				(defun code-at (n) (char-code (char "abc" n)))
+				(rontolisp:wasm-export 'code-at :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "route", "6")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(false, program, "route", "4")).isEqualTo("2");
+		assertThat(compileNoGcAndInvoke(false, program, "route", "-1")).isEqualTo("3");
+		assertThat(compileNoGcAndInvoke(false, program, "digits", "0")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(false, program, "digits", "12345")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(false, program, "digits", "-42")).isEqualTo("3");
+		assertThat(compileNoGcAndInvoke(false, program, "code-at", "1")).isEqualTo("98");
+		// Composes with the tree shaker (--optimize).
+		assertThat(compileNoGcAndInvoke(true, program, "route", "6")).isEqualTo("1");
+		// A string-producing op with no literal and no :string boundary still gets the
+		// memory + helpers (subseq/princ-to-string flag the memory as used).
+		String noLiteral = """
+				(defun width (n) (length (princ-to-string (* n n))))
+				(rontolisp:wasm-export 'width :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, noLiteral, "width", "100")).isEqualTo("5");
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,
@@ -835,6 +870,31 @@ class WasmLispCompilerIntegrationTest {
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("GET /hello");
+	}
+
+	@Test
+	void httpHandlerServesResponseLargerThanIoChunkUnderWasmtimeServe() throws Exception {
+		// wasi:io's blocking-write-and-flush accepts at most 4096 bytes per call, so the
+		// serve adapter must chunk the response body (adapter-serve.wat, like
+		// adapter-http.wat's request-body loop). 64 chars doubled 7 times = 8192 bytes.
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (let ((s "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
+				    (dotimes (i 7)
+				      (setq s (concatenate 'string s s)))
+				    (list :status 200 :body s)))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] componentBytes = new WasmLispCompiler(false, true, false, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-big.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime serve -W gc=y --addr 127.0.0.1:8081 serve-big.wasm >/tmp/serve-big.log 2>&1 &"
+						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/big.out -w '%{http_code}'"
+						+ " http://127.0.0.1:8081/big) && [ \"$code\" != 000 ]"
+						+ " && { echo \"$code $(wc -c < /tmp/big.out)\"; exit 0; }; sleep 0.25; done;"
+						+ " cat /tmp/serve-big.log; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve large response; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("200 8192");
 	}
 
 	@Test

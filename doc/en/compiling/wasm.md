@@ -286,9 +286,14 @@ subset:
   `minimize`, `repeat`/`while`/`until`/`do`/`return`) — its `collect`/`append`/`nconc`
   and `for ... in`/`on` clauses allocate lists and are not;
 - float/int conversions: `float truncate floor ceiling round`;
-- strings: string literals and `(concatenate 'string ...)`.
+- strings and characters: string literals, character literals, `(concatenate 'string ...)`,
+  `length`, `subseq`, `string=`, `char`, `char-code`/`code-char`, `char=` and
+  `princ-to-string` (of integers and strings). There is no separate character type: a
+  character is represented by its code point, so the portable idioms
+  `(char= (char s i) #\x)` and `(char-code (char s i))` behave exactly like the other
+  backends, while a bare `(char s i)` crossing an `:int` boundary shows the code.
 
-Anything else that would allocate a heap object (cons/list, characters, symbols, vectors,
+Anything else that would allocate a heap object (cons/list, symbols, vectors,
 hash tables, `eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment to
 a global, a lambda-list keyword such as `&optional`/`&rest`/`&key` — the rest list is a
 cons) makes the function ineligible. Rather than miscompile silently, that is a
@@ -346,6 +351,18 @@ an accumulator loop:
       (setq out (concatenate 'string out "*")))
     out))
 (stars 5)  ; => "*****"
+```
+
+Slicing and inspection work on the same representation: `length` reads the header,
+`subseq` copies a slice into a fresh buffer, `string=` compares content byte-wise, `char`
+indexes a byte, and `princ-to-string` renders an integer — enough for routing/parsing
+kernels, not just accumulation:
+
+```lisp
+(defun describe-int (n)
+  (let ((s (princ-to-string n)))
+    (concatenate 'string s " has " (princ-to-string (length s)) " chars")))
+(describe-int -42)  ; => "-42 has 3 chars"
 ```
 
 A module that uses strings gains a (growable) linear memory, and exports that `memory` plus
@@ -499,8 +516,9 @@ the exported `__ronto_alloc(size)` bump allocator), passes `(ptr, len)`, then de
 `(ptr, len)` the export returns.
 
 `:string` works under `--no-gc`, so the module still runs on **any** engine — as long as
-the function stays within the non-GC string subset (string literals and
-`(concatenate 'string ...)`). A greeting builder is enough to show the protocol:
+the function stays within the non-GC string subset (see the
+[eligible subset](#eligible-subset) above). A greeting builder is enough to show the
+protocol:
 
 ```lisp
 ;; greetkit.lisp

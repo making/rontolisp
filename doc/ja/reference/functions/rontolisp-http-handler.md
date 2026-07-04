@@ -68,10 +68,10 @@ GET /hello
 実行可能 JAR `rontolisp-0.1.0-SNAPSHOT-exec.jar` がクラスパスに必要）、
 **WASI コンポーネント** バックエンド
 （`--component`、`wasmtime serve` 用の `wasi:http/incoming-handler`
-コンポーネント）で動作します。JVM と WASI コンポーネントのバックエンドでは、
+コンポーネント）で動作します。WASI コンポーネントバックエンドでは、
 リクエスト／レスポンスのヘッダはまだ受け渡しされません。ハンドラには
-`:headers nil` が渡され、レスポンスの `:headers` は無視されます。ヘッダを
-そのまま通すのはインタープリタだけです。
+`:headers nil` が渡され、レスポンスの `:headers` は無視されます。
+インタープリタと JVM バックエンドはヘッダをそのまま受け渡しします。
 
 serve コンポーネントは純粋な WASI 0.2 なので wasmtime 専用ではありません。
 `wasi:http` 0.2 を提供し WebAssembly GC プロポーザルを有効化できるホストであれば

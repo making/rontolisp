@@ -52,17 +52,46 @@ the bottom). Created 2026-07-04.
 - **Spin**: `spin up` cannot run any rontolisp component -- Spin's embedded
   wasmtime does not enable the wasm-GC proposal. Revisit if Spin exposes a GC
   flag / runtime-config, or gains GC by default.
-- **Headers**: v1 marshals only method/path/body (request) and status/body
-  (response) on BOTH compiled backends. Request/response headers are dropped.
-  WASM: extend the `%http-dispatch` encoding (e.g. a length-prefixed header
-  block) and the adapter-serve.wat request read / response write (the fetch
-  adapter's `fields.entries` / `fields.append` loops are the template).
-  JVM: extend `JvmHttpHandlerRuntimeBuilder`'s `handle()` to walk
-  `Request.headers()` into the `:headers` alist and the response alist back into
-  `Response` headers (the interpreter's `invokeHttpHandler` is the template).
-- **Allocator reset**: the mem-http `cabi_realloc` and the core `__ronto_alloc`
-  bump pointers never reset, so a very long-lived server eventually exhausts the
-  16-page memory. Reset per request (guarded) or grow memory.
+- **Headers (WASM)**: the WASM serve component marshals only method/path/body
+  (request) and status/body (response); headers are dropped. Extend the
+  `%http-dispatch` encoding (e.g. a length-prefixed header block) and the
+  adapter-serve.wat request read / response write (the fetch adapter's
+  `fields.entries` / `fields.append` loops are the template).
+  JVM headers DONE 2026-07-04: `JvmHttpHandlerRuntimeBuilder.handle()` walks
+  `Request.headers()` into the `:headers` alist and the response `:headers`
+  alist back into `Response` headers (interpreter-lenient: malformed entries
+  skipped). Tests: `HttpHandlerJvmTest.compiledDirectiveMarshalsRequestHeaders`
+  / `MarshalsResponseHeaders`.
+- **Allocator reset** -- DONE 2026-07-04. The mem-http `cabi_realloc` and core
+  `__ronto_alloc` bump pointers never rewound, so an instance-reusing host (jco
+  serve, wasmCloud -- verified: jco reuses one instance across requests, unlike
+  `wasmtime serve` which instantiates per request) grew linear memory by
+  roughly the response size per request (`__ronto_alloc` memory.grows).
+  `adapter-serve.wat` now snapshots the core heap ptr (@84), the runtime intern
+  count (@100) and the mem `$hp` global (newly exported as `"hp"`) after init,
+  and restores both allocators at each `serve` entry; the core heap restore is
+  guarded by the intern count (runtime interning ratchets the snapshot up
+  instead, since `_intern` records reference token bytes in place). The init
+  flag AND the snapshots live in ADAPTER-LOCAL GLOBALS, not linear memory: a
+  response > ~48 KiB sweeps the core bump heap across the whole 0x50000 scratch
+  page, so linear-memory state written by request N is garbage by request N+1
+  (observed as a jco crash: `$hp` snapshot read back as 0x78787878 -> realloc
+  out of bounds; the historical 0x50300 init flag survived only because any
+  nonzero body byte still read as "initialized"). GC-heap state (globals,
+  hash tables) is untouched by the reset -- verified with a counter handler on
+  jco (1,2,3,... across requests) and 10 x 256 KiB requests on one instance.
+- **Response chunking + outparam ordering** -- DONE 2026-07-04.
+  `blocking-write-and-flush` accepts at most 4096 bytes per call, and
+  adapter-serve.wat wrote the whole body in one call, so any response > 4096
+  bytes failed on EVERY host ("Buffer too large... expected at most 4096" ->
+  500). Now chunked at 4096 like adapter-http.wat's request-body loop, AND
+  `response-outparam.set` moved BEFORE the body writes: the host only starts
+  consuming the body stream after the outparam is set, so set-after-write
+  deadlocks as soon as the body exceeds one host buffer (the old order only
+  ever worked because a single <= 4096-byte write fit the buffer). Order now:
+  ctor/status/body -> resp_set -> write chunks -> drop -> finish. Test:
+  `WasmLispCompilerIntegrationTest.httpHandlerServesResponseLargerThanIoChunkUnderWasmtimeServe`
+  (8 KiB); 256 KiB verified manually on wasmtime serve + jco.
 - **JVM backend** — DONE (2026-07-04, see SHIPPED above). Original design
   (reuses two proven mechanisms):
   1. The compiled program class IMPLEMENTS `HttpHandlerSupport.Handler`

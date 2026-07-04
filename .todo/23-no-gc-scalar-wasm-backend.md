@@ -51,14 +51,24 @@ already decodes the memory/global/grow/block/loop opcodes). Tests: `ScalarWasmCo
 AtTheBoundary` in `WasmLispCompilerIntegrationTest` (wasmtime, no `-W gc`, asserts the
 returned `:string` length). Docs: README "Strings under `--no-gc`"; CLAUDE.md bullet.
 
+**Phase 2b (2026-07-04) — string/char primitives.** Follow-up (b) landed: `length`,
+`subseq` (end optional, no bounds check), `string=` (a `__streq` helper), `char` /
+`char-code` / `code-char` / `char=` (a character IS its i64 code point — no separate
+type; `char-code`/`code-char` are identities, `char=` is numeric `=`, `#\x` literals
+compile as their code, so `(char= (char s i) #\x)` is portable across backends) and
+`princ-to-string` (INT via a `__itoa` helper; STRING passthrough; FLOAT = compile
+error). String-producing ops (concatenate/subseq/princ-to-string) also flag the memory
+as used, so `(length (princ-to-string n))` works with no literal and no `:string`
+boundary. Motivated by the no-gc http-handler Tier A study (2026-07-04 session): these
+are its prerequisite string ops, and independently make routing/parsing kernels
+expressible. Tests: `WasmLispCompilerIntegrationTest.noGcSupportsStringPrimitives`;
+docs: "Strings" section of `doc/*/compiling/wasm.md`.
+
 **Remaining follow-ups.** (a) Convenience numeric builtins `gcd`/`lcm`/`expt`/`isqrt` are
 not yet primitives, but are now user-expressible via the loop forms (e.g. an iterative
-Euclid `gcd`); add them as builtins only if demand warrants. (b) **More string ops**:
-only literals + `(concatenate 'string ...)` are in so far; `length`/`char`/`char-code`/
-`subseq`/`string=` etc. would make string kernels far more capable (each maps cleanly onto
-the linear-memory header). (c) **`:s-expr`** — the cons/reader/printer runtime (a uniform
-tagged value for heterogeneous lists) remains the genuinely large piece; see "Out of
-scope" below.
+Euclid `gcd`); add them as builtins only if demand warrants. (b) **`:s-expr`** — the
+cons/reader/printer runtime (a uniform tagged value for heterogeneous lists) remains the
+genuinely large piece; see "Out of scope" below.
 
 **Original design note (2026-06-28).** Raised in the `claude-opus` session
 right after `--optimize` + the `--no-wasi` `_initialize` rename, while discussing how
