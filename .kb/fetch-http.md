@@ -140,8 +140,21 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   pre-pass rewrites the directive into a `%http-dispatch` wasm-export wrapper
   (`"<status>\n<body>"` encoding), `WasmLispCompiler` serve mode un-gates
   wasm-export in component mode, and `WasmServeComponentBuilder.buildServe`
-  wires mem + core + `adapter-serve.wasm` into a
+  wires mem + `adapter-serve-p1.wasm` + core + `adapter-serve.wasm` into a
   `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve -W gc=y`.
+  `adapter-serve-p1.wat` is the preview1 bridge: instantiated BEFORE the core
+  (the serve adapter imports the core's `%http-dispatch`, so unlike the
+  `wasmtime run` adapter it cannot also provide the core's
+  `wasi_snapshot_preview1` imports), it implements `random_get` over
+  `wasi:random/random@0.2.0`, `clock_time_get` over `wasi:clocks/{wall,
+  monotonic-}clock@0.2.0` and `fd_write` (fd 1/2) over `wasi:cli/{stdout,
+  stderr}@0.2.0` streams in 4096-byte `blocking-write-and-flush` chunks (the
+  stream handles are cached in module globals), so `random` / time built-ins /
+  `print` work inside a served handler; `environ_*` report a zero environment
+  (`getenv` -> nil), `fd_read` is immediate EOF, `path_open` returns errno 76
+  (the core traps on it -- file streams stay unavailable, the proxy world has
+  no filesystem). Test:
+  `WasmLispCompilerIntegrationTest.httpHandlerRandomClockAndPrintUnderWasmtimeServe`.
   The serve component is plain WASI 0.2: unlike the `wasmtime run` path for
   regular components, none of the `component-model-async` flags are needed, so
   any `wasi:http` 0.2 host with the wasm-GC proposal enabled can serve it.

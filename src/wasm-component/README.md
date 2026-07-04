@@ -186,3 +186,38 @@ addition to the async flags.
 When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-http.wat`
 over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http.wit`, regenerate, and
 re-derive the `buildHttp` constants — the rontolisp core's `http.fetch` seam stays unchanged.
+
+## Serve variant (`rontolisp:http-handler`) — pure WASI 0.2
+
+A program using `rontolisp:http-handler` compiles to the serve variant: a
+`wasi:http/incoming-handler@0.2.0` component for `wasmtime serve` (or any
+`wasi:http` 0.2 host with wasm-GC). It is pure WASI 0.2 — no async canon
+built-ins, so none of the `component-model-async` flags. The parallel blob set
+is:
+
+```
+src/wasm-component/
+  uni-serve.wit  core-serve.wat  adapter-serve.wat  adapter-serve-p1.wat
+  deps/random-0.2  deps/cli-0.2   (0.2 deps; io-0.2 / clocks-0.2 / http shared)
+
+src/main/resources/.../component/
+  import-block-serve.bin  adapter-serve.wasm  adapter-serve-p1.wasm
+```
+
+`uni-serve.wit` (world `uni-serve`) imports the 0.2 http/io incoming-handler
+machinery plus the proxy world's `wasi:random/random`, `wasi:clocks/{wall,
+monotonic-}clock` and `wasi:cli/{stdout,stderr}`. Two adapters sandwich the
+rontolisp core because instantiation order forces it: `adapter-serve.wat`
+(reads the incoming request, calls the core's exported `%http-dispatch`,
+writes the outgoing response) imports the core, so it comes AFTER — which
+means it cannot also provide the core's `wasi_snapshot_preview1` imports the
+way `adapter.wat` does for `wasmtime run` components. `adapter-serve-p1.wat`
+is that missing preview1 bridge, instantiated BEFORE the core: `random_get`
+over `get-random-u64`, `clock_time_get` over the 0.2 clocks, `fd_write` (fd
+1/2) over the cli stdout/stderr streams, a zero environment for `environ_*`
+(`getenv` returns nil), EOF for `fd_read`, errno 76 for `path_open` (no
+filesystem in the proxy world). `WasmServeComponentBuilder.build` wires
+mem -> bridge -> core -> serve adapter and lifts the adapter's `serve` export
+synchronously as `handle`. Note `wasi:clocks/monotonic-clock` lands as import
+instance 0 (wasm-tools hoists it first as a dependency of `wasi:http/types`),
+before `wasi:io/error`. Details: `../../.kb/fetch-http.md`.

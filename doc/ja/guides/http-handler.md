@@ -122,6 +122,13 @@ WASI コンポーネントバックエンドでは、リクエスト／レスポ
 受け渡しされません。ハンドラには `:headers nil` が渡され、レスポンスの
 `:headers` は無視されます。インタープリタと JVM バックエンドはヘッダを
 そのまま受け渡しします。
+
+serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
+`print`（ホストの標準出力への出力）はすべて動作します — コンポーネントが
+これらを、すべての `wasi:http` ホストが提供する `wasi:random`・`wasi:clocks`・
+`wasi:cli` インタフェースへブリッジするためです。`getenv` は `nil` を返し
+（サービングホストは環境変数を公開しません）、ファイルストリームは利用
+できません。
 詳細は
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
 のリファレンスページを参照してください。

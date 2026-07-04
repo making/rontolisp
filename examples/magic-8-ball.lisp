@@ -1,56 +1,7 @@
-# Bridge random/clock (WASI) into serve components, then ship the Magic 8 Ball example
-
-## Problem
-
-A serve component (`rontolisp:http-handler` + `--component`) compiles the core
-in the same way as `--no-wasi`: the eight WASI Preview-1-shaped imports
-(`fd_write`, `fd_read`, `path_open`, `fd_close`, `random_get`,
-`clock_time_get`, `environ_sizes_get`, `environ_get`) are not imported and
-`unreachable` trap stubs are defined at function indices 0-7 instead
-(`WasmLispCompiler.java` around lines 1488-1496, the `this.noWasi || this.serve`
-branches). So inside a served handler, `random`, the time built-ins,
-`getenv`, file streams and even `print` all trap at the first call — wasmtime
-answers `500 Internal Server Error` (`wasm trap: wasm 'unreachable' instruction
-executed`, then `guest never invoked 'response-outparam::set'`).
-
-Verified 2026-07-04: `(random 100)` works under `wasmtime run` in both Preview 1
-and `--component` mode, but a handler calling `(random 100)` 500s on every
-request under `wasmtime serve`.
-
-This is a rontolisp v1 limitation, NOT a host limitation: the `wasi:http`
-proxy world that `wasmtime serve` provides DOES include `wasi:random/random`,
-`wasi:clocks/{monotonic-clock,wall-clock}` and `wasi:cli` stdout/stderr.
-
-## Plan
-
-Extend `adapter-serve.wat` (and `WasmServeComponentBuilder.buildServe`) to
-implement at least `random_get` and `clock_time_get` over `wasi:random` /
-`wasi:clocks` instead of leaving them as trap stubs — the same bridging that
-`adapter.wat` already does for `wasmtime run` components. Optionally also
-bridge `fd_write` for fd 1/2 to `wasi:cli` stdout/stderr so `print`-style
-debugging works in a served handler. `environ_get` and `path_open` stay
-unavailable (not part of the proxy world).
-
-## Goal: restore examples/magic-8-ball.lisp with true randomness
-
-The Magic 8 Ball example (a reproduction of the classic Spin tutorial JSON
-API) was written and fully verified on 2026-07-04 — interpreter, JVM class,
-`wasmtime serve -W gc=y` and `jco serve` (jco 1.24.6; note jco binds
-`localhost` as IPv6, so curl `localhost`, not `127.0.0.1`) all returned
-byte-identical responses — but rolled back because serve components have no
-entropy, which forced a hash-of-the-question workaround instead of the
-tutorial's random draw. Once this bridge lands, restore it with
-`(random (length *answers*))` (keep the question/body parsing as is) and
-re-add its `examples/README.md` row.
-
-Last verified source (hash-based; replace `consult` with a `random` draw when
-restoring):
-
-```lisp
 ;; The Magic 8 Ball -- a rontolisp reproduction of the classic Spin tutorial
 ;; (https://spinframework.dev/ "Building a Magic 8 Ball JSON API"), on
 ;; rontolisp:http-handler. Ask it a yes/no question and it answers with one
-;; of the twenty canonical Magic 8 Ball replies as JSON:
+;; of the twenty canonical Magic 8 Ball replies, drawn at random, as JSON:
 ;;
 ;;   GET  /?question=Will+it+work    -> {"question": "Will+it+work", "answer": "..."}
 ;;   POST /  with body               -> the body is the question -- either raw
@@ -121,16 +72,10 @@ restoring):
 
 ;; --- consulting the ball -----------------------------------------------------
 
-;; A 31x rolling hash. The modulus keeps every intermediate value inside the
-;; WASM i31 fixnum range (1000003 * 31 + 255 < 2^30).
-(defun ball-hash (s)
-  (let ((h 0))
-    (dotimes (i (length s) h)
-      (setq h (mod (+ (* h 31) (char-code (char s i))) 1000003)))))
-
-(defun consult (question)
-  (nth (mod (ball-hash (string-downcase question)) (length *answers*))
-       *answers*))
+;; A fresh random draw per shake, like the real thing -- asking the same
+;; question twice may answer differently.
+(defun consult ()
+  (nth (random (length *answers*)) *answers*))
 
 (defun handle (request)
   (let ((path (path-only (getf request :path))))
@@ -138,7 +83,7 @@ restoring):
         (let ((question (question-of request)))
           (if question
               (json-response 200 (list :question question
-                                       :answer (consult question)))
+                                       :answer (consult)))
               (json-response 400
                              (list :error "ask the ball a question"
                                    :usage "GET /?question=... or POST a question body"))))
@@ -147,4 +92,3 @@ restoring):
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).
 (rontolisp:http-handler 'handle 8080)
-```

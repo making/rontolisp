@@ -898,6 +898,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void httpHandlerRandomClockAndPrintUnderWasmtimeServe() throws Exception {
+		// Inside a served handler random / time / print must work: the serve component
+		// bridges the preview1 random_get / clock_time_get / fd_write imports to the
+		// wasi:random / wasi:clocks / wasi:cli interfaces of the wasi:http proxy world
+		// (adapter-serve-p1.wat) instead of trapping.
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (print "handling")
+				  (let ((r (random 10)))
+				    (list :status 200
+				          :body (concatenate 'string
+				                             (if (and (integerp r) (>= r 0) (< r 10)) "r-in" "r-out")
+				                             " "
+				                             (if (numberp (get-universal-time)) "t-num" "t-bad")))))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] componentBytes = new WasmLispCompiler(false, true, false, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-rand.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime serve -W gc=y --addr 127.0.0.1:8082 serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8082/) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-rand.log; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve random/clock round trip; log: %s", result.getStderr())
+			.isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("r-in t-num");
+	}
+
+	@Test
 	void componentFileWriteThenRead() throws Exception {
 		// Component mode does file I/O over wasi:filesystem@0.3.0 (read-via-stream /
 		// append-via-stream, driven through stream/future): the adapter maps the

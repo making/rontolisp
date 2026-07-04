@@ -211,7 +211,9 @@ public final class WasmComponentBuilder {
 	/**
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
 	 * wrap the rontolisp core (which exports {@code %http-dispatch},
-	 * {@code __ronto_alloc} and {@code run}) with the serve adapter
+	 * {@code __ronto_alloc} and {@code run}) with the preview1 bridge
+	 * ({@code adapter-serve-p1.wasm}: random / clocks / stdout-stderr for the core's
+	 * {@code wasi_snapshot_preview1} imports) and the serve adapter
 	 * ({@code adapter-serve.wasm}) so the component exports
 	 * {@code wasi:http/incoming-handler@0.2.0} and runs under {@code wasmtime serve} (or
 	 * any {@code wasi:http} 0.2 host with wasm-GC enabled, e.g. jco or wasmCloud).

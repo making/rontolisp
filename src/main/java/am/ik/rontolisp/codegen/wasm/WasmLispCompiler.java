@@ -1418,11 +1418,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// with internal trap stubs in the function/code sections below, keeping
 				// every
 				// FUNC_* constant valid.
-				// Serve mode stubs the WASI imports too (a pure http-handler does no
-				// base I/O); the serve adapter provides no wasi_snapshot_preview1
-				// functions, so the core fills indices 0-7 with internal trap stubs
-				// like no-wasi while still importing its memory (component mode).
-				if (!(this.noWasi || this.serve)) {
+				// Serve mode keeps the imports: the preview1 bridge
+				// (adapter-serve-p1.wasm, instantiated before this core by
+				// WasmServeComponentBuilder) provides them over the wasi:http proxy
+				// world (random / clocks / stdout-stderr; graceful stubs for the rest).
+				if (!this.noWasi) {
 					imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, TYPE_FD_WRITE)
 						.addImport("wasi_snapshot_preview1", "fd_read", ExternalKind.FUNCTION, TYPE_FD_WRITE)
 						.addImport("wasi_snapshot_preview1", "path_open", ExternalKind.FUNCTION, TYPE_PATH_OPEN)
@@ -1485,7 +1485,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// (fd_write, fd_read, path_open, fd_close, random_get, clock_time_get,
 				// environ_sizes_get, environ_get). This keeps every FUNC_* constant
 				// valid.
-				if (this.noWasi || this.serve) {
+				if (this.noWasi) {
 					fnDef.addFunction(TYPE_FD_WRITE) // 0: fd_write
 						.addFunction(TYPE_FD_WRITE) // 1: fd_read
 						.addFunction(TYPE_PATH_OPEN) // 2: path_open
@@ -1717,7 +1717,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// No-wasi mode: bodies for the eight trap stubs at indices 0-7. Each is
 				// `unreachable; end` (no locals); unreachable is stack-polymorphic so one
 				// shape satisfies every WASI signature. Calling one (i.e. any I/O) traps.
-				if (this.noWasi || this.serve) {
+				if (this.noWasi) {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
