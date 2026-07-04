@@ -377,8 +377,28 @@ final class JvmExprCompiler {
 				case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);
 				case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
 				case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);
-				case LispNames.REDUCE -> JvmReduceCompiler.compile(cons, ctx, className);
-				case LispNames.SORT -> JvmSortCompiler.compile(cons, ctx, className);
+				case LispNames.REDUCE -> {
+					// A string sequence folds over a list of its characters; the wrapper
+					// is null when the call is already the inner list fold.
+					LispVal wrappedReduce = LispMacroExpander.wrapReduceForStringSeq(cons);
+					if (wrappedReduce != null) {
+						JvmExprCompiler.compileExpr(wrappedReduce, ctx, className);
+					}
+					else {
+						JvmReduceCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.SORT -> {
+					// A string sequence sorts as a list of its characters and is coerced
+					// back to a string; null when the call is already the inner sort.
+					LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
+					if (wrappedSort != null) {
+						JvmExprCompiler.compileExpr(wrappedSort, ctx, className);
+					}
+					else {
+						JvmSortCompiler.compile(cons, ctx, className);
+					}
+				}
 				case LispNames.APPLY -> JvmApplyCompiler.compile(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);

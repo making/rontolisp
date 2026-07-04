@@ -230,17 +230,19 @@ public final class LispEvaluator {
 			return LispNil.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
-			// (reduce fn list) or (reduce fn list :initial-value init)
+			// (reduce fn seq) or (reduce fn seq :initial-value init); a string sequence
+			// folds over a list of its characters (Environment.seqAsList).
 			if (args.size() == 2) {
-				LispVal list = args.get(1);
+				LispVal list = Environment.seqAsList(args.get(1));
 				if (!(list instanceof LispCons first)) {
-					throw new LispEvalException("reduce requires a non-empty list when no initial value is provided");
+					throw new LispEvalException(
+							"reduce requires a non-empty sequence when no initial value is provided");
 				}
 				return reduceValues(args.get(0), first.car(), first.cdr());
 			}
 			if (args.size() == 4 && args.get(2) instanceof LispSymbol kw
 					&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
-				return reduceValues(args.get(0), args.get(3), args.get(1));
+				return reduceValues(args.get(0), args.get(3), Environment.seqAsList(args.get(1)));
 			}
 			throw new LispEvalException(
 					LispNames.REDUCE + " expects (reduce fn list) or (reduce fn list :initial-value init)");
@@ -249,37 +251,37 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.EVERY + " expects 2 arguments, got " + args.size());
 			}
-			return everyValues(args.get(0), args.get(1));
+			return everyValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.SOME, new LispFunction(LispNames.SOME, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SOME + " expects 2 arguments, got " + args.size());
 			}
-			return someValues(args.get(0), args.get(1));
+			return someValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.FIND_IF, new LispFunction(LispNames.FIND_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.FIND_IF + " expects 2 arguments, got " + args.size());
 			}
-			return findIfValues(args.get(0), args.get(1));
+			return findIfValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.FIND_IF_NOT, new LispFunction(LispNames.FIND_IF_NOT, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.FIND_IF_NOT + " expects 2 arguments, got " + args.size());
 			}
-			return findIfNotValues(args.get(0), args.get(1));
+			return findIfNotValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.POSITION_IF, new LispFunction(LispNames.POSITION_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.POSITION_IF + " expects 2 arguments, got " + args.size());
 			}
-			return positionIfValues(args.get(0), args.get(1));
+			return positionIfValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.COUNT_IF, new LispFunction(LispNames.COUNT_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.COUNT_IF + " expects 2 arguments, got " + args.size());
 			}
-			return countIfValues(args.get(0), args.get(1));
+			return countIfValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.MEMBER_IF, new LispFunction(LispNames.MEMBER_IF, args -> {
 			if (args.size() != 2) {
@@ -351,13 +353,15 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
 			}
-			return removeIfValues(args.get(0), args.get(1), false);
+			return Environment.seqResult(args.get(1),
+					removeIfValues(args.get(0), Environment.seqAsList(args.get(1)), false));
 		}));
 		this.globalEnv.defineFunction(LispNames.REMOVE_IF_NOT, new LispFunction(LispNames.REMOVE_IF_NOT, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF_NOT + " expects 2 arguments, got " + args.size());
 			}
-			return removeIfValues(args.get(0), args.get(1), true);
+			return Environment.seqResult(args.get(1),
+					removeIfValues(args.get(0), Environment.seqAsList(args.get(1)), true));
 		}));
 		// delete-if/delete-if-not are the destructive variants of
 		// remove-if/remove-if-not:
@@ -386,7 +390,9 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SORT + " expects 2 arguments, got " + args.size());
 			}
-			return sortValues(args.get(0), args.get(1));
+			// A string sequence sorts as a list of its characters and is rebuilt as a
+			// string (Common Lisp sequences).
+			return Environment.seqResult(args.get(0), sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
 		}));
 		this.globalEnv.defineFunction(LispNames.APPLY, new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {

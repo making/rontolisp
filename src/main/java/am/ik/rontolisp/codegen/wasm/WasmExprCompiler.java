@@ -343,8 +343,28 @@ final class WasmExprCompiler {
 				case LispNames.MAPCAR -> WasmMapcarCompiler.compile(cons, ctx);
 				case LispNames.MAPC -> WasmMapcCompiler.compile(cons, ctx);
 				case LispNames.MAPCAN -> WasmMapcanCompiler.compile(cons, ctx);
-				case LispNames.REDUCE -> WasmReduceCompiler.compile(cons, ctx);
-				case LispNames.SORT -> WasmSortCompiler.compile(cons, ctx);
+				case LispNames.REDUCE -> {
+					// A string sequence folds over a list of its characters; the wrapper
+					// is null when the call is already the inner list fold.
+					LispVal wrappedReduce = LispMacroExpander.wrapReduceForStringSeq(cons);
+					if (wrappedReduce != null) {
+						WasmExprCompiler.compileExpr(wrappedReduce, ctx);
+					}
+					else {
+						WasmReduceCompiler.compile(cons, ctx);
+					}
+				}
+				case LispNames.SORT -> {
+					// A string sequence sorts as a list of its characters and is coerced
+					// back to a string; null when the call is already the inner sort.
+					LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
+					if (wrappedSort != null) {
+						WasmExprCompiler.compileExpr(wrappedSort, ctx);
+					}
+					else {
+						WasmSortCompiler.compile(cons, ctx);
+					}
+				}
 				case LispNames.APPLY -> WasmApplyCompiler.compile(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);

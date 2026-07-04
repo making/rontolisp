@@ -1,9 +1,13 @@
 # notevery
 
-`(notevery predicate list)`
+`(notevery predicate sequence)`
 
-Returns `t` if `predicate` is nil for at least one element of `list`, and `nil` if every element satisfies it -- the complement of `every`. An empty list yields `nil`. Single-list form only.
+Returns `t` if `predicate` is nil for at least one element of `sequence`, and `nil` if every element satisfies it -- the complement of `every`. The sequence may be a list or a string (whose elements are characters). An empty sequence yields `nil`. Single-sequence form only.
 
 ```lisp
 (notevery #'evenp '(2 4 5)) ; => t
+```
+
+```lisp
+(notevery #'digit-char-p "12a") ; => t
 ```

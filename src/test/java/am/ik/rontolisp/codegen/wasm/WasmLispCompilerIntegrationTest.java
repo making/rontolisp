@@ -2300,6 +2300,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void scanFunctionsOnStrings() throws Exception {
+		assertThat(compileAndRun("""
+				(print (find #\\l "hello"))
+				(print (find-if #'digit-char-p "ab3c"))
+				(print (find-if-not #'digit-char-p "12a3"))
+				(print (position-if #'digit-char-p "ab3c"))
+				(print (count #\\a "banana"))
+				(print (count-if #'digit-char-p "a1b2"))
+				(print (every #'digit-char-p "12a"))
+				(print (some #'digit-char-p "abc1"))
+				(print (notany #'digit-char-p "ab1"))
+				(print (notevery #'digit-char-p "12a"))
+				(print (reduce (lambda (acc c) (if (char= c #\\a) (+ acc 1) acc)) "banana" :initial-value 0))"""))
+			.isEqualTo("#\\l\n#\\3\n#\\a\n2\n3\n2\nnil\n1\nnil\nt\n3");
+	}
+
+	@Test
+	void sequenceReturningFunctionsOnStrings() throws Exception {
+		assertThat(compileAndRun("""
+				(print (reverse "abc"))
+				(print (remove #\\l "hello"))
+				(print (remove-if #'digit-char-p "a1b2"))
+				(print (remove-if-not #'digit-char-p "a1b2"))
+				(print (remove-duplicates "banana"))
+				(print (substitute #\\o #\\a "banana"))
+				(print (sort "cab" #'char<))
+				(print (funcall #'reverse "abc"))"""))
+			.isEqualTo("\"cba\"\n\"heo\"\n\"ab\"\n\"12\"\n\"bna\"\n\"bonono\"\n\"abc\"\n\"cba\"");
+	}
+
+	@Test
 	void positionIfFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (position-if #'evenp '(1 3 5 6 7))) (print (position-if #'plusp '(-1 -2 -3))) (print (funcall #'position-if #'oddp '(2 4 5)))"))

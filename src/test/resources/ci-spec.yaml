@@ -913,6 +913,45 @@ cases:
       5
       nil
       2
+  - name: sequence-functions-on-strings
+    source: |
+      (print (find #\l "hello"))
+      (print (find-if #'digit-char-p "ab3c"))
+      (print (find-if-not #'digit-char-p "12a3"))
+      (print (position-if #'digit-char-p "ab3c"))
+      (print (count #\a "banana"))
+      (print (count-if #'digit-char-p "a1b2"))
+      (print (every #'digit-char-p "12a"))
+      (print (some #'digit-char-p "abc1"))
+      (print (notany #'digit-char-p "ab1"))
+      (print (notevery #'digit-char-p "12a"))
+      (print (reduce (lambda (acc c) (if (char= c #\a) (+ acc 1) acc)) "banana" :initial-value 0))
+      (print (reverse "abc"))
+      (print (remove #\l "hello"))
+      (print (remove-if #'digit-char-p "a1b2"))
+      (print (remove-if-not #'digit-char-p "a1b2"))
+      (print (remove-duplicates "banana"))
+      (print (substitute #\o #\a "banana"))
+      (print (sort "cab" #'char<))
+    expected: |
+      #\l
+      #\3
+      #\a
+      2
+      3
+      2
+      nil
+      1
+      nil
+      t
+      3
+      "cba"
+      "heo"
+      "ab"
+      "12"
+      "bna"
+      "bonono"
+      "abc"
   # Wrapped in a defun (rather than bare top-level prints) so its body compiles into its own
   # JVM method; the cross-backend driver concatenates every case into one program and the JVM
   # caps a single method at 64 KiB, which the bare top-level forms were near.

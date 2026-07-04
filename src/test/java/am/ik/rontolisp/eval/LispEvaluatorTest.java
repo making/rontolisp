@@ -1963,6 +1963,40 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalScanFunctionsOnStrings() {
+		assertThat(eval("(find #\\l \"hello\")").print()).isEqualTo("#\\l");
+		assertThat(eval("(find #\\z \"hello\")")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(find-if #'digit-char-p \"ab3c\")").print()).isEqualTo("#\\3");
+		assertThat(eval("(find-if-not #'digit-char-p \"12a3\")").print()).isEqualTo("#\\a");
+		assertThat(eval("(position-if #'digit-char-p \"ab3c\")").print()).isEqualTo("2");
+		assertThat(eval("(count #\\a \"banana\")").print()).isEqualTo("3");
+		assertThat(eval("(count-if #'digit-char-p \"a1b2\")").print()).isEqualTo("2");
+		assertThat(eval("(every #'digit-char-p \"123\")").print()).isEqualTo("t");
+		assertThat(eval("(every #'digit-char-p \"12a\")")).isSameAs(LispNil.INSTANCE);
+		// some yields the first non-nil predicate value: digit-char-p's weight of #\1
+		assertThat(eval("(some #'digit-char-p \"abc1\")").print()).isEqualTo("1");
+		assertThat(eval("(notany #'digit-char-p \"ab1\")")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(notevery #'digit-char-p \"12a\")").print()).isEqualTo("t");
+		assertThat(
+				eval("(reduce (lambda (acc c) (if (char= c #\\a) (+ acc 1) acc)) \"banana\" :initial-value 0)").print())
+			.isEqualTo("3");
+	}
+
+	@Test
+	void evalSequenceReturningFunctionsOnStrings() {
+		assertThat(eval("(reverse \"abc\")").print()).isEqualTo("\"cba\"");
+		assertThat(eval("(reverse \"\")").print()).isEqualTo("\"\"");
+		assertThat(eval("(remove #\\l \"hello\")").print()).isEqualTo("\"heo\"");
+		assertThat(eval("(remove-if #'digit-char-p \"a1b2\")").print()).isEqualTo("\"ab\"");
+		assertThat(eval("(remove-if-not #'digit-char-p \"a1b2\")").print()).isEqualTo("\"12\"");
+		assertThat(eval("(remove-duplicates \"banana\")").print()).isEqualTo("\"bna\"");
+		assertThat(eval("(substitute #\\o #\\a \"banana\")").print()).isEqualTo("\"bonono\"");
+		assertThat(eval("(sort \"cab\" #'char<)").print()).isEqualTo("\"abc\"");
+		assertThat(eval("(funcall #'reverse \"abc\")").print()).isEqualTo("\"cba\"");
+		assertThat(eval("(funcall #'remove #\\l \"hello\")").print()).isEqualTo("\"heo\"");
+	}
+
+	@Test
 	void evalPositionIf() {
 		assertThat(eval("(position-if #'evenp '(1 3 5 6 7))").print()).isEqualTo("3");
 		assertThat(eval("(position-if #'oddp '(2 4 5))").print()).isEqualTo("2");

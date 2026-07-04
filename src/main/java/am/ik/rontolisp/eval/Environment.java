@@ -1056,6 +1056,49 @@ public final class Environment implements Scope {
 		return a.equals(b);
 	}
 
+	/**
+	 * Normalizes a sequence argument: a string becomes a list of its characters (indexed
+	 * like char/length), anything else is returned unchanged. The sequence functions
+	 * accept strings as well as lists (Common Lisp sequences) through this helper.
+	 * @param val the sequence argument
+	 * @return the value as a list
+	 */
+	static LispVal seqAsList(LispVal val) {
+		if (val instanceof LispString str) {
+			String s = str.value();
+			LispVal result = LispNil.INSTANCE;
+			for (int i = s.length() - 1; i >= 0; i--) {
+				result = new LispCons(new LispChar(s.charAt(i)), result);
+			}
+			return result;
+		}
+		return val;
+	}
+
+	/**
+	 * Rebuilds a string from a list of characters when the original sequence argument was
+	 * a string; otherwise returns the list unchanged.
+	 * @param original the original sequence argument
+	 * @param list the list result of the scan over {@link #seqAsList(LispVal)}
+	 * @return the result in the original sequence's representation
+	 */
+	static LispVal seqResult(LispVal original, LispVal list) {
+		if (!(original instanceof LispString)) {
+			return list;
+		}
+		StringBuilder sb = new StringBuilder();
+		LispVal cur = list;
+		while (cur instanceof LispCons cell) {
+			if (!(cell.car() instanceof LispChar c)) {
+				throw new LispEvalException(
+						"cannot build a string from a non-character element: " + cell.car().print());
+			}
+			sb.appendCodePoint(c.codePoint());
+			cur = cell.cdr();
+		}
+		return new LispString(sb.toString());
+	}
+
 	private static void registerSequenceOps(Environment env) {
 		env.defineFunction(LispNames.LENGTH, new LispFunction(LispNames.LENGTH, args -> {
 			requireArgCount(LispNames.LENGTH, args, 1);
@@ -1082,19 +1125,19 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.REVERSE, new LispFunction(LispNames.REVERSE, args -> {
 			requireArgCount(LispNames.REVERSE, args, 1);
 			LispVal result = LispNil.INSTANCE;
-			LispVal cur = args.get(0);
+			LispVal cur = seqAsList(args.get(0));
 			while (cur instanceof LispCons cell) {
 				result = new LispCons(cell.car(), result);
 				cur = cell.cdr();
 			}
-			return result;
+			return seqResult(args.get(0), result);
 		}));
 		// member is registered in LispEvaluator so the optional :test keyword designator
 		// can be applied through the evaluator (it may name a user function or lambda).
 		env.defineFunction(LispNames.FIND, new LispFunction(LispNames.FIND, args -> {
 			requireArgCount(LispNames.FIND, args, 2);
 			LispVal item = args.get(0);
-			LispVal cur = args.get(1);
+			LispVal cur = seqAsList(args.get(1));
 			while (cur instanceof LispCons cell) {
 				if (isEq(item, cell.car())) {
 					return cell.car();
@@ -1131,7 +1174,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.COUNT, new LispFunction(LispNames.COUNT, args -> {
 			requireArgCount(LispNames.COUNT, args, 2);
 			LispVal item = args.get(0);
-			LispVal cur = args.get(1);
+			LispVal cur = seqAsList(args.get(1));
 			long count = 0;
 			while (cur instanceof LispCons cell) {
 				if (isEq(item, cell.car())) {
@@ -1196,7 +1239,7 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.REMOVE, args, 2);
 			LispVal item = args.get(0);
 			List<LispVal> kept = new java.util.ArrayList<>();
-			LispVal cur = args.get(1);
+			LispVal cur = seqAsList(args.get(1));
 			while (cur instanceof LispCons cell) {
 				if (!isEq(item, cell.car())) {
 					kept.add(cell.car());
@@ -1207,7 +1250,7 @@ public final class Environment implements Scope {
 			for (int i = kept.size() - 1; i >= 0; i--) {
 				result = new LispCons(kept.get(i), result);
 			}
-			return result;
+			return seqResult(args.get(1), result);
 		}));
 		// delete is the destructive variant of remove: splice out matching cells in place
 		// (Common Lisp semantics; use the return value since the head may change).
@@ -1243,7 +1286,7 @@ public final class Environment implements Scope {
 			LispVal newItem = args.get(0);
 			LispVal oldItem = args.get(1);
 			List<LispVal> out = new java.util.ArrayList<>();
-			LispVal cur = args.get(2);
+			LispVal cur = seqAsList(args.get(2));
 			while (cur instanceof LispCons cell) {
 				out.add(isEq(oldItem, cell.car()) ? newItem : cell.car());
 				cur = cell.cdr();
@@ -1252,7 +1295,7 @@ public final class Environment implements Scope {
 			for (int i = out.size() - 1; i >= 0; i--) {
 				result = new LispCons(out.get(i), result);
 			}
-			return result;
+			return seqResult(args.get(2), result);
 		});
 		env.defineFunction(LispNames.SUBSTITUTE, substitute);
 		// nsubstitute is the destructive variant: rewrite matching cars in place and
@@ -1306,7 +1349,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.REMOVE_DUPLICATES, new LispFunction(LispNames.REMOVE_DUPLICATES, args -> {
 			requireArgCount(LispNames.REMOVE_DUPLICATES, args, 1);
 			List<LispVal> kept = new java.util.ArrayList<>();
-			LispVal cur = args.get(0);
+			LispVal cur = seqAsList(args.get(0));
 			// Keep an element only when it does not occur again later in the list, so the
 			// last occurrence of each value survives (Common Lisp default; eql compare).
 			while (cur instanceof LispCons cell) {
@@ -1328,7 +1371,7 @@ public final class Environment implements Scope {
 			for (int i = kept.size() - 1; i >= 0; i--) {
 				result = new LispCons(kept.get(i), result);
 			}
-			return result;
+			return seqResult(args.get(0), result);
 		}));
 		env.defineFunction(LispNames.NCONC, new LispFunction(LispNames.NCONC, args -> {
 			requireArgCount(LispNames.NCONC, args, 2);
