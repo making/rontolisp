@@ -34,15 +34,33 @@ public final class HttpHandlerSupport {
 	private HttpHandlerSupport() {
 	}
 
-	/** A single HTTP header (name and value). */
+	/**
+	 * A single HTTP header (name and value).
+	 *
+	 * @param name the header name
+	 * @param value the header value
+	 */
 	public record Header(String name, String value) {
 	}
 
-	/** An incoming HTTP request handed to the Lisp handler. */
+	/**
+	 * An incoming HTTP request handed to the Lisp handler.
+	 *
+	 * @param method the HTTP method (e.g. {@code GET})
+	 * @param path the request path including any query string
+	 * @param headers the request headers
+	 * @param body the request body (empty string if none)
+	 */
 	public record Request(String method, String path, List<Header> headers, String body) {
 	}
 
-	/** The HTTP response the Lisp handler returns. */
+	/**
+	 * The HTTP response the Lisp handler returns.
+	 *
+	 * @param status the HTTP status code
+	 * @param headers the response headers
+	 * @param body the response body (empty string for none)
+	 */
 	public record Response(int status, List<Header> headers, String body) {
 	}
 
@@ -50,6 +68,11 @@ public final class HttpHandlerSupport {
 	@FunctionalInterface
 	public interface Handler {
 
+		/**
+		 * Handles one incoming HTTP request.
+		 * @param request the incoming request
+		 * @return the response to write back
+		 */
 		Response handle(Request request);
 
 	}

@@ -139,11 +139,8 @@ final class JvmExprCompiler {
 					return;
 				}
 				if (LispNames.HTTP_HANDLER.equals(qn.member())) {
-					// rontolisp:http-handler runs a blocking embedded HTTP server on the
-					// interpreter backend; the JVM backend does not implement it yet.
-					throw new UnsupportedOperationException(
-							LispNames.HTTP_HANDLER + " is currently only supported on the interpreter backend "
-									+ "(JVM and WASM component support are in progress)");
+					JvmHttpHandlerCompiler.compile(cons, ctx, className);
+					return;
 				}
 				if (LispNames.WASM_EXPORT.equals(qn.member())) {
 					// rontolisp:wasm-export marks a function for direct WASM export; the

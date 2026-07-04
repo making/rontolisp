@@ -113,14 +113,42 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   `invokeHttpHandler` builds the request plist and reads the response plist.
   Tests: `HttpHandlerTest` (Java seam round trip + directive round trip via a
   background thread + validation).
-- **JVM / WASM component (IN PROGRESS)** -- both are a clear compile error for
-  now (`JvmExprCompiler` / `WasmExprCompiler` throw "interpreter backend").
-  The WASM design is PROVEN end-to-end (a hand-wired component exporting
-  `wasi:http/incoming-handler@0.2.0` runs under `wasmtime serve`) and fully
-  specified -- adapter WAT mirroring the fetch adapter's request/response
-  marshalling but calling a `wasm-export`-emitted core `%http-dispatch`
-  (`"<status>\n<body>"` encoding), plus a `WasmComponentBuilder.buildServe`
-  wiring derived from a `wasm-tools` dump. All derived wasi:http@0.2 core ABI
-  signatures (notably `[static]response-outparam.set` ->
+- **JVM (implemented)** -- reuses the interpreter's `HttpHandlerSupport` server:
+  the generated class ITSELF implements `HttpHandlerSupport.Handler` (the same
+  mechanism as the tls-connect trust-all `X509TrustManager`; the public no-arg
+  constructor is shared between the two and emitted when either is used, and
+  `handle` joins the trust methods as an extra `--optimize` shaker root because
+  the server invokes it through the interface). The directive site
+  (`JvmHttpHandlerCompiler`) resolves the quoted handler name against the Pass-1
+  function registry like `#'name`, stores the funcref in the `_httpHandlerFn`
+  static field, and emits `HttpHandlerSupport.serve(port, new Prog())` (port
+  default 8080; a non-literal port expression compiles as `(int) Long`). The
+  injected `public handle(Request)` method (`JvmHttpHandlerRuntimeBuilder`)
+  builds the request plist `(:method m :path p :headers nil :body b)` as cons
+  cells in the shared runtime value rep (quote-wrapped strings, like
+  `JvmFetchRuntimeBuilder`), applies the handler via the `_invoke_1` dispatcher
+  (arity 1 is force-registered like the fetch runtime does), reads
+  `:status`/`:body` back with a plist-get loop and returns
+  `new Response(status, Collections.emptyList(), body)` (`List.of()` would need
+  an interface-static invokestatic, illegal in class version 50). CONSEQUENCE:
+  the compiled class is NOT standalone -- it needs the rontolisp jar on the
+  runtime classpath (`java -cp rontolisp.jar:. App`), unlike every other JVM
+  program. Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam;
+  compile + curl round trips incl. `--optimize`) and
+  `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`.
+- **WASM component (implemented, `--component`)** -- a `HttpHandlerInliner` cli
+  pre-pass rewrites the directive into a `%http-dispatch` wasm-export wrapper
+  (`"<status>\n<body>"` encoding), `WasmLispCompiler` serve mode un-gates
+  wasm-export in component mode, and `WasmServeComponentBuilder.buildServe`
+  wires mem + core + `adapter-serve.wasm` into a
+  `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve -W gc=y`.
+  All derived wasi:http@0.2 core ABI signatures (notably
+  `[static]response-outparam.set` ->
   `(param i32 i32 i32 i32 i64 i32 i32 i32 i32)`) are recorded in
-  `../.todo/51-wasi-http-incoming-handler-spin.md`.
+  `../.todo/51-wasi-http-incoming-handler-spin.md`. Spin cannot run it (no
+  wasm-GC in Spin's wasmtime); Preview-1 WASM output is a compile error
+  ("requires --component").
+- **v1 limitations (JVM + WASM)** -- request/response headers are dropped (the
+  handler sees `:headers nil`, response `:headers` is ignored); only the
+  interpreter passes headers through. On WASM the bump allocators do not reset
+  per request.

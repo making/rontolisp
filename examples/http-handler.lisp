@@ -3,14 +3,17 @@
 ;; (:status / :headers / :body). Unlike http-hello.lisp (a hand-rolled raw-TCP
 ;; server), rontolisp:http-handler adapts the request/response for you.
 ;;
-;; Supported on the interpreter backend (a blocking server on :8080, one virtual
-;; thread per request) and the WASI component backend (--component), which
-;; compiles the handler into a wasi:http/incoming-handler component runnable
-;; under `wasmtime serve`. The JVM backend is in progress; Spin cannot run the
-;; component yet (its wasmtime does not enable the wasm-GC proposal).
+;; Supported on the interpreter and JVM backends (a blocking server on :8080,
+;; one virtual thread per request) and the WASI component backend (--component),
+;; which compiles the handler into a wasi:http/incoming-handler component
+;; runnable under `wasmtime serve`. Spin cannot run the component yet (its
+;; wasmtime does not enable the wasm-GC proposal).
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/http-handler.lisp
+;; Run (JVM class; it implements the embedded server's handler interface, so
+;; keep the rontolisp jar on the classpath):
+;;   java -jar $JAR examples/http-handler.lisp -o App.class && java -cp $JAR:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/http-handler.lisp -o app.wasm --component && \
 ;;     wasmtime serve -W gc=y -W component-model-async=y \

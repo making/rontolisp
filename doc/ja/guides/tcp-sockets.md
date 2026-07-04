@@ -193,7 +193,19 @@ Hello from rontolisp!
 GET /hello
 ```
 
-同じソースは **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve` で
+同じソースは **JVM クラス** にもコンパイルでき、同じ方式で提供します
+（`rontolisp.jar` をクラスパスに含めたままにしてください — 生成クラスは
+組み込みサーバのハンドラインタフェースを実装します）。
+
+```console
+$ java -jar rontolisp.jar app.lisp -o App.class
+$ java -cp rontolisp.jar:. App
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+さらに **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve` で
 動作します。
 
 ```console
@@ -207,9 +219,9 @@ GET /hello
 ```
 
 この場合モジュールは `wasi:http/incoming-handler` をエクスポートし、ソケットはホストが
-所有するため `port` 引数は無視されます。JVM バックエンドは開発中です。Spin
-（`spin up`）ではまだ動作しません。組み込み wasmtime が、rontolisp のすべての
-コンポーネントが必要とする WebAssembly GC プロポーザルを有効化していないためです。
+所有するため `port` 引数は無視されます。Spin（`spin up`）ではまだ動作しません。
+組み込み wasmtime が、rontolisp のすべてのコンポーネントが必要とする WebAssembly GC
+プロポーザルを有効化していないためです。
 
 ## その他のサンプル
 

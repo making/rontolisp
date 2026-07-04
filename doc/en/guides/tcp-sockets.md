@@ -189,7 +189,19 @@ Hello from rontolisp!
 GET /hello
 ```
 
-The same source also compiles to a **WASI HTTP component** that runs under
+The same source compiles to a **JVM class** serving the same way (keep
+`rontolisp.jar` on the classpath — the class implements the embedded server's
+handler interface):
+
+```console
+$ java -jar rontolisp.jar app.lisp -o App.class
+$ java -cp rontolisp.jar:. App
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+And it also compiles to a **WASI HTTP component** that runs under
 `wasmtime serve`:
 
 ```console
@@ -203,9 +215,9 @@ GET /hello
 ```
 
 There the module exports `wasi:http/incoming-handler` and the host owns the
-socket, so the `port` argument is ignored. The JVM backend is still in progress;
-Spin (`spin up`) cannot run the component yet because its embedded wasmtime does
-not enable the WebAssembly GC proposal that every rontolisp component needs.
+socket, so the `port` argument is ignored. Spin (`spin up`) cannot run the
+component yet because its embedded wasmtime does not enable the WebAssembly GC
+proposal that every rontolisp component needs.
 
 ## More examples
 

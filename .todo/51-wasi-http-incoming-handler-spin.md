@@ -1,9 +1,9 @@
 # wasi:http incoming-handler — compile a rontolisp defun into an HTTP component (wasmtime serve / Spin)
 
-Status: DONE for interpreter + WASM component (2026-07-04). `wasmtime serve`
-works end to end; Spin is BLOCKED by Spin not enabling wasm-GC. JVM backend and
-request/response HEADER marshalling remain (see "Follow-ups" at the bottom).
-Created 2026-07-04.
+Status: DONE for interpreter + WASM component + JVM (2026-07-04).
+`wasmtime serve` works end to end; Spin is BLOCKED by Spin not enabling wasm-GC.
+Request/response HEADER marshalling (JVM + WASM) remains (see "Follow-ups" at
+the bottom). Created 2026-07-04.
 
 ## SHIPPED (commits 068e958, e3e8ffd, f8d6a5f, ea7601f, 215d384)
 
@@ -24,6 +24,19 @@ Created 2026-07-04.
   instances 0=io/error,1=io/streams,2=http/types; component types 0-5 (3=input-
   stream,4=output-stream), next free 6; canonical options per wasi func recorded
   in `WasmServeComponentBuilder`.
+- JVM backend, exactly per the follow-up design below (2026-07-04): the
+  generated class implements `HttpHandlerSupport.Handler` (shared no-arg ctor
+  with the tls-connect trick; `handle` is an extra `--optimize` shaker root),
+  `JvmHttpHandlerCompiler` stores the `#'name`-resolved funcref in
+  `_httpHandlerFn` and emits `HttpHandlerSupport.serve(port, new Prog())`, and
+  `JvmHttpHandlerRuntimeBuilder` injects `handle(Request)` (request plist ->
+  `_invoke_1` -> `:status`/`:body`, headers dropped,
+  `Collections.emptyList()` because interface-static `List.of()` is illegal at
+  class version 50). The compiled class needs the rontolisp jar on the runtime
+  classpath. Tests: `HttpHandlerJvmTest` (compile + curl round trips incl.
+  `--optimize`), `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`
+  / `compileHttpHandlerRejectsUnquotedHandlerName`. Docs/examples updated
+  (reference page, tcp-sockets guide, examples/http-handler.lisp header).
 
 ## Follow-ups
 
@@ -31,14 +44,18 @@ Created 2026-07-04.
   wasmtime does not enable the wasm-GC proposal. Revisit if Spin exposes a GC
   flag / runtime-config, or gains GC by default.
 - **Headers**: v1 marshals only method/path/body (request) and status/body
-  (response). Request/response headers are dropped. To add them, extend the
-  `%http-dispatch` encoding (e.g. a length-prefixed header block) and the
-  adapter-serve.wat request read / response write (the fetch adapter's
-  `fields.entries` / `fields.append` loops are the template).
+  (response) on BOTH compiled backends. Request/response headers are dropped.
+  WASM: extend the `%http-dispatch` encoding (e.g. a length-prefixed header
+  block) and the adapter-serve.wat request read / response write (the fetch
+  adapter's `fields.entries` / `fields.append` loops are the template).
+  JVM: extend `JvmHttpHandlerRuntimeBuilder`'s `handle()` to walk
+  `Request.headers()` into the `:headers` alist and the response alist back into
+  `Response` headers (the interpreter's `invokeHttpHandler` is the template).
 - **Allocator reset**: the mem-http `cabi_realloc` and the core `__ronto_alloc`
   bump pointers never reset, so a very long-lived server eventually exhausts the
   16-page memory. Reset per request (guarded) or grow memory.
-- **JVM backend** (next session). Design (reuses two proven mechanisms):
+- **JVM backend** — DONE (2026-07-04, see SHIPPED above). Original design
+  (reuses two proven mechanisms):
   1. The compiled program class IMPLEMENTS `HttpHandlerSupport.Handler`
      (`Response handle(Request)`), exactly like the TLS-insecure trick where the
      class implements `javax.net.ssl.X509TrustManager`

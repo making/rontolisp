@@ -12,12 +12,13 @@ Lisp のハンドラ関数で HTTP リクエストを処理します。`handler`
 - **レスポンス** — `(:status <integer> :headers <alist> :body <string>)`。キーが無い場合は
   `:status 200`、本文は空がデフォルトです。
 
-**インタープリタ** バックエンドでは、`http-handler` は `port`（デフォルト `8080`、
-リクエストごとに 1 つの仮想スレッド）でブロッキングの組み込み HTTP サーバを起動し、
-プロセスが停止されるまで（Ctrl-C）処理を続けます。**WASI コンポーネント**
-（`--component`）にコンパイルすると、代わりに `wasi:http/incoming-handler` を
-エクスポートし、`wasmtime serve` 上でサーバレス HTTP コンポーネントとして動作します
-（`port` 引数は無視されます。ソケットはホストが所有します）。
+**インタープリタ** と **JVM** バックエンドでは、`http-handler` は `port`
+（デフォルト `8080`、リクエストごとに 1 つの仮想スレッド）でブロッキングの
+組み込み HTTP サーバを起動し、プロセスが停止されるまで（Ctrl-C）処理を続けます。
+**WASI コンポーネント**（`--component`）にコンパイルすると、代わりに
+`wasi:http/incoming-handler` をエクスポートし、`wasmtime serve` 上でサーバレス
+HTTP コンポーネントとして動作します（`port` 引数は無視されます。ソケットは
+ホストが所有します）。
 
 ```console
 (defun handle (request)
@@ -38,6 +39,17 @@ Hello from rontolisp!
 GET /hello
 ```
 
+JVM クラスにコンパイルします（生成クラスは組み込みサーバのハンドラインタフェースを
+実装するため、実行時も `rontolisp.jar` をクラスパスに含める必要があります）。
+
+```console
+$ java -jar rontolisp.jar app.lisp -o App.class
+$ java -cp rontolisp.jar:. App
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
 あるいは WASI HTTP コンポーネントにコンパイルし、`wasmtime serve` で提供します。
 
 ```console
@@ -52,10 +64,14 @@ GET /hello
 
 ## バックエンド対応
 
-`http-handler` は **インタープリタ** バックエンド（ブロッキングサーバ）と
-**WASI コンポーネント** バックエンド（`--component`、`wasmtime serve` 用の
-`wasi:http/incoming-handler` コンポーネント）で動作します。**JVM** バックエンドは
-開発中で、現時点ではコンパイル時に明確なエラーを出します。
+`http-handler` は **インタープリタ** バックエンド（ブロッキングサーバ）、
+**JVM** バックエンド（同じブロッキングサーバ。生成クラスの実行には
+`rontolisp.jar` がクラスパスに必要）、**WASI コンポーネント** バックエンド
+（`--component`、`wasmtime serve` 用の `wasi:http/incoming-handler`
+コンポーネント）で動作します。JVM と WASI コンポーネントのバックエンドでは、
+リクエスト／レスポンスのヘッダはまだ受け渡しされません。ハンドラには
+`:headers nil` が渡され、レスポンスの `:headers` は無視されます。ヘッダを
+そのまま通すのはインタープリタだけです。
 
 Spin（`spin up`）ではまだ動作しません。Spin の組み込み wasmtime は WebAssembly GC
 プロポーザルを有効化しておらず、rontolisp のすべてのコンポーネントが GC を必要とする

@@ -3329,11 +3329,30 @@ class JvmLispCompilerTest {
 			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
+	// The serving round trip lives in HttpHandlerJvmTest (eval package, where the test
+	// server shutdown seam is accessible); this pins the class-level design: the
+	// generated class itself implements HttpHandlerSupport.Handler (like the
+	// tls-connect X509TrustManager trick) so HttpHandlerSupport.serve can drive it.
 	@Test
-	void compileHttpHandlerIsCompileError() {
-		assertThatThrownBy(() -> compileAndRun("(defun h (r) nil) (rontolisp:http-handler 'h)"))
+	void compileHttpHandlerImplementsHandlerInterface() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler
+			.compile(LispReader.readAllFromString("(defun h (r) (list :body \"ok\")) (rontolisp:http-handler 'h)"));
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			assertThat(am.ik.rontolisp.eval.HttpHandlerSupport.Handler.class).isAssignableFrom(clazz);
+			assertThat(clazz.getMethod("handle", am.ik.rontolisp.eval.HttpHandlerSupport.Request.class)).isNotNull();
+		}
+	}
+
+	@Test
+	void compileHttpHandlerRejectsUnquotedHandlerName() {
+		assertThatThrownBy(() -> compileAndRun("(defun h (r) nil) (rontolisp:http-handler h)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("interpreter backend");
+			.hasMessageContaining("quoted handler name");
 	}
 
 	@Test

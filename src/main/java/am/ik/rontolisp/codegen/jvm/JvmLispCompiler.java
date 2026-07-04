@@ -301,14 +301,24 @@ public final class JvmLispCompiler implements LispCompiler {
 		// tree-shaker cannot see, so they are extra --optimize roots.
 		boolean usesTlsConnect = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT));
+		// rontolisp:http-handler reuses the same "the generated class implements the
+		// interface" mechanism: the class implements HttpHandlerSupport.Handler, the
+		// directive stores the handler funcref in a static field and calls
+		// HttpHandlerSupport.serve(port, new Prog()), and the injected handle() method
+		// marshals the request/response plists through the _invoke_1 dispatcher.
+		boolean usesHttpHandler = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER));
+		// Both mechanisms need `new Prog()`, so the class gets a public no-arg
+		// constructor when either is present.
+		boolean needsInstanceCtor = usesTlsConnect || usesHttpHandler;
 		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
 				: null;
 		ClassConstant x509CertificateClass = usesTlsConnect
 				? cp.addClass(cp.addUtf8("java/security/cert/X509Certificate")) : null;
-		MethodrefConstant objectInitRef = usesTlsConnect
+		MethodrefConstant objectInitRef = needsInstanceCtor
 				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
-		Utf8Constant trustInitName = usesTlsConnect ? cp.addUtf8("<init>") : null;
-		Utf8Constant trustInitDesc = usesTlsConnect ? cp.addUtf8("()V") : null;
+		Utf8Constant instanceInitName = needsInstanceCtor ? cp.addUtf8("<init>") : null;
+		Utf8Constant instanceInitDesc = needsInstanceCtor ? cp.addUtf8("()V") : null;
 		Utf8Constant checkClientName = usesTlsConnect ? cp.addUtf8("checkClientTrusted") : null;
 		Utf8Constant checkServerName = usesTlsConnect ? cp.addUtf8("checkServerTrusted") : null;
 		Utf8Constant checkTrustedDesc = usesTlsConnect
@@ -325,6 +335,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
 
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
+				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
+						longClass, longValue, stringLength, stringSubstring, stringConcat)
+				: null;
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
@@ -467,8 +481,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		// _await applies rontolisp:then callbacks through the arity-1 dispatcher, so its
-		// emission must be forced whenever the fetch/await runtime is present.
-		if (usesFetch) {
+		// emission must be forced whenever the fetch/await runtime is present; the
+		// http-handler handle() method applies the handler the same way.
+		if (usesFetch || usesHttpHandler) {
 			indirectCallArities.add(1);
 		}
 
@@ -526,6 +541,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tlsConnectHelper(tlsConnectHelperMethod)
 			.tlsListenHelper(tlsListenHelperMethod)
 			.tlsListenP12Helper(tlsListenP12HelperMethod)
+			.httpHandlerRuntime(httpHandlerRuntime)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.className(this.className)
@@ -925,6 +941,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (x509TrustManagerClass != null) {
 					i.add(w -> w.writeU2(x509TrustManagerClass.index()));
 				}
+				if (httpHandlerRuntime != null) {
+					i.add(w -> w.writeU2(httpHandlerRuntime.handlerInterface().index()));
+				}
 			})
 			.writeFields(f -> {
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
@@ -947,6 +966,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(gensymCtrFieldName)
 					.writeU2(gensymCtrFieldDesc)
 					.writeU2(0));
+				if (httpHandlerRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(httpHandlerRuntime.handlerFieldName())
+						.writeU2(httpHandlerRuntime.handlerFieldDesc())
+						.writeU2(0));
+				}
 				// One static Object field per top-level global variable (default null =
 				// nil); written by setq/defvar, read by getstatic from any method body.
 				for (Utf8Constant gfName : globalFieldNameUtfs) {
@@ -1116,29 +1141,32 @@ public final class JvmLispCompiler implements LispCompiler {
 								})));
 					}
 				}
-				if (usesTlsConnect) {
+				if (needsInstanceCtor) {
 					// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
-					// :insecure trust-all manager.
-					Utf8Constant initName = java.util.Objects.requireNonNull(trustInitName);
-					Utf8Constant initDesc = java.util.Objects.requireNonNull(trustInitDesc);
+					// :insecure trust-all manager; the http-handler directive does the
+					// same for the HttpHandlerSupport.Handler instance.
+					Utf8Constant initName = java.util.Objects.requireNonNull(instanceInitName);
+					Utf8Constant initDesc = java.util.Objects.requireNonNull(instanceInitDesc);
+					int objectInitIdx = java.util.Objects.requireNonNull(objectInitRef).index();
+					List<Integer> instanceInitCode = new java.util.ArrayList<>(
+							List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
+					JvmRuntimeBuilder.emitU2(instanceInitCode, objectInitIdx);
+					instanceInitCode.add(Opcode.RETURN);
+					methods.add(AccessFlag.ACC_PUBLIC, initName, initDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(1)
+										.writeU2(1)
+										.writeCode((Object[]) instanceInitCode.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+				}
+				if (usesTlsConnect) {
 					Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
 					Utf8Constant serverName = java.util.Objects.requireNonNull(checkServerName);
 					Utf8Constant trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
 					Utf8Constant issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
 					Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
-					int objectInitIdx = java.util.Objects.requireNonNull(objectInitRef).index();
 					int x509CertIdx = java.util.Objects.requireNonNull(x509CertificateClass).index();
-					List<Integer> trustInitCode = new java.util.ArrayList<>(
-							List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
-					JvmRuntimeBuilder.emitU2(trustInitCode, objectInitIdx);
-					trustInitCode.add(Opcode.RETURN);
-					methods.add(AccessFlag.ACC_PUBLIC, initName, initDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(1)
-										.writeU2(1)
-										.writeCode((Object[]) trustInitCode.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
 					// X509TrustManager: trust-all client/server checks (empty bodies) and
 					// an empty accepted-issuers array.
 					methods.add(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, method -> method
@@ -1158,6 +1186,19 @@ public final class JvmLispCompiler implements LispCompiler {
 										.writeCode((Object[]) acceptedIssuersCode.toArray(new Integer[0]))
 										.writeU2(0)
 										.writeU2(0))));
+				}
+				if (httpHandlerRuntime != null) {
+					// handle(Request): the HttpHandlerSupport.Handler implementation
+					// adapting each incoming request to the compiled Lisp handler.
+					JvmHttpHandlerRuntimeBuilder.HandleMethod hm = httpHandlerRuntime.handle();
+					methods.add(AccessFlag.ACC_PUBLIC, hm.name(), hm.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(hm.maxStack())
+									.writeU2(hm.maxLocals())
+									.writeCode((Object[]) hm.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
 				}
 				if (parseIntMethodBody != null) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, parseIntMethodBody.name(),
@@ -1310,6 +1351,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				roots.add("checkClientTrusted");
 				roots.add("checkServerTrusted");
 				roots.add("getAcceptedIssuers");
+			}
+			// HttpHandlerSupport invokes handle through the Handler interface, another
+			// edge the call-graph tree-shaker cannot see.
+			if (usesHttpHandler) {
+				roots.add("handle");
 			}
 			classBytes = JvmClassShaker.shake(classBytes, roots);
 		}
@@ -1650,6 +1696,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		final @Nullable MethodrefConstant tlsListenP12Helper;
 
 		/**
+		 * The {@code rontolisp:http-handler} runtime references (handler-funcref field,
+		 * {@code serve} entry point, program-class constructor); null unless the program
+		 * uses {@code rontolisp:http-handler}.
+		 */
+		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime;
+
+		/**
 		 * The {@code java:} interop bridge references ({@code init}/{@code new}/
 		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
 		 * program uses a {@code java:} function.
@@ -1791,6 +1844,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tlsConnectHelper = builder.tlsConnectHelper;
 			this.tlsListenHelper = builder.tlsListenHelper;
 			this.tlsListenP12Helper = builder.tlsListenP12Helper;
+			this.httpHandlerRuntime = builder.httpHandlerRuntime;
 			this.javaOps = builder.javaOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
@@ -1890,6 +1944,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant tlsListenHelper;
 
 			private @Nullable MethodrefConstant tlsListenP12Helper;
+
+			private JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
 
@@ -2126,6 +2182,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder tlsListenP12Helper(@Nullable MethodrefConstant tlsListenP12Helper) {
 				this.tlsListenP12Helper = tlsListenP12Helper;
+				return this;
+			}
+
+			Builder httpHandlerRuntime(JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime) {
+				this.httpHandlerRuntime = httpHandlerRuntime;
 				return this;
 			}
 
