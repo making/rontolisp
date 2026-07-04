@@ -32,18 +32,20 @@ the module runs as a serverless HTTP component under `wasmtime serve` (the
 Run it on the interpreter, then talk to it with `curl`:
 
 ```console
-$ java -jar rontolisp.jar app.lisp
+$ rontolisp app.lisp
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
 
 Compile it to a JVM class (the class implements the embedded server's handler
-interface, so `rontolisp.jar` must stay on the classpath when running it):
+interface, so the rontolisp executable JAR must be on the classpath when
+running it — this is the one step that needs the JAR instead of the native
+binary):
 
 ```console
-$ java -jar rontolisp.jar app.lisp -o App.class
-$ java -cp rontolisp.jar:. App
+$ rontolisp app.lisp -o App.class
+$ java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -52,7 +54,7 @@ GET /hello
 Or compile it to a WASI HTTP component and serve it with `wasmtime serve`:
 
 ```console
-$ java -jar rontolisp.jar app.lisp -o app.wasm --component
+$ rontolisp app.lisp -o app.wasm --component
 $ wasmtime serve -W gc=y -W component-model-async=y \
     -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
     app.wasm
@@ -64,8 +66,9 @@ GET /hello
 ## Backend support
 
 `http-handler` runs on the **interpreter** backend (a blocking server), the
-**JVM** backend (the same blocking server; the compiled class needs
-`rontolisp.jar` on the classpath) and the **WASI component** backend
+**JVM** backend (the same blocking server; the compiled class needs the
+rontolisp executable JAR, `rontolisp-0.1.0-SNAPSHOT-exec.jar`, on the
+classpath) and the **WASI component** backend
 (`--component`, a `wasi:http/incoming-handler` component for `wasmtime serve`).
 On the JVM and WASI component backends, request and response headers are not
 marshalled yet: the handler sees `:headers nil` and `:headers` in the response
@@ -75,4 +78,5 @@ Spin (`spin up`) cannot run the component yet: Spin's embedded wasmtime does not
 enable the WebAssembly GC proposal, which every rontolisp component requires, so
 use `wasmtime serve -W gc=y ...`.
 
-See [Serving HTTP](../../guides/tcp-sockets.md) for the full example.
+See the [Serving HTTP guide](../../guides/http-handler.md) for the full
+example.

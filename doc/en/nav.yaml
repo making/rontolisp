@@ -43,6 +43,8 @@ sections:
         title: Java Interop
       - file: guides/http-fetch.md
         title: HTTP Requests (fetch)
+      - file: guides/http-handler.md
+        title: Serving HTTP (http-handler)
       - file: guides/tcp-sockets.md
         title: TCP Sockets
       - file: guides/math-backends.md

@@ -163,66 +163,6 @@ PKCS12 キーストアファイルを受け取り(自己署名キーストアを
   (close listener))
 ```
 
-## `http-handler` で HTTP を提供する
-
-`read-line`/`write-line` で HTTP を手書きする（`http-hello.lisp` のような）方法も
-勉強になりますが、素朴なリクエスト/レスポンス型のサーバであれば
-[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
-がパースを引き受けてくれます。ハンドラはリクエストのプロパティリスト
-（`:method` / `:path` / `:headers` / `:body`）を受け取り、レスポンスのプロパティリスト
-（`:status` / `:headers` / `:body`）を返します。これは
-[`rontolisp:fetch`](http-fetch.md) と同じ値モデルで、送信ではなく受信側です。
-
-```console
-(defun handle (request)
-  (list :status 200
-        :headers (list (cons "content-type" "text/plain"))
-        :body (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (getf request :method) (getf request :path))))
-
-(rontolisp:http-handler 'handle 8080)
-```
-
-インタープリタではこれがブロックし、ポート 8080 で提供します（リクエストごとに
-1 つの仮想スレッド）。
-
-```console
-$ java -jar rontolisp.jar app.lisp
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-同じソースは **JVM クラス** にもコンパイルでき、同じ方式で提供します
-（`rontolisp.jar` をクラスパスに含めたままにしてください — 生成クラスは
-組み込みサーバのハンドラインタフェースを実装します）。
-
-```console
-$ java -jar rontolisp.jar app.lisp -o App.class
-$ java -cp rontolisp.jar:. App
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-さらに **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve` で
-動作します。
-
-```console
-$ java -jar rontolisp.jar app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W component-model-async=y \
-    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-    app.wasm
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-この場合モジュールは `wasi:http/incoming-handler` をエクスポートし、ソケットはホストが
-所有するため `port` 引数は無視されます。Spin（`spin up`）ではまだ動作しません。
-組み込み wasmtime が、rontolisp のすべてのコンポーネントが必要とする WebAssembly GC
-プロポーザルを有効化していないためです。
-
 ## その他のサンプル
 
 [`examples/` ディレクトリ](https://github.com/making/rontolisp/tree/develop/examples)
@@ -246,6 +186,8 @@ GET /hello
   [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
   は同じプロトコルをTLSで提供します (`redis-cli --tls --insecure -p 6380`)。
 
-HTTPの *クライアント* 側については、ソケット上でプロトコルを手書きする
-必要はありません — `rontolisp:fetch` を使ってください。
-[HTTPリクエストガイド](http-fetch.md)を参照してください。
+HTTPについては、どちらの向きでもソケット上でプロトコルを手書きする必要は
+ありません。*クライアント* 側は `rontolisp:fetch`
+（[HTTPリクエストガイド](http-fetch.md)参照）、*サーバ* 側は
+`rontolisp:http-handler` がリクエストのパースとレスポンスの変換を引き受けます
+（[HTTP サーバガイド](http-handler.md)参照）。

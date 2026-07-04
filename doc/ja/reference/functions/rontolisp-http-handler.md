@@ -33,18 +33,19 @@ HTTP コンポーネントとして動作します（`port` 引数は無視さ�
 インタープリタで実行して `curl` で通信します。
 
 ```console
-$ java -jar rontolisp.jar app.lisp
+$ rontolisp app.lisp
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
 
 JVM クラスにコンパイルします（生成クラスは組み込みサーバのハンドラインタフェースを
-実装するため、実行時も `rontolisp.jar` をクラスパスに含める必要があります）。
+実装するため、実行時に rontolisp の実行可能 JAR をクラスパスに含める必要が
+あります — ネイティブバイナリではなく JAR が必要になるのはこのステップだけです）。
 
 ```console
-$ java -jar rontolisp.jar app.lisp -o App.class
-$ java -cp rontolisp.jar:. App
+$ rontolisp app.lisp -o App.class
+$ java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -53,7 +54,7 @@ GET /hello
 あるいは WASI HTTP コンポーネントにコンパイルし、`wasmtime serve` で提供します。
 
 ```console
-$ java -jar rontolisp.jar app.lisp -o app.wasm --component
+$ rontolisp app.lisp -o app.wasm --component
 $ wasmtime serve -W gc=y -W component-model-async=y \
     -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
     app.wasm
@@ -65,8 +66,9 @@ GET /hello
 ## バックエンド対応
 
 `http-handler` は **インタープリタ** バックエンド（ブロッキングサーバ）、
-**JVM** バックエンド（同じブロッキングサーバ。生成クラスの実行には
-`rontolisp.jar` がクラスパスに必要）、**WASI コンポーネント** バックエンド
+**JVM** バックエンド（同じブロッキングサーバ。生成クラスの実行には rontolisp の
+実行可能 JAR `rontolisp-0.1.0-SNAPSHOT-exec.jar` がクラスパスに必要）、
+**WASI コンポーネント** バックエンド
 （`--component`、`wasmtime serve` 用の `wasi:http/incoming-handler`
 コンポーネント）で動作します。JVM と WASI コンポーネントのバックエンドでは、
 リクエスト／レスポンスのヘッダはまだ受け渡しされません。ハンドラには
@@ -77,4 +79,4 @@ Spin（`spin up`）ではまだ動作しません。Spin の組み込み wasmtim
 プロポーザルを有効化しておらず、rontolisp のすべてのコンポーネントが GC を必要とする
 ためです。`wasmtime serve -W gc=y ...` を使用してください。
 
-完全な例は [HTTP サーバ](../../guides/tcp-sockets.md) を参照してください。
+完全な例は [HTTP サーバガイド](../../guides/http-handler.md)を参照してください。

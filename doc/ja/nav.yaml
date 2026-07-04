@@ -43,6 +43,8 @@ sections:
         title: Java 連携
       - file: guides/http-fetch.md
         title: HTTPリクエスト（fetch）
+      - file: guides/http-handler.md
+        title: HTTPサーバ（http-handler）
       - file: guides/tcp-sockets.md
         title: TCPソケット
       - file: guides/math-backends.md

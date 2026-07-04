@@ -225,12 +225,16 @@ package system. Each name below links to its own page.
 | `rontolisp:await` | `(rontolisp:await p)` | resolve a promise (blocking); a non-promise passes through unchanged |
 | `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | derive a new promise that applies a callback to the settled value |
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | `t` if the value is a promise |
+| `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function (a blocking server; a `wasi:http` component under `--component`) |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string: objects become keyword plists, or hash tables with `:hash-table` |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | serialize a value (plists and hash tables become objects) to a JSON string |
 | `rontolisp:tcp-connect` | `(rontolisp:tcp-connect "127.0.0.1" 7777)` | open a blocking TCP connection; returns a bidirectional stream handle |
 | `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | bind a listening TCP socket and return a listener handle; port `0` picks a free ephemeral port |
 | `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | wait for a client connection (blocking); returns a bidirectional stream handle |
 | `rontolisp:tcp-local-port` | `(rontolisp:tcp-local-port listener)` | the local port a listener or socket is actually bound to |
+| `rontolisp:tls-connect` | `(rontolisp:tls-connect "example.com" 443)` | open an encrypted (TLS) client connection; returns the same kind of stream handle as `tcp-connect` |
+| `rontolisp:tls-listen` | `(rontolisp:tls-listen "server.p12" "changeit" 8443)` | bind an encrypted listening socket from a PKCS12 keystore; accept with `tcp-accept` |
+| `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | bind an encrypted listening socket from PEM certificate/key files |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | declare a host function callable from Lisp when compiling to a WASM core module |
 
@@ -244,7 +248,12 @@ generic promise operations `rontolisp:await` / `rontolisp:then` /
 [fetch](functions/rontolisp-fetch.md),
 [await](functions/rontolisp-await.md), [then](functions/rontolisp-then.md) and
 [promisep](functions/rontolisp-promisep.md) reference pages for options, the
-result plist, backend support, and limitations. `rontolisp:json-parse` and
+result plist, backend support, and limitations. `rontolisp:http-handler` is
+the incoming counterpart of `fetch` -- it serves HTTP requests with a handler
+function over the same request/response property lists; see the
+[Serving HTTP guide](../guides/http-handler.md) for a worked example on every
+backend, and the [http-handler](functions/rontolisp-http-handler.md) reference
+page for backend support and limitations. `rontolisp:json-parse` and
 `rontolisp:json-stringify` convert between JSON documents and Lisp values
 (JavaScript `JSON.parse`/`JSON.stringify` style) -- for example to parse a
 fetch response body; see the
@@ -259,7 +268,12 @@ the [tcp-connect](functions/rontolisp-tcp-connect.md),
 [tcp-listen](functions/rontolisp-tcp-listen.md),
 [tcp-accept](functions/rontolisp-tcp-accept.md) and
 [tcp-local-port](functions/rontolisp-tcp-local-port.md) reference pages for
-backend support and limitations. `rontolisp:wasm-export` and
+backend support and limitations. The TLS variants (`rontolisp:tls-connect` /
+`tls-listen` / `tls-listen-pem`) wrap the same stream handles in TLS; see the
+[tls-connect](functions/rontolisp-tls-connect.md),
+[tls-listen](functions/rontolisp-tls-listen.md) and
+[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) reference pages.
+`rontolisp:wasm-export` and
 `rontolisp:wasm-import` are compile-time directives for the WASM backend; see
 their [wasm-export](functions/rontolisp-wasm-export.md) and
 [wasm-import](functions/rontolisp-wasm-import.md) reference pages and the

@@ -159,66 +159,6 @@ and
   (close listener))
 ```
 
-## Serving HTTP with `http-handler`
-
-Hand-rolling HTTP over `read-line`/`write-line` (as `http-hello.lisp` does) is
-instructive, but for a plain request/response server
-[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
-does the parsing for you. You write a handler that takes a request property list
-(`:method` / `:path` / `:headers` / `:body`) and returns a response property
-list (`:status` / `:headers` / `:body`) — the same value model as
-[`rontolisp:fetch`](http-fetch.md), just incoming instead of outgoing:
-
-```console
-(defun handle (request)
-  (list :status 200
-        :headers (list (cons "content-type" "text/plain"))
-        :body (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (getf request :method) (getf request :path))))
-
-(rontolisp:http-handler 'handle 8080)
-```
-
-On the interpreter this blocks and serves on port 8080 (one virtual thread per
-request):
-
-```console
-$ java -jar rontolisp.jar app.lisp
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-The same source compiles to a **JVM class** serving the same way (keep
-`rontolisp.jar` on the classpath — the class implements the embedded server's
-handler interface):
-
-```console
-$ java -jar rontolisp.jar app.lisp -o App.class
-$ java -cp rontolisp.jar:. App
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-And it also compiles to a **WASI HTTP component** that runs under
-`wasmtime serve`:
-
-```console
-$ java -jar rontolisp.jar app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W component-model-async=y \
-    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-    app.wasm
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-There the module exports `wasi:http/incoming-handler` and the host owns the
-socket, so the `port` argument is ignored. Spin (`spin up`) cannot run the
-component yet because its embedded wasmtime does not enable the WebAssembly GC
-proposal that every rontolisp component needs.
-
 ## More examples
 
 The [`examples/` directory](https://github.com/making/rontolisp/tree/develop/examples)
@@ -243,6 +183,8 @@ its header comment:
   [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
   serves the same protocol over TLS (`redis-cli --tls --insecure -p 6380`).
 
-For the *client* side of HTTP there is no need to hand-roll the protocol over
-a socket — use `rontolisp:fetch`; see the
-[HTTP Requests guide](http-fetch.md).
+For HTTP there is no need to hand-roll the protocol over a socket in either
+direction: the *client* side is `rontolisp:fetch` (see the
+[HTTP Requests guide](http-fetch.md)), and for the *server* side
+`rontolisp:http-handler` parses requests and adapts responses for you (see the
+[Serving HTTP guide](http-handler.md)).
