@@ -2300,6 +2300,33 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void runtimeInternTableSurvivesLargeStaticData() throws Exception {
+		// A large program pushes the static string segment past the runtime intern
+		// table's historical fixed base (8192); runtime-interned symbols then clobbered
+		// static strings and the eval function registry. Pin that the intern table is
+		// relocated above the static data: after inflating the segment well past 8KiB
+		// and interning hundreds of fresh symbols at runtime, every static string still
+		// prints intact and an eval call through the registry still resolves.
+		StringBuilder program = new StringBuilder();
+		StringBuilder expected = new StringBuilder();
+		program.append("(defun bigdata-probe (a &rest r) (list a r))\n");
+		StringBuilder syms = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			syms.append(" fresh-sym-").append(i);
+		}
+		program.append("(print (car (read-from-string \"(").append(syms).append(")\")))\n");
+		expected.append("fresh-sym-0\n");
+		for (int i = 0; i < 200; i++) {
+			String pad = "inflate-" + i + "-abcdefghijklmnopqrstuvwxyz-0123456789";
+			program.append("(print \"").append(pad).append("\")\n");
+			expected.append('"').append(pad).append("\"\n");
+		}
+		program.append("(print (eval (quote (bigdata-probe 1 2 3))))\n");
+		expected.append("(1 (2 3))");
+		assertThat(compileAndRun(program.toString())).isEqualTo(expected.toString());
+	}
+
+	@Test
 	void scanFunctionsOnStrings() throws Exception {
 		assertThat(compileAndRun("""
 				(print (find #\\l "hello"))

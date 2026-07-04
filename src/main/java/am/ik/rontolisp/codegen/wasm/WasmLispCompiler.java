@@ -515,6 +515,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// interned string bytes are clobbered).
 	static final int BYTE_SCRATCH_ADDR = 148;
 
+	// Cell holding the runtime intern table's base address (see RT_INTERN_MIN_BASE);
+	// seeded by an active data segment at instantiation from the program's actual
+	// static-data size.
+	static final int RT_INTERN_BASE_ADDR = 152;
+
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
@@ -546,9 +551,19 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int REQ_HDR_BUF = 0x40100;
 
-	static final int RT_INTERN_BASE = 8192;
+	// Minimum base address of the growable runtime intern table (8-byte (offset,len)
+	// records appended by _intern for symbols first seen at runtime). The actual base
+	// is computed per program -- max(this, 16-aligned end of the static string
+	// segment) -- and seeded into the RT_INTERN_BASE_ADDR cell at instantiation, so
+	// the records can never start inside the interned-string data (which outgrows a
+	// fixed 8192 base on large programs; the old fixed base let runtime interning
+	// silently corrupt static strings and the eval registry).
+	static final int RT_INTERN_MIN_BASE = 8192;
 
-	static final int READ_LINE_BUF = 16384;
+	// Bytes reserved for the runtime intern table between its base and the heap base
+	// (the historical 8192..16384 gap). The bump-allocator heap starts at
+	// rtInternBase + this.
+	static final int RT_INTERN_REGION_SIZE = 8192;
 
 	// The interned-string data segment must start ABOVE every fixed scratch address
 	// below,
@@ -848,12 +863,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		ctx.topLevel = true;
 		ctx.usesEval = usesEval;
 
-		// Initialize heap pointer for read-line buffer
-		startWriter.write(Instruction.I32_CONST);
-		startWriter.writeSignedLeb128(HEAP_PTR_ADDR);
-		startWriter.write(Instruction.I32_CONST);
-		startWriter.writeSignedLeb128(READ_LINE_BUF);
-		startWriter.write(Instruction.I32_STORE, 0x02, 0x00);
+		// The heap pointer (HEAP_PTR_ADDR) is seeded by an active data segment at
+		// instantiation (see writeDataSection below), not here: its value depends on
+		// the final static-data size, which is unknown while this body is built.
 
 		for (LispVal expr : topLevelExprs) {
 			WasmExprCompiler.compileExpr(expr, ctx);
@@ -967,11 +979,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		// host-facing bump allocator __ronto_alloc and the _str_from_mem string builder.
 		// They precede the wrappers so the fixed FUNC_* constants are unaffected.
 		boolean exportUsesMemory = (!this.component) && exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
-		// Any exported function may be invoked by a host without running _start, so the
-		// linear-memory heap pointer (normally seeded at the top of _start) must be
-		// initialized at instantiation whenever exports are present, even for scalar-only
-		// exports whose body allocates internally (e.g. via princ-to-string).
-		boolean exportsPresent = (!this.component) && !exportDecls.isEmpty();
 		int exportHelperBase = FUNC_USER_BASE + numDefuns + numLambdas;
 		// A :string import result is written into linear memory by the host and boxed
 		// with the same _str_from_mem helper, so it forces the helper pair on too.
@@ -1171,6 +1178,16 @@ public final class WasmLispCompiler implements LispCompiler {
 			readBody = WasmReadRuntimeBuilder.buildReadStub();
 			loadBody = WasmReadRuntimeBuilder.buildLoadStub();
 		}
+
+		// Final static-data layout. The string table is complete here (its last append
+		// was the runtime-reader intern blob above), so the runtime intern table's base
+		// and the bump-allocator heap base can be derived from its size; both are seeded
+		// into fixed cells by active data segments below. This keeps runtime interning
+		// and heap allocation above the static data no matter how large the program is.
+		byte[] stringData = stringTable.toByteArray();
+		int staticEnd = DATA_BASE_OFFSET + stringData.length;
+		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (staticEnd + 15) & ~15);
+		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
@@ -1581,7 +1598,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			// (the canonical realloc heap is page 1+ in component mode).
 			.writeMemory(memories -> {
 				if (!this.component) {
-					memories.addMemory(4);
+					// At least 4 pages (getenv places the environ buffer in page 3); a
+					// program whose computed heap base approaches that keeps the same
+					// ~3.7 pages of heap headroom the fixed 16384 base used to leave.
+					memories.addMemory(Math.max(4, (heapBase + 65535) / 65536 + 3));
 				}
 			})
 			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
@@ -1769,19 +1789,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Data section
 			.writeDataSection(data -> {
-				// Exports are called by a host without running _start, so the
-				// linear-memory
-				// heap pointer (normally initialized at the top of _start) must be seeded
-				// at
-				// instantiation. Write READ_LINE_BUF as a little-endian i32 at
-				// HEAP_PTR_ADDR.
-				// Harmless for the _start path (it stores the same value).
-				if (exportsPresent) {
-					int heapBase = READ_LINE_BUF;
-					data.addActiveData(0, HEAP_PTR_ADDR, new byte[] { (byte) heapBase, (byte) (heapBase >> 8),
-							(byte) (heapBase >> 16), (byte) (heapBase >> 24) });
-				}
-				byte[] stringData = stringTable.toByteArray();
+				// The heap pointer and the runtime intern table's base are seeded at
+				// instantiation (values computed above from the final static-data size).
+				// Instantiation-time seeding also covers hosts that call exported
+				// functions without running _start.
+				data.addActiveData(0, HEAP_PTR_ADDR, littleEndian32(heapBase));
+				data.addActiveData(0, RT_INTERN_BASE_ADDR, littleEndian32(rtInternBase));
 				if (stringData.length > 0) {
 					data.addActiveData(0, DATA_BASE_OFFSET, stringData);
 				}
@@ -1896,6 +1909,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		target.write((value >>> 8) & 0xFF);
 		target.write((value >>> 16) & 0xFF);
 		target.write((value >>> 24) & 0xFF);
+	}
+
+	private static byte[] littleEndian32(int value) {
+		return new byte[] { (byte) value, (byte) (value >>> 8), (byte) (value >>> 16), (byte) (value >>> 24) };
 	}
 
 	private static DefunDecl extractSetqLambda(LispVal expr) {

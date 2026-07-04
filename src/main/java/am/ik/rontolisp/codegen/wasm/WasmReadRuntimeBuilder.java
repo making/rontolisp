@@ -228,28 +228,34 @@ final class WasmReadRuntimeBuilder {
 		w.write(Type.I32);
 		final int OFF = 0, LEN = 1, IDX = 2, EOFF = 3, ELEN = 4, K = 5, COUNT = 6;
 
+		// The runtime table's base is not a constant: it is seeded at instantiation
+		// (RT_INTERN_BASE_ADDR cell) from the program's actual static-data size, so the
+		// records can never overwrite the interned-string segment.
+		Runnable emitRtBase = () -> loadMem32(w, WasmLispCompiler.RT_INTERN_BASE_ADDR);
 		// 1. compile-time table (constant count)
 		i32(w, internCount);
 		setLocal(w, COUNT);
-		emitInternScan(w, internBase, OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
+		emitInternScan(w, () -> i32(w, internBase), OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
 		// 2. runtime table (count from memory)
 		loadMem32(w, WasmLispCompiler.RT_INTERN_COUNT_ADDR);
 		setLocal(w, COUNT);
-		emitInternScan(w, WasmLispCompiler.RT_INTERN_BASE, OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
+		emitInternScan(w, emitRtBase, OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
 		// 3. miss: append (off, len) and return off
-		// mem[RT_BASE + count*8] = off
-		i32(w, WasmLispCompiler.RT_INTERN_BASE);
+		// mem[rtBase + count*8] = off
+		emitRtBase.run();
 		getLocal(w, COUNT);
 		i32(w, 8);
 		w.write(Instruction.I32_MUL);
 		w.write(Instruction.I32_ADD);
 		getLocal(w, OFF);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// mem[RT_BASE + count*8 + 4] = len
-		i32(w, WasmLispCompiler.RT_INTERN_BASE + 4);
+		// mem[rtBase + count*8 + 4] = len
+		emitRtBase.run();
 		getLocal(w, COUNT);
 		i32(w, 8);
 		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		i32(w, 4);
 		w.write(Instruction.I32_ADD);
 		getLocal(w, LEN);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
@@ -265,12 +271,12 @@ final class WasmReadRuntimeBuilder {
 	}
 
 	/**
-	 * Emits a scan of {@code COUNT} {@code (offset,length)} entries starting at
-	 * {@code baseAddr}; on the first byte-equal entry returns its offset from the
-	 * function.
+	 * Emits a scan of {@code COUNT} {@code (offset,length)} entries starting at the base
+	 * address pushed by {@code emitBase}; on the first byte-equal entry returns its
+	 * offset from the function.
 	 */
-	private static void emitInternScan(WasmWriter w, int baseAddr, int OFF, int LEN, int IDX, int EOFF, int ELEN, int K,
-			int COUNT) {
+	private static void emitInternScan(WasmWriter w, Runnable emitBase, int OFF, int LEN, int IDX, int EOFF, int ELEN,
+			int K, int COUNT) {
 		i32(w, 0);
 		setLocal(w, IDX);
 		block(w);
@@ -280,19 +286,21 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, COUNT);
 		w.write(Instruction.I32_GE_S);
 		brIf(w, 1);
-		// EOFF = mem[baseAddr + IDX*8]
-		i32(w, baseAddr);
+		// EOFF = mem[base + IDX*8]
+		emitBase.run();
 		getLocal(w, IDX);
 		i32(w, 8);
 		w.write(Instruction.I32_MUL);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		setLocal(w, EOFF);
-		// ELEN = mem[baseAddr + IDX*8 + 4]
-		i32(w, baseAddr + 4);
+		// ELEN = mem[base + IDX*8 + 4]
+		emitBase.run();
 		getLocal(w, IDX);
 		i32(w, 8);
 		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		i32(w, 4);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		setLocal(w, ELEN);
