@@ -38,10 +38,37 @@ Created 2026-07-04.
 - **Allocator reset**: the mem-http `cabi_realloc` and the core `__ronto_alloc`
   bump pointers never reset, so a very long-lived server eventually exhausts the
   16-page memory. Reset per request (guarded) or grow memory.
-- **JVM backend**: a generated class implementing an HttpHandlerSupport SAM
-  (X509TrustManager-style) building the request plist + calling the compiled
-  handler via `_invoke_1`. Currently a clean "requires --component"/interpreter
-  error.
+- **JVM backend** (next session). Design (reuses two proven mechanisms):
+  1. The compiled program class IMPLEMENTS `HttpHandlerSupport.Handler`
+     (`Response handle(Request)`), exactly like the TLS-insecure trick where the
+     class implements `javax.net.ssl.X509TrustManager`
+     (`JvmLispCompiler` ~L297-317, `writeInterfaces`, the injected methods, and
+     the extra `--optimize` shaker roots gated on `usesTlsConnect`). Gate a new
+     `usesHttpHandler = programUsesSymbol(program, rontolisp:http-handler)`.
+  2. The injected `handle(HttpHandlerSupport$Request)` method body:
+     - reads `request.method()/path()/body()` (invokevirtual on the record),
+     - builds the request plist `(:method m :path p :headers nil :body b)` as
+       cons cells in the shared runtime value rep -- mirror
+       `JvmFetchRuntimeBuilder` which already builds
+       `(:status .. :body .. :headers ..)` (interned `:status` etc. via
+       `cp.addString`),
+     - applies the compiled handler funcref via the `_invoke_1` dispatcher (the
+       same one fetch/await/mapcar use; force-registered when the fetch runtime is
+       emitted -- do the same when `usesHttpHandler`),
+     - reads `:status`/`:body` back from the response plist (a plist-get loop; see
+       the interpreter's `httpPlistGet` / the WASM `%http-encode` for the shape)
+       and `return new HttpHandlerSupport.Response(status, List.of(), body)`.
+     v1 can drop request/response headers like the WASM path (List.of()).
+  3. The `(rontolisp:http-handler 'name port)` directive site (JvmExprCompiler,
+     currently throws) emits `HttpHandlerSupport.serve(port, this)` -- `this` is
+     the program instance implementing Handler. Resolve the handler funcref from
+     `'name` (a Pass-1 defun) the way `#'name` does.
+  Tests: extend `HttpHandlerTest` (or a JVM variant) to compile+run the server on
+  a background thread and curl it, like the interpreter directive test. Then flip
+  `JvmExprCompiler`'s http-handler case from the compile error to the emit, and
+  update `JvmLispCompilerTest.compileHttpHandlerIsCompileError` to a
+  compile+serve round trip. Remember: HttpHandlerSupport is already `public` and
+  the web substitution (`Target_HttpHandlerSupport`) already stubs `serve`.
 
 ## Original status line (historical)
 
