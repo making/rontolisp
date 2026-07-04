@@ -28,7 +28,7 @@ final class Target_SocketSupport {
 	}
 
 	@Substitute
-	static Socket connectTls(String host, int port) {
+	static Socket connectTls(String host, int port, boolean insecure) {
 		throw new LispEvalException("tls-connect: TCP sockets are not supported in the browser playground");
 	}
 
@@ -40,6 +40,16 @@ final class Target_SocketSupport {
 	@Substitute
 	static ServerSocket listenTls(String keyStorePath, String password, int port, String host) {
 		throw new LispEvalException("tls-listen: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
+	static ServerSocket listenTlsPem(String certPath, String keyPath, int port, String host) {
+		throw new LispEvalException("tls-listen-pem: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
+	static ServerSocket listenTlsP12(String base64KeyStore, String password, int port, String host) {
+		throw new LispEvalException("tls-listen-pem: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute

@@ -118,6 +118,21 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void tlsListenPemIsCompileErrorInBothWasmModes() {
+		assertThatThrownBy(() -> compile("(rontolisp:tls-listen-pem \"cert.pem\" \"key.pem\" 8443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-listen-pem \"cert.pem\" \"key.pem\" 8443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
+		// The internal %tls-listen-p12 shape (were the inliner ever run for WASM) also
+		// reports as tls-listen-pem.
+		assertThatThrownBy(() -> compile("(rontolisp:%tls-listen-p12 \"blob\" \"pw\" 8443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
+	}
+
+	@Test
 	void fetchAndTcpInOneComponentProgramIsCompileError() {
 		// fetch (a wasi:http 0.2 hybrid) and tcp sockets (wasi:sockets 0.3) need
 		// different component blob variants; combining them is not supported yet.

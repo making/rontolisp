@@ -48,17 +48,20 @@ keytool -genkeypair -alias my-server -keyalg EC -dname CN=localhost \
   バックエンドの `tcp-listen` と異なり、失敗が `nil` になることはありません:
   キーストアの欠落、誤ったパスワード、使用中のポートは、どちらのバックエンド
   でもエラーを通知します。
-- **WASM**: 非サポート — wasmtime は WASI 0.3 コンポーネント向けの TLS を
-  ホストしていない(`wasi:tls` はまだ 0.2 のドラフト)ため、`tls-listen` は
-  Preview 1 と `--component` のどちらのモードでも**コンパイルエラー**です。
+- **WASM**: 非サポート — `tls-listen` は Preview 1 と `--component` の
+  どちらのモードでも**コンパイルエラー**です。`wasi:tls` の提案は
+  **クライアント専用**(WASM コンポーネント向けのサーバー側 TLS
+  インターフェイスは存在しない)であり、TLS *サーバー*には WASM
+  の経路がありません。
 - **ブラウザプレイグラウンド**: 非サポート — ブラウザのサンドボックスには生の
   TCP ソケットがないため、`tls-listen` はエラーを通知します。
 
 ## 制限事項
 
-- キーストアは PKCS12 でなければなりません(`keytool` のデフォルト。PEM の
-  証明書/鍵ファイルを直接読むことはできません — `openssl pkcs12 -export`
-  で変換してください)。
+- キーストアは PKCS12 でなければなりません(`keytool` のデフォルト)。証明書と
+  鍵を **PEM ファイル**(certbot / OpenSSL の出力)から直接提供するには、
+  代わりに [`rontolisp:tls-listen-pem`](rontolisp-tls-listen-pem.md) を
+  使ってください。
 - クライアント証明書認証(相互 TLS)のオプションはありません。
 - accept された接続のハンドシェイクは遅延実行です: 証明書検証に失敗する
   クライアントは、`rontolisp:tcp-accept` の時点ではなく、その接続に対する

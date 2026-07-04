@@ -10,5 +10,5 @@
 [パッケージのイントロスペクション](../packages.md#package-introspection) を参照してください。
 
 ```lisp
-(rontolisp:list-functions :rontolisp) ; => (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)
+(rontolisp:list-functions :rontolisp) ; => (await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)
 ```

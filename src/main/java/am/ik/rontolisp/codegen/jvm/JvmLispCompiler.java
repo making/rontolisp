@@ -261,7 +261,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
-				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN));
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_P12));
 		MethodrefConstant tcpConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
@@ -285,6 +287,34 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant tlsListenHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_DESC)))
+				: null;
+		MethodrefConstant tlsListenP12HelperMethod = usesSockets ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_P12_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_P12_DESC)))
+				: null;
+
+		// tls-connect's :insecure opt-out installs the generated class itself as a
+		// trust-all X509TrustManager (the JVM backend cannot emit an anonymous class),
+		// so when the program uses tls-connect the class implements the interface, gets
+		// a no-arg constructor (for _tlsConnect's `new Prog()`) and the three trust
+		// methods. JSSE calls the trust methods through the interface, an edge the
+		// tree-shaker cannot see, so they are extra --optimize roots.
+		boolean usesTlsConnect = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT));
+		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
+				: null;
+		ClassConstant x509CertificateClass = usesTlsConnect
+				? cp.addClass(cp.addUtf8("java/security/cert/X509Certificate")) : null;
+		MethodrefConstant objectInitRef = usesTlsConnect
+				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
+		Utf8Constant trustInitName = usesTlsConnect ? cp.addUtf8("<init>") : null;
+		Utf8Constant trustInitDesc = usesTlsConnect ? cp.addUtf8("()V") : null;
+		Utf8Constant checkClientName = usesTlsConnect ? cp.addUtf8("checkClientTrusted") : null;
+		Utf8Constant checkServerName = usesTlsConnect ? cp.addUtf8("checkServerTrusted") : null;
+		Utf8Constant checkTrustedDesc = usesTlsConnect
+				? cp.addUtf8("([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V") : null;
+		Utf8Constant acceptedIssuersName = usesTlsConnect ? cp.addUtf8("getAcceptedIssuers") : null;
+		Utf8Constant acceptedIssuersDesc = usesTlsConnect ? cp.addUtf8("()[Ljava/security/cert/X509Certificate;")
 				: null;
 
 		// java: interop runtime: emitted only when the program uses one of the five
@@ -495,6 +525,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tcpLocalPortHelper(tcpLocalPortHelperMethod)
 			.tlsConnectHelper(tlsConnectHelperMethod)
 			.tlsListenHelper(tlsListenHelperMethod)
+			.tlsListenP12Helper(tlsListenP12HelperMethod)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.className(this.className)
@@ -891,6 +922,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			.writeConstantPool(cp) //
 			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass) //
 			.writeInterfaces(i -> {
+				if (x509TrustManagerClass != null) {
+					i.add(w -> w.writeU2(x509TrustManagerClass.index()));
+				}
 			})
 			.writeFields(f -> {
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
@@ -1082,6 +1116,49 @@ public final class JvmLispCompiler implements LispCompiler {
 								})));
 					}
 				}
+				if (usesTlsConnect) {
+					// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
+					// :insecure trust-all manager.
+					Utf8Constant initName = java.util.Objects.requireNonNull(trustInitName);
+					Utf8Constant initDesc = java.util.Objects.requireNonNull(trustInitDesc);
+					Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
+					Utf8Constant serverName = java.util.Objects.requireNonNull(checkServerName);
+					Utf8Constant trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
+					Utf8Constant issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
+					Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
+					int objectInitIdx = java.util.Objects.requireNonNull(objectInitRef).index();
+					int x509CertIdx = java.util.Objects.requireNonNull(x509CertificateClass).index();
+					List<Integer> trustInitCode = new java.util.ArrayList<>(
+							List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
+					JvmRuntimeBuilder.emitU2(trustInitCode, objectInitIdx);
+					trustInitCode.add(Opcode.RETURN);
+					methods.add(AccessFlag.ACC_PUBLIC, initName, initDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(1)
+										.writeU2(1)
+										.writeCode((Object[]) trustInitCode.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+					// X509TrustManager: trust-all client/server checks (empty bodies) and
+					// an empty accepted-issuers array.
+					methods.add(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, method -> method
+						.writeAttributes(attrs -> attrs.add(codeUtf8,
+								attr -> attr.writeU2(0).writeU2(3).writeCode(Opcode.RETURN).writeU2(0).writeU2(0))));
+					methods.add(AccessFlag.ACC_PUBLIC, serverName, trustedDesc, method -> method
+						.writeAttributes(attrs -> attrs.add(codeUtf8,
+								attr -> attr.writeU2(0).writeU2(3).writeCode(Opcode.RETURN).writeU2(0).writeU2(0))));
+					List<Integer> acceptedIssuersCode = new java.util.ArrayList<>(
+							List.of(Opcode.ICONST_0, Opcode.ANEWARRAY));
+					JvmRuntimeBuilder.emitU2(acceptedIssuersCode, x509CertIdx);
+					acceptedIssuersCode.add(Opcode.ARETURN);
+					methods.add(AccessFlag.ACC_PUBLIC, issuersName, issuersDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(1)
+										.writeU2(1)
+										.writeCode((Object[]) acceptedIssuersCode.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+				}
 				if (parseIntMethodBody != null) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, parseIntMethodBody.name(),
 							parseIntMethodBody.desc(),
@@ -1220,7 +1297,21 @@ public final class JvmLispCompiler implements LispCompiler {
 			// cannot show is the java: bridge's reflective getDeclaredMethod("_apply",
 			// ..)
 			// lookup, so _apply is an extra root when the program uses java: interop.
-			classBytes = JvmClassShaker.shake(classBytes, usesJava ? Set.of("main", "_apply") : Set.of("main"));
+			// JSSE invokes the X509TrustManager methods through the interface, an edge
+			// the
+			// call-graph tree-shaker cannot see, so they are extra roots when
+			// tls-connect's
+			// :insecure trust-all manager is present.
+			java.util.Set<String> roots = new java.util.HashSet<>(Set.of("main"));
+			if (usesJava) {
+				roots.add("_apply");
+			}
+			if (usesTlsConnect) {
+				roots.add("checkClientTrusted");
+				roots.add("checkServerTrusted");
+				roots.add("getAcceptedIssuers");
+			}
+			classBytes = JvmClassShaker.shake(classBytes, roots);
 		}
 		return classBytes;
 	}
@@ -1556,6 +1647,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant tlsListenHelper;
 
+		final @Nullable MethodrefConstant tlsListenP12Helper;
+
 		/**
 		 * The {@code java:} interop bridge references ({@code init}/{@code new}/
 		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
@@ -1697,6 +1790,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tcpLocalPortHelper = builder.tcpLocalPortHelper;
 			this.tlsConnectHelper = builder.tlsConnectHelper;
 			this.tlsListenHelper = builder.tlsListenHelper;
+			this.tlsListenP12Helper = builder.tlsListenP12Helper;
 			this.javaOps = builder.javaOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
@@ -1794,6 +1888,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant tlsConnectHelper;
 
 			private @Nullable MethodrefConstant tlsListenHelper;
+
+			private @Nullable MethodrefConstant tlsListenP12Helper;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
 
@@ -2025,6 +2121,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder tlsListenHelper(@Nullable MethodrefConstant tlsListenHelper) {
 				this.tlsListenHelper = tlsListenHelper;
+				return this;
+			}
+
+			Builder tlsListenP12Helper(@Nullable MethodrefConstant tlsListenP12Helper) {
+				this.tlsListenP12Helper = tlsListenP12Helper;
 				return this;
 			}
 

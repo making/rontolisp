@@ -46,16 +46,18 @@ Complete servers live in the `examples/` directory:
 - **Interpreter** and **JVM**: use the JDK TLS stack. Unlike `tcp-listen` on
   the WASM backend, failures never yield `nil`: a missing keystore, a wrong
   password or a busy port signals an error on both backends.
-- **WASM**: not supported — wasmtime hosts no TLS for WASI 0.3 components
-  (`wasi:tls` is still a 0.2 draft), so `tls-listen` is a **compile error**
-  in both Preview 1 and `--component` mode.
+- **WASM**: not supported — `tls-listen` is a **compile error** in both
+  Preview 1 and `--component` mode. The `wasi:tls` proposal is **client-only**
+  (there is no server-side TLS interface for WASM components), so a TLS
+  *server* has no WASM path.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-listen` signals an error.
 
 ## Limitations
 
-- The keystore must be PKCS12 (`keytool`'s default; PEM certificate/key files
-  are not read directly — convert with `openssl pkcs12 -export`).
+- The keystore must be PKCS12 (`keytool`'s default). To serve a certificate and
+  key straight from **PEM files** (certbot / OpenSSL output), use
+  [`rontolisp:tls-listen-pem`](rontolisp-tls-listen-pem.md) instead.
 - No client-certificate authentication (mutual TLS) options.
 - The handshake of an accepted connection is lazy: a client that fails
   certificate validation surfaces as an error on the server's first read or

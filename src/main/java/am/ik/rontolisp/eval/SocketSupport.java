@@ -14,10 +14,14 @@ import java.io.FileInputStream;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 
+import java.security.cert.X509Certificate;
+
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 
 import org.jspecify.annotations.Nullable;
 
@@ -54,33 +58,55 @@ final class SocketSupport {
 	}
 
 	/**
-	 * Opens a blocking TCP connection and performs a TLS handshake. The server
+	 * Opens a blocking TCP connection and performs a TLS handshake. By default the server
 	 * certificate is validated against the JDK default trust store and the hostname is
-	 * verified (HTTPS-style endpoint identification). A fresh {@link SSLContext} is
-	 * initialized per call so the {@code javax.net.ssl.trustStore} system properties are
-	 * re-read on every connection (unlike the process-wide cached
-	 * {@code SSLSocketFactory.getDefault()}). An {@link SSLSocket} is a {@link Socket},
-	 * so the returned socket goes into the stream table unchanged and every stream
-	 * built-in works on it as-is.
+	 * verified (HTTPS-style endpoint identification); {@code insecure} disables both
+	 * checks (a trust-all manager, no endpoint identification) for development against
+	 * self-signed servers. A fresh {@link SSLContext} is initialized per call so the
+	 * {@code javax.net.ssl.trustStore} system properties are re-read on every connection
+	 * (unlike the process-wide cached {@code SSLSocketFactory.getDefault()}). An
+	 * {@link SSLSocket} is a {@link Socket}, so the returned socket goes into the stream
+	 * table unchanged and every stream built-in works on it as-is.
 	 * @param host a hostname or IP literal
 	 * @param port the remote TCP port
+	 * @param insecure whether to skip certificate and hostname verification
 	 * @return the connected socket with the handshake completed
 	 * @throws LispEvalException if the connection or the handshake fails
 	 */
-	static Socket connectTls(String host, int port) {
+	static Socket connectTls(String host, int port, boolean insecure) {
 		try {
 			SSLContext context = SSLContext.getInstance("TLS");
-			context.init(null, null, null);
+			context.init(null, insecure ? new TrustManager[] { new TrustAllManager() } : null, null);
 			SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket(host, port);
-			SSLParameters parameters = socket.getSSLParameters();
-			parameters.setEndpointIdentificationAlgorithm("HTTPS");
-			socket.setSSLParameters(parameters);
+			if (!insecure) {
+				SSLParameters parameters = socket.getSSLParameters();
+				parameters.setEndpointIdentificationAlgorithm("HTTPS");
+				socket.setSSLParameters(parameters);
+			}
 			socket.startHandshake();
 			return socket;
 		}
 		catch (IOException | GeneralSecurityException ex) {
 			throw new LispEvalException("tls-connect: cannot connect to " + host + ":" + port + ": " + ex.getMessage());
 		}
+	}
+
+	/** Accepts any peer certificate chain; used only by the {@code :insecure} opt-out. */
+	private static final class TrustAllManager implements X509TrustManager {
+
+		@Override
+		public void checkClientTrusted(X509Certificate[] chain, String authType) {
+		}
+
+		@Override
+		public void checkServerTrusted(X509Certificate[] chain, String authType) {
+		}
+
+		@Override
+		public X509Certificate[] getAcceptedIssuers() {
+			return new X509Certificate[0];
+		}
+
 	}
 
 	/**
@@ -133,6 +159,146 @@ final class SocketSupport {
 		}
 		catch (IOException | GeneralSecurityException ex) {
 			throw new LispEvalException("tls-listen: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * The fixed password of the in-memory PKCS12 keystore built from PEM material
+	 * (package-visible so {@link TlsPemSupport} can serialize the keystore for the
+	 * compile-time inliner with the same password).
+	 */
+	static final char[] PEM_KEYSTORE_PASSWORD = "rontolisp-pem".toCharArray();
+
+	/**
+	 * Builds an in-memory PKCS12 {@link KeyStore} from a PEM certificate chain and an
+	 * unencrypted PKCS#8 private key. Shared by the interpreter ({@link #listenTlsPem})
+	 * and the JVM/WASM compile-time inliner, which serializes the result and embeds it,
+	 * so both backends parse PEM through exactly this one code path.
+	 * @param certPath a PEM file holding one or more {@code CERTIFICATE} blocks (leaf
+	 * first)
+	 * @param keyPath a PEM file holding one unencrypted PKCS#8 {@code PRIVATE KEY} block
+	 * @return a single-entry PKCS12 keystore protected by {@link #PEM_KEYSTORE_PASSWORD}
+	 * @throws IOException if a file cannot be read or the PEM is malformed
+	 * @throws GeneralSecurityException if the certificate or key cannot be parsed
+	 */
+	static KeyStore pemToKeyStore(String certPath, String keyPath) throws IOException, GeneralSecurityException {
+		java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
+		java.util.List<java.security.cert.Certificate> chain = new java.util.ArrayList<>();
+		try (InputStream in = new FileInputStream(certPath)) {
+			for (java.security.cert.Certificate cert : cf.generateCertificates(in)) {
+				chain.add(cert);
+			}
+		}
+		if (chain.isEmpty()) {
+			throw new java.security.cert.CertificateException("no certificate found in " + certPath);
+		}
+		String keyPem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(keyPath)),
+				StandardCharsets.UTF_8);
+		java.security.PrivateKey privateKey = parsePkcs8PrivateKey(keyPem, keyPath);
+		KeyStore keyStore = KeyStore.getInstance("PKCS12");
+		keyStore.load(null, null);
+		keyStore.setKeyEntry("key", privateKey, PEM_KEYSTORE_PASSWORD,
+				chain.toArray(new java.security.cert.Certificate[0]));
+		return keyStore;
+	}
+
+	/**
+	 * Parses an unencrypted PKCS#8 {@code PRIVATE KEY} PEM block, detecting the key
+	 * algorithm by trying each supported {@code KeyFactory} in turn (the PKCS#8 wrapper
+	 * carries the algorithm, but the JDK offers no single algorithm-agnostic factory).
+	 */
+	private static java.security.PrivateKey parsePkcs8PrivateKey(String keyPem, String keyPath)
+			throws GeneralSecurityException {
+		StringBuilder base64 = new StringBuilder();
+		boolean inBlock = false;
+		for (String line : keyPem.split("\\R")) {
+			String trimmed = line.trim();
+			if (trimmed.startsWith("-----BEGIN") && trimmed.contains("PRIVATE KEY")) {
+				inBlock = true;
+			}
+			else if (trimmed.startsWith("-----END") && trimmed.contains("PRIVATE KEY")) {
+				break;
+			}
+			else if (inBlock) {
+				base64.append(trimmed);
+			}
+		}
+		if (base64.isEmpty()) {
+			throw new java.security.spec.InvalidKeySpecException(
+					"no unencrypted PKCS#8 PRIVATE KEY block found in " + keyPath);
+		}
+		byte[] der = java.util.Base64.getDecoder().decode(base64.toString());
+		java.security.spec.PKCS8EncodedKeySpec spec = new java.security.spec.PKCS8EncodedKeySpec(der);
+		for (String algorithm : new String[] { "RSA", "EC", "DSA", "EdDSA" }) {
+			try {
+				return java.security.KeyFactory.getInstance(algorithm).generatePrivate(spec);
+			}
+			catch (java.security.spec.InvalidKeySpecException ignored) {
+				// try the next algorithm
+			}
+		}
+		throw new java.security.spec.InvalidKeySpecException(
+				"unsupported or encrypted private key in " + keyPath + " (expected unencrypted PKCS#8)");
+	}
+
+	/**
+	 * Binds a listening TLS socket serving a certificate chain and private key read from
+	 * two PEM files. Otherwise identical to {@link #listenTls}: the listener is a
+	 * {@code ServerSocket} subclass, so {@code tcp-accept}/{@code tcp-local-port}/
+	 * {@code close} work on it unchanged and an accepted socket handshakes lazily.
+	 * @param certPath a PEM certificate-chain file (leaf certificate first)
+	 * @param keyPath a PEM file holding the unencrypted PKCS#8 private key
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening TLS server socket
+	 * @throws LispEvalException if the PEM cannot be parsed or the address cannot be
+	 * bound
+	 */
+	static ServerSocket listenTlsPem(String certPath, String keyPath, int port, @Nullable String host) {
+		try {
+			KeyStore keyStore = pemToKeyStore(certPath, keyPath);
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+			kmf.init(keyStore, PEM_KEYSTORE_PASSWORD);
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(kmf.getKeyManagers(), null, null);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			return context.getServerSocketFactory().createServerSocket(port, 50, address);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-listen-pem: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Binds a listening TLS socket from an in-memory PKCS12 keystore supplied as a Base64
+	 * string (the shape the {@code tls-listen-pem} compile-time inliner produces: the PEM
+	 * material is parsed and serialized to PKCS12 bytes at compile time, then embedded).
+	 * @param base64KeyStore the Base64-encoded PKCS12 keystore bytes
+	 * @param password the keystore (and key) password
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening TLS server socket
+	 * @throws LispEvalException if the keystore cannot be loaded or the address cannot be
+	 * bound
+	 */
+	static ServerSocket listenTlsP12(String base64KeyStore, String password, int port, @Nullable String host) {
+		try {
+			byte[] bytes = java.util.Base64.getDecoder().decode(base64KeyStore);
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
+			try (InputStream in = new java.io.ByteArrayInputStream(bytes)) {
+				keyStore.load(in, password.toCharArray());
+			}
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+			kmf.init(keyStore, password.toCharArray());
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(kmf.getKeyManagers(), null, null);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			return context.getServerSocketFactory().createServerSocket(port, 50, address);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-listen-pem: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
 					+ ": " + ex.getMessage());
 		}
 	}

@@ -1291,6 +1291,27 @@ public final class LispNames {
 	 */
 	public static final String TLS_LISTEN = "tls-listen";
 
+	/**
+	 * The {@code tls-listen-pem} function provided by the {@code rontolisp} package.
+	 * Binds a listening TLS socket serving the certificate chain and unencrypted PKCS#8
+	 * private key read from two PEM files:
+	 * {@code (tls-listen-pem cert-file key-file port &optional
+	 * host)}. Otherwise identical to {@code tls-listen} (the listener handle works with
+	 * {@code rontolisp:tcp-accept}, {@code rontolisp:tcp-local-port} and {@code close}).
+	 * The interpreter reads the PEM files at run time; the JVM backend embeds the parsed
+	 * keystore at compile time (so the {@code cert-file}/{@code key-file} paths must be
+	 * string literals when compiling). WASM has no TLS host support.
+	 */
+	public static final String TLS_LISTEN_PEM = "tls-listen-pem";
+
+	/**
+	 * Internal helper the {@code tls-listen-pem} compile-time inliner rewrites to: binds
+	 * a TLS listener from an in-memory PKCS12 keystore passed as a Base64 string
+	 * ({@code (%tls-listen-p12 base64 password port &optional host)}). Not part of the
+	 * public API -- programs call {@code tls-listen-pem}.
+	 */
+	public static final String TLS_LISTEN_P12 = "%tls-listen-p12";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";
 

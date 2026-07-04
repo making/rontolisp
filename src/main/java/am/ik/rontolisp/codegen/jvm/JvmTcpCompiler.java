@@ -6,6 +6,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 import org.jspecify.annotations.Nullable;
@@ -34,9 +35,26 @@ final class JvmTcpCompiler {
 				invoke(ctx, ctx.tcpConnectHelper, member);
 			}
 			case LispNames.TLS_CONNECT -> {
-				requireArgs(member, args, 2, 2);
+				// (tls-connect host port) or (tls-connect host port :insecure value):
+				// like open's :direction, the option keyword must be a literal; the
+				// value is a runtime expression (non-nil skips verification).
+				int given = args.size() - 1;
+				if (given != 2 && given != 4) {
+					throw new UnsupportedOperationException(member + " expects 2 or 4 arguments, got " + given);
+				}
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				if (given == 4) {
+					if (!(args.get(3) instanceof LispSymbol option) || !option.isKeyword()
+							|| !option.name().equals(":insecure")) {
+						throw new UnsupportedOperationException(
+								member + " expects :insecure, got: " + args.get(3).print());
+					}
+					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
+				}
+				else {
+					ctx.emit(Opcode.ACONST_NULL);
+				}
 				invoke(ctx, ctx.tlsConnectHelper, member);
 			}
 			case LispNames.TLS_LISTEN -> {
@@ -51,6 +69,19 @@ final class JvmTcpCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 				}
 				invoke(ctx, ctx.tlsListenHelper, member);
+			}
+			case LispNames.TLS_LISTEN_P12 -> {
+				requireArgs(member, args, 3, 4);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+				if (args.size() == 5) {
+					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
+				}
+				else {
+					ctx.emit(Opcode.ACONST_NULL);
+				}
+				invoke(ctx, ctx.tlsListenP12Helper, member);
 			}
 			case LispNames.TCP_LISTEN -> {
 				requireArgs(member, args, 1, 2);

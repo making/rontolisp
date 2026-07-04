@@ -3184,7 +3184,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
 	}
 
 	@Test
@@ -3228,7 +3228,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
 	}
 
 	@Test
@@ -3568,6 +3568,50 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void tlsListenPemEchoRoundTripOnLoopback() throws Exception {
+		// The Lisp side is the TLS server configured from PEM files (cert + PKCS#8
+		// key); the peer trusts the same self-signed certificate. The PEM cert is the
+		// very certificate the shared keystore holds, so the existing echo client
+		// trusts it unchanged.
+		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		java.nio.file.Path[] pem = am.ik.rontolisp.TlsTestSupport.pemFiles();
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over pem tls");
+		String program = """
+				(let* ((listener (rontolisp:tls-listen-pem "%s" "%s" %d "127.0.0.1"))
+				       (client (rontolisp:tcp-accept listener))
+				       (line (read-line client)))
+				  (write-line line client)
+				  (close client)
+				  (close listener)
+				  line)
+				""".formatted(pem[0], pem[1], port);
+		assertThat(eval(program)).isEqualTo(new LispString("hello over pem tls"));
+		client.join();
+	}
+
+	@Test
+	void tlsListenPemBadFilesSignalsError() {
+		assertThatThrownBy(
+				() -> eval("(rontolisp:tls-listen-pem \"/no/such/cert.pem\" \"/no/such/key.pem\" 0 \"127.0.0.1\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-listen-pem");
+	}
+
+	@Test
+	void tlsListenPemArgumentValidation() {
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" \"k.pem\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-listen-pem");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem 1 \"k.pem\" 0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string certificate path");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" 1 0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string key path");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" \"k.pem\" \"nope\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects an integer port");
+	}
+
+	@Test
 	void tlsListenBadKeyStoreSignalsError() {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"/no/such/keystore.p12\" \"changeit\" 0 \"127.0.0.1\")"))
 			.isInstanceOf(LispEvalException.class)
@@ -3596,6 +3640,43 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" \"nope\")"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects an integer port");
+		// the only accepted option is the :insecure keyword-value pair (arity 4)
+		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" 443 :insecure)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-connect");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" 443 :verify t)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects :insecure");
+	}
+
+	@Test
+	void tlsConnectInsecureSkipsCertificateVerification() throws Exception {
+		// The self-signed server certificate is NOT in any trust store here;
+		// :insecure t must skip both the chain validation and the hostname check.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			String program = """
+					(let ((client (rontolisp:tls-connect "127.0.0.1" %d :insecure t)))
+					  (write-line "hello insecurely" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    reply))
+					""".formatted(server.getLocalPort());
+			assertThat(eval(program)).isEqualTo(new LispString("hello insecurely"));
+			echo.join();
+		}
+	}
+
+	@Test
+	void tlsConnectInsecureNilStillVerifies() throws Exception {
+		// :insecure nil is the verifying default, so the untrusted self-signed
+		// certificate must still fail the handshake.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			String program = "(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + " :insecure nil)";
+			assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
+				.hasMessageContaining("tls-connect");
+		}
 	}
 
 	@Test

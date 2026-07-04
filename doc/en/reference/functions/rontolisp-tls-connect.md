@@ -1,6 +1,7 @@
 # rontolisp:tls-connect
 
 `(rontolisp:tls-connect host port)`
+`(rontolisp:tls-connect host port :insecure value)`
 
 Opens a blocking TCP connection to `host`/`port`, performs a **TLS
 handshake**, and returns a **bidirectional stream handle** — the encrypted
@@ -18,6 +19,12 @@ to a server with an untrusted or mismatching certificate signals an error. To
 trust a self-signed certificate, point the standard
 `javax.net.ssl.trustStore` / `javax.net.ssl.trustStorePassword` system
 properties at your own trust store; they are re-read on every call.
+
+Passing `:insecure` with a non-`nil` `value` **disables** both checks — the
+certificate chain is accepted unconditionally and the hostname is not verified.
+This is intended for development against a self-signed server; never use it for
+real endpoints, since it removes all protection against man-in-the-middle
+attacks. `:insecure nil` is the same as omitting the option (verification on).
 
 The example below speaks HTTP/1.1 over TLS by hand (the request lines end
 with CRLF, so the carriage return is appended explicitly; `read-line` strips
@@ -41,17 +48,20 @@ TLS-wrapped protocols:
 - **Interpreter** and **JVM**: use the JDK TLS stack (`SSLSocket`); `host` may
   be a hostname or an IP literal. A failed connection or handshake (refused
   port, untrusted certificate, hostname mismatch) signals an error.
-- **WASM**: not supported — wasmtime hosts no TLS for WASI 0.3 components
-  (`wasi:tls` is still a 0.2 draft), so `tls-connect` is a **compile error**
-  in both Preview 1 and `--component` mode.
+- **WASM**: not supported yet — `tls-connect` is a **compile error** in both
+  Preview 1 and `--component` mode. A component-mode client could be built on
+  wasmtime's experimental `wasi:tls@0.3.0-draft` interface, but that interface
+  is unstable (no semver guarantee); until it settles, use the interpreter or
+  the JVM backend.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-connect` signals an error.
 
 ## Limitations
 
-- Certificate verification cannot be disabled from Lisp; use the trust-store
-  system properties to trust additional certificates. For the *server* side
-  of TLS see [`rontolisp:tls-listen`](rontolisp-tls-listen.md).
+- `:insecure` is an all-or-nothing opt-out (no per-certificate pinning); to
+  trust specific additional certificates while keeping verification on, use the
+  trust-store system properties instead. For the *server* side of TLS see
+  [`rontolisp:tls-listen`](rontolisp-tls-listen.md).
 - `read` (the s-expression reader) does not work on socket handles; read
   lines or bytes and parse them explicitly (e.g. with
   [`read-from-string`](read-from-string.md)).

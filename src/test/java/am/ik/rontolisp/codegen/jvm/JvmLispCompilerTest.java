@@ -3209,7 +3209,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -3475,13 +3475,107 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTlsListenP12EchoRoundTripOnLoopback() throws Exception {
+		// The compiled program is the TLS server configured from an embedded PKCS12
+		// keystore (the shape the tls-listen-pem inliner produces). The keystore is
+		// built from the shared PEM material; the peer trusts the same certificate.
+		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		java.nio.file.Path[] pem = am.ik.rontolisp.TlsTestSupport.pemFiles();
+		String base64 = am.ik.rontolisp.eval.TlsPemSupport.pemToBase64Pkcs12(pem[0].toString(), pem[1].toString());
+		String password = am.ik.rontolisp.eval.TlsPemSupport.KEYSTORE_PASSWORD;
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over p12 tls");
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:%%tls-listen-p12 "%s" "%s" %d "127.0.0.1"))
+				       (client (rontolisp:tcp-accept listener))
+				       (line (read-line client)))
+				  (write-line line client)
+				  (close client)
+				  (close listener)
+				  (print line))
+				""".formatted(base64, password, port))).isEqualTo("\"hello over p12 tls\"");
+		client.join();
+	}
+
+	@Test
 	void compileTlsRejectsWrongArgCount() {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\")"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-connect expects 2 arguments");
+			.hasMessageContaining("tls-connect expects 2 or 4 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" 443 :insecure)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-connect expects 2 or 4 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" 443 :verify t)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expects :insecure");
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-listen \"ks.p12\" \"pw\")"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("tls-listen expects 3 or 4 arguments");
+	}
+
+	@Test
+	void compileAndRunTlsInsecureSkipsCertificateVerification() throws Exception {
+		// The self-signed server certificate is NOT trusted here; :insecure t makes
+		// the emitted _tlsConnect trust any chain (the generated class itself is the
+		// X509TrustManager) and skip the hostname check.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let ((client (rontolisp:tls-connect "127.0.0.1" %d :insecure t)))
+					  (write-line "hello insecurely" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"hello insecurely\"");
+			echo.join();
+		}
+	}
+
+	@Test
+	void compileAndRunTlsInsecureNilStillVerifies() throws Exception {
+		// :insecure nil is the verifying default, so the untrusted certificate must
+		// still fail the handshake.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThatThrownBy(() -> compileAndRun(
+					"(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + " :insecure nil)"))
+				.hasStackTraceContaining("SSLHandshakeException");
+		}
+	}
+
+	@Test
+	void compileAndRunTlsInsecureSurvivesOptimize() throws Exception {
+		// --optimize (JvmClassShaker) must keep the X509TrustManager methods of the
+		// generated class: JSSE invokes them through the interface, which the shaker
+		// cannot see as references.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			List<LispVal> program = LispReader.readAllFromString("""
+					(let ((client (rontolisp:tls-connect "127.0.0.1" %d :insecure t)))
+					  (write-line "hello optimized" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    (print reply)))
+					""".formatted(server.getLocalPort()));
+			byte[] classBytes = new JvmLispCompiler("Test", false, true).compile(program);
+			Path classFile = tempDir.resolve("Test.class");
+			Files.write(classFile, classBytes);
+			try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+					ClassLoader.getSystemClassLoader())) {
+				Class<?> clazz = loader.loadClass("Test");
+				Method main = clazz.getMethod("main", String[].class);
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				PrintStream oldOut = System.out;
+				System.setOut(new PrintStream(baos));
+				try {
+					main.invoke(null, (Object) new String[0]);
+				}
+				finally {
+					System.setOut(oldOut);
+				}
+				assertThat(baos.toString().trim()).isEqualTo("\"hello optimized\"");
+			}
+			echo.join();
+		}
 	}
 
 	@Test

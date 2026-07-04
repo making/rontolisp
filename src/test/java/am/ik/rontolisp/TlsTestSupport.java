@@ -52,6 +52,61 @@ public final class TlsTestSupport {
 		return path;
 	}
 
+	private static volatile Path @Nullable [] pemFiles;
+
+	/**
+	 * Returns {@code [certPath, keyPath]} PEM files derived from the shared keystore
+	 * (same certificate and key, so the existing {@link #startOneShotEchoClient} trusts a
+	 * PEM-configured server unchanged). The certificate is written as a
+	 * {@code CERTIFICATE} block and the private key as an unencrypted PKCS#8
+	 * {@code PRIVATE KEY} block, both standard PEM (matching what certbot /
+	 * {@code openssl
+	 * genpkey} emit). Generated on first use.
+	 * @return the two PEM file paths
+	 */
+	public static Path[] pemFiles() {
+		Path[] files = pemFiles;
+		if (files == null) {
+			synchronized (TlsTestSupport.class) {
+				files = pemFiles;
+				if (files == null) {
+					files = generatePemFiles();
+					pemFiles = files;
+				}
+			}
+		}
+		return files;
+	}
+
+	private static Path[] generatePemFiles() {
+		try {
+			KeyStore ks = KeyStore.getInstance("PKCS12");
+			try (var in = Files.newInputStream(keyStore())) {
+				ks.load(in, STORE_PASSWORD.toCharArray());
+			}
+			String alias = "rontolisp-tls-test";
+			java.security.cert.Certificate cert = ks.getCertificate(alias);
+			java.security.Key key = ks.getKey(alias, STORE_PASSWORD.toCharArray());
+			Path dir = Files.createTempDirectory("rontolisp-tls-pem");
+			Path certPem = dir.resolve("cert.pem");
+			Path keyPem = dir.resolve("key.pem");
+			Files.writeString(certPem, pemBlock("CERTIFICATE", cert.getEncoded()));
+			Files.writeString(keyPem, pemBlock("PRIVATE KEY", key.getEncoded()));
+			return new Path[] { certPem, keyPem };
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+		catch (java.security.GeneralSecurityException ex) {
+			throw new IllegalStateException(ex);
+		}
+	}
+
+	private static String pemBlock(String type, byte[] der) {
+		String base64 = java.util.Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.UTF_8)).encodeToString(der);
+		return "-----BEGIN " + type + "-----\n" + base64 + "\n-----END " + type + "-----\n";
+	}
+
 	private static Path generateKeyStore() {
 		try {
 			Path dir = Files.createTempDirectory("rontolisp-tls-test");

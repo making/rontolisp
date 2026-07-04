@@ -2,9 +2,10 @@
 
 Four `rontolisp`-package built-ins — `tcp-connect` (host port), `tcp-listen`
 (port &optional host), `tcp-accept` (listener), `tcp-local-port` (handle) —
-plus the encrypted variants `tls-connect` (host port) and `tls-listen`
-(keystore password port &optional host; both interpreter/JVM only, see
-below), that return **bidirectional stream handles in the same handle space
+plus the encrypted variants `tls-connect` (host port &optional :insecure
+value), `tls-listen` (keystore password port &optional host) and
+`tls-listen-pem` (cert-file key-file port &optional host; all three
+interpreter/JVM only, see below), that return **bidirectional stream handles in the same handle space
 as file streams**, so the standard stream built-ins (`read-line`,
 `write-line`, `read-byte`, `write-byte`, `close`) work on sockets unchanged. Blocking,
 synchronous API (no promises). Reads are byte-at-a-time (no readahead buffer
@@ -37,7 +38,7 @@ component returns `nil`.
   runtime is UNCHANGED — `fd_read`/`fd_write`/`fd_close` dispatch on fd >= 200
   inside `adapter-sock.wat`.
 
-## TLS (`rontolisp:tls-connect` / `tls-listen`)
+## TLS (`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`)
 
 Interpreter/JVM-only. The whole design leans on `SSLSocket` /
 `SSLServerSocket` being `java.net.Socket` / `ServerSocket` subclasses: the
@@ -57,24 +58,57 @@ handshake failure surface at first-I/O time, not accept time).
   overrides) work without JVM restarts. HTTPS-style endpoint identification
   (`SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")`) is enabled
   before `startHandshake()`; the JDK does NOT verify hostnames by default.
-- **`tls-listen` config**: a **PKCS12 keystore file + password** (NOT PEM —
-  PEM parsing in hand-assembled JVM bytecode would have forced the
-  template-class route; PKCS12 keeps both backends on plain
-  `KeyStore`/`KeyManagerFactory`/`SSLContext` calls). Failures (missing
-  keystore, wrong password, busy port) signal on both backends — no
-  nil-on-failure, since there is no WASM variant.
-- **Interpreter**: `SocketSupport.connectTls` / `listenTls`, registered in
-  `Environment` next to the tcp functions; the web playground substitution
-  (`Target_SocketSupport`) adds matching signal-only methods.
-- **JVM**: `_tlsConnect` / `_tlsListen` in `JvmSocketRuntimeBuilder`,
-  dispatched through `JvmTcpCompiler`. The socket-runtime emission gate in
-  `JvmLispCompiler` is `usesSockets` = any `tcp-*` OR `tls-*`, so a tls-only
+- **`tls-connect` `:insecure`**: `(tls-connect host port :insecure value)` —
+  a non-nil `value` skips BOTH cert-chain validation and endpoint
+  identification. The option keyword must be the literal `:insecure` (like
+  `open`'s `:direction`); the value is a runtime expression. Interpreter:
+  `SocketSupport.TrustAllManager` (a trust-all `X509TrustManager`) + no
+  endpoint id. JVM: the JDK cannot take an anonymous TrustManager from
+  hand-assembled bytecode, so the **generated program class itself implements
+  `X509TrustManager`** (a no-arg `<init>` + the three trust methods, emitted
+  in `JvmLispCompiler` only when `usesTlsConnect`); `_tlsConnect` does
+  `new Prog()` and passes it to `SSLContext.init`. Those three methods are
+  reached only through the interface (JSSE), invisible to the tree-shaker, so
+  they are extra `--optimize` roots (`checkClientTrusted` / `checkServerTrusted`
+  / `getAcceptedIssuers`).
+- **`tls-listen` config**: a **PKCS12 keystore file + password** (keeps both
+  backends on plain `KeyStore`/`KeyManagerFactory`/`SSLContext` calls).
+  Failures (missing keystore, wrong password, busy port) signal on both
+  backends — no nil-on-failure, since there is no WASM variant.
+- **`tls-listen-pem` (PEM cert + key)**: takes `cert-file key-file port
+  [host]` — a PEM cert chain + an **unencrypted PKCS#8** key (`BEGIN PRIVATE
+  KEY`; algorithm detected by trying RSA/EC/DSA/EdDSA `KeyFactory`). PEM
+  parsing (`SocketSupport.pemToKeyStore`, exposed via the public
+  `TlsPemSupport`) is too big to hand-assemble, so it runs at **parse time**:
+  the interpreter reads the files at run time (`SocketSupport.listenTlsPem`,
+  paths may be runtime values), while on the compile path the `cli`
+  `TlsPemInliner` pre-pass (JVM branch of `RontoLispCli` only, so WASM still
+  sees `tls-listen-pem`) parses the (literal-only) paths at compile time,
+  serializes the keystore to a Base64 PKCS12 blob and rewrites the call to the
+  internal `rontolisp:%tls-listen-p12 base64 password port [host]` built-in.
+  `%tls-listen-p12` loads the keystore from a `ByteArrayInputStream` and shares
+  `tls-listen`'s SSLContext/server-socket tail (`emitKmfToServerSocket` on the
+  JVM); non-literal PEM paths on the compile path are a compile error.
+- **Interpreter**: `SocketSupport.connectTls` / `listenTls` / `listenTlsPem` /
+  `listenTlsP12`, registered in `Environment` next to the tcp functions; the
+  web playground substitution (`Target_SocketSupport`) adds matching
+  signal-only methods.
+- **JVM**: `_tlsConnect` / `_tlsListen` / `_tlsListenP12` in
+  `JvmSocketRuntimeBuilder`, dispatched through `JvmTcpCompiler`. The
+  socket-runtime emission gate in `JvmLispCompiler` is `usesSockets` = any
+  `tcp-*` OR `tls-connect`/`tls-listen`/`%tls-listen-p12`, so a tls-only
   program gets the full socket runtime (and the stream built-ins grow their
   socket branches).
-- **WASM**: compile error in BOTH Preview 1 and `--component` mode
-  (`WasmExprCompiler`) — wasmtime hosts no TLS for WASI 0.3 components
-  (`wasi:tls` is still a 0.2 draft), so unlike the tcp built-ins there is no
-  component fallback.
+- **WASM**: `tls-connect` / `tls-listen` / `tls-listen-pem` (and the internal
+  `%tls-listen-p12`) are a compile error in BOTH Preview 1 and `--component`
+  mode (`WasmExprCompiler`) — TLS is interpreter/JVM only, no component
+  fallback. NOTE (corrected 2026-07): wasmtime 46 *does* host
+  `wasi:tls@0.3.0-draft` (p3), composable with the existing WASI-0.3 sockets
+  streams, so a component-mode `tls-connect` is technically feasible — but the
+  interface is **client-only** (no server API, so `tls-listen`/`tls-listen-pem`
+  can never work on WASM) and explicitly experimental/non-semver (WIT churn
+  between wasmtime releases, no cert/insecure knobs). Deferred pending a stable
+  interface; see `.todo/50-tls-server-and-extensions.md`.
 - **Tests**: `TlsTestSupport` (shared, package `am.ik.rontolisp`) generates
   one self-signed PKCS12 keystore per JVM with the JDK `keytool`
   (CN=localhost, SAN ip:127.0.0.1 + dns:localhost so endpoint identification
@@ -84,11 +118,16 @@ handshake failure surface at first-I/O time, not accept time).
   (client trust via `withTrustStore`, which points `javax.net.ssl.trustStore`
   at the keystore) and a one-shot echo TLS *client* with connect-retry for
   the `tls-listen` tests (port picked up front via `freePort()` — the port
-  must be embedded in the program text). Pinning:
-  `LispEvaluatorTest#tls*`, `JvmLispCompilerTest#compileAndRunTls*` /
-  `#compileTlsRejectsWrongArgCount`,
+  must be embedded in the program text). `TlsTestSupport.pemFiles()` derives a
+  cert.pem + unencrypted-PKCS#8 key.pem from that same keystore in pure Java
+  (same cert, so the existing echo client trusts a PEM-configured server
+  unchanged) for the `tls-listen-pem` / `%tls-listen-p12` tests. Pinning:
+  `LispEvaluatorTest#tls*` (incl. `tlsConnectInsecure*`, `tlsListenPem*`),
+  `JvmLispCompilerTest#compileAndRunTls*` (incl. `*Insecure*`,
+  `*TlsListenP12*`) / `#compileTlsRejectsWrongArgCount`,
   `WasmLispCompilerTest#tlsConnectIsCompileErrorInBothWasmModes` /
-  `#tlsListenIsCompileErrorInBothWasmModes`.
+  `#tlsListenIsCompileErrorInBothWasmModes` /
+  `#tlsListenPemIsCompileErrorInBothWasmModes`.
 - **Examples**: `examples/https-hello.lisp` and `examples/kv-server-tls.lisp`
   are the TLS twins of `http-hello.lisp` / `kv-server.lisp` (only the listen
   call differs; both headers carry the keytool one-liner that generates

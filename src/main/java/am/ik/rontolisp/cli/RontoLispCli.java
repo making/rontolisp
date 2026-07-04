@@ -191,8 +191,11 @@ public final class RontoLispCli {
 			}
 		}
 		else {
+			// The JVM backend cannot parse PEM in hand-assembled bytecode, so rewrite
+			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
+			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize).compile(program);
+			bytes = new JvmLispCompiler(className, dynamic, optimize).compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
 			Files.write(Path.of(outputFile), bytes);

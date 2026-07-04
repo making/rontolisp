@@ -17,7 +17,8 @@
 | [`rontolisp:tcp-accept`](../reference/functions/rontolisp-tcp-accept.md) | クライアント接続を待つ: `(rontolisp:tcp-accept listener)` |
 | [`rontolisp:tcp-local-port`](../reference/functions/rontolisp-tcp-local-port.md) | バインドされたポートを読み取る (ポート `0` でlistenした後に便利) |
 | [`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) | **暗号化された**クライアント接続を開く: `(rontolisp:tls-connect host port)` |
-| [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) | **暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen keystore password port &optional host)` |
+| [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) | PKCS12 キーストアから**暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen keystore password port &optional host)` |
+| [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md) | PEM ファイルから**暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen-pem cert-file key-file port &optional host)` |
 
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > ソケットクラスを使い、ホスト名とIPリテラルの両方を受け付けます。WASM
@@ -32,8 +33,9 @@
 > [tcp-connect](../reference/functions/rontolisp-tcp-connect.md)
 > のリファレンスページを参照してください。
 > TLS関数
-> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)
-> と [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md))
+> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)、
+> [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md)、
+> [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
 > はインタプリタ/JVM専用です (WASMバックエンドではコンパイルエラー)。
 
 ## 最初の往復
@@ -130,8 +132,8 @@ world
 `write-byte`、`close` がそのまま使えます。サーバー証明書は JDK デフォルトの
 トラストストアで検証され、ホスト名も検証されます。自己署名証明書を受け入れる
 には `javax.net.ssl.trustStore` システムプロパティで独自のトラストストアを
-指定してください。詳細と手書き HTTPS の例はリファレンスページを参照して
-ください:
+指定するか、`:insecure t` を渡して検証を完全にスキップします(開発用途のみ)。
+詳細と手書き HTTPS の例はリファレンスページを参照してください:
 
 ```console
 (let ((sock (rontolisp:tls-connect "example.com" 443)))
@@ -145,7 +147,10 @@ PKCS12 キーストアファイルを受け取り(自己署名キーストアを
 `keytool` コマンドはリファレンスページに記載)、プレーンな
 `rontolisp:tcp-accept` / `rontolisp:tcp-local-port` / `close` がそのまま使える
 リスナーを返します。accept された各接続は最初の読み取りでハンドシェイクを
-完了します。以下のサーバーの TLS 版は `examples/` ディレクトリにあります —
+完了します。PKCS12 キーストアの代わりに PEM ファイル(certbot / OpenSSL の
+出力)から直接提供するには、
+[`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md)
+を使ってください。以下のサーバーの TLS 版は `examples/` ディレクトリにあります —
 [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
 と
 [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp):
