@@ -193,9 +193,23 @@ Hello from rontolisp!
 GET /hello
 ```
 
-`http-handler` は現在インタープリタバックエンドのみで動作します。JVM バックエンドと
-WASI コンポーネントバックエンド（ハンドラを `wasi:http/incoming-handler`
-コンポーネントにコンパイルし、`wasmtime serve` や Spin で動かす）は開発中です。
+同じソースは **WASI HTTP コンポーネント** にもコンパイルでき、`wasmtime serve` で
+動作します。
+
+```console
+$ java -jar rontolisp.jar app.lisp -o app.wasm --component
+$ wasmtime serve -W gc=y -W component-model-async=y \
+    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
+    app.wasm
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+この場合モジュールは `wasi:http/incoming-handler` をエクスポートし、ソケットはホストが
+所有するため `port` 引数は無視されます。JVM バックエンドは開発中です。Spin
+（`spin up`）ではまだ動作しません。組み込み wasmtime が、rontolisp のすべての
+コンポーネントが必要とする WebAssembly GC プロポーザルを有効化していないためです。
 
 ## その他のサンプル
 

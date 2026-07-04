@@ -14,7 +14,10 @@ value model spans incoming and outgoing requests:
 
 On the **interpreter** backend `http-handler` starts a blocking embedded HTTP
 server on `port` (default `8080`, one virtual thread per request) and serves
-until the process is stopped (Ctrl-C).
+until the process is stopped (Ctrl-C). Compiled to a **WASI component**
+(`--component`) it instead exports `wasi:http/incoming-handler`, so the module
+runs as a serverless HTTP component under `wasmtime serve` (the `port` argument
+is ignored — the host owns the socket).
 
 ```console
 (defun handle (request)
@@ -26,7 +29,7 @@ until the process is stopped (Ctrl-C).
 (rontolisp:http-handler 'handle 8080)
 ```
 
-Run it, then talk to it with `curl`:
+Run it on the interpreter, then talk to it with `curl`:
 
 ```console
 $ java -jar rontolisp.jar app.lisp
@@ -35,11 +38,27 @@ Hello from rontolisp!
 GET /hello
 ```
 
+Or compile it to a WASI HTTP component and serve it with `wasmtime serve`:
+
+```console
+$ java -jar rontolisp.jar app.lisp -o app.wasm --component
+$ wasmtime serve -W gc=y -W component-model-async=y \
+    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
+    app.wasm
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
 ## Backend support
 
-`http-handler` currently runs on the **interpreter** backend only. The **JVM**
-backend and the **WASI component** backend (compiling the handler into a
-`wasi:http/incoming-handler` component that runs under `wasmtime serve` and Spin)
-are in progress; they signal a clear error at compile time for now.
+`http-handler` runs on the **interpreter** backend (a blocking server) and the
+**WASI component** backend (`--component`, a `wasi:http/incoming-handler`
+component for `wasmtime serve`). The **JVM** backend is in progress and signals a
+clear error at compile time for now.
+
+Spin (`spin up`) cannot run the component yet: Spin's embedded wasmtime does not
+enable the WebAssembly GC proposal, which every rontolisp component requires, so
+use `wasmtime serve -W gc=y ...`.
 
 See [Serving HTTP](../../guides/tcp-sockets.md) for the full example.

@@ -189,10 +189,23 @@ Hello from rontolisp!
 GET /hello
 ```
 
-`http-handler` currently runs on the interpreter backend only; the JVM backend
-and the WASI-component backend (compiling the handler into a
-`wasi:http/incoming-handler` component for `wasmtime serve` and Spin) are in
-progress.
+The same source also compiles to a **WASI HTTP component** that runs under
+`wasmtime serve`:
+
+```console
+$ java -jar rontolisp.jar app.lisp -o app.wasm --component
+$ wasmtime serve -W gc=y -W component-model-async=y \
+    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
+    app.wasm
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+There the module exports `wasi:http/incoming-handler` and the host owns the
+socket, so the `port` argument is ignored. The JVM backend is still in progress;
+Spin (`spin up`) cannot run the component yet because its embedded wasmtime does
+not enable the WebAssembly GC proposal that every rontolisp component needs.
 
 ## More examples
 

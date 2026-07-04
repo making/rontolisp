@@ -1,3 +1,10 @@
+# Spin manifest for the rontolisp:http-handler component.
+#
+# NOTE: `spin up` does not run this yet -- Spin's embedded wasmtime does not
+# enable the WebAssembly GC proposal, which every rontolisp component requires.
+# Use `wasmtime serve -W gc=y ...` instead (see examples/http-handler.lisp).
+# Build the component first:
+#   java -jar rontolisp.jar ../http-handler.lisp -o app.wasm --component
 spin_manifest_version = 2
 
 [application]

@@ -34,7 +34,10 @@ class WasmLispCompilerIntegrationTest {
 						+ " && curl https://wasmtime.dev/install.sh -sSf -o /tmp/install-wasmtime.sh"
 						+ " && bash /tmp/install-wasmtime.sh && rm /tmp/install-wasmtime.sh"
 						+ " && ln -s /root/.wasmtime/bin/wasmtime /usr/local/bin/wasmtime" + " && wasmtime --version"
-						+ " && apt-get remove -y curl && apt-get autoremove -y" + " && rm -rf /var/lib/apt/lists/*")
+						// curl stays installed: the http-handler serve test curls the
+						// wasi:http/incoming-handler component running under `wasmtime
+						// serve`.
+						+ " && rm -rf /var/lib/apt/lists/*")
 				.build()))
 		.withCommand("sleep", "infinity");
 
@@ -808,6 +811,30 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
+	}
+
+	@Test
+	void httpHandlerServesUnderWasmtimeServe() throws Exception {
+		// rontolisp:http-handler compiles (via the CLI's HttpHandlerInliner + serve mode)
+		// to a wasi:http/incoming-handler component; run it under `wasmtime serve` and
+		// hit
+		// it with curl (installed in the image), asserting the handler echoes the
+		// request.
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string (getf request :method) " " (getf request :path))))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] componentBytes = new WasmLispCompiler(false, true, false, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime serve -W gc=y -W component-model-async=y -W component-model-async-stackful=y"
+						+ " -W component-model-more-async-builtins=y serve.wasm >/tmp/serve.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8080/hello) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve.log; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("GET /hello");
 	}
 
 	@Test
