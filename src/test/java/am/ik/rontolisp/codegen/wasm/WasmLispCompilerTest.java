@@ -29,13 +29,14 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void httpHandlerIsCompileErrorInBothWasmModes() {
+	void httpHandlerInPreview1ModeRequiresComponent() {
+		// In Preview 1 (no --component) the http-handler directive reaches the compiler
+		// and
+		// is rejected; the component path (via the CLI's HttpHandlerInliner + serve mode)
+		// is exercised end to end in WasmLispCompilerIntegrationTest.
 		assertThatThrownBy(() -> compile("(defun h (r) nil) (rontolisp:http-handler 'h)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("interpreter backend");
-		assertThatThrownBy(() -> compileComponent("(defun h (r) nil) (rontolisp:http-handler 'h)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("interpreter backend");
+			.hasMessageContaining("--component");
 	}
 
 	@Test

@@ -139,9 +139,13 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.HTTP_HANDLER.equals(qn.member())) {
-					throw new UnsupportedOperationException(
-							LispNames.HTTP_HANDLER + " is currently only supported on the interpreter backend "
-									+ "(JVM and WASM component support are in progress)");
+					// In component mode the HttpHandlerInliner rewrites http-handler into
+					// a
+					// %http-dispatch wasm-export wrapper before compilation, so it never
+					// reaches here; reaching here means Preview 1 (no --component).
+					throw new UnsupportedOperationException(LispNames.HTTP_HANDLER
+							+ " requires --component (it compiles to a wasi:http/incoming-handler component "
+							+ "runnable with `wasmtime serve`)");
 				}
 				if (LispNames.AWAIT.equals(qn.member())) {
 					WasmAwaitCompiler.compile(cons, ctx);

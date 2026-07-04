@@ -461,6 +461,30 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a component function type with the given named parameters (each a defined
+	 * value type referenced by component type index) and <strong>no</strong> result, e.g.
+	 * {@code wasi:http/incoming-handler}'s
+	 * {@code handle(request: incoming-request, response-out: response-outparam)}.
+	 * @param paramNames the parameter names, in order
+	 * @param paramTypeIndices the component type index of each parameter's value type
+	 * @return the encoded function type
+	 */
+	public static byte[] funcTypeParamsNoResult(java.util.List<String> paramNames,
+			java.util.List<Integer> paramTypeIndices) {
+		return enc(w -> {
+			w.write(0x40); // functype
+			w.writeUnsignedLeb128(paramNames.size());
+			for (int i = 0; i < paramNames.size(); i++) {
+				plainName(w, paramNames.get(i));
+				w.writeSignedLeb128(paramTypeIndices.get(i)); // valtype = component type
+																// index
+			}
+			// result list: 0x01 (named-results form) then an empty vec (no results).
+			w.write(0x01).writeUnsignedLeb128(0);
+		});
+	}
+
+	/**
 	 * Encode a component function type with no parameters whose single result is a
 	 * defined type referenced by index (e.g. {@code result<_, _>}).
 	 * @param resultTypeIndex the component type index of the result type

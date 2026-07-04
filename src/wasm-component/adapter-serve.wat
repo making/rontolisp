@@ -18,10 +18,10 @@
 ;;   0x70000  request body bytes (read from the incoming-body stream)
 (module
   (import "mem" "memory" (memory (;0;) 16))
-  ;; The rontolisp core, instantiated first. `init` runs the top-level once (defun/intern
-  ;; setup); `dispatch` is the %http-dispatch wasm-export wrapper.
-  (import "core" "init" (func $core_init (result i32)))
-  (import "core" "dispatch" (func $dispatch
+  ;; The rontolisp core, instantiated first. `run` runs the top-level once (defun/intern
+  ;; setup); `%http-dispatch` is the wasm-export wrapper running the Lisp handler.
+  (import "core" "run" (func $core_init (result i32)))
+  (import "core" "%http-dispatch" (func $dispatch
     (param i32 i32 i32 i32 i32 i32) (result i32 i32)))
   ;; Lowered wasi:http@0.2 / wasi:io@0.2 functions (grouped under "w" by buildServe).
   (import "w" "req-method" (func $req_method (param i32 i32)))
