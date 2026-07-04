@@ -3209,7 +3209,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -3417,6 +3417,71 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-local-port 1 2)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("tcp-local-port expects 1 arguments");
+	}
+
+	@Test
+	void compileAndRunTlsEchoRoundTripOnLoopback() throws Exception {
+		// A TLS handshake needs the server to participate concurrently, so the echo
+		// peer runs on a background thread. The compiled class runs in-process, so
+		// pointing javax.net.ssl.trustStore at the test keystore makes the emitted
+		// _tlsConnect (which initializes a fresh SSLContext per call) trust the
+		// self-signed certificate.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				assertThat(compileAndRun("""
+						(let ((client (rontolisp:tls-connect "127.0.0.1" %d)))
+						  (write-line "hello over tls" client)
+						  (let ((reply (read-line client)))
+						    (close client)
+						    (print reply)))
+						""".formatted(server.getLocalPort()))).isEqualTo("\"hello over tls\"");
+				echo.join();
+			}
+		});
+	}
+
+	@Test
+	void compileAndRunTlsUntrustedCertificateThrows() throws Exception {
+		// Without the trust-store override the JDK default trust store does not trust
+		// the self-signed server certificate, so the handshake must fail.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThatThrownBy(
+					() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + ")"))
+				.hasStackTraceContaining("SSLHandshakeException");
+		}
+	}
+
+	@Test
+	void compileAndRunTlsListenEchoRoundTripOnLoopback() throws Exception {
+		// The compiled program is the TLS *server* (tls-listen + the plain
+		// tcp-accept); the peer is a Java client thread that trusts the self-signed
+		// certificate directly and retries connecting until the listener is bound.
+		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over server tls");
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tls-listen "%s" "%s" %d "127.0.0.1"))
+				       (client (rontolisp:tcp-accept listener))
+				       (line (read-line client)))
+				  (write-line line client)
+				  (close client)
+				  (close listener)
+				  (print line))
+				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
+				port)))
+			.isEqualTo("\"hello over server tls\"");
+		client.join();
+	}
+
+	@Test
+	void compileTlsRejectsWrongArgCount() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-connect expects 2 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-listen \"ks.p12\" \"pw\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-listen expects 3 or 4 arguments");
 	}
 
 	@Test

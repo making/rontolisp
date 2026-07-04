@@ -10,6 +10,14 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.io.FileInputStream;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 
 import org.jspecify.annotations.Nullable;
 
@@ -46,6 +54,36 @@ final class SocketSupport {
 	}
 
 	/**
+	 * Opens a blocking TCP connection and performs a TLS handshake. The server
+	 * certificate is validated against the JDK default trust store and the hostname is
+	 * verified (HTTPS-style endpoint identification). A fresh {@link SSLContext} is
+	 * initialized per call so the {@code javax.net.ssl.trustStore} system properties are
+	 * re-read on every connection (unlike the process-wide cached
+	 * {@code SSLSocketFactory.getDefault()}). An {@link SSLSocket} is a {@link Socket},
+	 * so the returned socket goes into the stream table unchanged and every stream
+	 * built-in works on it as-is.
+	 * @param host a hostname or IP literal
+	 * @param port the remote TCP port
+	 * @return the connected socket with the handshake completed
+	 * @throws LispEvalException if the connection or the handshake fails
+	 */
+	static Socket connectTls(String host, int port) {
+		try {
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(null, null, null);
+			SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket(host, port);
+			SSLParameters parameters = socket.getSSLParameters();
+			parameters.setEndpointIdentificationAlgorithm("HTTPS");
+			socket.setSSLParameters(parameters);
+			socket.startHandshake();
+			return socket;
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-connect: cannot connect to " + host + ":" + port + ": " + ex.getMessage());
+		}
+	}
+
+	/**
 	 * Binds a listening TCP socket.
 	 * @param port the local port (0 picks an ephemeral port)
 	 * @param host the local address to bind, or {@code null} for all interfaces
@@ -62,6 +100,39 @@ final class SocketSupport {
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("tcp-listen: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Binds a listening TLS socket serving the certificate from a PKCS12 keystore file.
+	 * The listener is a {@code ServerSocket} subclass, so it lives in the stream table
+	 * like a plain listener and {@code tcp-accept}/{@code tcp-local-port}/{@code close}
+	 * work on it unchanged; an accepted {@code SSLSocket} performs its TLS handshake
+	 * lazily on the first read/write.
+	 * @param keyStorePath a PKCS12 keystore file holding the server key and certificate
+	 * @param password the keystore (and key) password
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening TLS server socket
+	 * @throws LispEvalException if the keystore cannot be loaded or the address cannot be
+	 * bound
+	 */
+	static ServerSocket listenTls(String keyStorePath, String password, int port, @Nullable String host) {
+		try {
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
+			try (InputStream in = new FileInputStream(keyStorePath)) {
+				keyStore.load(in, password.toCharArray());
+			}
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+			kmf.init(keyStore, password.toCharArray());
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(kmf.getKeyManagers(), null, null);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			return context.getServerSocketFactory().createServerSocket(port, 50, address);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-listen: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
 					+ ": " + ex.getMessage());
 		}
 	}

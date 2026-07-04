@@ -1,6 +1,7 @@
 # TCP Sockets
 
-The `rontolisp` package provides four functions for plain TCP networking. They
+The `rontolisp` package provides four functions for plain TCP networking,
+plus encrypted variants for both sides (`tls-connect` and `tls-listen`). They
 are **not part of Common Lisp**; reference them with the `rontolisp:`
 qualifier (see [Packages](../reference/packages.md)). A connected socket is a
 **bidirectional stream handle** in the same handle space as file streams, so
@@ -15,6 +16,8 @@ returns `nil` once the peer has closed the connection.
 | [`rontolisp:tcp-listen`](../reference/functions/rontolisp-tcp-listen.md) | Bind a listening socket: `(rontolisp:tcp-listen port &optional host)` |
 | [`rontolisp:tcp-accept`](../reference/functions/rontolisp-tcp-accept.md) | Wait for a client connection: `(rontolisp:tcp-accept listener)` |
 | [`rontolisp:tcp-local-port`](../reference/functions/rontolisp-tcp-local-port.md) | Read the bound port back (useful after listening on port `0`) |
+| [`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) | Open an **encrypted** client connection: `(rontolisp:tls-connect host port)` |
+| [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) | Bind an **encrypted** listening socket: `(rontolisp:tls-listen keystore password port &optional host)` |
 
 > **Backend support.** The interpreter and JVM-compiled classes use the JDK
 > socket classes and accept hostnames or IP literals. The WASM backend is
@@ -25,7 +28,10 @@ returns `nil` once the peer has closed the connection.
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference
-> page for the shared limitations (TCP only, no TLS, no UDP).
+> page for the shared limitations (TCP only, no UDP). The TLS functions
+> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)
+> and [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md))
+> are interpreter/JVM only (a compile error on the WASM backend).
 
 ## A first round trip
 
@@ -111,6 +117,42 @@ world
 world
 ```
 
+## TLS connections
+
+[`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) is
+the encrypted counterpart of `tcp-connect`: it performs a TLS handshake after
+connecting and returns the same kind of stream handle, so `read-line`,
+`write-line`, `read-byte`, `write-byte` and `close` work unchanged. The server
+certificate is validated against the JDK default trust store and the hostname
+is verified; point the `javax.net.ssl.trustStore` system properties at your
+own trust store to accept self-signed certificates. See the reference page
+for details and an HTTPS-by-hand example:
+
+```console
+(let ((sock (rontolisp:tls-connect "example.com" 443)))
+  ...  ; speak any TLS-wrapped protocol over the handle
+  (close sock))
+```
+
+The *server* side is
+[`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md): it
+takes a PKCS12 keystore file (its reference page shows the one-line `keytool`
+command that generates a self-signed one) and returns a listener that the
+plain `rontolisp:tcp-accept` / `rontolisp:tcp-local-port` / `close` work on;
+each accepted connection completes its handshake on the first read. The TLS
+variants of the servers below are in the `examples/` directory —
+[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+and
+[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp):
+
+```console
+(let* ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443))
+       (sock (rontolisp:tcp-accept listener)))
+  ...  ; serve the connection with the standard stream functions
+  (close sock)
+  (close listener))
+```
+
 ## More examples
 
 The [`examples/` directory](https://github.com/making/rontolisp/tree/develop/examples)
@@ -124,11 +166,16 @@ its header comment:
 - [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/http-hello.lisp)
   — a minimal HTTP/1.1 server that `curl` and browsers understand, built from
   `read-line`/`write-line` over the socket handle (CRLF request lines read as
-  plain lines on every backend).
+  plain lines on every backend). Its TLS twin
+  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+  serves the same page over HTTPS (`curl -k https://127.0.0.1:8443/`).
 - [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server.lisp)
   — a miniature **Redis-compatible** in-memory key-value server: speaks
   enough RESP2 that the real `redis-cli` works (`PING`/`SET`/`GET`/`DEL`/
-  `INCR`/...), with hash-table state surviving across connections.
+  `INCR`/...), with hash-table state surviving across connections. Its TLS
+  twin
+  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
+  serves the same protocol over TLS (`redis-cli --tls --insecure -p 6380`).
 
 For the *client* side of HTTP there is no need to hand-roll the protocol over
 a socket — use `rontolisp:fetch`; see the

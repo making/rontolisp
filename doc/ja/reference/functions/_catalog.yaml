@@ -255,6 +255,8 @@ categories:
       - { slug: rontolisp-tcp-listen, name: "rontolisp:tcp-listen" }
       - { slug: rontolisp-tcp-accept, name: "rontolisp:tcp-accept" }
       - { slug: rontolisp-tcp-local-port, name: "rontolisp:tcp-local-port" }
+      - { slug: rontolisp-tls-connect, name: "rontolisp:tls-connect" }
+      - { slug: rontolisp-tls-listen, name: "rontolisp:tls-listen" }
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
       - { slug: rontolisp-wasm-import, name: "rontolisp:wasm-import" }
   - title: "linalg パッケージ"

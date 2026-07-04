@@ -60,7 +60,9 @@ the server closes:
 
 ## Limitations
 
-- TCP only (no UDP yet) and no TLS: the connection is plain text.
+- TCP only (no UDP yet): the connection is plain text. For an encrypted
+  client connection use [`rontolisp:tls-connect`](rontolisp-tls-connect.md)
+  (interpreter/JVM only).
 - The WASM component backend accepts IPv4 literals only, and a program cannot
   combine `rontolisp:fetch` and the tcp functions in one `--component` binary
   yet.

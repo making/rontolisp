@@ -96,6 +96,28 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void tlsConnectIsCompileErrorInBothWasmModes() {
+		// Unlike the plain tcp built-ins there is no component fallback: wasmtime hosts
+		// no TLS for WASI 0.3 components, so the tls built-ins are interpreter/JVM only.
+		assertThatThrownBy(() -> compile("(rontolisp:tls-connect \"example.com\" 443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-connect is not supported on the WASM backend");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-connect \"example.com\" 443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-connect is not supported on the WASM backend");
+	}
+
+	@Test
+	void tlsListenIsCompileErrorInBothWasmModes() {
+		assertThatThrownBy(() -> compile("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-listen is not supported on the WASM backend");
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tls-listen is not supported on the WASM backend");
+	}
+
+	@Test
 	void fetchAndTcpInOneComponentProgramIsCompileError() {
 		// fetch (a wasi:http 0.2 hybrid) and tcp sockets (wasi:sockets 0.3) need
 		// different component blob variants; combining them is not supported yet.

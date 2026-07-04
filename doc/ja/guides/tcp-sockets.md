@@ -1,6 +1,7 @@
 # TCPソケット
 
-`rontolisp` パッケージは素のTCPネットワーキングのための4つの関数を提供します。
+`rontolisp` パッケージは素のTCPネットワーキングのための4つの関数と、両側の
+暗号化版 (`tls-connect` と `tls-listen`) を提供します。
 これらは **Common Lispの一部ではない** ため、`rontolisp:` 修飾子で参照します
 ([パッケージ](../reference/packages.md)を参照)。接続されたソケットはファイル
 ストリームと同じハンドル空間の **双方向ストリームハンドル** なので、標準の
@@ -15,6 +16,8 @@
 | [`rontolisp:tcp-listen`](../reference/functions/rontolisp-tcp-listen.md) | リスニングソケットをバインドする: `(rontolisp:tcp-listen port &optional host)` |
 | [`rontolisp:tcp-accept`](../reference/functions/rontolisp-tcp-accept.md) | クライアント接続を待つ: `(rontolisp:tcp-accept listener)` |
 | [`rontolisp:tcp-local-port`](../reference/functions/rontolisp-tcp-local-port.md) | バインドされたポートを読み取る (ポート `0` でlistenした後に便利) |
+| [`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) | **暗号化された**クライアント接続を開く: `(rontolisp:tls-connect host port)` |
+| [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) | **暗号化された**リスニングソケットをバインドする: `(rontolisp:tls-listen keystore password port &optional host)` |
 
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > ソケットクラスを使い、ホスト名とIPリテラルの両方を受け付けます。WASM
@@ -24,10 +27,14 @@
 > は非同期フラグに加えて `-S tcp=y -S inherit-network=y` を付けて実行する
 > 必要があります。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
 > シグナルします (ブラウザのサンドボックスには素のTCPがありません) — 下の
-> 実行可能な例はブラウザの外でのみ動作します。共通の制限 (TCPのみ、TLSなし、
+> 実行可能な例はブラウザの外でのみ動作します。共通の制限 (TCPのみ、
 > UDPなし) については
 > [tcp-connect](../reference/functions/rontolisp-tcp-connect.md)
 > のリファレンスページを参照してください。
+> TLS関数
+> ([`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md)
+> と [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md))
+> はインタプリタ/JVM専用です (WASMバックエンドではコンパイルエラー)。
 
 ## 最初の往復
 
@@ -115,6 +122,42 @@ world
 world
 ```
 
+## TLS接続
+
+[`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) は
+`tcp-connect` の暗号化版です: 接続後に TLS ハンドシェイクを行い、同じ種類の
+ストリームハンドルを返すため、`read-line`、`write-line`、`read-byte`、
+`write-byte`、`close` がそのまま使えます。サーバー証明書は JDK デフォルトの
+トラストストアで検証され、ホスト名も検証されます。自己署名証明書を受け入れる
+には `javax.net.ssl.trustStore` システムプロパティで独自のトラストストアを
+指定してください。詳細と手書き HTTPS の例はリファレンスページを参照して
+ください:
+
+```console
+(let ((sock (rontolisp:tls-connect "example.com" 443)))
+  ...  ; speak any TLS-wrapped protocol over the handle
+  (close sock))
+```
+
+*サーバー*側は
+[`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md) です:
+PKCS12 キーストアファイルを受け取り(自己署名キーストアを生成する 1 行の
+`keytool` コマンドはリファレンスページに記載)、プレーンな
+`rontolisp:tcp-accept` / `rontolisp:tcp-local-port` / `close` がそのまま使える
+リスナーを返します。accept された各接続は最初の読み取りでハンドシェイクを
+完了します。以下のサーバーの TLS 版は `examples/` ディレクトリにあります —
+[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+と
+[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp):
+
+```console
+(let* ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443))
+       (sock (rontolisp:tcp-accept listener)))
+  ...  ; serve the connection with the standard stream functions
+  (close sock)
+  (close listener))
+```
+
 ## その他のサンプル
 
 [`examples/` ディレクトリ](https://github.com/making/rontolisp/tree/develop/examples)
@@ -128,11 +171,15 @@ world
 - [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/http-hello.lisp)
   — `curl` やブラウザが理解する最小のHTTP/1.1サーバー。ソケットハンドル上の
   `read-line`/`write-line` で構築されています (CRLFのリクエスト行はどの
-  バックエンドでも普通の行として読めます)。
+  バックエンドでも普通の行として読めます)。TLS版の
+  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+  は同じページをHTTPSで提供します (`curl -k https://127.0.0.1:8443/`)。
 - [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server.lisp)
   — ミニチュアの **Redis互換** インメモリkey-valueサーバー: 本物の
   `redis-cli` が動く程度のRESP2を話し (`PING`/`SET`/`GET`/`DEL`/`INCR`/...)、
-  ハッシュテーブルの状態は接続をまたいで保持されます。
+  ハッシュテーブルの状態は接続をまたいで保持されます。TLS版の
+  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
+  は同じプロトコルをTLSで提供します (`redis-cli --tls --insecure -p 6380`)。
 
 HTTPの *クライアント* 側については、ソケット上でプロトコルを手書きする
 必要はありません — `rontolisp:fetch` を使ってください。

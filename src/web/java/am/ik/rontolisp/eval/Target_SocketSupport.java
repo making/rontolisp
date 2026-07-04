@@ -28,8 +28,18 @@ final class Target_SocketSupport {
 	}
 
 	@Substitute
+	static Socket connectTls(String host, int port) {
+		throw new LispEvalException("tls-connect: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
 	static ServerSocket listen(int port, String host) {
 		throw new LispEvalException("tcp-listen: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
+	static ServerSocket listenTls(String keyStorePath, String password, int port, String host) {
+		throw new LispEvalException("tls-listen: TCP sockets are not supported in the browser playground");
 	}
 
 	@Substitute

@@ -3184,7 +3184,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)");
 	}
 
 	@Test
@@ -3228,7 +3228,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then version)");
+				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen version)");
 	}
 
 	@Test
@@ -3495,6 +3495,107 @@ class LispEvaluatorTest {
 				(setq h (open "/dev/null" :input))
 				(rontolisp:tcp-local-port h)
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a socket or listener handle");
+	}
+
+	@Test
+	void tlsEchoRoundTripOnLoopback() throws Exception {
+		// A TLS handshake needs the server to participate concurrently (unlike the
+		// plain-TCP backlog trick), so the echo peer runs on a background thread. The
+		// self-signed certificate is trusted by pointing javax.net.ssl.trustStore at
+		// the test keystore; tls-connect re-reads it per call.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				String program = """
+						(let ((client (rontolisp:tls-connect "127.0.0.1" %d)))
+						  (write-line "hello over tls" client)
+						  (let ((reply (read-line client)))
+						    (close client)
+						    reply))
+						""".formatted(server.getLocalPort());
+				assertThat(eval(program)).isEqualTo(new LispString("hello over tls"));
+				echo.join();
+			}
+		});
+	}
+
+	@Test
+	void tlsConnectUntrustedCertificateSignalsError() throws Exception {
+		// Without the trust-store override the JDK default trust store does not trust
+		// the self-signed server certificate, so the handshake must fail with an error.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			String program = "(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + ")";
+			assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
+				.hasMessageContaining("tls-connect");
+		}
+	}
+
+	@Test
+	void tlsConnectRefusedSignalsError() {
+		// Listen on an ephemeral port, close it, then connect to the now-free port.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener)))
+				  (close listener)
+				  (rontolisp:tls-connect "127.0.0.1" port))
+				""";
+		assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-connect");
+	}
+
+	@Test
+	void tlsListenEchoRoundTripOnLoopback() throws Exception {
+		// The Lisp side is the TLS *server* (tls-listen + the plain tcp-accept); the
+		// peer is a Java client thread that trusts the self-signed certificate
+		// directly and retries connecting until the listener is bound. The accepted
+		// socket handshakes lazily on the first read.
+		int port = am.ik.rontolisp.TlsTestSupport.freePort();
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(port, "hello over server tls");
+		String program = """
+				(let* ((listener (rontolisp:tls-listen "%s" "%s" %d "127.0.0.1"))
+				       (bound-port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-accept listener))
+				       (line (read-line client)))
+				  (write-line line client)
+				  (close client)
+				  (close listener)
+				  (list bound-port line))
+				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
+				port);
+		assertThat(eval(program).print()).isEqualTo("(" + port + " \"hello over server tls\")");
+		client.join();
+	}
+
+	@Test
+	void tlsListenBadKeyStoreSignalsError() {
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"/no/such/keystore.p12\" \"changeit\" 0 \"127.0.0.1\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-listen");
+	}
+
+	@Test
+	void tlsListenArgumentValidation() {
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" \"pw\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-listen");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen 1 \"pw\" 0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string keystore path");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" 1 0)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string password");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" \"pw\" \"nope\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects an integer port");
+	}
+
+	@Test
+	void tlsArgumentValidation() {
+		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("tls-connect");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-connect 443 443)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string host");
+		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" \"nope\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects an integer port");
 	}
 
 	@Test

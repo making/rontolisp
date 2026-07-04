@@ -1,10 +1,12 @@
-# TCP sockets (`rontolisp:tcp-*`)
+# TCP sockets (`rontolisp:tcp-*`) and TLS (`rontolisp:tls-*`)
 
 Four `rontolisp`-package built-ins — `tcp-connect` (host port), `tcp-listen`
 (port &optional host), `tcp-accept` (listener), `tcp-local-port` (handle) —
-that return **bidirectional stream handles in the same handle space as file
-streams**, so the standard stream built-ins (`read-line`, `write-line`,
-`read-byte`, `write-byte`, `close`) work on sockets unchanged. Blocking,
+plus the encrypted variants `tls-connect` (host port) and `tls-listen`
+(keystore password port &optional host; both interpreter/JVM only, see
+below), that return **bidirectional stream handles in the same handle space
+as file streams**, so the standard stream built-ins (`read-line`,
+`write-line`, `read-byte`, `write-byte`, `close`) work on sockets unchanged. Blocking,
 synchronous API (no promises). Reads are byte-at-a-time (no readahead buffer
 is held between calls) and writes go out immediately (`write-line` flushes per
 line, unlike buffered file writers) on every backend. `read-line` returns
@@ -34,6 +36,63 @@ component returns `nil`.
   fd >= 200 serviced by the sockets adapter, so the core module's stream
   runtime is UNCHANGED — `fd_read`/`fd_write`/`fd_close` dispatch on fd >= 200
   inside `adapter-sock.wat`.
+
+## TLS (`rontolisp:tls-connect` / `tls-listen`)
+
+Interpreter/JVM-only. The whole design leans on `SSLSocket` /
+`SSLServerSocket` being `java.net.Socket` / `ServerSocket` subclasses: the
+handshaken socket (and the TLS listener) goes into the same stream table as a
+plain entry and every existing `instanceof` branch (and the JVM `_sock*` /
+`_tcpAccept` / `_tcpLocalPort` helpers) works on it unchanged — no new stream
+runtime code on either backend. That is also why there is no `tls-accept`:
+the plain `tcp-accept` accepts on a TLS listener, and the accepted
+`SSLSocket` handshakes lazily on its first read/write (which is what makes a
+handshake failure surface at first-I/O time, not accept time).
+
+- Both backends initialize a **fresh `SSLContext` per call**
+  (`SSLContext.getInstance("TLS")` + `init(null, null, null)`), NOT the
+  process-wide cached `SSLSocketFactory.getDefault()`, so the
+  `javax.net.ssl.trustStore` system properties are re-read on every
+  connection — this is what makes the loopback tests (and user trust-store
+  overrides) work without JVM restarts. HTTPS-style endpoint identification
+  (`SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")`) is enabled
+  before `startHandshake()`; the JDK does NOT verify hostnames by default.
+- **`tls-listen` config**: a **PKCS12 keystore file + password** (NOT PEM —
+  PEM parsing in hand-assembled JVM bytecode would have forced the
+  template-class route; PKCS12 keeps both backends on plain
+  `KeyStore`/`KeyManagerFactory`/`SSLContext` calls). Failures (missing
+  keystore, wrong password, busy port) signal on both backends — no
+  nil-on-failure, since there is no WASM variant.
+- **Interpreter**: `SocketSupport.connectTls` / `listenTls`, registered in
+  `Environment` next to the tcp functions; the web playground substitution
+  (`Target_SocketSupport`) adds matching signal-only methods.
+- **JVM**: `_tlsConnect` / `_tlsListen` in `JvmSocketRuntimeBuilder`,
+  dispatched through `JvmTcpCompiler`. The socket-runtime emission gate in
+  `JvmLispCompiler` is `usesSockets` = any `tcp-*` OR `tls-*`, so a tls-only
+  program gets the full socket runtime (and the stream built-ins grow their
+  socket branches).
+- **WASM**: compile error in BOTH Preview 1 and `--component` mode
+  (`WasmExprCompiler`) — wasmtime hosts no TLS for WASI 0.3 components
+  (`wasi:tls` is still a 0.2 draft), so unlike the tcp built-ins there is no
+  component fallback.
+- **Tests**: `TlsTestSupport` (shared, package `am.ik.rontolisp`) generates
+  one self-signed PKCS12 keystore per JVM with the JDK `keytool`
+  (CN=localhost, SAN ip:127.0.0.1 + dns:localhost so endpoint identification
+  passes on loopback). A TLS handshake needs a live peer — the plain-TCP
+  backlog trick does not apply — so the fixture runs the peer on a background
+  thread: a one-shot echo `SSLServerSocket` for the `tls-connect` tests
+  (client trust via `withTrustStore`, which points `javax.net.ssl.trustStore`
+  at the keystore) and a one-shot echo TLS *client* with connect-retry for
+  the `tls-listen` tests (port picked up front via `freePort()` — the port
+  must be embedded in the program text). Pinning:
+  `LispEvaluatorTest#tls*`, `JvmLispCompilerTest#compileAndRunTls*` /
+  `#compileTlsRejectsWrongArgCount`,
+  `WasmLispCompilerTest#tlsConnectIsCompileErrorInBothWasmModes` /
+  `#tlsListenIsCompileErrorInBothWasmModes`.
+- **Examples**: `examples/https-hello.lisp` and `examples/kv-server-tls.lisp`
+  are the TLS twins of `http-hello.lisp` / `kv-server.lisp` (only the listen
+  call differs; both headers carry the keytool one-liner that generates
+  `tls-server.p12`).
 
 ## The WASM core seam (fixed import indices 8-13)
 
@@ -105,7 +164,8 @@ it touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
 
 UDP (`.todo/47-udp-sockets.md`), hostname resolution on WASM
 (`.todo/48-wasm-tcp-hostname-lookup.md`), fetch+tcp in one component
-(`.todo/49-combine-fetch-and-sockets-component.md`), TLS, timeouts,
+(`.todo/49-combine-fetch-and-sockets-component.md`), TLS servers /
+insecure-mode / WASM TLS (`.todo/50-tls-server-and-extensions.md`), timeouts,
 `--no-gc`, the browser playground, and `(do () ...)`-style empty do bindings
 in examples (pre-existing `expandDo` limitation — the echo examples use a
 dummy binding).

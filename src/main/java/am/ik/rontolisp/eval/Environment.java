@@ -1943,6 +1943,22 @@ public final class Environment implements Scope {
 			streams.put(handle, socket);
 			return new LispInteger(handle);
 		}));
+		String tlsConnectName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT);
+		env.defineFunction(tlsConnectName, new LispFunction(tlsConnectName, args -> {
+			requireArgCount(LispNames.TLS_CONNECT, args, 2);
+			if (!(args.get(0) instanceof LispString host)) {
+				throw new LispEvalException(
+						LispNames.TLS_CONNECT + " expects a string host, got: " + args.get(0).print());
+			}
+			if (!(args.get(1) instanceof LispInteger port)) {
+				throw new LispEvalException(
+						LispNames.TLS_CONNECT + " expects an integer port, got: " + args.get(1).print());
+			}
+			Socket socket = SocketSupport.connectTls(host.value(), (int) port.value());
+			long handle = nextStreamHandle[0]++;
+			streams.put(handle, socket);
+			return new LispInteger(handle);
+		}));
 		String tcpListenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN);
 		env.defineFunction(tcpListenName, new LispFunction(tcpListenName, args -> {
 			if (args.isEmpty() || args.size() > 2) {
@@ -1961,6 +1977,37 @@ public final class Environment implements Scope {
 				host = hostString.value();
 			}
 			ServerSocket listener = SocketSupport.listen((int) port.value(), host);
+			long handle = nextStreamHandle[0]++;
+			streams.put(handle, listener);
+			return new LispInteger(handle);
+		}));
+		String tlsListenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN);
+		env.defineFunction(tlsListenName, new LispFunction(tlsListenName, args -> {
+			if (args.size() < 3 || args.size() > 4) {
+				throw new LispEvalException(LispNames.TLS_LISTEN + " expects 3 or 4 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString keyStore)) {
+				throw new LispEvalException(
+						LispNames.TLS_LISTEN + " expects a string keystore path, got: " + args.get(0).print());
+			}
+			if (!(args.get(1) instanceof LispString password)) {
+				throw new LispEvalException(
+						LispNames.TLS_LISTEN + " expects a string password, got: " + args.get(1).print());
+			}
+			if (!(args.get(2) instanceof LispInteger port)) {
+				throw new LispEvalException(
+						LispNames.TLS_LISTEN + " expects an integer port, got: " + args.get(2).print());
+			}
+			String host = null;
+			if (args.size() == 4) {
+				if (!(args.get(3) instanceof LispString hostString)) {
+					throw new LispEvalException(
+							LispNames.TLS_LISTEN + " expects a string host, got: " + args.get(3).print());
+				}
+				host = hostString.value();
+			}
+			ServerSocket listener = SocketSupport.listenTls(keyStore.value(), password.value(), (int) port.value(),
+					host);
 			long handle = nextStreamHandle[0]++;
 			streams.put(handle, listener);
 			return new LispInteger(handle);

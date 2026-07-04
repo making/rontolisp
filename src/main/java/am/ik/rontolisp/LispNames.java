@@ -1269,6 +1269,28 @@ public final class LispNames {
 	 */
 	public static final String TCP_LOCAL_PORT = "tcp-local-port";
 
+	/**
+	 * The {@code tls-connect} function provided by the {@code rontolisp} package. Opens a
+	 * blocking TCP connection to {@code host} and {@code port}, performs a TLS handshake
+	 * (the server certificate is validated against the JDK default trust store and the
+	 * hostname is verified), and returns a bidirectional stream handle usable with
+	 * {@code read-line}, {@code write-line}, {@code read-byte}, {@code write-byte} and
+	 * {@code close}. Interpreter and JVM backends only; the WASM backend has no TLS host
+	 * support.
+	 */
+	public static final String TLS_CONNECT = "tls-connect";
+
+	/**
+	 * The {@code tls-listen} function provided by the {@code rontolisp} package. Binds a
+	 * listening TLS socket serving the certificate from a PKCS12 keystore file:
+	 * {@code (tls-listen keystore password port &optional host)}. The listener handle
+	 * works with {@code rontolisp:tcp-accept}, {@code rontolisp:tcp-local-port} and
+	 * {@code close}; an accepted connection performs its TLS handshake on the first
+	 * read/write. Interpreter and JVM backends only; the WASM backend has no TLS host
+	 * support.
+	 */
+	public static final String TLS_LISTEN = "tls-listen";
+
 	/** The {@code cl} package name (standard functions, macros and variables). */
 	public static final String CL_PKG = "cl";
 

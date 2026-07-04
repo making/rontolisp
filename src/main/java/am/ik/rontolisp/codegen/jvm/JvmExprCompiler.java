@@ -132,7 +132,8 @@ final class JvmExprCompiler {
 					return;
 				}
 				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
-						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())) {
+						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
+						|| LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())) {
 					JvmTcpCompiler.compile(qn.member(), cons, ctx, className);
 					return;
 				}

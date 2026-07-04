@@ -11,16 +11,18 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Builds the JVM bytecode for the TCP socket runtime used by the
+ * Builds the JVM bytecode for the TCP/TLS socket runtime used by the
  * {@code rontolisp:tcp-connect} / {@code tcp-listen} / {@code tcp-accept} /
- * {@code tcp-local-port} built-ins. A socket handle is a {@code Long} indexing the same
- * static {@code _streams} table as file streams ({@link JvmIoRuntimeBuilder}); the entry
- * is the raw {@code java.net.Socket} (or {@code java.net.ServerSocket} for a listener),
- * and the stream built-ins dispatch on it: {@code _writeLine}/{@code _readLineStream}
- * call the {@code _sockWriteLine}/{@code _sockReadLine} helpers here (byte-at-a-time
- * reads, unbuffered writes), {@code _readByte}/{@code _writeByte} branch to the socket's
+ * {@code tcp-local-port} / {@code tls-connect} built-ins. A socket handle is a
+ * {@code Long} indexing the same static {@code _streams} table as file streams
+ * ({@link JvmIoRuntimeBuilder}); the entry is the raw {@code java.net.Socket} (or
+ * {@code java.net.ServerSocket} for a listener; an {@code SSLSocket} for
+ * {@code tls-connect} -- a plain {@code Socket} subclass, so no extra branches), and the
+ * stream built-ins dispatch on it: {@code _writeLine}/{@code _readLineStream} call the
+ * {@code _sockWriteLine}/{@code _sockReadLine} helpers here (byte-at-a-time reads,
+ * unbuffered writes), {@code _readByte}/{@code _writeByte} branch to the socket's
  * input/output stream, and {@code _closeStream} closes the socket directly. All methods
- * are emitted only when the program uses a tcp built-in.
+ * are emitted only when the program uses a tcp or tls built-in.
  */
 final class JvmSocketRuntimeBuilder {
 
@@ -41,6 +43,14 @@ final class JvmSocketRuntimeBuilder {
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
 
 	static final String TCP_CONNECT_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String TLS_CONNECT_METHOD = "_tlsConnect";
+
+	static final String TLS_CONNECT_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String TLS_LISTEN_METHOD = "_tlsListen";
+
+	static final String TLS_LISTEN_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String TCP_LISTEN_METHOD = "_tcpListen";
 
@@ -95,6 +105,56 @@ final class JvmSocketRuntimeBuilder {
 	private final ClassConstant serverSocketClass;
 
 	private final MethodrefConstant socketInit;
+
+	private final ClassConstant sslSocketClass;
+
+	private final MethodrefConstant sslContextGetInstance;
+
+	private final MethodrefConstant sslContextInit;
+
+	private final MethodrefConstant sslContextGetSocketFactory;
+
+	private final MethodrefConstant socketFactoryCreateSocket;
+
+	private final MethodrefConstant sslSocketGetSSLParameters;
+
+	private final MethodrefConstant sslSocketSetSSLParameters;
+
+	private final MethodrefConstant sslSocketStartHandshake;
+
+	private final MethodrefConstant sslParametersSetEndpointIdAlg;
+
+	private final ConstantPool.StringConstant tlsStr;
+
+	private final ConstantPool.StringConstant httpsStr;
+
+	private final ConstantPool.StringConstant pkcs12Str;
+
+	private final MethodrefConstant keyStoreGetInstance;
+
+	private final MethodrefConstant keyStoreLoad;
+
+	private final ClassConstant fileInputStreamClass;
+
+	private final MethodrefConstant fileInputStreamInit;
+
+	private final MethodrefConstant fileInputStreamClose;
+
+	private final MethodrefConstant kmfGetDefaultAlgorithm;
+
+	private final MethodrefConstant kmfGetInstance;
+
+	private final MethodrefConstant kmfInit;
+
+	private final MethodrefConstant kmfGetKeyManagers;
+
+	private final MethodrefConstant sslContextGetServerSocketFactory;
+
+	private final MethodrefConstant serverSocketFactoryCreate;
+
+	private final MethodrefConstant serverSocketFactoryCreateHost;
+
+	private final MethodrefConstant stringToCharArray;
 
 	private final MethodrefConstant serverSocketInitPort;
 
@@ -170,6 +230,57 @@ final class JvmSocketRuntimeBuilder {
 		this.serverSocketClass = cp.addClass(cp.addUtf8("java/net/ServerSocket"));
 		this.socketInit = cp.addMethodref(this.socketClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;I)V")));
+		ClassConstant sslContextClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLContext"));
+		this.sslSocketClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLSocket"));
+		ClassConstant sslParametersClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLParameters"));
+		this.sslContextGetInstance = cp.addMethodref(sslContextClass, cp.addNameAndType(cp.addUtf8("getInstance"),
+				cp.addUtf8("(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;")));
+		this.sslContextInit = cp.addMethodref(sslContextClass, cp.addNameAndType(cp.addUtf8("init"),
+				cp.addUtf8("([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V")));
+		this.sslContextGetSocketFactory = cp.addMethodref(sslContextClass,
+				cp.addNameAndType(cp.addUtf8("getSocketFactory"), cp.addUtf8("()Ljavax/net/ssl/SSLSocketFactory;")));
+		ClassConstant socketFactoryClass = cp.addClass(cp.addUtf8("javax/net/SocketFactory"));
+		this.socketFactoryCreateSocket = cp.addMethodref(socketFactoryClass,
+				cp.addNameAndType(cp.addUtf8("createSocket"), cp.addUtf8("(Ljava/lang/String;I)Ljava/net/Socket;")));
+		this.sslSocketGetSSLParameters = cp.addMethodref(this.sslSocketClass,
+				cp.addNameAndType(cp.addUtf8("getSSLParameters"), cp.addUtf8("()Ljavax/net/ssl/SSLParameters;")));
+		this.sslSocketSetSSLParameters = cp.addMethodref(this.sslSocketClass,
+				cp.addNameAndType(cp.addUtf8("setSSLParameters"), cp.addUtf8("(Ljavax/net/ssl/SSLParameters;)V")));
+		this.sslSocketStartHandshake = cp.addMethodref(this.sslSocketClass,
+				cp.addNameAndType(cp.addUtf8("startHandshake"), cp.addUtf8("()V")));
+		this.sslParametersSetEndpointIdAlg = cp.addMethodref(sslParametersClass, cp
+			.addNameAndType(cp.addUtf8("setEndpointIdentificationAlgorithm"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.tlsStr = cp.addString("TLS");
+		this.httpsStr = cp.addString("HTTPS");
+		this.pkcs12Str = cp.addString("PKCS12");
+		ClassConstant keyStoreClass = cp.addClass(cp.addUtf8("java/security/KeyStore"));
+		this.keyStoreGetInstance = cp.addMethodref(keyStoreClass, cp.addNameAndType(cp.addUtf8("getInstance"),
+				cp.addUtf8("(Ljava/lang/String;)Ljava/security/KeyStore;")));
+		this.keyStoreLoad = cp.addMethodref(keyStoreClass,
+				cp.addNameAndType(cp.addUtf8("load"), cp.addUtf8("(Ljava/io/InputStream;[C)V")));
+		this.fileInputStreamClass = cp.addClass(cp.addUtf8("java/io/FileInputStream"));
+		this.fileInputStreamInit = cp.addMethodref(this.fileInputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.fileInputStreamClose = cp.addMethodref(this.fileInputStreamClass,
+				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
+		ClassConstant kmfClass = cp.addClass(cp.addUtf8("javax/net/ssl/KeyManagerFactory"));
+		this.kmfGetDefaultAlgorithm = cp.addMethodref(kmfClass,
+				cp.addNameAndType(cp.addUtf8("getDefaultAlgorithm"), cp.addUtf8("()Ljava/lang/String;")));
+		this.kmfGetInstance = cp.addMethodref(kmfClass, cp.addNameAndType(cp.addUtf8("getInstance"),
+				cp.addUtf8("(Ljava/lang/String;)Ljavax/net/ssl/KeyManagerFactory;")));
+		this.kmfInit = cp.addMethodref(kmfClass,
+				cp.addNameAndType(cp.addUtf8("init"), cp.addUtf8("(Ljava/security/KeyStore;[C)V")));
+		this.kmfGetKeyManagers = cp.addMethodref(kmfClass,
+				cp.addNameAndType(cp.addUtf8("getKeyManagers"), cp.addUtf8("()[Ljavax/net/ssl/KeyManager;")));
+		this.sslContextGetServerSocketFactory = cp.addMethodref(sslContextClass, cp.addNameAndType(
+				cp.addUtf8("getServerSocketFactory"), cp.addUtf8("()Ljavax/net/ssl/SSLServerSocketFactory;")));
+		ClassConstant serverSocketFactoryClass = cp.addClass(cp.addUtf8("javax/net/ServerSocketFactory"));
+		this.serverSocketFactoryCreate = cp.addMethodref(serverSocketFactoryClass,
+				cp.addNameAndType(cp.addUtf8("createServerSocket"), cp.addUtf8("(II)Ljava/net/ServerSocket;")));
+		this.serverSocketFactoryCreateHost = cp.addMethodref(serverSocketFactoryClass, cp.addNameAndType(
+				cp.addUtf8("createServerSocket"), cp.addUtf8("(IILjava/net/InetAddress;)Ljava/net/ServerSocket;")));
+		this.stringToCharArray = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("toCharArray"), cp.addUtf8("()[C")));
 		this.serverSocketInitPort = cp.addMethodref(this.serverSocketClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
 		this.serverSocketInitHost = cp.addMethodref(this.serverSocketClass,
@@ -228,6 +339,10 @@ final class JvmSocketRuntimeBuilder {
 		List<SocketMethod> methods = new ArrayList<>();
 		methods.add(new SocketMethod(cp.addUtf8(TCP_CONNECT_METHOD), cp.addUtf8(TCP_CONNECT_DESC), 5, 3,
 				builder.buildTcpConnect()));
+		methods.add(new SocketMethod(cp.addUtf8(TLS_CONNECT_METHOD), cp.addUtf8(TLS_CONNECT_DESC), 5, 5,
+				builder.buildTlsConnect()));
+		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_METHOD), cp.addUtf8(TLS_LISTEN_DESC), 5, 13,
+				builder.buildTlsListen()));
 		methods.add(new SocketMethod(cp.addUtf8(TCP_LISTEN_METHOD), cp.addUtf8(TCP_LISTEN_DESC), 5, 4,
 				builder.buildTcpListen()));
 		methods.add(new SocketMethod(cp.addUtf8(TCP_ACCEPT_METHOD), cp.addUtf8(TCP_ACCEPT_DESC), 3, 1,
@@ -263,6 +378,176 @@ final class JvmSocketRuntimeBuilder {
 		emitUnboxInt(code);
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, this.socketInit.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.addStreamRef.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _tlsConnect(Object host, Object port) -> Long handle}. Strips the
+	 * surrounding quotes from the host string, opens a blocking TLS connection and stores
+	 * the handshaken {@code SSLSocket} in the stream table. A fresh {@code SSLContext} is
+	 * initialized per call (so the {@code javax.net.ssl.trustStore} system properties are
+	 * re-read on every connection) and HTTPS-style endpoint identification is enabled
+	 * before the handshake; an {@code SSLSocket} is a {@code Socket}, so every socket
+	 * branch of the stream built-ins works on the entry unchanged.
+	 */
+	private List<Integer> buildTlsConnect() {
+		// Slots: 0=host, 1=port, 2=h (String), 3=socket (SSLSocket), 4=params
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, 0, 2);
+		// SSLContext ctx = SSLContext.getInstance("TLS"); ctx.init(null, null, null);
+		emitLdc(code, this.tlsStr.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.sslContextGetInstance.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslContextInit.index());
+		// socket = (SSLSocket) ctx.getSocketFactory().createSocket(h, (int) port)
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslContextGetSocketFactory.index());
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ALOAD_1);
+		emitUnboxInt(code);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketFactoryCreateSocket.index());
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.sslSocketClass.index());
+		code.add(Opcode.ASTORE_3);
+		// params = socket.getSSLParameters();
+		// params.setEndpointIdentificationAlgorithm("HTTPS");
+		// socket.setSSLParameters(params);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketGetSSLParameters.index());
+		emitAstore(code, 4);
+		emitAload(code, 4);
+		emitLdc(code, this.httpsStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslParametersSetEndpointIdAlg.index());
+		code.add(Opcode.ALOAD_3);
+		emitAload(code, 4);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketSetSSLParameters.index());
+		// socket.startHandshake();
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslSocketStartHandshake.index());
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.addStreamRef.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _tlsListen(Object keystore, Object password, Object port, Object host) ->
+	 * Long handle}. Loads the PKCS12 keystore, builds an {@code SSLContext} over its key
+	 * managers and binds a TLS server socket (a {@code ServerSocket} subclass, so
+	 * {@code _tcpAccept}/{@code _tcpLocalPort}/{@code _closeStream} work on the entry
+	 * unchanged); a {@code null} host (nil) binds all interfaces. An accepted socket
+	 * performs its TLS handshake lazily on the first read/write.
+	 */
+	private List<Integer> buildTlsListen() {
+		// Slots: 0=keystore, 1=password, 2=port, 3=host, 4=path (String),
+		// 5=pw (String, then char[]), 6=store (KeyStore), 7=in (FileInputStream),
+		// 8=kms (KeyManager[]), 9=ctx (SSLContext), 10=factory, 11=p (int),
+		// 12=h (String)
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, 0, 4);
+		emitStripQuotes(code, 1, 5);
+		// pw = pw.toCharArray()
+		emitAload(code, 5);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringToCharArray.index());
+		emitAstore(code, 5);
+		// store = KeyStore.getInstance("PKCS12");
+		emitLdc(code, this.pkcs12Str.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.keyStoreGetInstance.index());
+		emitAstore(code, 6);
+		// in = new FileInputStream(path); store.load(in, pw); in.close();
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileInputStreamClass.index());
+		code.add(Opcode.DUP);
+		emitAload(code, 4);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInputStreamInit.index());
+		emitAstore(code, 7);
+		emitAload(code, 6);
+		emitAload(code, 7);
+		emitAload(code, 5);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.keyStoreLoad.index());
+		emitAload(code, 7);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.fileInputStreamClose.index());
+		// kms = KeyManagerFactory.getInstance(getDefaultAlgorithm()) initialized with
+		// (store, pw)
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.kmfGetDefaultAlgorithm.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.kmfGetInstance.index());
+		code.add(Opcode.DUP);
+		emitAload(code, 6);
+		emitAload(code, 5);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.kmfInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.kmfGetKeyManagers.index());
+		emitAstore(code, 8);
+		// ctx = SSLContext.getInstance("TLS"); ctx.init(kms, null, null);
+		emitLdc(code, this.tlsStr.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.sslContextGetInstance.index());
+		emitAstore(code, 9);
+		emitAload(code, 9);
+		emitAload(code, 8);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslContextInit.index());
+		// factory = ctx.getServerSocketFactory(); p = (int) port;
+		emitAload(code, 9);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.sslContextGetServerSocketFactory.index());
+		emitAstore(code, 10);
+		code.add(Opcode.ALOAD_2);
+		emitUnboxInt(code);
+		code.add(Opcode.ISTORE);
+		code.add(11);
+		code.add(Opcode.ALOAD_3);
+		int ifHostPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		// factory.createServerSocket(p, 50)
+		emitAload(code, 10);
+		code.add(Opcode.ILOAD);
+		code.add(11);
+		code.add(Opcode.BIPUSH);
+		code.add(50);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.serverSocketFactoryCreate.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.addStreamRef.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifHostPos, code.size());
+		// factory.createServerSocket(p, 50, InetAddress.getByName(h))
+		emitStripQuotes(code, 3, 12);
+		emitAload(code, 10);
+		code.add(Opcode.ILOAD);
+		code.add(11);
+		code.add(Opcode.BIPUSH);
+		code.add(50);
+		emitAload(code, 12);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.inetGetByName.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.serverSocketFactoryCreateHost.index());
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.addStreamRef.index());
 		code.add(Opcode.ARETURN);

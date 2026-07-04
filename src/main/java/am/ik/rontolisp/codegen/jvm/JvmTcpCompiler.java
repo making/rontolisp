@@ -12,11 +12,12 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the {@code rontolisp:tcp-connect} / {@code tcp-listen} / {@code tcp-accept} /
- * {@code tcp-local-port} built-ins. Each evaluates its arguments and calls the matching
- * {@code _tcp*} runtime helper emitted by {@link JvmSocketRuntimeBuilder}; the returned
- * value is a {@code Long} stream handle indexing the shared {@code _streams} table, so
- * the standard stream built-ins ({@code read-line}, {@code write-line},
- * {@code read-byte}, {@code write-byte}, {@code close}) work on it directly.
+ * {@code tcp-local-port} / {@code tls-connect} built-ins. Each evaluates its arguments
+ * and calls the matching {@code _tcp*}/{@code _tlsConnect} runtime helper emitted by
+ * {@link JvmSocketRuntimeBuilder}; the returned value is a {@code Long} stream handle
+ * indexing the shared {@code _streams} table, so the standard stream built-ins
+ * ({@code read-line}, {@code write-line}, {@code read-byte}, {@code write-byte},
+ * {@code close}) work on it directly.
  */
 final class JvmTcpCompiler {
 
@@ -31,6 +32,25 @@ final class JvmTcpCompiler {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				invoke(ctx, ctx.tcpConnectHelper, member);
+			}
+			case LispNames.TLS_CONNECT -> {
+				requireArgs(member, args, 2, 2);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				invoke(ctx, ctx.tlsConnectHelper, member);
+			}
+			case LispNames.TLS_LISTEN -> {
+				requireArgs(member, args, 3, 4);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+				if (args.size() == 5) {
+					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
+				}
+				else {
+					ctx.emit(Opcode.ACONST_NULL);
+				}
+				invoke(ctx, ctx.tlsListenHelper, member);
 			}
 			case LispNames.TCP_LISTEN -> {
 				requireArgs(member, args, 1, 2);

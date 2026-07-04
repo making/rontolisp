@@ -59,7 +59,9 @@ listen し、ループバック経由で自分自身へ接続して、
 
 ## 制限事項
 
-- TCP のみ(UDP は未対応)で TLS もありません: 通信は平文です。
+- TCP のみ(UDP は未対応): 通信は平文です。暗号化されたクライアント接続には
+  [`rontolisp:tls-connect`](rontolisp-tls-connect.md) を使ってください
+  (インタープリタ/JVM のみ)。
 - WASM コンポーネントバックエンドは IPv4 リテラルのみを受け付け、1 つの
   `--component` バイナリで `rontolisp:fetch` と tcp 関数を併用することは
   まだできません。

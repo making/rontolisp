@@ -47,5 +47,8 @@
 - リスナーハンドルが対応するのは `rontolisp:tcp-accept`、
   `rontolisp:tcp-local-port`、`close` のみで、それ自体はバイトストリームでは
   ありません。
-- 共通のソケット制限(TCP のみ、TLS なし、WASM では IPv4 リテラルのみ)は
+- 共通のソケット制限(TCP のみ、WASM では IPv4 リテラルのみ)は
   [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) を参照してください。
+  このリスナーが扱うのは平文の TCP です。TLS リスナーには
+  [`rontolisp:tls-listen`](rontolisp-tls-listen.md) を使ってください
+  (インタープリタ/JVM のみ)。

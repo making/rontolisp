@@ -45,4 +45,6 @@ bidirectional stream (see
 - The listener handle only supports `rontolisp:tcp-accept`,
   `rontolisp:tcp-local-port` and `close` — it is not a byte stream itself.
 - See [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) for the shared
-  socket limitations (TCP only, no TLS, IPv4 literals on WASM).
+  socket limitations (TCP only, IPv4 literals on WASM). The listener serves
+  plain TCP; for a TLS listener use
+  [`rontolisp:tls-listen`](rontolisp-tls-listen.md) (interpreter/JVM only).

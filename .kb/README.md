@@ -23,7 +23,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
-- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets (stream-handle integration + the wasi:sockets component variant)
+- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets and `rontolisp:tls-connect`/`tls-listen` (stream-handle integration + the wasi:sockets component variant)
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify` Lisp-source library + splice
 - [linalg.md](linalg.md) -- `linalg` package (numpy-style vector/matrix ops) Lisp-source library + the standard array functions
 - [java-interop.md](java-interop.md) -- `java:` reflection interop bridge

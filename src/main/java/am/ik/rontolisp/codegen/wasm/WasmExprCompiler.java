@@ -155,6 +155,13 @@ final class WasmExprCompiler {
 					WasmTcpCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
+				if (LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())) {
+					// wasmtime hosts no TLS for WASI 0.3 components (wasi:tls is still a
+					// 0.2 draft), so unlike the plain tcp built-ins there is no component
+					// fallback: the tls built-ins are interpreter/JVM only.
+					throw new UnsupportedOperationException("rontolisp:" + qn.member()
+							+ " is not supported on the WASM backend (no wasi:tls host support); use the interpreter or the JVM backend");
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			switch (sym.name()) {

@@ -250,30 +250,41 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addUtf8(JvmFetchRuntimeBuilder.AWAIT_METHOD_DESC)))
 				: null;
 
-		// TCP socket helpers: emitted only when the program uses a rontolisp:tcp-*
-		// built-in. A socket handle shares the _streams table with file streams, so the
-		// stream built-ins grow socket branches (JvmIoRuntimeBuilder) when this is set.
-		boolean usesTcp = programUsesSymbol(program,
+		// TCP/TLS socket helpers: emitted only when the program uses a rontolisp:tcp-*
+		// or rontolisp:tls-connect built-in. A socket handle shares the _streams table
+		// with file streams, so the stream built-ins grow socket branches
+		// (JvmIoRuntimeBuilder) when this is set.
+		boolean usesSockets = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT))
 				|| programUsesSymbol(program,
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT));
-		MethodrefConstant tcpConnectHelperMethod = usesTcp
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN));
+		MethodrefConstant tcpConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
 				: null;
-		MethodrefConstant tcpListenHelperMethod = usesTcp
+		MethodrefConstant tcpListenHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LISTEN_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LISTEN_DESC)))
 				: null;
-		MethodrefConstant tcpAcceptHelperMethod = usesTcp
+		MethodrefConstant tcpAcceptHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_ACCEPT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_ACCEPT_DESC)))
 				: null;
-		MethodrefConstant tcpLocalPortHelperMethod = usesTcp ? cp.addMethodref(thisClass,
+		MethodrefConstant tcpLocalPortHelperMethod = usesSockets ? cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_DESC)))
+				: null;
+		MethodrefConstant tlsConnectHelperMethod = usesSockets
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_DESC)))
+				: null;
+		MethodrefConstant tlsListenHelperMethod = usesSockets
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_DESC)))
 				: null;
 
 		// java: interop runtime: emitted only when the program uses one of the five
@@ -482,6 +493,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tcpListenHelper(tcpListenHelperMethod)
 			.tcpAcceptHelper(tcpAcceptHelperMethod)
 			.tcpLocalPortHelper(tcpLocalPortHelperMethod)
+			.tlsConnectHelper(tlsConnectHelperMethod)
+			.tlsListenHelper(tlsListenHelperMethod)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.className(this.className)
@@ -815,9 +828,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// File-stream runtime (open/close/write-line/read-line with a stream)
 		MethodrefConstant stringLengthForIo = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		// TCP socket runtime (only when the program uses a rontolisp:tcp-* built-in);
-		// built before the IO runtime so the stream built-ins can grow socket branches.
-		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesTcp
+		// TCP/TLS socket runtime (only when the program uses a rontolisp:tcp-* or
+		// rontolisp:tls-connect built-in); built before the IO runtime so the stream
+		// built-ins can grow socket branches.
+		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, objectClass, stringClass, longClass, longValueOf,
 						longValue, stringLengthForIo, stringSubstring, stringConcat)
 				: null;
@@ -1538,6 +1552,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant tcpLocalPortHelper;
 
+		final @Nullable MethodrefConstant tlsConnectHelper;
+
+		final @Nullable MethodrefConstant tlsListenHelper;
+
 		/**
 		 * The {@code java:} interop bridge references ({@code init}/{@code new}/
 		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
@@ -1677,6 +1695,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tcpListenHelper = builder.tcpListenHelper;
 			this.tcpAcceptHelper = builder.tcpAcceptHelper;
 			this.tcpLocalPortHelper = builder.tcpLocalPortHelper;
+			this.tlsConnectHelper = builder.tlsConnectHelper;
+			this.tlsListenHelper = builder.tlsListenHelper;
 			this.javaOps = builder.javaOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
@@ -1770,6 +1790,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant tcpAcceptHelper;
 
 			private @Nullable MethodrefConstant tcpLocalPortHelper;
+
+			private @Nullable MethodrefConstant tlsConnectHelper;
+
+			private @Nullable MethodrefConstant tlsListenHelper;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
 
@@ -1991,6 +2015,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder tcpLocalPortHelper(@Nullable MethodrefConstant tcpLocalPortHelper) {
 				this.tcpLocalPortHelper = tcpLocalPortHelper;
+				return this;
+			}
+
+			Builder tlsConnectHelper(@Nullable MethodrefConstant tlsConnectHelper) {
+				this.tlsConnectHelper = tlsConnectHelper;
+				return this;
+			}
+
+			Builder tlsListenHelper(@Nullable MethodrefConstant tlsListenHelper) {
+				this.tlsListenHelper = tlsListenHelper;
 				return this;
 			}
 
