@@ -1,8 +1,52 @@
 # wasi:http incoming-handler — compile a rontolisp defun into an HTTP component (wasmtime serve / Spin)
 
-Status: IN PROGRESS (2026-07-04). Interpreter backend DONE (see below);
-WASM component pipeline PROVEN end-to-end; Java integration remaining.
+Status: DONE for interpreter + WASM component (2026-07-04). `wasmtime serve`
+works end to end; Spin is BLOCKED by Spin not enabling wasm-GC. JVM backend and
+request/response HEADER marshalling remain (see "Follow-ups" at the bottom).
 Created 2026-07-04.
+
+## SHIPPED (commits 068e958, e3e8ffd, f8d6a5f, ea7601f, 215d384)
+
+- Surface + interpreter server (virtual threads) + tests + docs.
+- WASM serve component: `HttpHandlerInliner` (cli) rewrites the directive to a
+  `%http-dispatch` wasm-export wrapper; `WasmLispCompiler` serve mode
+  (`serve` flag, implies component) un-gates wasm-export + stubs WASI like
+  --no-wasi while importing memory; `WasmServeComponentBuilder.buildServe` wires
+  mem-http + core + `adapter-serve.wasm` and exports
+  `wasi:http/incoming-handler@0.2.0`. Runs under
+  `wasmtime serve -W gc=y -W component-model-async=y
+  -W component-model-async-stackful=y -W component-model-more-async-builtins=y`.
+  Verified: GET/POST, path/method/body marshalling, per-request status
+  (200/404), 20+ requests; CI test
+  `WasmLispCompilerIntegrationTest.httpHandlerServesUnderWasmtimeServe`.
+- `ComponentWriter.funcTypeParamsNoResult` (the handle func type).
+- Constants derived from `wasm-tools dump` of the `uni-serve` reference: import
+  instances 0=io/error,1=io/streams,2=http/types; component types 0-5 (3=input-
+  stream,4=output-stream), next free 6; canonical options per wasi func recorded
+  in `WasmServeComponentBuilder`.
+
+## Follow-ups
+
+- **Spin**: `spin up` cannot run any rontolisp component -- Spin's embedded
+  wasmtime does not enable the wasm-GC proposal. Revisit if Spin exposes a GC
+  flag / runtime-config, or gains GC by default.
+- **Headers**: v1 marshals only method/path/body (request) and status/body
+  (response). Request/response headers are dropped. To add them, extend the
+  `%http-dispatch` encoding (e.g. a length-prefixed header block) and the
+  adapter-serve.wat request read / response write (the fetch adapter's
+  `fields.entries` / `fields.append` loops are the template).
+- **Allocator reset**: the mem-http `cabi_realloc` and the core `__ronto_alloc`
+  bump pointers never reset, so a very long-lived server eventually exhausts the
+  16-page memory. Reset per request (guarded) or grow memory.
+- **JVM backend**: a generated class implementing an HttpHandlerSupport SAM
+  (X509TrustManager-style) building the request plist + calling the compiled
+  handler via `_invoke_1`. Currently a clean "requires --component"/interpreter
+  error.
+
+## Original status line (historical)
+
+IN PROGRESS (2026-07-04). Interpreter backend DONE (see below);
+WASM component pipeline PROVEN end-to-end; Java integration remaining.
 
 ## Progress log
 
