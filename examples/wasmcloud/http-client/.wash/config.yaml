@@ -1,0 +1,12 @@
+build:
+  command: rontolisp app.lisp -o app.wasm --component
+  component_path: app.wasm
+
+dev:
+  wasm_proposals:
+    - gc
+
+# wash denies all outgoing HTTP unless the upstream is allowlisted.
+workload:
+  allowedHosts:
+    - httpbin.org

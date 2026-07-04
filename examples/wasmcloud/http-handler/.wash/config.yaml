@@ -1,0 +1,7 @@
+build:
+  command: rontolisp app.lisp -o app.wasm --component
+  component_path: app.wasm
+
+dev:
+  wasm_proposals:
+    - gc
