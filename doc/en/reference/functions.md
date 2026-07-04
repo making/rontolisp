@@ -227,6 +227,10 @@ package system. Each name below links to its own page.
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | `t` if the value is a promise |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string: objects become keyword plists, or hash tables with `:hash-table` |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | serialize a value (plists and hash tables become objects) to a JSON string |
+| `rontolisp:tcp-connect` | `(rontolisp:tcp-connect "127.0.0.1" 7777)` | open a blocking TCP connection; returns a bidirectional stream handle |
+| `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | bind a listening TCP socket and return a listener handle; port `0` picks a free ephemeral port |
+| `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | wait for a client connection (blocking); returns a bidirectional stream handle |
+| `rontolisp:tcp-local-port` | `(rontolisp:tcp-local-port listener)` | the local port a listener or socket is actually bound to |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | declare a host function callable from Lisp when compiling to a WASM core module |
 
@@ -235,7 +239,9 @@ The introspection functions (`list-functions` / `list-macros` /
 [Package introspection](packages.md#package-introspection). `rontolisp:fetch`
 starts an outgoing HTTP request and returns a promise, resolved with the
 generic promise operations `rontolisp:await` / `rontolisp:then` /
-`rontolisp:promisep`; see the [fetch](functions/rontolisp-fetch.md),
+`rontolisp:promisep`; see the
+[HTTP Requests guide](../guides/http-fetch.md) for a worked overview, and the
+[fetch](functions/rontolisp-fetch.md),
 [await](functions/rontolisp-await.md), [then](functions/rontolisp-then.md) and
 [promisep](functions/rontolisp-promisep.md) reference pages for options, the
 result plist, backend support, and limitations. `rontolisp:json-parse` and
@@ -244,7 +250,16 @@ result plist, backend support, and limitations. `rontolisp:json-parse` and
 fetch response body; see the
 [json-parse](functions/rontolisp-json-parse.md) and
 [json-stringify](functions/rontolisp-json-stringify.md) reference pages for
-the value mapping and limitations. `rontolisp:wasm-export` and
+the value mapping and limitations. The tcp functions
+(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)
+open plain TCP sockets whose handles work with the standard stream functions
+(`read-line` / `write-line` / `read-byte` / `write-byte` / `close`); see the
+[TCP Sockets guide](../guides/tcp-sockets.md) for a worked echo server, and
+the [tcp-connect](functions/rontolisp-tcp-connect.md),
+[tcp-listen](functions/rontolisp-tcp-listen.md),
+[tcp-accept](functions/rontolisp-tcp-accept.md) and
+[tcp-local-port](functions/rontolisp-tcp-local-port.md) reference pages for
+backend support and limitations. `rontolisp:wasm-export` and
 `rontolisp:wasm-import` are compile-time directives for the WASM backend; see
 their [wasm-export](functions/rontolisp-wasm-export.md) and
 [wasm-import](functions/rontolisp-wasm-import.md) reference pages and the

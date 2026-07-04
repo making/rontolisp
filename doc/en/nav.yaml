@@ -41,6 +41,10 @@ sections:
         title: Vectors & Matrices (linalg)
       - file: guides/java-interop.md
         title: Java Interop
+      - file: guides/http-fetch.md
+        title: HTTP Requests (fetch)
+      - file: guides/tcp-sockets.md
+        title: TCP Sockets
       - file: guides/math-backends.md
         title: Math Function Backends
       - file: guides/missing-features.md

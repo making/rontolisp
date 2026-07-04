@@ -41,6 +41,10 @@ sections:
         title: ベクトルと行列（linalg）
       - file: guides/java-interop.md
         title: Java 連携
+      - file: guides/http-fetch.md
+        title: HTTPリクエスト（fetch）
+      - file: guides/tcp-sockets.md
+        title: TCPソケット
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
       - file: guides/missing-features.md

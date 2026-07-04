@@ -224,6 +224,10 @@
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | 値がプロミスなら `t` |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします: オブジェクトはキーワードのplist（`:hash-table` 指定でハッシュテーブル）になります |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | 値（plistとハッシュテーブルはオブジェクト）をJSON文字列にシリアライズします |
+| `rontolisp:tcp-connect` | `(rontolisp:tcp-connect "127.0.0.1" 7777)` | ブロッキングTCP接続を開きます。双方向ストリームハンドルを返します |
+| `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | リスニングTCPソケットをバインドしてリスナーハンドルを返します。ポート `0` は空きエフェメラルポートを選びます |
+| `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | クライアント接続を待ちます (ブロッキング)。双方向ストリームハンドルを返します |
+| `rontolisp:tcp-local-port` | `(rontolisp:tcp-local-port listener)` | リスナーまたはソケットが実際にバインドされているローカルポート |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | WASMコアモジュールへのコンパイル時に、ホスト関数をLispから呼び出し可能として宣言します |
 
@@ -231,13 +235,19 @@
 `list-special-forms`)については
 [パッケージのイントロスペクション](packages.md#package-introspection)
 で詳しく説明しています。`rontolisp:fetch`
-は外向きのHTTPリクエストを開始してプロミスを返し、汎用のプロミス操作 `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` がそれを解決します。オプション、結果plist、バックエンドのサポート、制限については
+は外向きのHTTPリクエストを開始してプロミスを返し、汎用のプロミス操作 `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` がそれを解決します。全体像は
+[HTTPリクエストガイド](../guides/http-fetch.md)を、オプション、結果plist、バックエンドのサポート、制限については
 [fetch](functions/rontolisp-fetch.md)、
 [await](functions/rontolisp-await.md)、
 [then](functions/rontolisp-then.md)、
 [promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（JavaScriptの `JSON.parse`/`JSON.stringify` 相当。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](functions/rontolisp-json-parse.md) と
-[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。`rontolisp:wasm-export` と `rontolisp:wasm-import`
+[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。tcp関数（`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`）は素のTCPソケットを開き、そのハンドルには標準のストリーム関数（`read-line` / `write-line` / `read-byte` / `write-byte` / `close`）がそのまま使えます。echoサーバーの実例は
+[TCPソケットガイド](../guides/tcp-sockets.md)を、バックエンドのサポートと制限は
+[tcp-connect](functions/rontolisp-tcp-connect.md)、
+[tcp-listen](functions/rontolisp-tcp-listen.md)、
+[tcp-accept](functions/rontolisp-tcp-accept.md)、
+[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。`rontolisp:wasm-export` と `rontolisp:wasm-import`
 はWASMバックエンド向けのコンパイル時ディレクティブです。
 [wasm-export](functions/rontolisp-wasm-export.md) と
 [wasm-import](functions/rontolisp-wasm-import.md) のリファレンスページ、および
