@@ -13,16 +13,14 @@ Arithmetic is generic and exact: integer inputs stay integers and ratios rather 
 ## A worked example
 
 ```lisp
-(linalg:eye 3)                                   ; => #2A((1 0 0) (0 1 0) (0 0 1))
-(linalg:arange 5)                                ; => #(0 1 2 3 4)
-(linalg:linspace 0 1 5)                          ; => #(0 1/4 1/2 3/4 1)
-(let ((a (linalg:from-list '((1 2) (3 4))))
-      (b (linalg:from-list '((5 6) (7 8)))))
-  (linalg:matmul a b))                           ; => #2A((19 22) (43 50))
-(linalg:det (linalg:from-list '((1 2) (3 4))))   ; => -2
-(linalg:inv (linalg:from-list '((1 2) (3 4))))   ; => #2A((-2 1) (3/2 -1/2))
-(linalg:solve (linalg:from-list '((2 1) (1 3)))
-              #(3 5))                            ; => #(4/5 7/5)
+(linalg:eye 3)                          ; => #2A((1 0 0) (0 1 0) (0 0 1))
+(linalg:arange 5)                       ; => #(0 1 2 3 4)
+(linalg:linspace 0 1 5)                 ; => #(0 1/4 1/2 3/4 1)
+(linalg:matmul #2A((1 2) (3 4))
+               #2A((5 6) (7 8)))        ; => #2A((19 22) (43 50))
+(linalg:det #2A((1 2) (3 4)))           ; => -2
+(linalg:inv #2A((1 2) (3 4)))           ; => #2A((-2 1) (3/2 -1/2))
+(linalg:solve #2A((2 1) (1 3)) #(3 5))  ; => #(4/5 7/5)
 ```
 
 ## Elementwise arithmetic and broadcasting
@@ -30,9 +28,9 @@ Arithmetic is generic and exact: integer inputs stay integers and ratios rather 
 [`linalg:add`](../reference/functions/linalg-add.md), [`linalg:sub`](../reference/functions/linalg-sub.md), [`linalg:mul`](../reference/functions/linalg-mul.md) and [`linalg:div`](../reference/functions/linalg-div.md) operate elementwise, and a scalar operand on either side is broadcast over the other operand's shape; two array operands must have equal shapes. Note that `mul` is the Hadamard (elementwise) product -- the matrix product is [`linalg:matmul`](../reference/functions/linalg-matmul.md) (or the rank-dispatching [`linalg:dot`](../reference/functions/linalg-dot.md)). Arbitrary per-element transformations go through [`linalg:emap`](../reference/functions/linalg-emap.md).
 
 ```lisp
-(linalg:add #(1 2 3) 10)                         ; => #(11 12 13)
-(linalg:mul 2 (linalg:from-list '((1 2) (3 4)))) ; => #2A((2 4) (6 8))
-(linalg:div #(1 2 3) 2)                          ; => #(1/2 1 3/2)
+(linalg:add #(1 2 3) 10)        ; => #(11 12 13)
+(linalg:mul 2 #2A((1 2) (3 4))) ; => #2A((2 4) (6 8))
+(linalg:div #(1 2 3) 2)         ; => #(1/2 1 3/2)
 ```
 
 ## First-class functions

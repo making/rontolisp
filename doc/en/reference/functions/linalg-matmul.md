@@ -5,6 +5,6 @@
 The matrix product of `a` and `b` (also matrix . vector). It behaves like [`linalg:dot`](linalg-dot.md) but signals an error when either operand is a scalar, catching the mistake of writing a matrix product where an elementwise [`linalg:mul`](linalg-mul.md) would silently apply. The inner dimensions must agree; a mismatch signals an error.
 
 ```lisp
-(linalg:matmul (linalg:from-list '((1 2) (3 4)))
-               (linalg:from-list '((5 6) (7 8)))) ; => #2A((19 22) (43 50))
+(linalg:matmul #2A((1 2) (3 4))
+               #2A((5 6) (7 8))) ; => #2A((19 22) (43 50))
 ```

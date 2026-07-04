@@ -3836,6 +3836,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void rank2ArrayLiteralSelfEvaluatesToReadableArray() {
+		assertThat(eval("#2A((1 2 3) (4 5 6))").print()).isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(eval("(aref #2A((1 2) (3 4)) 1 0)").print()).isEqualTo("3");
+		assertThat(eval("(array-dimensions #2A((1 2 3) (4 5 6)))").print()).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void rank3ArrayLiteralSelfEvaluatesToReadableArray() {
+		assertThat(eval("#3A(((1 2) (3 4)) ((5 6) (7 8)))").print()).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		assertThat(eval("(aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1)").print()).isEqualTo("6");
+	}
+
+	@Test
+	void rank2ArrayLiteralIsMutable() {
+		assertThat(eval("(let ((m #2A((1 2) (3 4)))) (setf (aref m 0 1) 9) m)").print()).isEqualTo("#2A((1 9) (3 4))");
+	}
+
+	@Test
 	void lengthOfVectorReturnsElementCount() {
 		assertThat(eval("(length (make-array 5 :initial-element 0))")).isEqualTo(new LispInteger(5));
 		assertThat(eval("(length #(10 20 30))")).isEqualTo(new LispInteger(3));

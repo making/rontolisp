@@ -133,6 +133,89 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readRank2ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#2A((1 2 3) (4 5 6))");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(2, 3);
+		assertThat(array.aref(0, 0)).isEqualTo(new LispInteger(1));
+		assertThat(array.aref(1, 2)).isEqualTo(new LispInteger(6));
+		assertThat(array.print()).isEqualTo("#2A((1 2 3) (4 5 6))");
+	}
+
+	@Test
+	void readRank2ArrayLiteralLowercase() {
+		LispVal result = LispReader.readFromString("#2a((1 2) (3 4))");
+		assertThat(((LispArray) result).print()).isEqualTo("#2A((1 2) (3 4))");
+	}
+
+	@Test
+	void readRank1ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#1A(1 2 3)");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(3);
+		assertThat(array.print()).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
+	void readRank3ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(2, 2, 2);
+		assertThat(array.aref(1, 0, 1)).isEqualTo(new LispInteger(6));
+		assertThat(array.print()).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+	}
+
+	@Test
+	void readEmptyRank2ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#2A()");
+		assertThat(result).isInstanceOf(LispArray.class);
+		assertThat(((LispArray) result).dimensions()).containsExactly(0, 0);
+	}
+
+	@Test
+	void readRank2ArrayLiteralWithEmptyRows() {
+		LispVal result = LispReader.readFromString("#2A(() ())");
+		assertThat(((LispArray) result).dimensions()).containsExactly(2, 0);
+	}
+
+	@Test
+	void readRank2ArrayLiteralWithMixedElements() {
+		LispVal result = LispReader.readFromString("#2A((a \"b\") (1 2.5))");
+		LispArray array = (LispArray) result;
+		assertThat(array.aref(0, 0)).isEqualTo(new LispSymbol("a"));
+		assertThat(array.aref(0, 1)).isEqualTo(new LispString("b"));
+		assertThat(array.aref(1, 0)).isEqualTo(new LispInteger(1));
+		assertThat(array.aref(1, 1)).isEqualTo(new LispDouble(2.5));
+	}
+
+	@Test
+	void readRaggedArrayLiteralThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#2A((1 2) (3))")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("ragged");
+	}
+
+	@Test
+	void readArrayLiteralWithNonListRowThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#2A(1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("nested list");
+	}
+
+	@Test
+	void readRank0ArrayLiteralThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#0A(1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rank");
+	}
+
+	@Test
+	void readUnterminatedArrayLiteralThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#2A((1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unexpected end of input");
+	}
+
+	@Test
 	void readDouble() {
 		LispVal result = LispReader.readFromString("3.14");
 		assertThat(result).isEqualTo(new LispDouble(3.14));

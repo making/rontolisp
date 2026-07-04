@@ -1751,6 +1751,26 @@ cases:
       #(7 7 7)
       #2A((1 0 0) (0 0 9))
 
+  - name: array-literals-cross-backend
+    source: |
+      (defun ci-array-literals ()
+        (print #2A((1 2 3) (4 5 6)))
+        (print (aref #2A((1 2) (3 4)) 1 0))
+        (print (array-dimensions #2A((1 2 3) (4 5 6))))
+        (print #3A(((1 2) (3 4)) ((5 6) (7 8))))
+        (print (aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1))
+        (let ((m #2A((1 2) (3 4))))
+          (setf (aref m 0 1) 9)
+          (print m)))
+      (ci-array-literals)
+    expected: |
+      #2A((1 2 3) (4 5 6))
+      3
+      (2 3)
+      #3A(((1 2) (3 4)) ((5 6) (7 8)))
+      6
+      #2A((1 9) (3 4))
+
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()

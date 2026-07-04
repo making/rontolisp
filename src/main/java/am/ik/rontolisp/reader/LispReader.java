@@ -77,6 +77,7 @@ public final class LispReader {
 			case Token.SymbolToken sym -> readSymbol(sym);
 			case Token.LeftParen ignored -> readList();
 			case Token.VectorOpen ignored -> readVector();
+			case Token.ArrayOpen array -> readArray(array.rank());
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
@@ -162,6 +163,72 @@ public final class LispReader {
 		this.pos++; // consume ')'
 		LispVal[] data = elements.toArray(new LispVal[0]);
 		return new LispArray(new int[] { data.length }, data);
+	}
+
+	// Reads a rank-n array literal #nA((...) ...) into a self-evaluating LispArray.
+	// The contents are nested lists of depth n whose leaves are the elements in
+	// row-major order; every list at the same depth must have the same length
+	// (ragged contents are a read error), matching Common Lisp.
+	private LispVal readArray(int rank) {
+		if (rank < 1) {
+			throw new LispReadException("#" + rank + "A: array rank must be >= 1");
+		}
+		List<LispVal> rows = new ArrayList<>();
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			rows.add(readExpr());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw new LispReadException("Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		// The dimensions come from the first-element chain; an empty level makes
+		// every remaining dimension 0 (e.g., #2A() has dimensions (0 0)).
+		int[] dims = new int[rank];
+		dims[0] = rows.size();
+		List<LispVal> level = rows;
+		for (int d = 1; d < rank; d++) {
+			level = level.isEmpty() ? List.of() : arrayLevelContents(level.get(0), rank);
+			dims[d] = level.size();
+		}
+		List<LispVal> flat = new ArrayList<>();
+		flattenArrayContents(rows, 0, dims, rank, flat);
+		return new LispArray(dims, flat.toArray(new LispVal[0]));
+	}
+
+	// Validates one level of #nA contents against the expected dimension and appends
+	// the elements to `out` in row-major order.
+	private void flattenArrayContents(List<LispVal> items, int depth, int[] dims, int rank, List<LispVal> out) {
+		if (items.size() != dims[depth]) {
+			throw new LispReadException(
+					"#" + rank + "A: ragged contents, expected " + dims[depth] + " elements, got " + items.size());
+		}
+		if (depth == dims.length - 1) {
+			out.addAll(items);
+			return;
+		}
+		for (LispVal item : items) {
+			flattenArrayContents(arrayLevelContents(item, rank), depth + 1, dims, rank, out);
+		}
+	}
+
+	// Converts one nested level of #nA contents (a proper list or nil) to its elements.
+	private static List<LispVal> arrayLevelContents(LispVal level, int rank) {
+		if (level instanceof LispNil) {
+			return List.of();
+		}
+		if (!(level instanceof LispCons)) {
+			throw new LispReadException("#" + rank + "A: expected a nested list, got " + level.print());
+		}
+		List<LispVal> items = new ArrayList<>();
+		LispVal tail = level;
+		while (tail instanceof LispCons cons) {
+			items.add(cons.car());
+			tail = cons.cdr();
+		}
+		if (!(tail instanceof LispNil)) {
+			throw new LispReadException("#" + rank + "A: contents must be proper lists");
+		}
+		return items;
 	}
 
 	private LispVal readQuote() {

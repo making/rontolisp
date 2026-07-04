@@ -13,16 +13,14 @@ linalg の配列は `make-array` で作られる組み込みの配列です。�
 ## 実例
 
 ```lisp
-(linalg:eye 3)                                   ; => #2A((1 0 0) (0 1 0) (0 0 1))
-(linalg:arange 5)                                ; => #(0 1 2 3 4)
-(linalg:linspace 0 1 5)                          ; => #(0 1/4 1/2 3/4 1)
-(let ((a (linalg:from-list '((1 2) (3 4))))
-      (b (linalg:from-list '((5 6) (7 8)))))
-  (linalg:matmul a b))                           ; => #2A((19 22) (43 50))
-(linalg:det (linalg:from-list '((1 2) (3 4))))   ; => -2
-(linalg:inv (linalg:from-list '((1 2) (3 4))))   ; => #2A((-2 1) (3/2 -1/2))
-(linalg:solve (linalg:from-list '((2 1) (1 3)))
-              #(3 5))                            ; => #(4/5 7/5)
+(linalg:eye 3)                          ; => #2A((1 0 0) (0 1 0) (0 0 1))
+(linalg:arange 5)                       ; => #(0 1 2 3 4)
+(linalg:linspace 0 1 5)                 ; => #(0 1/4 1/2 3/4 1)
+(linalg:matmul #2A((1 2) (3 4))
+               #2A((5 6) (7 8)))        ; => #2A((19 22) (43 50))
+(linalg:det #2A((1 2) (3 4)))           ; => -2
+(linalg:inv #2A((1 2) (3 4)))           ; => #2A((-2 1) (3/2 -1/2))
+(linalg:solve #2A((2 1) (1 3)) #(3 5))  ; => #(4/5 7/5)
 ```
 
 ## 要素ごとの算術演算とブロードキャスト
@@ -30,9 +28,9 @@ linalg の配列は `make-array` で作られる組み込みの配列です。�
 [`linalg:add`](../reference/functions/linalg-add.md)、[`linalg:sub`](../reference/functions/linalg-sub.md)、[`linalg:mul`](../reference/functions/linalg-mul.md)、[`linalg:div`](../reference/functions/linalg-div.md) は要素ごとに演算し、どちらか一方のスカラーのオペランドはもう一方のオペランドの形状にブロードキャストされます。2 つの配列オペランドは同じ形状でなければなりません。`mul` はアダマール積（要素ごとの積）であることに注意してください。行列積は [`linalg:matmul`](../reference/functions/linalg-matmul.md)（またはランクに応じてディスパッチする [`linalg:dot`](../reference/functions/linalg-dot.md)）です。要素ごとの任意の変換には [`linalg:emap`](../reference/functions/linalg-emap.md) を使います。
 
 ```lisp
-(linalg:add #(1 2 3) 10)                         ; => #(11 12 13)
-(linalg:mul 2 (linalg:from-list '((1 2) (3 4)))) ; => #2A((2 4) (6 8))
-(linalg:div #(1 2 3) 2)                          ; => #(1/2 1 3/2)
+(linalg:add #(1 2 3) 10)        ; => #(11 12 13)
+(linalg:mul 2 #2A((1 2) (3 4))) ; => #2A((2 4) (6 8))
+(linalg:div #(1 2 3) 2)         ; => #(1/2 1 3/2)
 ```
 
 ## 第一級関数

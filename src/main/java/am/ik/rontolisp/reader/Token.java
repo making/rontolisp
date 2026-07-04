@@ -38,6 +38,15 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Rank-n array literal open ({@code #nA(}) token; closed by the {@link RightParen}
+	 * matching the opening parenthesis.
+	 *
+	 * @param rank the array rank (the digits between {@code #} and {@code A})
+	 */
+	record ArrayOpen(int rank) implements Token {
+	}
+
+	/**
 	 * Integer number token.
 	 *
 	 * @param value the integer value

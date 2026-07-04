@@ -75,6 +75,31 @@ public final class LispLexer {
 				tokens.add(new Token.VectorOpen());
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				// #nA( opens a rank-n array literal (e.g., #2A((1 2) (3 4))). Anything
+				// else after #<digits> falls through to symbol reading, preserving the
+				// previous tokenization.
+				int probe = this.pos + 1;
+				while (probe < this.input.length() && isDigit(this.input.charAt(probe))) {
+					probe++;
+				}
+				if (probe + 1 < this.input.length()
+						&& (this.input.charAt(probe) == 'A' || this.input.charAt(probe) == 'a')
+						&& this.input.charAt(probe + 1) == '(') {
+					int rank;
+					try {
+						rank = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw new LispReadException("Invalid array rank: " + this.input.substring(this.pos, probe));
+					}
+					tokens.add(new Token.ArrayOpen(rank));
+					this.pos = probe + 2;
+				}
+				else {
+					tokens.add(readSymbol());
+				}
+			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isRadixMarker(this.input.charAt(this.pos + 1))) {
 				tokens.add(readRadixNumber());
 			}

@@ -14,7 +14,7 @@
 | Pi | `pi` | The constant π, read as the double `3.141592653589793` |
 | Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
-| Array | `#(1 2 3)`, `(make-array 3)` | Fixed-size array of any rank (rank 1 = vector); `#(...)` is a self-evaluating vector literal |
+| Array | `#(1 2 3)`, `#2A((1 2) (3 4))` | Fixed-size array of any rank (rank 1 = vector); `#(...)` and `#nA(...)` are self-evaluating array literals |
 | Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
 
 Numeric literals may use `,` as a grouping separator between digits in the
@@ -154,14 +154,18 @@ For numpy-style vector/matrix math on top of arrays, see the
 ```
 
 The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose
-elements are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. Arrays
-print in the same readable syntax across all backends: a rank-1 array as `#(...)`
-and a rank-n array as `#nA((...) ...)` (`#2A` for a matrix, `#3A` for a rank-3
-array, ...), with `prin1` quoting string elements and `princ` not:
+elements are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. A
+rank-n array is written `#nA((...) ...)` with its contents as nested lists of
+depth n (`#2A` for a matrix, `#3A` for a rank-3 array, ...); every list at the
+same depth must have the same length, so ragged contents are a read error.
+Arrays print in the same readable syntax across all backends, with `prin1`
+quoting string elements and `princ` not:
 
 ```lisp
 (print #(1 2 3))                          ; #(1 2 3)
 (princ #(a "b"))                          ; #(a b)
+(print #2A((1 2) (3 4)))                  ; #2A((1 2) (3 4))
+(aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1) ; => 6
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
 ```
 

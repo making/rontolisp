@@ -200,4 +200,27 @@ class LispLexerTest {
 			.isInstanceOf(LispReadException.class);
 	}
 
+	@Test
+	void tokenizeArrayOpen() {
+		List<Token> tokens = new LispLexer("#2A((1 2) (3 4))").tokenize();
+		assertThat(tokens).containsExactly(new Token.ArrayOpen(2), new Token.LeftParen(), new Token.NumberToken(1),
+				new Token.NumberToken(2), new Token.RightParen(), new Token.LeftParen(), new Token.NumberToken(3),
+				new Token.NumberToken(4), new Token.RightParen(), new Token.RightParen());
+	}
+
+	@Test
+	void tokenizeArrayOpenLowercase() {
+		List<Token> tokens = new LispLexer("#3a(((1)))").tokenize();
+		assertThat(tokens.get(0)).isEqualTo(new Token.ArrayOpen(3));
+	}
+
+	@Test
+	void tokenizeSharpDigitsWithoutArrayOpenIsASymbol() {
+		// #2A not followed by '(' keeps the previous symbol tokenization.
+		assertThat(new LispLexer("#2A").tokenize()).containsExactly(new Token.SymbolToken("#2A"));
+		assertThat(new LispLexer("#2Ax").tokenize()).containsExactly(new Token.SymbolToken("#2Ax"));
+		assertThat(new LispLexer("#2B(").tokenize()).containsExactly(new Token.SymbolToken("#2B"),
+				new Token.LeftParen());
+	}
+
 }

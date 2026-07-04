@@ -4153,6 +4153,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileRank2ArrayLiteralPrintsAsHash2A() throws Exception {
+		assertThat(compileAndRun("(print #2A((1 2 3) (4 5 6)))")).isEqualTo("#2A((1 2 3) (4 5 6))");
+	}
+
+	@Test
+	void compileRank2ArrayLiteralIsAReadableArray() throws Exception {
+		assertThat(compileAndRun("(print (aref #2A((1 2) (3 4)) 1 0))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (array-dimensions #2A((1 2 3) (4 5 6))))")).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void compileRank3ArrayLiteral() throws Exception {
+		assertThat(compileAndRun("(print (aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1))")).isEqualTo("6");
+	}
+
+	@Test
 	void compileLengthOfVectorReturnsElementCount() throws Exception {
 		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");
 		assertThat(compileAndRun("(print (length #(10 20 30)))")).isEqualTo("3");
