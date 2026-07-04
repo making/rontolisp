@@ -144,6 +144,34 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void httpHandlerWithFetchCompilesInServeMode() {
+		// fetch inside a served handler compiles to the serve+fetch component variant
+		// (WasmServeComponentBuilder.buildHttp); the round trip under `wasmtime serve
+		// -S http=y` is exercised in WasmLispCompilerIntegrationTest.
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun h (r)
+				  (list :status 200
+				        :body (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
+				(rontolisp:http-handler 'h)
+				"""));
+		assertThat(new WasmLispCompiler(false, true, false, false, true).compile(program)).isNotEmpty();
+	}
+
+	@Test
+	void httpHandlerWithTcpIsCompileErrorInServeMode() {
+		// There is no serve blob variant with wasi:sockets: fail at compile time
+		// instead of emitting a component that cannot instantiate.
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun h (r) (list :status 200 :body "x"))
+				(rontolisp:http-handler 'h)
+				(rontolisp:tcp-listen 7777)
+				"""));
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true, false, false, true).compile(program))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:tcp-* cannot be used in a rontolisp:http-handler");
+	}
+
+	@Test
 	void fetchAndTcpInOneComponentProgramIsCompileError() {
 		// fetch (a wasi:http 0.2 hybrid) and tcp sockets (wasi:sockets 0.3) need
 		// different component blob variants; combining them is not supported yet.

@@ -74,7 +74,10 @@ The interpreter and the JVM backend pass headers through. Inside a served
 handler `random`, the time built-ins and `print` (to the host's stdout) work —
 they are bridged to `wasi:random` / `wasi:clocks` / `wasi:cli`, which every
 `wasi:http` host provides; `getenv` returns `nil` and file streams are
-unavailable.
+unavailable. [`rontolisp:fetch`](rontolisp-fetch.md) also works inside a
+served handler (the component then additionally imports
+`wasi:http/outgoing-handler`), so proxy-style handlers run on every backend —
+grant the host outbound HTTP, e.g. `wasmtime serve -W gc=y -S http=y`.
 
 The serve component is plain WASI 0.2, so it is not tied to wasmtime: any host
 that serves `wasi:http` 0.2 and enables the WebAssembly GC proposal can run it —

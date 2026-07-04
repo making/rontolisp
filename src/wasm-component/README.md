@@ -221,3 +221,32 @@ mem -> bridge -> core -> serve adapter and lifts the adapter's `serve` export
 synchronously as `handle`. Note `wasi:clocks/monotonic-clock` lands as import
 instance 0 (wasm-tools hoists it first as a dependency of `wasi:http/types`),
 before `wasi:io/error`. Details: `../../.kb/fetch-http.md`.
+
+### Serve+fetch variant (`rontolisp:http-handler` + `rontolisp:fetch`)
+
+A handler program that also uses `rontolisp:fetch` (a proxy-style server making
+outgoing requests) compiles to a third parallel serve blob set:
+
+```
+src/wasm-component/
+  uni-serve-http.wit  core-serve-http.wat  adapter-serve-p1-http.wat
+
+src/main/resources/.../component/
+  import-block-serve-http.bin  adapter-serve-p1-http.wasm
+```
+
+`uni-serve-http.wit` (world `uni-serve-http`) is the serve surface plus
+`wasi:io/poll` and `wasi:http/outgoing-handler` appended last — still entirely
+inside the wasi:http proxy world, so any host that serves the plain variant can
+serve this one (grant outbound HTTP: `wasmtime serve -W gc=y -S http=y`).
+`adapter-serve-p1-http.wat` is `adapter-serve-p1.wat` plus the
+`fetch-start`/`fetch-await` bodies of `adapter-http.wat` and the
+errno-returning tcp stubs: the bridge (instantiated BEFORE the core, unlike the
+serve adapter) is what satisfies the rontolisp core's `http` and `sock`
+imports when the program uses fetch. `WasmServeComponentBuilder.buildHttp`
+wires it; note `wasi:io/poll` is dependency-hoisted to import instance 0, so
+every instance index shifts by one relative to the plain serve block and the
+constants were re-derived from a fresh `wasm-tools dump`. The fetch
+response-body scratch (0x70000) overlaps the serve adapter's request-body
+scratch, which is safe: `%http-dispatch` marshals the request into GC strings
+before the Lisp handler (and therefore any fetch) runs.

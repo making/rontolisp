@@ -79,7 +79,10 @@ request `:body` from an s-expression.
   genuinely overlap. Compile with `--component` and run with `-S http=y` plus
   the async flags. fetch remains a compile error in Preview 1 (core-module)
   mode, which has no host `wasi:http`; the generic promise operations
-  (`await`, `then`, `promisep`) compile in every mode.
+  (`await`, `then`, `promisep`) compile in every mode. fetch also works inside
+  a [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component
+  (a proxy-style handler): run it with `wasmtime serve -W gc=y -S http=y` —
+  the async flags are not needed there.
 - **Browser playground**: truly asynchronous. The interpreter runs in a Web
   Worker; `fetch` hands the request to the page's main thread, which runs the
   real browser `fetch()` (subject to CORS) while the program continues, so

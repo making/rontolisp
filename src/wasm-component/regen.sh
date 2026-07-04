@@ -57,6 +57,7 @@ wasm-tools parse adapter-http.wat -o "$OUT/adapter-http.wasm"
 wasm-tools parse adapter-sock.wat -o "$OUT/adapter-sock.wasm"
 wasm-tools parse adapter-serve.wat -o "$OUT/adapter-serve.wasm"
 wasm-tools parse adapter-serve-p1.wat -o "$OUT/adapter-serve-p1.wasm"
+wasm-tools parse adapter-serve-p1-http.wat -o "$OUT/adapter-serve-p1-http.wasm"
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
 wasm-tools validate "$OUT/mem-http.wasm"
@@ -64,6 +65,7 @@ wasm-tools validate "$OUT/adapter-http.wasm"
 wasm-tools validate "$OUT/adapter-sock.wasm"
 wasm-tools validate "$OUT/adapter-serve.wasm"
 wasm-tools validate "$OUT/adapter-serve-p1.wasm"
+wasm-tools validate "$OUT/adapter-serve-p1-http.wasm"
 
 echo "== unified import block (base) =="
 wasm-tools parse core.wat -o core.wasm
@@ -93,7 +95,15 @@ wasm-tools component new embedded-serve.wasm -o uni-serve.wasm
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-serve.wasm
 slice_import_block uni-serve.wasm "$OUT/import-block-serve.bin"
 
+echo "== unified import block (serve+fetch variant: http-handler + fetch) =="
+wasm-tools parse core-serve-http.wat -o core-serve-http.wasm
+wasm-tools component embed . core-serve-http.wasm -o embedded-serve-http.wasm --world uni-serve-http
+wasm-tools component new embedded-serve-http.wasm -o uni-serve-http.wasm
+wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-serve-http.wasm
+slice_import_block uni-serve-http.wasm "$OUT/import-block-serve-http.bin"
+
 rm -f core.wasm embedded.wasm uni.wasm core-http.wasm embedded-http.wasm uni-http.wasm \
       core-sock.wasm embedded-sock.wasm uni-sock.wasm \
-      core-serve.wasm embedded-serve.wasm uni-serve.wasm
+      core-serve.wasm embedded-serve.wasm uni-serve.wasm \
+      core-serve-http.wasm embedded-serve-http.wasm uni-serve-http.wasm
 echo "== done =="

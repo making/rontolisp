@@ -655,6 +655,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			throw new UnsupportedOperationException(
 					"rontolisp:fetch and rontolisp:tcp-* cannot be combined in one --component program yet");
 		}
+		// The serve component wires the wasi:http proxy world only; there is no serve
+		// blob variant with wasi:sockets, so fail at compile time instead of emitting a
+		// component that cannot instantiate.
+		if (this.serve && emitSockImport) {
+			throw new UnsupportedOperationException(
+					"rontolisp:tcp-* cannot be used in a rontolisp:http-handler --component program yet");
+		}
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -1856,8 +1863,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
 				// into
-				// a wasi:http/incoming-handler component (wasmtime serve).
-				return WasmComponentBuilder.buildServe(coreModule);
+				// a wasi:http/incoming-handler component (wasmtime serve). When the
+				// program also uses fetch, the serve+fetch variant wires the outgoing
+				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
+				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport);
 			}
 			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport);
 		}

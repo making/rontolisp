@@ -188,6 +188,31 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   sweeps the core bump heap across the 0x50000 scratch page and would corrupt
   them (the response body sweeping that page is otherwise harmless: all
   per-request scratch there is written before use).
+- **fetch inside a served handler (serve+fetch variant, 2026-07-04)** -- a
+  program using BOTH `rontolisp:http-handler` and `rontolisp:fetch` compiles to
+  a parallel serve blob set (proxy/aggregator shapes): the preview1
+  bridge is swapped for `adapter-serve-p1-http.wat` (= adapter-serve-p1 + the
+  fetch-start/fetch-await bodies of adapter-http.wat + the errno-returning tcp
+  stubs), instantiated BEFORE the core so it can satisfy the core's
+  `http`/`sock` imports (the serve adapter, which comes after the core, cannot).
+  `WasmServeComponentBuilder.buildHttp` wires it over
+  `import-block-serve-http.bin` (world `uni-serve-http` = the serve surface +
+  `wasi:io/poll` + `wasi:http/outgoing-handler`; io/poll is dependency-hoisted
+  to instance 0, shifting every serve instance index by one -- constants are
+  independent of `build()` and re-derived from `wasm-tools dump`).
+  `WasmLispCompiler` passes `emitHttpImport` through
+  `WasmComponentBuilder.buildServe(core, usesHttp)`. Still the plain proxy
+  world: run with `wasmtime serve -W gc=y -S http=y` (no async flags). Memory
+  safety: the fetch response-body scratch (0x70000) overlaps the serve
+  adapter's request-body scratch, which is safe because `%http-dispatch`
+  marshals the request into GC strings before the handler (and any fetch)
+  runs. serve + `rontolisp:tcp-*` is a compile error ("cannot be used in a
+  rontolisp:http-handler --component program yet") -- no serve blob variant
+  with wasi:sockets. Interpreter/JVM needed no changes (both sides are
+  `java.net.http.HttpClient` / `HttpServer`). Test:
+  `WasmLispCompilerIntegrationTest.httpHandlerFetchInsideServeUnderWasmtimeServe`
+  (the fetch backend is itself a plain rontolisp serve component, so the test
+  stays offline).
 - **v1 limitations** -- on the WASM component, request/response headers are
   dropped (the handler sees `:headers nil`, response `:headers` is ignored).
   The interpreter and the JVM backend (since 2026-07-04,

@@ -926,6 +926,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void httpHandlerFetchInsideServeUnderWasmtimeServe() throws Exception {
+		// A proxy-style handler: rontolisp:fetch inside a served handler works because
+		// the serve+fetch component variant (WasmServeComponentBuilder.buildHttp) wires
+		// the wasi:http outgoing machinery into the preview1 bridge
+		// (adapter-serve-p1-http.wat); run the proxy with `wasmtime serve -S http=y`.
+		// The backend is itself a plain rontolisp serve component, so the test stays
+		// offline.
+		List<LispVal> backend = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string "backend " (getf request :path))))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] backendBytes = new WasmLispCompiler(false, true, false, false, true).compile(backend);
+		List<LispVal> proxy = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (let ((resp (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8083/up"))))
+				    (list :status 200
+				          :body (concatenate 'string "proxied " (getf resp :body)
+				                             " " (princ-to-string (getf resp :status))))))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] proxyBytes = new WasmLispCompiler(false, true, false, false, true).compile(proxy);
+		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/serve-backend.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(proxyBytes), "/tmp/serve-proxy.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
+						+ " wasmtime serve -W gc=y -S http=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8084/) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done;"
+						+ " cat /tmp/serve-backend.log /tmp/serve-proxy.log 1>&2; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve fetch-inside-serve round trip; log: %s", result.getStderr())
+			.isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("proxied backend /up 200");
+	}
+
+	@Test
 	void componentFileWriteThenRead() throws Exception {
 		// Component mode does file I/O over wasi:filesystem@0.3.0 (read-via-stream /
 		// append-via-stream, driven through stream/future): the adapter maps the

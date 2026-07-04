@@ -116,6 +116,37 @@ GET /hello
 すべてのコンポーネントが必要とする WebAssembly GC プロポーザルを有効化しておらず、
 有効化するフラグも提供されていないためです。
 
+## ハンドラから他のサービスを呼び出す
+
+[`rontolisp:fetch`](http-fetch.md) は 3 つのバックエンドすべてで、サービング中の
+ハンドラ内でも動作します。古典的なプロキシ／アグリゲータの形が書けます:
+
+```console
+(defun handle (request)
+  (let ((res (rontolisp:await
+              (rontolisp:fetch "http://127.0.0.1:9000/upstream"))))
+    (list :status (getf res :status)
+          :body (getf res :body))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+WASI コンポーネントバックエンドでは、外向きリクエストの機構も同じコンポーネント
+に同梱されるため、変更点はホストに外向き HTTP を許可することだけです —
+wasmtime では `-S http=y` を付けます（`component-model-async` 系のフラグは
+引き続き不要です）:
+
+```console
+$ rontolisp proxy.lisp -o proxy.wasm --component
+$ wasmtime serve -W gc=y -S http=y proxy.wasm
+```
+
+完全な例は
+[`examples/dog-fetcher.lisp`](https://github.com/making/rontolisp/blob/develop/examples/dog-fetcher.lisp)
+です。[wasmCloud の dog-fetcher の例](https://wasmcloud.com/docs/v1/examples/rust/component/dog-fetcher/)
+の再現で、リクエストごとに dog.ceo API からランダムな犬の画像 URL を取得して
+JSON で応答します。
+
 ## 制限
 
 WASI コンポーネントバックエンドでは、リクエスト／レスポンスのヘッダはまだ

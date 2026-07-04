@@ -76,6 +76,10 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 `print`（ホストの標準出力への出力）は動作します — すべての `wasi:http`
 ホストが提供する `wasi:random` / `wasi:clocks` / `wasi:cli` へブリッジ
 されるためです。`getenv` は `nil` を返し、ファイルストリームは利用できません。
+[`rontolisp:fetch`](rontolisp-fetch.md) もサービング中のハンドラ内で動作します
+（この場合コンポーネントは追加で `wasi:http/outgoing-handler` をインポート
+します）。プロキシ型のハンドラはすべてのバックエンドで動作します — ホストに
+外向き HTTP を許可してください（例: `wasmtime serve -W gc=y -S http=y`）。
 
 serve コンポーネントは純粋な WASI 0.2 なので wasmtime 専用ではありません。
 `wasi:http` 0.2 を提供し WebAssembly GC プロポーザルを有効化できるホストであれば

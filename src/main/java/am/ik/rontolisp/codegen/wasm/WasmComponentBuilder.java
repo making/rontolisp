@@ -221,7 +221,22 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
 	public static byte[] buildServe(byte[] coreModule) {
-		return WasmServeComponentBuilder.build(coreModule);
+		return buildServe(coreModule, false);
+	}
+
+	/**
+	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program.
+	 * When the program also uses {@code rontolisp:fetch}, the serve+fetch variant is
+	 * assembled instead: the preview1 bridge is the extended
+	 * {@code adapter-serve-p1-http.wasm}, which additionally satisfies the core's
+	 * {@code http} (fetch-start / fetch-await) imports so a served handler can make
+	 * outgoing requests (run with {@code wasmtime serve -S http=y}).
+	 * @param coreModule the rontolisp core module compiled in serve mode
+	 * @param usesHttp whether the program uses {@code rontolisp:fetch}
+	 * @return the WASI 0.2 (http/incoming-handler) component binary
+	 */
+	public static byte[] buildServe(byte[] coreModule, boolean usesHttp) {
+		return usesHttp ? WasmServeComponentBuilder.buildHttp(coreModule) : WasmServeComponentBuilder.build(coreModule);
 	}
 
 	/**

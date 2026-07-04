@@ -114,6 +114,38 @@ GET /hello
 not enable the WebAssembly GC proposal that every rontolisp component needs,
 and it offers no flag to turn it on.
 
+## Calling other services from a handler
+
+[`rontolisp:fetch`](http-fetch.md) works inside a served handler on all three
+backends, enabling the classic proxy / aggregator shape:
+
+```console
+(defun handle (request)
+  (let ((res (rontolisp:await
+              (rontolisp:fetch "http://127.0.0.1:9000/upstream"))))
+    (list :status (getf res :status)
+          :body (getf res :body))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+On the WASI component backend the outgoing-request machinery rides along in
+the same component, so the only change is granting the host outbound HTTP —
+`-S http=y` for wasmtime (the `component-model-async` flags are still not
+needed):
+
+```console
+$ rontolisp proxy.lisp -o proxy.wasm --component
+$ wasmtime serve -W gc=y -S http=y proxy.wasm
+```
+
+A complete example is
+[`examples/dog-fetcher.lisp`](https://github.com/making/rontolisp/blob/develop/examples/dog-fetcher.lisp),
+a reproduction of
+[wasmCloud's dog-fetcher example](https://wasmcloud.com/docs/v1/examples/rust/component/dog-fetcher/):
+every request fetches a random dog picture URL from the dog.ceo API and
+answers it as JSON.
+
 ## Limitations
 
 On the WASI component backend, request and response headers are not marshalled
