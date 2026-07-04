@@ -184,6 +184,29 @@ public final class LispEvaluator {
 			}
 			return awaitValue(args.get(0));
 		}));
+		// http-handler lives here rather than in Environment because serving a request
+		// applies the handler function, which needs the evaluator's apply. It runs a
+		// blocking embedded HTTP server; the handler receives a request property list
+		// (:method / :path / :headers / :body) and returns a response property list
+		// (:status / :headers / :body). When compiled with --component the same directive
+		// instead exports wasi:http/incoming-handler (see the WASM compiler).
+		String httpHandlerName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER);
+		this.globalEnv.defineFunction(httpHandlerName, new LispFunction(httpHandlerName, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.HTTP_HANDLER + " expects 1 or 2 arguments, got " + args.size());
+			}
+			int port = 8080;
+			if (args.size() == 2) {
+				if (!(args.get(1) instanceof LispInteger portArg)) {
+					throw new LispEvalException(
+							LispNames.HTTP_HANDLER + " expects an integer port, got: " + args.get(1).print());
+				}
+				port = (int) portArg.value();
+			}
+			final LispVal handler = args.get(0);
+			HttpHandlerSupport.serve(port, request -> invokeHttpHandler(handler, request));
+			return LispNil.INSTANCE; // serve() blocks forever; unreachable in practice
+		}));
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use;
 		// user lambda lists have no &optional yet, so these variadic dispatchers pad
@@ -1387,6 +1410,62 @@ public final class LispEvaluator {
 		LispVal resolved = awaitValue(apply(promise.fn(), List.of(base), this.globalEnv));
 		promise.settle(resolved);
 		return resolved;
+	}
+
+	// Adapts one incoming HTTP request to the Lisp handler: builds the request property
+	// list, applies the handler and reads the response property list back.
+	private HttpHandlerSupport.Response invokeHttpHandler(LispVal handler, HttpHandlerSupport.Request request) {
+		LispVal headers = LispNil.INSTANCE;
+		List<HttpHandlerSupport.Header> requestHeaders = request.headers();
+		for (int i = requestHeaders.size() - 1; i >= 0; i--) {
+			HttpHandlerSupport.Header header = requestHeaders.get(i);
+			headers = new LispCons(new LispCons(new LispString(header.name()), new LispString(header.value())),
+					headers);
+		}
+		LispVal requestPlist = plist(new LispSymbol(":method"), new LispString(request.method()),
+				new LispSymbol(":path"), new LispString(request.path()), new LispSymbol(":headers"), headers,
+				new LispSymbol(":body"), new LispString(request.body()));
+		LispVal result = apply(handler, List.of(requestPlist), this.globalEnv);
+		int status = 200;
+		if (httpPlistGet(result, ":status") instanceof LispInteger statusVal) {
+			status = (int) statusVal.value();
+		}
+		String body = "";
+		LispVal bodyVal = httpPlistGet(result, ":body");
+		if (bodyVal instanceof LispString bodyStr) {
+			body = bodyStr.value();
+		}
+		List<HttpHandlerSupport.Header> responseHeaders = new ArrayList<>();
+		LispVal headerAlist = httpPlistGet(result, ":headers");
+		while (headerAlist instanceof LispCons cons) {
+			if (cons.car() instanceof LispCons pair && pair.car() instanceof LispString name
+					&& pair.cdr() instanceof LispString value) {
+				responseHeaders.add(new HttpHandlerSupport.Header(name.value(), value.value()));
+			}
+			headerAlist = cons.cdr();
+		}
+		return new HttpHandlerSupport.Response(status, responseHeaders, body);
+	}
+
+	// Builds a property list from alternating key/value LispVals.
+	private static LispVal plist(LispVal... elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			result = new LispCons(elements[i], result);
+		}
+		return result;
+	}
+
+	// Returns the value of key in a property list, or nil if absent.
+	private static LispVal httpPlistGet(LispVal plist, String key) {
+		LispVal current = plist;
+		while (current instanceof LispCons cons && cons.cdr() instanceof LispCons valueCell) {
+			if (cons.car() instanceof LispSymbol sym && sym.name().equals(key)) {
+				return valueCell.car();
+			}
+			current = valueCell.cdr();
+		}
+		return LispNil.INSTANCE;
 	}
 
 	// Evaluates the Lisp-source JSON library into the global environment on first

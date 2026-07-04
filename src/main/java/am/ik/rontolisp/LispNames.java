@@ -1338,6 +1338,19 @@ public final class LispNames {
 	public static final String WASM_EXPORT = "wasm-export";
 
 	/**
+	 * The {@code http-handler} directive provided by the {@code rontolisp} package. Used
+	 * as {@code (rontolisp:http-handler 'name [port])} to serve HTTP requests with a
+	 * handler function that receives a request property list ({@code :method} /
+	 * {@code :path} / {@code :headers} / {@code :body}) and returns a response property
+	 * list ({@code :status} / {@code :headers} / {@code :body}). On the interpreter and
+	 * the JVM backend it runs a blocking embedded HTTP server on the given port (default
+	 * 8080); when compiled to a WASI component ({@code --component}) it exports
+	 * {@code wasi:http/incoming-handler} so the module runs under {@code wasmtime serve}
+	 * and Spin (the port argument is ignored, the host owns the socket).
+	 */
+	public static final String HTTP_HANDLER = "http-handler";
+
+	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used
 	 * as {@code (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...)
 	 * :returns ...)} to declare a host function imported into the compiled WASM module

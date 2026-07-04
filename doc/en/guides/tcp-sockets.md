@@ -159,6 +159,41 @@ and
   (close listener))
 ```
 
+## Serving HTTP with `http-handler`
+
+Hand-rolling HTTP over `read-line`/`write-line` (as `http-hello.lisp` does) is
+instructive, but for a plain request/response server
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+does the parsing for you. You write a handler that takes a request property list
+(`:method` / `:path` / `:headers` / `:body`) and returns a response property
+list (`:status` / `:headers` / `:body`) — the same value model as
+[`rontolisp:fetch`](http-fetch.md), just incoming instead of outgoing:
+
+```console
+(defun handle (request)
+  (list :status 200
+        :headers (list (cons "content-type" "text/plain"))
+        :body (format nil "Hello from rontolisp!~%~a ~a~%"
+                      (getf request :method) (getf request :path))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+On the interpreter this blocks and serves on port 8080 (one virtual thread per
+request):
+
+```console
+$ java -jar rontolisp.jar app.lisp
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+`http-handler` currently runs on the interpreter backend only; the JVM backend
+and the WASI-component backend (compiling the handler into a
+`wasi:http/incoming-handler` component for `wasmtime serve` and Spin) are in
+progress.
+
 ## More examples
 
 The [`examples/` directory](https://github.com/making/rontolisp/tree/develop/examples)

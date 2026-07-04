@@ -138,6 +138,11 @@ final class WasmExprCompiler {
 					WasmFetchCompiler.compile(cons, ctx);
 					return;
 				}
+				if (LispNames.HTTP_HANDLER.equals(qn.member())) {
+					throw new UnsupportedOperationException(
+							LispNames.HTTP_HANDLER + " is currently only supported on the interpreter backend "
+									+ "(JVM and WASM component support are in progress)");
+				}
 				if (LispNames.AWAIT.equals(qn.member())) {
 					WasmAwaitCompiler.compile(cons, ctx);
 					return;

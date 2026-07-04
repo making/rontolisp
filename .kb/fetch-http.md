@@ -95,3 +95,32 @@ out-of-order, then-chain cases); Preview-1 promise ops run under wasmtime in
 component error-path + `-S http` gate tests plus an opt-in (`RONTOLISP_HTTP_E2E=1`)
 success test exercise overlap, out-of-order awaits and a then chain; ci-spec has a
 network-free `promise-generic-await-then-promisep` case covering all four backends.
+
+## `rontolisp:http-handler` (incoming HTTP / serving)
+
+The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
+(a quoted defun name, like `wasm-export`) takes a request plist
+`(:method :path :headers :body)` and returns a response plist
+`(:status :headers :body)`; missing keys default to `:status 200` / empty body.
+
+- **Interpreter (implemented)** -- `HttpHandlerSupport` (eval pkg, `public` for
+  the future web substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
+  ONE VIRTUAL THREAD PER REQUEST (`Executors.newVirtualThreadPerTaskExecutor`).
+  `serve(port, handler)` blocks forever (Ctrl-C to stop); `start(port, handler)`
+  is the non-blocking test seam (port 0 = ephemeral) and `stopAllForTesting()`
+  shuts servers down. Registered in `LispEvaluator` (not `Environment`) because
+  serving a request applies the handler via the evaluator's `apply`;
+  `invokeHttpHandler` builds the request plist and reads the response plist.
+  Tests: `HttpHandlerTest` (Java seam round trip + directive round trip via a
+  background thread + validation).
+- **JVM / WASM component (IN PROGRESS)** -- both are a clear compile error for
+  now (`JvmExprCompiler` / `WasmExprCompiler` throw "interpreter backend").
+  The WASM design is PROVEN end-to-end (a hand-wired component exporting
+  `wasi:http/incoming-handler@0.2.0` runs under `wasmtime serve`) and fully
+  specified -- adapter WAT mirroring the fetch adapter's request/response
+  marshalling but calling a `wasm-export`-emitted core `%http-dispatch`
+  (`"<status>\n<body>"` encoding), plus a `WasmComponentBuilder.buildServe`
+  wiring derived from a `wasm-tools` dump. All derived wasi:http@0.2 core ABI
+  signatures (notably `[static]response-outparam.set` ->
+  `(param i32 i32 i32 i32 i64 i32 i32 i32 i32)`) are recorded in
+  `../.todo/51-wasi-http-incoming-handler-spin.md`.

@@ -29,6 +29,16 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void httpHandlerIsCompileErrorInBothWasmModes() {
+		assertThatThrownBy(() -> compile("(defun h (r) nil) (rontolisp:http-handler 'h)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("interpreter backend");
+		assertThatThrownBy(() -> compileComponent("(defun h (r) nil) (rontolisp:http-handler 'h)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("interpreter backend");
+	}
+
+	@Test
 	void promiseOpsCompileInEveryMode() {
 		// await/then/promisep are generic promise operations; unlike fetch they compile
 		// in Preview 1 mode too

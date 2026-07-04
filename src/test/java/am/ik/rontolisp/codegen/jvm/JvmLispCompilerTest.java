@@ -3209,7 +3209,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -3327,6 +3327,13 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:then 1)")).isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep)"))
 			.isInstanceOf(UnsupportedOperationException.class);
+	}
+
+	@Test
+	void compileHttpHandlerIsCompileError() {
+		assertThatThrownBy(() -> compileAndRun("(defun h (r) nil) (rontolisp:http-handler 'h)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("interpreter backend");
 	}
 
 	@Test

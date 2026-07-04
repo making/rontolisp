@@ -163,6 +163,40 @@ PKCS12 キーストアファイルを受け取り(自己署名キーストアを
   (close listener))
 ```
 
+## `http-handler` で HTTP を提供する
+
+`read-line`/`write-line` で HTTP を手書きする（`http-hello.lisp` のような）方法も
+勉強になりますが、素朴なリクエスト/レスポンス型のサーバであれば
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+がパースを引き受けてくれます。ハンドラはリクエストのプロパティリスト
+（`:method` / `:path` / `:headers` / `:body`）を受け取り、レスポンスのプロパティリスト
+（`:status` / `:headers` / `:body`）を返します。これは
+[`rontolisp:fetch`](http-fetch.md) と同じ値モデルで、送信ではなく受信側です。
+
+```console
+(defun handle (request)
+  (list :status 200
+        :headers (list (cons "content-type" "text/plain"))
+        :body (format nil "Hello from rontolisp!~%~a ~a~%"
+                      (getf request :method) (getf request :path))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+インタープリタではこれがブロックし、ポート 8080 で提供します（リクエストごとに
+1 つの仮想スレッド）。
+
+```console
+$ java -jar rontolisp.jar app.lisp
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+`http-handler` は現在インタープリタバックエンドのみで動作します。JVM バックエンドと
+WASI コンポーネントバックエンド（ハンドラを `wasi:http/incoming-handler`
+コンポーネントにコンパイルし、`wasmtime serve` や Spin で動かす）は開発中です。
+
 ## その他のサンプル
 
 [`examples/` ディレクトリ](https://github.com/making/rontolisp/tree/develop/examples)
