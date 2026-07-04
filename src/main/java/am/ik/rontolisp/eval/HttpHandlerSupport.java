@@ -26,8 +26,8 @@ import am.ik.rontolisp.LispNames;
  *
  * <p>
  * When the program is compiled to a WASI component ({@code --component}) this class is
- * not used: the module instead exports {@code wasi:http/incoming-handler} so a host
- * ({@code wasmtime serve} / Spin) drives the handler.
+ * not used: the module instead exports {@code wasi:http/incoming-handler} so a host (e.g.
+ * {@code wasmtime serve}) drives the handler.
  */
 public final class HttpHandlerSupport {
 

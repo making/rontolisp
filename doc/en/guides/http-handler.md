@@ -60,18 +60,59 @@ It also compiles to a **WASI HTTP component** that runs under
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W component-model-async=y \
-    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-    app.wasm
+$ wasmtime serve -W gc=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
 
 There the module exports `wasi:http/incoming-handler` and the host owns the
-socket, so the `port` argument is ignored. Spin (`spin up`) cannot run the
-component yet because its embedded wasmtime does not enable the WebAssembly GC
-proposal that every rontolisp component needs.
+socket, so the `port` argument is ignored. Note the command needs none of the
+`component-model-async` flags that `wasmtime run` needs for a regular rontolisp
+component: the serve component is plain WASI 0.2, so its only non-default host
+requirement is the WebAssembly GC proposal (`-W gc=y`).
+
+## Other WASI HTTP runtimes
+
+Because the component only asks its host for `wasi:http` 0.2 plus wasm-GC,
+wasmtime is not the only runtime that can serve it.
+
+**jco** (the Bytecode Alliance's JavaScript toolchain, running on Node.js/V8 —
+where wasm-GC is enabled by default) runs it with no extra configuration:
+
+```console
+$ npx @bytecodealliance/jco serve app.wasm --port 8080
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+**wasmCloud** (`wash` 2.x) runs it once the `gc` proposal is switched on. For
+`wash dev`, point the project's `.wash/config.yaml` at the prebuilt component
+and list the proposal (the no-op `build.command` skips wash's own build step):
+
+```yaml
+build:
+  command: "true"
+  component_path: app.wasm
+dev:
+  wasm_proposals:
+    - gc
+```
+
+```console
+$ wash dev
+$ curl http://127.0.0.1:8000/hello
+Hello from rontolisp!
+GET /hello
+```
+
+`wash host` exposes the same switch as `--wasm-proposal gc` (or the
+`WASH_WASM_PROPOSALS=gc` environment variable).
+
+**Spin** (`spin up`) cannot run the component yet: its embedded wasmtime does
+not enable the WebAssembly GC proposal that every rontolisp component needs,
+and it offers no flag to turn it on.
 
 ## Limitations
 

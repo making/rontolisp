@@ -60,18 +60,61 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W component-model-async=y \
-    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-    app.wasm
+$ wasmtime serve -W gc=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
 
 この場合モジュールは `wasi:http/incoming-handler` をエクスポートし、ソケットは
-ホストが所有するため `port` 引数は無視されます。Spin（`spin up`）ではまだ動作
-しません。組み込み wasmtime が、rontolisp のすべてのコンポーネントが必要とする
-WebAssembly GC プロポーザルを有効化していないためです。
+ホストが所有するため `port` 引数は無視されます。通常の rontolisp コンポーネントを
+`wasmtime run` で実行する際に必要な `component-model-async` 系のフラグが一切
+不要な点に注目してください。serve コンポーネントは純粋な WASI 0.2 であり、
+ホストに要求するデフォルト外の機能は WebAssembly GC プロポーザル（`-W gc=y`）
+だけです。
+
+## その他の WASI HTTP ランタイム
+
+このコンポーネントがホストに要求するのは `wasi:http` 0.2 と wasm-GC だけなので、
+実行できるランタイムは wasmtime に限りません。
+
+**jco**（Bytecode Alliance の JavaScript ツールチェーン。Node.js/V8 上で動作し、
+V8 では wasm-GC がデフォルトで有効）は追加設定なしで実行できます。
+
+```console
+$ npx @bytecodealliance/jco serve app.wasm --port 8080
+$ curl http://127.0.0.1:8080/hello
+Hello from rontolisp!
+GET /hello
+```
+
+**wasmCloud**（`wash` 2.x）は `gc` プロポーザルを有効化すれば実行できます。
+`wash dev` の場合、プロジェクトの `.wash/config.yaml` でビルド済みコンポーネントを
+指定し、プロポーザルを列挙します（no-op の `build.command` で wash 自身の
+ビルドステップをスキップします）。
+
+```yaml
+build:
+  command: "true"
+  component_path: app.wasm
+dev:
+  wasm_proposals:
+    - gc
+```
+
+```console
+$ wash dev
+$ curl http://127.0.0.1:8000/hello
+Hello from rontolisp!
+GET /hello
+```
+
+`wash host` にも同じスイッチが `--wasm-proposal gc`（または環境変数
+`WASH_WASM_PROPOSALS=gc`）として用意されています。
+
+**Spin**（`spin up`）ではまだ動作しません。組み込み wasmtime が、rontolisp の
+すべてのコンポーネントが必要とする WebAssembly GC プロポーザルを有効化しておらず、
+有効化するフラグも提供されていないためです。
 
 ## 制限
 

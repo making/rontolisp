@@ -55,9 +55,7 @@ Or compile it to a WASI HTTP component and serve it with `wasmtime serve`:
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W component-model-async=y \
-    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-    app.wasm
+$ wasmtime serve -W gc=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -74,9 +72,12 @@ On the JVM and WASI component backends, request and response headers are not
 marshalled yet: the handler sees `:headers nil` and `:headers` in the response
 is ignored. Only the interpreter passes headers through.
 
-Spin (`spin up`) cannot run the component yet: Spin's embedded wasmtime does not
-enable the WebAssembly GC proposal, which every rontolisp component requires, so
-use `wasmtime serve -W gc=y ...`.
+The serve component is plain WASI 0.2, so it is not tied to wasmtime: any host
+that serves `wasi:http` 0.2 and enables the WebAssembly GC proposal can run it —
+jco (`jco serve` on Node.js, where wasm-GC is on by default) and wasmCloud
+(`wash` with the `gc` wasm proposal enabled) both work. Spin (`spin up`) cannot
+run the component yet: Spin's embedded wasmtime does not enable the GC proposal
+and offers no flag to turn it on.
 
 See the [Serving HTTP guide](../../guides/http-handler.md) for the full
-example.
+example and the per-runtime commands.

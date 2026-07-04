@@ -55,9 +55,7 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W component-model-async=y \
-    -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-    app.wasm
+$ wasmtime serve -W gc=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -75,8 +73,12 @@ GET /hello
 `:headers nil` が渡され、レスポンスの `:headers` は無視されます。ヘッダを
 そのまま通すのはインタープリタだけです。
 
-Spin（`spin up`）ではまだ動作しません。Spin の組み込み wasmtime は WebAssembly GC
-プロポーザルを有効化しておらず、rontolisp のすべてのコンポーネントが GC を必要とする
-ためです。`wasmtime serve -W gc=y ...` を使用してください。
+serve コンポーネントは純粋な WASI 0.2 なので wasmtime 専用ではありません。
+`wasi:http` 0.2 を提供し WebAssembly GC プロポーザルを有効化できるホストであれば
+実行できます — jco（Node.js 上の `jco serve`。V8 では wasm-GC がデフォルトで有効）
+と wasmCloud（`gc` wasm プロポーザルを有効化した `wash`）のどちらでも動作します。
+Spin（`spin up`）ではまだ動作しません。Spin の組み込み wasmtime は GC プロポーザルを
+有効化しておらず、有効化するフラグも提供されていないためです。
 
-完全な例は [HTTP サーバガイド](../../guides/http-handler.md)を参照してください。
+完全な例とランタイムごとのコマンドは
+[HTTP サーバガイド](../../guides/http-handler.md)を参照してください。

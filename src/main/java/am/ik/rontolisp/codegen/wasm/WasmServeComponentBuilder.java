@@ -13,7 +13,8 @@ import am.ik.wasm.ComponentWriter;
  * {@code __ronto_alloc} + {@code run} and imports its memory) with the shared 16-page
  * memory module and the serve adapter ({@code adapter-serve.wasm}), and exports
  * {@code wasi:http/incoming-handler@0.2.0} so the component runs under
- * {@code wasmtime serve} and Spin.
+ * {@code wasmtime serve} (or any {@code wasi:http} 0.2 host with wasm-GC enabled, e.g.
+ * jco or wasmCloud; not Spin, whose wasmtime cannot enable wasm-GC).
  *
  * <p>
  * The wiring mirrors {@link WasmComponentBuilder}'s base/http/sock variants but exports a

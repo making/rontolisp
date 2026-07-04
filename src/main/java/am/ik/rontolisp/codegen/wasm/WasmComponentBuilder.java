@@ -213,8 +213,8 @@ public final class WasmComponentBuilder {
 	 * wrap the rontolisp core (which exports {@code %http-dispatch},
 	 * {@code __ronto_alloc} and {@code run}) with the serve adapter
 	 * ({@code adapter-serve.wasm}) so the component exports
-	 * {@code wasi:http/incoming-handler@0.2.0} and runs under {@code wasmtime serve} and
-	 * Spin.
+	 * {@code wasi:http/incoming-handler@0.2.0} and runs under {@code wasmtime serve} (or
+	 * any {@code wasi:http} 0.2 host with wasm-GC enabled, e.g. jco or wasmCloud).
 	 * @param coreModule the rontolisp core module compiled in serve mode
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */

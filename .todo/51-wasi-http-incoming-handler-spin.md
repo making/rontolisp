@@ -1,7 +1,16 @@
 # wasi:http incoming-handler — compile a rontolisp defun into an HTTP component (wasmtime serve / Spin)
 
 Status: DONE for interpreter + WASM component + JVM (2026-07-04).
-`wasmtime serve` works end to end; Spin is BLOCKED by Spin not enabling wasm-GC.
+`wasmtime serve` works end to end; Spin is BLOCKED by Spin not enabling wasm-GC
+(and offering no flag to). Runtime survey 2026-07-04: the serve component is
+plain WASI 0.2 -- `wasmtime serve -W gc=y` alone suffices (the
+`component-model-async` flags in the SHIPPED notes below are unnecessary), and
+two alternative hosts were verified working: jco (`npx @bytecodealliance/jco
+serve app.wasm`, jco 1.24.6 / Node 22; 50 requests + POST OK) and wasmCloud
+(wash 2.5.1 `wash dev` with `dev.wasm_proposals: [gc]`, or `wash host
+--wasm-proposal gc`; fails without it: "rec group usage requires `gc`
+proposal"). WasmEdge (component model experimental) and Wasmer (no component
+model) cannot run it. Docs/comments updated accordingly.
 Request/response HEADER marshalling (JVM + WASM) remains (see "Follow-ups" at
 the bottom). Created 2026-07-04.
 

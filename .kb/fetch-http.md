@@ -142,11 +142,21 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
   wasm-export in component mode, and `WasmServeComponentBuilder.buildServe`
   wires mem + core + `adapter-serve.wasm` into a
   `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve -W gc=y`.
+  The serve component is plain WASI 0.2: unlike the `wasmtime run` path for
+  regular components, none of the `component-model-async` flags are needed, so
+  any `wasi:http` 0.2 host with the wasm-GC proposal enabled can serve it.
+  Verified 2026-07-04: jco (`npx @bytecodealliance/jco serve app.wasm`, jco
+  1.24.6 / Node 22 -- V8 enables wasm-GC by default; 50 sequential requests +
+  POST body OK) and wasmCloud (wash 2.5.1 `wash dev` with
+  `dev.wasm_proposals: [gc]` in `.wash/config.yaml`; `wash host` takes
+  `--wasm-proposal gc` / `WASH_WASM_PROPOSALS=gc`; without the proposal it
+  fails with "rec group usage requires `gc` proposal to be enabled").
   All derived wasi:http@0.2 core ABI signatures (notably
   `[static]response-outparam.set` ->
   `(param i32 i32 i32 i32 i64 i32 i32 i32 i32)`) are recorded in
   `../.todo/51-wasi-http-incoming-handler-spin.md`. Spin cannot run it (no
-  wasm-GC in Spin's wasmtime); Preview-1 WASM output is a compile error
+  wasm-GC in Spin's wasmtime and no flag to enable it -- exactly the gap
+  wasmCloud's proposal switch fills); Preview-1 WASM output is a compile error
   ("requires --component").
 - **v1 limitations (JVM + WASM)** -- request/response headers are dropped (the
   handler sees `:headers nil`, response `:headers` is ignored); only the

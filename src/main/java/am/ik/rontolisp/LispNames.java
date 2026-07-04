@@ -1346,7 +1346,7 @@ public final class LispNames {
 	 * the JVM backend it runs a blocking embedded HTTP server on the given port (default
 	 * 8080); when compiled to a WASI component ({@code --component}) it exports
 	 * {@code wasi:http/incoming-handler} so the module runs under {@code wasmtime serve}
-	 * and Spin (the port argument is ignored, the host owns the socket).
+	 * (the port argument is ignored, the host owns the socket).
 	 */
 	public static final String HTTP_HANDLER = "http-handler";
 

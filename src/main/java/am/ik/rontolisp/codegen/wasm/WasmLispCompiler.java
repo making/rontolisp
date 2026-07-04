@@ -128,8 +128,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * {@code %http-dispatch} {@code wasm-export} wrapper, so the wasm-export memory-ABI
 	 * machinery is enabled even in component mode, and the core is wrapped by
 	 * {@link WasmComponentBuilder#buildServe} into a {@code wasi:http/incoming-handler}
-	 * component (runnable under {@code wasmtime serve} and Spin) instead of the
-	 * {@code wasi:cli/run} component.
+	 * component (runnable under {@code wasmtime serve} or any {@code wasi:http} 0.2 host
+	 * with wasm-GC enabled, e.g. jco or wasmCloud) instead of the {@code wasi:cli/run}
+	 * component.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve) {
 		this.dynamic = dynamic;
@@ -1855,7 +1856,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
 				// into
-				// a wasi:http/incoming-handler component (wasmtime serve / Spin).
+				// a wasi:http/incoming-handler component (wasmtime serve).
 				return WasmComponentBuilder.buildServe(coreModule);
 			}
 			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport);
