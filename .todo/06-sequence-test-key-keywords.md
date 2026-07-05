@@ -2,6 +2,15 @@
 > `:start`/`:end`/`:from-end` (+ `:test-not` on `position`) via the shared
 > `buildPositionScan`, and `position-if-not` exists. The other sequence
 > functions below still take :test/:key only.
+>
+> **Update 2026-07-06 (todo 65):** the position family's FIRST-CLASS values
+> now take the full keyword set too — variadic `BuiltinFunctionWrappers`
+> entries re-extract runtime keywords via getf and feed the call-position
+> expansion, and the interpreter registrations moved into `LispEvaluator`
+> (`positionScanValues`) so `(apply #'position item seq other-keys)` works
+> (cl-utilities' split-sequence). `reduce` gained `:start`/`:end` (subseq
+> lowering) and its `:key` now coerces a string sequence to a char list
+> before the mapcar. `stable-sort` (with `:key`) and `copy-seq` exist.
 
 # `:test` / `:key` keyword args for sequence & alist functions
 

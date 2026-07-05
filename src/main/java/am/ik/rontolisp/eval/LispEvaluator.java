@@ -397,18 +397,18 @@ public final class LispEvaluator {
 			}
 			return findIfNotValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
-		this.globalEnv.defineFunction(LispNames.POSITION_IF, new LispFunction(LispNames.POSITION_IF, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.POSITION_IF + " expects 2 arguments, got " + args.size());
-			}
-			return positionIfValues(args.get(0), Environment.seqAsList(args.get(1)));
-		}));
-		this.globalEnv.defineFunction(LispNames.POSITION_IF_NOT, new LispFunction(LispNames.POSITION_IF_NOT, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.POSITION_IF_NOT + " expects 2 arguments, got " + args.size());
-			}
-			return positionIfNotValues(args.get(0), Environment.seqAsList(args.get(1)));
-		}));
+		// The position family is registered here (not in Environment) so the
+		// :test/:test-not/:key designators can be applied through the evaluator; the
+		// full keyword set (:start/:end/:from-end too) is parsed at runtime so
+		// first-class use through apply works (e.g. cl-utilities' split-sequence does
+		// (apply #'position delimiter seq :end right other-keys)). The call position
+		// routes through the shared macro expansion instead.
+		this.globalEnv.defineFunction(LispNames.POSITION, new LispFunction(LispNames.POSITION,
+				args -> positionScanValues(LispNames.POSITION, args, PositionScanMode.ITEM)));
+		this.globalEnv.defineFunction(LispNames.POSITION_IF, new LispFunction(LispNames.POSITION_IF,
+				args -> positionScanValues(LispNames.POSITION_IF, args, PositionScanMode.PREDICATE)));
+		this.globalEnv.defineFunction(LispNames.POSITION_IF_NOT, new LispFunction(LispNames.POSITION_IF_NOT,
+				args -> positionScanValues(LispNames.POSITION_IF_NOT, args, PositionScanMode.PREDICATE_NOT)));
 		this.globalEnv.defineFunction(LispNames.COUNT_IF, new LispFunction(LispNames.COUNT_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.COUNT_IF + " expects 2 arguments, got " + args.size());
@@ -538,6 +538,44 @@ public final class LispEvaluator {
 			// A string sequence sorts as a list of its characters and is rebuilt as a
 			// string (Common Lisp sequences).
 			return Environment.seqResult(args.get(0), sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
+		}));
+		// stable-sort is registered here (not in Environment) so the predicate and :key
+		// designators can be applied through the evaluator, like member/assoc. A Java
+		// list sort is stable; the result is always a fresh list, matching the shared
+		// macro expansion the call position routes through.
+		this.globalEnv.defineFunction(LispNames.STABLE_SORT, new LispFunction(LispNames.STABLE_SORT, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(
+						LispNames.STABLE_SORT + " expects at least 2 arguments, got " + args.size());
+			}
+			LispVal keyFn = null;
+			for (int i = 2; i < args.size(); i += 2) {
+				if (!(args.get(i) instanceof LispSymbol kw) || !LispNames.KEY_KEYWORD.equals(kw.name())
+						|| i + 1 >= args.size()) {
+					throw new LispEvalException(
+							LispNames.STABLE_SORT + " expects keyword arguments :key, got: " + args.get(i).print());
+				}
+				keyFn = args.get(i + 1) instanceof LispNil ? null : args.get(i + 1);
+			}
+			LispVal pred = args.get(1);
+			List<LispVal[]> decorated = new java.util.ArrayList<>();
+			LispVal cur = Environment.seqAsList(args.get(0));
+			while (cur instanceof LispCons cell) {
+				LispVal keyVal = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+				decorated.add(new LispVal[] { keyVal, cell.car() });
+				cur = cell.cdr();
+			}
+			decorated.sort((x, y) -> {
+				if (isTruthy(apply(pred, List.of(x[0], y[0]), this.globalEnv))) {
+					return -1;
+				}
+				return isTruthy(apply(pred, List.of(y[0], x[0]), this.globalEnv)) ? 1 : 0;
+			});
+			LispVal result = LispNil.INSTANCE;
+			for (int i = decorated.size() - 1; i >= 0; i--) {
+				result = new LispCons(decorated.get(i)[1], result);
+			}
+			return result;
 		}));
 		this.globalEnv.defineFunction(LispNames.APPLY, new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {
@@ -771,6 +809,18 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Resolves a top-level form through this evaluator's package resolver without
+	 * evaluating it. An {@code in-package}/{@code defpackage} directive updates the
+	 * resolver state as a side effect. Used by {@code UserMacroExpander} so
+	 * package-qualified macro definitions and their call sites match canonically.
+	 * @param form the top-level form
+	 * @return the resolved form
+	 */
+	public LispVal resolvePackages(LispVal form) {
+		return this.packageResolver.resolve(form);
+	}
+
+	/**
 	 * Evaluate an expression in the given environment.
 	 * @param expr the expression to evaluate
 	 * @param env the lexical environment
@@ -846,6 +896,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCcase(cons), env);
 				case LispNames.ERROR:
 					return eval(LispMacroExpander.expandError(cons), env);
+				case LispNames.WARN:
+					return eval(LispMacroExpander.expandWarn(cons), env);
+				case LispNames.STABLE_SORT:
+					return eval(LispMacroExpander.expandStableSort(cons), env);
+				case LispNames.COPY_SEQ:
+					return eval(LispMacroExpander.expandCopySeq(cons), env);
 				case LispNames.AND:
 					return eval(LispMacroExpander.expandAnd(cons), env);
 				case LispNames.OR:
@@ -1679,30 +1735,85 @@ public final class LispEvaluator {
 
 	// Return the 0-based index of the first element satisfying the predicate
 	// (Common Lisp position-if), or nil. Like position but tests with the predicate.
-	private LispVal positionIfValues(LispVal predicate, LispVal list) {
-		long index = 0;
-		while (list instanceof LispCons cell) {
-			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
-				return new LispInteger(index);
-			}
-			index++;
-			list = cell.cdr();
-		}
-		return LispNil.INSTANCE;
+	/** The matching flavor of a runtime {@code position}-family scan. */
+	private enum PositionScanMode {
+
+		/**
+		 * {@code position}: the first argument is an item compared by :test/:test-not.
+		 */
+		ITEM,
+		/** {@code position-if}: the first argument is a predicate. */
+		PREDICATE,
+		/** {@code position-if-not}: the first argument is a negated predicate. */
+		PREDICATE_NOT
+
 	}
 
-	// Return the 0-based index of the first element for which the predicate is false
-	// (Common Lisp position-if-not), or nil. The complement of position-if.
-	private LispVal positionIfNotValues(LispVal predicate, LispVal list) {
+	// The runtime counterpart of LispMacroExpander.buildPositionScan for first-class
+	// use: a forward scan honoring :start/:end, where a :from-end match records the
+	// index and keeps scanning (the last match wins). :test/:test-not apply only to
+	// position (ITEM mode); a nil keyword value counts as absent, like the expansion.
+	private LispVal positionScanValues(String opName, List<LispVal> args, PositionScanMode mode) {
+		if (args.size() < 2) {
+			throw new LispEvalException(opName + " expects at least 2 arguments, got " + args.size());
+		}
+		LispVal test = null;
+		LispVal testNot = null;
+		LispVal keyFn = null;
+		boolean fromEnd = false;
+		long start = 0;
+		Long end = null;
+		for (int i = 2; i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol kw) || i + 1 >= args.size()) {
+				throw new LispEvalException(opName + " expects :keyword value pairs, got: " + args.get(i).print());
+			}
+			LispVal value = args.get(i + 1);
+			boolean absent = value instanceof LispNil;
+			switch (kw.name()) {
+				case LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD -> {
+					if (mode != PositionScanMode.ITEM) {
+						throw new LispEvalException(opName + " does not take " + kw.name());
+					}
+					if (LispNames.TEST_KEYWORD.equals(kw.name())) {
+						test = absent ? null : value;
+					}
+					else {
+						testNot = absent ? null : value;
+					}
+				}
+				case LispNames.KEY_KEYWORD -> keyFn = absent ? null : value;
+				case LispNames.FROM_END_KEYWORD -> fromEnd = !absent;
+				case LispNames.START_KEYWORD -> start = absent ? 0 : Environment.requireIndex(opName, value);
+				case LispNames.END_KEYWORD -> end = absent ? null : (long) Environment.requireIndex(opName, value);
+				default -> throw new LispEvalException(opName
+						+ " expects keyword arguments :test/:test-not/:key/:start/:end/:from-end, got: " + kw.name());
+			}
+		}
+		LispVal item = args.get(0);
+		LispVal cur = Environment.seqAsList(args.get(1));
 		long index = 0;
-		while (list instanceof LispCons cell) {
-			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
-				return new LispInteger(index);
+		LispVal found = LispNil.INSTANCE;
+		while (cur instanceof LispCons cell && (end == null || index < end)) {
+			if (index >= start) {
+				LispVal elem = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+				boolean match = switch (mode) {
+					case ITEM -> testNot != null ? !isTruthy(apply(testNot, List.of(item, elem), this.globalEnv))
+							: isTruthy(apply(test != null ? test : new LispSymbol(LispNames.EQL), List.of(item, elem),
+									this.globalEnv));
+					case PREDICATE -> isTruthy(apply(item, List.of(elem), this.globalEnv));
+					case PREDICATE_NOT -> !isTruthy(apply(item, List.of(elem), this.globalEnv));
+				};
+				if (match) {
+					if (!fromEnd) {
+						return new LispInteger(index);
+					}
+					found = new LispInteger(index);
+				}
 			}
 			index++;
-			list = cell.cdr();
+			cur = cell.cdr();
 		}
-		return LispNil.INSTANCE;
+		return found;
 	}
 
 	// Return the number of elements satisfying the predicate (Common Lisp count-if),

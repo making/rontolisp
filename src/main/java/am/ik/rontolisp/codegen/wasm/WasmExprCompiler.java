@@ -216,6 +216,7 @@ final class WasmExprCompiler {
 				case LispNames.SYMBOL_VALUE -> WasmSymbolApiCompiler.compileSymbolValue(cons, ctx);
 				case LispNames.CONCATENATE -> WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx);
 				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
+				case LispNames.READ_CHAR -> WasmReadCharCompiler.compile(cons, ctx);
 				case LispNames.OPEN -> WasmOpenCompiler.compile(cons, ctx);
 				case LispNames.CLOSE -> WasmCloseCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
@@ -454,6 +455,10 @@ final class WasmExprCompiler {
 						WasmSortCompiler.compile(cons, ctx);
 					}
 				}
+				case LispNames.STABLE_SORT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons), ctx);
+				case LispNames.COPY_SEQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx);
+				case LispNames.VECTORP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx);
 				case LispNames.APPLY -> WasmApplyCompiler.compile(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);
@@ -494,6 +499,8 @@ final class WasmExprCompiler {
 				case LispNames.CCASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx);
 				case LispNames.ERROR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandError(cons), ctx);
 				case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
+				case LispNames.WARN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWarn(cons), ctx);
+				case LispNames.WARN_INTERNAL -> WasmWarnCompiler.compile(cons, ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
 				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);

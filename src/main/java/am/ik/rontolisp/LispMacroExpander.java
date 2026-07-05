@@ -1859,11 +1859,13 @@ public final class LispMacroExpander {
 		}
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispVal fromEndForm = keywordValue(parts, 3, LispNames.FROM_END_KEYWORD);
-		// Lower whenever :from-end/:key is present at all -- even a nil value must be
-		// stripped, since the native reduce rejects those keywords. A nil value is
-		// treated
-		// as absent (:from-end nil = left fold, :key nil = identity).
-		if (keyForm == null && fromEndForm == null) {
+		LispVal startForm = keywordValue(parts, 3, LispNames.START_KEYWORD);
+		LispVal endForm = keywordValue(parts, 3, LispNames.END_KEYWORD);
+		// Lower whenever :from-end/:key/:start/:end is present at all -- even a nil
+		// value must be stripped, since the native reduce rejects those keywords. A nil
+		// value is treated as absent (:from-end nil = left fold, :key nil = identity,
+		// :end nil = the whole sequence).
+		if (keyForm == null && fromEndForm == null && startForm == null && endForm == null) {
 			return null;
 		}
 		boolean hasKey = keyForm != null && !isNilForm(keyForm);
@@ -1871,8 +1873,16 @@ public final class LispMacroExpander {
 		LispVal fnForm = parts.get(1);
 		LispVal seqForm = parts.get(2);
 		LispVal initForm = keywordValue(parts, 3, LispNames.INITIAL_VALUE_KEYWORD);
-		// :key maps every element (via mapcar, which leaves the initial value untouched).
-		LispVal seqExpr = hasKey ? listToCons(List.of(new LispSymbol(LispNames.MAPCAR), keyForm, seqForm)) : seqForm;
+		// :start/:end restrict the fold to a subsequence (subseq accepts a nil end).
+		if (startForm != null || endForm != null) {
+			seqForm = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), seqForm,
+					startForm == null ? new LispInteger(0) : startForm, endForm == null ? LispNil.INSTANCE : endForm));
+		}
+		// :key maps every element (via mapcar, which leaves the initial value untouched;
+		// a string sequence is coerced to its character list first, since mapcar is
+		// list-only).
+		LispVal seqExpr = hasKey
+				? listToCons(List.of(new LispSymbol(LispNames.MAPCAR), keyForm, seqAsListForm(seqForm))) : seqForm;
 		if (!fromEnd) {
 			return buildPlainReduce(fnForm, seqExpr, initForm);
 		}
@@ -1900,6 +1910,116 @@ public final class LispMacroExpander {
 			reduceParts.add(initForm);
 		}
 		return listToCons(reduceParts);
+	}
+
+	/**
+	 * Expands {@code (copy-seq seq)} to {@code (subseq seq 0)}: subseq already returns a
+	 * fresh sequence of the argument's kind (list or string; arrays are not sequences
+	 * here, matching subseq).
+	 * @param cons the copy-seq expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCopySeq(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.COPY_SEQ + " expects 1 argument: " + cons.print());
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), parts.get(1), new LispInteger(0)));
+	}
+
+	/**
+	 * Expands {@code (vectorp x)} to {@code (let ((__vecp x)) (or (stringp __vecp)
+	 * (%arrayp __vecp)))}: strings are vectors in CL. Like the {@code vector} type
+	 * specifier in {@code makeTypeTest}, the rank is NOT checked (a rank-n array passes
+	 * too) so the gated array helpers stay out of programs that only ask the question.
+	 * @param cons the vectorp expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandVectorp(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.VECTORP + " expects 1 argument: " + cons.print());
+		}
+		LispSymbol v = new LispSymbol("__vecp");
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, v),
+				callOf(LispNames.ARRAYP_INTERNAL, v)));
+		return makeLet(v.name(), parts.get(1), test);
+	}
+
+	/**
+	 * Expands {@code (stable-sort seq predicate [:key fn])} into a
+	 * decorate/{@code sort}/undecorate scan: each element is decorated as
+	 * {@code (key-value index . element)}, the decorated list is sorted with the
+	 * predicate on key values tie-broken by the original index (which makes the result
+	 * stable regardless of the underlying {@code sort} algorithm), and the elements are
+	 * extracted back out. Lite: the result is always a fresh list (a vector argument does
+	 * not come back as a vector), matching the other sequence scans.
+	 *
+	 * <pre>
+	 * (let* ((__ssort_pred predicate) (__ssort_key key) (__ssort_dec nil) (__ssort_idx 0))
+	 *   (do ((__ssort_cur [seq-as-list seq] (cdr __ssort_cur)))
+	 *       ((atom __ssort_cur) nil)
+	 *     (setq __ssort_dec (cons (cons (funcall __ssort_key (car __ssort_cur))
+	 *                                   (cons __ssort_idx (car __ssort_cur))) __ssort_dec))
+	 *     (setq __ssort_idx (+ __ssort_idx 1)))
+	 *   (mapcar (lambda (__ssort_e) (cdr (cdr __ssort_e)))
+	 *           (sort __ssort_dec (lambda (__ssort_a __ssort_b) ...))))
+	 * </pre>
+	 * @param cons the stable-sort expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandStableSort(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(LispNames.STABLE_SORT + " expects a sequence and a predicate");
+		}
+		requireKeywords(LispNames.STABLE_SORT, parts, 3, LispNames.KEY_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
+		LispSymbol pred = new LispSymbol("__ssort_pred");
+		LispSymbol key = new LispSymbol("__ssort_key");
+		LispSymbol dec = new LispSymbol("__ssort_dec");
+		LispSymbol idx = new LispSymbol("__ssort_idx");
+		LispSymbol cur = new LispSymbol("__ssort_cur");
+		LispSymbol a = new LispSymbol("__ssort_a");
+		LispSymbol b = new LispSymbol("__ssort_b");
+		LispSymbol e = new LispSymbol("__ssort_e");
+		boolean hasKey = keyForm != null && !isNilForm(keyForm);
+		// (cons (funcall key elem) (cons idx elem)) -- without :key the key value IS the
+		// element.
+		LispVal elem = callOf(LispNames.CAR, cur);
+		LispVal keyed = hasKey ? listToCons(List.of(new LispSymbol(LispNames.FUNCALL), key, elem)) : elem;
+		LispVal decorated = listToCons(List.of(new LispSymbol(LispNames.CONS), keyed,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), idx, elem))));
+		LispVal accumulate = listToCons(List.of(new LispSymbol(LispNames.SETQ), dec,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), decorated, dec))));
+		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.SETQ), idx,
+				listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)))));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(cur, seqAsListForm(parts.get(1)), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal scan = expandDo((LispCons) listToCons(
+				List.of(new LispSymbol(LispNames.DO), bindings, endClause, accumulate, increment)));
+		// (lambda (a b) (if (pred (car a) (car b)) t
+		// (if (pred (car b) (car a)) nil (< (cadr a) (cadr b)))))
+		LispVal predAB = listToCons(
+				List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, a), callOf(LispNames.CAR, b)));
+		LispVal predBA = listToCons(
+				List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, b), callOf(LispNames.CAR, a)));
+		LispVal idxLt = listToCons(List.of(new LispSymbol(LispNames.LT),
+				callOf(LispNames.CAR, callOf(LispNames.CDR, a)), callOf(LispNames.CAR, callOf(LispNames.CDR, b))));
+		LispVal comparator = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(a, b)),
+				makeIf(predAB, LispTrue.INSTANCE, makeIf(predBA, LispNil.INSTANCE, idxLt))));
+		LispVal sorted = listToCons(List.of(new LispSymbol(LispNames.SORT), dec, comparator));
+		LispVal undecorate = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(e)),
+				callOf(LispNames.CDR, callOf(LispNames.CDR, e))));
+		LispVal result = listToCons(List.of(new LispSymbol(LispNames.MAPCAR), undecorate, sorted));
+		LispVal body = makeProgn(List.of(scan, result));
+		result = makeLet(idx.name(), new LispInteger(0), body);
+		result = makeLet(dec.name(), LispNil.INSTANCE, result);
+		if (hasKey && keyForm != null) {
+			result = makeLet(key.name(), keyForm, result);
+		}
+		return makeLet(pred.name(), parts.get(2), result);
 	}
 
 	private static LispVal makeProgn(List<LispVal> exprs) {
@@ -2203,6 +2323,21 @@ public final class LispMacroExpander {
 					// val).
 					listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), placeParts.get(1), placeParts.get(2),
 							value));
+				case LispNames.ELT -> {
+					// (setf (elt seq i) val): elt reads from lists and arrays, so the
+					// place dispatches at runtime -- rplaca into the nthcdr cell of a
+					// list, %aset into an array. Strings stay immutable (%aset rejects
+					// them, like the rest of the string representation).
+					LispSymbol seqVar = new LispSymbol("__setf_seq");
+					LispSymbol idxVar = new LispSymbol("__setf_idx");
+					LispSymbol valVar = new LispSymbol(SETF_VAR);
+					LispVal listSet = listToCons(List.of(new LispSymbol(LispNames.RPLACA),
+							listToCons(List.of(new LispSymbol(LispNames.NTHCDR), idxVar, seqVar)), valVar));
+					LispVal arraySet = listToCons(List.of(new LispSymbol(LispNames.ASET), seqVar, idxVar, valVar));
+					LispVal dispatch = makeIf(callOf(LispNames.CONSP, seqVar), listSet, arraySet);
+					yield makeLet(seqVar.name(), placeParts.get(1), makeLet(idxVar.name(), placeParts.get(2),
+							makeLet(valVar.name(), value, makeProgn(List.of(dispatch, valVar)))));
+				}
 				case LispNames.FILL_POINTER ->
 					// (setf (fill-pointer vector) val) -> (%set-fill-pointer vector val).
 					listToCons(List.of(new LispSymbol(LispNames.SET_FILL_POINTER), placeParts.get(1), value));
@@ -2262,18 +2397,26 @@ public final class LispMacroExpander {
 
 	private static final String SETF_VAR = "__setf";
 
+	private static final String SETF_TARGET_VAR = "__setf_tgt";
+
 	private static LispVal expandSetfWithRplaca(LispVal target, LispVal value) {
-		// (let ((__setf value)) (rplaca target __setf) __setf)
-		LispVal rplacaExpr = listToCons(List.of(new LispSymbol(LispNames.RPLACA), target, new LispSymbol(SETF_VAR)));
+		// (let ((__setf_tgt target)) (let ((__setf value)) (rplaca __setf_tgt __setf)
+		// __setf)) -- the place subform is evaluated BEFORE the value (CL evaluation
+		// order; the tail-collection idiom (setf (cdr tail) (setf tail (list x)))
+		// depends on the old tail being the rplacd target).
+		LispVal rplacaExpr = listToCons(
+				List.of(new LispSymbol(LispNames.RPLACA), new LispSymbol(SETF_TARGET_VAR), new LispSymbol(SETF_VAR)));
 		LispVal body = makeProgn(List.of(rplacaExpr, new LispSymbol(SETF_VAR)));
-		return makeLet(SETF_VAR, value, body);
+		return makeLet(SETF_TARGET_VAR, target, makeLet(SETF_VAR, value, body));
 	}
 
 	private static LispVal expandSetfWithRplacd(LispVal target, LispVal value) {
-		// (let ((__setf value)) (rplacd target __setf) __setf)
-		LispVal rplacdExpr = listToCons(List.of(new LispSymbol(LispNames.RPLACD), target, new LispSymbol(SETF_VAR)));
+		// (let ((__setf_tgt target)) (let ((__setf value)) (rplacd __setf_tgt __setf)
+		// __setf)) -- see expandSetfWithRplaca for the evaluation order.
+		LispVal rplacdExpr = listToCons(
+				List.of(new LispSymbol(LispNames.RPLACD), new LispSymbol(SETF_TARGET_VAR), new LispSymbol(SETF_VAR)));
 		LispVal body = makeProgn(List.of(rplacdExpr, new LispSymbol(SETF_VAR)));
-		return makeLet(SETF_VAR, value, body);
+		return makeLet(SETF_TARGET_VAR, target, makeLet(SETF_VAR, value, body));
 	}
 
 	private static LispVal expandSetfCarCdr(String accessor, LispVal arg, LispVal value) {
@@ -5689,9 +5832,29 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandError(LispCons cons) {
+		return expandSignal(cons, LispNames.ERROR, LispNames.ERROR_INTERNAL);
+	}
+
+	/**
+	 * Expands {@code (warn control args...)} the same way {@link #expandError} expands
+	 * {@code error}, delegating to {@code (%warn message)} which writes
+	 * {@code WARNING: message} to standard error and returns nil. Lite: there is no
+	 * condition system, so no condition object is created and nothing can handle or
+	 * muffle the warning.
+	 * @param cons the warn expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWarn(LispCons cons) {
+		return expandSignal(cons, LispNames.WARN, LispNames.WARN_INTERNAL);
+	}
+
+	// The shared error/warn expansion: format-machinery message building over a literal
+	// control string (or the condition-type / make-condition idioms), delegating to the
+	// given internal one-argument primitive (%error throws/traps, %warn prints).
+	private static LispVal expandSignal(LispCons cons, String opName, String internalName) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
-			throw new IllegalArgumentException("error expects a control string");
+			throw new IllegalArgumentException(opName + " expects a control string");
 		}
 		if (parts.get(1) instanceof LispCons datum && datum.car() instanceof LispSymbol op
 				&& LispNames.MAKE_CONDITION.equals(op.name())) {
@@ -5711,12 +5874,12 @@ public final class LispMacroExpander {
 			List<LispVal> listParts = new java.util.ArrayList<>();
 			listParts.add(new LispSymbol(LispNames.LIST));
 			listParts.addAll(parts.subList(1, parts.size()));
-			return expandError((LispCons) listToCons(List.of(new LispSymbol(LispNames.ERROR),
-					new LispString("Condition ~s was signalled."), listToCons(listParts))));
+			return expandSignal((LispCons) listToCons(List.of(new LispSymbol(opName),
+					new LispString("Condition ~s was signalled."), listToCons(listParts))), opName, internalName);
 		}
 		if (!(parts.get(1) instanceof LispString control)) {
 			throw new UnsupportedOperationException(
-					"error requires a literal control string, got: " + parts.get(1).print());
+					opName + " requires a literal control string, got: " + parts.get(1).print());
 		}
 		List<LispVal> args = parts.subList(2, parts.size());
 		List<LispVal> bindings = new java.util.ArrayList<>();
@@ -5726,21 +5889,24 @@ public final class LispMacroExpander {
 			argSyms.add(g);
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
-		List<LispVal> pieces = opsToPieces(new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms)));
+		// warn prefixes the rendered message so %warn stays a plain write primitive.
+		String controlText = LispNames.WARN_INTERNAL.equals(internalName) ? "WARNING: " + control.value()
+				: control.value();
+		List<LispVal> pieces = opsToPieces(new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms)));
 		// Fold the pieces into nested %string-concat calls (left-associative), as the
 		// format nil destination does.
 		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
 		for (int i = 1; i < pieces.size(); i++) {
 			message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), message, pieces.get(i)));
 		}
-		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), message));
+		LispVal signalCall = listToCons(List.of(new LispSymbol(internalName), message));
 		if (bindings.isEmpty()) {
-			return errorCall;
+			return signalCall;
 		}
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET));
 		letParts.add(listToCons(bindings));
-		letParts.add(errorCall);
+		letParts.add(signalCall);
 		return listToCons(letParts);
 	}
 

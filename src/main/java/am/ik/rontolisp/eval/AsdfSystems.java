@@ -105,9 +105,10 @@ public final class AsdfSystems {
 	/**
 	 * Parses the source text of a {@code .asd} file as plain data: {@code defsystem}
 	 * forms (any package spelling) become {@link LispSystem}s whose component files
-	 * resolve against the {@code .asd} file's directory, {@code in-package} forms are
-	 * skipped (the file is never evaluated, so the package does not matter), and any
-	 * other form is a hard error naming the file. A {@code #.} read-time-eval form (the
+	 * resolve against the {@code .asd} file's directory, {@code in-package} and
+	 * {@code defpackage} forms are skipped (the file is never evaluated, so the
+	 * system-definition package header idiom does not matter), and any other form is a
+	 * hard error naming the file. A {@code #.} read-time-eval form (the
 	 * ASDF-version-guard idiom) is skipped with a warning instead of erroring, and
 	 * {@code #+}/{@code #-} conditionals are evaluated against {@code features}.
 	 * @param source the {@code .asd} source text
@@ -120,7 +121,7 @@ public final class AsdfSystems {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
 		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
-			if (operatorMemberIs(form, LispNames.IN_PACKAGE)) {
+			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
@@ -128,7 +129,8 @@ public final class AsdfSystems {
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
-					+ " and " + LispNames.IN_PACKAGE + " are recognized): " + form.print());
+					+ ", " + LispNames.DEFPACKAGE + " and " + LispNames.IN_PACKAGE + " are recognized): "
+					+ form.print());
 		}
 		return systems;
 	}

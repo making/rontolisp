@@ -61,6 +61,10 @@ final class JvmIoRuntimeBuilder {
 
 	static final String READ_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String READ_CHAR_METHOD = "_readChar";
+
+	static final String READ_CHAR_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String WRITE_BYTE_METHOD = "_writeByte";
 
 	static final String WRITE_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -199,6 +203,20 @@ final class JvmIoRuntimeBuilder {
 
 	private final ConstantPool.StringConstant eofStr;
 
+	private final ConstantPool.StringConstant charEofStr;
+
+	private final FieldrefConstant stdinReaderField;
+
+	private final FieldrefConstant systemIn;
+
+	private final ClassConstant inputStreamReaderClass;
+
+	private final MethodrefConstant inputStreamReaderInit;
+
+	private final MethodrefConstant bufferedReaderRead;
+
+	private final MethodrefConstant characterValueOf;
+
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
@@ -298,6 +316,20 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		this.writeStrMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(WRITE_STR_METHOD), cp.addUtf8(WRITE_STR_DESC)));
+		// read-char support: the lazily initialized _stdinReader field (shared with the
+		// _readLine helper), BufferedReader.read() and the boxed Character result.
+		this.charEofStr = cp.addString("read-char: end of file");
+		this.stdinReaderField = cp.addFieldref(thisClass,
+				cp.addNameAndType(cp.addUtf8("_stdinReader"), cp.addUtf8("Ljava/io/BufferedReader;")));
+		this.systemIn = cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
+				cp.addNameAndType(cp.addUtf8("in"), cp.addUtf8("Ljava/io/InputStream;")));
+		this.inputStreamReaderClass = cp.addClass(cp.addUtf8("java/io/InputStreamReader"));
+		this.inputStreamReaderInit = cp.addMethodref(this.inputStreamReaderClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
+		this.bufferedReaderRead = cp.addMethodref(this.bufferedReaderClass,
+				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
+		this.characterValueOf = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Character")),
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(C)Ljava/lang/Character;")));
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -319,6 +351,7 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
 				buildReadLineStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5, 5, buildReadChar()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
 				buildWriteByte()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
@@ -841,6 +874,105 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.runtimeExceptionClass.index());
 		code.add(Opcode.DUP);
 		emitLdc(code, this.eofStr.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.runtimeExceptionInit.index());
+		code.add(Opcode.ATHROW);
+		return code;
+	}
+
+	/**
+	 * {@code _readChar(Object handle, Object eofErrorP, Object eofValue) -> Object}.
+	 * Reads one character (a UTF-16 code unit, like the rest of the string
+	 * representation) from the text stream in the table, or from standard input when the
+	 * handle is {@code null} (lazily initializing the {@code _stdinReader} field the
+	 * {@code _readLine} helper shares). On EOF returns {@code eofValue} when
+	 * {@code eofErrorP} is nil, otherwise throws. A character is a boxed
+	 * {@code Character}.
+	 */
+	private List<Integer> buildReadChar() {
+		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int)
+		List<Integer> code = new ArrayList<>();
+		// if (handle != null) goto STREAM;
+		code.add(Opcode.ALOAD_0);
+		int ifStreamPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		// if (_stdinReader == null) _stdinReader = new BufferedReader(new
+		// InputStreamReader(System.in));
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		int ifHavePos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.NEW);
+		emitU2(code, this.bufferedReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.NEW);
+		emitU2(code, this.inputStreamReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemIn.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.inputStreamReaderInit.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.bufferedReaderInit.index());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		patchBranch(code, ifHavePos, code.size());
+		// r = _stdinReader; goto READ;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		code.add(Opcode.ASTORE_3);
+		int gotoReadPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifStreamPos, code.size());
+		// STREAM: r = (BufferedReader) _streams[(int) ((Long) handle).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.bufferedReaderClass.index());
+		code.add(Opcode.ASTORE_3);
+		patchBranch(code, gotoReadPos, code.size());
+		// READ: c = r.read();
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderRead.index());
+		code.add(Opcode.ISTORE);
+		code.add(4);
+		// if (c >= 0) return Character.valueOf((char) c);
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		int ifEofPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterValueOf.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifEofPos, code.size());
+		// if (eofErrorP == null) return eofValue;
+		code.add(Opcode.ALOAD_1);
+		int ifThrowPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifThrowPos, code.size());
+		// throw new RuntimeException("read-char: end of file");
+		code.add(Opcode.NEW);
+		emitU2(code, this.runtimeExceptionClass.index());
+		code.add(Opcode.DUP);
+		emitLdc(code, this.charEofStr.index());
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, this.runtimeExceptionInit.index());
 		code.add(Opcode.ATHROW);

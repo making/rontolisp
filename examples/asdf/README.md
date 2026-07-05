@@ -2,14 +2,15 @@
 
 These demos load REAL third-party Common Lisp libraries -- unmodified
 upstream sources -- through `asdf:load-system` and exercise their public API.
-Both run identically on all four backends (interpreter, JVM, WASM Preview 1
+All run identically on all four backends (interpreter, JVM, WASM Preview 1
 and `--component`); they are the programs the cross-backend E2E tests pin
-(`SplitSequenceE2eTest` / `ParseNumberE2eTest`).
+(`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`).
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
 | [`split-sequence-demo.lisp`](split-sequence-demo.lisp) | split-sequence v2.0.1 (MIT) | <https://github.com/sharplispers/split-sequence> |
 | [`parse-number-demo.lisp`](parse-number-demo.lisp) | parse-number v1.8 (BSD 3-Clause) | <https://github.com/sharplispers/parse-number> |
+| [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
 
 ## Where the libraries come from
 
@@ -18,6 +19,7 @@ the demos run out of the box from the repository root:
 
 - `src/test/resources/split-sequence/`
 - `src/test/resources/parse-number/`
+- `src/test/resources/cl-utilities/`
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at
@@ -26,6 +28,7 @@ the directory containing the `.asd` file:
 ```bash
 curl -sL https://github.com/sharplispers/split-sequence/archive/refs/tags/v2.0.1.tar.gz | tar xz
 curl -sL https://github.com/sharplispers/parse-number/archive/refs/tags/v1.8.tar.gz | tar xz
+curl -sL https://common-lisp.net/project/cl-utilities/cl-utilities-latest.tar.gz | tar xz
 ```
 
 ## Running (all four backends)
@@ -99,13 +102,45 @@ is self-contained -- running it needs no library files.
 17
 ```
 
+`cl-utilities-demo.lisp`:
+
+```console
+("a" "b" "" "c")
+("a" "b" "c")
+((1) (3) (5))
+((1) (3) (5))
+1
+9
+(3 . "three")
+1
+1
+(1 1 1)
+(1 1 2)
+(5 t (#\h #\e #\l #\l #\o))
+24
+49
+(0 1 4 9 16)
+((2 4 6) (1 3 5))
+1
+1
+(2 1)
+42
+8
+255
+8
+(1 99)
+42
+(2 5)
+```
+
 ## What can be loaded today
 
 A library qualifies when it stays inside plain
 `defun`/`defmacro`/`defpackage` code, `loop`, multiple values,
 `check-type`/`etypecase` with the supported type specifiers, declarations
-(parsed no-ops) and the lite `define-condition`/`make-condition` error idiom.
-Libraries built on CLOS, the condition/restart system, dynamic (special)
-variable binding or mutable strings do not load yet -- see the
+(parsed no-ops) and the lite `define-condition`/`make-condition`/`warn`/
+`restart-case`/`return-from` idioms. Libraries built on CLOS, the
+condition/restart system, dynamic (special) variable binding or mutable
+strings do not load yet -- see the
 [ASDF systems guide](../../doc/en/guides/asdf-systems.md) for the supported
-subset and `.todo/65-cl-utilities-support.md` for the next target.
+subset.

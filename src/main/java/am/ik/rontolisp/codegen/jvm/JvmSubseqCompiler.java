@@ -56,11 +56,24 @@ final class JvmSubseqCompiler {
 		ctx.emit(Opcode.L2I);
 		ctx.emit(Opcode.ISTORE);
 		ctx.emit(startSlot);
-		// end = (int) arg, or -1 (sentinel for "to the end") when omitted
+		// end = (int) arg, or -1 (sentinel for "to the end") when omitted; a runtime
+		// nil value (e.g. an end parameter defaulting to nil) also maps to the
+		// sentinel, matching the interpreter's (subseq seq start nil).
 		if (args.size() >= 4 && !(args.get(3) instanceof LispNil)) {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+			ctx.emit(Opcode.DUP);
+			int ifNullPos = ctx.code.size();
+			ctx.emit(Opcode.IFNULL);
+			ctx.emitU2(0);
 			JvmEmitHelper.unboxLong(ctx);
 			ctx.emit(Opcode.L2I);
+			int gotoEndPos = ctx.code.size();
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+			ctx.emit(Opcode.POP);
+			ctx.emit(Opcode.ICONST_M1);
+			JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
 		}
 		else {
 			ctx.emit(Opcode.ICONST_M1);

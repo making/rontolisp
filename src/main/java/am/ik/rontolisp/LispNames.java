@@ -405,6 +405,20 @@ public final class LispNames {
 	 */
 	public static final String SORT = "sort";
 
+	/**
+	 * The {@code stable-sort} built-in function (sort preserving the relative order of
+	 * elements the predicate considers equal; supports {@code :key}). Lite: expanded to a
+	 * decorate/{@code sort}/undecorate scan over the sequence as a list, so the result is
+	 * always a fresh list (a vector argument does not come back as a vector).
+	 */
+	public static final String STABLE_SORT = "stable-sort";
+
+	/**
+	 * The {@code copy-seq} built-in function (returns a fresh copy of a sequence;
+	 * expanded to {@code (subseq seq 0)}).
+	 */
+	public static final String COPY_SEQ = "copy-seq";
+
 	/** The {@code identity} built-in function (returns its argument unchanged). */
 	public static final String IDENTITY = "identity";
 
@@ -1141,6 +1155,22 @@ public final class LispNames {
 	 */
 	public static final String ERROR_INTERNAL = "%error";
 
+	/**
+	 * The {@code warn} macro (print a warning and continue). It builds the message with
+	 * the {@code format} machinery like {@link #ERROR} and delegates to
+	 * {@link #WARN_INTERNAL}; there is no condition system, so no condition object is
+	 * created and nothing can handle or muffle the warning. Like {@code error} it has no
+	 * function value (classified as a macro).
+	 */
+	public static final String WARN = "warn";
+
+	/**
+	 * Internal single-argument primitive that writes {@code WARNING: message} plus a
+	 * newline to the standard error stream and returns nil. Not part of the public API;
+	 * produced by the {@code warn} macro expansion.
+	 */
+	public static final String WARN_INTERNAL = "%warn";
+
 	/** The {@code and} macro. */
 	public static final String AND = "and";
 
@@ -1200,6 +1230,16 @@ public final class LispNames {
 
 	/** The {@code return} special form (non-local exit from the nearest loop block). */
 	public static final String RETURN = "return";
+
+	/**
+	 * The {@code return-from} macro. Lite: the block name is ignored (there are no named
+	 * blocks) -- inside a defun/lambda body it is rewritten to {@code (return value)} and
+	 * the body is wrapped in the internal {@code %block}, so it returns from the
+	 * function; a {@code return-from} nested inside a {@code do}/{@code loop} exits that
+	 * loop's block instead (correct only when the loop is the function's final form). See
+	 * {@link am.ik.rontolisp.LambdaLists}.
+	 */
+	public static final String RETURN_FROM = "return-from";
 
 	/**
 	 * The internal {@code %block} special form establishing the {@code return} boundary
@@ -1342,6 +1382,14 @@ public final class LispNames {
 	/** The {@code read-line} built-in function. */
 	public static final String READ_LINE = "read-line";
 
+	/**
+	 * The {@code read-char} built-in function (read a single character:
+	 * {@code (read-char [stream [eof-error-p [eof-value]]])}). Works on the same stream
+	 * handles as {@code read-line} (standard input, file streams and string input
+	 * streams).
+	 */
+	public static final String READ_CHAR = "read-char";
+
 	// String operations
 
 	/** The {@code string} built-in function (string-designator coercion). */
@@ -1392,6 +1440,13 @@ public final class LispNames {
 	 * {@code check-type}/{@code typecase} tests; not a public function.
 	 */
 	public static final String ARRAYP_INTERNAL = "%arrayp";
+
+	/**
+	 * The {@code vectorp} built-in function (is the value a vector?). Strings are vectors
+	 * in CL. Lite: like the {@code vector} type specifier, the rank is not checked (a
+	 * rank-n array passes too).
+	 */
+	public static final String VECTORP = "vectorp";
 
 	/**
 	 * The internal {@code %mv-spill} global variable carrying a producer's secondary

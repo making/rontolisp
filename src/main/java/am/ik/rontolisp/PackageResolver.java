@@ -39,6 +39,13 @@ public final class PackageResolver {
 	private String currentPackage = LispNames.CL_USER_PKG;
 
 	/**
+	 * Whether resolution is inside a {@code defmacro}/{@code macrolet} definition, where
+	 * quoted data comes from backquote templates and its symbols are resolved against the
+	 * defining package (see {@link #resolveCons}).
+	 */
+	private boolean inMacroDefinition = false;
+
+	/**
 	 * Creates a resolver with a fresh registry of the built-in packages.
 	 */
 	public PackageResolver() {
@@ -212,14 +219,48 @@ public final class PackageResolver {
 
 	private LispVal resolveCons(LispCons cons) {
 		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(operatorMember(op))) {
-			// (quote DATUM): the operator is exempt and the datum is left untouched.
 			LispVal datum = ((LispCons) cons.cdr()).car();
+			// (quote DATUM): the operator is exempt and the datum is left untouched --
+			// except inside a defmacro/macrolet definition, where quoted symbols come
+			// from backquote templates (the reader expands every backquote level into
+			// list/cons/quote calls before this pass runs) and belong to the defining
+			// package: a bare template symbol must resolve to the same canonical
+			// spelling as the package-qualified defun/local-function it names.
+			if (this.inMacroDefinition) {
+				datum = resolveQuotedData(datum);
+			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
 		}
 		if (cons.car() instanceof LispSymbol rawOp && LispNames.DEFPACKAGE.equals(operatorMember(rawOp))) {
 			// resolveCons only sees non-top-level forms (resolve() consumes the
 			// top-level directive), so a defpackage here is out of place.
 			throw new LispPackageException(LispNames.DEFPACKAGE + " is only supported as a literal top-level form");
+		}
+		if (cons.car() instanceof LispSymbol macroOp && LispNames.DEFMACRO.equals(operatorMember(macroOp))) {
+			// The whole definition is template context (see the quote case above).
+			boolean saved = this.inMacroDefinition;
+			this.inMacroDefinition = true;
+			try {
+				return new LispCons(resolveForm(cons.car()), resolveForm(cons.cdr()));
+			}
+			finally {
+				this.inMacroDefinition = saved;
+			}
+		}
+		if (cons.car() instanceof LispSymbol macroletOp && LispNames.MACROLET.equals(operatorMember(macroletOp))
+				&& cons.cdr() instanceof LispCons defsCell) {
+			// (macrolet ((name lambda-list body...)...) body...): the local
+			// definitions are template context, the outer body is ordinary code.
+			boolean saved = this.inMacroDefinition;
+			this.inMacroDefinition = true;
+			LispVal defs;
+			try {
+				defs = resolveForm(defsCell.car());
+			}
+			finally {
+				this.inMacroDefinition = saved;
+			}
+			return new LispCons(resolveForm(cons.car()), new LispCons(defs, resolveForm(defsCell.cdr())));
 		}
 		LispVal car = resolveForm(cons.car());
 		if (car instanceof LispSymbol op) {
@@ -293,6 +334,17 @@ public final class PackageResolver {
 			throw new LispPackageException("No such package: " + name);
 		}
 		return new LispCons(op, new LispCons(new LispSymbol(":" + name), LispNil.INSTANCE));
+	}
+
+	// Resolves every symbol inside a quoted backquote-template datum (recursively
+	// through conses); non-symbol atoms pass through. Only used inside
+	// defmacro/macrolet definitions -- see resolveCons.
+	private LispVal resolveQuotedData(LispVal datum) {
+		return switch (datum) {
+			case LispSymbol sym -> resolveSymbol(sym);
+			case LispCons c -> new LispCons(resolveQuotedData(c.car()), resolveQuotedData(c.cdr()));
+			default -> datum;
+		};
 	}
 
 	private LispVal resolveSymbol(LispSymbol sym) {

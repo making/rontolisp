@@ -394,11 +394,17 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FBOUNDP = FUNC_SYMBOL_VALUE + 1;
 
+	// read-char runtime helper (WasmIoRuntimeBuilder.buildReadCharBody): one byte from
+	// stdin, a WASI fd or a string input stream, boxed as a character struct. Appended
+	// before FUNC_USER_BASE like the mod/rem helpers, so no import/FUNC_START index
+	// shifts and the component blobs are unaffected.
+	static final int FUNC_READ_CHAR = FUNC_FBOUNDP + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// promise-await helper, the two binary stream helpers, the four string-stream
-	// helpers, and the five symbol-API helpers.
-	static final int FUNC_USER_BASE = FUNC_FBOUNDP + 1;
+	// helpers, the five symbol-API helpers, and the read-char helper.
+	static final int FUNC_USER_BASE = FUNC_READ_CHAR + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -1711,6 +1717,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _boundp (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _symbol_value (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fboundp (sym)
+				// read-char runtime helper
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_char (stream,
+															// eof-error-p, eof-value) ->
+															// (ref null eq)
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1931,6 +1941,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(boundpBody);
 				code.addFunction(symbolValueBody);
 				code.addFunction(fboundpBody);
+				// read-char runtime helper body (FUNC_READ_CHAR)
+				code.addFunction(WasmIoRuntimeBuilder.buildReadCharBody());
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);

@@ -2,7 +2,7 @@
 
 `(position item sequence &key test test-not key start end from-end)`
 
-Returns the 0-based index of the first element of `sequence` that matches `item`, or `nil` if no element matches. The comparison is `eql` by default; `:test` takes a function designator to use a different comparison and `:test-not` its negation, while `:key` takes a selector function applied to each element before the comparison. `:start`/`:end` bound the scanned region (the returned index still counts from the start of the whole sequence), and with `:from-end` true the LAST match wins. The sequence may be a list or a string; the elements of a string are characters. Unlike `find`, which returns the element, `position` returns its integer position.
+Returns the 0-based index of the first element of `sequence` that matches `item`, or `nil` if no element matches. The comparison is `eql` by default; `:test` takes a function designator to use a different comparison and `:test-not` its negation, while `:key` takes a selector function applied to each element before the comparison. `:start`/`:end` bound the scanned region (the returned index still counts from the start of the whole sequence), and with `:from-end` true the LAST match wins. The sequence may be a list or a string; the elements of a string are characters. Unlike `find`, which returns the element, `position` returns its integer position. The full keyword set also works through the first-class value, e.g. `(apply #'position item seq other-keys)`.
 
 ```lisp
 (position 3 '(1 2 3)) ; => 2

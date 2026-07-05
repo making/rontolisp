@@ -61,7 +61,7 @@ public final class BuiltinFunctionWrappers {
 	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
 			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
-			LispNames.ARRAY_DISPLACEMENT);
+			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY);
 
 	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
@@ -191,6 +191,80 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
+	// (getf kw :indicator) -- runtime keyword extraction from the wrapper's rest list.
+	private static LispVal getfKw(String indicator) {
+		return callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator));
+	}
+
+	// (if (getf kw :indicator) (getf kw :indicator) default) -- getf is pure, so the
+	// double extraction is safe.
+	private static LispVal getfKwOr(String indicator, LispVal dflt) {
+		return listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(indicator), getfKw(indicator), dflt));
+	}
+
+	// #'name
+	private static LispVal sharpQuote(String fn) {
+		return callV(LispNames.FUNCTION, new LispSymbol(fn));
+	}
+
+	// Variadic wrapper for the position family: the runtime keywords are re-extracted
+	// with getf and fed back into the call-position expansion, so first-class use
+	// through apply supports the full :test/:test-not/:key/:start/:end/:from-end set
+	// (e.g. cl-utilities' split-sequence does (apply #'position item seq :end r ...)).
+	// A :test-not is normalized to a complemented :test; the -if/-if-not variants take
+	// no :test/:test-not (CL semantics).
+	private static WrapperDef positionFamily(String name, boolean item) {
+		List<LispVal> callParts = new ArrayList<>();
+		callParts.add(new LispSymbol(name));
+		callParts.add(new LispSymbol("a"));
+		callParts.add(new LispSymbol("seq"));
+		if (item) {
+			callParts.add(new LispSymbol(LispNames.TEST_KEYWORD));
+			callParts.add(listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.TEST_NOT_KEYWORD),
+					callV(LispNames.COMPLEMENT, getfKw(LispNames.TEST_NOT_KEYWORD)),
+					getfKwOr(LispNames.TEST_KEYWORD, sharpQuote(LispNames.EQL)))));
+		}
+		callParts.add(new LispSymbol(LispNames.KEY_KEYWORD));
+		callParts.add(getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)));
+		callParts.add(new LispSymbol(LispNames.START_KEYWORD));
+		callParts.add(getfKwOr(LispNames.START_KEYWORD, new LispInteger(0)));
+		callParts.add(new LispSymbol(LispNames.END_KEYWORD));
+		callParts.add(getfKw(LispNames.END_KEYWORD));
+		callParts.add(new LispSymbol(LispNames.FROM_END_KEYWORD));
+		callParts.add(getfKw(LispNames.FROM_END_KEYWORD));
+		return new WrapperDef(name, List.of("a", "seq", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
+	}
+
+	// Variadic wrapper for make-array (gated with the fill-pointer array group):
+	// runtime keywords are re-extracted with getf. A :displaced-to argument selects
+	// the bare-view shape (a displaced array cannot combine with the other options),
+	// everything else the general shape; :element-type is accepted and ignored, like
+	// the call position. Enables cl-utilities' copy-array idiom
+	// (apply #'make-array (list* dims options...)).
+	private static WrapperDef variadicMakeArray() {
+		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
+				new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
+				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0))));
+		LispVal general = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD),
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), getfKw(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.DISPLACED_TO_KEYWORD), displaced, general));
+		return new WrapperDef(LispNames.MAKE_ARRAY, List.of("dims", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Variadic wrapper for stable-sort: only :key is supported, extracted at runtime
+	// like the position family.
+	private static WrapperDef variadicStableSort() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.STABLE_SORT), new LispSymbol("seq"),
+				new LispSymbol("pred"), new LispSymbol(LispNames.KEY_KEYWORD),
+				getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY))));
+		return new WrapperDef(LispNames.STABLE_SORT, List.of("seq", "pred", LispNames.LAMBDA_REST, "kw"),
+				List.of(body));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
 			// (fixed-arity wrappers returned nil on JVM / trapped on WASM for a
@@ -213,23 +287,27 @@ public final class BuiltinFunctionWrappers {
 			// Sequence operations (compiled via macro expansion in call position)
 			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), unary(LispNames.BUTLAST),
 			binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND), binary(LispNames.FIND_IF),
-			binary(LispNames.FIND_IF_NOT), binary(LispNames.POSITION), binary(LispNames.POSITION_IF),
-			binary(LispNames.POSITION_IF_NOT), binary(LispNames.COUNT), binary(LispNames.COUNT_IF),
-			binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF), binary(LispNames.RASSOC), ternary(LispNames.ACONS),
-			binary(LispNames.PAIRLIS), unary(LispNames.COPY_ALIST), binary(LispNames.GETF),
-			unary(LispNames.REMOVE_DUPLICATES), variadicNconc(), unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST),
-			unary(LispNames.NREVERSE), unary(LispNames.MAKE_LIST), binary(LispNames.UNION),
+			binary(LispNames.FIND_IF_NOT), positionFamily(LispNames.POSITION, true),
+			positionFamily(LispNames.POSITION_IF, false), positionFamily(LispNames.POSITION_IF_NOT, false),
+			binary(LispNames.COUNT), binary(LispNames.COUNT_IF), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
+			binary(LispNames.RASSOC), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS), unary(LispNames.COPY_ALIST),
+			binary(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES), variadicNconc(), unary(LispNames.IDENTITY),
+			unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE), unary(LispNames.MAKE_LIST), binary(LispNames.UNION),
 			binary(LispNames.INTERSECTION), binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN),
 			binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF),
 			binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE), binary(LispNames.DELETE_IF),
 			binary(LispNames.DELETE_IF_NOT), ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE),
-			binary(LispNames.MAPCAN), binary(LispNames.SORT),
+			binary(LispNames.MAPCAN), binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
+			// funcall is variadic: (lambda (f &rest r) (apply f r)) -- e.g.
+			// cl-utilities' compose folds with (reduce #'funcall fns ...).
+			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),
+					List.of(callV(LispNames.APPLY, new LispSymbol("f"), new LispSymbol("r")))),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)
 			unary(LispNames.NUMBERP), unary(LispNames.INTEGERP), unary(LispNames.FLOATP), unary(LispNames.SYMBOLP),
 			unary(LispNames.STRINGP), unary(LispNames.LISTP), unary(LispNames.CONSP), unary(LispNames.KEYWORDP),
-			unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST),
+			unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST), unary(LispNames.VECTORP),
 			// Type conversion (arity 1)
 			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
 			unary(LispNames.ROUND),
@@ -305,13 +383,14 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.VECTOR_POP), binary(LispNames.VECTOR_PUSH_EXTEND),
 			// adjust-array is the 2-arg (no keyword) form; array-displacement yields
 			// its primary value (the target) -- the offset needs a direct mv consumer.
-			binary(LispNames.ADJUST_ARRAY), unary(LispNames.ARRAY_DISPLACEMENT),
+			binary(LispNames.ADJUST_ARRAY), unary(LispNames.ARRAY_DISPLACEMENT), variadicMakeArray(),
 			// terpri: 0-arity
 			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
 			// fresh-line: 0-arity
 			new WrapperDef(LispNames.FRESH_LINE, List.of(), List.of(call(LispNames.FRESH_LINE))),
 			// read-line: 0-arity
 			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))),
+			new WrapperDef(LispNames.READ_CHAR, List.of(), List.of(call(LispNames.READ_CHAR))),
 			// gensym: 0-arity (the literal-prefix form cannot be a first-class value;
 			// macroexpand/macroexpand-1 have no wrapper at all -- the macro table does
 			// not exist at runtime in compiled output)

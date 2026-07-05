@@ -50,11 +50,24 @@ public final class UserMacroExpander {
 		LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
 		List<LispVal> result = new ArrayList<>();
 		for (LispVal form : program) {
-			if (isOperator(form, LispNames.DEFMACRO)) {
-				macroEval.eval(form);
+			// A package directive updates the macro evaluator's resolver state (so a
+			// defmacro under (in-package P) registers its canonical qualified name and
+			// its template symbols resolve against P) and is kept verbatim for the
+			// compilers' own resolution pass (which tracks the same state itself).
+			if (isPackageDirective(form)) {
+				macroEval.resolvePackages(form);
+				result.add(form);
 				continue;
 			}
-			LispVal expanded = expandAll(form, macroEval);
+			// Resolve through the same resolver so macro CALL SITES match the
+			// canonical registered names (a defmacro under (in-package P) registers
+			// P-qualified).
+			LispVal resolved = macroEval.resolvePackages(form);
+			if (isOperator(resolved, LispNames.DEFMACRO)) {
+				macroEval.eval(resolved);
+				continue;
+			}
+			LispVal expanded = expandAll(resolved, macroEval);
 			if (isOperator(expanded, LispNames.DEFMACRO)) {
 				// A macro expanded into a macro definition: consume it as well.
 				macroEval.eval(expanded);
@@ -64,13 +77,30 @@ public final class UserMacroExpander {
 				// Register (no body execution) so later macro bodies can call it.
 				macroEval.eval(expanded);
 			}
-			result.add(expanded);
+			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
+			// canonical form is not always re-resolvable by the compilers' own pass
+			// (a cl: symbol canonicalizes to a bare name, which is an error to spell
+			// under a package that does not use cl).
+			result.add(expanded.print().equals(resolved.print()) ? form : expanded);
 		}
 		return result;
 	}
 
 	private static boolean isOperator(LispVal form, String name) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --
+	// the resolver consumes these, so they must be recognized BEFORE resolution to be
+	// kept verbatim for the compilers.
+	private static boolean isPackageDirective(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym)) {
+			return false;
+		}
+		String name = sym.name();
+		int colon = name.lastIndexOf(':');
+		String member = colon >= 0 ? name.substring(colon + 1) : name;
+		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member);
 	}
 
 	private static boolean usesMacroexpand(LispVal form) {

@@ -21,6 +21,8 @@ categories:
       - { slug: typecase, name: typecase }
       - { slug: etypecase, name: etypecase }
       - { slug: error, name: error }
+      - { slug: warn, name: warn }
+      - { slug: return-from, name: return-from }
       - { slug: setf, name: setf }
       - { slug: push, name: push }
       - { slug: pop, name: pop }

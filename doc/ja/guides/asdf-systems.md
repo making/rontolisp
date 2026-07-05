@@ -97,7 +97,7 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 
 ## 実際に何がロードできるか
 
-現在、実世界の 2 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
+現在、実世界の 3 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
 (インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -111,8 +111,14 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
   指数マーカーを扱います。`(error 'invalid-number :value ... :reason ...)`
   イディオムは簡易コンディション代替を通じて意図した診断情報付きで
   シグナルされます。
+- **[cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4**:
+  公開 API 全体が動作します — 独自の `split-sequence`、`extremum`
+  ファミリー (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`)、
+  `read-delimited`、`expt-mod`、`collecting`/`with-collectors`、自作マクロ
+  から使える `with-unique-names`/`with-gensyms`/`once-only` (3 段のネスト
+  バッククォート)、`rotate-byte`、`copy-array`、`compose`。
 
-両ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待出力付き —
+3 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待出力付き —
 は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。
@@ -121,7 +127,8 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 素の `defun`/`defmacro`/`defpackage` コード、`loop`、`values` を末尾に持つ
 関数への `multiple-value-bind`、サポート済みの型指定子による
 `check-type`/`etypecase`、宣言 (パース済み no-op、`deftype` を含む)、そして
-簡易版 `define-condition`/`make-condition` のエラーイディオム。CLOS、
+簡易版 `define-condition`/`make-condition`/`warn`/`restart-case`/
+`return-from` のイディオム。CLOS、
 コンディション/リスタートシステム、動的 (スペシャル) 変数束縛、パス名の上に
 構築されたライブラリはまだロードできません
 ([未対応のCL機能](missing-features.md)を参照)。それ以外の場合の実用は、

@@ -200,6 +200,7 @@ final class JvmExprCompiler {
 				case LispNames.CONCATENATE ->
 					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx, className);
 				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);
+				case LispNames.READ_CHAR -> JvmReadCharCompiler.compile(cons, ctx, className);
 				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
@@ -476,6 +477,12 @@ final class JvmExprCompiler {
 						JvmSortCompiler.compile(cons, ctx, className);
 					}
 				}
+				case LispNames.STABLE_SORT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons), ctx, className);
+				case LispNames.COPY_SEQ ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx, className);
+				case LispNames.VECTORP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx, className);
 				case LispNames.APPLY -> JvmApplyCompiler.compile(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
@@ -518,6 +525,8 @@ final class JvmExprCompiler {
 				case LispNames.ERROR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandError(cons), ctx, className);
 				case LispNames.ERROR_INTERNAL -> JvmErrorCompiler.compile(cons, ctx, className);
+				case LispNames.WARN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWarn(cons), ctx, className);
+				case LispNames.WARN_INTERNAL -> JvmWarnCompiler.compile(cons, ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);

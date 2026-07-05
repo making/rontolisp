@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
@@ -285,6 +286,13 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.ARRAYP_INTERNAL, new LispFunction(LispNames.ARRAYP_INTERNAL, args -> {
 			requireArgCount(LispNames.ARRAYP_INTERNAL, args, 1);
 			return (args.get(0) instanceof LispArray) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// vectorp: strings are vectors in CL. Like the vector type specifier, the rank
+		// is NOT checked (a rank-n array passes too) -- see makeTypeTest.
+		env.defineFunction(LispNames.VECTORP, new LispFunction(LispNames.VECTORP, args -> {
+			requireArgCount(LispNames.VECTORP, args, 1);
+			return (args.get(0) instanceof LispString || args.get(0) instanceof LispArray) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
 		}));
 	}
 
@@ -1458,31 +1466,8 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		}));
-		env.defineFunction(LispNames.POSITION, new LispFunction(LispNames.POSITION, args -> {
-			requireArgCount(LispNames.POSITION, args, 2);
-			LispVal item = args.get(0);
-			// position applies to strings as well as lists (Common Lisp sequences);
-			// string elements are characters, indexed like char/length.
-			if (args.get(1) instanceof LispString str) {
-				String s = str.value();
-				for (int i = 0; i < s.length(); i++) {
-					if (isEq(item, new LispChar(s.charAt(i)))) {
-						return new LispInteger(i);
-					}
-				}
-				return LispNil.INSTANCE;
-			}
-			LispVal cur = args.get(1);
-			long index = 0;
-			while (cur instanceof LispCons cell) {
-				if (isEq(item, cell.car())) {
-					return new LispInteger(index);
-				}
-				index++;
-				cur = cell.cdr();
-			}
-			return LispNil.INSTANCE;
-		}));
+		// position (and position-if/-if-not) are registered in LispEvaluator so the
+		// :test/:test-not/:key keyword designators can be applied through the evaluator.
 		env.defineFunction(LispNames.COUNT, new LispFunction(LispNames.COUNT, args -> {
 			requireArgCount(LispNames.COUNT, args, 2);
 			LispVal item = args.get(0);
@@ -1961,6 +1946,28 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException(LispNames.SUBSEQ + " expects a string or list, got: " + args.get(0).print());
 		}));
+		// copy-seq is (subseq seq 0): a fresh copy of a string or list. The call
+		// position expands to exactly that; this registration covers first-class use.
+		env.defineFunction(LispNames.COPY_SEQ, new LispFunction(LispNames.COPY_SEQ, args -> {
+			requireArgCount(LispNames.COPY_SEQ, args, 1);
+			if (args.get(0) instanceof LispString str) {
+				return new LispString(str.value());
+			}
+			if (args.get(0) instanceof LispCons || args.get(0) instanceof LispNil) {
+				List<LispVal> elements = new ArrayList<>();
+				LispVal cur = args.get(0);
+				while (cur instanceof LispCons cell) {
+					elements.add(cell.car());
+					cur = cell.cdr();
+				}
+				LispVal result = LispNil.INSTANCE;
+				for (int i = elements.size() - 1; i >= 0; i--) {
+					result = new LispCons(elements.get(i), result);
+				}
+				return result;
+			}
+			throw new LispEvalException(LispNames.COPY_SEQ + " expects a string or list, got: " + args.get(0).print());
+		}));
 		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
 			requireArgCount(LispNames.STRING_EQ, args, 2);
 			String a = requireString(LispNames.STRING_EQ, args.get(0));
@@ -1994,7 +2001,7 @@ public final class Environment implements Scope {
 		throw new LispEvalException(name + " expects a string, got: " + val.print());
 	}
 
-	private static int requireIndex(String name, LispVal val) {
+	static int requireIndex(String name, LispVal val) {
 		if (val instanceof LispInteger i) {
 			return (int) i.value();
 		}
@@ -2190,6 +2197,15 @@ public final class Environment implements Scope {
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
 			throw new LispEvalException(message);
 		}));
+		// %warn: internal single-argument primitive that writes a pre-built
+		// "WARNING: ..." message to standard error and returns nil. Produced by the warn
+		// macro expansion.
+		env.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
+			requireArgCount(LispNames.WARN_INTERNAL, args, 1);
+			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
+			System.err.println(message);
+			return LispNil.INSTANCE;
+		}));
 		env.defineFunction(LispNames.OPEN, new LispFunction(LispNames.OPEN, args -> {
 			requireMinArgCount(LispNames.OPEN, args, 1);
 			if (!(args.get(0) instanceof LispString path)) {
@@ -2298,6 +2314,42 @@ public final class Environment implements Scope {
 				}
 				String line = reader.readLine();
 				return line == null ? LispNil.INSTANCE : new LispString(line);
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		}));
+		// (read-char [stream [eof-error-p [eof-value]]]): one character from standard
+		// input or a text stream handle (file streams and string input streams). Reads
+		// UTF-16 code units, like the rest of the interpreter string representation.
+		env.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, args -> {
+			if (args.size() > 3) {
+				throw new LispEvalException(LispNames.READ_CHAR + " expects 0 to 3 arguments");
+			}
+			try {
+				Reader reader;
+				if (args.isEmpty() || args.get(0) instanceof LispNil) {
+					// Drain buffered output so any prompt is visible before we block on
+					// stdin.
+					out.flush();
+					reader = stdinReader;
+				}
+				else {
+					if (!(args.get(0) instanceof LispInteger handle)
+							|| !(streams.get(handle.value()) instanceof BufferedReader r)) {
+						throw new LispEvalException(LispNames.READ_CHAR + " expects an input stream");
+					}
+					reader = r;
+				}
+				int c = reader.read();
+				if (c < 0) {
+					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+					if (eofError) {
+						throw new LispEvalException(LispNames.READ_CHAR + ": end of file");
+					}
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				return new LispChar((char) c);
 			}
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);

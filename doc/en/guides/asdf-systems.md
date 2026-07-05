@@ -101,7 +101,7 @@ directory, so sibling systems in one registry directory find each other.
 
 ## What can I actually load?
 
-Two real-world libraries load unmodified today, verified on all four
+Three real-world libraries load unmodified today, verified on all four
 backends (interpreter, JVM, WASM Preview 1 and `--component`):
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -116,8 +116,15 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   exponent markers; the `(error 'invalid-number :value ... :reason ...)`
   idiom signals with the intended diagnostics through the lite condition
   stand-ins.
+- **[cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4**:
+  the whole public API works — its own `split-sequence`, the `extremum`
+  family (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`),
+  `read-delimited`, `expt-mod`, `collecting`/`with-collectors`,
+  `with-unique-names`/`with-gensyms`/`once-only` (three-level nested
+  backquote) usable from your own macros, `rotate-byte`, `copy-array` and
+  `compose`.
 
-Runnable demos for both — with the per-backend commands and expected
+Runnable demos for all three — with the per-backend commands and expected
 output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 
@@ -125,9 +132,9 @@ A library qualifies today roughly when it stays inside: plain
 `defun`/`defmacro`/`defpackage` code, `loop`, `multiple-value-bind` over
 `values`-tailed functions, `check-type`/`etypecase` with the supported type
 specifiers, declarations (parsed no-ops, `deftype` included), and the lite
-`define-condition`/`make-condition` error idiom. Libraries built on CLOS,
-the condition/restart system, dynamic (special) variable binding or
-pathnames do not load yet (see
+`define-condition`/`make-condition`/`warn`/`restart-case`/`return-from`
+idioms. Libraries built on CLOS, the condition/restart system, dynamic
+(special) variable binding or pathnames do not load yet (see
 [Unsupported CL Features](missing-features.md)). For anything else, the
 practical use is structuring **your own** multi-file rontolisp projects —
 with `.asd` files that real ASDF can read too.

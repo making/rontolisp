@@ -141,6 +141,16 @@ public final class LispReader {
 			// nil/t. This gives all three backends parity for free.
 			return new LispDouble(Math.PI);
 		}
+		if ("most-positive-fixnum".equals(name) || "most-negative-fixnum".equals(name)) {
+			// The fixnum range constants, read as self-evaluating integers like pi.
+			// The value is backend-dependent (fixed at read time like *features*):
+			// WASM fixnums are unboxed i31 references, the interpreter and the JVM
+			// backend use Java longs.
+			boolean wasm = this.features.contains("rontolisp-wasm");
+			long value = name.startsWith("most-positive") ? (wasm ? (1L << 30) - 1 : Long.MAX_VALUE)
+					: (wasm ? -(1L << 30) : Long.MIN_VALUE);
+			return new LispInteger(value);
+		}
 		if (LispNames.FEATURES_VAR.equals(name)) {
 			// The active feature list, substituted at read time like pi: a quoted
 			// list of keywords, so all three backends get parity for free. The list

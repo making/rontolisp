@@ -89,11 +89,17 @@ expands to `(progn <array> t)` (`LispMacroExpander.expandArrayElementType`).
 First-class values: `#'vector-push` etc. work via
 `BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS` (fill-pointer,
 array-has-fill-pointer-p, adjustable-array-p, array-element-type, vector-push,
-vector-pop, vector-push-extend -- the last in its 2-arg form), gated like
-`HASH_FUNCTIONS`: both compilers inject the group only when
-`programUsesAnyArrayOp` (which also gates the JVM array helpers and now lists
-the fill-pointer names) is true, so the wrappers and their helpers stay gated
-together.
+vector-pop, vector-push-extend -- the last in its 2-arg form -- plus
+make-array), gated like `HASH_FUNCTIONS`: both compilers inject the group only
+when `programUsesAnyArrayOp` (which also gates the JVM array helpers and now
+lists the fill-pointer names) is true, so the wrappers and their helpers stay
+gated together. `#'make-array` is a variadic wrapper (`variadicMakeArray`)
+whose runtime keywords are re-extracted with `getf`: a `:displaced-to`
+argument selects the bare-view shape, everything else the general
+`:adjustable`/`:fill-pointer`/`:initial-element` shape, and `:element-type` is
+accepted and ignored like the call position -- this is what makes
+cl-utilities' verbatim `copy-array` (`apply #'make-array (list* dims
+options...)`) work on the compile path.
 
 Interpreter/JVM errors carry `fn: message` text (e.g. "vector-pop: empty
 vector"); WASM traps (`unreachable`) on the same conditions. Compiled `list`

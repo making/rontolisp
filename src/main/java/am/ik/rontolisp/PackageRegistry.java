@@ -42,7 +42,8 @@ public final class PackageRegistry {
 			LispNames.NTH_VALUE, LispNames.MULTIPLE_VALUE_SETQ, LispNames.ROTATEF, LispNames.DESTRUCTURING_BIND,
 			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE,
 			LispNames.DEFINE_CONDITION, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET,
-			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX);
+			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN,
+			LispNames.RETURN_FROM);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -98,7 +99,8 @@ public final class PackageRegistry {
 			LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH,
 			LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY,
-			LispNames.ARRAY_DISPLACEMENT);
+			LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ, LispNames.READ_CHAR,
+			LispNames.VECTORP);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT);
@@ -123,7 +125,7 @@ public final class PackageRegistry {
 			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH, LispNames.ASET,
 			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
 			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL, LispNames.SET_FILL_POINTER,
-			LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET);
+			LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

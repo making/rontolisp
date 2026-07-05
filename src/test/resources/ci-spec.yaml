@@ -1090,9 +1090,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case rotatef setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
+      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      238
+      242
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -3036,3 +3036,58 @@ cases:
       0.25
       9
       double-float
+  - name: cl-utilities-residue-features
+    source: |
+      (print (apply #'position #\, "ab,cd" (list :start 1)))
+      (print (apply #'position 2 '(1 2 3 2 4) (list :from-end t)))
+      (print (position-if #'evenp '(1 3 4 5 6) :from-end t))
+      (print (position 5 '(1 5 2 5) :test #'<= :key #'1+))
+      (print (stable-sort '((1 . b) (0 . a) (1 . a)) #'< :key #'car))
+      (print (funcall #'stable-sort '(3 1 2) #'<))
+      (let ((cu-orig '(1 2 3)))
+        (print (list (copy-seq cu-orig) (eq (copy-seq cu-orig) cu-orig) (copy-seq "xyz"))))
+      (print (list (vectorp "abc") (vectorp (vector 1)) (vectorp '(1)) (funcall #'vectorp "s")))
+      (print (with-input-from-string (cu-s "hi")
+               (let* ((cu-c1 (read-char cu-s))
+                      (cu-c2 (read-char cu-s))
+                      (cu-c3 (read-char cu-s nil :end)))
+                 (list cu-c1 cu-c2 cu-c3))))
+      (let ((cu-v (vector 1 2 3)) (cu-l (list 4 5 6)))
+        (setf (elt cu-v 1) 9)
+        (setf (elt cu-l 0) 8)
+        (print (list (aref cu-v 1) cu-l)))
+      (print (reduce #'+ '(1 2 3 4 5) :start 1 :end 4))
+      (print (reduce #'+ "abc" :key #'char-code :start 1))
+      (print (< 1000000 most-positive-fixnum))
+      (print (funcall #'funcall #'+ 20 22))
+      (print (aref (apply #'make-array (list 3 :initial-element 7)) 2))
+      (defun cu-early (n)
+        (when (= n 0) (return-from cu-early :zero))
+        (* n 10))
+      (print (list (cu-early 0) (cu-early 4)))
+      (print (warn "check ~a" 1))
+      (defpackage :cu-pkg (:use :cl) (:export :cu-ten))
+      (in-package :cu-pkg)
+      (defun cu-helper (x) (* x 5))
+      (defmacro cu-ten (v) `(cu-helper (+ ,v ,v)))
+      (in-package :cl-user)
+      (print (cu-pkg:cu-ten 1))
+    expected: |
+      2
+      3
+      4
+      1
+      ((0 . a) (1 . b) (1 . a))
+      (1 2 3)
+      ((1 2 3) nil "xyz")
+      (t t nil t)
+      (#\h #\i :end)
+      (9 (8 5 6))
+      9
+      197
+      t
+      42
+      7
+      (:zero 40)
+      nil
+      10

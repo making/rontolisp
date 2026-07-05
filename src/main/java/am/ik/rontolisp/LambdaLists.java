@@ -81,6 +81,7 @@ public final class LambdaLists {
 	 * @return the native-shape lambda list and body
 	 */
 	public static Expanded expand(LispVal paramList, List<LispVal> body) {
+		body = rewriteReturnFrom(body);
 		List<LispVal> params = paramList instanceof LispCons cons ? cons.toList() : List.of();
 		if (!usesLambdaListKeywords(paramList)) {
 			List<LispSymbol> required = new ArrayList<>(params.size());
@@ -168,16 +169,86 @@ public final class LambdaLists {
 				return form;
 			}
 			List<LispVal> parts = cons.toList();
-			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2 && usesLambdaListKeywords(parts.get(1))) {
+			// A defun/lambda is rebuilt through expand() when its parameter list uses
+			// lambda-list keywords OR its body uses return-from (the return-from
+			// rewrite lives in expand so the interpreter's lazy path shares it).
+			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2 && (usesLambdaListKeywords(parts.get(1))
+					|| anyContainsReturnFrom(parts.subList(2, parts.size())))) {
 				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()));
 				return rebuildFunction(sym, null, e);
 			}
-			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && usesLambdaListKeywords(parts.get(2))) {
+			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && (usesLambdaListKeywords(parts.get(2))
+					|| anyContainsReturnFrom(parts.subList(3, parts.size())))) {
 				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()));
 				return rebuildFunction(sym, parts.get(1), e);
 			}
 		}
 		return new LispCons(desugar(cons.car()), desugar(cons.cdr()));
+	}
+
+	/**
+	 * Lite {@code return-from} support: when the body contains a
+	 * {@code (return-from name value)} form, every occurrence is rewritten to
+	 * {@code (return value)} (the block NAME is ignored -- there are no named blocks) and
+	 * the whole body is wrapped in the internal {@code %block} so the return exits the
+	 * function. Deviation: a {@code return-from} nested inside a {@code do}/ {@code loop}
+	 * exits that loop's (nearer) block instead, which is only equivalent when the loop is
+	 * the function's final form.
+	 * @param body the defun/lambda body forms
+	 * @return the body, rewritten and block-wrapped when return-from is present
+	 */
+	private static List<LispVal> rewriteReturnFrom(List<LispVal> body) {
+		if (!anyContainsReturnFrom(body)) {
+			return body;
+		}
+		List<LispVal> rewritten = new ArrayList<>(body.size() + 1);
+		rewritten.add(new LispSymbol(LispNames.PROGN));
+		for (LispVal form : body) {
+			rewritten.add(stripReturnFrom(form));
+		}
+		return List.of(list(new LispSymbol(LispNames.BLOCK_INTERNAL), list(rewritten.toArray(LispVal[]::new))));
+	}
+
+	private static boolean anyContainsReturnFrom(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (containsReturnFrom(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Quoted data is exempt, like the rest of the desugaring.
+	private static boolean containsReturnFrom(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return false;
+			}
+			if (LispNames.RETURN_FROM.equals(op.name())) {
+				return true;
+			}
+		}
+		return containsReturnFrom(cons.car()) || containsReturnFrom(cons.cdr());
+	}
+
+	private static LispVal stripReturnFrom(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return form;
+			}
+			if (LispNames.RETURN_FROM.equals(op.name())) {
+				List<LispVal> parts = cons.toList();
+				LispVal value = parts.size() > 2 ? stripReturnFrom(parts.get(2)) : LispNil.INSTANCE;
+				return list(new LispSymbol(LispNames.RETURN), value);
+			}
+		}
+		return new LispCons(stripReturnFrom(cons.car()), stripReturnFrom(cons.cdr()));
 	}
 
 	private static LispVal rebuildFunction(LispSymbol op, @Nullable LispVal name, Expanded e) {

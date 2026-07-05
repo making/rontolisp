@@ -82,6 +82,7 @@ categories:
       - { slug: keywordp, name: "keywordp" }
       - { slug: characterp, name: "characterp" }
       - { slug: functionp, name: "functionp" }
+      - { slug: vectorp, name: "vectorp" }
   - title: "Output"
     functions:
       - { slug: print, name: "print" }
@@ -143,6 +144,8 @@ categories:
       - { slug: nreconc, name: "nreconc" }
       - { slug: nconc, name: "nconc" }
       - { slug: sort, name: "sort" }
+      - { slug: stable-sort, name: "stable-sort" }
+      - { slug: copy-seq, name: "copy-seq" }
   - title: "List Search"
     functions:
       - { slug: member, name: "member" }
@@ -236,6 +239,7 @@ categories:
     functions:
       - { slug: read, name: "read" }
       - { slug: read-line, name: "read-line" }
+      - { slug: read-char, name: "read-char" }
       - { slug: read-from-string, name: "read-from-string" }
       - { slug: parse-integer, name: "parse-integer" }
       - { slug: eval, name: "eval" }
