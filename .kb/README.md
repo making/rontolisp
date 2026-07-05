@@ -28,6 +28,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets and `rontolisp:tls-connect`/`tls-listen` (stream-handle integration + the wasi:sockets component variant)
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify` Lisp-source library + splice
 - [linalg.md](linalg.md) -- `linalg` package (numpy-style vector/matrix ops) Lisp-source library + the standard array functions
+- [adjustable-arrays.md](adjustable-arrays.md) -- fill-pointer / `:adjustable` / (future) displaced arrays + `vector-push`/`-pop`/`-push-extend` (interpreter done; JVM/WASM pending)
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*` URL / query-string Lisp-source library
 - [java-interop.md](java-interop.md) -- `java:` reflection interop bridge
 - [template-class-embedding.md](template-class-embedding.md) -- when/how to embed a Java "template" class

@@ -598,6 +598,55 @@ public final class LispNames {
 	/** The {@code :initial-element} keyword accepted by {@code make-array}. */
 	public static final String INITIAL_ELEMENT_KEYWORD = ":initial-element";
 
+	/** The {@code :fill-pointer} keyword accepted by {@code make-array}. */
+	public static final String FILL_POINTER_KEYWORD = ":fill-pointer";
+
+	/** The {@code :adjustable} keyword accepted by {@code make-array}. */
+	public static final String ADJUSTABLE_KEYWORD = ":adjustable";
+
+	/**
+	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
+	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
+	 */
+	public static final String FILL_POINTER = "fill-pointer";
+
+	/**
+	 * The {@code %set-fill-pointer} internal built-in function. The target of the
+	 * {@code fill-pointer} {@code setf} place: {@code (%set-fill-pointer vector value)}
+	 * stores and returns the value.
+	 */
+	public static final String SET_FILL_POINTER = "%set-fill-pointer";
+
+	/** The {@code array-has-fill-pointer-p} built-in function. */
+	public static final String ARRAY_HAS_FILL_POINTER_P = "array-has-fill-pointer-p";
+
+	/**
+	 * The {@code array-element-type} built-in function. Element types are not tracked, so
+	 * it always returns {@code t}.
+	 */
+	public static final String ARRAY_ELEMENT_TYPE = "array-element-type";
+
+	/** The {@code adjustable-array-p} built-in function. */
+	public static final String ADJUSTABLE_ARRAY_P = "adjustable-array-p";
+
+	/**
+	 * The {@code vector-push} built-in function: store an element at the fill pointer and
+	 * increment it, returning the index used or {@code nil} when full.
+	 */
+	public static final String VECTOR_PUSH = "vector-push";
+
+	/**
+	 * The {@code vector-pop} built-in function: decrement the fill pointer and return the
+	 * element below it.
+	 */
+	public static final String VECTOR_POP = "vector-pop";
+
+	/**
+	 * The {@code vector-push-extend} built-in function: like {@code vector-push} but
+	 * grows the vector when it is full.
+	 */
+	public static final String VECTOR_PUSH_EXTEND = "vector-push-extend";
+
 	/**
 	 * The {@code vector} built-in function (build a fresh rank-1 array from the
 	 * arguments). Expanded by {@link LispMacroExpander#expandVector} into

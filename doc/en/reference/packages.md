@@ -122,7 +122,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-special-forms))
 ; => (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 221
+; => 236
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

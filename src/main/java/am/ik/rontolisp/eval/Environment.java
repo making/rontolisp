@@ -294,9 +294,17 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + " expects at least 1 argument");
 			}
 			LispVal init = LispNil.INSTANCE;
+			LispVal fillPointerArg = null;
+			boolean adjustable = false;
 			for (int i = 1; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol kw && LispNames.INITIAL_ELEMENT_KEYWORD.equals(kw.name())) {
-					init = args.get(i + 1);
+				if (args.get(i) instanceof LispSymbol kw) {
+					switch (kw.name()) {
+						case LispNames.INITIAL_ELEMENT_KEYWORD -> init = args.get(i + 1);
+						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
+						case LispNames.ADJUSTABLE_KEYWORD -> adjustable = !(args.get(i + 1) instanceof LispNil);
+						default -> {
+						}
+					}
 				}
 			}
 			int[] dims = parseDimensions(args.get(0));
@@ -308,7 +316,17 @@ public final class Environment implements Scope {
 			for (int i = 0; i < total; i++) {
 				data[i] = init;
 			}
-			return new LispArray(dims, data);
+			int fillPointer = -1;
+			if (fillPointerArg != null && !(fillPointerArg instanceof LispNil)) {
+				if (dims.length != 1) {
+					throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer requires a rank-1 array");
+				}
+				fillPointer = (fillPointerArg instanceof LispInteger n) ? (int) n.value() : dims[0];
+				if (fillPointer < 0 || fillPointer > dims[0]) {
+					throw new LispEvalException(LispNames.MAKE_ARRAY + ": :fill-pointer out of range");
+				}
+			}
+			return new LispArray(dims, data, fillPointer, adjustable);
 		}));
 		env.defineFunction(LispNames.AREF, new LispFunction(LispNames.AREF, args -> {
 			if (args.isEmpty()) {
@@ -358,6 +376,83 @@ public final class Environment implements Scope {
 			array.data()[rowMajorIndex(LispNames.ROW_MAJOR_ASET, array, args.get(1))] = value;
 			return value;
 		}));
+		env.defineFunction(LispNames.FILL_POINTER, new LispFunction(LispNames.FILL_POINTER, args -> {
+			requireArgCount(LispNames.FILL_POINTER, args, 1);
+			LispArray array = requireArray(LispNames.FILL_POINTER, args.get(0));
+			if (!array.hasFillPointer()) {
+				throw new LispEvalException(LispNames.FILL_POINTER + ": array has no fill pointer");
+			}
+			return new LispInteger(array.fillPointer());
+		}));
+		env.defineFunction(LispNames.SET_FILL_POINTER, new LispFunction(LispNames.SET_FILL_POINTER, args -> {
+			requireArgCount(LispNames.SET_FILL_POINTER, args, 2);
+			LispArray array = requireArray(LispNames.SET_FILL_POINTER, args.get(0));
+			if (!array.hasFillPointer()) {
+				throw new LispEvalException(LispNames.SET_FILL_POINTER + ": array has no fill pointer");
+			}
+			int value = (int) asLong(args.get(1));
+			try {
+				array.setFillPointer(value);
+			}
+			catch (IndexOutOfBoundsException ex) {
+				throw new LispEvalException(LispNames.SET_FILL_POINTER + ": " + ex.getMessage());
+			}
+			return args.get(1);
+		}));
+		env.defineFunction(LispNames.ARRAY_HAS_FILL_POINTER_P,
+				new LispFunction(LispNames.ARRAY_HAS_FILL_POINTER_P, args -> {
+					requireArgCount(LispNames.ARRAY_HAS_FILL_POINTER_P, args, 1);
+					LispArray array = requireArray(LispNames.ARRAY_HAS_FILL_POINTER_P, args.get(0));
+					return array.hasFillPointer() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}));
+		env.defineFunction(LispNames.ARRAY_ELEMENT_TYPE, new LispFunction(LispNames.ARRAY_ELEMENT_TYPE, args -> {
+			requireArgCount(LispNames.ARRAY_ELEMENT_TYPE, args, 1);
+			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
+			return new LispSymbol("t");
+		}));
+		env.defineFunction(LispNames.ADJUSTABLE_ARRAY_P, new LispFunction(LispNames.ADJUSTABLE_ARRAY_P, args -> {
+			requireArgCount(LispNames.ADJUSTABLE_ARRAY_P, args, 1);
+			LispArray array = requireArray(LispNames.ADJUSTABLE_ARRAY_P, args.get(0));
+			return array.adjustable() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.VECTOR_PUSH, new LispFunction(LispNames.VECTOR_PUSH, args -> {
+			requireArgCount(LispNames.VECTOR_PUSH, args, 2);
+			LispArray array = requireArray(LispNames.VECTOR_PUSH, args.get(1));
+			int index = vectorPush(LispNames.VECTOR_PUSH, array, args.get(0));
+			return index < 0 ? LispNil.INSTANCE : new LispInteger(index);
+		}));
+		env.defineFunction(LispNames.VECTOR_POP, new LispFunction(LispNames.VECTOR_POP, args -> {
+			requireArgCount(LispNames.VECTOR_POP, args, 1);
+			LispArray array = requireArray(LispNames.VECTOR_POP, args.get(0));
+			try {
+				return array.vectorPop();
+			}
+			catch (IllegalStateException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+		}));
+		env.defineFunction(LispNames.VECTOR_PUSH_EXTEND, new LispFunction(LispNames.VECTOR_PUSH_EXTEND, args -> {
+			if (args.size() < 2 || args.size() > 3) {
+				throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + " expects 2 or 3 arguments");
+			}
+			LispArray array = requireArray(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
+			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : 1;
+			try {
+				return new LispInteger(array.vectorPushExtend(args.get(0), extension));
+			}
+			catch (IllegalStateException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+		}));
+	}
+
+	private static int vectorPush(String fn, LispArray array, LispVal value) {
+		try {
+			return array.vectorPush(value);
+		}
+		catch (IllegalStateException ex) {
+			throw new LispEvalException(String.valueOf(ex.getMessage()));
+		}
 	}
 
 	private static int rowMajorIndex(String fn, LispArray array, LispVal indexVal) {
@@ -1200,7 +1295,7 @@ public final class Environment implements Scope {
 					throw new LispEvalException(LispNames.LENGTH + ": argument is not a sequence (rank-"
 							+ array.dimensions().length + " array)");
 				}
-				return new LispInteger(array.dimensions()[0]);
+				return new LispInteger(array.effectiveLength());
 			}
 			long count = 0;
 			LispVal cur = args.get(0);

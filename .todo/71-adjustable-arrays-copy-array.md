@@ -25,6 +25,25 @@ storage (`.kb/linalg.md`, `.kb/no-gc-scalar-wasm.md`). `vector-push`/
 `vector-push-extend`/`vector-pop` naturally come with fill pointers and are the
 real reason to want this beyond copy-array.
 
+## Progress (2026-07-06)
+
+**Step 1 (fill-pointer sub-step) on the INTERPRETER: DONE.** Implemented +
+tested: `make-array :fill-pointer/:adjustable`, `fill-pointer`(+setf),
+`array-has-fill-pointer-p`, `adjustable-array-p`, `array-element-type`,
+`vector-push`/`vector-pop`/`vector-push-extend`, and the verbatim cl-utilities
+`copy-array` runs on the interpreter (the headline acceptance). Design + the
+per-backend representation plan is written up in `.kb/adjustable-arrays.md`.
+
+Remaining, split into follow-up todos:
+- `.todo/72-fill-pointer-arrays-jvm.md` -- the JVM backend (header-wrapping
+  bytecode change; see the .kb design).
+- `.todo/73-fill-pointer-arrays-wasm.md` -- the WASM backend + the `--no-gc`
+  gate.
+- `:adjustable`+`adjust-array`, then `:displaced-to`+`array-displacement`
+  (hardest; aliasing), then splicing cl-utilities `copy-array` onto the compile
+  path -- still TODO here (or their own todos once fill-pointer lands on all
+  backends).
+
 ## Current state
 
 - Arrays are rank-n with a fixed header across backends; JVM header slot 0 is an

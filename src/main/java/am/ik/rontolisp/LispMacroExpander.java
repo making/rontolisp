@@ -2203,6 +2203,9 @@ public final class LispMacroExpander {
 					// val).
 					listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), placeParts.get(1), placeParts.get(2),
 							value));
+				case LispNames.FILL_POINTER ->
+					// (setf (fill-pointer vector) val) -> (%set-fill-pointer vector val).
+					listToCons(List.of(new LispSymbol(LispNames.SET_FILL_POINTER), placeParts.get(1), value));
 				case LispNames.NTH -> {
 					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
 					// __setf) __setf)

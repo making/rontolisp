@@ -3728,6 +3728,8 @@ class LispEvaluatorTest {
 					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
 			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
 			.contains("make-array", "aref", "row-major-aref", "array-row-major-index")
+			.contains("fill-pointer", "array-has-fill-pointer-p", "adjustable-array-p", "vector-push", "vector-pop",
+					"vector-push-extend", "array-element-type")
 			.contains("gensym", "macroexpand", "macroexpand-1")
 			.contains("require", "provide")
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
@@ -3736,9 +3738,9 @@ class LispEvaluatorTest {
 			.contains("byte", "byte-size", "byte-position", "ldb", "dpb")
 			.contains("string")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
-					"%make-string-input-stream", "%string-stream-contents")
+					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(229);
+			.hasSize(236);
 	}
 
 	@Test
@@ -5479,6 +5481,116 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(defstruct point x y) (make-point :z 1)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("Unknown keyword argument: :z");
+	}
+
+	@Test
+	void fillPointerLengthAndAccessors() {
+		assertThat(evalMulti("""
+				(setq v (make-array 5 :fill-pointer 2 :initial-element 0))
+				(list (length v) (fill-pointer v) (array-has-fill-pointer-p v) (adjustable-array-p v))
+				""").print()).isEqualTo("(2 2 t nil)");
+	}
+
+	@Test
+	void fillPointerVectorPrintsUpToFillPointer() {
+		assertThat(eval("""
+				(let ((v (make-array 5 :fill-pointer 3 :initial-element 9)))
+				  (prin1-to-string v))
+				""")).isEqualTo(new LispString("#(9 9 9)"));
+	}
+
+	@Test
+	void vectorPushStoresAndReturnsIndexOrNil() {
+		assertThat(evalMulti("""
+				(setq v (make-array 3 :fill-pointer 0))
+				(list (vector-push 10 v) (vector-push 20 v) (vector-push 30 v) (vector-push 40 v))
+				""").print()).isEqualTo("(0 1 2 nil)");
+	}
+
+	@Test
+	void vectorPushThenReadBack() {
+		assertThat(evalMulti("""
+				(setq v (make-array 3 :fill-pointer 0))
+				(vector-push 10 v)
+				(vector-push 20 v)
+				(list (length v) (aref v 0) (aref v 1))
+				""").print()).isEqualTo("(2 10 20)");
+	}
+
+	@Test
+	void vectorPop() {
+		assertThat(evalMulti("""
+				(setq v (make-array 5 :fill-pointer 3 :initial-element 0))
+				(setf (aref v 2) 99)
+				(list (vector-pop v) (length v))
+				""").print()).isEqualTo("(99 2)");
+	}
+
+	@Test
+	void vectorPushExtendGrowsBeyondCapacity() {
+		assertThat(evalMulti("""
+				(setq v (make-array 2 :fill-pointer 0 :adjustable t))
+				(vector-push-extend 1 v)
+				(vector-push-extend 2 v)
+				(vector-push-extend 3 v)
+				(list (length v) (adjustable-array-p v) (aref v 2))
+				""").print()).isEqualTo("(3 t 3)");
+	}
+
+	@Test
+	void setfFillPointer() {
+		assertThat(evalMulti("""
+				(setq v (make-array 5 :fill-pointer 5 :initial-element 7))
+				(setf (fill-pointer v) 2)
+				(list (length v) (fill-pointer v))
+				""").print()).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void simpleVectorHasNoFillPointer() {
+		assertThat(evalMulti("""
+				(setq v (make-array 3 :initial-element 0))
+				(list (array-has-fill-pointer-p v) (adjustable-array-p v))
+				""").print()).isEqualTo("(nil nil)");
+	}
+
+	@Test
+	void fillPointerOnNonFillPointerVectorSignals() {
+		assertThatThrownBy(() -> eval("(fill-pointer (make-array 3))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("no fill pointer");
+	}
+
+	@Test
+	void clUtilitiesCopyArrayRunsOnInterpreter() {
+		// The cl-utilities copy-array definition verbatim (the headline of todo 71):
+		// verifies array-element-type, make-array
+		// :element-type/:adjustable/:fill-pointer,
+		// array-has-fill-pointer-p, fill-pointer, adjustable-array-p, array-total-size
+		// and
+		// row-major-aref all cooperate.
+		assertThat(evalMulti("""
+				(defun copy-array (array &key
+				                   (element-type (array-element-type array))
+				                   (fill-pointer (and (array-has-fill-pointer-p array)
+				                                      (fill-pointer array)))
+				                   (adjustable (adjustable-array-p array)))
+				  (let* ((dimensions (array-dimensions array))
+				         (new-array (make-array dimensions
+				                                :element-type element-type
+				                                :adjustable adjustable
+				                                :fill-pointer fill-pointer)))
+				    (dotimes (i (array-total-size array))
+				      (setf (row-major-aref new-array i)
+				            (row-major-aref array i)))
+				    new-array))
+				(setq src (make-array 5 :fill-pointer 3 :adjustable t :initial-element 0))
+				(setf (aref src 0) 11)
+				(setf (aref src 1) 22)
+				(setf (aref src 2) 33)
+				(setq dst (copy-array src))
+				(list (length dst) (aref dst 0) (aref dst 1) (aref dst 2)
+				      (array-has-fill-pointer-p dst) (adjustable-array-p dst) (eq src dst))
+				""").print()).isEqualTo("(3 11 22 33 t t nil)");
 	}
 
 }

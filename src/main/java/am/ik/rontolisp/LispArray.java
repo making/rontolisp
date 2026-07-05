@@ -15,18 +15,47 @@ package am.ik.rontolisp;
  */
 public final class LispArray implements LispVal {
 
-	private final int[] dimensions;
+	private int[] dimensions;
 
-	private final LispVal[] data;
+	private LispVal[] data;
+
+	// The fill pointer of a rank-1 vector, or -1 when the array has none. When present it
+	// is the effective length (0 <= fillPointer <= dimensions[0]); aref/row-major-aref
+	// may
+	// still reach the full backing store, but length, printing and the sequence functions
+	// stop at the fill pointer.
+	private int fillPointer;
+
+	// Whether the array was created :adjustable. vector-push-extend grows any vector with
+	// a fill pointer regardless (matching common practice), but adjustable-array-p
+	// reports
+	// this flag verbatim.
+	private final boolean adjustable;
 
 	/**
-	 * Creates an array with the given dimensions backed by {@code data} (row-major).
+	 * Creates a simple array with the given dimensions backed by {@code data}
+	 * (row-major), with no fill pointer and not adjustable.
 	 * @param dimensions the dimension sizes (length = rank, {@code >= 1})
 	 * @param data the flat backing store (length = product of dimensions)
 	 */
 	public LispArray(int[] dimensions, LispVal[] data) {
+		this(dimensions, data, -1, false);
+	}
+
+	/**
+	 * Creates an array with the given dimensions, backing store, fill pointer and
+	 * adjustability.
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 1})
+	 * @param data the flat backing store (length = product of dimensions)
+	 * @param fillPointer the fill pointer, or {@code -1} for none (only rank-1 arrays may
+	 * have one)
+	 * @param adjustable whether the array is adjustable
+	 */
+	public LispArray(int[] dimensions, LispVal[] data, int fillPointer, boolean adjustable) {
 		this.dimensions = dimensions;
 		this.data = data;
+		this.fillPointer = fillPointer;
+		this.adjustable = adjustable;
 	}
 
 	/**
@@ -43,6 +72,114 @@ public final class LispArray implements LispVal {
 	 */
 	public LispVal[] data() {
 		return this.data;
+	}
+
+	/**
+	 * Returns the fill pointer, or {@code -1} when the array has none.
+	 * @return the fill pointer, or {@code -1}
+	 */
+	public int fillPointer() {
+		return this.fillPointer;
+	}
+
+	/**
+	 * Returns whether the array has a fill pointer.
+	 * @return {@code true} if a fill pointer is present
+	 */
+	public boolean hasFillPointer() {
+		return this.fillPointer >= 0;
+	}
+
+	/**
+	 * Returns whether the array is adjustable.
+	 * @return {@code true} if the array was created adjustable
+	 */
+	public boolean adjustable() {
+		return this.adjustable;
+	}
+
+	/**
+	 * Sets the fill pointer to {@code value}.
+	 * @param value the new fill pointer ({@code 0 <= value <= dimensions[0]})
+	 */
+	public void setFillPointer(int value) {
+		if (this.fillPointer < 0) {
+			throw new IllegalStateException("array has no fill pointer");
+		}
+		if (value < 0 || value > this.dimensions[0]) {
+			throw new IndexOutOfBoundsException("fill pointer out of range: " + value);
+		}
+		this.fillPointer = value;
+	}
+
+	/**
+	 * Returns the effective length: the fill pointer when present, otherwise the total
+	 * element count.
+	 * @return the effective length
+	 */
+	public int effectiveLength() {
+		return this.fillPointer >= 0 ? this.fillPointer : this.data.length;
+	}
+
+	/**
+	 * Pushes {@code value} at the fill pointer of a rank-1 vector, returning the index it
+	 * was stored at, or {@code -1} when the vector is full. Requires a fill pointer.
+	 * @param value the element to store
+	 * @return the index used, or {@code -1} if full
+	 */
+	public int vectorPush(LispVal value) {
+		requireVectorWithFillPointer("vector-push");
+		if (this.fillPointer >= this.dimensions[0]) {
+			return -1;
+		}
+		this.data[this.fillPointer] = value;
+		return this.fillPointer++;
+	}
+
+	/**
+	 * Pops and returns the element below the fill pointer of a rank-1 vector. Requires a
+	 * fill pointer.
+	 * @return the popped element
+	 */
+	public LispVal vectorPop() {
+		requireVectorWithFillPointer("vector-pop");
+		if (this.fillPointer == 0) {
+			throw new IllegalStateException("vector-pop: empty vector");
+		}
+		return this.data[--this.fillPointer];
+	}
+
+	/**
+	 * Pushes {@code value} like {@link #vectorPush}, growing the backing store (by at
+	 * least {@code extension}) when the vector is full. Requires a fill pointer.
+	 * @param value the element to store
+	 * @param extension the minimum number of elements to grow by when full
+	 * @return the index used
+	 */
+	public int vectorPushExtend(LispVal value, int extension) {
+		requireVectorWithFillPointer("vector-push-extend");
+		if (this.fillPointer >= this.dimensions[0]) {
+			int grow = Math.max(extension, 1);
+			int newCap = this.dimensions[0] + grow;
+			LispVal[] grown = new LispVal[newCap];
+			System.arraycopy(this.data, 0, grown, 0, this.data.length);
+			for (int i = this.data.length; i < newCap; i++) {
+				grown[i] = LispNil.INSTANCE;
+			}
+			this.data = grown;
+			this.dimensions = new int[] { newCap };
+		}
+		this.data[this.fillPointer] = value;
+		return this.fillPointer++;
+	}
+
+	private void requireVectorWithFillPointer(String fn) {
+		if (this.dimensions.length != 1) {
+			throw new IllegalStateException(fn + ": not a vector");
+		}
+		if (this.fillPointer < 0) {
+			throw new IllegalStateException(fn + ": vector has no fill pointer");
+		}
 	}
 
 	/**
@@ -96,9 +233,10 @@ public final class LispArray implements LispVal {
 	// index is.
 	private String render(java.util.function.Function<LispVal, String> renderElement) {
 		int rank = this.dimensions.length;
+		int count = effectiveLength();
 		StringBuilder sb = new StringBuilder();
 		sb.append(rank == 1 ? "#(" : "#" + rank + "A(");
-		for (int k = 0; k < this.data.length; k++) {
+		for (int k = 0; k < count; k++) {
 			if (k > 0) {
 				sb.append(' ');
 			}

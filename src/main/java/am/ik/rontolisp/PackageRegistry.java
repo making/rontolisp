@@ -95,7 +95,9 @@ public final class PackageRegistry {
 			LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.VALUES,
 			LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING, LispNames.SYMBOL_NAME, LispNames.INTERN,
 			LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.SYMBOL_VALUE,
-			LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE);
+			LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER,
+			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH,
+			LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT);
@@ -119,7 +121,8 @@ public final class PackageRegistry {
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
 			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH, LispNames.ASET,
 			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
-			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL);
+			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL,
+			LispNames.SET_FILL_POINTER);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
