@@ -3646,10 +3646,11 @@ class LispEvaluatorTest {
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
 			.contains("write-string", "write-to-string")
 			.contains("symbol-name", "intern", "find-symbol", "make-symbol", "boundp", "fboundp", "symbol-value")
+			.contains("string")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents")
 			.isSorted()
-			.hasSize(221);
+			.hasSize(222);
 	}
 
 	@Test
@@ -4877,6 +4878,25 @@ class LispEvaluatorTest {
 			.hasMessageContaining("expects a symbol");
 		assertThatThrownBy(() -> evalMulti("(symbol-name 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a symbol");
+	}
+
+	@Test
+	void stringCoercesDesignatorsToStrings() {
+		assertThat(evalMulti("(string \"foo\")").print()).isEqualTo("\"foo\"");
+		assertThat(evalMulti("(string 'foo)").print()).isEqualTo("\"foo\"");
+		assertThat(evalMulti("(string :bar)").print()).isEqualTo("\":bar\"");
+		assertThat(evalMulti("(string #\\a)").print()).isEqualTo("\"a\"");
+		assertThat(evalMulti("(string t)").print()).isEqualTo("\"t\"");
+		assertThat(evalMulti("(string nil)").print()).isEqualTo("\"nil\"");
+		assertThat(evalMulti("(gensym (string 'x))").print()).isEqualTo("#:x1");
+	}
+
+	@Test
+	void stringRejectsANonDesignator() {
+		assertThatThrownBy(() -> evalMulti("(string 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot coerce");
+		assertThatThrownBy(() -> evalMulti("(string '(1 2))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot coerce");
 	}
 
 	@Test

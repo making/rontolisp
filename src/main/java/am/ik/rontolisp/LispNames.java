@@ -1199,6 +1199,9 @@ public final class LispNames {
 
 	// String operations
 
+	/** The {@code string} built-in function (string-designator coercion). */
+	public static final String STRING = "string";
+
 	/** The {@code string-upcase} built-in function. */
 	public static final String STRING_UPCASE = "string-upcase";
 

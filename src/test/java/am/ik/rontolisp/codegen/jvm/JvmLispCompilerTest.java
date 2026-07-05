@@ -232,6 +232,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunString() throws Exception {
+		assertThat(compileAndRun("(print (string \"foo\")) (print (string 'foo)) (print (string :bar))"
+				+ "(print (string #\\a)) (print (string t)) (print (string nil))"
+				+ "(print (funcall #'string 'xyz)) (print (mapcar #'string '(a b)))"))
+			.isEqualTo("\"foo\"\n\"foo\"\n\":bar\"\n\"a\"\n\"t\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+	}
+
+	@Test
 	void compileAndRunIntern() throws Exception {
 		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"foo\") 'foo))"
 				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
@@ -3743,12 +3751,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("221");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("222");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("221");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("222");
 	}
 
 	@Test

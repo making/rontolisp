@@ -4105,7 +4105,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("221");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("222");
 	}
 
 	@Test
@@ -4128,6 +4128,14 @@ class WasmLispCompilerIntegrationTest {
 				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
 				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
 			.isEqualTo("\"foo\"\n\":bar\"\n\"#:g1\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+	}
+
+	@Test
+	void stringCoercesDesignatorsToStrings() throws Exception {
+		assertThat(compileAndRun("(print (string \"foo\")) (print (string 'foo)) (print (string :bar))"
+				+ "(print (string #\\a)) (print (string t)) (print (string nil))"
+				+ "(print (funcall #'string 'xyz)) (print (mapcar #'string '(a b)))"))
+			.isEqualTo("\"foo\"\n\"foo\"\n\":bar\"\n\"a\"\n\"t\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
 	}
 
 	@Test

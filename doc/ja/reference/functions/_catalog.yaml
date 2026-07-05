@@ -88,6 +88,7 @@ categories:
   - title: "文字列"
     functions:
       - { slug: concatenate, name: "concatenate" }
+      - { slug: string, name: "string" }
       - { slug: string-upcase, name: "string-upcase" }
       - { slug: string-downcase, name: "string-downcase" }
       - { slug: string-capitalize, name: "string-capitalize" }

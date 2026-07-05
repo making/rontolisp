@@ -1460,6 +1460,21 @@ public final class Environment implements Scope {
 						LispNames.SYMBOL_NAME + " expects a symbol, got " + args.get(0).print());
 			};
 		}));
+		// string: the CL string-designator coercion. A string is returned unchanged, a
+		// symbol yields its name (the same spelling princ prints), a character yields a
+		// one-character string. t/nil coerce like symbols ("t"/"nil").
+		env.defineFunction(LispNames.STRING, new LispFunction(LispNames.STRING, args -> {
+			requireArgCount(LispNames.STRING, args, 1);
+			return switch (args.get(0)) {
+				case LispString s -> s;
+				case LispSymbol sym -> new LispString(sym.name());
+				case LispChar c -> new LispString(new String(Character.toChars(c.codePoint())));
+				case LispTrue ignored -> new LispString("t");
+				case LispNil ignored -> new LispString("nil");
+				default -> throw new LispEvalException(
+						LispNames.STRING + " cannot coerce " + args.get(0).print() + " to a string");
+			};
+		}));
 		// make-symbol: rontolisp has no intern table (symbols compare by name), so
 		// "uninterned" is represented by the same "#:" name prefix gensym uses.
 		env.defineFunction(LispNames.MAKE_SYMBOL, new LispFunction(LispNames.MAKE_SYMBOL, args -> {

@@ -29,6 +29,16 @@ final class WasmSymbolApiCompiler {
 		compileUnaryCall(cons, LispNames.SYMBOL_NAME, WasmLispCompiler.FUNC_PRINC_TO_STR, ctx);
 	}
 
+	/**
+	 * string: the CL string-designator coercion. On the compiled path this reuses
+	 * {@code _princ_to_str} (like {@code symbol-name}); a string is identity, a symbol
+	 * yields its name, a character a one-character string. Lenient on non-designators
+	 * (the {@code symbol-name} precedent); the interpreter type-checks.
+	 */
+	static void compileString(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileUnaryCall(cons, LispNames.STRING, WasmLispCompiler.FUNC_PRINC_TO_STR, ctx);
+	}
+
 	static void compileIntern(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (cons.toList().size() == 3) {
 			throw new UnsupportedOperationException(LispNames.INTERN + " with a package argument is not supported");

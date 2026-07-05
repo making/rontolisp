@@ -40,6 +40,18 @@ final class JvmSymbolApiCompiler {
 		JvmPrincToStringCompiler.emitToString(parts.get(1), ctx.lispToDisplayString.index(), ctx, className);
 	}
 
+	/**
+	 * string: the CL string-designator coercion. On the compiled path this is
+	 * princ-to-string emission (like {@code symbol-name}); a string is returned
+	 * unchanged, a symbol yields its name, a character a one-character string. The
+	 * interpreter type- checks the argument; the compiled backend is lenient (the
+	 * {@code symbol-name} precedent).
+	 */
+	static void compileString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = requireArgs(cons, 1, LispNames.STRING);
+		JvmPrincToStringCompiler.emitToString(parts.get(1), ctx.lispToDisplayString.index(), ctx, className);
+	}
+
 	/** intern: strip the surrounding quotes from the runtime string. */
 	static void compileIntern(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		if (cons.toList().size() == 3) {

@@ -248,9 +248,10 @@ public final class BuiltinFunctionWrappers {
 							callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
 									new LispInteger(0))))),
 			// String operations
-			unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE), unary(LispNames.STRING_CAPITALIZE),
-			binary(LispNames.SUBSEQ), binary(LispNames.STRING_EQ), binary(LispNames.STRING_EQUAL),
-			binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM), binary(LispNames.STRING_RIGHT_TRIM),
+			unary(LispNames.STRING), unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE),
+			unary(LispNames.STRING_CAPITALIZE), binary(LispNames.SUBSEQ), binary(LispNames.STRING_EQ),
+			binary(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
+			binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations
 			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CODE_CHAR),
 			unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE), unary(LispNames.CHARACTERP),

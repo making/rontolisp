@@ -206,6 +206,7 @@ final class WasmExprCompiler {
 				case LispNames.PRIN1_TO_STRING -> WasmPrin1ToStringCompiler.compile(cons, ctx);
 				case LispNames.STRING_CONCAT -> WasmStringConcatCompiler.compile(cons, ctx);
 				case LispNames.GENSYM -> WasmGensymCompiler.compile(cons, ctx);
+				case LispNames.STRING -> WasmSymbolApiCompiler.compileString(cons, ctx);
 				case LispNames.SYMBOL_NAME -> WasmSymbolApiCompiler.compileSymbolName(cons, ctx);
 				case LispNames.INTERN -> WasmSymbolApiCompiler.compileIntern(cons, ctx);
 				case LispNames.FIND_SYMBOL -> WasmSymbolApiCompiler.compileFindSymbol(cons, ctx);

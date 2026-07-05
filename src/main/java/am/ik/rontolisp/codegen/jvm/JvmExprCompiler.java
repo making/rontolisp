@@ -189,6 +189,7 @@ final class JvmExprCompiler {
 				case LispNames.PRIN1_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
 				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
+				case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
 				case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
 				case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 				case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);

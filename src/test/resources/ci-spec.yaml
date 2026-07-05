@@ -1071,7 +1071,7 @@ cases:
     expected: |
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      221
+      222
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -2738,6 +2738,10 @@ cases:
       (print (fboundp 'sym-api-no-such-fn))
       (print (fboundp (intern "sym-api-fn")))
       (print (mapcar #'symbol-name '(a b)))
+      (print (string "sym-api-str"))
+      (print (string 'sym-api-sym))
+      (print (string #\z))
+      (print (mapcar #'string '(a b)))
     expected: |
       "foo"
       ":bar"
@@ -2760,6 +2764,10 @@ cases:
       t
       nil
       t
+      ("a" "b")
+      "sym-api-str"
+      "sym-api-sym"
+      "z"
       ("a" "b")
   - name: split-sequence-residue-features
     source: |
