@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -22,7 +23,8 @@ final class JvmLetCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		LispVal bindings = parts.get(1);
+		// A bare symbol entry is an init-less binding to nil.
+		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		Set<String> savedBoxedVars = new HashSet<>(ctx.boxedVars);
 		int savedNextLocal = ctx.nextLocal;

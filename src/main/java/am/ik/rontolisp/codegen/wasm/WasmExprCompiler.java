@@ -258,7 +258,12 @@ final class WasmExprCompiler {
 				case LispNames.CHAR_EQ -> WasmCharCompiler.compileEq(cons, ctx);
 				case LispNames.CHAR_LT -> WasmCharCompiler.compileLt(cons, ctx);
 				case LispNames.CHAR_LE -> WasmCharCompiler.compileLe(cons, ctx);
-				case LispNames.PARSE_INTEGER -> WasmParseIntegerCompiler.compile(cons, ctx);
+				case LispNames.PARSE_INTEGER ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx);
+				case LispNames.VALUES_LIST ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx);
+				case LispNames.COMPLEX -> WasmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx);
+				case LispNames.NE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx);
 				case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);
 				case LispNames.STRING_EQ -> WasmStringEqCompiler.compileEq(cons, ctx);
 				case LispNames.STRING_EQUAL -> WasmStringEqCompiler.compileEqual(cons, ctx);

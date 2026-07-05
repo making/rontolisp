@@ -138,7 +138,7 @@ public final class FreeVarAnalyzer {
 						case LispNames.LET -> {
 							List<LispVal> parts = cons.toList();
 							Set<String> innerBound = new HashSet<>(boundVars);
-							LispVal bindings = parts.get(1);
+							LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 							if (bindings instanceof LispCons bindingsCons) {
 								for (LispVal binding : bindingsCons.toList()) {
 									LispCons pair = (LispCons) binding;
@@ -291,7 +291,7 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.LET -> {
 							List<LispVal> parts = cons.toList();
-							LispVal bindings = parts.get(1);
+							LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 							if (bindings instanceof LispCons bindingsCons) {
 								for (LispVal binding : bindingsCons.toList()) {
 									LispCons pair = (LispCons) binding;

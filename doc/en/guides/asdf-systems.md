@@ -101,14 +101,25 @@ directory, so sibling systems in one registry directory find each other.
 
 ## What can I actually load?
 
-The proof point is **split-sequence v2.0.1**, a classic real-world library:
-its unmodified sources load via `asdf:load-system` and
-`split-sequence`/`split-sequence-if`/`split-sequence-if-not` work on strings
-and lists — including the second return value (the resume index), which
-crosses the function boundary through the multiple-value channel — on all
-four backends (interpreter, JVM, WASM Preview 1 and `--component`). Its
-CLOS-only `extended-sequence.lisp` is gated behind
-`:if-feature (:or :sbcl :abcl)` and drops out automatically.
+Two real-world libraries load unmodified today, verified on all four
+backends (interpreter, JVM, WASM Preview 1 and `--component`):
+
+- **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
+  `split-sequence`/`split-sequence-if`/`split-sequence-if-not` work on
+  strings and lists — including the second return value (the resume index),
+  which crosses the function boundary through the multiple-value channel.
+  Its CLOS-only `extended-sequence.lisp` is gated behind
+  `:if-feature (:or :sbcl :abcl)` and drops out automatically.
+- **[parse-number](https://github.com/sharplispers/parse-number) v1.8**:
+  `parse-number`/`parse-real-number`/`parse-positive-real-number` handle
+  integers, ratios, floats, radix-prefixed literals (`#xFF`, `#3r12`) and
+  exponent markers; the `(error 'invalid-number :value ... :reason ...)`
+  idiom signals with the intended diagnostics through the lite condition
+  stand-ins.
+
+Runnable demos for both — with the per-backend commands and expected
+output — live in
+[`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 
 A library qualifies today roughly when it stays inside: plain
 `defun`/`defmacro`/`defpackage` code, `loop`, `multiple-value-bind` over

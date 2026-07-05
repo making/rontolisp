@@ -97,13 +97,25 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 
 ## 実際に何がロードできるか
 
-実証例は **split-sequence v2.0.1** — 実世界の古典的ライブラリです。無改変の
-ソースが `asdf:load-system` でロードでき、
-`split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列と
-リストに対して動作します — 関数境界を多値チャネル経由で越える第 2 戻り値
-(再開インデックス) を含めて — 4 つ全てのバックエンド (インタプリタ、JVM、
-WASM Preview 1、`--component`) で。CLOS 専用の `extended-sequence.lisp` は
-`:if-feature (:or :sbcl :abcl)` でゲートされており自動的に除外されます。
+現在、実世界の 2 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
+(インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
+
+- **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
+  `split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列と
+  リストに対して動作します — 関数境界を多値チャネル経由で越える第 2 戻り値
+  (再開インデックス) を含めて。CLOS 専用の `extended-sequence.lisp` は
+  `:if-feature (:or :sbcl :abcl)` でゲートされており自動的に除外されます。
+- **[parse-number](https://github.com/sharplispers/parse-number) v1.8**:
+  `parse-number`/`parse-real-number`/`parse-positive-real-number` が整数、
+  有理数、浮動小数点数、基数プレフィクス付きリテラル (`#xFF`、`#3r12`)、
+  指数マーカーを扱います。`(error 'invalid-number :value ... :reason ...)`
+  イディオムは簡易コンディション代替を通じて意図した診断情報付きで
+  シグナルされます。
+
+両ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待出力付き —
+は
+[`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
+にあります。
 
 現時点でロードできるライブラリの目安は、おおよそ次の範囲に収まるものです:
 素の `defun`/`defmacro`/`defpackage` コード、`loop`、`values` を末尾に持つ

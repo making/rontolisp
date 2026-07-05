@@ -132,7 +132,7 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.MOD), binary(LispNames.REM),
 			// Comparison (arity 2)
 			binary(LispNames.EQ), binary(LispNames.LT), binary(LispNames.GT), binary(LispNames.LE),
-			binary(LispNames.GE),
+			binary(LispNames.GE), binary(LispNames.NE),
 			// List/utility (arity 2)
 			binary(LispNames.CONS), binary(LispNames.EQ_GENERAL), binary(LispNames.EQL), binary(LispNames.EQUAL),
 			binary(LispNames.MIN), binary(LispNames.MAX), binary(LispNames.NTHCDR), binary(LispNames.APPEND),
@@ -158,7 +158,7 @@ public final class BuiltinFunctionWrappers {
 			// Type predicates (arity 1)
 			unary(LispNames.NUMBERP), unary(LispNames.INTEGERP), unary(LispNames.FLOATP), unary(LispNames.SYMBOLP),
 			unary(LispNames.STRINGP), unary(LispNames.LISTP), unary(LispNames.CONSP), unary(LispNames.KEYWORDP),
-			unary(LispNames.FUNCTIONP),
+			unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST),
 			// Type conversion (arity 1)
 			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
 			unary(LispNames.ROUND),

@@ -920,11 +920,6 @@ public final class JvmLispCompiler implements LispCompiler {
 						stringLength, stringSubstring, stringConcat)
 				: null;
 
-		// parse-integer runtime helper, emitted only when the program uses parse-integer.
-		boolean usesParseInteger = programUsesSymbol(program, LispNames.PARSE_INTEGER);
-		final JvmParseIntegerRuntimeBuilder.@Nullable ParseIntMethod parseIntMethodBody = usesParseInteger
-				? JvmParseIntegerRuntimeBuilder.build(cp, stringClass, longClass, longValueOf) : null;
-
 		// length runtime helper. Emitted unconditionally (it is small and lives in its
 		// own
 		// method): length is also generated internally by other compilers (e.g. format
@@ -1210,17 +1205,6 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(hm.maxStack())
 									.writeU2(hm.maxLocals())
 									.writeCode((Object[]) hm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (parseIntMethodBody != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, parseIntMethodBody.name(),
-							parseIntMethodBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(parseIntMethodBody.maxStack())
-									.writeU2(parseIntMethodBody.maxLocals())
-									.writeCode((Object[]) parseIntMethodBody.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -1586,6 +1570,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mangled.indexOf('>') >= 0) {
 			mangled = mangled.replace(">", "$gt");
+		}
+		// '.' is illegal in JVM method/field names; dotted package names (e.g.
+		// parse-number's org.mapcar.parse-number) reach here through qualified
+		// defun/global names. A residual '/' (mid-name, e.g. make-float/frac) is a
+		// package separator to the JVM, so it must go too.
+		if (mangled.indexOf('.') >= 0) {
+			mangled = mangled.replace(".", "$dot");
+		}
+		if (mangled.indexOf('/') >= 0) {
+			mangled = mangled.replace("/", "$div");
 		}
 		return mangled;
 	}

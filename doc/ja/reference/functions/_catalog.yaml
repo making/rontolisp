@@ -19,6 +19,7 @@ categories:
   - title: "比較と数値述語"
     functions:
       - { slug: numeq, name: "=" }
+      - { slug: ne, name: "/=" }
       - { slug: lt, name: "<" }
       - { slug: gt, name: ">" }
       - { slug: le, name: "<=" }
@@ -178,6 +179,7 @@ categories:
       - { slug: funcall, name: "funcall" }
       - { slug: apply, name: "apply" }
       - { slug: values, name: "values" }
+      - { slug: values-list, name: "values-list" }
       - { slug: mapcar, name: "mapcar" }
       - { slug: map, name: "map" }
       - { slug: mapc, name: "mapc" }

@@ -15,3 +15,10 @@ The `.todo/54` Phase-2 read-layer additions, implemented entirely in the fronten
 **`#:foo`**: still lexed as a plain symbol whose name keeps the `#:` prefix (NOT renamed — a defpackage/asdf designator needs the original name, so gensym-style freshness is out of scope). `PackageResolver.resolveSymbol` passes `#:`-prefixed symbols through unresolved (like keywords/`&`-markers); `PackageResolver.designator` and `AsdfSystems.designator/symbolName` strip the prefix.
 
 ci-spec cases: `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features` (first use of `expectedByBackend`), `reader-features-variable`. Unit pins: the feature-conditional block in `LispReaderTest`, `loadedFilesAreReadWithTheGivenFeatures` in `LoadInlinerTest`.
+
+Symbol single-escapes (added for parse-number, 2026-07-05): a backslash in a
+symbol token makes the NEXT character part of the name verbatim -- even a
+terminating one -- and is itself dropped (`LispLexer.readSymbol`), so locals
+like parse-number's `\(-pos` read as a symbol named `(-pos`. Plain symbols
+only (no `|...|` multiple escape); the compiled runtime readers do not know
+this syntax, matching the other frontend-only reader features above.

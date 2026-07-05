@@ -55,6 +55,12 @@ heads accept the same specs as `check-type`:
   (`plainTypeName`): standard type names are not all registered CL symbols,
   so inside a user package the resolver qualifies e.g. `unsigned-byte` to
   `pkg::unsigned-byte` (found by the split-sequence e2e, `.todo/61`).
+  Complementing that, `PackageRegistry.CL_TYPES` registers the common
+  type-only names (float family, unsigned-byte, sequence, satisfies,
+  otherwise, ...) so they resolve BARE in the first place -- required where
+  the name reaches RUNTIME data, e.g. parse-number's `'double-float` compared
+  by the runtime `coerce` dispatch (symbols compare by name, so a qualified
+  spelling would never match).
 - `deftype` is a parsed no-op returning nil (the name is NOT registered;
   using it in a later type test errors) -- enough for the library shape
   where the type only appears in no-op declaim/declare declarations.

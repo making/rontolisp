@@ -1,5 +1,6 @@
 > **Update 2026-07-05 (split-sequence e2e, .todo/54 Phase 3):** the
-> `%mv-spill` runtime channel shipped -- a `values` result in a USER function
+> `%mv-spill` runtime channel shipped (+ `values-list` and the two-value
+> `parse-integer` expansion, added for parse-number 2026-07-05) -- a `values` result in a USER function
 > now reaches the caller's mv consumers on interpreter/JVM/WASM (see
 > `.kb/multiple-values.md`). Remaining here: true CL semantics for non-tail
 > `values` (stale-spill leak), first-class `#'values` spilling in compiled

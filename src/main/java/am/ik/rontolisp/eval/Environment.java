@@ -221,6 +221,9 @@ public final class Environment implements Scope {
 		// The multiple-value spill channel (see LispNames.MV_SPILL): the compilers
 		// inject an equivalent top-level (setq %mv-spill nil) when needed.
 		env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		// Informational (every float is the one double representation); predefined so
+		// library code reading it works. The compilers inject an equivalent setq.
+		env.define(LispNames.READ_DEFAULT_FLOAT_FORMAT, new LispSymbol("double-float"));
 		return env;
 	}
 
@@ -2300,14 +2303,18 @@ public final class Environment implements Scope {
 					default -> throw new LispEvalException(LispNames.PARSE_INTEGER + ": unsupported keyword " + key);
 				}
 			}
-			return parseInteger(str.value(), start, end, radix, junkAllowed);
+			LispVal[] valueAndPos = parseInteger(str.value(), start, end, radix, junkAllowed);
+			// Publish the stop position as the second value through the spill, so a
+			// first-class #'parse-integer matches the call-position expansion.
+			env.define(LispNames.MV_SPILL, new LispCons(valueAndPos[1], LispNil.INSTANCE));
+			return valueAndPos[0];
 		}));
 	}
 
 	// Shared parse-integer logic: trims whitespace, accepts an optional sign, and
 	// accumulates digits in the given radix. With junkAllowed, stops at the first
 	// non-digit and returns nil when no digits were seen; otherwise signals on junk.
-	private static LispVal parseInteger(String s, int start, int end, int radix, boolean junkAllowed) {
+	private static LispVal[] parseInteger(String s, int start, int end, int radix, boolean junkAllowed) {
 		int i = start;
 		while (i < end && Character.isWhitespace(s.charAt(i))) {
 			i++;
@@ -2339,11 +2346,11 @@ public final class Environment implements Scope {
 		}
 		if (!sawDigit) {
 			if (junkAllowed) {
-				return LispNil.INSTANCE;
+				return new LispVal[] { LispNil.INSTANCE, new LispInteger(i) };
 			}
 			throw new LispEvalException(LispNames.PARSE_INTEGER + ": no integer in string \"" + s + "\"");
 		}
-		return normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign)));
+		return new LispVal[] { normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign))), new LispInteger(i) };
 	}
 
 	private static void registerCharacters(Environment env) {
@@ -2605,6 +2612,17 @@ public final class Environment implements Scope {
 			}
 			env.define(LispNames.MV_SPILL, extras);
 			return args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+		}));
+		// values-list: (values-list '(1 2)) == (values 1 2) -- the first element is
+		// the primary value, the rest go to the spill channel.
+		env.defineFunction(LispNames.VALUES_LIST, new LispFunction(LispNames.VALUES_LIST, args -> {
+			requireArgCount(LispNames.VALUES_LIST, args, 1);
+			if (args.get(0) instanceof LispCons cons) {
+				env.define(LispNames.MV_SPILL, cons.cdr());
+				return cons.car();
+			}
+			env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+			return LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
 			requireArgCount(LispNames.NTHCDR, args, 2);

@@ -1020,9 +1020,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
+      (and assert case ccase check-type complement complex cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      219
+      221
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -2706,3 +2706,36 @@ cases:
       3
       res-vec-tag
       nil
+  - name: parse-number-residue-features
+    source: |
+      (multiple-value-bind (pn-n pn-pos) (parse-integer "  -42abc" :junk-allowed t)
+        (print (list pn-n pn-pos)))
+      (print (parse-integer "x1101y" :start 1 :end 5 :radix 2))
+      (print (nth-value 1 (parse-integer "77" :radix 8)))
+      (multiple-value-bind (a b c) (values-list '(10 20)) (print (list a b c)))
+      (print (values-list nil))
+      (print (/= 1 2))
+      (print (/= 1 2 1))
+      (let (pn-x pn-y)
+        (setq pn-x 5)
+        (print (list pn-x pn-y)))
+      (let ((pn-\(-tag 7)) (print pn-\(-tag))
+      (print (coerce 5 'single-float))
+      (defun pn-pick-type () 'double-float)
+      (print (coerce 1/4 (pn-pick-type)))
+      (print (complex 9 0))
+      (print *read-default-float-format*)
+    expected: |
+      (-42 5)
+      13
+      2
+      (10 20 nil)
+      nil
+      t
+      nil
+      (5 nil)
+      7
+      5.0
+      0.25
+      9
+      double-float

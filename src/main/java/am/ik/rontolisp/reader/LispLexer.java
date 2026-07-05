@@ -382,11 +382,24 @@ public final class LispLexer {
 	}
 
 	private Token.SymbolToken readSymbol() {
-		int start = this.pos;
-		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+		// CL single escape: a backslash makes the NEXT character part of the symbol
+		// name verbatim, even a terminating one -- real libraries name locals like
+		// \(-pos (parse-number). The backslash itself is dropped from the name.
+		StringBuilder sb = new StringBuilder();
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (c == '\\' && this.pos + 1 < this.input.length()) {
+				sb.append(this.input.charAt(this.pos + 1));
+				this.pos += 2;
+				continue;
+			}
+			if (!isSymbolChar(c)) {
+				break;
+			}
+			sb.append(c);
 			this.pos++;
 		}
-		return new Token.SymbolToken(this.input.substring(start, this.pos));
+		return new Token.SymbolToken(sb.toString());
 	}
 
 	private Token.StringToken readString() {

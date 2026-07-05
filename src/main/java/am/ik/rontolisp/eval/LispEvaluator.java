@@ -928,6 +928,15 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMakeCondition(cons), env);
 				case LispNames.DOCUMENTATION:
 					return eval(LispMacroExpander.expandDocumentation(cons), env);
+				case LispNames.COMPLEX:
+					return eval(LispMacroExpander.expandComplexLite(cons), env);
+				case LispNames.NE:
+					return eval(LispMacroExpander.expandNumericNotEqual(cons), env);
+				case LispNames.PARSE_INTEGER:
+					// The shared expansion carries the full keyword set and the second
+					// return value; the Environment function remains for first-class
+					// use (#'parse-integer).
+					return eval(LispMacroExpander.expandParseInteger(cons), env);
 				case LispNames.READ_SEQUENCE:
 					return eval(LispMacroExpander.expandReadSequence(cons), env);
 				case LispNames.WRITE_SEQUENCE:
@@ -1359,8 +1368,9 @@ public final class LispEvaluator {
 	private LispVal evalLet(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		Environment letEnv = new Environment(env);
-		// parts.get(1) is the bindings list: ((x 1) (y 2))
-		LispVal bindings = parts.get(1);
+		// parts.get(1) is the bindings list: ((x 1) (y 2)); a bare symbol entry is
+		// an init-less binding to nil.
+		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
 				LispCons bindPair = (LispCons) binding;

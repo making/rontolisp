@@ -71,6 +71,12 @@ the compilers call `LispMacroExpander.injectMvSpillGlobal` (a prepended
 top-level `(setq %mv-spill nil)`, gated on a scan for the five mv operator
 names) after lambda-list desugaring. The scalar `--no-gc` backend has no
 reference globals and keeps the old pure expansion (`expandValuesPrimary`).
+`values-list` (added for parse-number, 2026-07-05) is the spill's spread
+operator: `(values-list l)` publishes `(cdr l)` and returns `(car l)`
+(`expandValuesList` on the compile paths, a spill-writing Environment function
+on the interpreter; classified CL_FUNCTIONS with a unary wrapper). The
+`parse-integer` expansion returns its stop position as a literal second value,
+so PARSE_INTEGER and VALUES_LIST are part of the `injectMvSpillGlobal` scan.
 
 ## Semantics consequences (documented deviations)
 

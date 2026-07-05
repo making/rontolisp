@@ -588,7 +588,8 @@ public final class LispMacroExpander {
 		else {
 			resultExpr = makeProgn(resultForms);
 		}
-		LispVal bindings = listToCons(letBindings);
+		// (do () ...) is legal: an empty binding list stays nil.
+		LispVal bindings = letBindings.isEmpty() ? LispNil.INSTANCE : listToCons(letBindings);
 		LispVal letExpr = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr));
 		return makeBlock(letExpr);
 
@@ -2369,7 +2370,8 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandLetStar(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispVal bindings = parts.get(1);
+		// A bare symbol entry is an init-less binding to nil.
+		LispVal bindings = normalizeBindingList(parts.get(1));
 		List<LispVal> body = parts.subList(2, parts.size());
 		if (!(bindings instanceof LispCons bindingsCons)) {
 			// (let* () body...) -> (let () body...)
@@ -2750,6 +2752,154 @@ public final class LispMacroExpander {
 		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, x));
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x)), makeNot(call)));
 		return makeLet(fn.name(), normalizeFunctionDesignator(parts.get(1)), lambda);
+	}
+
+	/**
+	 * Expands {@code (complex real imag)} (or one argument) into a check that the
+	 * imaginary part is zero: there is no complex number representation, so a zero
+	 * imaginary part yields the real part and anything else signals. This keeps sources
+	 * whose complex branch is never taken (e.g. parse-number's #C parser) loadable.
+	 * @param cons the complex expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandComplexLite(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new IllegalArgumentException("complex expects a real part and an optional imaginary part");
+		}
+		if (parts.size() == 2) {
+			return parts.get(1);
+		}
+		LispSymbol re = new LispSymbol("__complex_r");
+		LispSymbol im = new LispSymbol("__complex_i");
+		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("complex numbers are not supported (imaginary part ~s)"), im));
+		LispVal body = makeIf(mvCall(LispNames.ZEROP, im), re, errorCall);
+		return makeLet(re.name(), parts.get(1), makeLet(im.name(), parts.get(2), body));
+	}
+
+	/**
+	 * Expands {@code (parse-integer string &key start end radix junk-allowed)} into a
+	 * shared digit-accumulation scan over the {@code char}/{@code digit-char-p}
+	 * primitives, so every backend gets the full keyword set and BOTH return values (the
+	 * integer and the position where parsing stopped, a literal {@code (values ...)} the
+	 * multiple-value consumers and the {@code %mv-spill} channel pick up). Semantics:
+	 * leading/trailing whitespace is skipped, an optional sign is accepted; without
+	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals, with it the scan
+	 * stops at the first non-digit and yields nil when no digits were seen.
+	 * @param cons the parse-integer expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandParseInteger(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("parse-integer expects a string: " + cons.print());
+		}
+		requireKeywords(LispNames.PARSE_INTEGER, parts, 2, LispNames.START_KEYWORD, LispNames.END_KEYWORD,
+				LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
+		LispVal startForm = keywordValue(parts, 2, LispNames.START_KEYWORD);
+		LispVal endForm = keywordValue(parts, 2, LispNames.END_KEYWORD);
+		LispVal radixForm = keywordValue(parts, 2, LispNames.RADIX_KEYWORD);
+		LispVal junkForm = keywordValue(parts, 2, LispNames.JUNK_ALLOWED_KEYWORD);
+		LispSymbol str = new LispSymbol("__pi_s");
+		LispSymbol endRaw = new LispSymbol("__pi_endraw");
+		LispSymbol start = new LispSymbol("__pi_start");
+		LispSymbol end = new LispSymbol("__pi_end");
+		LispSymbol radix = new LispSymbol("__pi_radix");
+		LispSymbol junk = new LispSymbol("__pi_junk");
+		LispSymbol i = new LispSymbol("__pi_i");
+		LispSymbol sign = new LispSymbol("__pi_sign");
+		LispSymbol acc = new LispSymbol("__pi_acc");
+		LispSymbol saw = new LispSymbol("__pi_saw");
+		LispSymbol digit = new LispSymbol("__pi_d");
+		LispVal charAt = mvCall(LispNames.CHAR, str, i);
+		LispVal advance = piSetq(i, mvCall(LispNames.ADD, i, new LispInteger(1)));
+		LispVal atWhitespace = mvCall(LispNames.MEMBER, charAt,
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(List.of(new LispChar(' '),
+						new LispChar('\t'), new LispChar('\n'), new LispChar('\r'), new LispChar((char) 12))))));
+		LispVal pastEnd = mvCall(LispNames.GE, i, end);
+		LispVal skipWhitespace = piDo(mvCall(LispNames.OR, pastEnd, makeNot(atWhitespace)), List.of(advance));
+		// (if (< i end) (if (eql c #\+) advance (if (eql c #\-) (sign -1; advance))))
+		LispVal signStep = makeIf(mvCall(LispNames.LT, i, end),
+				makeIf(mvCall(LispNames.EQL, charAt, new LispChar('+')), advance,
+						makeIf(mvCall(LispNames.EQL, charAt, new LispChar('-')),
+								makeProgn(List.of(piSetq(sign, new LispInteger(-1)), advance)), LispNil.INSTANCE)),
+				LispNil.INSTANCE);
+		// The digit loop: the end test reads the next digit into __pi_d as a side
+		// effect (or short-circuits at the end of the region first).
+		LispVal digitTest = mvCall(LispNames.OR, pastEnd,
+				makeNot(piSetq(digit, mvCall(LispNames.DIGIT_CHAR_P, charAt, radix))));
+		LispVal digitLoop = piDo(digitTest,
+				List.of(piSetq(acc, mvCall(LispNames.ADD, mvCall(LispNames.MUL, acc, radix), digit)),
+						piSetq(saw, LispTrue.INSTANCE), advance));
+		LispVal result = mvCall(LispNames.VALUES, mvCall(LispNames.MUL, sign, acc), i);
+		LispVal junkError = listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString("parse-integer: junk in string ~s"), str));
+		LispVal emptyError = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("parse-integer: no integer in string ~s"), str));
+		LispVal strictTail = makeProgn(
+				List.of(skipWhitespace, makeIf(mvCall(LispNames.LT, i, end), junkError, LispNil.INSTANCE),
+						makeIf(saw, LispNil.INSTANCE, emptyError), result));
+		LispVal junkTail = makeIf(saw, result, mvCall(LispNames.VALUES, LispNil.INSTANCE, i));
+		LispVal body = makeProgn(List.of(skipWhitespace, signStep, makeLet(digit.name(), LispNil.INSTANCE, digitLoop),
+				makeIf(junk, junkTail, strictTail)));
+		LispVal expanded = makeLet(saw.name(), LispNil.INSTANCE, body);
+		expanded = makeLet(acc.name(), new LispInteger(0), expanded);
+		expanded = makeLet(sign.name(), new LispInteger(1), expanded);
+		expanded = makeLet(i.name(), start, expanded);
+		expanded = makeLet(junk.name(), junkForm == null ? LispNil.INSTANCE : junkForm, expanded);
+		expanded = makeLet(radix.name(), radixForm == null ? new LispInteger(10) : radixForm, expanded);
+		expanded = makeLet(end.name(), makeIf(endRaw, endRaw, mvCall(LispNames.LENGTH, str)), expanded);
+		expanded = makeLet(endRaw.name(), endForm == null ? LispNil.INSTANCE : endForm, expanded);
+		expanded = makeLet(start.name(), startForm == null ? new LispInteger(0) : startForm, expanded);
+		return makeLet(str.name(), parts.get(1), expanded);
+	}
+
+	private static LispVal piSetq(LispSymbol var, LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), var, value));
+	}
+
+	/** Builds a body-only {@code (do () (endTest nil) body...)} loop, pre-expanded. */
+	private static LispVal piDo(LispVal endTest, List<LispVal> body) {
+		List<LispVal> doParts = new java.util.ArrayList<>();
+		doParts.add(new LispSymbol(LispNames.DO));
+		doParts.add(LispNil.INSTANCE);
+		doParts.add(listToCons(List.of(endTest, LispNil.INSTANCE)));
+		doParts.addAll(body);
+		return expandDo((LispCons) listToCons(doParts));
+	}
+
+	/**
+	 * Expands {@code (/= a b ...)} into negated {@code =} tests over every pair (all
+	 * arguments must be pairwise different, as in CL). Each argument is evaluated once
+	 * through a temp.
+	 * @param cons the /= expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNumericNotEqual(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("/= expects at least one number: " + cons.print());
+		}
+		if (parts.size() == 2) {
+			return makeProgn(List.of(parts.get(1), LispTrue.INSTANCE));
+		}
+		List<LispSymbol> temps = new java.util.ArrayList<>();
+		List<MvBinding> bindings = new java.util.ArrayList<>();
+		String prefix = "__ne" + MV_COUNTER.getAndIncrement();
+		for (int i = 1; i < parts.size(); i++) {
+			LispSymbol tmp = new LispSymbol(prefix + "_" + (i - 1));
+			bindings.add(new MvBinding(tmp, parts.get(i)));
+			temps.add(tmp);
+		}
+		List<LispVal> tests = new java.util.ArrayList<>();
+		tests.add(new LispSymbol(LispNames.AND));
+		for (int i = 0; i < temps.size(); i++) {
+			for (int j = i + 1; j < temps.size(); j++) {
+				tests.add(makeNot(mvCall(LispNames.EQ, temps.get(i), temps.get(j))));
+			}
+		}
+		return nestMvBindings(bindings, listToCons(tests));
 	}
 
 	/** The matching flavor of a {@code position}-family scan; see buildPositionScan. */
@@ -5447,6 +5597,19 @@ public final class LispMacroExpander {
 			parts = new java.util.ArrayList<>(parts);
 			parts.set(1, expandMakeCondition(datum));
 		}
+		if (parts.get(1) instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
+				&& datumCell.car() instanceof LispSymbol) {
+			// (error 'type initarg value ...) -- the condition-type idiom (e.g.
+			// parse-number's (error 'invalid-number :value v :reason r)). Lite: no
+			// condition object exists, so signal with the type and the evaluated
+			// initargs printed into the message.
+			List<LispVal> listParts = new java.util.ArrayList<>();
+			listParts.add(new LispSymbol(LispNames.LIST));
+			listParts.addAll(parts.subList(1, parts.size()));
+			return expandError((LispCons) listToCons(List.of(new LispSymbol(LispNames.ERROR),
+					new LispString("Condition ~s was signalled."), listToCons(listParts))));
+		}
 		if (!(parts.get(1) instanceof LispString control)) {
 			throw new UnsupportedOperationException(
 					"error requires a literal control string, got: " + parts.get(1).print());
@@ -5776,6 +5939,28 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
 		}
 		String type = quotedSymbolName(parts.get(2));
+		if (type != null && isFloatTypeName(type)) {
+			// Every float type is the same double representation here.
+			return mvCall(LispNames.FLOAT, parts.get(1));
+		}
+		if (type == null && !(parts.get(2) instanceof LispString)) {
+			// A computed result type (e.g. parse-number's (coerce x type) where type
+			// comes from the exponent marker): dispatch at runtime among the float
+			// designators; the collection types need a literal (their conversions
+			// expand structurally), so anything else signals.
+			LispSymbol x = new LispSymbol("__coerce_x");
+			LispSymbol t = new LispSymbol("__coerce_t");
+			List<LispVal> floats = new java.util.ArrayList<>();
+			for (String name : FLOAT_TYPE_NAMES) {
+				floats.add(new LispSymbol(name));
+			}
+			LispVal isFloatType = mvCall(LispNames.MEMBER, t,
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(floats))));
+			LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+					new LispString("coerce: a computed result type must be a float type, got ~s"), t));
+			LispVal body = makeIf(isFloatType, mvCall(LispNames.FLOAT, x), errorCall);
+			return makeLet(x.name(), parts.get(1), makeLet(t.name(), parts.get(2), body));
+		}
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispVal stringToList = listToCons(List.of(new LispSymbol(LispNames.MAP),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("list"))),
@@ -6149,6 +6334,14 @@ public final class LispMacroExpander {
 	}
 
 	/** Returns the symbol name inside a {@code (quote name)} form, or null otherwise. */
+	/** The float type-specifier names; all map to the one double representation. */
+	private static final List<String> FLOAT_TYPE_NAMES = List.of("float", "single-float", "double-float", "short-float",
+			"long-float");
+
+	private static boolean isFloatTypeName(String name) {
+		return FLOAT_TYPE_NAMES.contains(name);
+	}
+
 	private static @Nullable String quotedSymbolName(LispVal form) {
 		if (form instanceof LispCons quoted) {
 			List<LispVal> p = quoted.toList();
@@ -7294,6 +7487,33 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (values-list list)}: the list's first element is the primary value
+	 * and the rest are published to the {@code %mv-spill} channel, so the consumers see
+	 * every element as a value -- {@code (values-list '(1 2))} is {@code (values 1 2)}.
+	 * An empty list yields nil with no extra values.
+	 *
+	 * <pre>
+	 * (values-list l) ->
+	 *   (let ((__mvN_l l))
+	 *     (setq %mv-spill (if (consp __mvN_l) (cdr __mvN_l) nil))
+	 *     (if (consp __mvN_l) (car __mvN_l) nil))
+	 * </pre>
+	 * @param cons the values-list expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandValuesList(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.VALUES_LIST + " expects exactly one list: " + cons.print());
+		}
+		LispSymbol l = new LispSymbol("__mv" + MV_COUNTER.getAndIncrement() + "_l");
+		LispVal isCons = mvCall(LispNames.CONSP, l);
+		LispVal spill = setMvSpill(makeIf(isCons, mvCall(LispNames.CDR, l), LispNil.INSTANCE));
+		LispVal primary = makeIf(isCons, mvCall(LispNames.CAR, l), LispNil.INSTANCE);
+		return makeLet(l.name(), parts.get(1), makeProgn(List.of(spill, primary)));
+	}
+
+	/**
 	 * Expands a {@code (values ...)} call to its primary value WITHOUT touching the
 	 * {@code %mv-spill} global: the scalar {@code --no-gc} backend has no reference
 	 * globals (and no lists), so it keeps the pure prog1 semantics -- extra values are
@@ -7647,29 +7867,88 @@ public final class LispMacroExpander {
 	 * @param program the top-level forms (package-resolved)
 	 * @return the program, with the spill global prepended when needed
 	 */
-	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
-		boolean uses = false;
-		for (LispVal form : program) {
-			if (usesMvOperator(form)) {
-				uses = true;
-				break;
+	/**
+	 * Normalizes a {@code let}/{@code let*} binding list: a bare symbol entry (CL's
+	 * init-less binding, {@code (let (a b) ...)}) becomes {@code (sym nil)} so every
+	 * consumer -- the evaluator, the compilers and the analyzers -- only sees the
+	 * {@code (name init)} pair shape. Returns the list unchanged when nothing needs
+	 * normalizing.
+	 * @param bindings the binding list form
+	 * @return the normalized binding list
+	 */
+	public static LispVal normalizeBindingList(LispVal bindings) {
+		if (!(bindings instanceof LispCons cons) || !cons.isProperList()) {
+			return bindings;
+		}
+		List<LispVal> entries = cons.toList();
+		boolean changed = false;
+		List<LispVal> out = new java.util.ArrayList<>(entries.size());
+		for (LispVal entry : entries) {
+			if (entry instanceof LispSymbol) {
+				out.add(listToCons(List.of(entry, LispNil.INSTANCE)));
+				changed = true;
+			}
+			else {
+				out.add(entry);
 			}
 		}
-		if (!uses) {
+		return changed ? listToCons(out) : bindings;
+	}
+
+	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
+		boolean usesMv = false;
+		boolean usesFloatFormat = false;
+		for (LispVal form : program) {
+			usesMv = usesMv || usesMvOperator(form);
+			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
+		}
+		if (!usesMv && !usesFloatFormat) {
 			return program;
 		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 1);
-		out.add(listToCons(
-				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), LispNil.INSTANCE)));
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 2);
+		if (usesMv) {
+			out.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), LispNil.INSTANCE)));
+		}
+		if (usesFloatFormat) {
+			// The standard reader-control variable: informational here (every float is
+			// the one double representation), predefined so library code reading it
+			// works. See LispNames.READ_DEFAULT_FLOAT_FORMAT.
+			out.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.READ_DEFAULT_FLOAT_FORMAT),
+							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("double-float"))))));
+		}
 		out.addAll(program);
 		return out;
+	}
+
+	/** True when the form mentions the symbol name anywhere (quote included). */
+	private static boolean usesSymbol(LispVal form, String name) {
+		if (form instanceof LispSymbol sym) {
+			return name.equals(sym.name());
+		}
+		if (form instanceof LispCons cons) {
+			for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+				if (usesSymbol(cell.car(), name)) {
+					return true;
+				}
+				if (!(cell.cdr() instanceof LispCons) && usesSymbol(cell.cdr(), name)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static boolean usesMvOperator(LispVal form) {
 		if (form instanceof LispSymbol sym) {
 			return switch (sym.name()) {
+				// values-list spreads through the spill and the parse-integer
+				// expansion returns its end position via a literal values, so both
+				// need the global too.
 				case LispNames.VALUES, LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST,
-						LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE ->
+						LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE, LispNames.VALUES_LIST,
+						LispNames.PARSE_INTEGER ->
 					true;
 				default -> false;
 			};

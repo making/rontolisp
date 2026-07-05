@@ -181,6 +181,12 @@ public final class LispNames {
 	/** The {@code >=} built-in function. */
 	public static final String GE = ">=";
 
+	/**
+	 * The {@code /=} numeric not-equal operator. Expands to negated {@code =} tests (all
+	 * arguments pairwise different, like CL).
+	 */
+	public static final String NE = "/=";
+
 	// List operations
 
 	/** The {@code cons} built-in function. */
@@ -1435,6 +1441,27 @@ public final class LispNames {
 
 	/** The {@code *package*} variable holding the current package name. */
 	public static final String PACKAGE_VAR = "*package*";
+
+	/**
+	 * The {@code *read-default-float-format*} variable. Every float shares the one double
+	 * representation, so its value ({@code double-float}) is informational: it exists so
+	 * library code that reads it (or rebinds it through a keyword argument, lexically
+	 * here) loads and runs.
+	 */
+	public static final String READ_DEFAULT_FLOAT_FORMAT = "*read-default-float-format*";
+
+	/**
+	 * The {@code values-list} built-in function (spread a list as multiple values through
+	 * the {@code %mv-spill} channel).
+	 */
+	public static final String VALUES_LIST = "values-list";
+
+	/**
+	 * The {@code complex} operator. Lite: no complex representation exists, so a zero
+	 * imaginary part yields the real part and anything else signals (classified as a
+	 * macro here, in CL it is a function).
+	 */
+	public static final String COMPLEX = "complex";
 
 	/**
 	 * The {@code *features*} variable, substituted at read time with the active feature

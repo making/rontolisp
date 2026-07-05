@@ -41,7 +41,7 @@ public final class PackageRegistry {
 			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
 			LispNames.NTH_VALUE, LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING,
 			LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
-			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT);
+			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -92,10 +92,22 @@ public final class PackageRegistry {
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND,
 			LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING,
 			LispNames.SYMBOL_NAME, LispNames.INTERN, LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP,
-			LispNames.FBOUNDP, LispNames.SYMBOL_VALUE, LispNames.FUNCTIONP);
+			LispNames.FBOUNDP, LispNames.SYMBOL_VALUE, LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE);
 
 	/** The {@code cl} variables. */
-	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
+	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT);
+
+	/**
+	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
+	 * function/macro names. Registered so they resolve bare inside user packages (a
+	 * {@code (:use :cl)} package's {@code 'double-float} or {@code (integer 0)} must not
+	 * become {@code pkg::double-float}); they are not callable and do not appear in the
+	 * introspection listings.
+	 */
+	private static final Set<String> CL_TYPES = Set.of("integer", "number", "rational", "ratio", "real", "fixnum",
+			"bignum", "single-float", "double-float", "short-float", "long-float", "unsigned-byte", "signed-byte",
+			"boolean", "sequence", "array", "simple-array", "simple-vector", "simple-string", "base-string",
+			"character", "base-char", "standard-char", "satisfies", "otherwise");
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
@@ -111,14 +123,15 @@ public final class PackageRegistry {
 	 * the categorized sets above.
 	 */
 	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_INTERNALS);
+			CL_INTERNALS, CL_TYPES);
 
 	/**
 	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
 	 * (car/cdr compositions are recognized separately by
 	 * {@link LispMacroExpander#isCarCdrComposition} and are also external).
 	 */
-	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES);
+	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
+			CL_TYPES);
 
 	/**
 	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix

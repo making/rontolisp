@@ -246,7 +246,14 @@ final class JvmExprCompiler {
 				case LispNames.CHAR_EQ -> JvmCharCompiler.compileEq(cons, ctx, className);
 				case LispNames.CHAR_LT -> JvmCharCompiler.compileLt(cons, ctx, className);
 				case LispNames.CHAR_LE -> JvmCharCompiler.compileLe(cons, ctx, className);
-				case LispNames.PARSE_INTEGER -> JvmParseIntegerCompiler.compile(cons, ctx, className);
+				case LispNames.PARSE_INTEGER ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
+				case LispNames.VALUES_LIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx, className);
+				case LispNames.COMPLEX ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx, className);
+				case LispNames.NE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx, className);
 				case LispNames.READ_FROM_STRING -> JvmReadFromStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_EQ -> JvmStringEqCompiler.compileEq(cons, ctx, className);
 				case LispNames.STRING_EQUAL -> JvmStringEqCompiler.compileEqual(cons, ctx, className);

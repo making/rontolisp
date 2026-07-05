@@ -1,3 +1,8 @@
+> **Update 2026-07-05 (parse-number e2e):** `/=` shipped (pairwise-different
+> expansion over `=`, variadic), plus lite `complex` (zero imaginary part
+> only), float-type + computed-type `coerce`, and the predefined
+> `*read-default-float-format*` (informational; every float is double).
+
 # Number system extensions (`rational`, `rationalize`, `complex` numbers, `realp`, `complexp`, `realpart`, `imagpart`, `phase`, `conjugate`, `integer-decode-float`, `decode-universal-time`, `encode-universal-time`, `day`, `month`, `year`, `second`, `minute`, `hour`, `timezone`)
 
 **Status:** not implemented. Low priority — complex numbers and time decomposition are niche.
