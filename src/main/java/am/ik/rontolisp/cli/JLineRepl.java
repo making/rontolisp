@@ -22,15 +22,29 @@ final class JLineRepl {
 	private JLineRepl() {
 	}
 
+	/**
+	 * Builds the REPL's line reader. Event expansion is disabled: JLine's csh-style
+	 * {@code !} history expansion treats backslash as an escape character and STRIPS it
+	 * from the returned line, which silently corrupts every Lisp character literal
+	 * ({@code #\,} arrived as {@code #,} and read as an unquote outside backquote). Lisp
+	 * has no use for {@code !} expansion, so the raw line wins.
+	 * @param terminal the terminal to read from
+	 * @return the configured line reader
+	 */
+	static LineReader buildLineReader(Terminal terminal) {
+		return LineReaderBuilder.builder()
+			.terminal(terminal)
+			.option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
+			.variable(LineReader.HISTORY_FILE, Path.of(System.getProperty("user.home"), ".rontolisp_history"))
+			.build();
+	}
+
 	static void run(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
 		// Disable grapheme cluster (mode 2027) detection. JLine probes for it by
 		// sending a DECRQM query (CSI ? 2027 $ p); terminals that do not understand
 		// the query echo the trailing "p" as visible garbage before the first prompt.
 		try (Terminal terminal = TerminalBuilder.builder().system(true).graphemeCluster(false).build()) {
-			LineReader lineReader = LineReaderBuilder.builder()
-				.terminal(terminal)
-				.variable(LineReader.HISTORY_FILE, Path.of(System.getProperty("user.home"), ".rontolisp_history"))
-				.build();
+			LineReader lineReader = buildLineReader(terminal);
 			while (true) {
 				String prompt = buffer.isEmpty() ? "> " : "  ";
 				String line;
