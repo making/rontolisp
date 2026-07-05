@@ -418,6 +418,13 @@ final class JvmExprCompiler {
 				case LispNames.VECTOR_PUSH -> JvmArrayCompiler.compileVectorPush(cons, ctx, className);
 				case LispNames.VECTOR_POP -> JvmArrayCompiler.compileVectorPop(cons, ctx, className);
 				case LispNames.VECTOR_PUSH_EXTEND -> JvmArrayCompiler.compileVectorPushExtend(cons, ctx, className);
+				case LispNames.ADJUST_ARRAY ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx, className);
+				case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
+				case LispNames.ARRAY_DISPLACEMENT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);
+				case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);
+				case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
 				case LispNames.COERCE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);

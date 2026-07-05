@@ -829,9 +829,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
-					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass));
-			built
-				.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod));
+					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
+			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
+					thisClass));
 			arrayMethods = built;
 		}
 		else {
@@ -1427,6 +1427,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.ARRAY_ELEMENT_TYPE)
 				|| programUsesSymbol(program, LispNames.VECTOR_PUSH) || programUsesSymbol(program, LispNames.VECTOR_POP)
 				|| programUsesSymbol(program, LispNames.VECTOR_PUSH_EXTEND)
+				|| programUsesSymbol(program, LispNames.ADJUST_ARRAY)
+				|| programUsesSymbol(program, LispNames.ARRAY_BECOME)
+				|| programUsesSymbol(program, LispNames.ARRAY_DISPLACEMENT)
+				|| programUsesSymbol(program, LispNames.ARRAY_DISP_TARGET)
+				|| programUsesSymbol(program, LispNames.ARRAY_DISP_OFFSET)
 				|| programUsesSymbol(program, LispNames.COERCE) || programContainsArrayLiteral(program);
 	}
 

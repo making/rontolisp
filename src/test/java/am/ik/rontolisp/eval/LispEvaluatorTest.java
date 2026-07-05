@@ -3740,7 +3740,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(236);
+			.hasSize(238);
 	}
 
 	@Test
@@ -5591,6 +5591,112 @@ class LispEvaluatorTest {
 				(list (length dst) (aref dst 0) (aref dst 1) (aref dst 2)
 				      (array-has-fill-pointer-p dst) (adjustable-array-p dst) (eq src dst))
 				""").print()).isEqualTo("(3 11 22 33 t t nil)");
+	}
+
+	@Test
+	void adjustArrayGrowsNonAdjustableIntoFreshArray() {
+		assertThat(evalMulti("""
+				(setq v (make-array 3 :initial-element 7))
+				(setq v2 (adjust-array v 5 :initial-element 0))
+				(list v2 (eq v v2))
+				""").print()).isEqualTo("(#(7 7 7 0 0) nil)");
+	}
+
+	@Test
+	void adjustArrayAdjustsAdjustableInPlace() {
+		assertThat(evalMulti("""
+				(setq w (make-array 3 :adjustable t :initial-element 1))
+				(setq w2 (adjust-array w 5 :initial-element 9))
+				(list (eq w w2) w)
+				""").print()).isEqualTo("(t #(1 1 1 9 9))");
+	}
+
+	@Test
+	void adjustArrayPreservesElementsBySubscriptsOnRank2() {
+		// Resizing a 2x2 to 3x3 keeps (i, j) at (i, j) -- NOT a flat copy.
+		assertThat(evalMulti("""
+				(setq m (make-array '(2 2) :initial-element 0))
+				(setf (aref m 0 0) 1) (setf (aref m 0 1) 2)
+				(setf (aref m 1 0) 3) (setf (aref m 1 1) 4)
+				(adjust-array m '(3 3) :initial-element 0)
+				""").print()).isEqualTo("#2A((1 2 0) (3 4 0) (0 0 0))");
+	}
+
+	@Test
+	void adjustArrayCarriesTheFillPointerOver() {
+		assertThat(evalMulti("""
+				(setq fv (make-array 4 :fill-pointer 2 :initial-element 5))
+				(fill-pointer (adjust-array fv 8))
+				""").print()).isEqualTo("2");
+	}
+
+	@Test
+	void adjustArrayErrors() {
+		assertThatThrownBy(() -> evalMulti("(adjust-array (make-array '(2 2)) 5)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("rank mismatch");
+		assertThatThrownBy(() -> evalMulti("(adjust-array (make-array 2 :displaced-to (make-array 5)) 3)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("displaced arrays are not supported");
+	}
+
+	@Test
+	void displacedArrayAliasesTheTargetStorage() {
+		assertThat(evalMulti("""
+				(setq base (make-array 6 :initial-element 0))
+				(dotimes (i 6) (setf (aref base i) (* i 10)))
+				(setq view (make-array 3 :displaced-to base :displaced-index-offset 2))
+				(setf (aref view 0) 99)
+				(setq r1 (aref base 2))
+				(setf (aref base 4) 111)
+				(list view r1 (aref view 2) (length view))
+				""").print()).isEqualTo("(#(99 30 111) 99 111 3)");
+	}
+
+	@Test
+	void displacedArrayOverRank2GivesARowView() {
+		assertThat(evalMulti("""
+				(setq mat (make-array '(2 3) :initial-element 0))
+				(dotimes (i 6) (%row-major-aset mat i i))
+				(make-array 3 :displaced-to mat :displaced-index-offset 3)
+				""").print()).isEqualTo("#(3 4 5)");
+	}
+
+	@Test
+	void displacedArraySeesTheTargetGrowInPlace() {
+		// adjust-array on an adjustable target replaces its storage IN PLACE, so an
+		// existing displaced view follows the new storage (chain-resolved access).
+		assertThat(evalMulti("""
+				(setq tgt (make-array 4 :adjustable t :initial-element 1))
+				(setq v (make-array 2 :displaced-to tgt :displaced-index-offset 1))
+				(adjust-array tgt 6 :initial-element 8)
+				(setf (aref tgt 1) 55)
+				(aref v 0)
+				""").print()).isEqualTo("55");
+	}
+
+	@Test
+	void arrayDisplacementReturnsTargetAndOffset() {
+		assertThat(evalMulti("""
+				(setq base (make-array 5))
+				(setq view (make-array 2 :displaced-to base :displaced-index-offset 3))
+				(multiple-value-bind (tgt off) (array-displacement view)
+				  (list (eq tgt base) off))
+				""").print()).isEqualTo("(t 3)");
+		assertThat(evalMulti("""
+				(multiple-value-bind (tgt off) (array-displacement (make-array 2))
+				  (list tgt off))
+				""").print()).isEqualTo("(nil 0)");
+	}
+
+	@Test
+	void makeArrayDisplacedErrors() {
+		assertThatThrownBy(() -> evalMulti("(make-array 3 :displaced-to (make-array 5) :fill-pointer 2)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot be combined");
+		assertThatThrownBy(() -> evalMulti("(make-array 4 :displaced-to (make-array 3) :displaced-index-offset 2)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("too small");
 	}
 
 }

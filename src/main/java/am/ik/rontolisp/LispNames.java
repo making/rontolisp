@@ -605,6 +605,52 @@ public final class LispNames {
 	public static final String ADJUSTABLE_KEYWORD = ":adjustable";
 
 	/**
+	 * The {@code :displaced-to} keyword accepted by {@code make-array}: the built array
+	 * is a view sharing the target's storage. Cannot be combined with
+	 * {@code :fill-pointer}/{@code :adjustable}/{@code :initial-element} (lite
+	 * semantics).
+	 */
+	public static final String DISPLACED_TO_KEYWORD = ":displaced-to";
+
+	/** The {@code :displaced-index-offset} keyword accepted by {@code make-array}. */
+	public static final String DISPLACED_INDEX_OFFSET_KEYWORD = ":displaced-index-offset";
+
+	/**
+	 * The {@code adjust-array} built-in function: resize an array preserving the elements
+	 * at common subscripts. Adjusts an {@code :adjustable} array in place (returning it),
+	 * otherwise returns a fresh array. Expanded by
+	 * {@link LispMacroExpander#expandAdjustArray} on the compile path.
+	 */
+	public static final String ADJUST_ARRAY = "adjust-array";
+
+	/**
+	 * The {@code array-displacement} built-in function: the {@code :displaced-to} target
+	 * and offset as two values ({@code nil} and 0 for a non-displaced array). Expanded by
+	 * {@link LispMacroExpander#expandArrayDisplacement} on the compile path.
+	 */
+	public static final String ARRAY_DISPLACEMENT = "array-displacement";
+
+	/**
+	 * The {@code %array-disp-target} internal built-in function: the displacement target
+	 * of an array, or {@code nil} (the primary value of {@code array-displacement}).
+	 */
+	public static final String ARRAY_DISP_TARGET = "%array-disp-target";
+
+	/**
+	 * The {@code %array-disp-offset} internal built-in function: the displacement offset
+	 * of an array, or 0 (the secondary value of {@code array-displacement}).
+	 */
+	public static final String ARRAY_DISP_OFFSET = "%array-disp-offset";
+
+	/**
+	 * The {@code %array-become} internal built-in function:
+	 * {@code (%array-become old new)} replaces {@code old}'s dimensions, fill pointer and
+	 * data with {@code new}'s in place and returns {@code old} (the in-place half of
+	 * {@code adjust-array} on an adjustable array).
+	 */
+	public static final String ARRAY_BECOME = "%array-become";
+
+	/**
 	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
 	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
 	 */

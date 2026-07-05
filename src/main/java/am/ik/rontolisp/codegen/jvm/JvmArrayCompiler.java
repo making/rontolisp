@@ -31,11 +31,53 @@ final class JvmArrayCompiler {
 		if (args.size() < 2) {
 			throw new UnsupportedOperationException("make-array expects at least 1 argument");
 		}
+		LispVal displacedTo = findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD);
+		if (displacedTo != null) {
+			// A displaced view excludes the other keywords (lite semantics; detected at
+			// compile time because make-array keywords are literal at the call site).
+			if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
+					|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
+					|| findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null) {
+				throw new UnsupportedOperationException(
+						"make-array: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
+			}
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			JvmExprCompiler.compileExpr(displacedTo, ctx, className);
+			compileKeywordValueOrNull(findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD), ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE_DISPLACED,
+					JvmArrayRuntimeBuilder.MAKE_DISPLACED_DESC);
+			return;
+		}
+		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
+			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD), ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
+	}
+
+	static void compileArrayBecome(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-become old new): adjust old in place to new's shape/contents.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%array-become expects 2 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME, JvmArrayRuntimeBuilder.ARRAY_BECOME_DESC);
+	}
+
+	static void compileDispTarget(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ARRAY_DISP_TARGET, JvmArrayRuntimeBuilder.DISP_TARGET,
+				JvmArrayRuntimeBuilder.DISP_TARGET_DESC);
+	}
+
+	static void compileDispOffset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ARRAY_DISP_OFFSET, JvmArrayRuntimeBuilder.DISP_OFFSET,
+				JvmArrayRuntimeBuilder.DISP_OFFSET_DESC);
 	}
 
 	static void compileFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

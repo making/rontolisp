@@ -17,8 +17,9 @@ import am.ik.wasm.Type;
  * holding a header {@code TYPE_CONS} of {@code (dims . (meta . data))}, where
  * {@code dims} and {@code data} are {@code TYPE_HASH_BUCKETS} arrays
  * ({@code array (mut (ref null eq))}) and {@code meta} is a {@code TYPE_CONS} of
- * {@code (fillPointer . adjustable)} -- {@code fillPointer} an i31 or null when the array
- * has none, {@code adjustable} the raw {@code :adjustable} argument (null = nil).
+ * {@code (fillPointer . (adjustable . offset))} -- {@code fillPointer} an i31 or null
+ * when the array has none, {@code adjustable} the raw {@code :adjustable} argument (null
+ * = nil), {@code offset} the displacement offset as an i31 (0 for an ordinary array).
  * {@code dims} holds the dimension sizes as i31 integers; {@code data} holds the
  * row-major elements. The header's car stays the dims bucket array, so the
  * array-vs-hash-table discriminator used by {@code %arrayp}/{@code length}/the printer is
@@ -26,6 +27,15 @@ import am.ik.wasm.Type;
  * the subscripts (unrolled per call site, whose subscript count is static), so a rank-2
  * element {@code (i, j)} lives at flat index {@code i * dims[1] + j} and a rank-1 element
  * {@code (i)} at {@code i}.
+ *
+ * <p>
+ * A displaced array ({@code make-array :displaced-to}) stores the TARGET CELL in the data
+ * slot instead of a buckets array: every data access resolves the chain (adding each
+ * hop's meta offset to the flat index) before touching the base buckets, so writes alias
+ * the target's storage -- including after the target is grown by
+ * {@code vector-push-extend} or {@code adjust-array} (the chain re-reads the target's
+ * header). A displaced array never has a fill pointer and is never adjustable (lite
+ * semantics, enforced at compile time because make-array keywords are literal).
  *
  * <p>
  * Everything is emitted inline (no runtime helper function and no new heap type), so the
@@ -39,6 +49,13 @@ final class WasmArrayCompiler {
 
 	static void compileMake(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		if (findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD) != null) {
+			compileMakeDisplaced(cons, ctx);
+			return;
+		}
+		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
+			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
+		}
 		// dims -> dimsSlot, init -> initSlot
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
@@ -52,7 +69,199 @@ final class WasmArrayCompiler {
 		int initSlot = setTemp(ctx);
 		int dimsArrSlot = ctx.allocTemp();
 		int totalSlot = ctx.allocTemp(); // holds an i31-boxed total element count
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
 
+		// data = array.new buckets (init, total)
+		getLocal(ctx, initSlot);
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		arrayNew(ctx);
+		int dataArrSlot = setTemp(ctx);
+
+		// Resolve the :fill-pointer argument into an i31-or-null (nil = none; an
+		// integer = that value, bounds-checked; anything else, i.e. t, = the vector
+		// size) and stash the raw :adjustable argument. Both are compiled only when the
+		// keyword appears at the call site.
+		LispVal fpExpr = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
+		int fpValSlot = -1;
+		if (fpExpr != null) {
+			WasmExprCompiler.compileExpr(fpExpr, ctx);
+			int fpSlot = setTemp(ctx);
+			fpValSlot = ctx.allocTemp();
+			getLocal(ctx, fpSlot);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF, 0x40);
+			refNull(ctx);
+			setLocal(ctx, fpValSlot);
+			ctx.writer.write(Instruction.ELSE);
+			// a fill pointer requires a rank-1 array
+			getBuckets(ctx, dimsArrSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			i32Const(ctx, 1);
+			ctx.writer.write(Instruction.I32_NE);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+			getLocal(ctx, fpSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(Type.I31.code());
+			ctx.writer.write(Instruction.IF, 0x40);
+			// integer: 0 <= fp <= dims[0], else trap
+			getLocal(ctx, fpSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, 0);
+			ctx.writer.write(Instruction.I32_LT_S);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+			getLocal(ctx, fpSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			getBuckets(ctx, dimsArrSlot);
+			i32Const(ctx, 0);
+			arrayGet(ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_GT_S);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+			getLocal(ctx, fpSlot);
+			setLocal(ctx, fpValSlot);
+			ctx.writer.write(Instruction.ELSE);
+			// t: the vector size (dims[0] is already an i31)
+			getBuckets(ctx, dimsArrSlot);
+			i32Const(ctx, 0);
+			arrayGet(ctx);
+			setLocal(ctx, fpValSlot);
+			ctx.writer.write(Instruction.END);
+			ctx.writer.write(Instruction.END);
+		}
+		LispVal adjExpr = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
+		int adjValSlot = -1;
+		if (adjExpr != null) {
+			WasmExprCompiler.compileExpr(adjExpr, ctx);
+			adjValSlot = setTemp(ctx);
+		}
+
+		// header = cons(dimsArr, cons(cons(fp, cons(adj, 0)), data));
+		// cell = struct.new TYPE_CELL(header)
+		getLocal(ctx, dimsArrSlot);
+		if (fpValSlot >= 0) {
+			getLocal(ctx, fpValSlot);
+		}
+		else {
+			refNull(ctx);
+		}
+		if (adjValSlot >= 0) {
+			getLocal(ctx, adjValSlot);
+		}
+		else {
+			refNull(ctx);
+		}
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		getLocal(ctx, dataArrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+	}
+
+	// (make-array dims :displaced-to target [:displaced-index-offset off]): a displaced
+	// view -- the data slot holds the TARGET CELL and meta carries the offset. The other
+	// make-array keywords are rejected (lite semantics). The view is bounds-checked
+	// against the target's total size (the product of its dims), trapping when too small.
+	private static void compileMakeDisplaced(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
+				|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
+				|| findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null) {
+			throw new UnsupportedOperationException(
+					"make-array: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
+		}
+		LispVal targetExpr = findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD);
+		if (targetExpr == null) {
+			throw new UnsupportedOperationException("make-array: :displaced-to expects a value");
+		}
+		LispVal offsetExpr = findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD);
+		// dims -> dimsArr + total (boxed i31), same parse as the ordinary path
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int dimsSlot = setTemp(ctx);
+		int dimsArrSlot = ctx.allocTemp();
+		int totalSlot = ctx.allocTemp();
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		// target -> targetSlot; offset -> offSlot (i31; 0 when absent or nil)
+		WasmExprCompiler.compileExpr(targetExpr, ctx);
+		int targetSlot = setTemp(ctx);
+		int offSlot = ctx.allocTemp();
+		if (offsetExpr != null) {
+			WasmExprCompiler.compileExpr(offsetExpr, ctx);
+			setLocal(ctx, offSlot);
+			getLocal(ctx, offSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(Type.I31.code());
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.IF, 0x40);
+			i32Const(ctx, 0);
+			boxI31(ctx);
+			setLocal(ctx, offSlot);
+			ctx.writer.write(Instruction.END);
+		}
+		else {
+			i32Const(ctx, 0);
+			boxI31(ctx);
+			setLocal(ctx, offSlot);
+		}
+		// targetTotal = product of the target's dims; trap unless
+		// 0 <= off and total + off <= targetTotal
+		int targetTotalSlot = ctx.allocTemp();
+		int mSlot = ctx.allocTemp();
+		emitTargetDimsProduct(ctx, targetSlot, targetTotalSlot, mSlot);
+		getLocal(ctx, offSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, offSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_ADD);
+		getLocal(ctx, targetTotalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// header = cons(dimsArr, cons(cons(null, cons(null, off)), targetCell))
+		getLocal(ctx, dimsArrSlot);
+		refNull(ctx);
+		refNull(ctx);
+		getLocal(ctx, offSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		getLocal(ctx, targetSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+	}
+
+	// Parses the make-array dimensions value in dimsSlot (an i31 for the rank-1
+	// shorthand, otherwise a cons list of sizes) into a fresh buckets array of i31 sizes
+	// (dimsArrSlot) and the boxed-i31 total element count (totalSlot).
+	private static void emitParseDims(WasmLispCompiler.Ctx ctx, int dimsSlot, int dimsArrSlot, int totalSlot) {
 		// if dims is an i31 (rank-1 shorthand: an integer) ...
 		getLocal(ctx, dimsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -149,102 +358,49 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END); // loop
 		ctx.writer.write(Instruction.END); // block
 		ctx.writer.write(Instruction.END); // end outer if
+	}
 
-		// data = array.new buckets (init, total)
-		getLocal(ctx, initSlot);
-		getLocal(ctx, totalSlot);
+	// Pushes nothing; stores the i31 product of the dims of the array cell in targetSlot
+	// into productSlot (mSlot is boxed-i31 scratch).
+	private static void emitTargetDimsProduct(WasmLispCompiler.Ctx ctx, int targetSlot, int productSlot, int mSlot) {
+		int dimsBucketsSlot = ctx.allocTemp();
+		getLocal(ctx, targetSlot);
+		castCellGet0(ctx);
+		castConsGet(ctx, 0);
+		setLocal(ctx, dimsBucketsSlot);
+		i32Const(ctx, 1);
+		boxI31(ctx);
+		setLocal(ctx, productSlot);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		setLocal(ctx, mSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getLocal(ctx, mSlot);
 		WasmEmitHelper.castI31GetS(ctx);
-		arrayNew(ctx);
-		int dataArrSlot = setTemp(ctx);
-
-		// Resolve the :fill-pointer argument into an i31-or-null (nil = none; an
-		// integer = that value, bounds-checked; anything else, i.e. t, = the vector
-		// size) and stash the raw :adjustable argument. Both are compiled only when the
-		// keyword appears at the call site.
-		LispVal fpExpr = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
-		int fpValSlot = -1;
-		if (fpExpr != null) {
-			WasmExprCompiler.compileExpr(fpExpr, ctx);
-			int fpSlot = setTemp(ctx);
-			fpValSlot = ctx.allocTemp();
-			getLocal(ctx, fpSlot);
-			ctx.writer.write(Instruction.REF_IS_NULL);
-			ctx.writer.write(Instruction.IF, 0x40);
-			refNull(ctx);
-			setLocal(ctx, fpValSlot);
-			ctx.writer.write(Instruction.ELSE);
-			// a fill pointer requires a rank-1 array
-			getBuckets(ctx, dimsArrSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-			i32Const(ctx, 1);
-			ctx.writer.write(Instruction.I32_NE);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.UNREACHABLE);
-			ctx.writer.write(Instruction.END);
-			getLocal(ctx, fpSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			ctx.writer.writeHeapType(Type.I31.code());
-			ctx.writer.write(Instruction.IF, 0x40);
-			// integer: 0 <= fp <= dims[0], else trap
-			getLocal(ctx, fpSlot);
-			WasmEmitHelper.castI31GetS(ctx);
-			i32Const(ctx, 0);
-			ctx.writer.write(Instruction.I32_LT_S);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.UNREACHABLE);
-			ctx.writer.write(Instruction.END);
-			getLocal(ctx, fpSlot);
-			WasmEmitHelper.castI31GetS(ctx);
-			getBuckets(ctx, dimsArrSlot);
-			i32Const(ctx, 0);
-			arrayGet(ctx);
-			WasmEmitHelper.castI31GetS(ctx);
-			ctx.writer.write(Instruction.I32_GT_S);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.UNREACHABLE);
-			ctx.writer.write(Instruction.END);
-			getLocal(ctx, fpSlot);
-			setLocal(ctx, fpValSlot);
-			ctx.writer.write(Instruction.ELSE);
-			// t: the vector size (dims[0] is already an i31)
-			getBuckets(ctx, dimsArrSlot);
-			i32Const(ctx, 0);
-			arrayGet(ctx);
-			setLocal(ctx, fpValSlot);
-			ctx.writer.write(Instruction.END);
-			ctx.writer.write(Instruction.END);
-		}
-		LispVal adjExpr = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
-		int adjValSlot = -1;
-		if (adjExpr != null) {
-			WasmExprCompiler.compileExpr(adjExpr, ctx);
-			adjValSlot = setTemp(ctx);
-		}
-
-		// header = cons(dimsArr, cons(cons(fp, adj), data));
-		// cell = struct.new TYPE_CELL(header)
-		getLocal(ctx, dimsArrSlot);
-		if (fpValSlot >= 0) {
-			getLocal(ctx, fpValSlot);
-		}
-		else {
-			refNull(ctx);
-		}
-		if (adjValSlot >= 0) {
-			getLocal(ctx, adjValSlot);
-		}
-		else {
-			refNull(ctx);
-		}
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		getLocal(ctx, dataArrSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		getBuckets(ctx, dimsBucketsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		ctx.writer.write(Instruction.I32_GE_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		getLocal(ctx, productSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getBuckets(ctx, dimsBucketsSlot);
+		getLocal(ctx, mSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		arrayGet(ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_MUL);
+		boxI31(ctx);
+		setLocal(ctx, productSlot);
+		getLocal(ctx, mSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_ADD);
+		boxI31(ctx);
+		setLocal(ctx, mSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // loop
+		ctx.writer.write(Instruction.END); // block
 	}
 
 	static void compileAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -254,10 +410,9 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
-		// data[flat]: push the data array first, then the i32 flat index on top.
-		getLocal(ctx, headerSlot);
-		getData(ctx);
+		// data[flat], resolving the displacement chain first.
 		emitFlatIndex(ctx, headerSlot, args, 2, rank);
+		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
 	}
 
@@ -271,9 +426,10 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		castCellGet0(ctx);
-		getData(ctx);
+		int headerSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
+		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
 	}
 
@@ -288,9 +444,10 @@ final class WasmArrayCompiler {
 		int valSlot = ctx.allocTemp();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		castCellGet0(ctx);
-		getData(ctx);
+		int headerSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
+		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
 		ctx.writer.write(Instruction.TEE_LOCAL);
 		ctx.writer.writeSignedLeb128(valSlot);
@@ -358,14 +515,60 @@ final class WasmArrayCompiler {
 		int valSlot = ctx.allocTemp();
 		// data[flat] = val, leaving val as the result. Evaluation order: array (done),
 		// subscripts, then value; tee keeps the value on the stack for array.set.
-		getLocal(ctx, headerSlot);
-		getData(ctx);
 		emitFlatIndex(ctx, headerSlot, args, 2, rank);
+		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 		ctx.writer.write(Instruction.TEE_LOCAL);
 		ctx.writer.writeSignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
+	}
+
+	// Resolves the displacement chain: expects the i32 flat index on the stack; leaves
+	// [buckets, i32 index] ready for array.get/array.set. While the header's data slot
+	// holds a TARGET CELL (a displaced view), the meta offset is added to the index and
+	// the walk hops to the target's header; an ordinary array falls straight through.
+	private static void emitResolveDataAndIndex(WasmLispCompiler.Ctx ctx, int headerSlot) {
+		int flatSlot = ctx.allocTemp();
+		boxI31(ctx);
+		setLocal(ctx, flatSlot);
+		int curSlot = ctx.allocTemp();
+		getLocal(ctx, headerSlot);
+		setLocal(ctx, curSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		// exit when the data slot is not a cell (it is the buckets array)
+		getLocal(ctx, curSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		// flat += the meta offset (meta.cdr.cdr)
+		getLocal(ctx, flatSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, curSlot);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_ADD);
+		boxI31(ctx);
+		setLocal(ctx, flatSlot);
+		// cur = the target cell's header
+		getLocal(ctx, curSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		castCellGet0(ctx);
+		setLocal(ctx, curSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // loop
+		ctx.writer.write(Instruction.END); // block
+		getLocal(ctx, curSlot);
+		getData(ctx);
+		getLocal(ctx, flatSlot);
+		WasmEmitHelper.castI31GetS(ctx);
 	}
 
 	// Pushes the i32 flat index for the subscripts at args[firstSub..firstSub+rank-1]:
@@ -460,7 +663,7 @@ final class WasmArrayCompiler {
 	}
 
 	static void compileAdjustableArrayP(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// (adjustable-array-p array): meta.cdr holds the raw :adjustable argument
+		// (adjustable-array-p array): meta.cdr.car holds the raw :adjustable argument
 		// (null = nil), so non-null means adjustable.
 		requireArgs(cons, 2, "adjustable-array-p expects 1 argument");
 		List<LispVal> args = cons.toList();
@@ -468,9 +671,87 @@ final class WasmArrayCompiler {
 		castCellGet0(ctx);
 		getMeta(ctx);
 		castConsGet(ctx, 1);
+		castConsGet(ctx, 0);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.I32_EQZ);
 		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	static void compileArrayBecome(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-become old new): replace old's dims, fill pointer and data with new's
+		// in place (the in-place half of adjust-array on an adjustable array); returns
+		// old. The adjustable flag and offset (meta.cdr) are kept.
+		requireArgs(cons, 3, "%array-become expects 2 arguments");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int oldCellSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int newCellSlot = setTemp(ctx);
+		int oldHeaderSlot = ctx.allocTemp();
+		int newHeaderSlot = ctx.allocTemp();
+		getLocal(ctx, oldCellSlot);
+		castCellGet0(ctx);
+		setLocal(ctx, oldHeaderSlot);
+		getLocal(ctx, newCellSlot);
+		castCellGet0(ctx);
+		setLocal(ctx, newHeaderSlot);
+		// oldHeader.car = newHeader.car (the dims buckets)
+		getLocal(ctx, oldHeaderSlot);
+		castCons(ctx);
+		getLocal(ctx, newHeaderSlot);
+		castConsGet(ctx, 0);
+		structSetCons(ctx, 0);
+		// oldMeta.car = newMeta.car (the fill pointer)
+		getLocal(ctx, oldHeaderSlot);
+		getMeta(ctx);
+		castCons(ctx);
+		getLocal(ctx, newHeaderSlot);
+		getMeta(ctx);
+		castConsGet(ctx, 0);
+		structSetCons(ctx, 0);
+		// (cdr oldHeader).cdr = (cdr newHeader).cdr (the data buckets)
+		getLocal(ctx, oldHeaderSlot);
+		castConsGet(ctx, 1);
+		castCons(ctx);
+		getLocal(ctx, newHeaderSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		structSetCons(ctx, 1);
+		getLocal(ctx, oldCellSlot);
+	}
+
+	static void compileDispTarget(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-disp-target array): the displaced-to target cell (the data slot when
+		// it is a cell), or nil.
+		requireArgs(cons, 2, "%array-disp-target expects 1 argument");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		castCellGet0(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		int dataSlot = setTemp(ctx);
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	static void compileDispOffset(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-disp-offset array): the displacement offset i31 (meta.cdr.cdr; 0 for
+		// an ordinary array).
+		requireArgs(cons, 2, "%array-disp-offset expects 1 argument");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		castCellGet0(ctx);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
 	}
 
 	static void compileVectorPush(LispCons cons, WasmLispCompiler.Ctx ctx) {

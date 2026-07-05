@@ -60,7 +60,8 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
-			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND);
+			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
+			LispNames.ARRAY_DISPLACEMENT);
 
 	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
@@ -302,6 +303,9 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.FILL_POINTER), unary(LispNames.ARRAY_HAS_FILL_POINTER_P),
 			unary(LispNames.ADJUSTABLE_ARRAY_P), unary(LispNames.ARRAY_ELEMENT_TYPE), binary(LispNames.VECTOR_PUSH),
 			unary(LispNames.VECTOR_POP), binary(LispNames.VECTOR_PUSH_EXTEND),
+			// adjust-array is the 2-arg (no keyword) form; array-displacement yields
+			// its primary value (the target) -- the offset needs a direct mv consumer.
+			binary(LispNames.ADJUST_ARRAY), unary(LispNames.ARRAY_DISPLACEMENT),
 			// terpri: 0-arity
 			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
 			// fresh-line: 0-arity

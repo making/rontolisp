@@ -230,6 +230,8 @@ categories:
       - { slug: vector-push, name: "vector-push" }
       - { slug: vector-pop, name: "vector-pop" }
       - { slug: vector-push-extend, name: "vector-push-extend" }
+      - { slug: adjust-array, name: "adjust-array" }
+      - { slug: array-displacement, name: "array-displacement" }
   - title: "リーダーと評価"
     functions:
       - { slug: read, name: "read" }

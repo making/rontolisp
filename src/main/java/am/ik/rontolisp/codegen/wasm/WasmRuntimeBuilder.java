@@ -1696,7 +1696,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(6);
+		w.write(7);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1809,7 +1809,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1916,8 +1916,8 @@ final class WasmRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 
 		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
-		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-11 = i32 (array
-		// index/length/rank/dimension/stride/scratch).
+		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-12 = i32 (array
+		// index/length/rank/dimension/stride/scratch/displacement-base).
 		w.write(5);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1929,7 +1929,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(6);
+		w.write(7);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -2076,7 +2076,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -2284,7 +2284,7 @@ final class WasmRuntimeBuilder {
 	// the next index is. Slots: dims/data = (ref null eq) locals; idx/len/rank/j/stride/m
 	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
-			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot) {
+			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot) {
 		// if (param0 is TYPE_CELL)
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2344,12 +2344,91 @@ final class WasmRuntimeBuilder {
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		w.write(Instruction.ELSE);
-		innerConsGet(w, dataSlot, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		// no fill pointer: the total element count is the product of the dims (a
+		// displaced array's data slot is the target CELL, so the buckets length is
+		// not available here; for an ordinary array the product is the same value)
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		setLocal(w, strideSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, mSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, mSlot);
+		getBucketsLocal(w, dimsSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, strideSlot);
+		getBucketsLocal(w, dimsSlot);
+		getLocal(w, mSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_MUL);
+		setLocal(w, strideSlot);
+		getLocal(w, mSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, mSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		getLocal(w, strideSlot);
 		w.write(Instruction.END);
 		setLocal(w, lenSlot);
+
+		// resolve the displacement chain: base accumulates each hop's meta offset;
+		// dataSlot walks from this array's inner (meta . data) cons to the base
+		// array's, whose data slot holds the actual buckets
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, baseSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		innerConsGet(w, dataSlot, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		// base += meta.cdr.cdr (the offset i31)
+		getLocal(w, baseSlot);
+		innerConsGet(w, dataSlot, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, baseSlot);
+		// hop to the target cell's inner (meta . data) cons
+		innerConsGet(w, dataSlot, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		setLocal(w, dataSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
 
 		// data = inner.cdr
 		innerConsGet(w, dataSlot, 1);
@@ -2417,9 +2496,11 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 
-		// element: elementFunc(data[idx])
+		// element: elementFunc(data[base + idx])
 		getBucketsLocal(w, dataSlot);
+		getLocal(w, baseSlot);
 		getLocal(w, idxSlot);
+		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.CALL);

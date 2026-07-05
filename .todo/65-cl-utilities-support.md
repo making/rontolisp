@@ -74,8 +74,8 @@ do the lighter ones first):
   -> **`.todo/70-byte-field-ops.md`**
 - `make-array` with `:adjustable`/`:fill-pointer`/`:displaced-to`,
   `array-displacement`, `adjustable-array-p`, `array-has-fill-pointer-p`,
-  `fill-pointer` -- `copy-array` (HEAVIEST, may split further).
-  -> **`.todo/71-adjustable-arrays-copy-array.md`**
+  `fill-pointer`, `adjust-array` -- `copy-array` -- DONE on all four backends
+  (2026-07-06, todo 71 closed; see `.kb/adjustable-arrays.md`).
 - `with-slots` -- belongs with CLOS/defstruct work, tracked in
   `.todo/40-clos-and-defstruct.md`.
 - `warn` -- belongs with the condition system, tracked in

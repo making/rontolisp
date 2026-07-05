@@ -6042,6 +6042,154 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (adjust-array array new-dimensions &amp;key initial-element fill-pointer)
+	 * into a build-and-copy over the existing primitives: a fresh array of the new shape
+	 * is filled with the elements at the subscripts valid in both shapes (per-subscript,
+	 * not flat), then an {@code :adjustable} array is adjusted in place via
+	 * {@code %array-become} (returning the array itself) while a non-adjustable one
+	 * returns the fresh copy. Without an explicit {@code :fill-pointer} the old fill
+	 * pointer is carried over ({@code make-array} range-checks it against the new size).
+	 * {@code :displaced-to} is rejected at expansion time; displaced input arrays are
+	 * rejected at runtime. Matches the interpreter's {@code adjust-array} built-in.
+	 * @param cons the adjust-array expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandAdjustArray(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new UnsupportedOperationException("adjust-array expects an array and new dimensions");
+		}
+		LispVal initExpr = null;
+		LispVal fpExpr = null;
+		for (int i = 3; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol kw) {
+				switch (kw.name()) {
+					case LispNames.INITIAL_ELEMENT_KEYWORD -> initExpr = parts.get(i + 1);
+					case LispNames.FILL_POINTER_KEYWORD -> fpExpr = parts.get(i + 1);
+					case LispNames.DISPLACED_TO_KEYWORD ->
+						throw new UnsupportedOperationException("adjust-array: :displaced-to is not supported");
+					default -> {
+					}
+				}
+			}
+		}
+		LispSymbol a = new LispSymbol("__adj_a");
+		LispSymbol nd = new LispSymbol("__adj_nd");
+		LispSymbol ndl = new LispSymbol("__adj_ndl");
+		LispSymbol od = new LispSymbol("__adj_od");
+		LispSymbol fp = new LispSymbol("__adj_fp");
+		LispSymbol newArr = new LispSymbol("__adj_new");
+		LispSymbol total = new LispSymbol("__adj_total");
+		// (make-array ndl [:initial-element E] :fill-pointer fp
+		// :adjustable (adjustable-array-p a))
+		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
+		if (initExpr != null) {
+			makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
+			makeParts.add(initExpr);
+		}
+		makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
+		makeParts.add(fp);
+		makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
+		makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
+		// the carried-over fill pointer: the explicit expression, else the array's own
+		LispVal fpInit = fpExpr != null ? fpExpr : makeIf(callOf(LispNames.ARRAY_HAS_FILL_POINTER_P, a),
+				callOf(LispNames.FILL_POINTER, a), LispNil.INSTANCE);
+		List<LispVal> bindings = List.of(listToCons(List.of(a, parts.get(1))), listToCons(List.of(nd, parts.get(2))),
+				listToCons(List.of(ndl,
+						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
+				listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
+				listToCons(List.of(newArr, listToCons(makeParts))),
+				listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr))));
+		LispVal displacedCheck = makeIf(callOf(LispNames.ARRAY_DISP_TARGET, a),
+				mvCall(LispNames.ERROR, new LispString("adjust-array: displaced arrays are not supported")),
+				LispNil.INSTANCE);
+		LispVal rankCheck = makeIf(mvCall(LispNames.EQ, callOf(LispNames.LENGTH, ndl), callOf(LispNames.LENGTH, od)),
+				LispNil.INSTANCE, mvCall(LispNames.ERROR, new LispString("adjust-array: rank mismatch")));
+		LispVal copyLoop = adjustArrayCopyLoop(a, ndl, od, newArr, total);
+		LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), mvCall(LispNames.ARRAY_BECOME, a, newArr),
+				newArr);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), displacedCheck, rankCheck,
+				copyLoop, result));
+	}
+
+	// The element-copy loop of expandAdjustArray: for every row-major index of the new
+	// array, decompose it into subscripts under the new dimensions (innermost first via
+	// the reversed dimension list), keep it only when every subscript is inside the old
+	// shape, and copy from the old row-major position (the Horner fold over the old
+	// dimensions).
+	private static LispVal adjustArrayCopyLoop(LispSymbol a, LispSymbol ndl, LispSymbol od, LispSymbol newArr,
+			LispSymbol total) {
+		LispSymbol i = new LispSymbol("__adj_i");
+		LispSymbol rem = new LispSymbol("__adj_rem");
+		LispSymbol subs = new LispSymbol("__adj_subs");
+		LispSymbol d = new LispSymbol("__adj_d");
+		LispSymbol q = new LispSymbol("__adj_q");
+		LispSymbol ok = new LispSymbol("__adj_ok");
+		LispSymbol flat = new LispSymbol("__adj_flat");
+		LispSymbol s = new LispSymbol("__adj_s");
+		LispSymbol o = new LispSymbol("__adj_o");
+		// (do ((d (reverse ndl) (cdr d))) ((null d) nil)
+		// (let ((q (floor rem (car d))))
+		// (setq subs (cons (- rem (* q (car d))) subs)) (setq rem q)))
+		LispVal decompose = listToCons(
+				List.of(new LispSymbol(LispNames.DO),
+						listToCons(List
+							.of(listToCons(List.of(d, callOf(LispNames.REVERSE, ndl), callOf(LispNames.CDR, d))))),
+						listToCons(List.of(callOf(LispNames.NULL, d),
+								LispNil.INSTANCE)),
+						makeLet(q.name(), mvCall(LispNames.FLOOR, rem, callOf(LispNames.CAR, d)), makeProgn(List.of(
+								mvCall(LispNames.SETQ, subs,
+										mvCall(LispNames.CONS,
+												mvCall(LispNames.SUB, rem,
+														mvCall(LispNames.MUL, q, callOf(LispNames.CAR, d))),
+												subs)),
+								mvCall(LispNames.SETQ, rem, q))))));
+		// (do ((s subs (cdr s)) (o od (cdr o))) ((null s) nil)
+		// (if (< (car s) (car o)) nil (setq ok nil))
+		// (setq flat (+ (* flat (car o)) (car s))))
+		LispVal boundsFold = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(List.of(s, subs, callOf(LispNames.CDR, s))),
+						listToCons(List.of(o, od, callOf(LispNames.CDR, o))))),
+				listToCons(List.of(callOf(LispNames.NULL, s), LispNil.INSTANCE)),
+				makeIf(mvCall(LispNames.LT, callOf(LispNames.CAR, s), callOf(LispNames.CAR, o)), LispNil.INSTANCE,
+						mvCall(LispNames.SETQ, ok, LispNil.INSTANCE)),
+				mvCall(LispNames.SETQ, flat, mvCall(LispNames.ADD,
+						mvCall(LispNames.MUL, flat, callOf(LispNames.CAR, o)), callOf(LispNames.CAR, s)))));
+		LispVal copyIfInOld = makeIf(ok,
+				mvCall(LispNames.ROW_MAJOR_ASET, newArr, i, mvCall(LispNames.ROW_MAJOR_AREF, a, flat)),
+				LispNil.INSTANCE);
+		// (let ((ok t) (flat 0)) <boundsFold> <copyIfInOld>)
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(
+				List.of(listToCons(List.of(ok, LispTrue.INSTANCE)), listToCons(List.of(flat, new LispInteger(0))))),
+				boundsFold, copyIfInOld));
+		// (let ((rem i) (subs nil)) <decompose> <innerLet>)
+		LispVal perIndex = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(rem, i)), listToCons(List.of(subs, LispNil.INSTANCE)))),
+				decompose, innerLet));
+		// (do ((i 0 (+ i 1))) ((>= i total) nil) <perIndex>)
+		return listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List
+					.of(listToCons(List.of(i, new LispInteger(0), mvCall(LispNames.ADD, i, new LispInteger(1)))))),
+				listToCons(List.of(mvCall(LispNames.GE, i, total), LispNil.INSTANCE)), perIndex));
+	}
+
+	/**
+	 * Expands (array-displacement array) in an ordinary (single-value) context into its
+	 * primary value {@code (%array-disp-target array)}: the {@code :displaced-to} target
+	 * or {@code nil}. The offset second value is only observable through a multiple-value
+	 * consumer (see {@code lowerMvProducer}).
+	 * @param cons the array-displacement expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandArrayDisplacement(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException("array-displacement expects 1 argument");
+		}
+		return callOf(LispNames.ARRAY_DISP_TARGET, parts.get(1));
+	}
+
+	/**
 	 * Expands (coerce value 'type) for the literal result types {@code 'list},
 	 * {@code 'vector}, and {@code 'string} into a runtime dispatch on the value's actual
 	 * type (list, vector, or string), converting only when needed. A non-literal or
@@ -7468,6 +7616,7 @@ public final class LispMacroExpander {
 			case LispNames.VALUES -> true;
 			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE -> size == 2 || size == 3;
 			case LispNames.GETHASH -> size == 3 || size == 4;
+			case LispNames.ARRAY_DISPLACEMENT -> size == 2;
 			default -> false;
 		};
 	}
@@ -7507,6 +7656,15 @@ public final class LispMacroExpander {
 						values.add(q);
 						values.add(mvCall(LispNames.SUB, a, q));
 					}
+					return new MvProducer(bindings, values, null);
+				}
+				case LispNames.ARRAY_DISPLACEMENT: {
+					// (array-displacement array) -> target (or nil) + offset (or 0),
+					// read through the two internal accessors over one array temp.
+					LispSymbol arr = new LispSymbol(prefix + "_arr");
+					bindings.add(new MvBinding(arr, parts.get(1)));
+					values.add(mvCall(LispNames.ARRAY_DISP_TARGET, arr));
+					values.add(mvCall(LispNames.ARRAY_DISP_OFFSET, arr));
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.GETHASH: {

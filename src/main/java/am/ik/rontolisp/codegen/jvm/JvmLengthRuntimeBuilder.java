@@ -112,13 +112,14 @@ final class JvmLengthRuntimeBuilder {
 		a.aaload();
 		a.areturn();
 		a.bind(noFillPointer);
-		a.aload(0);
-		a.checkcast(arrayListClass);
-		a.invokevirtual(alSize);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.op(Opcode.I2L);
-		a.invokestatic(longValueOf);
+		// dims[0] (already a boxed Long): equals size() - 1 for an ordinary vector and
+		// stays correct for a displaced one (which holds no data slots).
+		a.aload(3);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
 		a.areturn();
 		a.bind(notArray);
 

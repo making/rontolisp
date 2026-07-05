@@ -3812,12 +3812,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("236");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("238");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("236");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("238");
 	}
 
 	@Test
@@ -4683,6 +4683,70 @@ class JvmLispCompilerTest {
 				(setf (aref *c* 0) 99)
 				(print (list *c* *v* (fill-pointer *c*) (adjustable-array-p *c*)))
 				""")).isEqualTo("(#(99 8 5) #(5 8 5) 3 t)");
+	}
+
+	@Test
+	void compileAdjustArray() throws Exception {
+		// Non-adjustable -> fresh array; :adjustable -> adjusted in place (eq);
+		// rank-2 keeps the elements at their subscripts; the fill pointer carries
+		// over without an explicit :fill-pointer.
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :initial-element 7))
+				(defparameter *v2* (adjust-array *v* 5 :initial-element 0))
+				(print (list *v2* (eq *v* *v2*)))
+				(defparameter *w* (make-array 3 :adjustable t :initial-element 1))
+				(defparameter *w2* (adjust-array *w* 5 :initial-element 9))
+				(print (list (eq *w* *w2*) *w*))
+				(defparameter *m* (make-array '(2 2) :initial-element 0))
+				(setf (aref *m* 0 0) 1) (setf (aref *m* 0 1) 2)
+				(setf (aref *m* 1 0) 3) (setf (aref *m* 1 1) 4)
+				(print (adjust-array *m* '(3 3) :initial-element 0))
+				(defparameter *fv* (make-array 4 :fill-pointer 2 :initial-element 5))
+				(print (fill-pointer (adjust-array *fv* 8)))
+				""")).isEqualTo("(#(7 7 7 0 0) nil)\n(t #(1 1 1 9 9))\n#2A((1 2 0) (3 4 0) (0 0 0))\n2");
+	}
+
+	@Test
+	void compileDisplacedArrays() throws Exception {
+		// A displaced view aliases the target's storage in both directions, prints and
+		// measures with its own dims, works over a rank-2 target, and keeps following
+		// an adjustable target grown in place by adjust-array.
+		assertThat(compileAndRun("""
+				(defparameter *base* (make-array 6 :initial-element 0))
+				(dotimes (i 6) (setf (aref *base* i) (* i 10)))
+				(defparameter *view* (make-array 3 :displaced-to *base* :displaced-index-offset 2))
+				(setf (aref *view* 0) 99)
+				(print (aref *base* 2))
+				(setf (aref *base* 4) 111)
+				(print (list *view* (aref *view* 2) (length *view*)))
+				(defparameter *mat* (make-array '(2 3) :initial-element 0))
+				(dotimes (i 6) (setf (row-major-aref *mat* i) i))
+				(print (make-array 3 :displaced-to *mat* :displaced-index-offset 3))
+				(defparameter *tgt* (make-array 4 :adjustable t :initial-element 1))
+				(defparameter *dv* (make-array 2 :displaced-to *tgt* :displaced-index-offset 1))
+				(adjust-array *tgt* 6 :initial-element 8)
+				(setf (aref *tgt* 1) 55)
+				(print (aref *dv* 0))
+				""")).isEqualTo("99\n(#(99 30 111) 111 3)\n#(3 4 5)\n55");
+	}
+
+	@Test
+	void compileArrayDisplacementValues() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *base* (make-array 5))
+				(defparameter *view* (make-array 2 :displaced-to *base* :displaced-index-offset 3))
+				(multiple-value-bind (tgt off) (array-displacement *view*)
+				  (print (list (eq tgt *base*) off)))
+				(multiple-value-bind (tgt off) (array-displacement *base*)
+				  (print (list tgt off)))
+				""")).isEqualTo("(t 3)\n(nil 0)");
+	}
+
+	@Test
+	void compileMakeArrayDisplacedKeywordComboIsACompileError() {
+		assertThatThrownBy(() -> compileAndRun("(print (make-array 3 :displaced-to (make-array 5) :fill-pointer 2))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cannot be combined");
 	}
 
 	@Test

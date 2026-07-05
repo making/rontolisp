@@ -418,7 +418,7 @@ final class JavaInterop {
 				int count = array.effectiveLength();
 				List<LispVal> elements = new ArrayList<>(count);
 				for (int i = 0; i < count; i++) {
-					LispVal element = array.data()[i];
+					LispVal element = array.readFlat(i);
 					elements.add(element == null ? LispNil.INSTANCE : element);
 				}
 				return marshalSequence(elements, target, caller, out, index);

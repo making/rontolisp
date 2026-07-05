@@ -294,14 +294,22 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + " expects at least 1 argument");
 			}
 			LispVal init = LispNil.INSTANCE;
+			boolean initGiven = false;
 			LispVal fillPointerArg = null;
 			boolean adjustable = false;
+			LispVal displacedToArg = null;
+			LispVal displacedOffsetArg = null;
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
 					switch (kw.name()) {
-						case LispNames.INITIAL_ELEMENT_KEYWORD -> init = args.get(i + 1);
+						case LispNames.INITIAL_ELEMENT_KEYWORD -> {
+							init = args.get(i + 1);
+							initGiven = true;
+						}
 						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
 						case LispNames.ADJUSTABLE_KEYWORD -> adjustable = !(args.get(i + 1) instanceof LispNil);
+						case LispNames.DISPLACED_TO_KEYWORD -> displacedToArg = args.get(i + 1);
+						case LispNames.DISPLACED_INDEX_OFFSET_KEYWORD -> displacedOffsetArg = args.get(i + 1);
 						default -> {
 						}
 					}
@@ -311,6 +319,24 @@ public final class Environment implements Scope {
 			int total = 1;
 			for (int d : dims) {
 				total *= d;
+			}
+			if (displacedToArg != null && !(displacedToArg instanceof LispNil)) {
+				// A displaced array is a bare view: no own storage, no fill pointer, not
+				// adjustable (lite semantics; combining the keywords is an error).
+				if (initGiven || adjustable || (fillPointerArg != null && !(fillPointerArg instanceof LispNil))) {
+					throw new LispEvalException(LispNames.MAKE_ARRAY
+							+ ": :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
+				}
+				LispArray target = requireArray(LispNames.MAKE_ARRAY, displacedToArg);
+				int offset = displacedOffsetArg == null ? 0 : (int) asLong(displacedOffsetArg);
+				if (offset < 0 || total + offset > target.totalSize()) {
+					throw new LispEvalException(
+							LispNames.MAKE_ARRAY + ": :displaced-to array is too small for the requested view");
+				}
+				return new LispArray(dims, target, offset);
+			}
+			if (displacedOffsetArg != null && !(displacedOffsetArg instanceof LispNil)) {
+				throw new LispEvalException(LispNames.MAKE_ARRAY + ": :displaced-index-offset requires :displaced-to");
 			}
 			LispVal[] data = new LispVal[total];
 			for (int i = 0; i < total; i++) {
@@ -366,14 +392,14 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.ROW_MAJOR_AREF, new LispFunction(LispNames.ROW_MAJOR_AREF, args -> {
 			requireArgCount(LispNames.ROW_MAJOR_AREF, args, 2);
 			LispArray array = requireArray(LispNames.ROW_MAJOR_AREF, args.get(0));
-			return array.data()[rowMajorIndex(LispNames.ROW_MAJOR_AREF, array, args.get(1))];
+			return array.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, array, args.get(1)));
 		}));
 		env.defineFunction(LispNames.ROW_MAJOR_ASET, new LispFunction(LispNames.ROW_MAJOR_ASET, args -> {
 			// (%row-major-aset array index value)
 			requireArgCount(LispNames.ROW_MAJOR_ASET, args, 3);
 			LispArray array = requireArray(LispNames.ROW_MAJOR_ASET, args.get(0));
 			LispVal value = args.get(2);
-			array.data()[rowMajorIndex(LispNames.ROW_MAJOR_ASET, array, args.get(1))] = value;
+			array.writeFlat(rowMajorIndex(LispNames.ROW_MAJOR_ASET, array, args.get(1)), value);
 			return value;
 		}));
 		env.defineFunction(LispNames.FILL_POINTER, new LispFunction(LispNames.FILL_POINTER, args -> {
@@ -444,6 +470,109 @@ public final class Environment implements Scope {
 				throw new LispEvalException(String.valueOf(ex.getMessage()));
 			}
 		}));
+		env.defineFunction(LispNames.ADJUST_ARRAY, new LispFunction(LispNames.ADJUST_ARRAY, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.ADJUST_ARRAY + " expects an array and new dimensions");
+			}
+			LispArray array = requireArray(LispNames.ADJUST_ARRAY, args.get(0));
+			LispVal init = LispNil.INSTANCE;
+			LispVal fillPointerArg = null;
+			for (int i = 2; i + 1 < args.size(); i += 2) {
+				if (args.get(i) instanceof LispSymbol kw) {
+					switch (kw.name()) {
+						case LispNames.INITIAL_ELEMENT_KEYWORD -> init = args.get(i + 1);
+						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
+						case LispNames.DISPLACED_TO_KEYWORD ->
+							throw new LispEvalException(LispNames.ADJUST_ARRAY + ": :displaced-to is not supported");
+						default -> {
+						}
+					}
+				}
+			}
+			return adjustArray(array, parseDimensions(args.get(1)), init, fillPointerArg);
+		}));
+		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
+			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
+			LispArray old = requireArray(LispNames.ARRAY_BECOME, args.get(0));
+			old.become(requireArray(LispNames.ARRAY_BECOME, args.get(1)));
+			return old;
+		}));
+		LispFunction dispTarget = new LispFunction(LispNames.ARRAY_DISPLACEMENT, args -> {
+			requireArgCount(LispNames.ARRAY_DISPLACEMENT, args, 1);
+			LispArray array = requireArray(LispNames.ARRAY_DISPLACEMENT, args.get(0));
+			return array.displacedTo() == null ? LispNil.INSTANCE : array.displacedTo();
+		});
+		// array-displacement's primary value; the offset is the second value, read
+		// through %array-disp-offset by the multiple-value consumers (syntactic tier).
+		env.defineFunction(LispNames.ARRAY_DISPLACEMENT, dispTarget);
+		env.defineFunction(LispNames.ARRAY_DISP_TARGET, dispTarget);
+		env.defineFunction(LispNames.ARRAY_DISP_OFFSET, new LispFunction(LispNames.ARRAY_DISP_OFFSET, args -> {
+			requireArgCount(LispNames.ARRAY_DISP_OFFSET, args, 1);
+			return new LispInteger(requireArray(LispNames.ARRAY_DISP_OFFSET, args.get(0)).displacedOffset());
+		}));
+	}
+
+	// The shared adjust-array core: build the resized copy (preserving the elements at
+	// common subscripts), then either adjust the array in place (:adjustable, returning
+	// it) or return the fresh copy. Matches LispMacroExpander.expandAdjustArray on the
+	// compile path.
+	private static LispVal adjustArray(LispArray array, int[] newDims, LispVal init, @Nullable LispVal fillPointerArg) {
+		if (array.displacedTo() != null) {
+			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": displaced arrays are not supported");
+		}
+		int[] oldDims = array.dimensions();
+		if (newDims.length != oldDims.length) {
+			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": rank mismatch");
+		}
+		int total = 1;
+		for (int d : newDims) {
+			total *= d;
+		}
+		int fillPointer = -1;
+		if (fillPointerArg != null && !(fillPointerArg instanceof LispNil)) {
+			if (newDims.length != 1) {
+				throw new LispEvalException(LispNames.ADJUST_ARRAY + ": :fill-pointer requires a rank-1 array");
+			}
+			fillPointer = (fillPointerArg instanceof LispInteger n) ? (int) n.value() : newDims[0];
+		}
+		else if (array.hasFillPointer()) {
+			fillPointer = array.fillPointer();
+		}
+		if (fillPointer > total || (fillPointer < 0 && fillPointer != -1)) {
+			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": :fill-pointer out of range");
+		}
+		LispVal[] data = new LispVal[total];
+		for (int i = 0; i < total; i++) {
+			data[i] = init;
+		}
+		LispArray resized = new LispArray(newDims, data, fillPointer, array.adjustable());
+		// Copy the elements at the subscripts valid in BOTH shapes (per-subscript, not
+		// flat: resizing a matrix keeps (i, j) at (i, j)).
+		int[] subs = new int[newDims.length];
+		for (int flat = 0; flat < total; flat++) {
+			int rem = flat;
+			boolean inOld = true;
+			int oldFlat = 0;
+			for (int k = newDims.length - 1; k >= 0; k--) {
+				subs[k] = rem % newDims[k];
+				rem /= newDims[k];
+			}
+			for (int k = 0; k < newDims.length; k++) {
+				if (subs[k] >= oldDims[k]) {
+					inOld = false;
+					break;
+				}
+				oldFlat = oldFlat * oldDims[k] + subs[k];
+			}
+			if (inOld) {
+				data[flat] = array.readFlat(oldFlat);
+			}
+		}
+		if (array.adjustable()) {
+			array.become(resized);
+			return array;
+		}
+		return resized;
 	}
 
 	private static int vectorPush(String fn, LispArray array, LispVal value) {
@@ -457,7 +586,7 @@ public final class Environment implements Scope {
 
 	private static int rowMajorIndex(String fn, LispArray array, LispVal indexVal) {
 		int index = (int) asLong(indexVal);
-		if (index < 0 || index >= array.data().length) {
+		if (index < 0 || index >= array.totalSize()) {
 			throw new LispEvalException(fn + ": index out of bounds");
 		}
 		return index;

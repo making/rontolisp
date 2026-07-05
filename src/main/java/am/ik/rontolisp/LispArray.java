@@ -1,5 +1,7 @@
 package am.ik.rontolisp;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * An array value (Common Lisp {@code array}/{@code simple-array}).
  *
@@ -32,6 +34,18 @@ public final class LispArray implements LispVal {
 	// this flag verbatim.
 	private final boolean adjustable;
 
+	// The displacement target (make-array :displaced-to), or null when the array has its
+	// own storage. A displaced array holds no data of its own (data is a shared empty
+	// array): element access resolves through the target chain, adding displacedOffset at
+	// each hop, so writes are visible through every view. Displacement excludes a fill
+	// pointer, adjustability and an initial element (lite semantics, enforced by
+	// make-array).
+	@Nullable private final LispArray displacedTo;
+
+	private final int displacedOffset;
+
+	private static final LispVal[] NO_DATA = new LispVal[0];
+
 	/**
 	 * Creates a simple array with the given dimensions backed by {@code data}
 	 * (row-major), with no fill pointer and not adjustable.
@@ -56,6 +70,25 @@ public final class LispArray implements LispVal {
 		this.data = data;
 		this.fillPointer = fillPointer;
 		this.adjustable = adjustable;
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+	}
+
+	/**
+	 * Creates a displaced array: a view over {@code target}'s storage starting at
+	 * {@code offset} (row-major). The view has no fill pointer, is not adjustable and
+	 * owns no data.
+	 * @param dimensions the dimension sizes of the view (length = rank, {@code >= 1})
+	 * @param target the array supplying the storage
+	 * @param offset the row-major index into {@code target} where the view starts
+	 */
+	public LispArray(int[] dimensions, LispArray target, int offset) {
+		this.dimensions = dimensions;
+		this.data = NO_DATA;
+		this.fillPointer = -1;
+		this.adjustable = false;
+		this.displacedTo = target;
+		this.displacedOffset = offset;
 	}
 
 	/**
@@ -67,11 +100,85 @@ public final class LispArray implements LispVal {
 	}
 
 	/**
-	 * Returns the flat row-major backing store.
-	 * @return the backing data (length = product of dimensions)
+	 * Returns the flat row-major backing store. Empty for a displaced array (which owns
+	 * no storage; use {@link #readFlat}/{@link #writeFlat}).
+	 * @return the backing data (length = product of dimensions, or 0 when displaced)
 	 */
 	public LispVal[] data() {
 		return this.data;
+	}
+
+	/**
+	 * Returns the displacement target, or {@code null} when the array owns its storage.
+	 * @return the {@code :displaced-to} array, or {@code null}
+	 */
+	@Nullable public LispArray displacedTo() {
+		return this.displacedTo;
+	}
+
+	/**
+	 * Returns the displacement offset ({@code :displaced-index-offset}; 0 when the array
+	 * is not displaced).
+	 * @return the row-major offset into the displacement target
+	 */
+	public int displacedOffset() {
+		return this.displacedOffset;
+	}
+
+	/**
+	 * Returns the total element count (the product of the dimensions).
+	 * @return the total size
+	 */
+	public int totalSize() {
+		int total = 1;
+		for (int d : this.dimensions) {
+			total *= d;
+		}
+		return total;
+	}
+
+	/**
+	 * Reads the element at the given row-major index, following the displacement chain.
+	 * @param flat the row-major index ({@code 0 <= flat < totalSize()})
+	 * @return the stored element
+	 */
+	public LispVal readFlat(int flat) {
+		LispArray a = this;
+		LispArray target = a.displacedTo;
+		while (target != null) {
+			flat += a.displacedOffset;
+			a = target;
+			target = a.displacedTo;
+		}
+		return a.data[flat];
+	}
+
+	/**
+	 * Stores the element at the given row-major index, following the displacement chain.
+	 * @param flat the row-major index ({@code 0 <= flat < totalSize()})
+	 * @param value the value to store
+	 */
+	public void writeFlat(int flat, LispVal value) {
+		LispArray a = this;
+		LispArray target = a.displacedTo;
+		while (target != null) {
+			flat += a.displacedOffset;
+			a = target;
+			target = a.displacedTo;
+		}
+		a.data[flat] = value;
+	}
+
+	/**
+	 * Replaces this array's dimensions, data and fill pointer with {@code other}'s (the
+	 * in-place half of {@code adjust-array} on an adjustable array). The adjustable flag
+	 * is kept; {@code other} is discarded by the caller.
+	 * @param other the freshly built replacement array
+	 */
+	public void become(LispArray other) {
+		this.dimensions = other.dimensions;
+		this.data = other.data;
+		this.fillPointer = other.fillPointer;
 	}
 
 	/**
@@ -118,7 +225,7 @@ public final class LispArray implements LispVal {
 	 * @return the effective length
 	 */
 	public int effectiveLength() {
-		return this.fillPointer >= 0 ? this.fillPointer : this.data.length;
+		return this.fillPointer >= 0 ? this.fillPointer : totalSize();
 	}
 
 	/**
@@ -188,7 +295,7 @@ public final class LispArray implements LispVal {
 	 * @return the stored element
 	 */
 	public LispVal aref(int... subscripts) {
-		return this.data[flatIndex(subscripts)];
+		return readFlat(flatIndex(subscripts));
 	}
 
 	/**
@@ -197,7 +304,7 @@ public final class LispArray implements LispVal {
 	 * @param subscripts the indices (one per dimension)
 	 */
 	public void aset(LispVal value, int... subscripts) {
-		this.data[flatIndex(subscripts)] = value;
+		writeFlat(flatIndex(subscripts), value);
 	}
 
 	private int flatIndex(int[] subscripts) {
@@ -209,7 +316,7 @@ public final class LispArray implements LispVal {
 		for (int k = 1; k < subscripts.length; k++) {
 			flat = flat * this.dimensions[k] + subscripts[k];
 		}
-		if (flat < 0 || flat >= this.data.length) {
+		if (flat < 0 || flat >= totalSize()) {
 			throw new IndexOutOfBoundsException("aref: index out of bounds");
 		}
 		return flat;
@@ -266,7 +373,7 @@ public final class LispArray implements LispVal {
 	}
 
 	private LispVal elementOrNil(int flat) {
-		LispVal element = this.data[flat];
+		LispVal element = readFlat(flat);
 		return element == null ? LispNil.INSTANCE : element;
 	}
 

@@ -11,14 +11,22 @@ import am.ik.jvm.Opcode;
 
 /**
  * Builds the JVM bytecode for the array runtime helpers. An array is represented at
- * runtime as a {@code java.util.ArrayList}: slot 0 holds a fixed 3-element header
- * {@code Object[]{dims, fillPointer, adjustable}} -- {@code dims} is an {@code Object[]}
- * of boxed {@code Long} dimension sizes (length = rank), {@code fillPointer} is a
- * {@code Long} or {@code null} when the array has none, and {@code adjustable} is the raw
- * {@code :adjustable} argument ({@code null} = nil) -- and slots {@code 1..} hold the
- * row-major data. Any rank {@code >= 1} is supported: the flat index is the Horner fold
- * over the subscripts, so a rank-2 element {@code (i, j)} lives at list index
- * {@code 1 + i * cols + j} and a rank-1 element {@code (i)} at {@code 1 + i}.
+ * runtime as a {@code java.util.ArrayList}: slot 0 holds a header {@code Object[]{dims,
+ * fillPointer, adjustable}} -- {@code dims} is an {@code Object[]} of boxed {@code Long}
+ * dimension sizes (length = rank), {@code fillPointer} is a {@code Long} or {@code null}
+ * when the array has none, and {@code adjustable} is the raw {@code :adjustable} argument
+ * ({@code null} = nil) -- and slots {@code 1..} hold the row-major data. Any rank
+ * {@code >= 1} is supported: the flat index is the Horner fold over the subscripts, so a
+ * rank-2 element {@code (i, j)} lives at list index {@code 1 + i * cols + j} and a rank-1
+ * element {@code (i)} at {@code 1 + i}.
+ *
+ * <p>
+ * A displaced array ({@code make-array :displaced-to}) instead carries a 5-element header
+ * {@code Object[]{dims, null, null, target, offset}} and holds NO data slots: every data
+ * access goes through {@code _rmGet}/{@code _rmSet}, which follow the target chain adding
+ * each hop's offset to the 1-based list index (so writes alias the target's storage). A
+ * displaced array never has a fill pointer and is never adjustable (lite semantics,
+ * enforced at compile time).
  *
  * <p>
  * The generated static helpers (gated on the program actually using arrays):
@@ -106,6 +114,30 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String VECTOR_PUSH_EXTEND_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String MAKE_DISPLACED = "_arrayMakeDisplaced";
+
+	static final String MAKE_DISPLACED_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String RM_GET = "_rmGet";
+
+	static final String RM_GET_DESC = "(Ljava/lang/Object;I)Ljava/lang/Object;";
+
+	static final String RM_SET = "_rmSet";
+
+	static final String RM_SET_DESC = "(Ljava/lang/Object;ILjava/lang/Object;)Ljava/lang/Object;";
+
+	static final String ARRAY_BECOME = "_arrayBecome";
+
+	static final String ARRAY_BECOME_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String DISP_TARGET = "_arrayDispTarget";
+
+	static final String DISP_TARGET_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String DISP_OFFSET = "_arrayDispOffset";
+
+	static final String DISP_OFFSET_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 	}
@@ -113,7 +145,8 @@ final class JvmArrayRuntimeBuilder {
 	private JvmArrayRuntimeBuilder() {
 	}
 
-	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass) {
+	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
+			ClassConstant selfClass) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
@@ -130,9 +163,15 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
 		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
 				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+		MethodrefConstant alRemove = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(I)Ljava/lang/Object;")));
 		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
 		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant rmGet = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC)));
+		MethodrefConstant rmSet = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
 
 		List<ArrayMethod> methods = new ArrayList<>();
 
@@ -148,87 +187,9 @@ final class JvmArrayRuntimeBuilder {
 		m.dup();
 		m.invokespecial(alInit);
 		m.astore(list);
-		m.aload(dims);
-		m.instanceOf(longClass);
-		int notLong = m.label();
-		m.branch(Opcode.IFEQ, notLong);
-		// 1-D integer shorthand: dimsArr = {dims}; total = ((Long) dims).intValue()
-		m.iconst(1);
-		m.anewarray(objectClass);
-		m.dup();
-		m.iconst(0);
-		m.aload(dims);
-		m.aastore();
-		m.astore(dimsArr);
-		m.aload(dims);
-		m.checkcast(longClass);
-		m.invokevirtual(longIntValue);
-		m.istore(total);
-		int afterDims = m.label();
-		m.branch(Opcode.GOTO, afterDims);
-		// cons list of dimensions: first count the length (n), then copy the sizes
-		// into dimsArr while multiplying total.
-		m.bind(notLong);
-		m.iconst(0);
-		m.istore(n);
-		m.aload(dims);
-		m.astore(cur);
-		int countLoop = m.label();
-		int countDone = m.label();
-		m.bind(countLoop);
-		m.aload(cur);
-		m.instanceOf(objectArrayClass);
-		m.branch(Opcode.IFEQ, countDone);
-		m.iinc(n, 1);
-		m.aload(cur);
-		m.checkcast(objectArrayClass);
-		m.iconst(1);
-		m.aaload();
-		m.astore(cur);
-		m.branch(Opcode.GOTO, countLoop);
-		m.bind(countDone);
-		m.iload(n);
-		m.anewarray(objectClass);
-		m.astore(dimsArr);
-		m.iconst(1);
-		m.istore(total);
-		m.iconst(0);
-		m.istore(idx);
-		m.aload(dims);
-		m.astore(cur);
-		int fillLoop = m.label();
-		m.bind(fillLoop);
-		m.iload(idx);
-		m.iload(n);
-		m.branch(Opcode.IF_ICMPGE, afterDims);
-		// dimsArr[idx] = car(cur)
-		m.aload(dimsArr);
-		m.iload(idx);
-		m.aload(cur);
-		m.checkcast(objectArrayClass);
-		m.iconst(0);
-		m.aaload();
-		m.aastore();
-		// total *= ((Long) dimsArr[idx]).intValue()
-		m.iload(total);
-		m.aload(dimsArr);
-		m.iload(idx);
-		m.aaload();
-		m.checkcast(longClass);
-		m.invokevirtual(longIntValue);
-		m.op(Opcode.IMUL);
-		m.istore(total);
-		// cur = cdr(cur)
-		m.aload(cur);
-		m.checkcast(objectArrayClass);
-		m.iconst(1);
-		m.aaload();
-		m.astore(cur);
-		m.iinc(idx, 1);
-		m.branch(Opcode.GOTO, fillLoop);
-		// afterDims: resolve the fill pointer (null = none; a Long = that value,
+		emitParseDims(m, objectClass, longClass, objectArrayClass, longIntValue, dims, dimsArr, total, cur, n, idx);
+		// resolve the fill pointer (null = none; a Long = that value,
 		// range-checked; anything else, i.e. t, = the vector size), requiring rank 1.
-		m.bind(afterDims);
 		m.aconstNull();
 		m.astore(fpVal);
 		int afterFp = m.label();
@@ -307,43 +268,39 @@ final class JvmArrayRuntimeBuilder {
 		m.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 12, m.finish()));
 
-		// _aref1(arr, i): return ((ArrayList) arr).get(1 + ((Long) i).intValue())
+		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
+		// follows the displacement chain, so every accessor goes through it.
 		JvmAsm a1 = new JvmAsm();
 		a1.aload(0);
-		a1.checkcast(arrayListClass);
 		a1.iconst(1);
 		a1.aload(1);
 		a1.checkcast(longClass);
 		a1.invokevirtual(longIntValue);
 		a1.op(Opcode.IADD);
-		a1.invokevirtual(alGet);
+		a1.invokestatic(rmGet);
 		a1.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(AREF1_DESC), 3, 2, a1.finish()));
 
-		// _aref2(arr, i, j): cols = dims[1]; return list.get(1 + i * cols + j)
+		// _aref2(arr, i, j): cols = dims[1]; return _rmGet(arr, 1 + i * cols + j)
 		JvmAsm a2 = new JvmAsm();
 		emitFlat2(a2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue);
 		a2.istore(3);
 		a2.aload(0);
-		a2.checkcast(arrayListClass);
 		a2.iload(3);
-		a2.invokevirtual(alGet);
+		a2.invokestatic(rmGet);
 		a2.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), 4, 4, a2.finish()));
 
-		// _aset1(arr, i, val): ((ArrayList) arr).set(1 + i, val); return val
+		// _aset1(arr, i, val): _rmSet(arr, 1 + i, val) -- returns val
 		JvmAsm s1 = new JvmAsm();
 		s1.aload(0);
-		s1.checkcast(arrayListClass);
 		s1.iconst(1);
 		s1.aload(1);
 		s1.checkcast(longClass);
 		s1.invokevirtual(longIntValue);
 		s1.op(Opcode.IADD);
 		s1.aload(2);
-		s1.invokevirtual(alSet);
-		s1.pop();
-		s1.aload(2);
+		s1.invokestatic(rmSet);
 		s1.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), 4, 3, s1.finish()));
 
@@ -395,44 +352,37 @@ final class JvmArrayRuntimeBuilder {
 		d.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(DIMS_DESC), 6, 4, d.finish()));
 
-		// _aset2(arr, i, j, val): list.set(1 + i * cols + j, val); return val
+		// _aset2(arr, i, j, val): _rmSet(arr, 1 + i * cols + j, val) -- returns val
 		JvmAsm s2 = new JvmAsm();
 		emitFlat2(s2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue);
 		s2.istore(4);
 		s2.aload(0);
-		s2.checkcast(arrayListClass);
 		s2.iload(4);
 		s2.aload(3);
-		s2.invokevirtual(alSet);
-		s2.pop();
-		s2.aload(3);
+		s2.invokestatic(rmSet);
 		s2.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), 4, 5, s2.finish()));
 
-		// _arefN(arr, subs): return list.get(1 + flatIndex(arr, subs))
+		// _arefN(arr, subs): return _rmGet(arr, 1 + flatIndex(arr, subs))
 		JvmAsm an = new JvmAsm();
 		emitFlatN(an, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 2, 3, 4, 5);
 		an.aload(0);
-		an.checkcast(arrayListClass);
 		an.iconst(1);
 		an.iload(2);
 		an.op(Opcode.IADD);
-		an.invokevirtual(alGet);
+		an.invokestatic(rmGet);
 		an.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(AREFN_DESC), 4, 6, an.finish()));
 
-		// _asetN(arr, subs, val): list.set(1 + flatIndex(arr, subs), val); return val
+		// _asetN(arr, subs, val): _rmSet(arr, 1 + flatIndex(arr, subs), val)
 		JvmAsm sn = new JvmAsm();
 		emitFlatN(sn, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 3, 4, 5, 6);
 		sn.aload(0);
-		sn.checkcast(arrayListClass);
 		sn.iconst(1);
 		sn.iload(3);
 		sn.op(Opcode.IADD);
 		sn.aload(2);
-		sn.invokevirtual(alSet);
-		sn.pop();
-		sn.aload(2);
+		sn.invokestatic(rmSet);
 		sn.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(ASETN_DESC), 4, 7, sn.finish()));
 
@@ -621,7 +571,393 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), 6, 8,
 				vpe.finish()));
 
+		// _rmGet(list, idx): the single data-read primitive (idx is the 1-based list
+		// index). Follows the displacement chain: while the header is a 5-element
+		// {dims, fp, adj, target, offset} with a non-null target, add the offset and
+		// hop to the target list. Locals: 0 = list, 1 = idx, 2 = header.
+		JvmAsm rg = new JvmAsm();
+		emitResolveDisplacement(rg, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 2);
+		rg.aload(0);
+		rg.checkcast(arrayListClass);
+		rg.iload(1);
+		rg.invokevirtual(alGet);
+		rg.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 3, 3, rg.finish()));
+
+		// _rmSet(list, idx, val): the single data-write primitive; returns val.
+		// Locals: 0 = list, 1 = idx, 2 = val, 3 = header.
+		JvmAsm rs = new JvmAsm();
+		emitResolveDisplacement(rs, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 3);
+		rs.aload(0);
+		rs.checkcast(arrayListClass);
+		rs.iload(1);
+		rs.aload(2);
+		rs.invokevirtual(alSet);
+		rs.pop();
+		rs.aload(2);
+		rs.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 4, 4, rs.finish()));
+
+		// _arrayMakeDisplaced(dims, target, offset): a displaced view -- a fresh
+		// ArrayList holding ONLY the 5-element header {dimsArr, null, null, target,
+		// offsetLong}; the view is bounds-checked against the target's total size.
+		// Locals: 0 = dims, 1 = target, 2 = offsetArg, 3 = list, 4 = total,
+		// 5 = dimsArr, 6 = idx, 7 = cur, 8 = n, 9 = off (int), 10 = targetHeader,
+		// 11 = targetTotal (product scratch), 12 = m (product scratch).
+		JvmAsm md = new JvmAsm();
+		int mdDims = 0, mdTarget = 1, mdOffset = 2, mdList = 3, mdTotal = 4, mdDimsArr = 5, mdIdx = 6, mdCur = 7,
+				mdN = 8, mdOff = 9, mdTargetHeader = 10, mdProduct = 11, mdM = 12;
+		md.anew(arrayListClass);
+		md.dup();
+		md.invokespecial(alInit);
+		md.astore(mdList);
+		emitParseDims(md, objectClass, longClass, objectArrayClass, longIntValue, mdDims, mdDimsArr, mdTotal, mdCur,
+				mdN, mdIdx);
+		// off = offsetArg == null ? 0 : ((Long) offsetArg).intValue()
+		int offGiven = md.label();
+		int offDone = md.label();
+		md.aload(mdOffset);
+		md.branch(Opcode.IFNONNULL, offGiven);
+		md.iconst(0);
+		md.istore(mdOff);
+		md.branch(Opcode.GOTO, offDone);
+		md.bind(offGiven);
+		md.aload(mdOffset);
+		md.checkcast(longClass);
+		md.invokevirtual(longIntValue);
+		md.istore(mdOff);
+		md.bind(offDone);
+		// targetTotal = product of the target's dims; require 0 <= off and
+		// total + off <= targetTotal
+		emitLoadHeader(md, arrayListClass, objectArrayClass, alGet, mdTarget);
+		md.astore(mdTargetHeader);
+		emitDimsProduct(md, longClass, objectArrayClass, longIntValue, mdTargetHeader, mdProduct, mdM);
+		md.istore(mdProduct);
+		int mdBad = md.label();
+		int mdOk = md.label();
+		md.iload(mdOff);
+		md.branch(Opcode.IFLT, mdBad);
+		md.iload(mdTotal);
+		md.iload(mdOff);
+		md.op(Opcode.IADD);
+		md.iload(mdProduct);
+		md.branch(Opcode.IF_ICMPGT, mdBad);
+		md.branch(Opcode.GOTO, mdOk);
+		md.bind(mdBad);
+		emitThrow(md, rtExClass, rtExInit,
+				cp.addString("make-array: :displaced-to array is too small for the requested view"));
+		md.bind(mdOk);
+		// list.add(new Object[]{dimsArr, null, null, target, Long.valueOf(off)})
+		md.aload(mdList);
+		md.iconst(5);
+		md.anewarray(objectClass);
+		md.dup();
+		md.iconst(0);
+		md.aload(mdDimsArr);
+		md.aastore();
+		md.dup();
+		md.iconst(3);
+		md.aload(mdTarget);
+		md.aastore();
+		md.dup();
+		md.iconst(4);
+		md.iload(mdOff);
+		md.op(Opcode.I2L);
+		md.invokestatic(longValueOf);
+		md.aastore();
+		md.invokevirtual(alAdd);
+		md.pop();
+		md.aload(mdList);
+		md.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), 6, 13, md.finish()));
+
+		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
+		// (the in-place half of adjust-array on an adjustable array); returns a. The
+		// adjustable flag (header slot 2) is kept. Locals: 0 = a, 1 = b, 2 = headerA,
+		// 3 = headerB, 4 = i.
+		JvmAsm bc = new JvmAsm();
+		emitLoadHeader(bc, arrayListClass, objectArrayClass, alGet, 0);
+		bc.astore(2);
+		emitLoadHeader(bc, arrayListClass, objectArrayClass, alGet, 1);
+		bc.astore(3);
+		// headerA[0] = headerB[0]; headerA[1] = headerB[1]
+		bc.aload(2);
+		bc.iconst(0);
+		bc.aload(3);
+		bc.iconst(0);
+		bc.aaload();
+		bc.aastore();
+		bc.aload(2);
+		bc.iconst(1);
+		bc.aload(3);
+		bc.iconst(1);
+		bc.aaload();
+		bc.aastore();
+		// while (a.size() > b.size()) a.remove(a.size() - 1)
+		int shrinkLoop = bc.label();
+		int shrinkDone = bc.label();
+		bc.bind(shrinkLoop);
+		bc.aload(0);
+		bc.checkcast(arrayListClass);
+		bc.invokevirtual(alSize);
+		bc.aload(1);
+		bc.checkcast(arrayListClass);
+		bc.invokevirtual(alSize);
+		bc.branch(Opcode.IF_ICMPLE, shrinkDone);
+		bc.aload(0);
+		bc.checkcast(arrayListClass);
+		bc.aload(0);
+		bc.checkcast(arrayListClass);
+		bc.invokevirtual(alSize);
+		bc.iconst(1);
+		bc.op(Opcode.ISUB);
+		bc.invokevirtual(alRemove);
+		bc.pop();
+		bc.branch(Opcode.GOTO, shrinkLoop);
+		bc.bind(shrinkDone);
+		// while (a.size() < b.size()) a.add(null)
+		int growLoop2 = bc.label();
+		int growDone2 = bc.label();
+		bc.bind(growLoop2);
+		bc.aload(0);
+		bc.checkcast(arrayListClass);
+		bc.invokevirtual(alSize);
+		bc.aload(1);
+		bc.checkcast(arrayListClass);
+		bc.invokevirtual(alSize);
+		bc.branch(Opcode.IF_ICMPGE, growDone2);
+		bc.aload(0);
+		bc.checkcast(arrayListClass);
+		bc.aconstNull();
+		bc.invokevirtual(alAdd);
+		bc.pop();
+		bc.branch(Opcode.GOTO, growLoop2);
+		bc.bind(growDone2);
+		// for (i = 1; i < b.size(); i++) a.set(i, b.get(i))
+		bc.iconst(1);
+		bc.istore(4);
+		int copyLoop = bc.label();
+		int copyDone = bc.label();
+		bc.bind(copyLoop);
+		bc.iload(4);
+		bc.aload(1);
+		bc.checkcast(arrayListClass);
+		bc.invokevirtual(alSize);
+		bc.branch(Opcode.IF_ICMPGE, copyDone);
+		bc.aload(0);
+		bc.checkcast(arrayListClass);
+		bc.iload(4);
+		bc.aload(1);
+		bc.checkcast(arrayListClass);
+		bc.iload(4);
+		bc.invokevirtual(alGet);
+		bc.invokevirtual(alSet);
+		bc.pop();
+		bc.iinc(4, 1);
+		bc.branch(Opcode.GOTO, copyLoop);
+		bc.bind(copyDone);
+		bc.aload(0);
+		bc.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME), cp.addUtf8(ARRAY_BECOME_DESC), 5, 5, bc.finish()));
+
+		// _arrayDispTarget(arr): the displacement target, or null (nil).
+		// Locals: 0 = arr, 1 = header.
+		JvmAsm dt = new JvmAsm();
+		emitLoadHeader(dt, arrayListClass, objectArrayClass, alGet, 0);
+		dt.astore(1);
+		int dtNil = dt.label();
+		dt.aload(1);
+		dt.arraylength();
+		dt.iconst(3);
+		dt.branch(Opcode.IF_ICMPLE, dtNil);
+		dt.aload(1);
+		dt.iconst(3);
+		dt.aaload();
+		dt.areturn();
+		dt.bind(dtNil);
+		dt.aconstNull();
+		dt.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(DISP_TARGET), cp.addUtf8(DISP_TARGET_DESC), 3, 2, dt.finish()));
+
+		// _arrayDispOffset(arr): the displacement offset, or 0.
+		// Locals: 0 = arr, 1 = header.
+		JvmAsm dofs = new JvmAsm();
+		emitLoadHeader(dofs, arrayListClass, objectArrayClass, alGet, 0);
+		dofs.astore(1);
+		int dofsNone = dofs.label();
+		dofs.aload(1);
+		dofs.arraylength();
+		dofs.iconst(3);
+		dofs.branch(Opcode.IF_ICMPLE, dofsNone);
+		dofs.aload(1);
+		dofs.iconst(4);
+		dofs.aaload();
+		dofs.areturn();
+		dofs.bind(dofsNone);
+		dofs.op(Opcode.LCONST_0);
+		dofs.invokestatic(longValueOf);
+		dofs.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(DISP_OFFSET), cp.addUtf8(DISP_OFFSET_DESC), 3, 2, dofs.finish()));
+
 		return methods;
+	}
+
+	// Follows the displacement chain of the array list in listSlot: while its header is
+	// a 5-element {dims, fp, adj, target, offset} with a non-null target, add the
+	// offset to the 1-based list index in idxSlot and hop listSlot to the target.
+	private static void emitResolveDisplacement(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
+			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant longIntValue, int listSlot,
+			int idxSlot, int headerSlot) {
+		int loop = a.label();
+		int done = a.label();
+		a.bind(loop);
+		emitLoadHeader(a, arrayListClass, objectArrayClass, alGet, listSlot);
+		a.astore(headerSlot);
+		a.aload(headerSlot);
+		a.arraylength();
+		a.iconst(3);
+		a.branch(Opcode.IF_ICMPLE, done);
+		a.aload(headerSlot);
+		a.iconst(3);
+		a.aaload();
+		a.branch(Opcode.IFNULL, done);
+		// idx += ((Long) header[4]).intValue(); list = header[3]
+		a.iload(idxSlot);
+		a.aload(headerSlot);
+		a.iconst(4);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.istore(idxSlot);
+		a.aload(headerSlot);
+		a.iconst(3);
+		a.aaload();
+		a.astore(listSlot);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+	}
+
+	// Parses a make-array dimensions argument in the local dims (a Long for the rank-1
+	// shorthand, otherwise a cons list of Longs) into an Object[] of boxed Long sizes
+	// (dimsArr) and the int total element count (total). cur/n/idx are scratch slots.
+	private static void emitParseDims(JvmAsm m, ClassConstant objectClass, ClassConstant longClass,
+			ClassConstant objectArrayClass, MethodrefConstant longIntValue, int dims, int dimsArr, int total, int cur,
+			int n, int idx) {
+		m.aload(dims);
+		m.instanceOf(longClass);
+		int notLong = m.label();
+		m.branch(Opcode.IFEQ, notLong);
+		// 1-D integer shorthand: dimsArr = {dims}; total = ((Long) dims).intValue()
+		m.iconst(1);
+		m.anewarray(objectClass);
+		m.dup();
+		m.iconst(0);
+		m.aload(dims);
+		m.aastore();
+		m.astore(dimsArr);
+		m.aload(dims);
+		m.checkcast(longClass);
+		m.invokevirtual(longIntValue);
+		m.istore(total);
+		int afterDims = m.label();
+		m.branch(Opcode.GOTO, afterDims);
+		// cons list of dimensions: first count the length (n), then copy the sizes
+		// into dimsArr while multiplying total.
+		m.bind(notLong);
+		m.iconst(0);
+		m.istore(n);
+		m.aload(dims);
+		m.astore(cur);
+		int countLoop = m.label();
+		int countDone = m.label();
+		m.bind(countLoop);
+		m.aload(cur);
+		m.instanceOf(objectArrayClass);
+		m.branch(Opcode.IFEQ, countDone);
+		m.iinc(n, 1);
+		m.aload(cur);
+		m.checkcast(objectArrayClass);
+		m.iconst(1);
+		m.aaload();
+		m.astore(cur);
+		m.branch(Opcode.GOTO, countLoop);
+		m.bind(countDone);
+		m.iload(n);
+		m.anewarray(objectClass);
+		m.astore(dimsArr);
+		m.iconst(1);
+		m.istore(total);
+		m.iconst(0);
+		m.istore(idx);
+		m.aload(dims);
+		m.astore(cur);
+		int fillLoop = m.label();
+		m.bind(fillLoop);
+		m.iload(idx);
+		m.iload(n);
+		m.branch(Opcode.IF_ICMPGE, afterDims);
+		// dimsArr[idx] = car(cur)
+		m.aload(dimsArr);
+		m.iload(idx);
+		m.aload(cur);
+		m.checkcast(objectArrayClass);
+		m.iconst(0);
+		m.aaload();
+		m.aastore();
+		// total *= ((Long) dimsArr[idx]).intValue()
+		m.iload(total);
+		m.aload(dimsArr);
+		m.iload(idx);
+		m.aaload();
+		m.checkcast(longClass);
+		m.invokevirtual(longIntValue);
+		m.op(Opcode.IMUL);
+		m.istore(total);
+		// cur = cdr(cur)
+		m.aload(cur);
+		m.checkcast(objectArrayClass);
+		m.iconst(1);
+		m.aaload();
+		m.astore(cur);
+		m.iinc(idx, 1);
+		m.branch(Opcode.GOTO, fillLoop);
+		m.bind(afterDims);
+	}
+
+	// Pushes the int product of the boxed Long dimension sizes of the header in
+	// headerSlot (the total element count), using productSlot/mSlot as scratch.
+	private static void emitDimsProduct(JvmAsm a, ClassConstant longClass, ClassConstant objectArrayClass,
+			MethodrefConstant longIntValue, int headerSlot, int productSlot, int mSlot) {
+		a.iconst(1);
+		a.istore(productSlot);
+		a.iconst(0);
+		a.istore(mSlot);
+		int loop = a.label();
+		int done = a.label();
+		a.bind(loop);
+		a.iload(mSlot);
+		a.aload(headerSlot);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.arraylength();
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.iload(productSlot);
+		a.aload(headerSlot);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.iload(mSlot);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IMUL);
+		a.istore(productSlot);
+		a.iinc(mSlot, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		a.iload(productSlot);
 	}
 
 	// Pushes the slot-0 header Object[] of the array in arrSlot.
@@ -732,10 +1068,12 @@ final class JvmArrayRuntimeBuilder {
 	 * @return the two helper methods
 	 */
 	static List<ArrayMethod> buildToStringMethods(ConstantPool cp, MethodrefConstant lispToString,
-			MethodrefConstant lispToDisplayString) {
+			MethodrefConstant lispToDisplayString, ClassConstant selfClass) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		MethodrefConstant rmGet = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC)));
 		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 		MethodrefConstant alGet = cp.addMethodref(arrayListClass,
@@ -756,10 +1094,10 @@ final class JvmArrayRuntimeBuilder {
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 5, 11,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
-						sbAppend, sbToString, stringValueOfInt, lispToString)));
+						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet)));
 		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 5, 11,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
-						sbAppend, sbToString, stringValueOfInt, lispToDisplayString)));
+						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet)));
 		return methods;
 	}
 
@@ -773,7 +1111,8 @@ final class JvmArrayRuntimeBuilder {
 	private static List<Integer> buildToString(ConstantPool cp, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant alSize,
 			MethodrefConstant longIntValue, MethodrefConstant sbInit, MethodrefConstant sbAppend,
-			MethodrefConstant sbToString, MethodrefConstant stringValueOfInt, MethodrefConstant elementFormat) {
+			MethodrefConstant sbToString, MethodrefConstant stringValueOfInt, MethodrefConstant elementFormat,
+			MethodrefConstant rmGet) {
 		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9, header = 10;
 		JvmAsm a = new JvmAsm();
 		// list = (ArrayList) arr; header = (Object[]) list.get(0)
@@ -785,7 +1124,8 @@ final class JvmArrayRuntimeBuilder {
 		a.invokevirtual(alGet);
 		a.checkcast(objectArrayClass);
 		a.astore(header);
-		// n = header[1] != null ? fill pointer : list.size() - 1
+		// n = header[1] != null ? fill pointer : product of the dims (the total element
+		// count; a displaced array holds no data slots, so size() - 1 would be wrong)
 		int useSize = a.label();
 		int afterN = a.label();
 		a.aload(header);
@@ -800,10 +1140,7 @@ final class JvmArrayRuntimeBuilder {
 		a.istore(n);
 		a.branch(Opcode.GOTO, afterN);
 		a.bind(useSize);
-		a.aload(list);
-		a.invokevirtual(alSize);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		emitDimsProduct(a, longClass, objectArrayClass, longIntValue, header, stride, m);
 		a.istore(n);
 		a.bind(afterN);
 		// dims = (Object[]) header[0]; rank = dims.length
@@ -871,13 +1208,13 @@ final class JvmArrayRuntimeBuilder {
 		a.iinc(j, 1);
 		a.branch(Opcode.GOTO, openLoop);
 		a.bind(openDone);
-		// sb.append(elementFormat(list.get(k + 1)))
+		// sb.append(elementFormat(_rmGet(list, k + 1))) -- displaced-aware element read
 		a.aload(sb);
 		a.aload(list);
 		a.iload(k);
 		a.iconst(1);
 		a.op(Opcode.IADD);
-		a.invokevirtual(alGet);
+		a.invokestatic(rmGet);
 		a.invokestatic(elementFormat);
 		a.invokevirtual(sbAppend);
 		a.pop();
