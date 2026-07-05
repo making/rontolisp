@@ -2823,6 +2823,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMapcarWithMultipleLists() {
+		assertThat(eval("(mapcar #'+ '(1 2 3 4) '(10 20 30 40))").print()).isEqualTo("(11 22 33 44)");
+	}
+
+	@Test
+	void evalMapcarWithMultipleListsStopsAtShortest() {
+		assertThat(eval("(mapcar #'cons '(1 2 3) '(a b))").print()).isEqualTo("((1 . a) (2 . b))");
+	}
+
+	@Test
+	void evalMapcarWithThreeLists() {
+		assertThat(eval("(mapcar #'+ '(1 2) '(10 20) '(100 200))").print()).isEqualTo("(111 222)");
+	}
+
+	@Test
 	void evalMapcReturnsOriginalList() {
 		// mapc applies the function for effect and returns the original list,
 		// not the mapped results (unlike mapcar).

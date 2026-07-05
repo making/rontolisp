@@ -366,6 +366,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMapcarMultipleLists() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'+ '(1 2 3 4) '(10 20 30 40)))")).isEqualTo("(11 22 33 44)");
+	}
+
+	@Test
+	void compileAndRunMapcarMultipleListsStopsAtShortest() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . a) (2 . b))");
+	}
+
+	@Test
 	void compileAndRunRankThreeArrayRefSetAndPrint() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))

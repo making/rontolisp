@@ -328,11 +328,13 @@ public final class LispEvaluator {
 			return applyJsonHelper(JsonLibrary.HELPER_STRINGIFY, List.of(args.get(0)));
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.MAPCAR + " expects 2 arguments, got " + args.size());
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.MAPCAR + " expects at least 2 arguments, got " + args.size());
 			}
-			requireList(LispNames.MAPCAR, args.get(1));
-			return mapValues(args.get(0), args.get(1));
+			for (int i = 1; i < args.size(); i++) {
+				requireList(LispNames.MAPCAR, args.get(i));
+			}
+			return mapValues(args.get(0), args.subList(1, args.size()));
 		}));
 		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC, args -> {
 			if (args.size() != 2) {
@@ -1463,15 +1465,28 @@ public final class LispEvaluator {
 		}
 	}
 
-	private LispVal mapValues(LispVal function, LispVal list) {
+	// mapcar over one or more lists in parallel, stopping at the shortest list
+	// (Common Lisp semantics).
+	private LispVal mapValues(LispVal function, List<LispVal> lists) {
+		List<LispVal> cursors = new ArrayList<>(lists);
 		List<LispVal> results = new ArrayList<>();
-		while (list instanceof LispCons cell) {
-			LispVal mapped = apply(function, List.of(cell.car()), this.globalEnv);
-			results.add(mapped);
-			list = cell.cdr();
-		}
-		if (results.isEmpty()) {
-			return LispNil.INSTANCE;
+		while (true) {
+			List<LispVal> callArgs = new ArrayList<>(cursors.size());
+			boolean exhausted = false;
+			for (int i = 0; i < cursors.size(); i++) {
+				if (cursors.get(i) instanceof LispCons cell) {
+					callArgs.add(cell.car());
+					cursors.set(i, cell.cdr());
+				}
+				else {
+					exhausted = true;
+					break;
+				}
+			}
+			if (exhausted) {
+				break;
+			}
+			results.add(apply(function, callArgs, this.globalEnv));
 		}
 		LispVal result = LispNil.INSTANCE;
 		for (int i = results.size() - 1; i >= 0; i--) {

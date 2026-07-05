@@ -599,6 +599,15 @@ cases:
       (11 12 13)
       (1 4 9)
       nil
+  - name: mapcar-multiple-lists
+    source: |
+      (print (mapcar #'+ '(1 2 3 4) '(10 20 30 40)))
+      (print (mapcar #'cons '(1 2 3) '(a b)))
+      (print (mapcar (lambda (a b c) (+ a b c)) '(1 2) '(10 20) '(100 200)))
+    expected: |
+      (11 22 33 44)
+      ((1 . a) (2 . b))
+      (111 222)
   - name: map
     source: |
       (print (map 'list #'+ '(1 2 3) '(10 20 30)))

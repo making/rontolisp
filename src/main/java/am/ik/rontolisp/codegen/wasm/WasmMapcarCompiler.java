@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -10,8 +11,9 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code mapcar} built-in function. Generates a block/loop that applies a
- * function to each element of a list, building a new list using the
- * sentinel/tail-mutation pattern.
+ * function to the parallel elements of one or more lists, building a new list using the
+ * sentinel/tail-mutation pattern. With multiple lists the loop stops at the shortest list
+ * (Common Lisp semantics).
  */
 final class WasmMapcarCompiler {
 
@@ -20,8 +22,9 @@ final class WasmMapcarCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(1);
-		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + 1;
+		int nLists = args.size() - 2;
+		ctx.indirectCallArities.add(nLists);
+		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + nLists;
 
 		// Compile function expression
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
@@ -29,14 +32,16 @@ final class WasmMapcarCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(funcSlot);
 
-		// Compile list expression
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		int listSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
-
-		// mapcar operates on lists; a non-list (e.g. a string) traps.
-		WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
+		// Compile each list expression, guarding it is a list.
+		List<Integer> listSlots = new ArrayList<>();
+		for (int i = 0; i < nLists; i++) {
+			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
+			int listSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(listSlot);
+			WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
+			listSlots.add(listSlot);
+		}
 
 		// Create sentinel cons: struct.new TYPE_CONS (null, null)
 		ctx.writer.write(Instruction.REF_NULL);
@@ -60,26 +65,30 @@ final class WasmMapcarCompiler {
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
 
-		// Check if list is cons; if not, break to $exit
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.I32_EQZ);
-		ctx.writer.write(Instruction.BR_IF, 1); // break to $exit
+		// Break to $exit as soon as any list is no longer a cons (shortest list stops).
+		for (int listSlot : listSlots) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.BR_IF, 1); // break to $exit
+		}
 
-		// Push func and car(list) for dispatch
+		// Push func and car of each list for dispatch
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(funcSlot);
-		// car(list)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car
-		// Call dispatch_1(func, car)
+		for (int listSlot : listSlots) {
+			// car(list)
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeSignedLeb128(0); // car
+		}
+		// Call dispatch_<nLists>(func, car...)
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
 
@@ -109,16 +118,18 @@ final class WasmMapcarCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(tailSlot);
 
-		// list = cdr(list)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1); // cdr
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		// advance each list: list = cdr(list)
+		for (int listSlot : listSlots) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeSignedLeb128(1); // cdr
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(listSlot);
+		}
 
 		// br 0 (continue loop)
 		ctx.writer.write(Instruction.BR, 0);

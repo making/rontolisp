@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -9,8 +10,9 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code mapcar} built-in function. Generates an inline loop that applies a
- * function to each element of a list, building a new list using the
- * sentinel/tail-mutation pattern.
+ * function to the parallel elements of one or more lists, building a new list using the
+ * sentinel/tail-mutation pattern. With multiple lists the loop stops at the shortest list
+ * (Common Lisp semantics).
  */
 final class JvmMapcarCompiler {
 
@@ -19,7 +21,8 @@ final class JvmMapcarCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(1);
+		int nLists = args.size() - 2;
+		ctx.indirectCallArities.add(nLists);
 
 		// Compile function expression
 		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
@@ -27,15 +30,17 @@ final class JvmMapcarCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(funcSlot);
 
-		// Compile list expression
-		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		int listSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
-
-		// mapcar operates on lists; a non-list (e.g. a string) signals an error.
-		JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
-				"mapcar: argument is not a list (use map for strings/vectors)");
+		// Compile each list expression, guarding it is a list.
+		List<Integer> listSlots = new ArrayList<>();
+		for (int i = 0; i < nLists; i++) {
+			JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
+			int listSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(listSlot);
+			JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
+					"mapcar: argument is not a list (use map for strings/vectors)");
+			listSlots.add(listSlot);
+		}
 
 		// Create sentinel cons: new Object[2] {null, null}
 		ctx.emit(Opcode.ICONST_2);
@@ -54,25 +59,30 @@ final class JvmMapcarCompiler {
 
 		// loop:
 		int loopPos = ctx.code.size();
-		// if list == null, goto exit
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		// if any list == null, goto exit (stop at the shortest list)
+		List<Integer> exitBranches = new ArrayList<>();
+		for (int listSlot : listSlots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			exitBranches.add(ctx.code.size());
+			ctx.emit(Opcode.IFNULL);
+			ctx.emitU2(0);
+		}
 
-		// Push func and car(list) for dispatch call
+		// Push func and car of each list for the dispatch call
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(funcSlot);
-		// car(list) = ((Object[]) list)[0]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		// Call _invoke_1(func, car)
-		JvmFunctionCallCompiler.emitDispatchCall(1, ctx, className);
+		for (int listSlot : listSlots) {
+			// car(list) = ((Object[]) list)[0]
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_0);
+			ctx.emit(Opcode.AALOAD);
+		}
+		// Call _invoke_<nLists>(func, car...)
+		JvmFunctionCallCompiler.emitDispatchCall(nLists, ctx, className);
 
 		// Create new cons: new Object[2] {mapped, null}
 		int mappedSlot = ctx.allocTemp();
@@ -107,15 +117,17 @@ final class JvmMapcarCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(tailSlot);
 
-		// list = cdr(list) = ((Object[]) list)[1]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
+		// advance each list: list = cdr(list) = ((Object[]) list)[1]
+		for (int listSlot : listSlots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.AALOAD);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(listSlot);
+		}
 
 		// goto loop
 		int gotoPos = ctx.code.size();
@@ -124,7 +136,10 @@ final class JvmMapcarCompiler {
 		ctx.emitU2(offset & 0xFFFF);
 
 		// exit: load head[1] (cdr of sentinel = first real cons or null)
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		int exitPos = ctx.code.size();
+		for (int branchPos : exitBranches) {
+			JvmEmitHelper.patchBranch(ctx, branchPos, exitPos);
+		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(headSlot);
 		ctx.emit(Opcode.CHECKCAST);

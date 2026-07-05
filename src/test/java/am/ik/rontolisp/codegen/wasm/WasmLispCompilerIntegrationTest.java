@@ -3047,6 +3047,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void mapcarMultipleLists() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'+ '(1 2 3 4) '(10 20 30 40)))")).isEqualTo("(11 22 33 44)");
+	}
+
+	@Test
+	void mapcarMultipleListsStopsAtShortest() throws Exception {
+		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . a) (2 . b))");
+	}
+
+	@Test
 	void mapcReturnsOriginalList() throws Exception {
 		// mapc prints each element (side effect) and returns the original list.
 		assertThat(compileAndRun("(print (mapc #'print '(10 20)))")).isEqualTo("10\n20\n(10 20)");
