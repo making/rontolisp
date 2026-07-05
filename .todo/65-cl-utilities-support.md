@@ -36,12 +36,13 @@ compile/eval) EXCEPT `once-only.lisp`.
 The 2026-07-05 re-triage (probing the real 1.2.4 tarball) found the original
 triage was wrong on two points, and surfaced deeper gaps:
 
-- **Nested backquote (`once-only.lisp`)** -- DONE (2026-07-05, `.todo/66`). The
-  reader now fully expands nested/multi-level backquote at read time (CLtL2/
-  Steele port in `LispReader`); backends unaffected. `once-only.lisp` READS and
-  the macro expands correctly (verified against SBCL). BUT it also calls
-  `(string name)` -- see the `string` residue item below -- so the file still
-  won't fully expand until `string` lands.
+- **Nested backquote (`once-only.lisp`)** -- DONE (2026-07-05, commit
+  "Support nested backquote in the reader"; details in
+  `.kb/defmacro-backquote.md`). The reader now fully expands nested/multi-level
+  backquote at read time (CLtL2/Steele port in `LispReader`); backends
+  unaffected. `once-only.lisp` READS and the macro expands correctly (verified
+  against SBCL). BUT it also calls `(string name)` -- see the `string` residue
+  item below -- so the file still won't fully expand until `string` lands.
 - **`string`** -- MISSING (surfaced by `once-only.lisp`, which does
   `(gensym (string name))`). Need the CL `string` designator coercion
   (symbol -> name, string -> itself, char -> 1-char string). Small, all four
@@ -69,14 +70,14 @@ interpreter:
 `with-unique-names`/`with-gensyms` (definition) and simple `compose`/
 `collecting` shapes work on the interpreter, but there is no clean, whole-system
 runnable subset to anchor a `ClUtilitiesE2eTest` yet -- so vendoring +
-`ClUtilitiesE2eTest` is deferred until nested backquote (`.todo/66`) plus enough
-of the stdlib residue above lands. Do NOT vendor cl-utilities for a
+`ClUtilitiesE2eTest` is deferred until enough of the stdlib residue above lands
+(nested backquote is now done). Do NOT vendor cl-utilities for a
 non-functional E2E.
 
 ## Plan (remaining)
 
-1. Nested backquote in the reader (`.todo/66`) -- unblocks `once-only`, hence
-   the full-system LOAD.
+1. Nested backquote in the reader -- DONE (unblocked `once-only`'s expansion;
+   `string` builtin still needed before the file fully expands).
 2. Pick off the stdlib residue above (variadic `nconc`, `reduce :from-end`,
    `integer-length`/`logbitp`, `multiple-value-setq`, `rotatef`) so a useful
    subset RUNS; leave `make-array`-displacement / byte-ops (`copy-array`,
