@@ -54,9 +54,40 @@ public final class FreeVarAnalyzer {
 	 */
 	public static LinkedHashSet<String> findFreeVars(List<LispVal> body, Set<String> boundVars,
 			Set<String> knownFunctions, Set<String> globals) {
+		return findFreeVars(body, boundVars, knownFunctions, globals, Set.of());
+	}
+
+	/**
+	 * Like {@link #findFreeVars(List, Set, Set, Set)}, but names in
+	 * {@code enclosingLexicals} -- variables lexically visible at the analyzed lambda's
+	 * creation site -- override the built-in/function/global exclusions: Lisp-2 means a
+	 * bare symbol is always a variable, so a local named {@code list} or {@code count}
+	 * shadows the function of the same name and must be captured like any other free
+	 * variable.
+	 * @param body the expressions to analyze
+	 * @param boundVars variables bound in the current scope (params, let bindings)
+	 * @param knownFunctions names of defined functions
+	 * @param globals names of top-level global variables (excluded from the result)
+	 * @param enclosingLexicals variable names lexically visible at the creation site
+	 * @return ordered set of free variable names
+	 */
+	public static LinkedHashSet<String> findFreeVars(List<LispVal> body, Set<String> boundVars,
+			Set<String> knownFunctions, Set<String> globals, Set<String> enclosingLexicals) {
+		Set<String> functionsMinusLexicals = knownFunctions;
+		Set<String> globalsMinusLexicals = globals;
+		Set<String> specialsMinusLexicals = SPECIAL_NAMES;
+		if (!enclosingLexicals.isEmpty()) {
+			functionsMinusLexicals = new HashSet<>(knownFunctions);
+			functionsMinusLexicals.removeAll(enclosingLexicals);
+			globalsMinusLexicals = new HashSet<>(globals);
+			globalsMinusLexicals.removeAll(enclosingLexicals);
+			specialsMinusLexicals = new HashSet<>(SPECIAL_NAMES);
+			specialsMinusLexicals.removeAll(enclosingLexicals);
+		}
 		LinkedHashSet<String> freeVars = new LinkedHashSet<>();
 		for (LispVal expr : body) {
-			collectFreeVars(expr, boundVars, knownFunctions, globals, freeVars);
+			collectFreeVars(expr, boundVars, functionsMinusLexicals, globalsMinusLexicals, specialsMinusLexicals,
+					freeVars);
 		}
 		return freeVars;
 	}
@@ -79,11 +110,11 @@ public final class FreeVarAnalyzer {
 	}
 
 	private static void collectFreeVars(LispVal expr, Set<String> boundVars, Set<String> knownFunctions,
-			Set<String> globals, LinkedHashSet<String> freeVars) {
+			Set<String> globals, Set<String> specialNames, LinkedHashSet<String> freeVars) {
 		switch (expr) {
 			case LispSymbol sym -> {
 				String name = sym.name();
-				if (!sym.isKeyword() && !SPECIAL_NAMES.contains(name) && !boundVars.contains(name)
+				if (!sym.isKeyword() && !specialNames.contains(name) && !boundVars.contains(name)
 						&& !knownFunctions.contains(name) && !globals.contains(name)) {
 					freeVars.add(name);
 				}
@@ -100,7 +131,8 @@ public final class FreeVarAnalyzer {
 							Set<String> innerBound = new HashSet<>(boundVars);
 							innerBound.addAll(extractParamNames(parts.get(1)));
 							for (int i = 2; i < parts.size(); i++) {
-								collectFreeVars(parts.get(i), innerBound, knownFunctions, globals, freeVars);
+								collectFreeVars(parts.get(i), innerBound, knownFunctions, globals, specialNames,
+										freeVars);
 							}
 						}
 						case LispNames.LET -> {
@@ -112,83 +144,86 @@ public final class FreeVarAnalyzer {
 									LispCons pair = (LispCons) binding;
 									List<LispVal> pairList = pair.toList();
 									// The init expression is evaluated in outer scope
-									collectFreeVars(pairList.get(1), boundVars, knownFunctions, globals, freeVars);
+									collectFreeVars(pairList.get(1), boundVars, knownFunctions, globals, specialNames,
+											freeVars);
 									innerBound.add(((LispSymbol) pairList.get(0)).name());
 								}
 							}
 							for (int i = 2; i < parts.size(); i++) {
-								collectFreeVars(parts.get(i), innerBound, knownFunctions, globals, freeVars);
+								collectFreeVars(parts.get(i), innerBound, knownFunctions, globals, specialNames,
+										freeVars);
 							}
 						}
 						case LispNames.DEFUN -> {
 							// defun body is handled separately; skip
 						}
 						case LispNames.LET_STAR -> collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DOLIST -> collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DO -> collectFreeVars(LispMacroExpander.expandDo(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.LOOP -> collectFreeVars(LispMacroExpander.expandLoop(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: the default walk would misread the raw
 						// shapes (e.g. the type symbol in (the integer x), declaration
 						// specifiers in declare) as variable references.
 						case LispNames.CHECK_TYPE -> collectFreeVars(LispMacroExpander.expandCheckType(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.ASSERT -> collectFreeVars(LispMacroExpander.expandAssert(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
 							// Parsed no-ops: no variable references.
 						}
 						case LispNames.THE -> collectFreeVars(LispMacroExpander.expandThe(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.EVAL_WHEN -> collectFreeVars(LispMacroExpander.expandEvalWhen(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: the default walk would misread the
 						// definition lists as call forms. The expansion generates fresh
 						// variable names, but they are all bound inside it, so the free
 						// set is the same as the compile-time expansion's.
 						case LispNames.FLET -> collectFreeVars(LispMacroExpander.expandFlet(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.LABELS -> collectFreeVars(LispMacroExpander.expandLabels(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: the default walk would misread the
 						// multiple-value-bind variable list as a call form. The temp
 						// names
 						// are counter-fresh but all bound inside the expansion.
 						case LispNames.MULTIPLE_VALUE_BIND ->
 							collectFreeVars(LispMacroExpander.expandMultipleValueBind(cons), boundVars, knownFunctions,
-									globals, freeVars);
+									globals, specialNames, freeVars);
 						case LispNames.MULTIPLE_VALUE_LIST ->
 							collectFreeVars(LispMacroExpander.expandMultipleValueList(cons), boundVars, knownFunctions,
-									globals, freeVars);
+									globals, specialNames, freeVars);
 						case LispNames.MULTIPLE_VALUE_CALL ->
 							collectFreeVars(LispMacroExpander.expandMultipleValueCall(cons), boundVars, knownFunctions,
-									globals, freeVars);
+									globals, specialNames, freeVars);
 						case LispNames.NTH_VALUE -> collectFreeVars(LispMacroExpander.expandNthValue(cons), boundVars,
-								knownFunctions, globals, freeVars);
+								knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: the default walk would misread the
 						// destructuring pattern as a call form.
 						case LispNames.DESTRUCTURING_BIND ->
 							collectFreeVars(LispMacroExpander.expandDestructuringBind(cons), boundVars, knownFunctions,
-									globals, freeVars);
+									globals, specialNames, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
 							List<LispVal> parts = cons.toList();
 							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
-								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, freeVars);
+								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
 							}
 						}
 						case LispNames.SETQ -> {
 							List<LispVal> parts = cons.toList();
 							String name = ((LispSymbol) parts.get(1)).name();
-							if (!SPECIAL_NAMES.contains(name) && !boundVars.contains(name)
+							if (!specialNames.contains(name) && !boundVars.contains(name)
 									&& !knownFunctions.contains(name) && !globals.contains(name)) {
 								freeVars.add(name);
 							}
-							collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, freeVars);
+							collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, specialNames, freeVars);
 						}
 						case LispNames.DEFVAR -> {
 							// defvar names a global variable, not a lexical reference;
@@ -196,7 +231,8 @@ public final class FreeVarAnalyzer {
 							// the optional init form can reference variables.
 							List<LispVal> parts = cons.toList();
 							if (parts.size() > 2) {
-								collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, freeVars);
+								collectFreeVars(parts.get(2), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
 							}
 						}
 						default -> {
@@ -205,7 +241,8 @@ public final class FreeVarAnalyzer {
 							// subexpressions can reference variables
 							List<LispVal> parts = cons.toList();
 							for (int i = 1; i < parts.size(); i++) {
-								collectFreeVars(parts.get(i), boundVars, knownFunctions, globals, freeVars);
+								collectFreeVars(parts.get(i), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
 							}
 						}
 					}
@@ -214,7 +251,7 @@ public final class FreeVarAnalyzer {
 					// Non-symbol head (e.g., ((lambda ...) args))
 					List<LispVal> parts = cons.toList();
 					for (LispVal part : parts) {
-						collectFreeVars(part, boundVars, knownFunctions, globals, freeVars);
+						collectFreeVars(part, boundVars, knownFunctions, globals, specialNames, freeVars);
 					}
 				}
 			}

@@ -35,9 +35,7 @@ final class JvmLetCompiler {
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(parts.subList(2, parts.size()), letVarNames,
 				ctx.functions.keySet());
-		Set<String> newBoxedVars = new HashSet<>(ctx.boxedVars);
-		newBoxedVars.addAll(capturedInLet);
-		ctx.boxedVars = newBoxedVars;
+		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
 				LispCons pair = (LispCons) binding;
@@ -58,6 +56,18 @@ final class JvmLetCompiler {
 				int slot = ctx.allocLocal(name);
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(slot);
+				// The boxed set tracks names, so this binding's boxedness must
+				// REPLACE a shadowed outer binding's: a raw closure stored under a
+				// name whose outer binding was boxed would otherwise be cell-read in
+				// the body (.todo/62). Updated only after the init compiled, so the
+				// init (evaluated in the outer scope, e.g. a lambda capturing the
+				// same-named outer variable) still sees the outer boxedness.
+				if (capturedInLet.contains(name)) {
+					ctx.boxedVars.add(name);
+				}
+				else {
+					ctx.boxedVars.remove(name);
+				}
 			}
 		}
 		for (int i = 2; i < parts.size(); i++) {

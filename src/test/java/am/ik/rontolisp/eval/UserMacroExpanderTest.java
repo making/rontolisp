@@ -180,12 +180,14 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
-	void improperCallFormIsRejectedNotTruncated() {
-		// The rebuild walk must not silently drop a dotted tail in call position.
-		assertThatThrownBy(() -> expand("""
+	void improperCallFormIsLeftVerbatimNotTruncated() {
+		// An improper list is never a call form, but it can be legitimate data (a
+		// loop destructuring pattern like (value . remaining)), so the walk keeps it
+		// verbatim -- the compilers/evaluator still reject a genuine dotted call.
+		assertThat(expand("""
 				(defmacro twice (x) `(* 2 ,x))
 				(print (+ 1 . 2))
-				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("Improper list in call position");
+				""")).isEqualTo("(print (+ 1 . 2))");
 	}
 
 	@Test

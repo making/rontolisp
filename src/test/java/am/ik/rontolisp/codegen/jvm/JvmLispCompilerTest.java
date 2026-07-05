@@ -1017,6 +1017,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLetShadowingBoxedOuterVariable() throws Exception {
+		// .todo/62: the boxedVars set tracks names, so an inner let binding a RAW
+		// value under a name whose outer binding was boxed (captured by the init
+		// lambda) must not be cell-read in the body.
+		assertThat(compileAndRun("""
+				(let ((g (lambda () 1)))
+				  (let ((g (lambda () (+ 10 (funcall g)))))
+				    (print (funcall g))))
+				""")).isEqualTo("11");
+	}
+
+	@Test
+	void compileAndRunLambdaCapturesVariableShadowingFunctionName() throws Exception {
+		// A lexical variable named like a built-in function (count/list) is a plain
+		// capturable variable (Lisp-2): the capture analysis must not treat the
+		// reference as a function name.
+		assertThat(compileAndRun("""
+				(defun grab (list count)
+				  (let ((list (nthcdr count list)))
+				    (let ((g (lambda () (car list))))
+				      (funcall g))))
+				(print (grab '(1 2 3) 1))
+				""")).isEqualTo("2");
+	}
+
+	@Test
 	void compileAndRunLambdaImmediateCall() throws Exception {
 		assertThat(compileAndRun("(print ((lambda (x) (* x x)) 5))")).isEqualTo("25");
 	}
@@ -3578,7 +3604,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
@@ -3589,12 +3615,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("217");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("219");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("217");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("219");
 	}
 
 	@Test

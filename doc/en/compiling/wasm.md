@@ -24,8 +24,13 @@ The generated `.wasm` binary uses:
 Requires a wasm-GC capable runtime such as wasmtime 14+.
 
 On the WASM backend a function (`defun` or `lambda`) may take at most **seven
-parameters**; a larger arity is a compile error (the interpreter and JVM backends have no
-such limit). Bundle the extra arguments into a list to stay within it. The rest list of a
+parameters** (the interpreter and JVM backends have no such limit). A fixed-arity `defun`
+past the limit is bundled automatically: the compiler keeps the first six parameters,
+packs the rest into a list, and rewrites every direct call site to match -- so wide
+library signatures (e.g. split-sequence's 10-parameter internals) compile unchanged.
+Taking such a function's value with `#'name`/`symbol-function` is a compile error (only
+direct calls know the bundled shape), and a `lambda` or variadic function past the limit
+still errors -- bundle those arguments into a list yourself. The rest list of a
 variadic function counts as one parameter, so a `&rest` function may declare at most six
 required parameters while accepting any number of arguments at a direct call site.
 

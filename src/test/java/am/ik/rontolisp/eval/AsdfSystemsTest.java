@@ -103,9 +103,22 @@ class AsdfSystemsTest {
 
 	@Test
 	void unsupportedOptionIsAHardError() {
-		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :in-order-to ((test-op (test-op :lib/tests))))"))
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :defsystem-depends-on (:some-plugin))"))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("unsupported option :in-order-to");
+			.hasMessageContaining("unsupported option :defsystem-depends-on");
+	}
+
+	@Test
+	void testOpWiringOptionsAreToleratedAndIgnored() {
+		// Real libraries wire their test systems through :in-order-to/:perform (e.g.
+		// split-sequence); there is no operate/test-op machinery, so both parse as
+		// ignored metadata instead of failing the whole .asd.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "main"))
+				  :in-order-to ((test-op (test-op :lib/tests)))
+				  :perform (test-op (o c) (symbol-call :5am :run! :lib)))""");
+		assertThat(system.files()).containsExactly("main.lisp");
 	}
 
 	@Test

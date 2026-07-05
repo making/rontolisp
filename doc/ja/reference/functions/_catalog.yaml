@@ -73,6 +73,7 @@ categories:
       - { slug: consp, name: "consp" }
       - { slug: keywordp, name: "keywordp" }
       - { slug: characterp, name: "characterp" }
+      - { slug: functionp, name: "functionp" }
   - title: "出力"
     functions:
       - { slug: print, name: "print" }
@@ -142,6 +143,7 @@ categories:
       - { slug: find-if-not, name: "find-if-not" }
       - { slug: position, name: "position" }
       - { slug: position-if, name: "position-if" }
+      - { slug: position-if-not, name: "position-if-not" }
       - { slug: count, name: "count" }
       - { slug: count-if, name: "count-if" }
       - { slug: assoc, name: "assoc" }

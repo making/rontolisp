@@ -213,6 +213,16 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons), ctx, className);
 				case LispNames.WITH_INPUT_FROM_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons), ctx, className);
+				case LispNames.PUSHNEW ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPushnew(cons), ctx, className);
+				case LispNames.DEFTYPE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx, className);
+				case LispNames.DEFINE_CONDITION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx, className);
+				case LispNames.MAKE_CONDITION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons), ctx, className);
+				case LispNames.DOCUMENTATION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx, className);
 				case LispNames.WITH_OPEN_FILE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
 				case LispNames.READ_BYTE -> JvmReadByteCompiler.compile(cons, ctx, className);
@@ -302,6 +312,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx, className);
 				case LispNames.POSITION_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIf(cons), ctx, className);
+				case LispNames.POSITION_IF_NOT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIfNot(cons), ctx, className);
+				case LispNames.COMPLEMENT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandComplement(cons), ctx, className);
 				case LispNames.COUNT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCount(cons), ctx, className);
 				case LispNames.COUNT_IF ->
@@ -438,6 +452,8 @@ final class JvmExprCompiler {
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
 				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
+				case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
+				case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
 				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);
 				case LispNames.FLOAT -> JvmFloatConvCompiler.compile(cons, ctx, className);
 				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {

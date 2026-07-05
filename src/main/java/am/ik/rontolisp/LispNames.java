@@ -247,6 +247,19 @@ public final class LispNames {
 	public static final String POSITION_IF = "position-if";
 
 	/**
+	 * The {@code position-if-not} built-in function (return the 0-based index of the
+	 * first element for which the predicate is false, or nil).
+	 */
+	public static final String POSITION_IF_NOT = "position-if-not";
+
+	/**
+	 * The {@code complement} built-in (return a predicate answering the opposite of the
+	 * given one). Classified as a macro here: it expands to a wrapping lambda, so it is
+	 * not usable as {@code #'complement}.
+	 */
+	public static final String COMPLEMENT = "complement";
+
+	/**
 	 * The {@code count} built-in function (return the number of elements {@code eql} to
 	 * the given item).
 	 */
@@ -833,6 +846,42 @@ public final class LispNames {
 	public static final String THE = "the";
 
 	/**
+	 * The {@code deftype} macro. Parsed no-op like {@link #DECLAIM}: the type name is NOT
+	 * registered, so it is only useful where the defined type is never used in a runtime
+	 * type test (e.g. inside {@code declaim ftype} declarations, themselves no-ops); a
+	 * later use in {@code check-type}/{@code typecase} fails naming the unsupported
+	 * specifier.
+	 */
+	public static final String DEFTYPE = "deftype";
+
+	/**
+	 * The {@code define-condition} macro. Parsed no-op: there is no condition system (see
+	 * {@code .todo/39}), so the condition type is not registered anywhere.
+	 */
+	public static final String DEFINE_CONDITION = "define-condition";
+
+	/**
+	 * The {@code make-condition} operator. Lite expansion to the {@code :format-control}
+	 * value (or the condition type name as a string), so the common
+	 * {@code (error (make-condition 'type :format-control "..."))} idiom signals with the
+	 * intended message. Classified as a macro here (in CL it is a function).
+	 */
+	public static final String MAKE_CONDITION = "make-condition";
+
+	/**
+	 * The {@code documentation} accessor. Lite: reads expand to nil and
+	 * {@code (setf (documentation ...) "...")} discards the docstring (docstrings are not
+	 * stored anywhere). Classified as a macro here (in CL it is a function).
+	 */
+	public static final String DOCUMENTATION = "documentation";
+
+	/**
+	 * The {@code pushnew} macro. Expands like {@link #PUSH} guarded by {@code member};
+	 * extra {@code :test}/{@code :key} arguments are passed through to {@code member}.
+	 */
+	public static final String PUSHNEW = "pushnew";
+
+	/**
 	 * The {@code eval-when} operator. Expands to {@code progn} of its body; at top level
 	 * the compile path additionally splices the body into top-level forms (see
 	 * {@code LispMacroExpander.flattenTopLevel}).
@@ -1154,6 +1203,28 @@ public final class LispNames {
 	/** The {@code parse-integer} built-in function (parse an integer from a string). */
 	public static final String PARSE_INTEGER = "parse-integer";
 
+	/** The {@code functionp} built-in function (is the value a function?). */
+	public static final String FUNCTIONP = "functionp";
+
+	/**
+	 * The internal {@code %arrayp} predicate (is the value an array?). Used by the
+	 * {@code vector}/{@code array}/{@code sequence} type specifiers in
+	 * {@code check-type}/{@code typecase} tests; not a public function.
+	 */
+	public static final String ARRAYP_INTERNAL = "%arrayp";
+
+	/**
+	 * The internal {@code %mv-spill} global variable carrying a producer's secondary
+	 * values across a function boundary: every {@code (values ...)} call stores its extra
+	 * values here (a fresh list) as it returns its primary, and a multiple-value consumer
+	 * whose producer form is not syntactically recognized clears the spill, evaluates the
+	 * producer, and reads the extras back. This is what makes {@code multiple-value-bind}
+	 * over a user function work; the compilers inject a top-level
+	 * {@code (setq %mv-spill nil)} to create the global when a program uses any
+	 * multiple-value operator (the interpreter predefines it).
+	 */
+	public static final String MV_SPILL = "%mv-spill";
+
 	// Characters
 
 	/** The {@code char} built-in function (the character at an index of a string). */
@@ -1266,6 +1337,18 @@ public final class LispNames {
 	 * applied to each element before the equality test).
 	 */
 	public static final String KEY_KEYWORD = ":key";
+
+	/**
+	 * The {@code :test-not} keyword recognized by {@code position} (the negated equality
+	 * predicate).
+	 */
+	public static final String TEST_NOT_KEYWORD = ":test-not";
+
+	/**
+	 * The {@code :from-end} keyword recognized by the {@code position} family (when true,
+	 * the index of the last match is returned).
+	 */
+	public static final String FROM_END_KEYWORD = ":from-end";
 
 	/** The {@code :input} keyword (open a file for reading). */
 	public static final String INPUT_KEYWORD = ":input";

@@ -2767,11 +2767,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalMultipleValueUserFunctionCollapsesToPrimary() {
-		// v1 limitation: a (values ...) tail in a user function collapses to the
-		// primary value, so the caller's extra variables read as nil.
+	void evalMultipleValueUserFunctionTailValuesCrossTheCallBoundary() {
+		// The %mv-spill channel: a (values ...) tail in a user function publishes its
+		// extra values, so the caller's multiple-value-bind reads them back.
 		assertThat(evalMulti("(defun mv-two () (values 4 5))" + " (multiple-value-bind (a b) (mv-two) (list a b))")
-			.print()).isEqualTo("(4 nil)");
+			.print()).isEqualTo("(4 5)");
+		// A producer that never calls values leaves the cleared spill: extras are nil.
+		assertThat(evalMulti("(defun mv-one () 4)" + " (multiple-value-bind (a b) (mv-one) (list a b))").print())
+			.isEqualTo("(4 nil)");
+		// A values tail with FEWER values than a previous call's resets the spill.
+		assertThat(evalMulti("(defun mv-two2 () (values 4 5))" + " (defun mv-one2 () (values 6))"
+				+ " (multiple-value-bind (a b) (mv-two2) nil)" + " (multiple-value-bind (a b) (mv-one2) (list a b))")
+			.print()).isEqualTo("(6 nil)");
 	}
 
 	@Test
@@ -3553,7 +3560,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
@@ -3588,7 +3595,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents")
 			.isSorted()
-			.hasSize(217);
+			.hasSize(219);
 	}
 
 	@Test

@@ -102,7 +102,12 @@ public final class UserMacroExpander {
 			if (LispNames.QUOTE.equals(sym.name()) || LispNames.DEFMACRO.equals(sym.name())) {
 				return form;
 			}
-			requireProperCallForm(cons);
+			if (!cons.isProperList()) {
+				// An improper list is never a call form; the legitimate appearances
+				// are data patterns (a loop destructuring pattern like
+				// (value . remaining)) whose elements are plain variables.
+				return form;
+			}
 			List<LispVal> parts = cons.toList();
 			switch (sym.name()) {
 				case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR:

@@ -24,6 +24,7 @@ categories:
       - { slug: setf, name: setf }
       - { slug: push, name: push }
       - { slug: pop, name: pop }
+      - { slug: pushnew, name: pushnew }
       - { slug: remf, name: remf }
       - { slug: let-star, name: "let*" }
       - { slug: dolist, name: dolist }
@@ -47,3 +48,8 @@ categories:
       - { slug: multiple-value-call, name: multiple-value-call }
       - { slug: nth-value, name: nth-value }
       - { slug: destructuring-bind, name: destructuring-bind }
+      - { slug: complement, name: complement }
+      - { slug: deftype, name: deftype }
+      - { slug: define-condition, name: define-condition }
+      - { slug: make-condition, name: make-condition }
+      - { slug: documentation, name: documentation }

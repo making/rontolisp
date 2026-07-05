@@ -74,6 +74,12 @@ public final class LispMacroExpander {
 			case LispNames.DESTRUCTURING_BIND -> expandDestructuringBind(cons);
 			case LispNames.WITH_OUTPUT_TO_STRING -> expandWithOutputToString(cons);
 			case LispNames.WITH_INPUT_FROM_STRING -> expandWithInputFromString(cons);
+			case LispNames.PUSHNEW -> expandPushnew(cons);
+			case LispNames.DEFTYPE -> expandDeftype(cons);
+			case LispNames.DEFINE_CONDITION -> expandDefineCondition(cons);
+			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
+			case LispNames.DOCUMENTATION -> expandDocumentation(cons);
+			case LispNames.COMPLEMENT -> expandComplement(cons);
 			default -> null;
 		};
 	}
@@ -666,6 +672,8 @@ public final class LispMacroExpander {
 			"while", "until", "do", "doing", "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum",
 			"summing", "count", "counting", "maximize", "maximizing", "minimize", "minimizing", "when", "if", "unless",
 			"else", "end", "finally", "initially", "return", "with", "and", "into", "thereis", "always", "never",
+			// Parsed and discarded: type declarations carry no information here.
+			"of-type",
 			// Recognized so their use fails with a clear "unsupported" error instead of
 			// being misparsed as a simple-loop body or a missing for sub-clause.
 			"named", "being");
@@ -740,10 +748,25 @@ public final class LispMacroExpander {
 		return new LoopExpander(toks).build();
 	}
 
-	/** Returns the lowercased loop keyword a token denotes, or null if it is not one. */
+	/**
+	 * Returns the lowercased loop keyword a token denotes, or null if it is not one. As
+	 * in CL, loop keywords are matched by symbol name regardless of package, so the
+	 * keyword-package spelling ({@code :for}, {@code :collect}, {@code :=}) used by many
+	 * libraries is recognized too.
+	 */
 	private static @Nullable String loopKeyword(LispVal v) {
 		if (v instanceof LispSymbol s) {
-			String n = s.name().toLowerCase(java.util.Locale.ROOT);
+			String n = s.name();
+			// A bare loop keyword inside a user package arrives package-qualified
+			// (pkg::into): match by the plain member name, like the keyword spelling.
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(n);
+			if (qn != null) {
+				n = qn.member();
+			}
+			n = n.toLowerCase(java.util.Locale.ROOT);
+			if (n.startsWith(":") && n.length() > 1) {
+				n = n.substring(1);
+			}
 			if (LOOP_KEYWORDS.contains(n)) {
 				return n;
 			}
@@ -946,6 +969,7 @@ public final class LispMacroExpander {
 				throw new IllegalArgumentException(
 						"loop: for expects a variable or destructuring pattern, got: " + var.print());
 			}
+			skipOfType();
 			String sub = peekKeyword();
 			if (sub == null) {
 				throw new IllegalArgumentException("loop: incomplete for clause for " + var.print());
@@ -1191,6 +1215,7 @@ public final class LispMacroExpander {
 				if (!(var instanceof LispSymbol) && !(var instanceof LispCons)) {
 					throw new IllegalArgumentException("loop: with expects a variable, got: " + var.print());
 				}
+				skipOfType();
 				LispVal val = LispNil.INSTANCE;
 				if ("=".equals(peekKeyword())) {
 					pos++;
@@ -1375,7 +1400,9 @@ public final class LispMacroExpander {
 
 		private LispVal parseAccumulation(String kw) {
 			LispVal value = nextForm();
+			skipOfType();
 			LispSymbol target;
+			LispSymbol tail = null;
 			if ("into".equals(peekKeyword())) {
 				pos++;
 				LispVal v = nextForm();
@@ -1384,11 +1411,26 @@ public final class LispMacroExpander {
 				}
 				target = intoVar;
 				registerInto(intoVar, accInit(kw), accReverse(kw));
+				tail = intoTails.get(intoVar.name());
 			}
 			else {
 				target = implicitAccumulator(accInit(kw), accReverse(kw));
 			}
-			return accStep(kw, target, value);
+			// Tolerated after `into` too (e.g. `:sum 1 :into n :of-type fixnum`, the
+			// split-sequence spelling), though CL puts of-type before it.
+			skipOfType();
+			return accStep(kw, target, tail, value);
+		}
+
+		/**
+		 * Consumes an {@code of-type TYPE} declaration if one is next: the type spec
+		 * carries no information for this expansion and is discarded.
+		 */
+		private void skipOfType() {
+			if ("of-type".equals(peekKeyword())) {
+				pos++;
+				nextForm();
+			}
 		}
 
 		/** The init form for an accumulator of the given kind. */
@@ -1410,11 +1452,18 @@ public final class LispMacroExpander {
 		/**
 		 * Builds the per-iteration accumulation step for the given kind onto {@code acc}.
 		 */
-		private LispVal accStep(String kw, LispSymbol acc, LispVal value) {
+		private LispVal accStep(String kw, LispSymbol acc, @Nullable LispSymbol tail, LispVal value) {
 			return switch (canonicalAcc(kw)) {
-				case "collect" -> setq(acc, call(LispNames.CONS, value, acc));
-				case "append" -> setq(acc, call(LispNames.REVAPPEND, value, acc));
-				case "nconc" -> setq(acc, call(LispNames.NRECONC, value, acc));
+				// The implicit accumulator builds its list reversed and nreverses at
+				// the epilogue; an `into` variable is user-visible mid-loop (a
+				// `return` may read it before the epilogue), so it accumulates in
+				// order through its tail cursor.
+				case "collect" -> tail != null ? attachToTail(acc, tail, call(LispNames.CONS, value, LispNil.INSTANCE))
+						: setq(acc, call(LispNames.CONS, value, acc));
+				case "append" -> tail != null ? attachToTail(acc, tail, call(LispNames.COPY_LIST, value))
+						: setq(acc, call(LispNames.REVAPPEND, value, acc));
+				case "nconc" ->
+					tail != null ? attachToTail(acc, tail, value) : setq(acc, call(LispNames.NRECONC, value, acc));
 				case "sum" -> setq(acc, call(LispNames.ADD, acc, value));
 				case "count" ->
 					makeIf(value, setq(acc, call(LispNames.ADD, acc, new LispInteger(1))), LispNil.INSTANCE);
@@ -1422,6 +1471,23 @@ public final class LispMacroExpander {
 				case "minimize" -> setq(acc, makeIf(acc, call(LispNames.MIN, acc, value), value));
 				default -> throw new UnsupportedOperationException("loop: unsupported accumulation: " + kw);
 			};
+		}
+
+		/**
+		 * Appends the (possibly empty) fresh list produced by {@code elems} at the
+		 * accumulator's tail in O(1) amortized:
+		 *
+		 * <pre>
+		 * (let ((__elemsN elems))
+		 *   (if acc (rplacd tail __elemsN) (setq acc __elemsN))
+		 *   (if __elemsN (setq tail (last __elemsN)) nil))
+		 * </pre>
+		 */
+		private LispVal attachToTail(LispSymbol acc, LispSymbol tail, LispVal elems) {
+			LispSymbol elemsVar = gensym("elems");
+			LispVal attach = makeIf(acc, call(LispNames.RPLACD, tail, elemsVar), setq(acc, elemsVar));
+			LispVal advance = makeIf(elemsVar, setq(tail, call(LispNames.LAST, elemsVar)), LispNil.INSTANCE);
+			return makeLet(elemsVar.name(), elems, makeProgn(List.of(attach, advance)));
 		}
 
 		private static String canonicalAcc(String kw) {
@@ -1439,13 +1505,22 @@ public final class LispMacroExpander {
 
 		private final java.util.Map<String, Boolean> intoVars = new java.util.HashMap<>();
 
+		// The tail cursor of each list-kind `into` variable (see attachToTail).
+		private final java.util.Map<String, LispSymbol> intoTails = new java.util.HashMap<>();
+
 		private void registerInto(LispSymbol var, LispVal init, boolean reverse) {
 			Boolean seen = intoVars.get(var.name());
 			if (seen == null) {
 				intoVars.put(var.name(), reverse);
 				bindings.add(pair(var, init));
 				if (reverse) {
-					postLoop.add(setq(var, call(LispNames.NREVERSE, var)));
+					// List accumulation keeps the into variable in source order at
+					// every step (a mid-loop return may read it), so instead of the
+					// implicit accumulator's reverse+nreverse it advances a tail
+					// cursor bound alongside the variable.
+					LispSymbol tail = gensym("tail");
+					bindings.add(pair(tail, LispNil.INSTANCE));
+					intoTails.put(var.name(), tail);
 				}
 			}
 			else if (seen != reverse) {
@@ -2021,6 +2096,9 @@ public final class LispMacroExpander {
 			List<LispVal> placeParts = placeCons.toList();
 			String accessor = ((LispSymbol) placeParts.get(0)).name();
 			return switch (accessor) {
+				// (setf (documentation 'name 'doc-type) "...") -> the docstring value:
+				// docstrings are not stored anywhere (lite, matching the nil reader).
+				case LispNames.DOCUMENTATION -> value;
 				case LispNames.CAR, LispNames.FIRST -> expandSetfWithRplaca(placeParts.get(1), value);
 				case LispNames.CDR, LispNames.REST -> expandSetfWithRplacd(placeParts.get(1), value);
 				case LispNames.GETHASH ->
@@ -2155,6 +2233,45 @@ public final class LispMacroExpander {
 	}
 
 	private static final String PUSH_VAR = "__push_item";
+
+	/**
+	 * Expands (pushnew item place [args...]) into a member-guarded push. Extra arguments
+	 * ({@code :test}/{@code :key}) are passed through to {@code member}. Like
+	 * {@code push}, the place may be evaluated more than once.
+	 *
+	 * <pre>
+	 * (pushnew item place) ->
+	 *   (let ((__push_item item))
+	 *     (if (member __push_item place) place (setf place (cons __push_item place))))
+	 * </pre>
+	 *
+	 * A literal quoted-list place is a no-op returning the list unchanged: the one
+	 * real-world shape is {@code (pushnew :my-feature *features*)}, where the reader has
+	 * already substituted {@code *features*} with its quoted feature list -- the feature
+	 * set is fixed at read time, so a runtime registration cannot take effect anyway.
+	 * @param cons the pushnew expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPushnew(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException("pushnew expects an item and a place: " + cons.print());
+		}
+		LispVal item = parts.get(1);
+		LispVal place = parts.get(2);
+		if (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name())) {
+			return makeProgn(List.of(item, place));
+		}
+		List<LispVal> memberParts = new java.util.ArrayList<>();
+		memberParts.add(new LispSymbol(LispNames.MEMBER));
+		memberParts.add(new LispSymbol(PUSH_VAR));
+		memberParts.add(place);
+		memberParts.addAll(parts.subList(3, parts.size()));
+		LispVal consExpr = listToCons(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(PUSH_VAR), place));
+		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, consExpr));
+		return makeLet(PUSH_VAR, item, makeIf(listToCons(memberParts), place, setfExpr));
+	}
 
 	/**
 	 * Expands (pop place) into a prog1 expression: save the head, advance the place, and
@@ -2572,68 +2689,166 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandPosition(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		requireTestKeyKeywords(LispNames.POSITION, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
-		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
-		LispSymbol item = new LispSymbol("__pos_item");
-		LispSymbol seq = new LispSymbol("__pos_seq");
-		LispSymbol len = new LispSymbol("__pos_len");
-		LispSymbol idx = new LispSymbol("__pos_idx");
-		LispSymbol cur = new LispSymbol("__pos_cur");
-		// (let ((__pos_item item))
-		// (let ((__pos_seq seq))
-		// (if (stringp __pos_seq)
-		// (let ((__pos_len (length __pos_seq)))
-		// (do ((__pos_idx 0 (+ __pos_idx 1)))
-		// ((>= __pos_idx __pos_len) nil)
-		// (if (eql __pos_item (char __pos_seq __pos_idx)) (return __pos_idx) nil)))
-		// (do ((__pos_idx 0 (+ __pos_idx 1)) (__pos_cur __pos_seq (cdr __pos_cur)))
-		// ((atom __pos_cur) nil)
-		// (if (eql __pos_item (car __pos_cur)) (return __pos_idx) nil)))))
-		LispVal idxStep = listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)));
-		LispVal strBindings = listToCons(List.of(listToCons(List.of(idx, new LispInteger(0), idxStep))));
-		LispVal strEndClause = listToCons(
-				List.of(listToCons(List.of(new LispSymbol(LispNames.GE), idx, len)), LispNil.INSTANCE));
-		LispVal charAt = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
-		LispVal strMatch = testMatchForm(testForm, item, keyedForm(keyForm, charAt));
-		LispVal strBody = makeIf(strMatch, makeReturn(idx), LispNil.INSTANCE);
-		LispVal strScan = makeLet(len.name(), callOf(LispNames.LENGTH, seq), expandDo(
-				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), strBindings, strEndClause, strBody))));
-		LispVal listBindings = listToCons(List.of(listToCons(List.of(idx, new LispInteger(0), idxStep)),
-				listToCons(List.of(cur, seq, callOf(LispNames.CDR, cur)))));
-		LispVal listEndClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal listMatch = testMatchForm(testForm, item, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
-		LispVal listBody = makeIf(listMatch, makeReturn(idx), LispNil.INSTANCE);
-		LispVal listScan = expandDo(
-				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), listBindings, listEndClause, listBody)));
-		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seq), strScan, listScan);
-		return makeLet(item.name(), parts.get(1), makeLet(seq.name(), parts.get(2), dispatch));
+		requireKeywords(LispNames.POSITION, parts, 3, LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
+				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
+		return buildPositionScan(parts, PositionMode.ITEM);
 	}
 
 	/**
-	 * Expands (position-if pred lst) into a do/return scan returning the 0-based index of
-	 * the first element for which the predicate is true, or nil. Like {@code position}
-	 * but tests each element with {@code (funcall pred element)} rather than {@code eql}.
+	 * Expands (position-if pred lst) into the shared position scan returning the 0-based
+	 * index of the first element for which the predicate is true, or nil. Like
+	 * {@code position} but tests each element with {@code (funcall pred element)} rather
+	 * than {@code eql}; the same {@code :key}/{@code :start}/{@code :end}/
+	 * {@code :from-end} keywords apply.
 	 * @param cons the position-if expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandPositionIf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol pred = new LispSymbol("__posif_pred");
-		LispSymbol idx = new LispSymbol("__posif_idx");
-		LispSymbol cur = new LispSymbol("__posif_cur");
-		// (do ((__posif_pred pred) (__posif_idx 0 (+ __posif_idx 1))
-		// (__posif_cur lst (cdr __posif_cur)))
-		// ((atom __posif_cur) nil)
-		// (if (funcall __posif_pred (car __posif_cur)) (return __posif_idx) nil))
+		requireKeywords(LispNames.POSITION_IF, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
+		return buildPositionScan(parts, PositionMode.PREDICATE);
+	}
+
+	/**
+	 * Expands (position-if-not pred lst) into the shared position scan returning the
+	 * 0-based index of the first element for which the predicate is false, or nil. The
+	 * complement of {@code position-if}, with the same keywords.
+	 * @param cons the position-if-not expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPositionIfNot(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		requireKeywords(LispNames.POSITION_IF_NOT, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
+		return buildPositionScan(parts, PositionMode.PREDICATE_NOT);
+	}
+
+	/**
+	 * Expands {@code (complement fn)} into a one-argument lambda answering the opposite
+	 * of the given predicate. The function form is evaluated once. Lite: CL's
+	 * {@code complement} is variadic, but the result here takes exactly one argument (the
+	 * predicate case; a variadic wrapper would need {@code apply}, which drags the whole
+	 * eval runtime into every compiled program using it) -- and because this is an
+	 * expansion, not a function, {@code #'complement} is not available.
+	 *
+	 * <pre>
+	 * (complement fn) ->
+	 *   (let ((__complement_fn fn))
+	 *     (lambda (__complement_x) (not (funcall __complement_fn __complement_x))))
+	 * </pre>
+	 * @param cons the complement expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandComplement(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("complement expects exactly one function: " + cons.print());
+		}
+		LispSymbol fn = new LispSymbol("__complement_fn");
+		LispSymbol x = new LispSymbol("__complement_x");
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, x));
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x)), makeNot(call)));
+		return makeLet(fn.name(), normalizeFunctionDesignator(parts.get(1)), lambda);
+	}
+
+	/** The matching flavor of a {@code position}-family scan; see buildPositionScan. */
+	private enum PositionMode {
+
+		/**
+		 * {@code position}: the first argument is an item compared by :test/:test-not.
+		 */
+		ITEM,
+		/** {@code position-if}: the first argument is a predicate. */
+		PREDICATE,
+		/** {@code position-if-not}: the first argument is a negated predicate. */
+		PREDICATE_NOT
+
+	}
+
+	/**
+	 * Builds the shared {@code position}/{@code position-if}/{@code position-if-not}
+	 * expansion: a single forward do-scan over the sequence (a string is coerced to its
+	 * character list first, like the other sequence scans) honoring {@code :start}/
+	 * {@code :end}, where a {@code :from-end} match records the index and keeps scanning
+	 * (the last match wins) while a normal match returns immediately.
+	 *
+	 * <pre>
+	 * (let* ((__pos_item item) (__pos_lst <seq-as-list seq>)
+	 *        (__pos_startv start|0) (__pos_endv end|nil) (__pos_fromv from-end)
+	 *        (__pos_found nil))
+	 *   (let ((__pos_hit (do ((__pos_idx __pos_startv (+ __pos_idx 1))
+	 *                         (__pos_cur (nthcdr __pos_startv __pos_lst) (cdr __pos_cur)))
+	 *                        ((or (atom __pos_cur) (if __pos_endv (>= __pos_idx __pos_endv) nil)) nil)
+	 *                      (if MATCH
+	 *                          (if __pos_fromv (setq __pos_found __pos_idx) (return __pos_idx))
+	 *                          nil))))
+	 *     (if __pos_hit __pos_hit __pos_found)))
+	 * </pre>
+	 */
+	private static LispVal buildPositionScan(List<LispVal> parts, PositionMode mode) {
+		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		LispVal testNotForm = keywordValue(parts, 3, LispNames.TEST_NOT_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
+		LispVal startForm = keywordValue(parts, 3, LispNames.START_KEYWORD);
+		LispVal endForm = keywordValue(parts, 3, LispNames.END_KEYWORD);
+		LispVal fromEndForm = keywordValue(parts, 3, LispNames.FROM_END_KEYWORD);
+		LispSymbol item = new LispSymbol("__pos_item");
+		LispSymbol lst = new LispSymbol("__pos_lst");
+		LispSymbol startv = new LispSymbol("__pos_startv");
+		LispSymbol endv = new LispSymbol("__pos_endv");
+		LispSymbol fromv = new LispSymbol("__pos_fromv");
+		LispSymbol found = new LispSymbol("__pos_found");
+		LispSymbol hit = new LispSymbol("__pos_hit");
+		LispSymbol idx = new LispSymbol("__pos_idx");
+		LispSymbol cur = new LispSymbol("__pos_cur");
 		LispVal idxStep = listToCons(List.of(new LispSymbol(LispNames.ADD), idx, new LispInteger(1)));
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(pred, parts.get(1))), listToCons(List.of(idx, new LispInteger(0), idxStep)),
-						listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
-		LispVal body = makeIf(test, makeReturn(idx), LispNil.INSTANCE);
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		LispVal curInit = listToCons(List.of(new LispSymbol(LispNames.NTHCDR), startv, lst));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(idx, startv, idxStep)),
+				listToCons(List.of(cur, curInit, callOf(LispNames.CDR, cur)))));
+		LispVal atEnd = callOf(LispNames.ATOM, cur);
+		if (endForm != null) {
+			LispVal pastEnd = makeIf(endv, listToCons(List.of(new LispSymbol(LispNames.GE), idx, endv)),
+					LispNil.INSTANCE);
+			atEnd = listToCons(List.of(new LispSymbol(LispNames.OR), atEnd, pastEnd));
+		}
+		LispVal endClause = listToCons(List.of(atEnd, LispNil.INSTANCE));
+		LispVal keyedElem = keyedForm(keyForm, callOf(LispNames.CAR, cur));
+		LispVal match = switch (mode) {
+			case ITEM -> testNotForm != null
+					? makeNot(listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testNotForm, item, keyedElem)))
+					: testMatchForm(testForm, item, keyedElem);
+			case PREDICATE -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), item, keyedElem));
+			case PREDICATE_NOT -> makeNot(listToCons(List.of(new LispSymbol(LispNames.FUNCALL), item, keyedElem)));
+		};
+		LispVal recordFound = listToCons(List.of(new LispSymbol(LispNames.SETQ), found, idx));
+		LispVal onHit = fromEndForm == null ? makeReturn(idx) : makeIf(fromv, recordFound, makeReturn(idx));
+		LispVal body = makeIf(match, onHit, LispNil.INSTANCE);
+		LispVal scan = expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		LispVal result = makeLet(hit.name(), scan, makeIf(hit, hit, found));
+		result = makeLet(found.name(), LispNil.INSTANCE, result);
+		if (fromEndForm != null) {
+			result = makeLet(fromv.name(), fromEndForm, result);
+		}
+		result = makeLet(endv.name(), endForm == null ? LispNil.INSTANCE : endForm, result);
+		result = makeLet(startv.name(), startForm == null ? new LispInteger(0) : startForm, result);
+		result = makeLet(lst.name(), seqAsListForm(parts.get(2)), result);
+		return makeLet(item.name(), parts.get(1), result);
+	}
+
+	// Validates a keyword/value argument tail against the operator's allowed keyword
+	// set; anything else is rejected loudly rather than silently ignored.
+	private static void requireKeywords(String name, List<LispVal> parts, int start, String... allowed) {
+		for (int i = start; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol kw) || !List.of(allowed).contains(kw.name())) {
+				throw new IllegalArgumentException(name + " expects keyword arguments " + String.join("/", allowed)
+						+ ", got: " + parts.get(i).print());
+			}
+			if (i + 1 >= parts.size()) {
+				throw new IllegalArgumentException(name + " expects a value after " + kw.name());
+			}
+		}
 	}
 
 	/**
@@ -5224,6 +5439,14 @@ public final class LispMacroExpander {
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException("error expects a control string");
 		}
+		if (parts.get(1) instanceof LispCons datum && datum.car() instanceof LispSymbol op
+				&& LispNames.MAKE_CONDITION.equals(op.name())) {
+			// (error (make-condition 'type :format-control "...")) -- the lite
+			// make-condition expands to its format-control string, so the idiom
+			// signals with the intended message.
+			parts = new java.util.ArrayList<>(parts);
+			parts.set(1, expandMakeCondition(datum));
+		}
 		if (!(parts.get(1) instanceof LispString control)) {
 			throw new UnsupportedOperationException(
 					"error requires a literal control string, got: " + parts.get(1).print());
@@ -6132,16 +6355,43 @@ public final class LispMacroExpander {
 		if (!(typeSpec instanceof LispSymbol sym)) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + typeSpec.print());
 		}
-		if ("boolean".equals(sym.name())) {
-			// (or (null value) (eq value t))
-			return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, value),
-					listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), value, LispTrue.INSTANCE))));
+		String name = plainTypeName(sym);
+		switch (name) {
+			case "boolean":
+				// (or (null value) (eq value t))
+				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, value),
+						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), value, LispTrue.INSTANCE))));
+			case "unsigned-byte":
+				// unsigned-byte = (integer 0 *): a non-negative integer.
+				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.INTEGERP, value),
+						listToCons(List.of(new LispSymbol(LispNames.GE), value, new LispInteger(0)))));
+			case "vector", "simple-vector", "array", "simple-array":
+				// Strings are vectors (so arrays) in CL. The rank is NOT checked (a
+				// rank-n array passes a `vector` test too): the rank read would drag
+				// the gated array helpers into every typecase-using program.
+				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
+						callOf(LispNames.ARRAYP_INTERNAL, value)));
+			case "sequence":
+				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, value),
+						callOf(LispNames.STRINGP, value), callOf(LispNames.ARRAYP_INTERNAL, value)));
+			default:
 		}
-		String pred = atomicTypePredicate(sym.name());
+		String pred = atomicTypePredicate(name);
 		if (pred == null) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + sym.name());
 		}
 		return callOf(pred, value);
+	}
+
+	/**
+	 * The package-stripped name of a type-specifier symbol: standard type names are not
+	 * all registered CL symbols (only function/macro names are), so inside a user package
+	 * the resolver qualifies e.g. {@code unsigned-byte} to {@code my-pkg::unsigned-byte}
+	 * -- type matching goes by the plain name.
+	 */
+	private static String plainTypeName(LispSymbol sym) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+		return qn == null ? sym.name() : qn.member();
 	}
 
 	/**
@@ -6163,6 +6413,7 @@ public final class LispMacroExpander {
 			case "atom" -> LispNames.ATOM;
 			case "character" -> LispNames.CHARACTERP;
 			case "hash-table" -> LispNames.HASH_TABLE_P;
+			case "function" -> LispNames.FUNCTIONP;
 			default -> null;
 		};
 	}
@@ -6173,10 +6424,10 @@ public final class LispMacroExpander {
 		if (!(parts.get(0) instanceof LispSymbol head)) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
 		}
-		switch (head.name()) {
+		switch (plainTypeName(head)) {
 			case LispNames.OR, LispNames.AND: {
 				List<LispVal> tests = new java.util.ArrayList<>();
-				tests.add(new LispSymbol(head.name()));
+				tests.add(new LispSymbol(plainTypeName(head)));
 				for (int i = 1; i < parts.size(); i++) {
 					tests.add(makeTypeTest(value, parts.get(i)));
 				}
@@ -6209,7 +6460,7 @@ public final class LispMacroExpander {
 				return listToCons(List.of(parts.get(1), value));
 			}
 			default: {
-				String pred = atomicTypePredicate(head.name());
+				String pred = atomicTypePredicate(plainTypeName(head));
 				if (pred == null) {
 					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
 				}
@@ -6326,6 +6577,70 @@ public final class LispMacroExpander {
 	 * @return nil
 	 */
 	public static LispVal expandProclaim(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (deftype name lambda-list body)} to {@code nil}: a parsed no-op like
+	 * {@code declaim}. The type name is NOT registered anywhere, so this only supports
+	 * the common library shape where the defined type appears in (equally no-op)
+	 * {@code declaim} declarations; using it in {@code check-type}/ {@code typecase}
+	 * still fails naming the unsupported specifier.
+	 * @param cons the deftype expression
+	 * @return nil
+	 */
+	public static LispVal expandDeftype(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (define-condition name parents slots options...)} to {@code nil}:
+	 * there is no condition system, so the definition is a parsed no-op. Pairs with the
+	 * lite {@link #expandMakeCondition}.
+	 * @param cons the define-condition expression
+	 * @return nil
+	 */
+	public static LispVal expandDefineCondition(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (make-condition type args...)} to its {@code :format-control} value
+	 * when one is given, or to the condition type name as a string otherwise. Lite: with
+	 * no condition system there is no condition object to build, but this keeps the
+	 * common {@code (error (make-condition 'type :format-control "..."))} idiom signaling
+	 * with the intended message ({@code :format-arguments} and any other options are
+	 * discarded).
+	 * @param cons the make-condition expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeCondition(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("make-condition expects a condition type: " + cons.print());
+		}
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol key && ":format-control".equals(key.name())) {
+				return parts.get(i + 1);
+			}
+		}
+		LispVal type = parts.get(1);
+		if (type instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
+				&& datumCell.car() instanceof LispSymbol datum) {
+			return new LispString("Condition of type " + datum.name() + " was signalled.");
+		}
+		return new LispString("Condition of type " + type.print() + " was signalled.");
+	}
+
+	/**
+	 * Expands {@code (documentation name doc-type)} to {@code nil}: docstrings are not
+	 * stored anywhere (a {@code (setf (documentation ...) "...")} discards its value the
+	 * same way, see {@link #expandSetf}).
+	 * @param cons the documentation expression
+	 * @return nil
+	 */
+	public static LispVal expandDocumentation(LispCons cons) {
 		return LispNil.INSTANCE;
 	}
 
@@ -6509,7 +6824,10 @@ public final class LispMacroExpander {
 			return form;
 		}
 		if (!cons.isProperList()) {
-			throw new IllegalArgumentException("Improper list in call position: " + cons.print());
+			// An improper list is never a call form; the legitimate appearances are
+			// data patterns (a loop destructuring pattern like (value . remaining))
+			// whose elements are plain variables, so they pass through verbatim.
+			return form;
 		}
 		List<LispVal> parts = cons.toList();
 		if (fns.containsKey(name)) {
@@ -6783,16 +7101,20 @@ public final class LispMacroExpander {
 	/**
 	 * A producer form lowered for a multiple-value consumer: the temp {@code bindings}
 	 * are evaluated in order (nested {@code let}s) and the {@code values} expressions
-	 * (pure reads over the temps) yield the producer's values. The lowering is entirely
-	 * syntactic -- there is no runtime multiple-value representation. Recognized
-	 * multi-value producers are a literal {@code (values ...)} call and the two-value
-	 * built-ins {@code floor}/{@code ceiling}/{@code round}/{@code truncate} (quotient +
-	 * remainder) and {@code gethash} (value + present-p); every other form is a
-	 * single-value producer (a function returning {@code (values a b)} collapses to its
-	 * primary value, so the extra variables read as nil -- CL semantics for a
-	 * single-value producer).
+	 * (pure reads over the temps) yield the producer's values. Recognized multi-value
+	 * producers -- a literal {@code (values ...)} call and the two-value built-ins
+	 * {@code floor}/{@code ceiling}/{@code round}/{@code truncate} (quotient + remainder)
+	 * and {@code gethash} (value + present-p) -- lower purely syntactically with
+	 * {@code rest} null. Any other producer goes through the {@code %mv-spill} runtime
+	 * channel: the spill is cleared, the form is evaluated (a {@code values} tail inside
+	 * the callee stores its extra values in the spill as a fresh list), and {@code rest}
+	 * snapshots the spill -- the consumer reads value {@code i > 0} as
+	 * {@code (nth i-1 rest)}. This is how {@code multiple-value-bind} over a user
+	 * function sees the callee's tail values. Deviation from CL: a producer that calls
+	 * {@code values} in a NON-tail position and then returns normally leaves a stale
+	 * spill behind, so the extra variables may read leftover values instead of nil.
 	 */
-	private record MvProducer(List<MvBinding> bindings, List<LispVal> values) {
+	private record MvProducer(List<MvBinding> bindings, List<LispVal> values, @Nullable LispSymbol rest) {
 	}
 
 	/** True when the form is recognized as a multi-value producer (see MvProducer). */
@@ -6822,7 +7144,7 @@ public final class LispMacroExpander {
 						bindings.add(new MvBinding(tmp, parts.get(i)));
 						values.add(tmp);
 					}
-					return new MvProducer(bindings, values);
+					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE: {
 					// (floor x [y]) -> quotient + remainder x - q*y (y defaults to 1).
@@ -6844,7 +7166,7 @@ public final class LispMacroExpander {
 						values.add(q);
 						values.add(mvCall(LispNames.SUB, a, q));
 					}
-					return new MvProducer(bindings, values);
+					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.GETHASH: {
 					// (gethash key table [default]) -> value + present-p. A fresh
@@ -6867,16 +7189,36 @@ public final class LispMacroExpander {
 					LispVal missing = mvCall(LispNames.EQ_GENERAL, v, s);
 					values.add(makeIf(missing, dflt, v));
 					values.add(makeIf(missing, LispNil.INSTANCE, LispTrue.INSTANCE));
-					return new MvProducer(bindings, values);
+					return new MvProducer(bindings, values, null);
 				}
 				default:
 					throw new IllegalStateException("unreachable: " + producer.print());
 			}
 		}
+		if (!(producer instanceof LispCons)) {
+			// An atom (a literal, a variable read) is a single-value producer for
+			// sure: no spill round-trip needed, extra variables read nil.
+			LispSymbol tmp = new LispSymbol(prefix + "_0");
+			bindings.add(new MvBinding(tmp, producer));
+			values.add(tmp);
+			return new MvProducer(bindings, values, null);
+		}
+		// Unknown call producer: read the callee's extra values back through the
+		// spill. The spill is cleared FIRST so a producer that never calls values
+		// leaves the extras nil, and snapshotted IMMEDIATELY after so a later
+		// producer (multiple-value-call) cannot overwrite it before the values are
+		// read.
 		LispSymbol tmp = new LispSymbol(prefix + "_0");
-		bindings.add(new MvBinding(tmp, producer));
+		bindings.add(new MvBinding(tmp, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), producer))));
 		values.add(tmp);
-		return new MvProducer(bindings, values);
+		LispSymbol rest = new LispSymbol(prefix + "_rest");
+		bindings.add(new MvBinding(rest, new LispSymbol(LispNames.MV_SPILL)));
+		return new MvProducer(bindings, values, rest);
+	}
+
+	/** Builds {@code (setq %mv-spill value)}. */
+	private static LispVal setMvSpill(LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), value));
 	}
 
 	/** Wraps the body in nested single-binding {@code let}s, first binding outermost. */
@@ -6925,6 +7267,43 @@ public final class LispMacroExpander {
 	public static LispVal expandValues(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
+			return makeProgn(List.of(setMvSpill(LispNil.INSTANCE), LispNil.INSTANCE));
+		}
+		// Bind every argument in order, publish the extras to the spill (a fresh
+		// list; nil when there are none, so a stale spill cannot leak through this
+		// call), and return the first.
+		String prefix = "__mv" + MV_COUNTER.getAndIncrement();
+		List<MvBinding> bindings = new java.util.ArrayList<>();
+		List<LispVal> temps = new java.util.ArrayList<>();
+		for (int i = 1; i < parts.size(); i++) {
+			LispSymbol tmp = new LispSymbol(prefix + "_" + (i - 1));
+			bindings.add(new MvBinding(tmp, parts.get(i)));
+			temps.add(tmp);
+		}
+		LispVal extras;
+		if (temps.size() == 1) {
+			extras = LispNil.INSTANCE;
+		}
+		else {
+			List<LispVal> listParts = new java.util.ArrayList<>();
+			listParts.add(new LispSymbol(LispNames.LIST));
+			listParts.addAll(temps.subList(1, temps.size()));
+			extras = listToCons(listParts);
+		}
+		return nestMvBindings(bindings, makeProgn(List.of(setMvSpill(extras), temps.get(0))));
+	}
+
+	/**
+	 * Expands a {@code (values ...)} call to its primary value WITHOUT touching the
+	 * {@code %mv-spill} global: the scalar {@code --no-gc} backend has no reference
+	 * globals (and no lists), so it keeps the pure prog1 semantics -- extra values are
+	 * evaluated and discarded, and cross-function consumers are unsupported there.
+	 * @param cons the values expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandValuesPrimary(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 1) {
 			return LispNil.INSTANCE;
 		}
 		if (parts.size() == 2) {
@@ -6969,7 +7348,18 @@ public final class LispMacroExpander {
 		letParts.add(new LispSymbol(LispNames.LET));
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		for (int i = 0; i < vars.size(); i++) {
-			LispVal value = i < producer.values().size() ? producer.values().get(i) : LispNil.INSTANCE;
+			LispVal value;
+			if (i < producer.values().size()) {
+				value = producer.values().get(i);
+			}
+			else if (producer.rest() != null) {
+				// The extra values of a spill producer live in the rest snapshot (a
+				// too-short spill reads nil through nth, CL's missing-value fill).
+				value = mvCall(LispNames.NTH, new LispInteger(i - producer.values().size()), producer.rest());
+			}
+			else {
+				value = LispNil.INSTANCE;
+			}
 			bindings.add(listToCons(List.of(vars.get(i), value)));
 		}
 		letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings));
@@ -6998,17 +7388,19 @@ public final class LispMacroExpander {
 	}
 
 	private static LispVal mvListForm(LispVal producer) {
-		if (!isMvProducerForm(producer)) {
-			return mvCall(LispNames.LIST, producer);
-		}
 		if (producer instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& LispNames.VALUES.equals(op.name())) {
+				&& LispNames.VALUES.equals(op.name()) && cons.isProperList()) {
 			// (values e...) -> (list e...): list evaluates left to right.
 			List<LispVal> listParts = new java.util.ArrayList<>(cons.toList());
 			listParts.set(0, new LispSymbol(LispNames.LIST));
 			return listToCons(listParts);
 		}
 		MvProducer lowered = lowerMvProducer(producer, "__mv" + MV_COUNTER.getAndIncrement());
+		if (lowered.rest() != null) {
+			// (cons primary rest): the spill list is freshly consed per values call,
+			// so sharing its tail is safe.
+			return nestMvBindings(lowered.bindings(), mvCall(LispNames.CONS, lowered.values().get(0), lowered.rest()));
+		}
 		List<LispVal> listParts = new java.util.ArrayList<>();
 		listParts.add(new LispSymbol(LispNames.LIST));
 		listParts.addAll(lowered.values());
@@ -7198,12 +7590,39 @@ public final class LispMacroExpander {
 		List<MvBinding> bindings = new java.util.ArrayList<>();
 		LispSymbol fn = new LispSymbol(prefix + "_fn");
 		bindings.add(new MvBinding(fn, parts.get(1)));
-		List<LispVal> callParts = new java.util.ArrayList<>();
-		callParts.add(new LispSymbol(LispNames.FUNCALL));
-		callParts.add(fn);
+		List<MvProducer> producers = new java.util.ArrayList<>();
+		boolean anySpill = false;
 		for (int i = 2; i < parts.size(); i++) {
 			MvProducer producer = lowerMvProducer(parts.get(i), prefix + "_" + (i - 2));
 			bindings.addAll(producer.bindings());
+			producers.add(producer);
+			anySpill = anySpill || producer.rest() != null;
+		}
+		if (anySpill) {
+			// A spill producer's value count is dynamic, so the argument list is
+			// built at runtime and spread with apply: (apply fn (append seg...)),
+			// where a syntactic producer contributes (list v...) and a spill one
+			// (cons primary rest).
+			List<LispVal> appendParts = new java.util.ArrayList<>();
+			appendParts.add(new LispSymbol(LispNames.APPEND));
+			for (MvProducer producer : producers) {
+				if (producer.rest() != null) {
+					appendParts.add(mvCall(LispNames.CONS, producer.values().get(0), producer.rest()));
+				}
+				else {
+					List<LispVal> seg = new java.util.ArrayList<>();
+					seg.add(new LispSymbol(LispNames.LIST));
+					seg.addAll(producer.values());
+					appendParts.add(listToCons(seg));
+				}
+			}
+			LispVal applyCall = mvCall(LispNames.APPLY, fn, listToCons(appendParts));
+			return nestMvBindings(bindings, applyCall);
+		}
+		List<LispVal> callParts = new java.util.ArrayList<>();
+		callParts.add(new LispSymbol(LispNames.FUNCALL));
+		callParts.add(fn);
+		for (MvProducer producer : producers) {
 			callParts.addAll(producer.values());
 		}
 		return nestMvBindings(bindings, listToCons(callParts));
@@ -7219,6 +7638,55 @@ public final class LispMacroExpander {
 	 * @param program the top-level forms
 	 * @return the flattened top-level forms
 	 */
+	/**
+	 * Prepends the top-level {@code (setq %mv-spill nil)} creating the multiple-value
+	 * spill global (see {@link LispNames#MV_SPILL}) when the program uses any
+	 * multiple-value operator; returns the program unchanged otherwise. Both compilers
+	 * call this so the global exists for the spill reads/writes their expansions emit
+	 * (the interpreter predefines the variable instead).
+	 * @param program the top-level forms (package-resolved)
+	 * @return the program, with the spill global prepended when needed
+	 */
+	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
+		boolean uses = false;
+		for (LispVal form : program) {
+			if (usesMvOperator(form)) {
+				uses = true;
+				break;
+			}
+		}
+		if (!uses) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 1);
+		out.add(listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), LispNil.INSTANCE)));
+		out.addAll(program);
+		return out;
+	}
+
+	private static boolean usesMvOperator(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return switch (sym.name()) {
+				case LispNames.VALUES, LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST,
+						LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE ->
+					true;
+				default -> false;
+			};
+		}
+		if (form instanceof LispCons cons) {
+			for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+				if (usesMvOperator(cell.car())) {
+					return true;
+				}
+				if (!(cell.cdr() instanceof LispCons) && usesMvOperator(cell.cdr())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	public static List<LispVal> flattenTopLevel(List<LispVal> program) {
 		// Keep the identity of a program with nothing to splice (callers may rely on
 		// "returned unchanged", e.g. UserMacroExpander's no-macro early return).

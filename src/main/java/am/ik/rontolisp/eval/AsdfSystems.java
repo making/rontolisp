@@ -169,11 +169,17 @@ public final class AsdfSystems {
 			}
 			LispVal value = items.get(i + 1);
 			switch (key.name()) {
-				// Metadata: accepted for .asd compatibility, not recorded anywhere.
+				// Metadata: accepted for .asd compatibility, not recorded anywhere. The
+				// :version value may be any literal form, including ASDF's
+				// (:read-file-form "version.sexp") indirection -- it is never inspected.
 				case ":description", ":long-description", ":version", ":author", ":maintainer", ":license", ":licence",
 						":homepage", ":bug-tracker", ":source-control", ":mailto" ->
 					{
 					}
+				// Test-op wiring only (there is no operate/test-op machinery to drive):
+				// tolerated so a real library's .asd parses, ignored like the metadata.
+				case ":in-order-to", ":perform" -> {
+				}
 				case ":depends-on" -> {
 					for (LispVal dep : properList(LispNames.ASDF_DEFSYSTEM + " " + name + " :depends-on", value)) {
 						dependsOn.add(designator(":depends-on", dep));

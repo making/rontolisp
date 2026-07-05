@@ -1,3 +1,8 @@
+> **Update 2026-07-05:** the position family now supports
+> `:start`/`:end`/`:from-end` (+ `:test-not` on `position`) via the shared
+> `buildPositionScan`, and `position-if-not` exists. The other sequence
+> functions below still take :test/:key only.
+
 # `:test` / `:key` keyword args for sequence & alist functions
 
 **Status: DONE (2026-07-04)** -- `:test` and `:key` are supported on

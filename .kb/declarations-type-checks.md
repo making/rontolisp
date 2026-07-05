@@ -35,13 +35,29 @@ heads accept the same specs as `check-type`:
 - Atomic map (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`,
   float* -> `floatp`, number/real -> `numberp`, rational/ratio ->
   `rationalp`, string, symbol, keyword, cons, list, null, atom, character,
-  hash-table; `boolean` -> `(or (null v) (eq v t))`; `t`/`otherwise` -> t;
-  literal `nil` spec -> nil (the empty type).
+  hash-table, function -> `functionp`; `boolean` -> `(or (null v) (eq v t))`;
+  `unsigned-byte` -> `(and (integerp v) (>= v 0))`; `vector`/`simple-vector`/
+  `array`/`simple-array` -> `(or (stringp v) (%arrayp v))` (the rank is NOT
+  checked -- a rank read would drag the gated array helpers into every
+  typecase-using program); `sequence` adds `listp`; `t`/`otherwise` -> t;
+  literal `nil` spec -> nil (the empty type). `functionp` is a real public
+  builtin (Environment + Jvm/WasmFunctionpCompiler: JVM = Object[] with an
+  Integer funcId in slot 0, WASM = `ref.test TYPE_CLOSURE`); `%arrayp` is a
+  CL_INTERNALS-only predicate (JVM = `instanceof java.util.ArrayList`; WASM
+  distinguishes an array cell from a hash table by testing the header car
+  for the dims array vs the i31 count).
 - Compound: `(or ...)`/`(and ...)`/`(not ...)` recurse; `(member items...)`
   -> `(member v '(items))` (eql, truthy tail); `(eql obj)` -> `(eql v 'obj)`;
   `(satisfies fn)` -> `(fn v)`; `(integer|float|rational|real|number [low
   [high]])` -> base predicate + bound checks, `*` = unbounded, `(n)` =
   exclusive bound.
+- Type-specifier symbols match by their package-STRIPPED name
+  (`plainTypeName`): standard type names are not all registered CL symbols,
+  so inside a user package the resolver qualifies e.g. `unsigned-byte` to
+  `pkg::unsigned-byte` (found by the split-sequence e2e, `.todo/61`).
+- `deftype` is a parsed no-op returning nil (the name is NOT registered;
+  using it in a later type test errors) -- enough for the library shape
+  where the type only appears in no-op declaim/declare declarations.
 - The value form may be evaluated several times, so callers bind a temp
   first (`__check-type` / typecase's `__typecase`).
 

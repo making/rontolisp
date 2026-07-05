@@ -40,7 +40,8 @@ public final class PackageRegistry {
 			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET, LispNames.LABELS,
 			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
 			LispNames.NTH_VALUE, LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING,
-			LispNames.WITH_INPUT_FROM_STRING);
+			LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
+			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -67,13 +68,13 @@ public final class PackageRegistry {
 			LispNames.TERPRI, LispNames.FRESH_LINE, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL, LispNames.LOAD,
 			LispNames.REQUIRE, LispNames.PROVIDE, LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE,
 			LispNames.MEMBER, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.MEMBER_IF,
-			LispNames.POSITION, LispNames.POSITION_IF, LispNames.COUNT, LispNames.COUNT_IF, LispNames.ASSOC,
-			LispNames.ASSOC_IF, LispNames.LAST, LispNames.BUTLAST, LispNames.GETF, LispNames.REMOVE_DUPLICATES,
-			LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING, LispNames.PRIN1_TO_STRING,
-			LispNames.CONCATENATE, LispNames.STRING_UPCASE, LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE,
-			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.STRING_EQUAL, LispNames.STRING_TRIM,
-			LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE,
-			LispNames.WRITE_LINE, LispNames.READ_BYTE, LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE,
+			LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT, LispNames.COUNT, LispNames.COUNT_IF,
+			LispNames.ASSOC, LispNames.ASSOC_IF, LispNames.LAST, LispNames.BUTLAST, LispNames.GETF,
+			LispNames.REMOVE_DUPLICATES, LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING,
+			LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING_UPCASE, LispNames.STRING_DOWNCASE,
+			LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.STRING_EQUAL,
+			LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN,
+			LispNames.CLOSE, LispNames.WRITE_LINE, LispNames.READ_BYTE, LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE,
 			LispNames.WRITE_SEQUENCE, LispNames.IDENTITY, LispNames.COPY_LIST, LispNames.NREVERSE, LispNames.MAKE_LIST,
 			LispNames.UNION, LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND,
 			LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.LIST_STAR, LispNames.ACONS,
@@ -91,7 +92,7 @@ public final class PackageRegistry {
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND,
 			LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING,
 			LispNames.SYMBOL_NAME, LispNames.INTERN, LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP,
-			LispNames.FBOUNDP, LispNames.SYMBOL_VALUE);
+			LispNames.FBOUNDP, LispNames.SYMBOL_VALUE, LispNames.FUNCTIONP);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
@@ -103,7 +104,7 @@ public final class PackageRegistry {
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
 			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH, LispNames.ASET,
 			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
-			LispNames.STRING_STREAM_CONTENTS);
+			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

@@ -1,3 +1,8 @@
+> **Update 2026-07-05:** lite stopgaps shipped for the load-time idioms:
+> `define-condition` is a parsed no-op and `make-condition` expands to its
+> `:format-control` value (so `(error (make-condition ...))` signals with the
+> intended message). The real condition system remains below.
+
 # Condition system (`handler-case`, `handler-bind`, `restart-case`, `restart-bind`, `invoke-restart`, `invoke-restart-interactively`, `signal`, `error` (done), `warn`, `cerror`, `abort`, `continue`, `break`, `make-condition`, `condition-type`, `simple-condition`, `simple-error`, `simple-warning`, `style-warning`, `serious-condition`, `warning`, `condition`, `storage-condition`, `program`, `control`, `serious-condition`, `error` (condition class))
 
 **Status:** not implemented. Low-Hard priority — the full condition system is one of CL's most complex subsystems.

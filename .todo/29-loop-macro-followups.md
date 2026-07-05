@@ -1,3 +1,10 @@
+> **Update 2026-07-05 (split-sequence e2e, .todo/54 Phase 3):** loop keywords
+> now match by package-stripped symbol name (`:for`, `pkg::into` spellings),
+> `of-type` is parsed and discarded (for/with/accumulation positions, also
+> after `into`), and `into` list accumulation is in-order via a tail cursor
+> (a mid-loop `return` reading the into variable used to see the reversed
+> list).
+
 # 29 - `loop` macro follow-ups (extend the supported clause subset)
 
 The first cut of `loop` shipped (numeric/list/`=` stepping, `with`, the seven

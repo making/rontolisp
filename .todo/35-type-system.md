@@ -1,3 +1,8 @@
+> **Update 2026-07-05:** `deftype` is accepted as a parsed no-op (name NOT
+> registered); `makeTypeTest` grew `unsigned-byte`, `function` (via the new
+> `functionp` builtin), `vector`/`array`/`sequence` (via internal `%arrayp`)
+> and package-stripped name matching. See `.kb/declarations-type-checks.md`.
+
 # Type system (`typep`, `coerce`, `type-error`, `type-error-datum`, `type-error-type`, `ctypecase`, `check-type`, `declaim`, `declare`, `the`, `ignore`, `ignorable`, `special`, `notinline`, `inline`, `optimize`, `speed`, `safety`, `space`, `debug`, `compilation-speed`)
 
 **Status:** not implemented. Medium-Low priority — the full CL type system is large; implement the useful subset.

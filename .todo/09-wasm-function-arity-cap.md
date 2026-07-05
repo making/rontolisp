@@ -1,6 +1,12 @@
 # WASM: raise the 7-parameter function limit
 
-**Status:** documented + guarded, not raised.
+**Status:** documented + guarded, not raised. **Update 2026-07-05:** the
+practical pressure is off -- `WasmArityBundler` (a WASM-only AST pre-pass) now
+auto-bundles fixed-arity defuns past the limit (keep 6 params + pack the rest
+into a list, rewriting all direct call sites), so wide library signatures like
+split-sequence's 10-parameter internals compile unchanged. `#'name` of a
+bundled function is a clear error; lambdas and `&rest` definitions past the
+limit still hard-error. Raising the limit for real remains as below.
 
 The WASM backend supports callable types only for arities 0..`MAX_CALLABLE_ARITY`
 (= 7), so a `defun`/`lambda` with more than seven parameters cannot be given a

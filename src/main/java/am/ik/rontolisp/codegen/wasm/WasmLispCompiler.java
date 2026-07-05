@@ -654,6 +654,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
+		// Create the %mv-spill global (a top-level setq) when the program uses a
+		// multiple-value operator: the expansions read/write it across functions.
+		program = LispMacroExpander.injectMvSpillGlobal(program);
+		// Bundle the surplus parameters of too-wide fixed-arity defuns into a list
+		// (and rewrite their direct call sites) so real-library signatures compile
+		// despite the MAX_CALLABLE_ARITY type limit.
+		program = WasmArityBundler.bundle(program);
 		// Detect whether the program uses (eval ...). When it does, a runtime
 		// interpreter (_eval) and a function-name registry are emitted, and dispatch
 		// functions are generated for every registered arity so _eval can apply them.
@@ -666,9 +673,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// boundp/symbol-value/fboundp probe the eval global envs through
 		// _env_lookup/_lookup, so they force it too; intern needs the real _intern body
 		// (canonical offsets) which lives in the reader runtime.
+		// multiple-value-call forces apply too: its expansion spreads a spill
+		// producer's dynamic value count with (apply fn (append ...)).
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP);
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
+				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
 		// rontolisp:fetch is component-only. In component mode it drives the
 		// http.fetch-start / http.fetch-await imports (function indices
 		// FUNC_FETCH_START / FUNC_FETCH_AWAIT); the component wrapper then imports

@@ -2291,12 +2291,19 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.EVAL_WHEN -> LispMacroExpander.expandEvalWhen(cons);
 			case LispNames.FLET -> LispMacroExpander.expandFlet(cons);
 			case LispNames.LABELS -> LispMacroExpander.expandLabels(cons);
-			case LispNames.VALUES -> LispMacroExpander.expandValues(cons);
+			// The scalar backend has no reference globals, so values stays the pure
+			// primary-value expansion (no %mv-spill publication).
+			case LispNames.VALUES -> LispMacroExpander.expandValuesPrimary(cons);
 			case LispNames.MULTIPLE_VALUE_BIND -> LispMacroExpander.expandMultipleValueBind(cons);
 			case LispNames.MULTIPLE_VALUE_LIST -> LispMacroExpander.expandMultipleValueList(cons);
 			case LispNames.MULTIPLE_VALUE_CALL -> LispMacroExpander.expandMultipleValueCall(cons);
 			case LispNames.NTH_VALUE -> LispMacroExpander.expandNthValue(cons);
 			case LispNames.DESTRUCTURING_BIND -> LispMacroExpander.expandDestructuringBind(cons);
+			case LispNames.PUSHNEW -> LispMacroExpander.expandPushnew(cons);
+			case LispNames.DEFTYPE -> LispMacroExpander.expandDeftype(cons);
+			case LispNames.DEFINE_CONDITION -> LispMacroExpander.expandDefineCondition(cons);
+			case LispNames.MAKE_CONDITION -> LispMacroExpander.expandMakeCondition(cons);
+			case LispNames.DOCUMENTATION -> LispMacroExpander.expandDocumentation(cons);
 			// Two-argument (floor a b) -> (floor (/ a b)); null (the one-argument
 			// form) falls through to the native rounding conversion.
 			case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND ->

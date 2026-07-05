@@ -1,3 +1,10 @@
+> **Update 2026-07-05 (split-sequence e2e, .todo/54 Phase 3):** the
+> `%mv-spill` runtime channel shipped -- a `values` result in a USER function
+> now reaches the caller's mv consumers on interpreter/JVM/WASM (see
+> `.kb/multiple-values.md`). Remaining here: true CL semantics for non-tail
+> `values` (stale-spill leak), first-class `#'values` spilling in compiled
+> code, and the scalar `--no-gc` backend.
+
 # Multiple value system (`values`, `multiple-value-bind`, `multiple-value-call`, etc.)
 
 **Status:** the core syntactic tier shipped 2026-07-05 (Phase 3 unit 3, see

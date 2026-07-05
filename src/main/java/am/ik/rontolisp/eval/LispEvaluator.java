@@ -401,6 +401,12 @@ public final class LispEvaluator {
 			}
 			return positionIfValues(args.get(0), Environment.seqAsList(args.get(1)));
 		}));
+		this.globalEnv.defineFunction(LispNames.POSITION_IF_NOT, new LispFunction(LispNames.POSITION_IF_NOT, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.POSITION_IF_NOT + " expects 2 arguments, got " + args.size());
+			}
+			return positionIfNotValues(args.get(0), Environment.seqAsList(args.get(1)));
+		}));
 		this.globalEnv.defineFunction(LispNames.COUNT_IF, new LispFunction(LispNames.COUNT_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.COUNT_IF + " expects 2 arguments, got " + args.size());
@@ -912,6 +918,16 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWithOutputToString(cons), env);
 				case LispNames.WITH_INPUT_FROM_STRING:
 					return eval(LispMacroExpander.expandWithInputFromString(cons), env);
+				case LispNames.PUSHNEW:
+					return eval(LispMacroExpander.expandPushnew(cons), env);
+				case LispNames.DEFTYPE:
+					return eval(LispMacroExpander.expandDeftype(cons), env);
+				case LispNames.DEFINE_CONDITION:
+					return eval(LispMacroExpander.expandDefineCondition(cons), env);
+				case LispNames.MAKE_CONDITION:
+					return eval(LispMacroExpander.expandMakeCondition(cons), env);
+				case LispNames.DOCUMENTATION:
+					return eval(LispMacroExpander.expandDocumentation(cons), env);
 				case LispNames.READ_SEQUENCE:
 					return eval(LispMacroExpander.expandReadSequence(cons), env);
 				case LispNames.WRITE_SEQUENCE:
@@ -996,6 +1012,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandFind(cons), env);
 				case LispNames.POSITION:
 					return eval(LispMacroExpander.expandPosition(cons), env);
+				case LispNames.POSITION_IF:
+					return eval(LispMacroExpander.expandPositionIf(cons), env);
+				case LispNames.POSITION_IF_NOT:
+					return eval(LispMacroExpander.expandPositionIfNot(cons), env);
+				case LispNames.COMPLEMENT:
+					return eval(LispMacroExpander.expandComplement(cons), env);
 				case LispNames.COUNT:
 					return eval(LispMacroExpander.expandCount(cons), env);
 				case LispNames.REMOVE:
@@ -1514,6 +1536,20 @@ public final class LispEvaluator {
 		long index = 0;
 		while (list instanceof LispCons cell) {
 			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+				return new LispInteger(index);
+			}
+			index++;
+			list = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the 0-based index of the first element for which the predicate is false
+	// (Common Lisp position-if-not), or nil. The complement of position-if.
+	private LispVal positionIfNotValues(LispVal predicate, LispVal list) {
+		long index = 0;
+		while (list instanceof LispCons cell) {
+			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
 				return new LispInteger(index);
 			}
 			index++;

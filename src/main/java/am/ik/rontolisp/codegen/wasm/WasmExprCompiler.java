@@ -227,6 +227,14 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons), ctx);
 				case LispNames.WITH_INPUT_FROM_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons), ctx);
+				case LispNames.PUSHNEW -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPushnew(cons), ctx);
+				case LispNames.DEFTYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx);
+				case LispNames.DEFINE_CONDITION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx);
+				case LispNames.MAKE_CONDITION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons), ctx);
+				case LispNames.DOCUMENTATION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx);
 				case LispNames.WITH_OPEN_FILE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx);
 				case LispNames.READ_BYTE -> WasmReadByteCompiler.compile(cons, ctx);
@@ -315,6 +323,10 @@ final class WasmExprCompiler {
 				case LispNames.POSITION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx);
 				case LispNames.POSITION_IF ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandPositionIf(cons), ctx);
+				case LispNames.POSITION_IF_NOT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandPositionIfNot(cons), ctx);
+				case LispNames.COMPLEMENT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandComplement(cons), ctx);
 				case LispNames.COUNT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCount(cons), ctx);
 				case LispNames.COUNT_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCountIf(cons), ctx);
 				case LispNames.ASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx);
@@ -421,6 +433,8 @@ final class WasmExprCompiler {
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
+				case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
+				case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);
 				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);
 				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(cons, ctx);
 				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {

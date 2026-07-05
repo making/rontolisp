@@ -36,6 +36,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPromise;
@@ -217,6 +218,9 @@ public final class Environment implements Scope {
 		registerHashTables(env);
 		registerArrays(env);
 		registerPackages(env);
+		// The multiple-value spill channel (see LispNames.MV_SPILL): the compilers
+		// inject an equivalent top-level (setq %mv-spill nil) when needed.
+		env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
 		return env;
 	}
 
@@ -269,6 +273,15 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.HASH_TABLE_P, new LispFunction(LispNames.HASH_TABLE_P, args -> {
 			requireArgCount(LispNames.HASH_TABLE_P, args, 1);
 			return (args.get(0) instanceof LispHashTable) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.FUNCTIONP, new LispFunction(LispNames.FUNCTIONP, args -> {
+			requireArgCount(LispNames.FUNCTIONP, args, 1);
+			return (args.get(0) instanceof LispFunction || args.get(0) instanceof LispLambda) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.ARRAYP_INTERNAL, new LispFunction(LispNames.ARRAYP_INTERNAL, args -> {
+			requireArgCount(LispNames.ARRAYP_INTERNAL, args, 1);
+			return (args.get(0) instanceof LispArray) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
 
@@ -2580,11 +2593,19 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
-		// values: no runtime multiple-value representation exists, so as a function it
-		// yields its primary value ((values) yields nil). The multiple-value consumers
-		// recognize a literal (values ...) producer syntactically before evaluation.
-		env.defineFunction(LispNames.VALUES,
-				new LispFunction(LispNames.VALUES, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
+		// values: yields its primary value ((values) yields nil) and publishes the
+		// extra values to the %mv-spill global, so a multiple-value consumer in a
+		// CALLER reads them back across the function boundary (the syntactic
+		// consumers still recognize a literal (values ...) producer before
+		// evaluation; the spill covers every other route, including funcall).
+		env.defineFunction(LispNames.VALUES, new LispFunction(LispNames.VALUES, args -> {
+			LispVal extras = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= 1; i--) {
+				extras = new LispCons(args.get(i), extras);
+			}
+			env.define(LispNames.MV_SPILL, extras);
+			return args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+		}));
 		env.defineFunction(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
 			requireArgCount(LispNames.NTHCDR, args, 2);
 			long n = asLong(args.get(0));

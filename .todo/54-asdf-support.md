@@ -63,6 +63,45 @@ blockers, and a phased plan.
 >
 > Next up: Phase 3 (language gaps for the "simple library" tier) below.
 
+> **Status 2026-07-05 (later still): Phase 3 is DONE** -- all seven units
+> shipped, closed by the split-sequence integration target (unit 7,
+> `.todo/61`, file removed). The REAL split-sequence v2.0.1 (vendored under
+> `src/test/resources/split-sequence`, MIT) loads via `asdf:load-system` and
+> works on strings and lists INCLUDING the second return value, verified on
+> all four backends. Residue fixed in unit 7 (details in the linked .kb
+> files):
+>
+> - `.asd` parsing tolerates `:in-order-to`/`:perform` (ignored test-op
+>   wiring); `:version (:read-file-form ...)` already parsed (values of
+>   metadata options are never inspected). `.kb/asdf.md`.
+> - Multiple values grew the `%mv-spill` runtime channel: a `values` result
+>   in a user function now reaches the caller's consumer (this was
+>   load-bearing -- split-list consumes 4 values internally).
+>   `.kb/multiple-values.md`.
+> - loop: keyword-package and package-qualified clause keyword spellings
+>   (`:for`, `pkg::into`), `of-type` (parsed, discarded), and in-order `into`
+>   accumulation via tail cursors (a mid-loop `return` used to see the
+>   reversed list).
+> - position family: `:start`/`:end`/`:from-end`/`:test-not` + new
+>   `position-if-not`; `complement` (unary lite expansion).
+> - New lite operators: `pushnew` (a quoted-list place -- the substituted
+>   `*features*` -- is a no-op), `deftype`/`define-condition` (parsed
+>   no-ops), `make-condition` (expands to its `:format-control`),
+>   `documentation` (reads nil, setf discards); `functionp` (real builtin) +
+>   `%arrayp` behind the `function`/`vector`/`array`/`sequence`/
+>   `unsigned-byte` type specifiers, and type-specifier names now match
+>   package-stripped. `.kb/declarations-type-checks.md`.
+> - WASM: fixed-arity defuns past the 7-parameter limit are auto-bundled
+>   (`WasmArityBundler`, .todo/09 stays for a real raise); split-sequence
+>   has 10-parameter internals.
+> - Compiler bug fixes found by the e2e: `.todo/62` (boxedVars name
+>   collision on shadowing lets, JVM + WASM; file removed) and lambda
+>   captures of variables shadowing function/builtin names
+>   (`FreeVarAnalyzer` enclosing-lexicals override).
+>
+> ci-spec: `split-sequence-residue-features`; JUnit: `SplitSequenceE2eTest`
+> (interpreter + compiled JVM over the vendored sources).
+
 ## Verdict up front
 
 Porting real ASDF (asdf.lisp + UIOP, ~15k lines of CL) is not feasible in the
@@ -215,9 +254,10 @@ docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
    /`boundp`/`fboundp`/`symbol-value` (package mutation stays in 38).
    **DONE 2026-07-05**; the todo file (60) was removed, details live in
    `.kb/symbol-runtime-api.md`.
-7. `.todo/61-split-sequence-e2e.md` -- the integration target: vendor
-   split-sequence, load via `asdf:load-system` on all four backends, fix the
-   residue, close Phase 3.
+7. Split-sequence e2e -- the integration target: vendor split-sequence, load
+   via `asdf:load-system` on all four backends, fix the residue, close
+   Phase 3. **DONE 2026-07-05**; the todo file (61) was removed, status in
+   the Phase 3 DONE block above.
 
 ### Phase 4: bigger substrate (medium libraries; still not real ASDF)
 

@@ -86,14 +86,32 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
   コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
-  維持されます。それ以外 (`:in-order-to`、`:perform`、`:defsystem-depends-on`、
-  `(:read-file-form ...)` など) は句を名指しするエラーです。
-  `test-op`/`operate` の機構はありません。
+  維持されます。test-op 配線用のオプション `:in-order-to` と `:perform` は許容され
+  無視されます (`test-op`/`operate` の機構はありません)。`:version` の値は ASDF の
+  `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
+  (検査されません)。それ以外 (`:defsystem-depends-on` など) は句を名指しする
+  エラーです。
 - 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます。
 - コンパイルパスはリテラルなトップレベルの `(asdf:load-system NAME)` を要求します。
   インタプリタは実行時に計算された名前も受け付けます。
 
-既存のサードパーティライブラリの多くは、rontolisp が未実装の Common Lisp 機能も使っています
-([未対応のCL機能](missing-features.md)を参照)。そのため現時点での実用は、
-**自分自身の**複数ファイル rontolisp プロジェクトの構成です — その `.asd` は本物の
-ASDF でも読めるものになります。
+## 実際に何がロードできるか
+
+実証例は **split-sequence v2.0.1** — 実世界の古典的ライブラリです。無改変の
+ソースが `asdf:load-system` でロードでき、
+`split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列と
+リストに対して動作します — 関数境界を多値チャネル経由で越える第 2 戻り値
+(再開インデックス) を含めて — 4 つ全てのバックエンド (インタプリタ、JVM、
+WASM Preview 1、`--component`) で。CLOS 専用の `extended-sequence.lisp` は
+`:if-feature (:or :sbcl :abcl)` でゲートされており自動的に除外されます。
+
+現時点でロードできるライブラリの目安は、おおよそ次の範囲に収まるものです:
+素の `defun`/`defmacro`/`defpackage` コード、`loop`、`values` を末尾に持つ
+関数への `multiple-value-bind`、サポート済みの型指定子による
+`check-type`/`etypecase`、宣言 (パース済み no-op、`deftype` を含む)、そして
+簡易版 `define-condition`/`make-condition` のエラーイディオム。CLOS、
+コンディション/リスタートシステム、動的 (スペシャル) 変数束縛、パス名の上に
+構築されたライブラリはまだロードできません
+([未対応のCL機能](missing-features.md)を参照)。それ以外の場合の実用は、
+**自分自身の**複数ファイル rontolisp プロジェクトの構成です — その `.asd` は
+本物の ASDF でも読めるものになります。

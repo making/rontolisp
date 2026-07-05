@@ -53,9 +53,13 @@ final class WasmLetCompiler {
 			}
 		}
 
-		// Save and extend boxedVars for the let body
+		// Save and adjust boxedVars for the let body. The set tracks names, so each
+		// binding's boxedness must REPLACE a shadowed outer binding's: a raw value
+		// stored under a name whose outer binding was boxed would otherwise be
+		// cell-read in the body (.todo/62).
 		Set<String> savedBoxed = ctx.boxedVars;
 		Set<String> newBoxed = new HashSet<>(savedBoxed);
+		newBoxed.removeAll(letVarNames);
 		newBoxed.addAll(capturedInLet);
 		ctx.boxedVars = newBoxed;
 

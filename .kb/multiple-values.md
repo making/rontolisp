@@ -53,13 +53,33 @@ spreading and no `apply`).
 `expandValues` (ordinary context): 0 args -> nil, 1 -> the form, n ->
 `(prog1 ...)`.
 
+## The %mv-spill runtime channel (added by `.todo/61`, 2026-07-05)
+
+split-sequence's list splitter consumes a user function's 4 values internally,
+so the syntactic tier alone was not enough. `values` now PUBLISHES its extra
+values to the `%mv-spill` global (a fresh list; nil when there are none) as it
+returns its primary, and a consumer whose producer form is an unrecognized
+CALL clears the spill, evaluates the producer, and snapshots the spill
+immediately (`MvProducer.rest`): value i>0 reads `(nth i-1 rest)`. Atom
+producers skip the spill (single-value for sure). `multiple-value-list` on a
+spill producer is `(cons primary rest)`; `multiple-value-call` with any spill
+producer spreads at runtime via `(apply fn (append seg...))` -- which is why
+MULTIPLE_VALUE_CALL now forces the eval runtime (`usesEval` gates in both
+compilers), like `apply` itself. Backends: the interpreter predefines
+`%mv-spill` in `Environment.createGlobal` and its `values` function writes it;
+the compilers call `LispMacroExpander.injectMvSpillGlobal` (a prepended
+top-level `(setq %mv-spill nil)`, gated on a scan for the five mv operator
+names) after lambda-list desugaring. The scalar `--no-gc` backend has no
+reference globals and keeps the old pure expansion (`expandValuesPrimary`).
+
 ## Semantics consequences (documented deviations)
 
-- A `(values ...)` tail in a USER function collapses to the primary value at
-  the call boundary (values->prog1 inside the callee); the caller's mv-bind
-  reads extra vars as nil. Same on all four backends. This is the check-point
-  for `.todo/61-split-sequence-e2e.md`: split-sequence's second value needs
-  the runtime tier (stays in `.todo/32`).
+- A `(values ...)` tail in a USER function now DOES reach the caller's
+  consumer through the spill. Deviations: a producer that calls `values` in a
+  NON-tail position and then returns normally leaves a stale spill (extra
+  vars may read leftovers instead of nil), and `funcall #'values` through the
+  compiled first-class wrapper yields the primary only (the interpreter's
+  function does spill).
 - Producers are recognized before user-macro expansion on the interpreter but
   after it on the compile path (UserMacroExpander runs first), so a USER MACRO
   expanding to `(values ...)` yields all values only when compiled. Literal
@@ -88,7 +108,8 @@ verbatim; `BuiltinFunctionWrappers` (`values`).
   `evalMultipleValueBind`, `evalMultipleValueBindFloorFamily`,
   `evalFloorFamilyWithDivisorInSingleValueContext`,
   `evalMultipleValueBindGethash`, `evalMultipleValueList`, `evalNthValue`,
-  `evalMultipleValueCall`, `evalMultipleValueUserFunctionCollapsesToPrimary`,
+  `evalMultipleValueCall`,
+  `evalMultipleValueUserFunctionTailValuesCrossTheCallBoundary`,
   `evalMultipleValueBindErrors`.
 - `JvmLispCompilerTest`: `compileAndRunValuesInSingleValueContext`,
   `compileAndRunMultipleValueBind`, `compileAndRunMultipleValueBindGethash`,
@@ -96,7 +117,8 @@ verbatim; `BuiltinFunctionWrappers` (`values`).
   `compileAndRunMultipleValueCall`.
 - `WasmLispCompilerIntegrationTest`: `multipleValueForms`,
   `multipleValueGethash`.
-- ci-spec: `multiple-values-core`; the `rontolisp-package-introspection`
+- ci-spec: `multiple-values-core` + the spill/user-function case inside
+  `split-sequence-residue-features`; the `rontolisp-package-introspection`
   expectations gained the 4 macro names and 208 (all three backend test
   classes updated too).
 - Test-writing caveats hit while pinning: compiled `print` returns nil

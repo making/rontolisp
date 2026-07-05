@@ -89,15 +89,34 @@ directory, so sibling systems in one registry directory find each other.
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
-  order. Anything else (`:in-order-to`, `:perform`, `:defsystem-depends-on`,
-  `(:read-file-form ...)`, ...) is an error naming the clause. There is no
-  `test-op`/`operate` machinery.
+  order. The test-op wiring options `:in-order-to` and `:perform` are
+  tolerated and ignored (there is no `test-op`/`operate` machinery), and a
+  `:version` value may be any literal form including ASDF's
+  `(:read-file-form ...)` indirection (never inspected). Anything else
+  (`:defsystem-depends-on`, ...) is an error naming the clause.
 - Loading a system twice is a no-op; circular `:depends-on` chains are
   detected and reported.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;
   the interpreter also accepts a computed name at runtime.
 
-Most existing third-party libraries also use Common Lisp features rontolisp
-does not implement yet (see [Unsupported CL Features](missing-features.md)),
-so the practical use today is structuring **your own** multi-file rontolisp
-projects — with `.asd` files that real ASDF can read too.
+## What can I actually load?
+
+The proof point is **split-sequence v2.0.1**, a classic real-world library:
+its unmodified sources load via `asdf:load-system` and
+`split-sequence`/`split-sequence-if`/`split-sequence-if-not` work on strings
+and lists — including the second return value (the resume index), which
+crosses the function boundary through the multiple-value channel — on all
+four backends (interpreter, JVM, WASM Preview 1 and `--component`). Its
+CLOS-only `extended-sequence.lisp` is gated behind
+`:if-feature (:or :sbcl :abcl)` and drops out automatically.
+
+A library qualifies today roughly when it stays inside: plain
+`defun`/`defmacro`/`defpackage` code, `loop`, `multiple-value-bind` over
+`values`-tailed functions, `check-type`/`etypecase` with the supported type
+specifiers, declarations (parsed no-ops, `deftype` included), and the lite
+`define-condition`/`make-condition` error idiom. Libraries built on CLOS,
+the condition/restart system, dynamic (special) variable binding or
+pathnames do not load yet (see
+[Unsupported CL Features](missing-features.md)). For anything else, the
+practical use is structuring **your own** multi-file rontolisp projects —
+with `.asd` files that real ASDF can read too.

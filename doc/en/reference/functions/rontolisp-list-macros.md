@@ -9,5 +9,5 @@ package is an error. See
 [Package introspection](../packages.md#package-introspection) for details.
 
 ```lisp
-(rontolisp:list-macros) ; => (and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
+(rontolisp:list-macros) ; => (and assert case ccase check-type complement cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
 ```
