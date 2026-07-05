@@ -2265,6 +2265,16 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0);
 	}
 
+	// Pushes the given field of the cons held in slot (cast to TYPE_CONS).
+	private static void innerConsGet(WasmWriter w, int slot, int field) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(field);
+	}
+
 	// Emits the array branch shared by _print_val and _princ_val: if param 0 is a
 	// TYPE_CELL box whose header car is a TYPE_HASH_BUCKETS array (i.e. an array, not a
 	// hash table), prints it as #(...) (rank 1) or #nA((...) ...) (rank n) and returns.
@@ -2292,7 +2302,7 @@ final class WasmRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.IF, 0x40);
 
-		// dims = header.car, data = header.cdr
+		// dims = header.car; dataSlot temporarily holds the (meta . data) inner cons
 		cellHeader(w);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
@@ -2308,13 +2318,42 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		setLocal(w, dataSlot);
 
-		// rank = len(dims); len = len(data)
+		// rank = len(dims)
 		getBucketsLocal(w, dimsSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 		setLocal(w, rankSlot);
-		getBucketsLocal(w, dataSlot);
+
+		// len = the fill pointer (meta.car) when present -- a fill-pointer vector
+		// prints only up to it -- else len(data)
+		innerConsGet(w, dataSlot, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x7F); // (result i32)
+		innerConsGet(w, dataSlot, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		innerConsGet(w, dataSlot, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.END);
 		setLocal(w, lenSlot);
+
+		// data = inner.cdr
+		innerConsGet(w, dataSlot, 1);
+		setLocal(w, dataSlot);
 
 		// prefix: "#(" for rank 1, "#" + rank + "A(" for rank n
 		getLocal(w, rankSlot);

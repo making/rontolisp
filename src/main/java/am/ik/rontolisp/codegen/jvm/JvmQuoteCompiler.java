@@ -58,10 +58,12 @@ final class JvmQuoteCompiler {
 		}
 	}
 
-	// Builds the runtime array representation (a java.util.ArrayList whose slot 0 is an
-	// Object[] of Long dimension sizes and slots 1.. are the row-major elements),
-	// matching JvmArrayRuntimeBuilder. The list reference is kept on the stack and DUPed
-	// for each add, so the operand stack stays shallow regardless of the element count.
+	// Builds the runtime array representation (a java.util.ArrayList whose slot 0 is
+	// the {dims, fillPointer, adjustable} header Object[] and slots 1.. are the
+	// row-major elements), matching JvmArrayRuntimeBuilder. A literal array never has a
+	// fill pointer and is not adjustable, so header slots 1 and 2 stay null. The list
+	// reference is kept on the stack and DUPed for each add, so the operand stack stays
+	// shallow regardless of the element count.
 	private static void compileQuotedArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
 		int[] dims = array.dimensions();
 		ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
@@ -75,6 +77,11 @@ final class JvmQuoteCompiler {
 		ctx.emit(Opcode.INVOKESPECIAL);
 		ctx.emitU2(alInit.index());
 		addElement(ctx, alAdd, () -> {
+			JvmEmitHelper.emitIntConst(ctx, 3);
+			ctx.emit(Opcode.ANEWARRAY);
+			ctx.emitU2(ctx.objectClass.index());
+			ctx.emit(Opcode.DUP);
+			JvmEmitHelper.emitIntConst(ctx, 0);
 			JvmEmitHelper.emitIntConst(ctx, dims.length);
 			ctx.emit(Opcode.ANEWARRAY);
 			ctx.emitU2(ctx.objectClass.index());
@@ -84,6 +91,7 @@ final class JvmQuoteCompiler {
 				JvmEmitHelper.compileLong(dims[d], ctx);
 				ctx.emit(Opcode.AASTORE);
 			}
+			ctx.emit(Opcode.AASTORE);
 		});
 		for (LispVal element : array.data()) {
 			LispVal value = (element == null) ? LispNil.INSTANCE : element;

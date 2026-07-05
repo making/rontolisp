@@ -52,6 +52,17 @@ public final class BuiltinFunctionWrappers {
 			LispNames.MAPHASH);
 
 	/**
+	 * Fill-pointer array wrappers, gated like {@link #HASH_FUNCTIONS}: their compiled
+	 * bodies reference the array runtime helpers (JVM) that are emitted only when the
+	 * program uses an array operator, so each backend injects them only for programs that
+	 * do. {@code %set-fill-pointer} is internal and intentionally excluded;
+	 * {@code vector-push-extend} is exposed in its 2-argument form (no extension).
+	 */
+	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
+			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
+			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND);
+
+	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
 	 * user.
 	 * @param userDefinedNames names already defined by user defuns
@@ -285,6 +296,12 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.MAKE_HASH_TABLE, List.of(), List.of(call(LispNames.MAKE_HASH_TABLE))),
 			binary(LispNames.GETHASH), binary(LispNames.REMHASH), unary(LispNames.CLRHASH),
 			unary(LispNames.HASH_TABLE_COUNT), unary(LispNames.HASH_TABLE_P), binary(LispNames.MAPHASH),
+			// Fill-pointer array operators: gated like the hash-table group (see
+			// ARRAY_FILL_POINTER_FUNCTIONS). vector-push-extend is the 2-arg form;
+			// %set-fill-pointer is internal and omitted.
+			unary(LispNames.FILL_POINTER), unary(LispNames.ARRAY_HAS_FILL_POINTER_P),
+			unary(LispNames.ADJUSTABLE_ARRAY_P), unary(LispNames.ARRAY_ELEMENT_TYPE), binary(LispNames.VECTOR_PUSH),
+			unary(LispNames.VECTOR_POP), binary(LispNames.VECTOR_PUSH_EXTEND),
 			// terpri: 0-arity
 			new WrapperDef(LispNames.TERPRI, List.of(), List.of(call(LispNames.TERPRI))),
 			// fresh-line: 0-arity

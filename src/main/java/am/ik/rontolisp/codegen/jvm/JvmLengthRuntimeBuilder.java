@@ -18,8 +18,9 @@ import am.ik.jvm.Opcode;
  * quotes); a vector (rank-1 array) returns its element count; any other value is treated
  * as a list and its cons cells are counted (Common Lisp sequences). A rank-2+ array is
  * not a sequence, so it throws. An array is an {@link java.util.ArrayList} whose slot 0
- * holds the dimension sizes (an {@code Object[]}; length 1 for rank 1), so its element
- * count is {@code size() - 1}.
+ * holds the {@code {dims, fillPointer, adjustable}} header (see
+ * {@link JvmArrayRuntimeBuilder}), so its element count is the fill pointer when the
+ * header carries one, otherwise {@code size() - 1}.
  *
  * <p>
  * The whole computation lives in this single helper (emitted once) rather than inline at
@@ -53,7 +54,8 @@ final class JvmLengthRuntimeBuilder {
 		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
-		// Slots: 0 = v, 1/2 = count (long accumulator for the list case).
+		// Slots: 0 = v, 1/2 = count (long accumulator for the list case), 3 = the
+		// array's slot-0 header (Object[]).
 		JvmAsm a = new JvmAsm();
 		int notString = a.label();
 		int notArray = a.label();
@@ -75,7 +77,8 @@ final class JvmLengthRuntimeBuilder {
 		a.areturn();
 		a.bind(notString);
 
-		// Array: an ArrayList whose slot 0 is the Object[] of dimension sizes.
+		// Array: an ArrayList whose slot 0 is the {dims, fillPointer, adjustable}
+		// header. The fill pointer, when present, is the effective length.
 		a.aload(0);
 		a.instanceOf(arrayListClass);
 		a.branch(Opcode.IFEQ, notArray);
@@ -83,6 +86,11 @@ final class JvmLengthRuntimeBuilder {
 		a.checkcast(arrayListClass);
 		a.iconst(0);
 		a.invokevirtual(alGet);
+		a.checkcast(objectArrayClass);
+		a.astore(3);
+		a.aload(3);
+		a.iconst(0);
+		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.arraylength();
 		a.iconst(1);
@@ -94,6 +102,16 @@ final class JvmLengthRuntimeBuilder {
 		a.invokespecial(rtExInit);
 		a.op(Opcode.ATHROW);
 		a.bind(rank1);
+		int noFillPointer = a.label();
+		a.aload(3);
+		a.iconst(1);
+		a.aaload();
+		a.branch(Opcode.IFNULL, noFillPointer);
+		a.aload(3);
+		a.iconst(1);
+		a.aaload();
+		a.areturn();
+		a.bind(noFillPointer);
 		a.aload(0);
 		a.checkcast(arrayListClass);
 		a.invokevirtual(alSize);
@@ -130,7 +148,7 @@ final class JvmLengthRuntimeBuilder {
 		a.invokestatic(longValueOf);
 		a.areturn();
 
-		return new LengthMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 4, 3, a.finish());
+		return new LengthMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 4, 4, a.finish());
 	}
 
 }

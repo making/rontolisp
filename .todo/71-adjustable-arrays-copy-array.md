@@ -27,22 +27,22 @@ real reason to want this beyond copy-array.
 
 ## Progress (2026-07-06)
 
-**Step 1 (fill-pointer sub-step) on the INTERPRETER: DONE.** Implemented +
-tested: `make-array :fill-pointer/:adjustable`, `fill-pointer`(+setf),
+**Step 1 (fill-pointer sub-step): DONE on ALL FOUR BACKENDS** (interpreter, JVM,
+WASM Preview 1, WASM component; todos 72/73 closed). Implemented + tested:
+`make-array :fill-pointer/:adjustable`, `fill-pointer`(+setf),
 `array-has-fill-pointer-p`, `adjustable-array-p`, `array-element-type`,
-`vector-push`/`vector-pop`/`vector-push-extend`, and the verbatim cl-utilities
-`copy-array` runs on the interpreter (the headline acceptance). Design + the
-per-backend representation plan is written up in `.kb/adjustable-arrays.md`.
+`vector-push`/`vector-pop`/`vector-push-extend`, first-class wrappers
+(`#'vector-push` etc., gated with the array runtime), `length`/printing clamped
+to the fill pointer, and the verbatim cl-utilities `copy-array` runs everywhere
+(pinned per backend + the `fill-pointer-arrays-cross-backend` ci-spec case).
+`--no-gc` rejects the surface with its usual clear compile error (arrays are
+ineligible there: "--no-gc: unsupported operation 'vector-push' ..."). Docs:
+per-operator pages under `reference/functions/` (en+ja) + the make-array page.
+Representation details: `.kb/adjustable-arrays.md`.
 
-Remaining, split into follow-up todos:
-- `.todo/72-fill-pointer-arrays-jvm.md` -- the JVM backend (header-wrapping
-  bytecode change; see the .kb design).
-- `.todo/73-fill-pointer-arrays-wasm.md` -- the WASM backend + the `--no-gc`
-  gate.
-- `:adjustable`+`adjust-array`, then `:displaced-to`+`array-displacement`
-  (hardest; aliasing), then splicing cl-utilities `copy-array` onto the compile
-  path -- still TODO here (or their own todos once fill-pointer lands on all
-  backends).
+Remaining (the rest of this todo):
+- `adjust-array`, then `:displaced-to`+`array-displacement` (hardest; aliasing
+  semantics) -- split into their own todos when picked up.
 
 ## Current state
 

@@ -166,6 +166,17 @@ class JavaInteropTest {
 				""")).isEqualTo(new LispString("a-b"));
 	}
 
+	@Test
+	void fillPointerVectorMarshalsUpToFillPointer() {
+		// The fill pointer bounds the marshaled sequence, matching length/printing.
+		assertThat(eval("""
+				(setq v (make-array 3 :fill-pointer 0))
+				(vector-push "a" v)
+				(vector-push "b" v)
+				(java:static "java.lang.String" "join" "-" v)
+				""")).isEqualTo(new LispString("a-b"));
+	}
+
 	// A dotted (improper) list is not a sequence, so no overload matches.
 	@Test
 	void dottedListDoesNotMarshal() {

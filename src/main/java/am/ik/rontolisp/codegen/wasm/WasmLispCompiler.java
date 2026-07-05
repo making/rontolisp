@@ -816,6 +816,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!programUsesAnyHashOp(program)) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
 		}
+		// Fill-pointer array wrappers likewise: inject them only for array-using
+		// programs, for symmetry with the JVM backend (where they reference the gated
+		// array runtime helpers).
+		if (!programUsesAnyArrayOp(program)) {
+			wrapperExcludes.addAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
+		}
 		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
@@ -2042,6 +2048,50 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.REMHASH) || programUsesSymbol(program, LispNames.CLRHASH)
 				|| programUsesSymbol(program, LispNames.HASH_TABLE_COUNT)
 				|| programUsesSymbol(program, LispNames.HASH_TABLE_P) || programUsesSymbol(program, LispNames.MAPHASH);
+	}
+
+	// True when the program references any array operator (or contains an array
+	// literal), matching the JVM backend's predicate. Gates the first-class
+	// fill-pointer wrappers so they are injected only for array-using programs.
+	private static boolean programUsesAnyArrayOp(List<LispVal> program) {
+		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.AREF)
+				|| programUsesSymbol(program, LispNames.ASET) || programUsesSymbol(program, LispNames.ARRAY_DIMENSIONS)
+				|| programUsesSymbol(program, LispNames.VECTOR) || programUsesSymbol(program, LispNames.SVREF)
+				|| programUsesSymbol(program, LispNames.ARRAY_RANK)
+				|| programUsesSymbol(program, LispNames.ARRAY_DIMENSION)
+				|| programUsesSymbol(program, LispNames.ARRAY_TOTAL_SIZE)
+				|| programUsesSymbol(program, LispNames.ROW_MAJOR_AREF)
+				|| programUsesSymbol(program, LispNames.ROW_MAJOR_ASET)
+				|| programUsesSymbol(program, LispNames.ARRAY_ROW_MAJOR_INDEX)
+				|| programUsesSymbol(program, LispNames.FILL_POINTER)
+				|| programUsesSymbol(program, LispNames.SET_FILL_POINTER)
+				|| programUsesSymbol(program, LispNames.ARRAY_HAS_FILL_POINTER_P)
+				|| programUsesSymbol(program, LispNames.ADJUSTABLE_ARRAY_P)
+				|| programUsesSymbol(program, LispNames.ARRAY_ELEMENT_TYPE)
+				|| programUsesSymbol(program, LispNames.VECTOR_PUSH) || programUsesSymbol(program, LispNames.VECTOR_POP)
+				|| programUsesSymbol(program, LispNames.VECTOR_PUSH_EXTEND)
+				|| programUsesSymbol(program, LispNames.COERCE) || programContainsArrayLiteral(program);
+	}
+
+	// True when a self-evaluating array literal (#(...)) appears anywhere in the
+	// program.
+	private static boolean programContainsArrayLiteral(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (containsArrayLiteral(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean containsArrayLiteral(LispVal val) {
+		if (val instanceof am.ik.rontolisp.LispArray) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
+		}
+		return false;
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {

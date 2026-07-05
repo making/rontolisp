@@ -210,6 +210,17 @@ class JvmJavaInteropCompilerTest {
 				""")).isEqualTo("\"a-b\"");
 	}
 
+	@Test
+	void fillPointerVectorMarshalsUpToFillPointer() throws Exception {
+		// The fill pointer bounds the marshaled sequence, matching length/printing.
+		assertThat(compileAndRun("""
+				(setq v (make-array 3 :fill-pointer 0))
+				(vector-push "a" v)
+				(vector-push "b" v)
+				(print (java:static "java.lang.String" "join" "-" v))
+				""")).isEqualTo("\"a-b\"");
+	}
+
 	// A dotted (improper) list is not a sequence, so no overload matches.
 	@Test
 	void dottedListDoesNotMarshal() {

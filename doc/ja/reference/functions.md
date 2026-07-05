@@ -212,6 +212,13 @@
 | `row-major-aref` | `(row-major-aref (make-array (list 2 3)) 4)` | フラットな行優先インデックスの要素。階数に依存せず、`setf` の場所としても使えます |
 | `array-row-major-index` | `(array-row-major-index (make-array (list 2 3)) 1 1)` | `4`(添字のフラットな行優先インデックス) |
 | `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`、`(#\a #\b)`(結果型はリテラルの `'list`/`'vector`/`'string` のみ) |
+| `fill-pointer` | `(fill-pointer v)` | `:fill-pointer` ベクタのフィルポインタ(実効長)。`setf` 可能な場所でもある |
+| `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |
+| `adjustable-array-p` | `(adjustable-array-p a)` | 配列が `:adjustable` で作成されていれば `t`、そうでなければ `nil` |
+| `array-element-type` | `(array-element-type a)` | 常に `t`(要素型は追跡されない) |
+| `vector-push` | `(vector-push x v)` | フィルポインタの位置に `x` を格納しインデックスを返す。満杯なら `nil` |
+| `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
+| `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |
 
 ## rontolisp パッケージの関数
 

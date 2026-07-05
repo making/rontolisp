@@ -83,11 +83,11 @@ final class WasmQuoteCompiler {
 	}
 
 	// Builds the runtime array representation: a TYPE_CELL box wrapping a header
-	// cons (dims . data), where dims and data are both TYPE_HASH_BUCKETS arrays. dims
-	// holds
-	// the dimension sizes as i31 integers, data holds the row-major elements. This
-	// mirrors
-	// the layout produced by WasmArrayCompiler.compileMake.
+	// cons (dims . (meta . data)), where dims and data are both TYPE_HASH_BUCKETS
+	// arrays and meta is a (fillPointer . adjustable) cons. dims holds the dimension
+	// sizes as i31 integers, data holds the row-major elements; a literal array never
+	// has a fill pointer and is not adjustable, so both meta fields stay null. This
+	// mirrors the layout produced by WasmArrayCompiler.compileMake.
 	private static void compileQuotedArray(LispArray array, WasmLispCompiler.Ctx ctx) {
 		int[] dims = array.dimensions();
 		LispVal[] data = array.data();
@@ -118,9 +118,16 @@ final class WasmQuoteCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			arraySet(ctx);
 		}
-		// header = cons(dims, data); cell = struct.new TYPE_CELL(header)
+		// header = cons(dims, cons(cons(null, null), data));
+		// cell = struct.new TYPE_CELL(header)
 		getBuckets(ctx, dimsSlot);
+		refNull(ctx);
+		refNull(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		getBuckets(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);

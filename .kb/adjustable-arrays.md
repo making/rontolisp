@@ -13,25 +13,47 @@ cl-utilities `copy-array` touches:
 
 ## Status (2026-07-06)
 
-**Interpreter: DONE and tested.** All of the above except displacement /
-`adjust-array` are implemented on the interpreter, and the verbatim cl-utilities
-`copy-array` definition runs there (pinned by
-`LispEvaluatorTest.clUtilitiesCopyArrayRunsOnInterpreter`, the headline
-acceptance of todo 71).
+**Fill-pointer sub-step: DONE on all four backends** (interpreter, JVM, WASM
+Preview 1, WASM component) and tested; the verbatim cl-utilities `copy-array`
+definition runs everywhere (pinned by
+`LispEvaluatorTest.clUtilitiesCopyArrayRunsOnInterpreter`,
+`JvmLispCompilerTest.compileClUtilitiesCopyArray`,
+`WasmLispCompilerIntegrationTest.compileClUtilitiesCopyArray`, and the
+`fill-pointer-arrays-cross-backend` ci-spec case). `--no-gc` rejects the whole
+surface with its usual clear compile error (arrays are ineligible on the scalar
+backend: `--no-gc: unsupported operation 'vector-push' ...`), satisfying the
+todo-71 "gate explicitly" acceptance without a dedicated gate.
 
-**JVM / WASM / `--no-gc`: NOT YET** -- these are the heavy per-backend pieces,
-split into follow-up todos (`.todo/72` JVM, `.todo/73` WASM). The names are
-already registered as `cl` functions (`PackageRegistry`), so a compiled program
-that calls e.g. `vector-push` currently fails at compile time (no codegen case),
-not silently. Adding them to `CL_SYMBOLS` bumped the `list-functions` count
-`229 -> 236` (pinned in `LispEvaluatorTest`, `JvmLispCompilerTest`,
-`WasmLispCompilerIntegrationTest`).
+Semantics shared by all backends: only rank-1 arrays may have a fill pointer
+(`:fill-pointer t` = the vector size, an integer = that value, range-checked);
+the fill pointer is the effective length (`length`, `#(...)` printing, the
+sequence view) while `aref`/`row-major-aref` still reach the full backing
+store; `vector-push-extend` grows any fill-pointer vector regardless of
+`:adjustable` (the flag is reported verbatim by `adjustable-array-p`);
+`array-element-type` always returns `t` (`:element-type` is parsed and
+ignored). `%set-fill-pointer` is the internal `setf` target wired in
+`LispMacroExpander.expandSetf`. On the compile path `array-element-type`
+expands to `(progn <array> t)` (`LispMacroExpander.expandArrayElementType`).
+
+First-class values: `#'vector-push` etc. work via
+`BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS` (fill-pointer,
+array-has-fill-pointer-p, adjustable-array-p, array-element-type, vector-push,
+vector-pop, vector-push-extend -- the last in its 2-arg form), gated like
+`HASH_FUNCTIONS`: both compilers inject the group only when
+`programUsesAnyArrayOp` (which also gates the JVM array helpers and now lists
+the fill-pointer names) is true, so the wrappers and their helpers stay gated
+together.
+
+Interpreter/JVM errors carry `fn: message` text (e.g. "vector-pop: empty
+vector"); WASM traps (`unreachable`) on the same conditions. Compiled `list`
+argument evaluation is right-to-left (.todo/14), so tests/ci-spec sequence
+side-effecting pushes/pops through separate bindings.
 
 ## Representation
 
-### Interpreter (`LispArray`) -- implemented
+### Interpreter (`LispArray`)
 
-`LispArray` gained mutable state (fields are no longer `final`):
+`LispArray` has mutable state (fields are no longer `final`):
 
 - `int fillPointer` -- the fill pointer, or `-1` for none. When present it is
   the effective length; only rank-1 arrays may have one.
@@ -51,72 +73,82 @@ fill pointer bounds the sequence view, not element access).
 
 `make-array` parses `:fill-pointer` (`t` = size, integer = that value, `nil` =
 none; rank-1 only), `:adjustable`, and ignores unknown keywords such as
-`:element-type`. `array-element-type` always returns `t` (element types are not
-tracked).
+`:element-type`. New builtins live in `Environment.registerArrays`.
 
-New builtins live in `Environment.registerArrays`: `fill-pointer`,
-`%set-fill-pointer` (the `setf` target, wired in
-`LispMacroExpander.expandSetf`), `array-has-fill-pointer-p`,
-`adjustable-array-p`, `array-element-type`, `vector-push`, `vector-pop`,
-`vector-push-extend`.
+### JVM (implemented)
 
-### JVM (planned) -- `.todo/72`
+An array is still a `java.util.ArrayList`, but slot 0 now holds a fixed
+3-element header `Object[]{dims, fillPointer, adjustable}` -- `dims` the
+`Object[]` of Long dimension sizes (length = rank), `fillPointer` a `Long` or
+null, `adjustable` the RAW `:adjustable` argument (null = nil; kept verbatim so
+`_adjustableArrayP` is a null test). Data stays at slots `1..` (the `1 + flat`
+offset in `_aref*`/`_aset*` is untouched); every dims reader gained one extra
+`aaload 0` (`emitFlat2`, `emitFlatN`, `_arrayDims`, `buildToString`,
+`JvmLengthRuntimeBuilder`). BOTH header producers build the wrapper:
+`_arrayMake` (signature grew to `(dims, init, fillPointer, adjustable)`;
+`JvmArrayCompiler.compileMake` compiles the keyword value expressions or pushes
+null) and `JvmQuoteCompiler.compileQuotedArray` (literals: slots 1/2 null).
+`buildToString` + `_length` clamp the element count to the fill pointer.
 
-Today a JVM array is a `java.util.ArrayList`: slot 0 = an `Object[]` of `Long`
-dims, slots `1..` = row-major data (`JvmArrayRuntimeBuilder`). A fill pointer /
-adjustable flag has to be carried WITHOUT shifting the data offset (which
-`_aref1`/`row-major-aref` and the `1 + flat` index all bake in) and without
-breaking rank detection (`rank == header.length` in `_arrayDims`, `emitFlatN`,
-`buildToString`, `JvmQuoteCompiler.compileQuotedArray`).
+New static helpers in `JvmArrayRuntimeBuilder` (same array gate):
+`_fillPointer`, `_setFillPointer`, `_arrayHasFillPointer`, `_adjustableArrayP`,
+`_vectorPush`, `_vectorPop`, `_vectorPushExtend` (push-extend appends nulls to
+the ArrayList and updates the inner dims[0]). Call sites are wired in
+`JvmArrayCompiler` + `JvmExprCompiler.compileCons`; `--optimize`
+(`JvmClassShaker`) keeps used helpers via the ordinary invokestatic call graph
+(verified with `--optimize` on a fill-pointer program).
 
-Recommended design: **wrap slot 0** in a fixed 3-element header
-`Object[]{ dimsInner (Object[] of Long), fillPointer (Long|null), adjustable
-(Boolean|null) }`. Data stays at slots `1..` (so `_aref*`/`_aset*` and the
-`row-major` reuse are untouched); only the "read dims" accessor gains one extra
-`aaload` in `emitFlat2`/`emitFlatN`/`_arrayDims`/`buildToString`, and BOTH
-producers (`_arrayMake` and `JvmQuoteCompiler`) build the wrapper. `_arrayMake`'s
-signature grows to `(dims, init, fillPointer, adjustable)`. `buildToString` and
-`JvmLengthRuntimeBuilder` clamp the element count to the fill pointer. New static
-helpers: `_fillPointer`, `_setFillPointer`, `_arrayHasFillPointer`,
-`_adjustableArrayP`, `_vectorPush`, `_vectorPop`, `_vectorPushExtend`
-(push-extend grows the `ArrayList` + the inner dims). Also needs a
-`BuiltinFunctionWrappers` entry per name for `#'vector-push` etc., and the
-`--optimize` shaker must keep the helpers reachable when used.
+### WASM (implemented)
 
-### WASM (planned) -- `.todo/73`
+The `TYPE_CELL` box now holds a header `TYPE_CONS` of
+`(dims . (meta . data))`: `dims`/`data` are the same `TYPE_HASH_BUCKETS`
+arrays; `meta` is a `TYPE_CONS` of `(fillPointer-i31-or-null . adjustableRaw)`.
+The header's CAR is still the dims buckets array, so the array-vs-hash-table
+discriminator used by `%arrayp` / `WasmLengthCompiler` / the printer is
+unchanged, and `compileDims`/`emitFlatIndex` (car readers) needed no change;
+data readers go one cons deeper (`WasmArrayCompiler.getData` =
+`cdr`/`cdr`/cast-buckets, meta = `cadr`). Producers: `compileMake` (resolves
+`:fill-pointer` at runtime -- null / bounds-checked i31 / `t` -> dims[0] --
+only when the keyword appears at the call site) and
+`WasmQuoteCompiler.compileQuotedArray` (meta `(null . null)`).
+`WasmLengthCompiler` and the shared printer branch
+(`WasmRuntimeBuilder.emitPrintArray`) clamp to `meta.car` when it is an i31.
+The new builtins are emitted INLINE in `WasmArrayCompiler`
+(compileFillPointer/SetFillPointer/HasFillPointer/AdjustableArrayP/VectorPush/
+VectorPop/VectorPushExtend; push-extend copies into a fresh buckets array with
+a loop and `struct.set`s the inner cons + dims[0]) -- no new heap type, no new
+`FUNC_*` index, so the component blobs are untouched and Preview 1 /
+`--component` stay identical.
 
-Today a WASM array is a `TYPE_CELL` box holding a header `TYPE_CONS`
-`(dims . data)`, both `TYPE_HASH_BUCKETS` arrays of `(ref null eq)`
-(`WasmArrayCompiler`); dims holds i31 sizes, data the row-major elements. Rank =
-`dims.length`. Carry the fill pointer / adjustable flag by extending the header
-(e.g. the box holds `(meta . (dims . data))` where meta is a 2-slot buckets of
-`[fillPointer-i31-or-null, adjustable-i31]`), or a parallel small buckets. All
-inline emission (`compileMake`/`compileAref`/`compileAset`/`compileDims`) plus
-`WasmLengthCompiler` and the array printer must follow the new indirection. Keep
-the static `FUNC_*` import indices unchanged (inline-only, no new heap type) so
-the component blobs stay valid. `--component` I/O adapter is unaffected (arrays
-are pure in-memory values).
+### `--no-gc` scalar WASM
 
-### `--no-gc` scalar WASM (planned) -- `.todo/73` or its own todo
-
-`ScalarWasmCompiler` has no general array type today (only string/char over
-`[len][bytes]` headers). Fill-pointer vectors here are a sharp edge; gate with a
-clear compile error if impractical, per the todo-71 acceptance ("displacement
-documented even if limited/unsupported on `--no-gc`").
+Unsupported, like every array operation on the scalar backend: the eligibility
+scan (`ScalarWasmCompiler.collectCallsCons`) names the operation in a clear
+compile error ("--no-gc: unsupported operation 'vector-push' in function 'f'
+..."). Documented under the `--no-gc` section of `doc/*/compiling/wasm.md`
+("vectors" in the ineligible list).
 
 ## Displacement / `adjust-array` (future)
 
 `:displaced-to` (+ `:displaced-index-offset`), `array-displacement` and
 `adjust-array` are the hardest part (aliasing semantics -- a displaced array
-shares another array's storage). Deferred entirely; see the todo. `copy-array`
+shares another array's storage). Deferred entirely; see `.todo/71`. `copy-array`
 does not need displacement, so it is not on the critical path.
 
-## Tests
+## Tests / docs
 
 - Interpreter: `LispEvaluatorTest` -- `fillPointerLengthAndAccessors`,
   `fillPointerVectorPrintsUpToFillPointer`, `vectorPushStoresAndReturnsIndexOrNil`,
   `vectorPushThenReadBack`, `vectorPop`, `vectorPushExtendGrowsBeyondCapacity`,
   `setfFillPointer`, `simpleVectorHasNoFillPointer`,
   `fillPointerOnNonFillPointerVectorSignals`, `clUtilitiesCopyArrayRunsOnInterpreter`.
+- JVM: `JvmLispCompilerTest.compileFillPointer*` / `compileVectorP*` /
+  `compileSetfFillPointer` / `compileSimpleVectorHasNoFillPointer` /
+  `compileFillPointerFirstClassWrappers` / `compileClUtilitiesCopyArray`.
+- WASM: the same set in `WasmLispCompilerIntegrationTest`.
+- E2E: ci-spec `fill-pointer-arrays-cross-backend` (all four backends).
+- Docs: `reference/functions/{fill-pointer,array-has-fill-pointer-p,
+  adjustable-array-p,array-element-type,vector-push,vector-pop,
+  vector-push-extend}.md` (en+ja) + the make-array page + the functions table.
 - The `list-functions` count (236) is pinned in `LispEvaluatorTest`,
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`.

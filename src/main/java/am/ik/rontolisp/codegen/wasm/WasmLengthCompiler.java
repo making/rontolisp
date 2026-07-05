@@ -120,7 +120,44 @@ final class WasmLengthCompiler {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
-		// rank 1: return dims[0] (already an i31).
+		// rank 1: the fill pointer when the meta cons carries one (the effective
+		// length), else dims[0] (both already i31s). meta = (cadr header), see
+		// WasmArrayCompiler.
+		int fpSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeSignedLeb128(0); // header cons
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeSignedLeb128(1); // (meta . data)
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeSignedLeb128(0); // meta
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeSignedLeb128(0); // fill pointer or null
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(fpSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(fpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(fpSlot);
+		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(dimsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -129,6 +166,7 @@ final class WasmLengthCompiler {
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.ELSE);
 		// rank 2+: not a sequence.
 		ctx.writer.write(Instruction.UNREACHABLE);

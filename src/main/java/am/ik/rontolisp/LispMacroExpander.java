@@ -5987,6 +5987,19 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (array-element-type array) into {@code (progn array t)} on the compile
+	 * path: element types are not tracked, so the answer is always the symbol {@code t}
+	 * (matching the interpreter built-in), and the array expression is kept only for its
+	 * evaluation.
+	 * @param cons the array-element-type expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandArrayElementType(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1), LispTrue.INSTANCE));
+	}
+
+	/**
 	 * Expands (array-row-major-index array sub...) into the Horner fold of the subscripts
 	 * over {@code array-dimensions}: {@code ((s0 * d1 + s1) * d2 + s2) ...}, so any
 	 * static subscript count works. The array's dimensions and the subscripts are bound
@@ -8236,6 +8249,14 @@ public final class LispMacroExpander {
 		return changed ? listToCons(out) : bindings;
 	}
 
+	/**
+	 * Injects the top-level {@code (setq %mv-spill nil)} /
+	 * {@code (setq *read-default-float-format* ...)} globals the compilers need when the
+	 * program uses a multiple-value operator or the float-format variable; returns the
+	 * program unchanged otherwise.
+	 * @param program the top-level forms
+	 * @return the program with the required global initializers prepended
+	 */
 	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
 		boolean usesMv = false;
 		boolean usesFloatFormat = false;
@@ -8307,6 +8328,14 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Splices top-level {@code progn}/{@code eval-when} forms into the surrounding
+	 * top-level form list (recursively), so nested {@code defun}/{@code defmacro}
+	 * definitions are collected on the compile path. A program with nothing to splice is
+	 * returned unchanged (identity preserved for callers' early returns).
+	 * @param program the top-level forms
+	 * @return the flattened top-level forms
+	 */
 	public static List<LispVal> flattenTopLevel(List<LispVal> program) {
 		// Keep the identity of a program with nothing to splice (callers may rely on
 		// "returned unchanged", e.g. UserMacroExpander's no-macro early return).

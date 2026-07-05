@@ -414,8 +414,11 @@ final class JavaInterop {
 				if (array.dimensions().length != 1) {
 					return NO_MATCH; // only rank-1 vectors are bridged
 				}
-				List<LispVal> elements = new ArrayList<>(array.data().length);
-				for (LispVal element : array.data()) {
+				// The fill pointer, when present, bounds the marshaled sequence.
+				int count = array.effectiveLength();
+				List<LispVal> elements = new ArrayList<>(count);
+				for (int i = 0; i < count; i++) {
+					LispVal element = array.data()[i];
 					elements.add(element == null ? LispNil.INSTANCE : element);
 				}
 				return marshalSequence(elements, target, caller, out, index);

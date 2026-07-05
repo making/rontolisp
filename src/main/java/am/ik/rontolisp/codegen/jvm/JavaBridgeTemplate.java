@@ -461,12 +461,15 @@ final class JavaBridgeTemplate {
 		if (value instanceof BigInteger || value instanceof BigInteger[]) {
 			return NO_MATCH; // bignums and ratios are not bridged (as interpreted)
 		}
-		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] dims) {
-			// The compiled Lisp array representation: slot 0 = the dimension sizes.
-			if (dims.length != 1) {
+		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] header) {
+			// The compiled Lisp array representation: slot 0 = the {dims, fillPointer,
+			// adjustable} header. The fill pointer, when present, is the effective
+			// length of the marshaled sequence.
+			if (!(header[0] instanceof Object[] dims) || dims.length != 1) {
 				return NO_MATCH; // only rank-1 vectors are bridged
 			}
-			return marshalSequence(new ArrayList<>(list.subList(1, list.size())), target, out, index);
+			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
+			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index);
 		}
 		// Anything else is a wrapped host object.
 		if (target.isInstance(value)) {

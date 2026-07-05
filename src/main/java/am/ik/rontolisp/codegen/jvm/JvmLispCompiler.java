@@ -411,6 +411,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (!programUsesAnyHashOp(program)) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
 		}
+		// Fill-pointer array wrappers reference the array runtime helpers
+		// (JvmArrayRuntimeBuilder), emitted only when the program uses an array
+		// operator; gate the group the same way.
+		if (!programUsesAnyArrayOp(program)) {
+			wrapperExcludes.addAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
+		}
 		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
 			defuns.add(extractSetqLambda(wrapper));
 		}
@@ -1414,6 +1420,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.ROW_MAJOR_AREF)
 				|| programUsesSymbol(program, LispNames.ROW_MAJOR_ASET)
 				|| programUsesSymbol(program, LispNames.ARRAY_ROW_MAJOR_INDEX)
+				|| programUsesSymbol(program, LispNames.FILL_POINTER)
+				|| programUsesSymbol(program, LispNames.SET_FILL_POINTER)
+				|| programUsesSymbol(program, LispNames.ARRAY_HAS_FILL_POINTER_P)
+				|| programUsesSymbol(program, LispNames.ADJUSTABLE_ARRAY_P)
+				|| programUsesSymbol(program, LispNames.ARRAY_ELEMENT_TYPE)
+				|| programUsesSymbol(program, LispNames.VECTOR_PUSH) || programUsesSymbol(program, LispNames.VECTOR_POP)
+				|| programUsesSymbol(program, LispNames.VECTOR_PUSH_EXTEND)
 				|| programUsesSymbol(program, LispNames.COERCE) || programContainsArrayLiteral(program);
 	}
 

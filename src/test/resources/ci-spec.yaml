@@ -1092,7 +1092,7 @@ cases:
     expected: |
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case rotatef setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      229
+      236
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -1901,6 +1901,78 @@ cases:
       20
       #(7 7 7)
       #2A((1 0 0) (0 0 9))
+
+  # Fill-pointer arrays (todo 72/73): make-array :fill-pointer/:adjustable,
+  # length/printing clamped to the fill pointer, fill-pointer (+ setf),
+  # array-has-fill-pointer-p, adjustable-array-p, array-element-type,
+  # vector-push/vector-pop/vector-push-extend, first-class wrappers, and the
+  # verbatim cl-utilities copy-array. Side effects are sequenced through let*
+  # bindings (.todo/14: the compilers evaluate list arguments right-to-left).
+  - name: fill-pointer-arrays-cross-backend
+    source: |
+      (defun ci-copy-array (array &key
+                            (element-type (array-element-type array))
+                            (fill-pointer (and (array-has-fill-pointer-p array)
+                                               (fill-pointer array)))
+                            (adjustable (adjustable-array-p array)))
+        (let* ((dimensions (array-dimensions array))
+               (new-array (make-array dimensions
+                                      :element-type element-type
+                                      :adjustable adjustable
+                                      :fill-pointer fill-pointer)))
+          (dotimes (i (array-total-size array))
+            (setf (row-major-aref new-array i)
+                  (row-major-aref array i)))
+          new-array))
+      (defun ci-fill-pointer ()
+        (let ((v (make-array 5 :fill-pointer 2 :initial-element 0)))
+          (print (list (length v) (fill-pointer v)
+                       (array-has-fill-pointer-p v) (adjustable-array-p v)))
+          (print v)
+          (setf (fill-pointer v) 4)
+          (print (list (length v) (fill-pointer v))))
+        (let* ((w (make-array 3 :fill-pointer 0))
+               (a (vector-push 10 w))
+               (b (vector-push 20 w))
+               (c (vector-push 30 w))
+               (d (vector-push 40 w)))
+          (print (list a b c d))
+          (print (list (length w) (aref w 0) (aref w 1)))
+          (let ((p (vector-pop w)))
+            (print (list p (length w)))))
+        (let ((e (make-array 2 :fill-pointer 0 :adjustable t)))
+          (vector-push-extend 1 e)
+          (vector-push-extend 2 e)
+          (vector-push-extend 3 e)
+          (print (list (length e) (adjustable-array-p e) (aref e 2))))
+        (let ((s (make-array 3 :initial-element 7))
+              (ft (make-array 4 :fill-pointer t :initial-element 1)))
+          (print (list (array-has-fill-pointer-p s) (adjustable-array-p s)
+                       (array-element-type s)))
+          (print (list (length ft) (fill-pointer ft))))
+        (let ((fw (make-array 3 :fill-pointer 0)))
+          (funcall #'vector-push 5 fw)
+          (let* ((fp (funcall #'fill-pointer fw))
+                 (popped (funcall #'vector-pop fw)))
+            (print (list fp popped (funcall #'array-has-fill-pointer-p fw)))))
+        (let ((orig (make-array 4 :fill-pointer 3 :adjustable t :initial-element 5)))
+          (setf (aref orig 1) 8)
+          (let ((copy (ci-copy-array orig)))
+            (setf (aref copy 0) 99)
+            (print (list copy orig (fill-pointer copy) (adjustable-array-p copy))))))
+      (ci-fill-pointer)
+    expected: |
+      (2 2 t nil)
+      #(0 0)
+      (4 4)
+      (0 1 2 nil)
+      (3 10 20)
+      (30 2)
+      (3 t 3)
+      (nil nil t)
+      (4 4)
+      (1 5 t)
+      (#(99 8 5) #(5 8 5) 3 t)
 
   - name: array-literals-cross-backend
     source: |

@@ -12,13 +12,14 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 /**
- * Compiles the array built-ins ({@code make-array}, {@code aref}, {@code %aset}). Each
- * pushes its arguments and calls the matching static runtime helper emitted by
- * {@link JvmArrayRuntimeBuilder}. {@code make-array} resolves the
- * {@code :initial-element} keyword at compile time; {@code aref}/{@code %aset} pick a
- * helper by the number of subscripts: ranks 1 and 2 call dedicated fast helpers, higher
- * ranks package the subscripts into an {@code Object[]} for the generic {@code _arefN}/
- * {@code _asetN}.
+ * Compiles the array built-ins ({@code make-array}, {@code aref}, {@code %aset}, and the
+ * fill-pointer surface). Each pushes its arguments and calls the matching static runtime
+ * helper emitted by {@link JvmArrayRuntimeBuilder}. {@code make-array} resolves the
+ * {@code :initial-element}/{@code :fill-pointer}/{@code :adjustable} keywords at compile
+ * time (their value expressions are compiled and evaluated at runtime);
+ * {@code aref}/{@code %aset} pick a helper by the number of subscripts: ranks 1 and 2
+ * call dedicated fast helpers, higher ranks package the subscripts into an
+ * {@code Object[]} for the generic {@code _arefN}/{@code _asetN}.
  */
 final class JvmArrayCompiler {
 
@@ -31,14 +32,95 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException("make-array expects at least 1 argument");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		LispVal init = findInitialElement(args);
-		if (init != null) {
-			JvmExprCompiler.compileExpr(init, ctx, className);
+		compileKeywordValueOrNull(findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD), ctx, className);
+		compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
+		compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
+	}
+
+	static void compileFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.FILL_POINTER, JvmArrayRuntimeBuilder.FILL_POINTER,
+				JvmArrayRuntimeBuilder.FILL_POINTER_DESC);
+	}
+
+	static void compileSetFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%set-fill-pointer array value): the setf target of (fill-pointer array).
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%set-fill-pointer expects an array and a value, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.SET_FILL_POINTER,
+				JvmArrayRuntimeBuilder.SET_FILL_POINTER_DESC);
+	}
+
+	static void compileHasFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ARRAY_HAS_FILL_POINTER_P, JvmArrayRuntimeBuilder.HAS_FILL_POINTER,
+				JvmArrayRuntimeBuilder.HAS_FILL_POINTER_DESC);
+	}
+
+	static void compileAdjustableArrayP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ADJUSTABLE_ARRAY_P, JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P,
+				JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P_DESC);
+	}
+
+	static void compileVectorPush(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (vector-push value vector)
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"vector-push expects a value and a vector, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH, JvmArrayRuntimeBuilder.VECTOR_PUSH_DESC);
+	}
+
+	static void compileVectorPop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.VECTOR_POP, JvmArrayRuntimeBuilder.VECTOR_POP,
+				JvmArrayRuntimeBuilder.VECTOR_POP_DESC);
+	}
+
+	static void compileVectorPushExtend(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (vector-push-extend value vector [extension])
+		List<LispVal> args = cons.toList();
+		if (args.size() < 3 || args.size() > 4) {
+			throw new UnsupportedOperationException(
+					"vector-push-extend expects 2 or 3 arguments, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		if (args.size() == 4) {
+			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		}
+		else {
+			JvmEmitHelper.compileLong(1, ctx);
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND,
+				JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND_DESC);
+	}
+
+	private static void compileUnary(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName,
+			String helper, String desc) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		invokeHelper(ctx, className, helper, desc);
+	}
+
+	// Compiles the keyword's value expression, or pushes null (nil) when the keyword is
+	// absent.
+	private static void compileKeywordValueOrNull(@Nullable LispVal value, JvmLispCompiler.Ctx ctx, String className) {
+		if (value != null) {
+			JvmExprCompiler.compileExpr(value, ctx, className);
 		}
 		else {
 			ctx.emit(Opcode.ACONST_NULL);
 		}
-		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 	}
 
 	static void compileAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -138,9 +220,9 @@ final class JvmArrayCompiler {
 		}
 	}
 
-	private static @Nullable LispVal findInitialElement(List<LispVal> args) {
+	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {
 		for (int i = 2; i + 1 < args.size(); i += 2) {
-			if (args.get(i) instanceof LispSymbol kw && LispNames.INITIAL_ELEMENT_KEYWORD.equals(kw.name())) {
+			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
 				return args.get(i + 1);
 			}
 		}

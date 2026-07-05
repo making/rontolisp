@@ -4883,6 +4883,136 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileFillPointerLengthAndAccessors() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :fill-pointer 2 :initial-element 0))
+				(print (list (length *v*) (fill-pointer *v*) (array-has-fill-pointer-p *v*) (adjustable-array-p *v*)))
+				""")).isEqualTo("(2 2 t nil)");
+	}
+
+	@Test
+	void compileFillPointerVectorPrintsUpToFillPointer() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((v (make-array 5 :fill-pointer 3 :initial-element 9)))
+				  (print v))
+				""")).isEqualTo("#(9 9 9)");
+	}
+
+	@Test
+	void compileFillPointerTIsTheVectorSize() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 4 :fill-pointer t :initial-element 1))
+				(print (list (length *v*) (fill-pointer *v*)))
+				""")).isEqualTo("(4 4)");
+	}
+
+	@Test
+	void compileVectorPushStoresAndReturnsIndexOrNil() throws Exception {
+		// Each push is sequenced through a top-level defparameter: the compilers
+		// evaluate list argument forms right-to-left (.todo/14), so side-effecting
+		// forms must not share one list form.
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :fill-pointer 0))
+				(defparameter *a* (vector-push 10 *v*))
+				(defparameter *b* (vector-push 20 *v*))
+				(defparameter *c* (vector-push 30 *v*))
+				(defparameter *d* (vector-push 40 *v*))
+				(print (list *a* *b* *c* *d*))
+				""")).isEqualTo("(0 1 2 nil)");
+	}
+
+	@Test
+	void compileVectorPushThenReadBack() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :fill-pointer 0))
+				(vector-push 10 *v*)
+				(vector-push 20 *v*)
+				(print (list (length *v*) (aref *v* 0) (aref *v* 1)))
+				""")).isEqualTo("(2 10 20)");
+	}
+
+	@Test
+	void compileVectorPop() throws Exception {
+		// The pop is sequenced before the length read (.todo/14: right-to-left
+		// argument evaluation on the compile path).
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :fill-pointer 3 :initial-element 0))
+				(setf (aref *v* 2) 99)
+				(defparameter *p* (vector-pop *v*))
+				(print (list *p* (length *v*)))
+				""")).isEqualTo("(99 2)");
+	}
+
+	@Test
+	void compileVectorPushExtendGrowsBeyondCapacity() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 2 :fill-pointer 0 :adjustable t))
+				(vector-push-extend 1 *v*)
+				(vector-push-extend 2 *v*)
+				(vector-push-extend 3 *v*)
+				(print (list (length *v*) (adjustable-array-p *v*) (aref *v* 2)))
+				""")).isEqualTo("(3 t 3)");
+	}
+
+	@Test
+	void compileSetfFillPointer() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))
+				(setf (fill-pointer *v*) 2)
+				(print (list (length *v*) (fill-pointer *v*)))
+				""")).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void compileSimpleVectorHasNoFillPointer() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :initial-element 0))
+				(print (list (array-has-fill-pointer-p *v*) (adjustable-array-p *v*) (array-element-type *v*)))
+				""")).isEqualTo("(nil nil t)");
+	}
+
+	@Test
+	void compileFillPointerFirstClassWrappers() throws Exception {
+		// The fill-pointer read is sequenced before the mutating pop (.todo/14).
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :fill-pointer 0))
+				(funcall #'vector-push 5 *v*)
+				(defparameter *fp* (funcall #'fill-pointer *v*))
+				(defparameter *popped* (funcall #'vector-pop *v*))
+				(print (list *fp* *popped* (funcall #'array-has-fill-pointer-p *v*)))
+				""")).isEqualTo("(1 5 t)");
+	}
+
+	@Test
+	void compileClUtilitiesCopyArray() throws Exception {
+		// The cl-utilities copy-array definition verbatim (todo 71 headline) on the
+		// WASM backend: array-element-type, make-array :adjustable/:fill-pointer,
+		// array-has-fill-pointer-p, fill-pointer, adjustable-array-p, array-total-size
+		// and row-major-aref cooperating.
+		assertThat(compileAndRun("""
+				(defun copy-array (array &key
+				                   (element-type (array-element-type array))
+				                   (fill-pointer (and (array-has-fill-pointer-p array)
+				                                      (fill-pointer array)))
+				                   (adjustable (adjustable-array-p array)))
+				  (let* ((dimensions (array-dimensions array))
+				         (new-array (make-array dimensions
+				                                :element-type element-type
+				                                :adjustable adjustable
+				                                :fill-pointer fill-pointer)))
+				    (dotimes (i (array-total-size array))
+				      (setf (row-major-aref new-array i)
+				            (row-major-aref array i)))
+				    new-array))
+				(defparameter *v* (make-array 4 :fill-pointer 3 :adjustable t :initial-element 5))
+				(setf (aref *v* 1) 8)
+				(defparameter *c* (copy-array *v*))
+				(setf (aref *c* 0) 99)
+				(print (list *c* *v* (fill-pointer *c*) (adjustable-array-p *c*)))
+				""")).isEqualTo("(#(99 8 5) #(5 8 5) 3 t)");
+	}
+
+	@Test
 	void vectorSvrefCoerceAndArrayIntrospectionWork() throws Exception {
 		assertThat(compileAndRun("""
 				(print (vector 1 2 3))

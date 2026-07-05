@@ -223,6 +223,13 @@ categories:
       - { slug: array-rank, name: "array-rank" }
       - { slug: array-total-size, name: "array-total-size" }
       - { slug: coerce, name: "coerce" }
+      - { slug: fill-pointer, name: "fill-pointer" }
+      - { slug: array-has-fill-pointer-p, name: "array-has-fill-pointer-p" }
+      - { slug: adjustable-array-p, name: "adjustable-array-p" }
+      - { slug: array-element-type, name: "array-element-type" }
+      - { slug: vector-push, name: "vector-push" }
+      - { slug: vector-pop, name: "vector-pop" }
+      - { slug: vector-push-extend, name: "vector-push-extend" }
   - title: "Reader & Evaluation"
     functions:
       - { slug: read, name: "read" }

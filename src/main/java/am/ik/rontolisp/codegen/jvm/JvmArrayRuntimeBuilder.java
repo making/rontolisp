@@ -11,8 +11,11 @@ import am.ik.jvm.Opcode;
 
 /**
  * Builds the JVM bytecode for the array runtime helpers. An array is represented at
- * runtime as a {@code java.util.ArrayList}: slot 0 holds the dimension sizes (an
- * {@code Object[]} of boxed {@code Long}s, length = rank) and slots {@code 1..} hold the
+ * runtime as a {@code java.util.ArrayList}: slot 0 holds a fixed 3-element header
+ * {@code Object[]{dims, fillPointer, adjustable}} -- {@code dims} is an {@code Object[]}
+ * of boxed {@code Long} dimension sizes (length = rank), {@code fillPointer} is a
+ * {@code Long} or {@code null} when the array has none, and {@code adjustable} is the raw
+ * {@code :adjustable} argument ({@code null} = nil) -- and slots {@code 1..} hold the
  * row-major data. Any rank {@code >= 1} is supported: the flat index is the Horner fold
  * over the subscripts, so a rank-2 element {@code (i, j)} lives at list index
  * {@code 1 + i * cols + j} and a rank-1 element {@code (i)} at {@code 1 + i}.
@@ -20,11 +23,17 @@ import am.ik.jvm.Opcode;
  * <p>
  * The generated static helpers (gated on the program actually using arrays):
  * <ul>
- * <li>{@code _arrayMake(dims, init)} -&gt; a fresh ArrayList</li>
+ * <li>{@code _arrayMake(dims, init, fillPointer, adjustable)} -&gt; a fresh
+ * ArrayList</li>
  * <li>{@code _aref1(arr, i)} / {@code _aref2(arr, i, j)} / {@code _arefN(arr, subs)}
  * -&gt; the stored element</li>
  * <li>{@code _aset1(arr, i, val)} / {@code _aset2(arr, i, j, val)} /
  * {@code _asetN(arr, subs, val)} -&gt; the value</li>
+ * <li>{@code _fillPointer} / {@code _setFillPointer} / {@code _arrayHasFillPointer} /
+ * {@code _adjustableArrayP} / {@code _vectorPush} / {@code _vectorPop} /
+ * {@code _vectorPushExtend} -&gt; the fill-pointer surface (the fill pointer, when
+ * present, is the effective length for {@code length} and printing; {@code aref} still
+ * reaches the full backing store)</li>
  * </ul>
  * The {@code N} variants take the subscripts packaged into an {@code Object[]} and are
  * used by rank-3+ call sites; ranks 1 and 2 keep their dedicated fast helpers.
@@ -33,7 +42,7 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String MAKE = "_arrayMake";
 
-	static final String MAKE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+	static final String MAKE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String AREF1 = "_aref1";
 
@@ -69,6 +78,34 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String TO_STRING_DESC = "(Ljava/lang/Object;)Ljava/lang/String;";
 
+	static final String FILL_POINTER = "_fillPointer";
+
+	static final String FILL_POINTER_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String SET_FILL_POINTER = "_setFillPointer";
+
+	static final String SET_FILL_POINTER_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String HAS_FILL_POINTER = "_arrayHasFillPointer";
+
+	static final String HAS_FILL_POINTER_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String ADJUSTABLE_ARRAY_P = "_adjustableArrayP";
+
+	static final String ADJUSTABLE_ARRAY_P_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String VECTOR_PUSH = "_vectorPush";
+
+	static final String VECTOR_PUSH_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String VECTOR_POP = "_vectorPop";
+
+	static final String VECTOR_POP_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String VECTOR_PUSH_EXTEND = "_vectorPushExtend";
+
+	static final String VECTOR_PUSH_EXTEND_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 	}
@@ -89,15 +126,24 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(ILjava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant longIntValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
+		MethodrefConstant longValueOf = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
+		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
 		List<ArrayMethod> methods = new ArrayList<>();
 
-		// _arrayMake(dims, init):
-		// list = new ArrayList(); build the Object[] dimension header and the total
+		// _arrayMake(dims, init, fp, adj):
+		// list = new ArrayList(); build the Object[] dimension sizes and the total
 		// element count from dims (a Long for the rank-1 shorthand, otherwise a cons
-		// list of Longs); list.add(dimsArr); repeat total times: list.add(init).
+		// list of Longs); wrap them with the fill pointer and the adjustable flag into
+		// the 3-element slot-0 header; repeat total times: list.add(init).
 		JvmAsm m = new JvmAsm();
-		int dims = 0, init = 1, list = 2, total = 3, dimsArr = 4, idx = 5, cur = 6, n = 7;
+		int dims = 0, init = 1, fp = 2, adj = 3, list = 4, total = 5, dimsArr = 6, idx = 7, cur = 8, n = 9, fpVal = 10,
+				v = 11;
 		m.anew(arrayListClass);
 		m.dup();
 		m.invokespecial(alInit);
@@ -180,10 +226,66 @@ final class JvmArrayRuntimeBuilder {
 		m.astore(cur);
 		m.iinc(idx, 1);
 		m.branch(Opcode.GOTO, fillLoop);
-		// afterDims: list.add(dimsArr); fill init total times
+		// afterDims: resolve the fill pointer (null = none; a Long = that value,
+		// range-checked; anything else, i.e. t, = the vector size), requiring rank 1.
 		m.bind(afterDims);
-		m.aload(list);
+		m.aconstNull();
+		m.astore(fpVal);
+		int afterFp = m.label();
+		m.aload(fp);
+		m.branch(Opcode.IFNULL, afterFp);
+		int rankOk = m.label();
 		m.aload(dimsArr);
+		m.arraylength();
+		m.iconst(1);
+		m.branch(Opcode.IF_ICMPEQ, rankOk);
+		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer requires a rank-1 array"));
+		m.bind(rankOk);
+		int fpIsT = m.label();
+		m.aload(fp);
+		m.instanceOf(longClass);
+		m.branch(Opcode.IFEQ, fpIsT);
+		m.aload(fp);
+		m.checkcast(longClass);
+		m.invokevirtual(longIntValue);
+		m.istore(v);
+		int fpBad = m.label();
+		int fpLongOk = m.label();
+		m.iload(v);
+		m.branch(Opcode.IFLT, fpBad);
+		m.iload(v);
+		m.iload(total);
+		m.branch(Opcode.IF_ICMPGT, fpBad);
+		m.branch(Opcode.GOTO, fpLongOk);
+		m.bind(fpBad);
+		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer out of range"));
+		m.bind(fpLongOk);
+		m.aload(fp);
+		m.astore(fpVal);
+		m.branch(Opcode.GOTO, afterFp);
+		// :fill-pointer t -> the vector size (dimsArr[0] is already the boxed Long)
+		m.bind(fpIsT);
+		m.aload(dimsArr);
+		m.iconst(0);
+		m.aaload();
+		m.astore(fpVal);
+		// list.add(new Object[]{dimsArr, fpVal, adj}); fill init total times
+		m.bind(afterFp);
+		m.aload(list);
+		m.iconst(3);
+		m.anewarray(objectClass);
+		m.dup();
+		m.iconst(0);
+		m.aload(dimsArr);
+		m.aastore();
+		m.dup();
+		m.iconst(1);
+		m.aload(fpVal);
+		m.aastore();
+		m.dup();
+		m.iconst(2);
+		m.aload(adj);
+		m.aastore();
 		m.invokevirtual(alAdd);
 		m.pop();
 		m.iconst(0);
@@ -203,7 +305,7 @@ final class JvmArrayRuntimeBuilder {
 		m.bind(end);
 		m.aload(list);
 		m.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 8, m.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 12, m.finish()));
 
 		// _aref1(arr, i): return ((ArrayList) arr).get(1 + ((Long) i).intValue())
 		JvmAsm a1 = new JvmAsm();
@@ -246,14 +348,18 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), 4, 3, s1.finish()));
 
 		// _arrayDims(arr): the dimension sizes as a fresh cons list, built backwards
-		// over the Object[] header (the sizes are already boxed Longs). A cons is an
-		// Object[]{car, cdr} and nil is null, matching the compiled cons representation.
+		// over the dims Object[] in the slot-0 header (the sizes are already boxed
+		// Longs). A cons is an Object[]{car, cdr} and nil is null, matching the compiled
+		// cons representation.
 		JvmAsm d = new JvmAsm();
 		int dArr = 0, dDims = 1, dResult = 2, dJ = 3;
 		d.aload(dArr);
 		d.checkcast(arrayListClass);
 		d.iconst(0);
 		d.invokevirtual(alGet);
+		d.checkcast(objectArrayClass);
+		d.iconst(0);
+		d.aaload();
 		d.checkcast(objectArrayClass);
 		d.astore(dDims);
 		d.aconstNull();
@@ -330,7 +436,287 @@ final class JvmArrayRuntimeBuilder {
 		sn.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(ASETN_DESC), 4, 7, sn.finish()));
 
+		// _fillPointer(arr): the fill pointer (a Long), or an error when the array has
+		// none. Locals: 0 = arr, 1 = header.
+		JvmAsm fpm = new JvmAsm();
+		emitLoadHeader(fpm, arrayListClass, objectArrayClass, alGet, 0);
+		fpm.astore(1);
+		int fpPresent = fpm.label();
+		fpm.aload(1);
+		fpm.iconst(1);
+		fpm.aaload();
+		fpm.branch(Opcode.IFNONNULL, fpPresent);
+		emitThrow(fpm, rtExClass, rtExInit, cp.addString("fill-pointer: array has no fill pointer"));
+		fpm.bind(fpPresent);
+		fpm.aload(1);
+		fpm.iconst(1);
+		fpm.aaload();
+		fpm.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(FILL_POINTER), cp.addUtf8(FILL_POINTER_DESC), 3, 2, fpm.finish()));
+
+		// _setFillPointer(arr, value): range-checked fill-pointer store; returns value.
+		// Locals: 0 = arr, 1 = value, 2 = header, 3 = v (int), 4 = cap (int).
+		JvmAsm sfp = new JvmAsm();
+		emitLoadHeader(sfp, arrayListClass, objectArrayClass, alGet, 0);
+		sfp.astore(2);
+		int sfpPresent = sfp.label();
+		sfp.aload(2);
+		sfp.iconst(1);
+		sfp.aaload();
+		sfp.branch(Opcode.IFNONNULL, sfpPresent);
+		emitThrow(sfp, rtExClass, rtExInit, cp.addString("%set-fill-pointer: array has no fill pointer"));
+		sfp.bind(sfpPresent);
+		sfp.aload(1);
+		sfp.checkcast(longClass);
+		sfp.invokevirtual(longIntValue);
+		sfp.istore(3);
+		emitLoadDim0(sfp, longClass, objectArrayClass, longIntValue, 2);
+		sfp.istore(4);
+		int sfpBad = sfp.label();
+		int sfpOk = sfp.label();
+		sfp.iload(3);
+		sfp.branch(Opcode.IFLT, sfpBad);
+		sfp.iload(3);
+		sfp.iload(4);
+		sfp.branch(Opcode.IF_ICMPGT, sfpBad);
+		sfp.branch(Opcode.GOTO, sfpOk);
+		sfp.bind(sfpBad);
+		emitThrow(sfp, rtExClass, rtExInit, cp.addString("%set-fill-pointer: fill pointer out of range"));
+		sfp.bind(sfpOk);
+		sfp.aload(2);
+		sfp.iconst(1);
+		sfp.aload(1);
+		sfp.aastore();
+		sfp.aload(1);
+		sfp.areturn();
+		methods
+			.add(new ArrayMethod(cp.addUtf8(SET_FILL_POINTER), cp.addUtf8(SET_FILL_POINTER_DESC), 3, 5, sfp.finish()));
+
+		// _arrayHasFillPointer(arr): "t" when the header carries a fill pointer, else
+		// nil (null). Locals: 0 = arr.
+		JvmAsm hfp = new JvmAsm();
+		emitHeaderSlotToBool(hfp, arrayListClass, objectArrayClass, alGet, cp, 1);
+		methods
+			.add(new ArrayMethod(cp.addUtf8(HAS_FILL_POINTER), cp.addUtf8(HAS_FILL_POINTER_DESC), 3, 1, hfp.finish()));
+
+		// _adjustableArrayP(arr): "t" when the array was created :adjustable (the raw
+		// truthy argument is stored verbatim), else nil. Locals: 0 = arr.
+		JvmAsm adp = new JvmAsm();
+		emitHeaderSlotToBool(adp, arrayListClass, objectArrayClass, alGet, cp, 2);
+		methods.add(new ArrayMethod(cp.addUtf8(ADJUSTABLE_ARRAY_P), cp.addUtf8(ADJUSTABLE_ARRAY_P_DESC), 3, 1,
+				adp.finish()));
+
+		// _vectorPush(val, arr): store val at the fill pointer and return the index used
+		// (a Long), or nil (null) when the vector is full. Locals: 0 = val, 1 = arr,
+		// 2 = header, 3 = fp (int), 4 = cap (int).
+		JvmAsm vp = new JvmAsm();
+		emitLoadHeader(vp, arrayListClass, objectArrayClass, alGet, 1);
+		vp.astore(2);
+		emitRequireFillPointer(vp, longClass, longIntValue, rtExClass, rtExInit,
+				cp.addString("vector-push: vector has no fill pointer"), 2);
+		vp.istore(3);
+		emitLoadDim0(vp, longClass, objectArrayClass, longIntValue, 2);
+		vp.istore(4);
+		int vpStore = vp.label();
+		vp.iload(3);
+		vp.iload(4);
+		vp.branch(Opcode.IF_ICMPLT, vpStore);
+		vp.aconstNull();
+		vp.areturn();
+		vp.bind(vpStore);
+		emitStoreAtFillPointerAndAdvance(vp, arrayListClass, longClass, alSet, longValueOf, 0, 1, 2, 3);
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH), cp.addUtf8(VECTOR_PUSH_DESC), 6, 5, vp.finish()));
+
+		// _vectorPop(arr): decrement the fill pointer and return the element it passed.
+		// Locals: 0 = arr, 1 = header, 2 = fp (int).
+		JvmAsm vpop = new JvmAsm();
+		emitLoadHeader(vpop, arrayListClass, objectArrayClass, alGet, 0);
+		vpop.astore(1);
+		emitRequireFillPointer(vpop, longClass, longIntValue, rtExClass, rtExInit,
+				cp.addString("vector-pop: vector has no fill pointer"), 1);
+		vpop.istore(2);
+		int vpopOk = vpop.label();
+		vpop.iload(2);
+		vpop.branch(Opcode.IFNE, vpopOk);
+		emitThrow(vpop, rtExClass, rtExInit, cp.addString("vector-pop: empty vector"));
+		vpop.bind(vpopOk);
+		vpop.aload(1);
+		vpop.iconst(1);
+		vpop.iload(2);
+		vpop.iconst(1);
+		vpop.op(Opcode.ISUB);
+		vpop.op(Opcode.I2L);
+		vpop.invokestatic(longValueOf);
+		vpop.aastore();
+		// list.get(1 + (fp - 1)) == list.get(fp)
+		vpop.aload(0);
+		vpop.checkcast(arrayListClass);
+		vpop.iload(2);
+		vpop.invokevirtual(alGet);
+		vpop.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_POP), cp.addUtf8(VECTOR_POP_DESC), 6, 3, vpop.finish()));
+
+		// _vectorPushExtend(val, arr, ext): like _vectorPush but grows the backing store
+		// (by at least ext elements, minimum 1) when the vector is full, updating the
+		// stored dimension size. Locals: 0 = val, 1 = arr, 2 = ext, 3 = header,
+		// 4 = fp (int), 5 = cap (int), 6 = grow (int), 7 = newCap (int).
+		JvmAsm vpe = new JvmAsm();
+		emitLoadHeader(vpe, arrayListClass, objectArrayClass, alGet, 1);
+		vpe.astore(3);
+		emitRequireFillPointer(vpe, longClass, longIntValue, rtExClass, rtExInit,
+				cp.addString("vector-push-extend: vector has no fill pointer"), 3);
+		vpe.istore(4);
+		emitLoadDim0(vpe, longClass, objectArrayClass, longIntValue, 3);
+		vpe.istore(5);
+		int vpeStore = vpe.label();
+		vpe.iload(4);
+		vpe.iload(5);
+		vpe.branch(Opcode.IF_ICMPLT, vpeStore);
+		// grow = max(((Long) ext).intValue(), 1); newCap = cap + grow
+		vpe.aload(2);
+		vpe.checkcast(longClass);
+		vpe.invokevirtual(longIntValue);
+		vpe.istore(6);
+		int growOk = vpe.label();
+		vpe.iload(6);
+		vpe.iconst(1);
+		vpe.branch(Opcode.IF_ICMPGE, growOk);
+		vpe.iconst(1);
+		vpe.istore(6);
+		vpe.bind(growOk);
+		vpe.iload(5);
+		vpe.iload(6);
+		vpe.op(Opcode.IADD);
+		vpe.istore(7);
+		// while (list.size() - 1 < newCap) list.add(null) -- grown slots read as nil
+		int growLoop = vpe.label();
+		int growDone = vpe.label();
+		vpe.bind(growLoop);
+		vpe.aload(1);
+		vpe.checkcast(arrayListClass);
+		vpe.invokevirtual(alSize);
+		vpe.iconst(1);
+		vpe.op(Opcode.ISUB);
+		vpe.iload(7);
+		vpe.branch(Opcode.IF_ICMPGE, growDone);
+		vpe.aload(1);
+		vpe.checkcast(arrayListClass);
+		vpe.aconstNull();
+		vpe.invokevirtual(alAdd);
+		vpe.pop();
+		vpe.branch(Opcode.GOTO, growLoop);
+		vpe.bind(growDone);
+		// dims[0] = Long.valueOf(newCap)
+		vpe.aload(3);
+		vpe.iconst(0);
+		vpe.aaload();
+		vpe.checkcast(objectArrayClass);
+		vpe.iconst(0);
+		vpe.iload(7);
+		vpe.op(Opcode.I2L);
+		vpe.invokestatic(longValueOf);
+		vpe.aastore();
+		vpe.bind(vpeStore);
+		emitStoreAtFillPointerAndAdvance(vpe, arrayListClass, longClass, alSet, longValueOf, 0, 1, 3, 4);
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), 6, 8,
+				vpe.finish()));
+
 		return methods;
+	}
+
+	// Pushes the slot-0 header Object[] of the array in arrSlot.
+	private static void emitLoadHeader(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
+			MethodrefConstant alGet, int arrSlot) {
+		a.aload(arrSlot);
+		a.checkcast(arrayListClass);
+		a.iconst(0);
+		a.invokevirtual(alGet);
+		a.checkcast(objectArrayClass);
+	}
+
+	// Pushes the int first dimension size of the header in headerSlot.
+	private static void emitLoadDim0(JvmAsm a, ClassConstant longClass, ClassConstant objectArrayClass,
+			MethodrefConstant longIntValue, int headerSlot) {
+		a.aload(headerSlot);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+	}
+
+	// Emits a full helper body returning "t" when header[slot] of the array in local 0
+	// is non-null, else null (nil).
+	private static void emitHeaderSlotToBool(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
+			MethodrefConstant alGet, ConstantPool cp, int slot) {
+		emitLoadHeader(a, arrayListClass, objectArrayClass, alGet, 0);
+		a.iconst(slot);
+		a.aaload();
+		int isNil = a.label();
+		a.branch(Opcode.IFNULL, isNil);
+		a.ldcString(cp.addString("t"));
+		a.areturn();
+		a.bind(isNil);
+		a.aconstNull();
+		a.areturn();
+	}
+
+	// Requires a fill pointer on the header in headerSlot (throws with message when
+	// absent) and pushes its int value.
+	private static void emitRequireFillPointer(JvmAsm a, ClassConstant longClass, MethodrefConstant longIntValue,
+			ClassConstant rtExClass, MethodrefConstant rtExInit, am.ik.jvm.ConstantPool.StringConstant message,
+			int headerSlot) {
+		int present = a.label();
+		a.aload(headerSlot);
+		a.iconst(1);
+		a.aaload();
+		a.branch(Opcode.IFNONNULL, present);
+		emitThrow(a, rtExClass, rtExInit, message);
+		a.bind(present);
+		a.aload(headerSlot);
+		a.iconst(1);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+	}
+
+	// new RuntimeException(message); athrow.
+	private static void emitThrow(JvmAsm a, ClassConstant rtExClass, MethodrefConstant rtExInit,
+			am.ik.jvm.ConstantPool.StringConstant message) {
+		a.anew(rtExClass);
+		a.dup();
+		a.ldcString(message);
+		a.invokespecial(rtExInit);
+		a.op(Opcode.ATHROW);
+	}
+
+	// Stores val at the fill pointer of the array in arrSlot (data index 1 + fp),
+	// advances the stored fill pointer and returns Long.valueOf(fp).
+	private static void emitStoreAtFillPointerAndAdvance(JvmAsm a, ClassConstant arrayListClass,
+			ClassConstant longClass, MethodrefConstant alSet, MethodrefConstant longValueOf, int valSlot, int arrSlot,
+			int headerSlot, int fpSlot) {
+		a.aload(arrSlot);
+		a.checkcast(arrayListClass);
+		a.iconst(1);
+		a.iload(fpSlot);
+		a.op(Opcode.IADD);
+		a.aload(valSlot);
+		a.invokevirtual(alSet);
+		a.pop();
+		a.aload(headerSlot);
+		a.iconst(1);
+		a.iload(fpSlot);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.op(Opcode.I2L);
+		a.invokestatic(longValueOf);
+		a.aastore();
+		a.iload(fpSlot);
+		a.op(Opcode.I2L);
+		a.invokestatic(longValueOf);
+		a.areturn();
 	}
 
 	/**
@@ -368,10 +754,10 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
 
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 5, 10,
+		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 5, 11,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
 						sbAppend, sbToString, stringValueOfInt, lispToString)));
-		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 5, 10,
+		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 5, 11,
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
 						sbAppend, sbToString, stringValueOfInt, lispToDisplayString)));
 		return methods;
@@ -380,27 +766,50 @@ final class JvmArrayRuntimeBuilder {
 	// Emits one array-printing helper implementing the readable #(...) / #nA(...)
 	// syntax: a nested group paren opens where the flat index k is a multiple of that
 	// dimension's stride (the product of the trailing dimension sizes) and closes where
-	// k + 1 is. Locals: 0=arr, 1=list, 2=sb, 3=n (element count), 4=dims (Object[]),
-	// 5=k, 6=j (dimension), 7=stride, 8=m (stride scratch), 9=rank.
+	// k + 1 is. The element count clamps to the fill pointer when the header carries
+	// one, so a fill-pointer vector prints only up to it. Locals: 0=arr, 1=list, 2=sb,
+	// 3=n (element count), 4=dims (Object[]), 5=k, 6=j (dimension), 7=stride,
+	// 8=m (stride scratch), 9=rank, 10=header (Object[]).
 	private static List<Integer> buildToString(ConstantPool cp, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant alSize,
 			MethodrefConstant longIntValue, MethodrefConstant sbInit, MethodrefConstant sbAppend,
 			MethodrefConstant sbToString, MethodrefConstant stringValueOfInt, MethodrefConstant elementFormat) {
-		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9;
+		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9, header = 10;
 		JvmAsm a = new JvmAsm();
-		// list = (ArrayList) arr; n = list.size() - 1
+		// list = (ArrayList) arr; header = (Object[]) list.get(0)
 		a.aload(arr);
 		a.checkcast(arrayListClass);
 		a.astore(list);
+		a.aload(list);
+		a.iconst(0);
+		a.invokevirtual(alGet);
+		a.checkcast(objectArrayClass);
+		a.astore(header);
+		// n = header[1] != null ? fill pointer : list.size() - 1
+		int useSize = a.label();
+		int afterN = a.label();
+		a.aload(header);
+		a.iconst(1);
+		a.aaload();
+		a.branch(Opcode.IFNULL, useSize);
+		a.aload(header);
+		a.iconst(1);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(n);
+		a.branch(Opcode.GOTO, afterN);
+		a.bind(useSize);
 		a.aload(list);
 		a.invokevirtual(alSize);
 		a.iconst(1);
 		a.op(Opcode.ISUB);
 		a.istore(n);
-		// dims = (Object[]) list.get(0); rank = dims.length
-		a.aload(list);
+		a.bind(afterN);
+		// dims = (Object[]) header[0]; rank = dims.length
+		a.aload(header);
 		a.iconst(0);
-		a.invokevirtual(alGet);
+		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.astore(dimsArr);
 		a.aload(dimsArr);
@@ -555,11 +964,14 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(1);
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
-		// cols = ((Long) ((Object[]) list.get(0))[1]).intValue()
+		// cols = ((Long) ((Object[]) ((Object[]) list.get(0))[0])[1]).intValue()
 		a.aload(0);
 		a.checkcast(arrayListClass);
 		a.iconst(0);
 		a.invokevirtual(get);
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.iconst(1);
 		a.aaload();
@@ -579,11 +991,14 @@ final class JvmArrayRuntimeBuilder {
 	private static void emitFlatN(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue, int subs, int flat,
 			int kSlot, int nSlot, int dimsSlot) {
-		// dims = (Object[]) ((ArrayList) arr).get(0)
+		// dims = (Object[]) ((Object[]) ((ArrayList) arr).get(0))[0]
 		a.aload(0);
 		a.checkcast(arrayListClass);
 		a.iconst(0);
 		a.invokevirtual(get);
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.astore(dimsSlot);
 		// subs = (Object[]) subs (re-store the checked cast); n = subs.length
