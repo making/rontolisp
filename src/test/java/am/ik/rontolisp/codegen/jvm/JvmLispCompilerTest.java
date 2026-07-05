@@ -104,6 +104,34 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}
 
+	// print / prin1 / princ return their argument (CL semantics), so the value can be
+	// used in a surrounding form -- not nil.
+	@Test
+	void compileAndRunPrintReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(print (print 11))")).isEqualTo("11\n11");
+	}
+
+	@Test
+	void compileAndRunPrin1ReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(prin1 (prin1 11))")).isEqualTo("1111");
+	}
+
+	@Test
+	void compileAndRunPrincReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(princ (princ 11))")).isEqualTo("1111");
+	}
+
+	@Test
+	void compileAndRunPrintReturnValueThroughLet() throws Exception {
+		assertThat(compileAndRun("(let ((x (print 11))) (let ((a x)) (print a)))")).isEqualTo("11\n11");
+	}
+
+	@Test
+	void compileAndRunPrintToStringStreamReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(let ((v nil)) (with-output-to-string (s) (setq v (print 11 s))) (print v))"))
+			.isEqualTo("11");
+	}
+
 	// defmacro is handled by the compile-path pass (eval.UserMacroExpander, run by the
 	// CLI before this compiler), which consumes the definitions and fully expands every
 	// call site -- the compiler itself never sees a macro form.

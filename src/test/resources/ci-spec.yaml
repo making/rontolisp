@@ -724,6 +724,21 @@ cases:
       hello
       (1 hello 3)
       12
+  - name: print-family-returns-its-argument
+    source: |
+      (print (print 11))
+      (prin1 (prin1 22))
+      (terpri)
+      (princ (princ 33))
+      (terpri)
+      (let ((x (print 44))) (print x))
+    expected: |
+      11
+      11
+      2222
+      3333
+      44
+      44
   - name: eval-interpreter-jvm-and-wasm-share-the
     source: |
       (print (eval '(+ 1 2)))

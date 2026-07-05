@@ -17,17 +17,30 @@ final class JvmPrincCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		// princ returns its argument (CL semantics); stash the object so it can be left
+		// on
+		// the stack after printing, not nil.
+		int objSlot = ctx.allocTemp();
 		if (args.size() > 2) {
 			// (princ value stream): render, then route through _writeStr.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(objSlot);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(objSlot);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.lispToDisplayString.index());
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmStringStreamCompiler.emitWriteStr(ctx, className);
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(objSlot);
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(objSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(objSlot);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ctx.lispToDisplayString.index());
 		int slot = ctx.allocTemp();
@@ -40,7 +53,8 @@ final class JvmPrincCompiler {
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(ctx.printStr.index());
 		JvmFreshLineCompiler.emitTrackLocal(ctx, className, slot);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(objSlot);
 	}
 
 }

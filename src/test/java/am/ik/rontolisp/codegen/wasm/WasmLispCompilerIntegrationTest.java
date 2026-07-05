@@ -1526,6 +1526,34 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(prin1 1) (princ 2) (terpri)")).isEqualTo("12");
 	}
 
+	// print / prin1 / princ return their argument (CL semantics), so the value is usable
+	// in a surrounding form -- not nil.
+	@Test
+	void printReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(print (print 11))")).isEqualTo("11\n11");
+	}
+
+	@Test
+	void prin1ReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(prin1 (prin1 11))")).isEqualTo("1111");
+	}
+
+	@Test
+	void princReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(princ (princ 11))")).isEqualTo("1111");
+	}
+
+	@Test
+	void printReturnValueThroughLet() throws Exception {
+		assertThat(compileAndRun("(let ((x (print 11))) (let ((a x)) (print a)))")).isEqualTo("11\n11");
+	}
+
+	@Test
+	void printToStringStreamReturnsArgument() throws Exception {
+		assertThat(compileAndRun("(let ((v nil)) (with-output-to-string (s) (setq v (print 11 s))) (print v))"))
+			.isEqualTo("11");
+	}
+
 	@Test
 	void format() throws Exception {
 		assertThat(compileAndRun("(format t \"Hello ~a, you are ~d! ~s~%\" 'world 42 \"str\")"))

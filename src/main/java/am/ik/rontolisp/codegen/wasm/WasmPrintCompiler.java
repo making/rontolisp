@@ -5,7 +5,6 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
-import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code print} built-in function.
@@ -17,10 +16,15 @@ final class WasmPrintCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		// print returns its argument (CL semantics); stash the object in a temp so it can
+		// be returned after printing, not nil.
+		int objSlot = ctx.allocTemp();
 		if (args.size() > 2) {
 			// (print value stream): render to a string, route it and a newline via
 			// _write_stream_str (the stream is evaluated once into a temp).
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writer.writeSignedLeb128(objSlot);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 			int streamSlot = ctx.allocTemp();
@@ -36,11 +40,13 @@ final class WasmPrintCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 			ctx.writer.write(Instruction.DROP);
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(objSlot);
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeSignedLeb128(objSlot);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_VAL);
 		// Write newline
@@ -50,9 +56,9 @@ final class WasmPrintCompiler {
 		ctx.writer.writeSignedLeb128(ctx.stringTable.newline.length());
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		// Return nil
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
+		// Return the argument
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(objSlot);
 	}
 
 }
