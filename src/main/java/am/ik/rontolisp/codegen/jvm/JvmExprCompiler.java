@@ -430,14 +430,23 @@ final class JvmExprCompiler {
 				case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
 				case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);
 				case LispNames.REDUCE -> {
-					// A string sequence folds over a list of its characters; the wrapper
-					// is null when the call is already the inner list fold.
-					LispVal wrappedReduce = LispMacroExpander.wrapReduceForStringSeq(cons);
-					if (wrappedReduce != null) {
-						JvmExprCompiler.compileExpr(wrappedReduce, ctx, className);
+					// :from-end/:key lower to a plain reduce first; then a string
+					// sequence
+					// folds over a list of its characters (the wrapper is null when the
+					// call
+					// is already the inner list fold).
+					LispVal loweredReduce = LispMacroExpander.expandReduce(cons);
+					if (loweredReduce != null) {
+						JvmExprCompiler.compileExpr(loweredReduce, ctx, className);
 					}
 					else {
-						JvmReduceCompiler.compile(cons, ctx, className);
+						LispVal wrappedReduce = LispMacroExpander.wrapReduceForStringSeq(cons);
+						if (wrappedReduce != null) {
+							JvmExprCompiler.compileExpr(wrappedReduce, ctx, className);
+						}
+						else {
+							JvmReduceCompiler.compile(cons, ctx, className);
+						}
 					}
 				}
 				case LispNames.SORT -> {

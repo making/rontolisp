@@ -1069,6 +1069,15 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandNotany(cons), env);
 				case LispNames.NOTEVERY:
 					return eval(LispMacroExpander.expandNotevery(cons), env);
+				case LispNames.REDUCE: {
+					// :from-end/:key lower to a plain reduce; other forms fall through to
+					// the native reduce builtin resolved below.
+					LispVal expandedReduce = LispMacroExpander.expandReduce(cons);
+					if (expandedReduce != null) {
+						return eval(expandedReduce, env);
+					}
+					break;
+				}
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);

@@ -1825,6 +1825,81 @@ public final class LispMacroExpander {
 		return makeLet(SEQ_LIST_VAR, seqAsListForm(parts.get(2)), listToCons(inner));
 	}
 
+	private static final String REDUCE_FN_VAR = "__reduce_fn";
+
+	private static final String REDUCE_A_VAR = "__reduce_a";
+
+	private static final String REDUCE_B_VAR = "__reduce_b";
+
+	/**
+	 * Lowers the extended keyword forms of {@code reduce} -- {@code :from-end} (right
+	 * fold) and {@code :key} (apply a selector to each element before folding) -- into
+	 * the plain 2-arg / {@code :initial-value} builtin that every backend already
+	 * compiles. Returns {@code null} when the call carries neither keyword (so a plain
+	 * {@code (reduce fn seq)} or {@code (reduce fn seq :initial-value i)} falls through
+	 * to the native reduce), which also leaves an unsupported/misplaced keyword to error
+	 * in the native reduce.
+	 *
+	 * <p>
+	 * Common Lisp right fold combines elements from the right with the accumulator on the
+	 * RIGHT: {@code (reduce #'f '(a b c) :from-end t)} = {@code (f a (f b c))} and, with
+	 * an initial value, {@code (f a (f b (f c i)))}. It is realized by reversing the
+	 * (already {@code :key}-mapped) sequence and folding left with an argument-swapping
+	 * wrapper, so the native left fold and the accumulator side stay correct.
+	 * {@code :key} maps each element but NOT the initial value.
+	 * @param cons the reduce expression
+	 * @return the lowered plain-reduce form, or {@code null} when no lowering is needed
+	 */
+	public static @Nullable LispVal expandReduce(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			return null; // arity errors surface in the native reduce
+		}
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
+		LispVal fromEndForm = keywordValue(parts, 3, LispNames.FROM_END_KEYWORD);
+		// Lower whenever :from-end/:key is present at all -- even a nil value must be
+		// stripped, since the native reduce rejects those keywords. A nil value is
+		// treated
+		// as absent (:from-end nil = left fold, :key nil = identity).
+		if (keyForm == null && fromEndForm == null) {
+			return null;
+		}
+		boolean hasKey = keyForm != null && !isNilForm(keyForm);
+		boolean fromEnd = fromEndForm != null && !isNilForm(fromEndForm);
+		LispVal fnForm = parts.get(1);
+		LispVal seqForm = parts.get(2);
+		LispVal initForm = keywordValue(parts, 3, LispNames.INITIAL_VALUE_KEYWORD);
+		// :key maps every element (via mapcar, which leaves the initial value untouched).
+		LispVal seqExpr = hasKey ? listToCons(List.of(new LispSymbol(LispNames.MAPCAR), keyForm, seqForm)) : seqForm;
+		if (!fromEnd) {
+			return buildPlainReduce(fnForm, seqExpr, initForm);
+		}
+		// Right fold: reverse the (mapped) sequence and swap the folding function's args
+		// so
+		// the accumulator stays on the right. Bind the function once to avoid
+		// re-evaluating
+		// the designator expression on every step.
+		LispSymbol fnVar = new LispSymbol(REDUCE_FN_VAR);
+		LispSymbol a = new LispSymbol(REDUCE_A_VAR);
+		LispSymbol b = new LispSymbol(REDUCE_B_VAR);
+		LispVal swapped = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(a, b)),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fnVar, b, a))));
+		LispVal reversed = listToCons(List.of(new LispSymbol(LispNames.REVERSE), seqExpr));
+		return makeLet(REDUCE_FN_VAR, fnForm, buildPlainReduce(swapped, reversed, initForm));
+	}
+
+	private static LispVal buildPlainReduce(LispVal fnForm, LispVal seqExpr, @Nullable LispVal initForm) {
+		List<LispVal> reduceParts = new java.util.ArrayList<>();
+		reduceParts.add(new LispSymbol(LispNames.REDUCE));
+		reduceParts.add(fnForm);
+		reduceParts.add(seqExpr);
+		if (initForm != null) {
+			reduceParts.add(new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD));
+			reduceParts.add(initForm);
+		}
+		return listToCons(reduceParts);
+	}
+
 	private static LispVal makeProgn(List<LispVal> exprs) {
 		List<LispVal> all = new java.util.ArrayList<>();
 		all.add(new LispSymbol(LispNames.PROGN));

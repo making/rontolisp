@@ -62,7 +62,10 @@ do the lighter ones first):
 - variadic `nconc` (ours is 2-arg) -- cl-utilities' own `split-sequence`.
   -> **`.todo/66-variadic-nconc.md`**
 - `reduce` with `:from-end` (+ `:key`) -- `compose`, `with-collectors`.
-  -> **`.todo/67-reduce-from-end-key.md`**
+  -> DONE (2026-07-05): lowered in `LispMacroExpander.expandReduce` (reverse +
+  arg-swap for `:from-end`, `mapcar` for `:key`), wired into the interpreter and
+  both compilers ahead of the string-seq wrapper. `compose` runs on all four
+  backends. (was `.todo/67-reduce-from-end-key.md`)
 - `integer-length`, `logbitp` -- `expt-mod` (non-SBCL branch).
   -> **`.todo/68-integer-length-logbitp.md`**
 - `multiple-value-setq`, `rotatef` -- `read-delimited`, `with-gensyms`,

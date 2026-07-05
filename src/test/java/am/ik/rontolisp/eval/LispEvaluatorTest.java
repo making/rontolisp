@@ -1729,6 +1729,40 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalReduceLeftFoldSubtraction() {
+		// ((((1-2)-3)-4)) = -8
+		assertThat(eval("(reduce #'- '(1 2 3 4))")).isEqualTo(new LispInteger(-8));
+	}
+
+	@Test
+	void evalReduceFromEndSubtraction() {
+		// (1-(2-(3-4))) = -2
+		assertThat(eval("(reduce #'- '(1 2 3 4) :from-end t)")).isEqualTo(new LispInteger(-2));
+	}
+
+	@Test
+	void evalReduceFromEndConsWithInitialValue() {
+		assertThat(eval("(reduce #'cons '(1 2 3) :from-end t :initial-value nil)").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalReduceKey() {
+		assertThat(eval("(reduce #'+ '((1) (2) (3)) :key #'car)")).isEqualTo(new LispInteger(6));
+	}
+
+	@Test
+	void evalReduceKeyAndFromEndAnyOrder() {
+		// :key selects car; :from-end folds right: (1 . (2 . (3 . nil)))
+		assertThat(eval("(reduce #'cons '((1) (2) (3)) :initial-value nil :from-end t :key #'car)").print())
+			.isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalReduceFromEndNilIsLeftFold() {
+		assertThat(eval("(reduce #'- '(1 2 3 4) :from-end nil)")).isEqualTo(new LispInteger(-8));
+	}
+
+	@Test
 	void evalRest() {
 		assertThat(eval("(rest '(1 2 3))").print()).isEqualTo("(2 3)");
 		assertThat(eval("(rest '(1))")).isSameAs(LispNil.INSTANCE);

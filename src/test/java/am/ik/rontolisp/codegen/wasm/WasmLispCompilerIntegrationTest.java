@@ -2377,6 +2377,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void reduceFromEnd() throws Exception {
+		assertThat(compileAndRun("(print (reduce #'- '(1 2 3 4) :from-end t))")).isEqualTo("-2");
+	}
+
+	@Test
+	void reduceFromEndWithInitialValue() throws Exception {
+		assertThat(compileAndRun("(print (reduce #'cons '(1 2 3) :from-end t :initial-value nil))"))
+			.isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void reduceKey() throws Exception {
+		assertThat(compileAndRun("(print (reduce #'+ '((1) (2) (3)) :key #'car))")).isEqualTo("6");
+	}
+
+	@Test
+	void reduceKeyAndFromEnd() throws Exception {
+		assertThat(compileAndRun("(print (reduce #'cons '((1) (2) (3)) :initial-value nil :from-end t :key #'car))"))
+			.isEqualTo("(1 2 3)");
+	}
+
+	@Test
 	void restAccessor() throws Exception {
 		assertThat(compileAndRun("(print (rest '(1 2 3))) (print (rest '(1)))")).isEqualTo("(2 3)\nnil");
 	}

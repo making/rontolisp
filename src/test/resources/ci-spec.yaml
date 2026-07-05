@@ -657,6 +657,19 @@ cases:
       15
       14
       0
+  - name: reduce-from-end-key
+    source: |
+      (print (reduce #'- '(1 2 3 4)))
+      (print (reduce #'- '(1 2 3 4) :from-end t))
+      (print (reduce #'cons '(1 2 3) :from-end t :initial-value nil))
+      (print (reduce #'+ '((1) (2) (3)) :key #'car))
+      (print (reduce #'cons '((1) (2) (3)) :initial-value nil :from-end t :key #'car))
+    expected: |
+      -8
+      -2
+      (1 2 3)
+      6
+      (1 2 3)
   - name: built-in-operators-as-first-class-values
     source: |
       (print (reduce #'+ '(1 2 3 4 5) :initial-value 0))
