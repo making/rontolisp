@@ -40,9 +40,10 @@ This page lists the most notable omissions. For what **is** available, see the
 ## User-defined macros (`defmacro`)
 
 User macros **are** supported — see [`defmacro`](../reference/special-forms/defmacro.md)
-for the details, including the backquote template syntax and the limitations
-(no `&optional`/`&key`, no nested backquote, unknown to the runtime `eval` of
-compiled programs). The built-in macro set (`cond`, `case`, `when`, `unless`,
+for the details, including the backquote template syntax (nested backquote
+included) and the limitations (`&whole`/`&environment` are unsupported, and
+macros are unknown to the runtime `eval` of compiled programs). The built-in
+macro set (`cond`, `case`, `when`, `unless`,
 `dotimes`, `dolist`, `do`, `setf`, `push`, `pop`, `incf`, ...) can be listed with
 `(rontolisp:list-macros)`; those names cannot be redefined.
 

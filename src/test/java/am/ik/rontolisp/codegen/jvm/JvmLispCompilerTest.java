@@ -167,6 +167,49 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	// once-only exercises three levels of read-time backquote through the compile
+	// path: the nested backquote is fully expanded by the reader, so the JVM
+	// compiler only sees ordinary list/cons/quote calls.
+	@Test
+	void compileAndRunNestedBackquoteOnceOnly() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro once-only (names &body body)
+				  (let ((gensyms (loop for name in names collect (gensym (symbol-name name)))))
+				    `(let (,@(loop for g in gensyms
+				                   for name in names
+				                   collect `(,g (gensym ,(symbol-name name)))))
+				       `(let (,,@(loop for g in gensyms for n in names
+				                       collect ``(,,g ,,n)))
+				          ,(let (,@(loop for n in names for g in gensyms
+				                         collect `(,n ,g)))
+				             ,@body)))))
+				(defmacro square (x) (once-only (x) `(* ,x ,x)))
+				(defvar *calls* 0)
+				(defun bump () (setq *calls* (+ *calls* 1)) 5)
+				(print (square (bump)))
+				(print *calls*)
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("25\n1");
+		}
+	}
+
 	@Test
 	void compileAndRunGensym() throws Exception {
 		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"

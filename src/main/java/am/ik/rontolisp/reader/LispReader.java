@@ -290,15 +290,34 @@ public final class LispReader {
 	// `(a ,b) -> (list (quote a) b)
 	// `(a ,@bs c) -> (append (list (quote a)) bs (list (quote c)))
 	// `,x -> x
-	// Nested backquote is not supported (a clear read error). Because expansion
-	// happens in the reader, the runtime `read` of compiled programs does not
-	// understand the backquote character.
+	// A non-nested template uses the optimized single-level expander below
+	// (readTemplateElement/readTemplateList). A template that contains an inner
+	// backquote is routed through the CLtL2/Steele nested-backquote algorithm
+	// (bqCompletelyProcess) which fully expands every level at read time into the
+	// same list/append/cons/quote primitives -- an inner ` increments the
+	// quasiquote level, ,/,@ decrement it, only unquotes that reach level 0 are
+	// evaluated, deeper ones are re-quoted as list-building code (so no runtime
+	// quasiquote marker is left). Because expansion happens entirely in the reader,
+	// the runtime `read` of compiled programs does not understand the backquote
+	// character.
 
 	/** One expanded template element and whether it splices into the enclosing list. */
 	private record TemplateElement(LispVal form, boolean splicing) {
 	}
 
+	private boolean rawSawNestedBackquote;
+
 	private LispVal readBackquote() {
+		// First read the template as a raw marker tree to detect whether it nests an
+		// inner backquote. Non-nested templates keep the optimized single-level
+		// expansion (and its exact output shape); nested ones go through CLtL2.
+		int save = this.pos;
+		this.rawSawNestedBackquote = false;
+		LispVal raw = readRawTemplate();
+		if (this.rawSawNestedBackquote) {
+			return bqCompletelyProcess(raw);
+		}
+		this.pos = save;
 		TemplateElement element = readTemplateElement();
 		if (element.splicing()) {
 			throw new LispReadException(",@ must appear inside a list in a backquote template");
@@ -435,6 +454,455 @@ public final class LispReader {
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		}
 		return value;
+	}
+
+	// --- Nested backquote: CLtL2/Steele algorithm -------------------------------
+	//
+	// A faithful port of the public-domain backquote implementation from CLtL2
+	// Appendix C (Guy L. Steele Jr.). The template is first read into a raw marker
+	// tree (readRawTemplate), then bqCompletelyProcess lowers it to list/append/
+	// cons/list*/quote forms. Nested backquotes and multiple comma levels are
+	// handled by the recursive BACKQUOTE case (double processing): every level is
+	// expanded at read time, so nothing survives to run time.
+	//
+	// The tokens below are unique sentinel symbols compared by identity (==), never
+	// by name, so they cannot clash with user symbols of the same spelling.
+
+	private static final LispSymbol BQ_COMMA = new LispSymbol("%bq-comma");
+
+	private static final LispSymbol BQ_COMMA_AT = new LispSymbol("%bq-comma-at");
+
+	private static final LispSymbol BQ_COMMA_DOT = new LispSymbol("%bq-comma-dot");
+
+	private static final LispSymbol BQ_BACKQUOTE = new LispSymbol("%bq-backquote");
+
+	private static final LispSymbol BQ_LIST = new LispSymbol("%bq-list");
+
+	private static final LispSymbol BQ_APPEND = new LispSymbol("%bq-append");
+
+	private static final LispSymbol BQ_LIST_STAR = new LispSymbol("%bq-list*");
+
+	private static final LispSymbol BQ_NCONC = new LispSymbol("%bq-nconc");
+
+	private static final LispSymbol BQ_CLOBBERABLE = new LispSymbol("%bq-clobberable");
+
+	private static final LispSymbol BQ_QUOTE = new LispSymbol("%bq-quote");
+
+	// Reads one datum of a backquote template into the raw marker representation,
+	// preserving `/,/,@ as BACKQUOTE/COMMA/COMMA-AT marker conses so the CLtL2
+	// processor can walk the structure. Sets rawSawNestedBackquote if it reads an
+	// inner backquote (the signal that the optimized path cannot be used).
+	private LispVal readRawTemplate() {
+		if (this.pos >= this.tokens.size()) {
+			throw new LispReadException("Unexpected end of input in backquote template");
+		}
+		Token token = this.tokens.get(this.pos);
+		switch (token) {
+			case Token.Backquote ignored -> {
+				this.pos++;
+				this.rawSawNestedBackquote = true;
+				return list2(BQ_BACKQUOTE, readRawTemplate());
+			}
+			case Token.Unquote ignored -> {
+				this.pos++;
+				return list2(BQ_COMMA, readRawTemplate());
+			}
+			case Token.UnquoteSplicing ignored -> {
+				this.pos++;
+				return list2(BQ_COMMA_AT, readRawTemplate());
+			}
+			case Token.LeftParen ignored -> {
+				this.pos++;
+				return readRawList();
+			}
+			case Token.Quote ignored -> {
+				this.pos++;
+				return list2(new LispSymbol(LispNames.QUOTE), readRawTemplate());
+			}
+			case Token.FunctionQuote ignored -> {
+				this.pos++;
+				return list2(new LispSymbol(LispNames.FUNCTION), readRawTemplate());
+			}
+			// Any other token (atoms, vectors, arrays) is constant template data:
+			// read it with the ordinary reader. Commas inside a vector literal are
+			// therefore unsupported, matching the single-level path.
+			default -> {
+				return readExpr();
+			}
+		}
+	}
+
+	// Reads the elements of a raw template list, preserving a dotted tail.
+	private LispVal readRawList() {
+		List<LispVal> elements = new ArrayList<>();
+		LispVal tail = LispNil.INSTANCE;
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			if (this.tokens.get(this.pos) instanceof Token.Dot) {
+				if (elements.isEmpty()) {
+					throw new LispReadException("Nothing appears before '.' in backquote template");
+				}
+				this.pos++; // consume '.'
+				tail = readRawTemplate();
+				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+					throw new LispReadException("More than one object follows '.' in backquote template");
+				}
+				break;
+			}
+			elements.add(readRawTemplate());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw new LispReadException("Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		LispVal result = tail;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+	// bq-completely-process: process then simplify then strip sentinel tokens.
+	private LispVal bqCompletelyProcess(LispVal x) {
+		return bqRemoveTokens(bqSimplify(bqProcess(x)));
+	}
+
+	// bq-process: remove one level of backquote, producing code in terms of the
+	// sentinel list/append markers. The BACKQUOTE case recursively completely
+	// processes an inner backquote and then re-processes the result, which is how
+	// a deeper comma level survives one round and is consumed by the next.
+	private LispVal bqProcess(LispVal x) {
+		if (!(x instanceof LispCons)) {
+			return list2(BQ_QUOTE, x);
+		}
+		LispVal head = car(x);
+		if (head == BQ_BACKQUOTE) {
+			return bqProcess(bqCompletelyProcess(cadr(x)));
+		}
+		if (head == BQ_COMMA) {
+			return bqExpandEscaped(cadr(x));
+		}
+		if (head == BQ_COMMA_AT) {
+			throw new LispReadException(",@ has no enclosing list in a backquote template");
+		}
+		if (head == BQ_COMMA_DOT) {
+			throw new LispReadException(",. has no enclosing list in a backquote template");
+		}
+		List<LispVal> segments = new ArrayList<>();
+		LispVal p = x;
+		while (true) {
+			if (!(p instanceof LispCons)) {
+				segments.add(list2(BQ_QUOTE, p));
+				return cons(BQ_APPEND, fromList(segments));
+			}
+			LispVal ph = car(p);
+			if (ph == BQ_COMMA) {
+				if (!(cddr(p) instanceof LispNil)) {
+					throw new LispReadException("Malformed ,");
+				}
+				segments.add(bqExpandEscaped(cadr(p)));
+				return cons(BQ_APPEND, fromList(segments));
+			}
+			if (ph == BQ_COMMA_AT) {
+				throw new LispReadException("Dotted ,@ in a backquote template");
+			}
+			if (ph == BQ_COMMA_DOT) {
+				throw new LispReadException("Dotted ,. in a backquote template");
+			}
+			segments.add(bracket(car(p)));
+			p = cdr(p);
+		}
+	}
+
+	// bracket: process one list element into an append segment.
+	private LispVal bracket(LispVal x) {
+		if (!(x instanceof LispCons)) {
+			return list2(BQ_LIST, bqProcess(x));
+		}
+		LispVal head = car(x);
+		if (head == BQ_COMMA) {
+			return list2(BQ_LIST, bqExpandEscaped(cadr(x)));
+		}
+		if (head == BQ_COMMA_AT) {
+			return bqExpandEscaped(cadr(x));
+		}
+		if (head == BQ_COMMA_DOT) {
+			return list2(BQ_CLOBBERABLE, bqExpandEscaped(cadr(x)));
+		}
+		return list2(BQ_LIST, bqProcess(x));
+	}
+
+	// Fully expands any inner backquote found in code that has escaped to level 0
+	// (a comma argument). Unlike CLtL2 -- which leaves an inner backquote as a live
+	// macro call to be expanded later -- our runtime has no backquote, so escaped
+	// inner backquotes are expanded here. Comma markers belonging to an outer level
+	// are preserved for the enclosing bqProcess pass.
+	private LispVal bqExpandEscaped(LispVal x) {
+		if (!(x instanceof LispCons cons)) {
+			return x;
+		}
+		if (cons.car() == BQ_BACKQUOTE) {
+			return bqCompletelyProcess(cadr(x));
+		}
+		return new LispCons(bqExpandEscaped(cons.car()), bqExpandEscaped(cons.cdr()));
+	}
+
+	private boolean bqSplicingFrob(LispVal x) {
+		return x instanceof LispCons && (car(x) == BQ_COMMA_AT || car(x) == BQ_COMMA_DOT);
+	}
+
+	private boolean bqFrob(LispVal x) {
+		return x instanceof LispCons && (car(x) == BQ_COMMA || car(x) == BQ_COMMA_AT || car(x) == BQ_COMMA_DOT);
+	}
+
+	// bq-simplify: fold nested list/append markers into flatter list/list*/append.
+	private LispVal bqSimplify(LispVal x) {
+		if (!(x instanceof LispCons)) {
+			return x;
+		}
+		LispVal simplified = (car(x) == BQ_QUOTE) ? x : bqMaptreeSimplify(x);
+		if (!(simplified instanceof LispCons) || car(simplified) != BQ_APPEND) {
+			return simplified;
+		}
+		return bqSimplifyArgs(simplified);
+	}
+
+	// maptree of bqSimplify over the arguments of a marker form (car unchanged).
+	private LispVal bqMaptreeSimplify(LispVal x) {
+		if (!(x instanceof LispCons cons)) {
+			return bqSimplify(x);
+		}
+		LispVal a = bqSimplify(cons.car());
+		LispVal d = bqMaptreeSimplify(cons.cdr());
+		if (a == cons.car() && d == cons.cdr()) {
+			return x;
+		}
+		return new LispCons(a, d);
+	}
+
+	private LispVal bqSimplifyArgs(LispVal x) {
+		// Iterate over the reversed argument list, attaching each to the result.
+		List<LispVal> args = new ArrayList<>();
+		LispVal p = cdr(x);
+		while (p instanceof LispCons cons) {
+			args.add(cons.car());
+			p = cons.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			LispVal arg = args.get(i);
+			if (!(arg instanceof LispCons)) {
+				result = bqAttachAppend(BQ_APPEND, arg, result);
+			}
+			else if (car(arg) == BQ_LIST && !anySplicingFrob(cdr(arg))) {
+				result = bqAttachConses(cdr(arg), result);
+			}
+			else if (car(arg) == BQ_LIST_STAR && !anySplicingFrob(cdr(arg))) {
+				LispVal butlast = butLast(cdr(arg));
+				LispVal last = lastElem(arg);
+				result = bqAttachConses(butlast, bqAttachAppend(BQ_APPEND, last, result));
+			}
+			else if (car(arg) == BQ_QUOTE && cadr(arg) instanceof LispCons && !bqFrob(cadr(arg))
+					&& cddr(arg) instanceof LispNil) {
+				result = bqAttachConses(list1(list2(BQ_QUOTE, car(cadr(arg)))), result);
+			}
+			else if (car(arg) == BQ_CLOBBERABLE) {
+				result = bqAttachAppend(BQ_NCONC, cadr(arg), result);
+			}
+			else {
+				result = bqAttachAppend(BQ_APPEND, arg, result);
+			}
+		}
+		return result;
+	}
+
+	private boolean anySplicingFrob(LispVal list) {
+		LispVal p = list;
+		while (p instanceof LispCons cons) {
+			if (bqSplicingFrob(cons.car())) {
+				return true;
+			}
+			p = cons.cdr();
+		}
+		return false;
+	}
+
+	private boolean nullOrQuoted(LispVal x) {
+		return x instanceof LispNil || (x instanceof LispCons && car(x) == BQ_QUOTE);
+	}
+
+	private LispVal bqAttachAppend(LispSymbol op, LispVal item, LispVal result) {
+		if (nullOrQuoted(item) && nullOrQuoted(result)) {
+			return list2(BQ_QUOTE, appendLists(quotedValue(item), quotedValue(result)));
+		}
+		if (result instanceof LispNil || isQuoteNil(result)) {
+			return bqSplicingFrob(item) ? list2(op, item) : item;
+		}
+		if (result instanceof LispCons && car(result) == op) {
+			return cons(car(result), cons(item, cdr(result)));
+		}
+		return listOf3(op, item, result);
+	}
+
+	private LispVal bqAttachConses(LispVal items, LispVal result) {
+		if (everyNullOrQuoted(items) && nullOrQuoted(result)) {
+			List<LispVal> vals = new ArrayList<>();
+			LispVal p = items;
+			while (p instanceof LispCons cons) {
+				vals.add(quotedValue(cons.car()));
+				p = cons.cdr();
+			}
+			return list2(BQ_QUOTE, appendLists(fromList(vals), quotedValue(result)));
+		}
+		if (result instanceof LispNil || isQuoteNil(result)) {
+			return cons(BQ_LIST, items);
+		}
+		if (result instanceof LispCons && (car(result) == BQ_LIST || car(result) == BQ_LIST_STAR)) {
+			return cons(car(result), appendLists(items, cdr(result)));
+		}
+		return cons(BQ_LIST_STAR, appendLists(items, list1(result)));
+	}
+
+	// bq-remove-tokens: replace the sentinel markers with the real Lisp operators
+	// (list/append/nconc/list*/quote), turning a 2-argument list* into cons.
+	private LispVal bqRemoveTokens(LispVal x) {
+		if (x == BQ_LIST) {
+			return new LispSymbol(LispNames.LIST);
+		}
+		if (x == BQ_APPEND) {
+			return new LispSymbol(LispNames.APPEND);
+		}
+		if (x == BQ_NCONC) {
+			return new LispSymbol(LispNames.NCONC);
+		}
+		if (x == BQ_LIST_STAR) {
+			return new LispSymbol(LispNames.LIST_STAR);
+		}
+		if (x == BQ_QUOTE) {
+			return new LispSymbol(LispNames.QUOTE);
+		}
+		if (!(x instanceof LispCons)) {
+			return x;
+		}
+		if (car(x) == BQ_CLOBBERABLE) {
+			return bqRemoveTokens(cadr(x));
+		}
+		if (car(x) == BQ_LIST_STAR && cddr(x) instanceof LispCons && cdr(cddr(x)) instanceof LispNil) {
+			// (list* a b) -> (cons a b)
+			return cons(new LispSymbol(LispNames.CONS), bqMaptreeRemove(cdr(x)));
+		}
+		return bqMaptreeRemove(x);
+	}
+
+	private LispVal bqMaptreeRemove(LispVal x) {
+		if (!(x instanceof LispCons cons)) {
+			return bqRemoveTokens(x);
+		}
+		LispVal a = bqRemoveTokens(cons.car());
+		LispVal d = bqMaptreeRemove(cons.cdr());
+		if (a == cons.car() && d == cons.cdr()) {
+			return x;
+		}
+		return new LispCons(a, d);
+	}
+
+	// --- small cons/list helpers for the CLtL2 port -----------------------------
+
+	private static LispVal car(LispVal x) {
+		return ((LispCons) x).car();
+	}
+
+	private static LispVal cdr(LispVal x) {
+		return ((LispCons) x).cdr();
+	}
+
+	private static LispVal cadr(LispVal x) {
+		return car(cdr(x));
+	}
+
+	private static LispVal cddr(LispVal x) {
+		return cdr(cdr(x));
+	}
+
+	private static LispCons cons(LispVal a, LispVal d) {
+		return new LispCons(a, d);
+	}
+
+	private static LispCons list1(LispVal a) {
+		return new LispCons(a, LispNil.INSTANCE);
+	}
+
+	private static LispCons list2(LispVal a, LispVal b) {
+		return new LispCons(a, new LispCons(b, LispNil.INSTANCE));
+	}
+
+	private static LispCons listOf3(LispVal a, LispVal b, LispVal c) {
+		return new LispCons(a, new LispCons(b, new LispCons(c, LispNil.INSTANCE)));
+	}
+
+	private static LispVal fromList(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+	// The value inside a (BQ_QUOTE v) form, or nil for nil.
+	private LispVal quotedValue(LispVal x) {
+		if (x instanceof LispNil) {
+			return LispNil.INSTANCE;
+		}
+		return cadr(x);
+	}
+
+	private boolean isQuoteNil(LispVal x) {
+		return x instanceof LispCons && car(x) == BQ_QUOTE && cadr(x) instanceof LispNil && cddr(x) instanceof LispNil;
+	}
+
+	private boolean everyNullOrQuoted(LispVal list) {
+		LispVal p = list;
+		while (p instanceof LispCons cons) {
+			if (!nullOrQuoted(cons.car())) {
+				return false;
+			}
+			p = cons.cdr();
+		}
+		return true;
+	}
+
+	// Appends two proper lists (used only on constant fold paths).
+	private LispVal appendLists(LispVal a, LispVal b) {
+		List<LispVal> items = new ArrayList<>();
+		LispVal p = a;
+		while (p instanceof LispCons cons) {
+			items.add(cons.car());
+			p = cons.cdr();
+		}
+		LispVal result = b;
+		for (int i = items.size() - 1; i >= 0; i--) {
+			result = new LispCons(items.get(i), result);
+		}
+		return result;
+	}
+
+	// All but the last element of a proper list.
+	private LispVal butLast(LispVal list) {
+		List<LispVal> items = new ArrayList<>();
+		LispVal p = list;
+		while (p instanceof LispCons cons && cons.cdr() instanceof LispCons) {
+			items.add(cons.car());
+			p = cons.cdr();
+		}
+		return fromList(items);
+	}
+
+	// The last element of a proper (non-empty) list.
+	private LispVal lastElem(LispVal list) {
+		LispVal p = list;
+		while (p instanceof LispCons cons && cons.cdr() instanceof LispCons) {
+			p = cons.cdr();
+		}
+		return car(p);
 	}
 
 }

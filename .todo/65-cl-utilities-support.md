@@ -36,15 +36,16 @@ compile/eval) EXCEPT `once-only.lisp`.
 The 2026-07-05 re-triage (probing the real 1.2.4 tarball) found the original
 triage was wrong on two points, and surfaced deeper gaps:
 
-- **Nested backquote (`once-only.lisp`)** -- the REAL gating blocker, not listed
-  before. `once-only` uses `` `(let (,,@... collect ``(,,g ,,n)))`` `` (3 levels
-  of backquote). Our reader expands backquote at read time and rejects nested
-  backquote (`LispReader.readTemplateElement`: "Nested backquote is not
-  supported"). Because `extremum` `:depends-on ("once-only")`, and
-  `asdf:load-system` reads every component, this fails the whole-system load.
-  Implementing read-time nested backquote (Steele/CLtL2 algorithm) is a large,
-  self-contained reader feature -- see `.todo/66`. Blast radius is the reader
-  only (backends unaffected; backquote is fully expanded before codegen).
+- **Nested backquote (`once-only.lisp`)** -- DONE (2026-07-05, `.todo/66`). The
+  reader now fully expands nested/multi-level backquote at read time (CLtL2/
+  Steele port in `LispReader`); backends unaffected. `once-only.lisp` READS and
+  the macro expands correctly (verified against SBCL). BUT it also calls
+  `(string name)` -- see the `string` residue item below -- so the file still
+  won't fully expand until `string` lands.
+- **`string`** -- MISSING (surfaced by `once-only.lisp`, which does
+  `(gensym (string name))`). Need the CL `string` designator coercion
+  (symbol -> name, string -> itself, char -> 1-char string). Small, all four
+  backends; a `symbol-name`-like builtin.
 - **`macrolet` was NOT actually needed by cl-utilities** -- its only occurrence
   (`compose.lisp`) is under `#+nil` (dead code). We implemented it anyway
   because it is a real, reusable feature that unblocks other libraries.

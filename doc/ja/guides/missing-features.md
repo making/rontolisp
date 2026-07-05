@@ -40,8 +40,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 ## ユーザー定義マクロ（`defmacro`）
 
 ユーザーマクロは**サポートされています** —
-バッククォートのテンプレート構文や制限事項（`&optional`/`&key` 非対応、
-ネストしたバッククォート非対応、コンパイル済みプログラムの実行時 `eval` では
+バッククォートのテンプレート構文（ネストしたバッククォートを含む）や制限事項
+（`&whole`/`&environment` 非対応、コンパイル済みプログラムの実行時 `eval` では
 認識されない、など）を含む詳細は
 [`defmacro`](../reference/special-forms/defmacro.md) を参照してください。
 組み込みマクロのセット（`cond`、`case`、`when`、`unless`、`dotimes`、`dolist`、

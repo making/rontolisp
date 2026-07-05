@@ -2688,6 +2688,30 @@ cases:
       3
       15
       (11 3)
+  # Nested backquote (once-only): three levels of read-time backquote, expanded
+  # entirely by the reader. Prints only integers, so gensym names never surface
+  # (the expansion-time gensym runs after every counter-printing case above).
+  - name: nested-backquote-once-only
+    source: |
+      (defmacro ci-once-only (names &body body)
+        (let ((gensyms (loop for name in names collect (gensym (symbol-name name)))))
+          `(let (,@(loop for g in gensyms
+                         for name in names
+                         collect `(,g (gensym ,(symbol-name name)))))
+             `(let (,,@(loop for g in gensyms for n in names
+                             collect ``(,,g ,,n)))
+                ,(let (,@(loop for n in names for g in gensyms
+                               collect `(,n ,g)))
+                   ,@body)))))
+      (defmacro ci-square (x) (ci-once-only (x) `(* ,x ,x)))
+      (defvar ci-oo-calls 0)
+      (defun ci-oo-bump () (setq ci-oo-calls (+ ci-oo-calls 1)) 5)
+      (print (ci-square (ci-oo-bump)))
+      (print ci-oo-calls)
+    expected: |
+      25
+      1
+
   - name: symbol-runtime-api
     source: |
       (print (symbol-name 'foo))

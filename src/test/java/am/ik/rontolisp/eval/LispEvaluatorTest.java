@@ -4680,6 +4680,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defmacroNestedBackquoteOnceOnly() {
+		// once-only uses three levels of backquote. Its guard against multiple
+		// evaluation must hold: the argument form runs exactly once. Verified
+		// structurally against SBCL's (let ((#:g (foo))) (* #:g #:g)).
+		LispVal result = evalMulti("""
+				(defmacro once-only (names &body body)
+				  (let ((gensyms (loop for name in names collect (gensym (symbol-name name)))))
+				    `(let (,@(loop for g in gensyms
+				                   for name in names
+				                   collect `(,g (gensym ,(symbol-name name)))))
+				       `(let (,,@(loop for g in gensyms for n in names
+				                       collect ``(,,g ,,n)))
+				          ,(let (,@(loop for n in names for g in gensyms
+				                         collect `(,n ,g)))
+				             ,@body)))))
+				(defmacro square (x)
+				  (once-only (x)
+				    `(* ,x ,x)))
+				(defvar *calls* 0)
+				(defun bump () (setq *calls* (+ *calls* 1)) 5)
+				(list (square (bump)) *calls*)
+				""");
+		// 5*5 = 25, and bump was evaluated exactly once.
+		assertThat(result.print()).isEqualTo("(25 1)");
+	}
+
+	@Test
 	void defmacroReceivesUnevaluatedForms() {
 		// swap! must see the variable names, not their values.
 		LispVal result = evalMulti("""

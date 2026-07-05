@@ -1,5 +1,35 @@
 # 66: Nested backquote in the reader
 
+## Status: DONE (2026-07-05)
+
+Implemented a faithful port of the CLtL2/Steele Appendix C backquote algorithm
+in `LispReader` (`bqCompletelyProcess` = `bqProcess` + `bqSimplify` +
+`bqRemoveTokens`, over identity-compared sentinel markers). `readBackquote`
+first raw-reads the template (`readRawTemplate`) to detect an inner `` ` ``;
+non-nested templates keep the optimized single-level expander (all existing
+output shapes unchanged, no test churn), nested ones go through CLtL2. Every
+quasiquote level is expanded at read time to `list`/`cons`/`list*`/`append`/
+`quote` -- no runtime marker survives, so the evaluator and all four backends
+are unaffected. One deviation from CLtL2: an inner backquote that escapes to
+level 0 (inside a comma argument) is expanded in place by `bqExpandEscaped`
+rather than left as a live `backquote` macro call, because our runtime has no
+backquote.
+
+Verified against SBCL 2.6.5: `once-only`'s `square` expansion is structurally
+identical, single/double/triple nesting match, and `(square (bump))` guards
+against multiple evaluation on interpreter + JVM + WASM Preview 1 + WASM
+component. Tests: `LispReaderTest` (`readNestedBackquote*`, `readTripleNested*`),
+`LispEvaluatorTest#defmacroNestedBackquoteOnceOnly`,
+`JvmLispCompilerTest#compileAndRunNestedBackquoteOnceOnly`,
+`WasmLispCompilerIntegrationTest#nestedBackquoteOnceOnly`, ci-spec
+`nested-backquote-once-only`. Docs: `defmacro.md` + `missing-features.md` (en+ja).
+
+Follow-up handed back to `.todo/65`: the REAL `once-only.lisp` also calls
+`(string name)`, and rontolisp has no `string` builtin -- added to the 65
+stdlib-residue list.
+
+---
+
 Split out of `.todo/65` (cl-utilities): `once-only.lisp` uses three levels of
 backquote
 

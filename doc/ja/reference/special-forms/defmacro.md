@@ -10,7 +10,7 @@
 - `,expr` は `expr` の値を挿入します
 - `,@expr` は `expr` の値(リスト)を周囲のリストに継ぎ足し(splice)ます
 
-ネストしたバッククォートはサポートされません。マクロ本体で変数捕捉のない一時変数を生成するには [`gensym`](../functions/gensym.md) を、展開結果を調べるには [`macroexpand-1`](../functions/macroexpand-1.md)/[`macroexpand`](../functions/macroexpand.md) を使用してください。
+ネストしたバッククォート(バッククォートテンプレートの中の別のバッククォート)はサポートされ、読み取り時に完全に展開されるため、`once-only` のような古典的なマクロ書きマクロも動作します。マクロ本体で変数捕捉のない一時変数を生成するには [`gensym`](../functions/gensym.md) を、展開結果を調べるには [`macroexpand-1`](../functions/macroexpand-1.md)/[`macroexpand`](../functions/macroexpand.md) を使用してください。
 
 インタープリタはマクロ呼び出しを評価時に展開します(そのため `defmacro` は REPL や `load`/`eval` 経由でも動作します)。コンパイルパスでは、CLI が JVM/WASM コンパイラの実行**前に**すべてのマクロ呼び出しを完全展開して定義を取り除くため、コンパイル出力には通常のフォームだけが含まれます。したがってコンパイル済みプログラムの実行時 `eval`/`read` は `defmacro` やバッククォート文字を認識せず、マクロは最初の使用より前に定義されている必要があります。
 

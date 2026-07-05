@@ -312,10 +312,42 @@ class LispReaderTest {
 			.hasMessageContaining("inside a list");
 	}
 
+	// --- Nested backquote: the CLtL2/Steele algorithm fully expands every level ---
+
 	@Test
-	void readNestedBackquoteFails() {
-		assertThatThrownBy(() -> LispReader.readFromString("``x")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("Nested backquote");
+	void readNestedBackquoteSymbol() {
+		// ``x -> (list 'quote 'x), folded to (quote (quote x)); evaluating once
+		// yields (quote x) = `x, matching an inner backquote whose comma survives.
+		assertThat(LispReader.readFromString("``x").print()).isEqualTo("(quote (quote x))");
+	}
+
+	@Test
+	void readNestedBackquoteDoubleUnquote() {
+		// ``(,,a): the inner comma survives, the outer one evaluates a. Expanding
+		// once builds (list 'list a) -- code that, evaluated with a, rebuilds `(,a).
+		assertThat(LispReader.readFromString("``(,,a)").print()).isEqualTo("(list (quote list) a)");
+	}
+
+	@Test
+	void readNestedBackquoteDoubleUnquoteSplicing() {
+		// ``(,,@lst): the ,@ splices lst at the outer level, each element re-quoted.
+		assertThat(LispReader.readFromString("``(,,@lst)").print()).isEqualTo("(cons (quote list) lst)");
+	}
+
+	@Test
+	void readNestedBackquoteInDataPosition() {
+		// The inner backquote sits in a data position, so only its ,(+ 1 2) that
+		// reaches level 0 would evaluate here; ,(+ 1 2) stays at level 1 and is kept.
+		assertThat(LispReader.readFromString("`(a `(b ,(+ 1 2)))").print())
+			.isEqualTo("(quote (a (list (quote b) (+ 1 2))))");
+	}
+
+	@Test
+	void readTripleNestedBackquote() {
+		// A third level: only the innermost triple-comma reaches level 0. Peeling
+		// all three levels reproduces `a`, verified against SBCL.
+		assertThat(LispReader.readFromString("```(,,,a)").print())
+			.isEqualTo("(list (quote list) (quote (quote list)) a)");
 	}
 
 	// --- Dotted pairs: (a . b) reads as a cons with a non-list cdr ---

@@ -10,7 +10,7 @@ Macro bodies usually build the expansion with the backquote template syntax, whi
 - `,expr` inserts the value of `expr`
 - `,@expr` splices the value of `expr` (a list) into the surrounding list
 
-Nested backquote is not supported. Use [`gensym`](../functions/gensym.md) to generate capture-safe temporaries in macro bodies, and [`macroexpand-1`](../functions/macroexpand-1.md)/[`macroexpand`](../functions/macroexpand.md) to inspect an expansion.
+Nested backquote (a backquote template inside another) is supported and fully expanded at read time, so classic macro-writing macros such as `once-only` work. Use [`gensym`](../functions/gensym.md) to generate capture-safe temporaries in macro bodies, and [`macroexpand-1`](../functions/macroexpand-1.md)/[`macroexpand`](../functions/macroexpand.md) to inspect an expansion.
 
 The interpreter expands macro calls at evaluation time (so `defmacro` also works in the REPL and via `load`/`eval`). On the compilation path the CLI fully expands every macro call **before** the JVM/WASM compilers run and removes the definitions, so compiled output contains only ordinary forms; consequently the runtime `eval`/`read` of a compiled program does not know `defmacro` or the backquote character, and a macro must be defined before its first use.
 

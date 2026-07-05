@@ -2979,6 +2979,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nestedBackquoteOnceOnly() throws Exception {
+		// once-only uses three levels of read-time backquote; the reader expands
+		// every level to list/cons/quote, so the WASM compiler only sees ordinary
+		// forms. Verifies the multiple-evaluation guard holds (bump runs once).
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro once-only (names &body body)
+				  (let ((gensyms (loop for name in names collect (gensym (symbol-name name)))))
+				    `(let (,@(loop for g in gensyms
+				                   for name in names
+				                   collect `(,g (gensym ,(symbol-name name)))))
+				       `(let (,,@(loop for g in gensyms for n in names
+				                       collect ``(,,g ,,n)))
+				          ,(let (,@(loop for n in names for g in gensyms
+				                         collect `(,n ,g)))
+				             ,@body)))))
+				(defmacro square (x) (once-only (x) `(* ,x ,x)))
+				(defvar *calls* 0)
+				(defun bump () (setq *calls* (+ *calls* 1)) 5)
+				(print (square (bump)))
+				(print *calls*)
+				"""));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("25\n1");
+	}
+
+	@Test
 	void defineCompilerMacroAndRestartCase() throws Exception {
 		// define-compiler-macro is a dropped no-op (the function wins); restart-case is a
 		// lite lowering to its primary form.
