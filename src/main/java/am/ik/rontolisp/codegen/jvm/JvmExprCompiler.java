@@ -659,6 +659,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx, className);
 				case LispNames.ROTATEF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx, className);
+				case LispNames.BYTE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandByte(cons), ctx, className);
+				case LispNames.BYTE_SIZE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandByteSize(cons), ctx, className);
+				case LispNames.BYTE_POSITION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx, className);
+				case LispNames.LDB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx, className);
+				case LispNames.DPB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx, className);
 				case LispNames.DESTRUCTURING_BIND ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx, className);
 				case LispNames.FIRST ->

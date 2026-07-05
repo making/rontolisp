@@ -2438,6 +2438,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalByteFieldOps() {
+		assertThat(eval("(byte-size (byte 8 3))").print()).isEqualTo("8");
+		assertThat(eval("(byte-position (byte 8 3))").print()).isEqualTo("3");
+		assertThat(eval("(ldb (byte 8 0) 255)").print()).isEqualTo("255");
+		assertThat(eval("(ldb (byte 4 4) 255)").print()).isEqualTo("15");
+		assertThat(eval("(ldb (byte 4 0) 255)").print()).isEqualTo("15");
+		assertThat(eval("(ldb (byte 8 8) 65535)").print()).isEqualTo("255");
+		assertThat(eval("(dpb 0 (byte 4 0) 255)").print()).isEqualTo("240");
+		assertThat(eval("(dpb 5 (byte 4 4) 0)").print()).isEqualTo("80");
+		assertThat(eval("(funcall #'ldb (byte 4 4) 255)").print()).isEqualTo("15");
+		assertThat(eval("(funcall #'dpb 0 (byte 4 0) 255)").print()).isEqualTo("240");
+		assertThat(eval("(funcall #'byte-size (byte 6 2))").print()).isEqualTo("6");
+	}
+
+	@Test
 	void evalListStarAndAcons() {
 		assertThat(eval("(list* 1 2 '(3 4))").print()).isEqualTo("(1 2 3 4)");
 		assertThat(eval("(list* 1 2 3)").print()).isEqualTo("(1 2 . 3)");
@@ -3718,11 +3733,12 @@ class LispEvaluatorTest {
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
 			.contains("write-string", "write-to-string")
 			.contains("symbol-name", "intern", "find-symbol", "make-symbol", "boundp", "fboundp", "symbol-value")
+			.contains("byte", "byte-size", "byte-position", "ldb", "dpb")
 			.contains("string")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents")
 			.isSorted()
-			.hasSize(224);
+			.hasSize(229);
 	}
 
 	@Test

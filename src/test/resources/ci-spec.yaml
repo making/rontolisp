@@ -1092,7 +1092,7 @@ cases:
     expected: |
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case rotatef setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      224
+      229
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -1431,6 +1431,25 @@ cases:
       t
       t
       (0 1 3 4)
+  - name: byte-field-ops
+    source: |
+      (print (byte-size (byte 8 3)))
+      (print (byte-position (byte 8 3)))
+      (print (ldb (byte 8 0) 255))
+      (print (ldb (byte 4 4) 255))
+      (print (ldb (byte 8 8) 65535))
+      (print (dpb 0 (byte 4 0) 255))
+      (print (dpb 5 (byte 4 4) 0))
+      (print (mapcar (lambda (n) (ldb (byte 4 0) n)) '(255 16 3)))
+    expected: |
+      8
+      3
+      255
+      15
+      255
+      240
+      80
+      (15 0 3)
   - name: list-sequence-additions
     source: |
       (print (list* 1 2 '(3 4)))

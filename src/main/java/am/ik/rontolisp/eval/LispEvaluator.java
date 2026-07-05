@@ -987,6 +987,16 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
 				case LispNames.ROTATEF:
 					return eval(LispMacroExpander.expandRotatef(cons), env);
+				case LispNames.BYTE:
+					return eval(LispMacroExpander.expandByte(cons), env);
+				case LispNames.BYTE_SIZE:
+					return eval(LispMacroExpander.expandByteSize(cons), env);
+				case LispNames.BYTE_POSITION:
+					return eval(LispMacroExpander.expandBytePosition(cons), env);
+				case LispNames.LDB:
+					return eval(LispMacroExpander.expandLdb(cons), env);
+				case LispNames.DPB:
+					return eval(LispMacroExpander.expandDpb(cons), env);
 				case LispNames.DESTRUCTURING_BIND:
 					return eval(LispMacroExpander.expandDestructuringBind(cons), env);
 				case LispNames.FLOOR:

@@ -582,6 +582,12 @@ final class WasmExprCompiler {
 				case LispNames.MULTIPLE_VALUE_SETQ ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx);
 				case LispNames.ROTATEF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx);
+				case LispNames.BYTE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandByte(cons), ctx);
+				case LispNames.BYTE_SIZE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandByteSize(cons), ctx);
+				case LispNames.BYTE_POSITION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx);
+				case LispNames.LDB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx);
+				case LispNames.DPB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx);
 				case LispNames.DESTRUCTURING_BIND ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx);
 				case LispNames.GCD -> {

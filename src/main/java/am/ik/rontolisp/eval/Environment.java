@@ -1013,6 +1013,50 @@ public final class Environment implements Scope {
 			int index = (int) asLong(args.get(0));
 			return asBigInteger(args.get(1)).testBit(index) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		// byte specifier: a plain (size position) list, matching the compile-path
+		// macro lowering (LispMacroExpander.expandByte). ldb/dpb read it back.
+		env.defineFunction(LispNames.BYTE, new LispFunction(LispNames.BYTE, args -> {
+			requireArgCount(LispNames.BYTE, args, 2);
+			return new LispCons(args.get(0), new LispCons(args.get(1), LispNil.INSTANCE));
+		}));
+		env.defineFunction(LispNames.BYTE_SIZE, new LispFunction(LispNames.BYTE_SIZE, args -> {
+			requireArgCount(LispNames.BYTE_SIZE, args, 1);
+			return byteSpecSize(args.get(0));
+		}));
+		env.defineFunction(LispNames.BYTE_POSITION, new LispFunction(LispNames.BYTE_POSITION, args -> {
+			requireArgCount(LispNames.BYTE_POSITION, args, 1);
+			return byteSpecPosition(args.get(0));
+		}));
+		env.defineFunction(LispNames.LDB, new LispFunction(LispNames.LDB, args -> {
+			requireArgCount(LispNames.LDB, args, 2);
+			int size = (int) asLong(byteSpecSize(args.get(0)));
+			int position = (int) asLong(byteSpecPosition(args.get(0)));
+			BigInteger mask = BigInteger.ONE.shiftLeft(size).subtract(BigInteger.ONE);
+			return normalizeBig(asBigInteger(args.get(1)).shiftRight(position).and(mask));
+		}));
+		env.defineFunction(LispNames.DPB, new LispFunction(LispNames.DPB, args -> {
+			requireArgCount(LispNames.DPB, args, 3);
+			int size = (int) asLong(byteSpecSize(args.get(1)));
+			int position = (int) asLong(byteSpecPosition(args.get(1)));
+			BigInteger fieldMask = BigInteger.ONE.shiftLeft(size).subtract(BigInteger.ONE).shiftLeft(position);
+			BigInteger cleared = asBigInteger(args.get(2)).andNot(fieldMask);
+			BigInteger newBits = asBigInteger(args.get(0)).shiftLeft(position).and(fieldMask);
+			return normalizeBig(cleared.or(newBits));
+		}));
+	}
+
+	private static LispVal byteSpecSize(LispVal spec) {
+		if (spec instanceof LispCons cons) {
+			return cons.car();
+		}
+		throw new LispEvalException("byte specifier expected, got " + spec.print());
+	}
+
+	private static LispVal byteSpecPosition(LispVal spec) {
+		if (spec instanceof LispCons cons && cons.cdr() instanceof LispCons rest) {
+			return rest.car();
+		}
+		throw new LispEvalException("byte specifier expected, got " + spec.print());
 	}
 
 	private static void defineUnaryDouble(Environment env, String name, DoubleUnaryOperator fn) {

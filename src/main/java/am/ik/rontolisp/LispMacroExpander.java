@@ -7619,6 +7619,116 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (byte size position)} into a two-element list
+	 * {@code (list size position)} -- the internal byte-specifier representation carried
+	 * by {@link #expandByteSize}/{@link #expandBytePosition}/{@link #expandLdb}/
+	 * {@link #expandDpb} (no new runtime type; a plain cons list works everywhere).
+	 * @param cons the byte expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandByte(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("byte expects 2 arguments (size position): " + cons.print());
+		}
+		return mvCall(LispNames.LIST, parts.get(1), parts.get(2));
+	}
+
+	/**
+	 * Expands {@code (byte-size bytespec)} into {@code (car bytespec)} -- the size stored
+	 * in the first slot of the byte specifier built by {@link #expandByte}.
+	 * @param cons the byte-size expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandByteSize(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("byte-size expects 1 argument: " + cons.print());
+		}
+		return mvCall(LispNames.CAR, parts.get(1));
+	}
+
+	/**
+	 * Expands {@code (byte-position bytespec)} into {@code (car (cdr bytespec))} -- the
+	 * position stored in the second slot of the byte specifier built by
+	 * {@link #expandByte}.
+	 * @param cons the byte-position expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandBytePosition(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("byte-position expects 1 argument: " + cons.print());
+		}
+		return mvCall(LispNames.CAR, mvCall(LispNames.CDR, parts.get(1)));
+	}
+
+	/**
+	 * Expands {@code (ldb bytespec integer)} (load byte) over the bit primitives: the
+	 * {@code size}-bit field at {@code position} of the integer, right-justified.
+	 *
+	 * <pre>
+	 * (ldb bs n) ->
+	 *   (let* ((__ldbN_s bs) (__ldbN_n n))
+	 *     (logand (ash __ldbN_n (- 0 (car (cdr __ldbN_s))))
+	 *             (- (ash 1 (car __ldbN_s)) 1)))
+	 * </pre>
+	 * @param cons the ldb expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLdb(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("ldb expects 2 arguments (bytespec integer): " + cons.print());
+		}
+		String prefix = "__ldb" + MV_COUNTER.getAndIncrement();
+		LispSymbol s = new LispSymbol(prefix + "_s");
+		LispSymbol n = new LispSymbol(prefix + "_n");
+		LispVal size = mvCall(LispNames.CAR, s);
+		LispVal position = mvCall(LispNames.CAR, mvCall(LispNames.CDR, s));
+		LispVal shifted = mvCall(LispNames.ASH, n, mvCall(LispNames.SUB, new LispInteger(0), position));
+		LispVal mask = mvCall(LispNames.SUB, mvCall(LispNames.ASH, new LispInteger(1), size), new LispInteger(1));
+		LispVal body = mvCall(LispNames.LOGAND, shifted, mask);
+		return nestMvBindings(List.of(new MvBinding(s, parts.get(1)), new MvBinding(n, parts.get(2))), body);
+	}
+
+	/**
+	 * Expands {@code (dpb newbyte bytespec integer)} (deposit byte) over the bit
+	 * primitives: the low {@code size} bits of {@code newbyte} replace the byte
+	 * specifier's field of the integer, the other bits unchanged.
+	 *
+	 * <pre>
+	 * (dpb nb bs n) ->
+	 *   (let* ((__dpbN_b nb) (__dpbN_s bs) (__dpbN_n n)
+	 *          (__dpbN_m (ash (- (ash 1 (car __dpbN_s)) 1) (car (cdr __dpbN_s)))))
+	 *     (logior (logand __dpbN_n (lognot __dpbN_m))
+	 *             (logand (ash __dpbN_b (car (cdr __dpbN_s))) __dpbN_m)))
+	 * </pre>
+	 * @param cons the dpb expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandDpb(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4) {
+			throw new IllegalArgumentException("dpb expects 3 arguments (newbyte bytespec integer): " + cons.print());
+		}
+		String prefix = "__dpb" + MV_COUNTER.getAndIncrement();
+		LispSymbol nb = new LispSymbol(prefix + "_b");
+		LispSymbol s = new LispSymbol(prefix + "_s");
+		LispSymbol n = new LispSymbol(prefix + "_n");
+		LispSymbol m = new LispSymbol(prefix + "_m");
+		LispVal size = mvCall(LispNames.CAR, s);
+		LispVal position = mvCall(LispNames.CAR, mvCall(LispNames.CDR, s));
+		LispVal ones = mvCall(LispNames.SUB, mvCall(LispNames.ASH, new LispInteger(1), size), new LispInteger(1));
+		LispVal maskInit = mvCall(LispNames.ASH, ones, position);
+		LispVal cleared = mvCall(LispNames.LOGAND, n, mvCall(LispNames.LOGNOT, m));
+		LispVal newBits = mvCall(LispNames.LOGAND, mvCall(LispNames.ASH, nb, position), m);
+		LispVal body = mvCall(LispNames.LOGIOR, cleared, newBits);
+		return nestMvBindings(List.of(new MvBinding(nb, parts.get(1)), new MvBinding(s, parts.get(2)),
+				new MvBinding(n, parts.get(3)), new MvBinding(m, maskInit)), body);
+	}
+
+	/**
 	 * Expands {@code (values-list list)}: the list's first element is the primary value
 	 * and the rest are published to the {@code %mv-spill} channel, so the consumers see
 	 * every element as a value -- {@code (values-list '(1 2))} is {@code (values 1 2)}.

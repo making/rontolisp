@@ -2864,6 +2864,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void byteFieldOps() throws Exception {
+		assertThat(compileAndRun(
+				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))
+			.isEqualTo("8\n3\n255\n15\n255");
+		assertThat(compileAndRun(
+				"(print (dpb 0 (byte 4 0) 255)) (print (dpb 5 (byte 4 4) 0)) (print (funcall #'ldb (byte 4 4) 255)) (print (funcall #'dpb 0 (byte 4 0) 255)) (print (funcall #'byte-size (byte 6 2)))"))
+			.isEqualTo("240\n80\n15\n240\n6");
+	}
+
+	@Test
 	void listStarAndAcons() throws Exception {
 		assertThat(compileAndRun(
 				"(print (list* 1 2 '(3 4))) (print (list* 1 2 3)) (print (list* 'x)) (print (acons 'a 1 nil))"))
@@ -4148,7 +4158,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("224");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("229");
 	}
 
 	@Test

@@ -167,6 +167,30 @@ public final class LispNames {
 	 */
 	public static final String LOGBITP = "logbitp";
 
+	/**
+	 * The {@code byte} built-in (builds a byte specifier). Represented internally as a
+	 * two-element list {@code (size position)}.
+	 */
+	public static final String BYTE = "byte";
+
+	/** The {@code byte-size} built-in (the size of a byte specifier). */
+	public static final String BYTE_SIZE = "byte-size";
+
+	/** The {@code byte-position} built-in (the position of a byte specifier). */
+	public static final String BYTE_POSITION = "byte-position";
+
+	/**
+	 * The {@code ldb} built-in (load byte: extract the byte specifier's field from an
+	 * integer, right-justified).
+	 */
+	public static final String LDB = "ldb";
+
+	/**
+	 * The {@code dpb} built-in (deposit byte: replace the byte specifier's field of an
+	 * integer with the low bits of a new value).
+	 */
+	public static final String DPB = "dpb";
+
 	// Comparison
 
 	/** The {@code =} built-in function. */

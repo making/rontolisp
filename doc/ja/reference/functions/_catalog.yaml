@@ -58,6 +58,11 @@ categories:
       - { slug: ash, name: "ash" }
       - { slug: integer-length, name: "integer-length" }
       - { slug: logbitp, name: "logbitp" }
+      - { slug: byte, name: "byte" }
+      - { slug: byte-size, name: "byte-size" }
+      - { slug: byte-position, name: "byte-position" }
+      - { slug: ldb, name: "ldb" }
+      - { slug: dpb, name: "dpb" }
   - title: "等価性と型述語"
     functions:
       - { slug: eq, name: "eq" }

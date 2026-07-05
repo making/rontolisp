@@ -236,6 +236,9 @@ public final class BuiltinFunctionWrappers {
 			// Bitwise integer operations
 			binary(LispNames.LOGAND), binary(LispNames.LOGIOR), binary(LispNames.LOGXOR), unary(LispNames.LOGNOT),
 			binary(LispNames.ASH), unary(LispNames.INTEGER_LENGTH), binary(LispNames.LOGBITP),
+			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
+			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
+			ternary(LispNames.DPB),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
 					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),
