@@ -235,7 +235,13 @@ public final class BuiltinFunctionWrappers {
 			// write-string: the 1-arg (standard output) form; write-to-string is a
 			// prin1-to-string alias
 			unary(LispNames.WRITE_STRING),
-			new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a"))));
+			new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a"))),
+			// symbol runtime API: only the pure string<->symbol converters get wrappers.
+			// find-symbol folds at compile time (literal-only, like symbol-function) and
+			// boundp/fboundp/symbol-value need the eval runtime, which is only emitted
+			// when the program calls them directly -- so none of those four can be a
+			// first-class value in compiled output (macroexpand precedent).
+			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unary(LispNames.INTERN));
 
 	private static LispVal listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;

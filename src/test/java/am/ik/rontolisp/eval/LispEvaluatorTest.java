@@ -3584,10 +3584,11 @@ class LispEvaluatorTest {
 			.contains("require", "provide")
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
 			.contains("write-string", "write-to-string")
+			.contains("symbol-name", "intern", "find-symbol", "make-symbol", "boundp", "fboundp", "symbol-value")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents")
 			.isSorted()
-			.hasSize(210);
+			.hasSize(217);
 	}
 
 	@Test
@@ -4771,6 +4772,97 @@ class LispEvaluatorTest {
 	@Test
 	void gensymIsAFirstClassFunction() {
 		assertThat(evalMulti("(symbolp (funcall #'gensym))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void symbolNameReturnsTheStoredNameVerbatim() {
+		assertThat(evalMulti("(symbol-name 'foo)").print()).isEqualTo("\"foo\"");
+		assertThat(evalMulti("(symbol-name :bar)").print()).isEqualTo("\":bar\"");
+		assertThat(evalMulti("(symbol-name (gensym))").print()).isEqualTo("\"#:g1\"");
+		assertThat(evalMulti("(symbol-name t)").print()).isEqualTo("\"t\"");
+		assertThat(evalMulti("(symbol-name nil)").print()).isEqualTo("\"nil\"");
+	}
+
+	@Test
+	void symbolNameRejectsANonSymbol() {
+		assertThatThrownBy(() -> evalMulti("(symbol-name \"foo\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a symbol");
+		assertThatThrownBy(() -> evalMulti("(symbol-name 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a symbol");
+	}
+
+	@Test
+	void internReturnsTheSymbolNamedByTheString() {
+		assertThat(evalMulti("(intern \"hello\")").print()).isEqualTo("hello");
+		assertThat(evalMulti("(symbolp (intern \"hello\"))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(eq (intern \"foo\") 'foo)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(intern (symbol-name 'round-trip))").print()).isEqualTo("round-trip");
+	}
+
+	@Test
+	void internRejectsAPackageArgumentAndNonStrings() {
+		assertThatThrownBy(() -> evalMulti("(intern \"foo\" :cl-user)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("package argument is not supported");
+		assertThatThrownBy(() -> evalMulti("(intern 'foo)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a string");
+	}
+
+	@Test
+	void findSymbolReturnsKnownNamesOnly() {
+		assertThat(evalMulti("(find-symbol \"car\")").print()).isEqualTo("car");
+		assertThat(evalMulti("(find-symbol \"cond\")").print()).isEqualTo("cond");
+		assertThat(evalMulti("(find-symbol \":kw\")").print()).isEqualTo(":kw");
+		assertThat(evalMulti("(find-symbol \"no-such-name\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(defun my-fn (x) x) (find-symbol \"my-fn\")").print()).isEqualTo("my-fn");
+		assertThat(evalMulti("(defvar *my-var* 1) (find-symbol \"*my-var*\")").print()).isEqualTo("*my-var*");
+	}
+
+	@Test
+	void makeSymbolReturnsAFreshUninternedSymbol() {
+		assertThat(evalMulti("(make-symbol \"temp\")").print()).isEqualTo("#:temp");
+		assertThat(evalMulti("(symbolp (make-symbol \"temp\"))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(eq (make-symbol \"foo\") 'foo)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void boundpChecksTheGlobalVariableNamespace() {
+		assertThat(evalMulti("(defvar *bp-var* 1) (boundp '*bp-var*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(boundp '*bp-nope*)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(boundp :kw)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(boundp t)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(boundp nil)")).isEqualTo(LispTrue.INSTANCE);
+		// lexical bindings are invisible, like CL's dynamic-only boundp
+		assertThat(evalMulti("(let ((lex 1)) (boundp 'lex))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void symbolValueReadsTheGlobalVariableNamespace() {
+		assertThat(evalMulti("(defvar *sv-var* 42) (symbol-value '*sv-var*)")).isEqualTo(new LispInteger(42));
+		assertThat(evalMulti("(setq *sv-var2* 7) (symbol-value (intern \"*sv-var2*\"))")).isEqualTo(new LispInteger(7));
+		assertThat(evalMulti("(symbol-value :kw)").print()).isEqualTo(":kw");
+		assertThat(evalMulti("(symbol-value t)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(symbol-value nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> evalMulti("(symbol-value '*sv-unbound*)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The variable *sv-unbound* is unbound");
+	}
+
+	@Test
+	void fboundpChecksFunctionsMacrosAndSpecialForms() {
+		assertThat(evalMulti("(fboundp 'car)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(fboundp 'cond)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(fboundp 'defun)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(fboundp 'cadr)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(fboundp 'no-such-fn)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(defun fb-fn (x) x) (fboundp 'fb-fn)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(defmacro fb-mac (x) x) (fboundp 'fb-mac)")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void symbolApiFunctionsAreFirstClassValues() {
+		assertThat(evalMulti("(funcall #'symbol-name 'foo)").print()).isEqualTo("\"foo\"");
+		assertThat(evalMulti("(funcall #'intern \"foo\")").print()).isEqualTo("foo");
+		assertThat(evalMulti("(mapcar #'symbol-name '(a b))").print()).isEqualTo("(\"a\" \"b\")");
+		assertThat(evalMulti("(defvar *fc-var* 1) (funcall #'boundp '*fc-var*)")).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test

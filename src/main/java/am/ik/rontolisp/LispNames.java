@@ -719,6 +719,45 @@ public final class LispNames {
 	/** The {@code macroexpand} function. Repeats {@code macroexpand-1} to a fixpoint. */
 	public static final String MACROEXPAND = "macroexpand";
 
+	/**
+	 * The {@code symbol-name} function. Returns the symbol's stored name verbatim (the
+	 * same spelling {@code princ} prints), so keywords keep their leading {@code :} and
+	 * rontolisp's case-preserving lowercase names are NOT upcased like in CL.
+	 */
+	public static final String SYMBOL_NAME = "symbol-name";
+
+	/**
+	 * The {@code intern} function. Returns the symbol named by the argument string,
+	 * verbatim. rontolisp symbols compare by name, so there is no intern table; the
+	 * current package is ignored and a package argument is an error.
+	 */
+	public static final String INTERN = "intern";
+
+	/**
+	 * The {@code find-symbol} function. Like {@code intern} but never creates: returns
+	 * the symbol when the name is known (a {@code cl} symbol, a keyword, or a
+	 * user-defined function), nil otherwise.
+	 */
+	public static final String FIND_SYMBOL = "find-symbol";
+
+	/**
+	 * The {@code make-symbol} function. Returns a fresh uninterned symbol named
+	 * {@code #:<name>} (the same {@code #:} convention gensym uses).
+	 */
+	public static final String MAKE_SYMBOL = "make-symbol";
+
+	/** The {@code boundp} function. Whether a symbol names a bound global variable. */
+	public static final String BOUNDP = "boundp";
+
+	/**
+	 * The {@code fboundp} function. Whether a symbol names a function, macro, or special
+	 * operator.
+	 */
+	public static final String FBOUNDP = "fboundp";
+
+	/** The {@code symbol-value} function. The global variable value named by a symbol. */
+	public static final String SYMBOL_VALUE = "symbol-value";
+
 	/** The {@code defvar} special form. */
 	public static final String DEFVAR = "defvar";
 

@@ -87,6 +87,22 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Look up a name in the variable namespace, searching up the scope chain.
+	 * @param name the variable name
+	 * @return the value, or {@code null} if unbound
+	 */
+	public @Nullable LispVal lookupOrNull(String name) {
+		LispVal val = this.bindings.get(name);
+		if (val != null) {
+			return val;
+		}
+		if (this.parent != null) {
+			return this.parent.lookupOrNull(name);
+		}
+		return null;
+	}
+
+	/**
 	 * Look up a name in the function namespace, searching up the scope chain.
 	 * @param name the function name
 	 * @return the function value
@@ -1414,6 +1430,35 @@ public final class Environment implements Scope {
 				prefix = s.value();
 			}
 			return new LispSymbol("#:" + prefix + gensymCounter.incrementAndGet());
+		}));
+		// symbol-name returns the stored name verbatim (the same spelling princ prints):
+		// rontolisp symbols are case-preserving lowercase (no CL upcase), keywords keep
+		// their leading ':' and gensyms their "#:" prefix.
+		env.defineFunction(LispNames.SYMBOL_NAME, new LispFunction(LispNames.SYMBOL_NAME, args -> {
+			requireArgCount(LispNames.SYMBOL_NAME, args, 1);
+			return switch (args.get(0)) {
+				case LispSymbol sym -> new LispString(sym.name());
+				case LispTrue ignored -> new LispString("t");
+				case LispNil ignored -> new LispString("nil");
+				default -> throw new LispEvalException(
+						LispNames.SYMBOL_NAME + " expects a symbol, got " + args.get(0).print());
+			};
+		}));
+		// make-symbol: rontolisp has no intern table (symbols compare by name), so
+		// "uninterned" is represented by the same "#:" name prefix gensym uses.
+		env.defineFunction(LispNames.MAKE_SYMBOL, new LispFunction(LispNames.MAKE_SYMBOL, args -> {
+			requireArgCount(LispNames.MAKE_SYMBOL, args, 1);
+			return new LispSymbol("#:" + requireString(LispNames.MAKE_SYMBOL, args.get(0)));
+		}));
+		// intern: symbols compare by name, so interning is just symbol construction. The
+		// name is used verbatim (no case folding, the current package is ignored); a
+		// package argument is an error until packages exist at runtime.
+		env.defineFunction(LispNames.INTERN, new LispFunction(LispNames.INTERN, args -> {
+			if (args.size() == 2) {
+				throw new LispEvalException(LispNames.INTERN + " with a package argument is not supported");
+			}
+			requireArgCount(LispNames.INTERN, args, 1);
+			return new LispSymbol(requireString(LispNames.INTERN, args.get(0)));
 		}));
 		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
 			requireArgCount(LispNames.COPY_LIST, args, 1);

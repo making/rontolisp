@@ -211,9 +211,10 @@ docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
    plus print-family optional stream args and format stream destinations.
    **DONE 2026-07-05**; the todo file (59) was removed, details live in
    `.kb/read-load-streams.md` (the rest of 36 stays there).
-6. `.todo/60-symbol-runtime-api.md` -- `intern`/`find-symbol`/`symbol-name`
-   /`make-symbol`/`boundp`/`fboundp`/`symbol-value` (package mutation stays
-   in 38).
+6. Runtime symbol API -- `intern`/`find-symbol`/`symbol-name`/`make-symbol`
+   /`boundp`/`fboundp`/`symbol-value` (package mutation stays in 38).
+   **DONE 2026-07-05**; the todo file (60) was removed, details live in
+   `.kb/symbol-runtime-api.md`.
 7. `.todo/61-split-sequence-e2e.md` -- the integration target: vendor
    split-sequence, load via `asdf:load-system` on all four backends, fix the
    residue, close Phase 3.

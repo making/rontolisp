@@ -374,11 +374,31 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_STR_STREAM_CONTENTS = FUNC_MAKE_STR_ISTREAM + 1;
 
+	// Symbol runtime API helpers (WasmSymbolApiRuntimeBuilder), all unary
+	// ((ref null eq)) -> (ref null eq): _make_symbol copies "#:" + the string content to
+	// a fresh heap symbol, _intern_sym canonicalizes the content range through _intern so
+	// the result's offset matches literals in env lookups, _boundp/_symbol_value probe
+	// the eval global env mirror (GLOBAL_ENV), _fboundp probes GLOBAL_FENV then the
+	// compiled-function registry (_lookup). Appended before FUNC_USER_BASE like the
+	// mod/rem helpers, so no import/FUNC_START index shifts and the component blobs are
+	// unaffected. Always present; boundp/fboundp/symbol-value force usesEval so the
+	// _env_lookup/_lookup bodies they call are real, and intern forces the real _intern
+	// body.
+	static final int FUNC_MAKE_SYMBOL = FUNC_STR_STREAM_CONTENTS + 1;
+
+	static final int FUNC_INTERN_SYM = FUNC_MAKE_SYMBOL + 1;
+
+	static final int FUNC_BOUNDP = FUNC_INTERN_SYM + 1;
+
+	static final int FUNC_SYMBOL_VALUE = FUNC_BOUNDP + 1;
+
+	static final int FUNC_FBOUNDP = FUNC_SYMBOL_VALUE + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
-	// promise-await helper, the two binary stream helpers, and the four string-stream
-	// helpers.
-	static final int FUNC_USER_BASE = FUNC_STR_STREAM_CONTENTS + 1;
+	// promise-await helper, the two binary stream helpers, the four string-stream
+	// helpers, and the five symbol-API helpers.
+	static final int FUNC_USER_BASE = FUNC_FBOUNDP + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -643,8 +663,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesRead = programUsesSymbol(program, LispNames.READ)
 				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
 		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
+		// boundp/symbol-value/fboundp probe the eval global envs through
+		// _env_lookup/_lookup, so they force it too; intern needs the real _intern body
+		// (canonical offsets) which lives in the reader runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
-				|| programUsesSymbol(program, LispNames.APPLY);
+				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP);
 		// rontolisp:fetch is component-only. In component mode it drives the
 		// http.fetch-start / http.fetch-await imports (function indices
 		// FUNC_FETCH_START / FUNC_FETCH_AWAIT); the component wrapper then imports
@@ -746,6 +770,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (exportNeedsReader || importNeedsReader) {
 			usesRead = true;
 		}
+		// The intern built-in canonicalizes through the reader runtime's _intern (so a
+		// runtime-interned symbol's offset matches literals in env lookups); it forces
+		// the real _intern body without pulling in the rest of the reader.
+		boolean usesIntern = usesRead || programUsesSymbol(program, LispNames.INTERN);
 
 		// Inject built-in function wrappers (user defuns take priority)
 		Set<String> userDefinedNames = new HashSet<>();
@@ -764,6 +792,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if (!usesRead) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
+		}
+		// The intern wrapper body calls _intern_sym -> _intern, which is a stub unless
+		// the program itself calls intern (usesIntern), so gate the wrapper the same way
+		// as read-from-string.
+		if (!usesIntern) {
+			wrapperExcludes.add(LispNames.INTERN);
 		}
 		// Hash-table wrappers compile inline hash code (and register maphash's arity-2
 		// dispatch); only inject them when the program uses a hash table, gating the
@@ -1197,15 +1231,20 @@ public final class WasmLispCompiler implements LispCompiler {
 			storeBody = WasmEvalRuntimeBuilder.buildStoreStub();
 		}
 
+		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
+		// t; intern it before the runtime intern blob below is snapshotted so a runtime
+		// (intern "t") canonicalizes to the same offset literals use.
+		int symbolTOffset = stringTable.addString("t").offset();
 		// Build the reader runtime (read/load). Symbols parsed at runtime are interned
 		// against a compile-time table of (offset,length) so they match the offsets the
-		// eval runtime compares against.
+		// eval runtime compares against. The intern built-in reuses _intern for the same
+		// canonicalization (usesIntern), without the rest of the reader.
 		final byte[] internBody;
 		final byte[] readExprBody;
 		final byte[] readListBody;
 		final byte[] readBody;
 		final byte[] loadBody;
-		if (usesRead) {
+		if (usesIntern) {
 			// Intern nil/t/quote/function before snapshotting so the runtime resolves
 			// them to the same offsets the eval runtime uses.
 			int nilOffset = stringTable.addString("nil").offset();
@@ -1216,10 +1255,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			int internCount = internEntries.size();
 			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount);
-			readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset, functionOffset);
-			readListBody = WasmReadRuntimeBuilder.buildReadListBody();
-			readBody = WasmReadRuntimeBuilder.buildReadBody();
-			loadBody = WasmReadRuntimeBuilder.buildLoadBody();
+			if (usesRead) {
+				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset,
+						functionOffset);
+				readListBody = WasmReadRuntimeBuilder.buildReadListBody();
+				readBody = WasmReadRuntimeBuilder.buildReadBody();
+				loadBody = WasmReadRuntimeBuilder.buildLoadBody();
+			}
+			else {
+				readExprBody = WasmReadRuntimeBuilder.buildReadExprStub();
+				readListBody = WasmReadRuntimeBuilder.buildReadListStub();
+				readBody = WasmReadRuntimeBuilder.buildReadStub();
+				loadBody = WasmReadRuntimeBuilder.buildLoadStub();
+			}
 		}
 		else {
 			internBody = WasmReadRuntimeBuilder.buildInternStub();
@@ -1228,6 +1276,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			readBody = WasmReadRuntimeBuilder.buildReadStub();
 			loadBody = WasmReadRuntimeBuilder.buildLoadStub();
 		}
+		// Symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FBOUNDP), built before the
+		// string table is serialized because they embed the offset of the symbol t.
+		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
+		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym();
+		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
+		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
+		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
 
 		// Final static-data layout. The string table is complete here (its last append
 		// was the runtime-reader intern blob above), so the runtime intern table's base
@@ -1634,6 +1689,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _make_str_istream (str)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _str_stream_contents
 															// (stream)
+				// symbol runtime API helpers
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _make_symbol (str)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _intern_sym (str)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _boundp (sym)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _symbol_value (sym)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fboundp (sym)
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1848,6 +1909,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody());
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody());
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildContentsBody());
+				// symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FBOUNDP)
+				code.addFunction(makeSymbolBody);
+				code.addFunction(internSymBody);
+				code.addFunction(boundpBody);
+				code.addFunction(symbolValueBody);
+				code.addFunction(fboundpBody);
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);

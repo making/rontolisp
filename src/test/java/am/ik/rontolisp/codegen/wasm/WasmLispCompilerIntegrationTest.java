@@ -3970,7 +3970,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("210");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("217");
 	}
 
 	@Test
@@ -3985,6 +3985,80 @@ class WasmLispCompilerIntegrationTest {
 		assertThatThrownBy(
 				() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(setq p \"t\") (gensym p)")))
 			.hasMessageContaining("literal string");
+	}
+
+	@Test
+	void symbolNameReturnsTheStoredNameVerbatim() throws Exception {
+		assertThat(compileAndRun("(print (symbol-name 'foo)) (print (symbol-name :bar))"
+				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
+				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
+			.isEqualTo("\"foo\"\n\":bar\"\n\"#:g1\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+	}
+
+	@Test
+	void internReturnsCanonicalSymbols() throws Exception {
+		// the interned symbol's offset is canonicalized through _intern, so eq against
+		// a literal and env lookups (symbol-value below) both work
+		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"foo\") 'foo))"
+				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
+				+ "(print (funcall #'intern \"abc\"))"))
+			.isEqualTo("hello\nt\nt\nround-trip\nabc");
+	}
+
+	@Test
+	void internRejectsAPackageArgument() {
+		assertThatThrownBy(
+				() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (intern \"foo\" :cl-user))")))
+			.hasMessageContaining("package argument is not supported");
+	}
+
+	@Test
+	void makeSymbolReturnsAFreshUninternedSymbol() throws Exception {
+		assertThat(compileAndRun("(print (make-symbol \"temp\")) (print (symbolp (make-symbol \"temp\")))"
+				+ "(print (eq (make-symbol \"foo\") 'foo)) (print (funcall #'make-symbol \"m\"))"))
+			.isEqualTo("#:temp\nt\nnil\n#:m");
+	}
+
+	@Test
+	void findSymbolFoldsLiterals() throws Exception {
+		assertThat(compileAndRun("(print (find-symbol \"car\")) (print (find-symbol \"cond\"))"
+				+ "(print (find-symbol \"no-such-name\")) (defun fs-fn (x) x) (print (find-symbol \"fs-fn\"))"))
+			.isEqualTo("car\ncond\nnil\nfs-fn");
+	}
+
+	@Test
+	void findSymbolRejectsAComputedArgument() {
+		assertThatThrownBy(() -> new WasmLispCompiler()
+			.compile(LispReader.readAllFromString("(setq n \"car\") (print (find-symbol n))")))
+			.hasMessageContaining("literal string");
+	}
+
+	@Test
+	void boundpChecksTheGlobalVariableNamespace() throws Exception {
+		assertThat(compileAndRun("(defvar *bp-var* 1) (print (boundp '*bp-var*)) (print (boundp '*bp-nope*))"
+				+ "(print (boundp :kw)) (print (boundp t)) (print (boundp nil))"
+				+ "(let ((lex 1)) (print (boundp 'lex)))"))
+			.isEqualTo("t\nnil\nt\nt\nt\nnil");
+	}
+
+	@Test
+	void symbolValueReadsTheGlobalVariableNamespace() throws Exception {
+		assertThat(compileAndRun("(defvar *sv-var* 42) (print (symbol-value '*sv-var*))"
+				+ "(setq *sv-var2* 7) (print (symbol-value (intern \"*sv-var2*\")))"
+				+ "(print (symbol-value :kw)) (print (symbol-value t)) (print (symbol-value nil))"))
+			.isEqualTo("42\n7\n:kw\nt\nnil");
+	}
+
+	@Test
+	void fboundpChecksFunctionsMacrosAndSpecialForms() throws Exception {
+		// literal arguments fold at compile time (macros/special forms included);
+		// computed arguments probe the runtime _fenv/_lookup registries (functions only)
+		assertThat(compileAndRun("(print (fboundp 'car)) (print (fboundp 'cond)) (print (fboundp 'defun))"
+				+ "(print (fboundp 'cadr)) (print (fboundp 'no-such-fn))"
+				+ "(defun fb-fn (x) x) (print (fboundp 'fb-fn))"
+				+ "(print (fboundp (intern \"fb-fn\"))) (print (fboundp (intern \"car\")))"
+				+ "(print (fboundp (intern \"nothing\")))"))
+			.isEqualTo("t\nt\nt\nt\nnil\nt\nt\nt\nnil");
 	}
 
 	@Test

@@ -89,7 +89,9 @@ public final class PackageRegistry {
 			LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_DIMENSIONS,
 			LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE, LispNames.ROW_MAJOR_AREF,
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND,
-			LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING);
+			LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING,
+			LispNames.SYMBOL_NAME, LispNames.INTERN, LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP,
+			LispNames.FBOUNDP, LispNames.SYMBOL_VALUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

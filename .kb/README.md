@@ -11,6 +11,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time macro expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
+- [symbol-runtime-api.md](symbol-runtime-api.md) -- `symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value` (verbatim names, no intern table, global-only variable lookups)
 - [defstruct.md](defstruct.md) -- `defstruct` expansion into plain defuns, tagged-list representation, setf accessor registry
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
 - [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling

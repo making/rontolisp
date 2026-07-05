@@ -133,7 +133,7 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 (print (rontolisp:list-special-forms))
 ; => (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 192
+; => 217
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

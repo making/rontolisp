@@ -224,6 +224,13 @@ categories:
   - title: "シンボルとマクロ"
     functions:
       - { slug: gensym, name: "gensym" }
+      - { slug: make-symbol, name: "make-symbol" }
+      - { slug: intern, name: "intern" }
+      - { slug: find-symbol, name: "find-symbol" }
+      - { slug: symbol-name, name: "symbol-name" }
+      - { slug: symbol-value, name: "symbol-value" }
+      - { slug: boundp, name: "boundp" }
+      - { slug: fboundp, name: "fboundp" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
   - title: "ストリームとファイル"

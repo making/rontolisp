@@ -1022,7 +1022,7 @@ cases:
     expected: |
       (and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      210
+      217
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -2617,3 +2617,52 @@ cases:
       3
       15
       (11 3)
+  - name: symbol-runtime-api
+    source: |
+      (print (symbol-name 'foo))
+      (print (symbol-name :bar))
+      (print (intern "sym-api-hello"))
+      (print (eq (intern "foo") 'foo))
+      (print (intern (symbol-name 'sym-api-round-trip)))
+      (print (find-symbol "car"))
+      (print (find-symbol "cond"))
+      (print (find-symbol "sym-api-no-such-name"))
+      (print (make-symbol "sym-api-temp"))
+      (print (eq (make-symbol "foo") 'foo))
+      (defvar *sym-api-var* 42)
+      (print (boundp '*sym-api-var*))
+      (print (boundp '*sym-api-nope*))
+      (print (boundp :sym-api-kw))
+      (print (symbol-value '*sym-api-var*))
+      (print (symbol-value (intern "*sym-api-var*")))
+      (print (symbol-value :sym-api-kw))
+      (defun sym-api-fn (x) x)
+      (print (fboundp 'sym-api-fn))
+      (print (fboundp 'car))
+      (print (fboundp 'cond))
+      (print (fboundp 'sym-api-no-such-fn))
+      (print (fboundp (intern "sym-api-fn")))
+      (print (mapcar #'symbol-name '(a b)))
+    expected: |
+      "foo"
+      ":bar"
+      sym-api-hello
+      t
+      sym-api-round-trip
+      car
+      cond
+      nil
+      #:sym-api-temp
+      nil
+      t
+      nil
+      t
+      42
+      42
+      :sym-api-kw
+      t
+      t
+      t
+      nil
+      t
+      ("a" "b")

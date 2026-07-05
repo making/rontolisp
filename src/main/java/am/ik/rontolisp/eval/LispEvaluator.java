@@ -204,6 +204,71 @@ public final class LispEvaluator {
 			}
 			return resolveFunction(sym.name());
 		}));
+		// boundp/symbol-value read the GLOBAL variable namespace only (like CL, where
+		// symbol-value never sees lexical bindings); they live on the evaluator because
+		// they capture the global environment. fboundp and find-symbol additionally need
+		// the user macro table.
+		this.globalEnv.defineFunction(LispNames.BOUNDP, new LispFunction(LispNames.BOUNDP, args -> {
+			requireSingleArg(LispNames.BOUNDP, args);
+			return switch (args.get(0)) {
+				case LispTrue ignored -> LispTrue.INSTANCE;
+				case LispNil ignored -> LispTrue.INSTANCE;
+				case LispSymbol sym -> sym.isKeyword() || this.globalEnv.lookupOrNull(sym.name()) != null
+						? LispTrue.INSTANCE : LispNil.INSTANCE;
+				default ->
+					throw new LispEvalException(LispNames.BOUNDP + " expects a symbol, got " + args.get(0).print());
+			};
+		}));
+		this.globalEnv.defineFunction(LispNames.SYMBOL_VALUE, new LispFunction(LispNames.SYMBOL_VALUE, args -> {
+			requireSingleArg(LispNames.SYMBOL_VALUE, args);
+			return switch (args.get(0)) {
+				case LispTrue t -> t;
+				case LispNil nil -> nil;
+				case LispSymbol sym -> {
+					if (sym.isKeyword()) {
+						yield sym;
+					}
+					LispVal value = this.globalEnv.lookupOrNull(sym.name());
+					if (value == null) {
+						throw new LispEvalException("The variable " + sym.name() + " is unbound");
+					}
+					yield value;
+				}
+				default -> throw new LispEvalException(
+						LispNames.SYMBOL_VALUE + " expects a symbol, got " + args.get(0).print());
+			};
+		}));
+		// fboundp is t for anything callable or expandable: functions, user macros, and
+		// the built-in macros/special forms (CL: fboundp is true of macros and special
+		// operators too).
+		this.globalEnv.defineFunction(LispNames.FBOUNDP, new LispFunction(LispNames.FBOUNDP, args -> {
+			requireSingleArg(LispNames.FBOUNDP, args);
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
+			}
+			String name = sym.name();
+			boolean bound = SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
+					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispMacroExpander.isCarCdrComposition(name);
+			return bound ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// find-symbol never creates: the symbol comes back only when the name is already
+		// known to the image (a cl symbol, a keyword, or a user definition). The
+		// compilers
+		// fold a literal call against their compile-time view (cl symbols + user defuns).
+		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL, new LispFunction(LispNames.FIND_SYMBOL, args -> {
+			if (args.size() == 2) {
+				throw new LispEvalException(LispNames.FIND_SYMBOL + " with a package argument is not supported");
+			}
+			requireSingleArg(LispNames.FIND_SYMBOL, args);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+			}
+			String name = str.value();
+			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
+					|| this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
+					|| this.globalEnv.lookupOrNull(name) != null;
+			return known ? new LispSymbol(name) : LispNil.INSTANCE;
+		}));
 		this.globalEnv.defineFunction(LispNames.FUNCALL, new LispFunction(LispNames.FUNCALL, args -> {
 			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
@@ -1196,6 +1261,12 @@ public final class LispEvaluator {
 		}
 		throw new LispEvalException(
 				LispNames.FUNCTION + " expects a function name or lambda expression, got " + designator.print());
+	}
+
+	private static void requireSingleArg(String name, List<LispVal> args) {
+		if (args.size() != 1) {
+			throw new LispEvalException(name + " expects 1 argument, got " + args.size());
+		}
 	}
 
 	/**

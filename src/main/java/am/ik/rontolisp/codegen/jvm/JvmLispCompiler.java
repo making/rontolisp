@@ -477,8 +477,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
 		// every arity up to the maximum callable must have a dispatch method. The apply
 		// built-in reuses _apply, so it forces the eval runtime to be emitted as well.
+		// boundp/symbol-value/fboundp resolve symbols at runtime against the eval
+		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
+		// they force the eval runtime like apply does.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava
-				|| programUsesSymbol(program, LispNames.APPLY);
+				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP);
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);

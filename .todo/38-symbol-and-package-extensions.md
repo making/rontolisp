@@ -1,6 +1,12 @@
 # Symbol and package system extensions
 
-**Status:** not implemented. Medium priority — needed for larger programs and libraries.
+**Status:** the symbol-function subset (`symbol-name`/`symbol-value`/`boundp`
+/`fboundp`/`intern`/`find-symbol`/`make-symbol` + the earlier `gensym`) shipped
+2026-07-05 as ASDF Phase 3 unit 6 — see `.kb/symbol-runtime-api.md` for the
+semantics (verbatim names, no intern table, global-only variable lookups,
+compile-path folds/gates). The rest below (symbol plists, `copy-symbol`,
+`unintern`, `macro-function`, and ALL package-mutation functions) remains
+unimplemented. Medium priority — needed for larger programs and libraries.
 
 ## What's missing
 
