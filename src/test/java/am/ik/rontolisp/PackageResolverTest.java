@@ -386,12 +386,97 @@ class PackageResolverTest {
 
 	@Test
 	void defpackageUnsupportedClauseIsRejected() {
-		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:nicknames :mp))"))
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadow :car))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining(":shadow is not supported");
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadowing-import-from :other :f))"))
 			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Unsupported defpackage clause: :nicknames");
-		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:documentation \"doc\"))"))
+			.hasMessageContaining(":shadowing-import-from is not supported");
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:intern :f))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Unsupported defpackage clause: :intern");
+	}
+
+	@Test
+	void defpackageDocumentationAndSizeAreIgnored() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:documentation \"doc\") (:size 10))"))
+			.isEqualTo("(quote mypkg)");
+	}
+
+	@Test
+	void defpackageNicknamesResolveLikeTheCanonicalName() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :mypackage (:use :cl) (:nicknames :mp :mypkg2) (:export :greet))");
+		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(mypackage:greet)");
+		assertThat(resolve(resolver, "(mypkg2:greet)")).isEqualTo("(mypackage:greet)");
+		assertThat(resolve(resolver, "(in-package :mp)")).isEqualTo("(quote mypackage)");
+		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mp)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Package already exists: mp");
+	}
+
+	@Test
+	void defpackageNicknameCollidingWithExistingPackageIsRejected() {
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:nicknames :cl-user))"))
 			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Unsupported defpackage clause: :documentation");
+			.hasMessageContaining("Package already exists: cl-user");
+	}
+
+	@Test
+	void commonLispNicknamesResolveToClAndClUser() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(common-lisp:car x)")).isEqualTo("(car x)");
+		assertThat(resolve(resolver, "(in-package :common-lisp-user)")).isEqualTo("(quote cl-user)");
+		resolve(resolver, "(defpackage :mypkg (:use :common-lisp) (:export :f))");
+		resolve(resolver, "(in-package :mypkg)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(car mypkg::x)");
+	}
+
+	@Test
+	void defpackageUninternedSymbolDesignatorsAreAccepted() {
+		// The portable defpackage idiom spells every designator #:name.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage #:mypkg (:use #:common-lisp) (:nicknames #:mp) (:export #:greet))");
+		resolve(resolver, "(in-package #:mypkg)");
+		assertThat(resolve(resolver, "(defun greet () (car x))")).isEqualTo("(defun mypkg:greet nil (car mypkg::x))");
+		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(mypkg:greet)");
+	}
+
+	@Test
+	void defpackageImportFromMapsToTheSourcePackage() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :base (:use :cl) (:export :pub))");
+		resolve(resolver, "(defpackage :client (:use :cl) (:import-from :base :pub))");
+		resolve(resolver, "(in-package :client)");
+		// The imported name resolves unqualified to the source package's canonical
+		// spelling, and client:pub redirects there too.
+		assertThat(resolve(resolver, "(pub)")).isEqualTo("(base:pub)");
+		assertThat(resolve(resolver, "(client::pub)")).isEqualTo("(base:pub)");
+	}
+
+	@Test
+	void defpackageImportFromClWorksWithoutUsingCl() {
+		// The (:import-from #:common-lisp ...) idiom of use-nothing libraries.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :bare (:import-from #:common-lisp #:car #:defun))");
+		resolve(resolver, "(in-package :bare)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(car bare::x)");
+		assertThatThrownBy(() -> resolve(resolver, "(cdr x)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Undefined symbol: cdr");
+	}
+
+	@Test
+	void defpackageImportFromUnknownPackageIsRejected() {
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:import-from :nosuch :f))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: nosuch");
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:import-from))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining(":import-from expects a package name");
+	}
+
+	@Test
+	void uninternedSymbolPassesThroughUnresolved() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(in-package :rontolisp)");
+		assertThat(resolve(resolver, "#:g1")).isEqualTo("#:g1");
 	}
 
 	@Test

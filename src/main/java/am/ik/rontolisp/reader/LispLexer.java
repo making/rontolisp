@@ -3,21 +3,50 @@ package am.ik.rontolisp.reader;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+
 /**
- * Tokenizer for Lisp source code.
+ * Tokenizer for Lisp source code. Besides tokenizing, the lexer resolves the read-time
+ * syntax that never reaches the parser: {@code #| ... |#} block comments (nesting, like
+ * Common Lisp) and the {@code #+}/{@code #-} feature conditionals, evaluated against the
+ * active {@link Features} -- a failing guard skips the following form at the raw
+ * character level, so a skipped form may use syntax the reader does not support.
+ * {@code #.} read-time evaluation is not supported and is a clear error; in the tolerant
+ * mode used for {@code .asd} files it is skipped with a warning instead (the
+ * version-guard idiom).
  */
 public final class LispLexer {
 
 	private final String input;
 
+	private final Features features;
+
+	private final boolean tolerateReadEval;
+
 	private int pos;
+
+	/**
+	 * Create a new lexer for the given input with the interpreter feature set.
+	 * @param input the source code string
+	 */
+	public LispLexer(String input) {
+		this(input, Features.INTERPRETER, false);
+	}
 
 	/**
 	 * Create a new lexer for the given input.
 	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param tolerateReadEval whether a {@code #.} form is skipped with a warning instead
+	 * of being an error (used for {@code .asd} files)
 	 */
-	public LispLexer(String input) {
+	public LispLexer(String input, Features features, boolean tolerateReadEval) {
 		this.input = input;
+		this.features = features;
+		this.tolerateReadEval = tolerateReadEval;
 		this.pos = 0;
 	}
 
@@ -67,6 +96,21 @@ public final class LispLexer {
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\'') {
 				tokens.add(new Token.FunctionQuote());
 				this.pos += 2;
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == '+' || this.input.charAt(this.pos + 1) == '-')) {
+				readFeatureConditional();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
+				if (!this.tolerateReadEval) {
+					throw new LispReadException("#. read-time evaluation is not supported");
+				}
+				System.err.println("warning: skipping unsupported #. read-time-eval form");
+				this.pos += 2;
+				skipDatum();
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
 				tokens.add(readChar());
@@ -374,6 +418,244 @@ public final class LispLexer {
 		}
 		this.pos++; // skip closing "
 		return new Token.StringToken(sb.toString());
+	}
+
+	// --- Feature conditionals (#+ / #-) ------------------------------------------
+	//
+	// The feature expression after #+/#- is parsed here, with a minimal reader over
+	// symbols and lists (a feature expression never uses other syntax), and evaluated
+	// against the active feature set. When the guard fails, the following form is
+	// skipped at the raw character level (skipDatum), NOT tokenized: this is what lets
+	// a guarded form use syntax rontolisp does not support, which is the whole point
+	// of #+/#- in portable libraries.
+
+	private void readFeatureConditional() {
+		boolean negated = this.input.charAt(this.pos + 1) == '-';
+		this.pos += 2; // skip "#+" / "#-"
+		LispVal expr = readFeatureExpr();
+		if (this.features.isEnabled(expr) == negated) {
+			skipDatum();
+		}
+	}
+
+	private LispVal readFeatureExpr() {
+		skipInterTokenSpace();
+		if (this.pos >= this.input.length()) {
+			throw new LispReadException("Unexpected end of input in feature expression");
+		}
+		char c = this.input.charAt(this.pos);
+		if (c == '(') {
+			this.pos++;
+			List<LispVal> items = new ArrayList<>();
+			while (true) {
+				skipInterTokenSpace();
+				if (this.pos >= this.input.length()) {
+					throw new LispReadException("Unexpected end of input in feature expression, expected ')'");
+				}
+				if (this.input.charAt(this.pos) == ')') {
+					this.pos++;
+					break;
+				}
+				items.add(readFeatureExpr());
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = items.size() - 1; i >= 0; i--) {
+				list = new LispCons(items.get(i), list);
+			}
+			return list;
+		}
+		if (isSymbolChar(c)) {
+			int start = this.pos;
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+			return new LispSymbol(this.input.substring(start, this.pos));
+		}
+		throw new LispReadException("Invalid feature expression starting with '" + c + "'");
+	}
+
+	// Skips whitespace and comments (line and block) between tokens.
+	private void skipInterTokenSpace() {
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (Character.isWhitespace(c)) {
+				this.pos++;
+			}
+			else if (c == ';') {
+				skipComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+			}
+			else {
+				return;
+			}
+		}
+	}
+
+	// Skips a #| ... |# block comment, honoring nesting like Common Lisp.
+	private void skipBlockComment() {
+		this.pos += 2; // skip "#|"
+		int depth = 1;
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (c == '|' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '#') {
+				this.pos += 2;
+				if (--depth == 0) {
+					return;
+				}
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				this.pos += 2;
+				depth++;
+			}
+			else {
+				this.pos++;
+			}
+		}
+		throw new LispReadException("Unterminated block comment");
+	}
+
+	// Skips one datum at the raw character level, without tokenizing it, so a form
+	// guarded by a failing #+/#- may use syntax the reader does not support.
+	private void skipDatum() {
+		skipInterTokenSpace();
+		if (this.pos >= this.input.length()) {
+			throw new LispReadException("Unexpected end of input, expected a form to skip");
+		}
+		char c = this.input.charAt(this.pos);
+		if (c == '\'' || c == '`') {
+			this.pos++;
+			skipDatum();
+			return;
+		}
+		if (c == ',') {
+			this.pos++;
+			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '@') {
+				this.pos++;
+			}
+			skipDatum();
+			return;
+		}
+		if (c == '"') {
+			skipStringRaw();
+			return;
+		}
+		if (c == '(') {
+			skipDelimitedList();
+			return;
+		}
+		if (c == ')') {
+			throw new LispReadException("Unexpected ')' where a form to skip was expected");
+		}
+		if (c == '#' && this.pos + 1 < this.input.length()) {
+			char next = this.input.charAt(this.pos + 1);
+			if (next == '\\') {
+				skipCharLiteralRaw();
+				return;
+			}
+			if (next == '\'') {
+				this.pos += 2;
+				skipDatum();
+				return;
+			}
+			if (next == '(') {
+				this.pos++;
+				skipDelimitedList();
+				return;
+			}
+			if (next == '+' || next == '-') {
+				// A nested conditional inside a skipped form: skip its feature
+				// expression and its guarded form, like *read-suppress*.
+				this.pos += 2;
+				skipDatum();
+				skipDatum();
+				return;
+			}
+			if (next == '.') {
+				this.pos += 2;
+				skipDatum();
+				return;
+			}
+			// #2A(...) and friends: skip the symbol-shaped prefix, then a directly
+			// following list (a glued '(' only occurs in array literals here).
+			this.pos++;
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '(') {
+				skipDelimitedList();
+			}
+			return;
+		}
+		// A symbol or number token.
+		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			this.pos++;
+		}
+	}
+
+	// Skips a balanced (...) list at the raw character level, honoring strings,
+	// comments and character literals (so #\( and "..." do not confuse the depth).
+	private void skipDelimitedList() {
+		int depth = 0;
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (c == '"') {
+				skipStringRaw();
+			}
+			else if (c == ';') {
+				skipComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
+				skipCharLiteralRaw();
+			}
+			else if (c == '(') {
+				depth++;
+				this.pos++;
+			}
+			else if (c == ')') {
+				depth--;
+				this.pos++;
+				if (depth == 0) {
+					return;
+				}
+			}
+			else {
+				this.pos++;
+			}
+		}
+		throw new LispReadException("Unexpected end of input in a skipped form, expected ')'");
+	}
+
+	private void skipStringRaw() {
+		this.pos++; // skip opening "
+		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '"') {
+			if (this.input.charAt(this.pos) == '\\' && this.pos + 1 < this.input.length()) {
+				this.pos++;
+			}
+			this.pos++;
+		}
+		if (this.pos >= this.input.length()) {
+			throw new LispReadException("Unterminated string literal");
+		}
+		this.pos++; // skip closing "
+	}
+
+	private void skipCharLiteralRaw() {
+		this.pos += 2; // skip "#\"
+		if (this.pos >= this.input.length()) {
+			throw new LispReadException("Unexpected end of input after #\\");
+		}
+		char first = this.input.charAt(this.pos);
+		this.pos++;
+		if (Character.isLetter(first)) {
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+		}
 	}
 
 	private static boolean isDigit(char c) {

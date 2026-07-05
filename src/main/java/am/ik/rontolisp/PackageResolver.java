@@ -1,8 +1,10 @@
 package am.ik.rontolisp;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -88,7 +90,7 @@ public final class PackageResolver {
 		if (parts.size() != 2) {
 			throw new LispPackageException(LispNames.IN_PACKAGE + " expects exactly one argument");
 		}
-		String name = packageDesignator(LispNames.IN_PACKAGE, parts.get(1));
+		String name = this.registry.canonicalName(packageDesignator(LispNames.IN_PACKAGE, parts.get(1)));
 		if (!this.registry.contains(name)) {
 			throw new LispPackageException("No such package: " + name);
 		}
@@ -101,7 +103,12 @@ public final class PackageResolver {
 	 * (:use ...) (:export ...))} directive. Exported names become owned and external;
 	 * symbols interned later (defuns under {@code (in-package NAME)}, free variables) are
 	 * internal. Without a {@code :use} clause nothing is visible unqualified (like SBCL),
-	 * so {@code (:use :cl)} must be spelled out. Any other clause is an error.
+	 * so {@code (:use :cl)} must be spelled out. {@code :nicknames} registers alternate
+	 * package names, {@code :import-from} maps the named symbols to their source package
+	 * (resolution is textual, so an imported name simply resolves to the source package's
+	 * canonical spelling), and {@code :documentation}/{@code :size} are accepted and
+	 * ignored. {@code :shadow}/{@code :shadowing-import-from} (and any other clause) are
+	 * an error.
 	 */
 	private LispVal resolveDefpackage(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -114,6 +121,8 @@ public final class PackageResolver {
 		}
 		List<String> useList = new ArrayList<>();
 		Set<String> exports = new HashSet<>();
+		List<String> nicknames = new ArrayList<>();
+		Map<String, String> imports = new HashMap<>();
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
 					|| !keyword.isKeyword()) {
@@ -124,7 +133,8 @@ public final class PackageResolver {
 			switch (keyword.name()) {
 				case LispNames.USE_KEYWORD -> {
 					for (LispVal arg : args.subList(1, args.size())) {
-						String used = designator(LispNames.USE_KEYWORD, "a package name", arg);
+						String used = this.registry
+							.canonicalName(designator(LispNames.USE_KEYWORD, "a package name", arg));
 						if (!this.registry.contains(used)) {
 							throw new LispPackageException("No such package: " + used);
 						}
@@ -138,11 +148,42 @@ public final class PackageResolver {
 						exports.add(designator(LispNames.EXPORT_KEYWORD, "a symbol name", arg));
 					}
 				}
+				case LispNames.NICKNAMES_KEYWORD -> {
+					for (LispVal arg : args.subList(1, args.size())) {
+						String nickname = designator(LispNames.NICKNAMES_KEYWORD, "a package name", arg);
+						if (this.registry.contains(nickname)) {
+							throw new LispPackageException("Package already exists: " + nickname);
+						}
+						nicknames.add(nickname);
+					}
+				}
+				case LispNames.IMPORT_FROM_KEYWORD -> {
+					if (args.size() < 2) {
+						throw new LispPackageException(LispNames.IMPORT_FROM_KEYWORD + " expects a package name");
+					}
+					String source = this.registry
+						.canonicalName(designator(LispNames.IMPORT_FROM_KEYWORD, "a package name", args.get(1)));
+					if (!this.registry.contains(source)) {
+						throw new LispPackageException("No such package: " + source);
+					}
+					for (LispVal arg : args.subList(2, args.size())) {
+						imports.put(designator(LispNames.IMPORT_FROM_KEYWORD, "a symbol name", arg), source);
+					}
+				}
+				// Metadata: accepted for portability, not recorded anywhere.
+				case ":documentation", ":size" -> {
+				}
+				case ":shadow", ":shadowing-import-from" -> throw new LispPackageException(LispNames.DEFPACKAGE + " "
+						+ keyword.name() + " is not supported (rontolisp has no symbol shadowing)");
 				default -> throw new LispPackageException(
 						"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
 			}
 		}
-		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(exports), Set.copyOf(exports)));
+		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(exports), Set.copyOf(exports),
+				Map.copyOf(imports)));
+		for (String nickname : nicknames) {
+			this.registry.defineNickname(nickname, name);
+		}
 		return quotedSymbol(name);
 	}
 
@@ -152,8 +193,10 @@ public final class PackageResolver {
 
 	private static String designator(String context, String kind, LispVal designator) {
 		return switch (designator) {
-			// A keyword (:cl-user) or a bare symbol (cl-user); strip a leading colon.
-			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			// A keyword (:cl-user), an uninterned symbol (#:cl-user, the common
+			// defpackage idiom) or a bare symbol (cl-user); strip the prefix.
+			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
+					: sym.isKeyword() ? sym.name().substring(1) : sym.name();
 			case LispString str -> str.value();
 			default -> throw new LispPackageException(context + " expects " + kind + ", got " + designator.print());
 		};
@@ -261,6 +304,11 @@ public final class PackageResolver {
 		if (sym.name().startsWith("&")) {
 			return sym;
 		}
+		// An uninterned symbol (#:foo, or a gensym-produced #:g1) belongs to no
+		// package; it passes through like a keyword.
+		if (sym.name().startsWith("#:")) {
+			return sym;
+		}
 		String name = sym.name();
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn != null) {
@@ -270,7 +318,7 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveQualified(PackageRegistry.QualifiedName qn) {
-		String pkg = qn.pkg();
+		String pkg = this.registry.canonicalName(qn.pkg());
 		String member = qn.member();
 		if (!this.registry.contains(pkg)) {
 			throw new LispPackageException("No such package: " + pkg);
@@ -283,6 +331,12 @@ public final class PackageResolver {
 		if (!qn.internal() && !isExternal(pkg, member)) {
 			throw new LispPackageException("The symbol " + member + " is not external in the " + pkg + " package (use "
 					+ PackageRegistry.qualifyInternal(pkg, member) + ")");
+		}
+		// A symbol imported via :import-from lives in its source package; resolution is
+		// textual, so redirect to the source package's canonical spelling.
+		String importSource = this.registry.get(pkg).imports().get(member);
+		if (importSource != null) {
+			pkg = importSource;
 		}
 		// cl and cl-user are normalized to bare names; other packages keep the qualified
 		// canonical name.
@@ -307,6 +361,17 @@ public final class PackageResolver {
 			throw new LispPackageException(
 					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");
 		}
+		LispPackage current = this.registry.get(this.currentPackage);
+		// A symbol imported via :import-from resolves to its source package's canonical
+		// spelling. Checked before the cl branch so (:import-from :cl :car) works in a
+		// package that does not use cl.
+		String importSource = current.imports().get(name);
+		if (importSource != null) {
+			if (LispNames.CL_PKG.equals(importSource) || LispNames.CL_USER_PKG.equals(importSource)) {
+				return new LispSymbol(name);
+			}
+			return canonical(importSource, name);
+		}
 		if (PackageRegistry.isClSymbol(name)) {
 			if (currentUsesCl()) {
 				return new LispSymbol(name);
@@ -314,7 +379,6 @@ public final class PackageResolver {
 			throw new LispPackageException(
 					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");
 		}
-		LispPackage current = this.registry.get(this.currentPackage);
 		if (current.owns(name)) {
 			return canonical(this.currentPackage, name);
 		}

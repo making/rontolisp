@@ -76,11 +76,17 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 ## サポート範囲 (と非サポート)
 
 - `.asd` ファイルは**データ**として解析されます: `defsystem` (裸または `asdf:` 修飾) と
-  `in-package` フォーム (スキップ) のみ書けます。リーダーレベルの ASDF イディオム —
-  `#+`/`#-` フィーチャ条件、`#.` リード時評価 — はサポートされません。
+  `in-package` フォーム (スキップ) のみ書けます。`#+`/`#-` フィーチャ条件は動作し
+  (ターゲットバックエンドのフィーチャーに対して評価されます。
+  [データ型](../reference/data-types.md#コメントフィーチャー条件features)を参照)、
+  `#.` リード時評価フォーム — ASDF バージョンガードの慣用形 — は、通常の read
+  エラーの代わりに警告付きでスキップされます。
 - `defsystem` はメタデータオプション (無視)、`:depends-on`、`:serial`、
   `:file`/`:module`/`:static-file` エントリを持つ `:components` をサポートします。
-  それ以外 (`:in-order-to`、`:perform`、`:defsystem-depends-on`、`:if-feature`、
+  コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
+  場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
+  ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
+  維持されます。それ以外 (`:in-order-to`、`:perform`、`:defsystem-depends-on`、
   `(:read-file-form ...)` など) は句を名指しするエラーです。
   `test-op`/`operate` の機構はありません。
 - 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます。

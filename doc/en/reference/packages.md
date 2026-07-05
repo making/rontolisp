@@ -9,7 +9,7 @@ rontolisp has a small namespace (package) system with six built-in packages, plu
 - **`java`** — Java interop by reflection, usable only under the JVM interpreter (`java -jar rontolisp.jar`), not the compilers or the native binary. It does **not** use `cl`. It owns `new`, `call`, `static`, `field` and `proxy`; see the [Java interop guide](../guides/java-interop.md).
 - **`asdf`** — a limited, API-compatible subset of ASDF (system definitions): `defsystem` and `load-system`. It does **not** use `cl`. See the [Systems guide](../guides/asdf-systems.md).
 
-A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`).
+A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`). The standard Common Lisp names `common-lisp` and `common-lisp-user` are built-in **nicknames** for `cl` and `cl-user`, so portable `(:use #:common-lisp)` clauses and `common-lisp:car` references resolve; user packages can register their own nicknames with the `defpackage` `:nicknames` clause.
 
 ```lisp
 (print *package*)              ; => cl-user
@@ -81,21 +81,32 @@ New packages are defined with [`defpackage`](special-forms/defpackage.md):
 
 Like `in-package`, `defpackage` is a **literal, top-level directive consumed at
 read/compile time**, so packages are defined in source order, before any use.
-The supported clauses are `(:use package...)` and `(:export symbol...)`; the
-name and the clause arguments are keywords, bare symbols, or strings. Any other
-clause (`:nicknames`, `:shadow`, `:import-from`, `:documentation`, ...) is an
-error, and so is redefining an existing package or using a package that does
-not exist yet.
+The supported clauses are `(:use package...)`, `(:export symbol...)`,
+`(:nicknames name...)` and `(:import-from package symbol...)`, plus
+`(:documentation "...")`/`(:size n)` which are accepted and ignored; the name
+and the clause arguments are keywords, bare symbols, strings, or uninterned
+symbols (`#:name`, the portable defpackage idiom). `:shadow` and
+`:shadowing-import-from` are errors (rontolisp has no symbol shadowing), and so
+is any other clause, redefining an existing package, or using a package that
+does not exist yet.
 
 - `:use` makes the **external** symbols of the used packages visible
   unqualified, as in Common Lisp — internal symbols of a used package still
   need the double colon. Without a `:use` clause nothing is inherited (like
   SBCL), so `cl` symbols would need the `cl:` prefix; ordinary packages should
-  say `(:use :cl)`. When several used packages export the same name, the first
-  package in `:use` order wins (Common Lisp signals a conflict instead).
+  say `(:use :cl)` (or, portably, `(:use #:common-lisp)`). When several used
+  packages export the same name, the first package in `:use` order wins
+  (Common Lisp signals a conflict instead).
 - `:export` declares the package's external symbols. Symbols interned later
   (a `defun` under `(in-package name)` that is not in the `:export` clause, a
   free variable) are internal, exactly like the built-in packages.
+- `:nicknames` registers alternate names that resolve everywhere the canonical
+  name does (in qualifiers, `in-package`, `:use`, ...). A nickname colliding
+  with an existing package or nickname is an error.
+- `:import-from` makes the named symbols of one package visible unqualified
+  without using the whole package. Resolution is textual: an imported name
+  resolves to the source package's canonical spelling, so importing and then
+  re-exporting a symbol makes `mypkg:name` refer to the original definition.
 
 There is no runtime package manipulation: `make-package`, `export`, `import`,
 `use-package`, `find-package` and friends are not available, and a `defpackage`

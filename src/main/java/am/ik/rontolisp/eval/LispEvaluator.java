@@ -28,6 +28,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -583,7 +584,8 @@ public final class LispEvaluator {
 			searchDirs.add(baseDir == null ? "" : baseDir);
 			searchDirs.addAll(this.systemPath);
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path())) {
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
+					Features.INTERPRETER)) {
 				this.asdfSystems.putIfAbsent(defined.name(), defined);
 			}
 			system = this.asdfSystems.get(name);
@@ -618,7 +620,8 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalDefsystem(LispCons cons) {
 		String baseDir = this.loadDirStack.peekLast();
-		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir);
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir,
+				Features.INTERPRETER);
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
 	}

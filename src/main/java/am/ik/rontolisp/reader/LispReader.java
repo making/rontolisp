@@ -26,10 +26,13 @@ public final class LispReader {
 
 	private final List<Token> tokens;
 
+	private final Features features;
+
 	private int pos;
 
-	private LispReader(List<Token> tokens) {
+	private LispReader(List<Token> tokens, Features features) {
 		this.tokens = tokens;
+		this.features = features;
 		this.pos = 0;
 	}
 
@@ -47,13 +50,41 @@ public final class LispReader {
 	}
 
 	/**
-	 * Read all expressions from the input string.
+	 * Read all expressions from the input string with the interpreter feature set.
 	 * @param input the source code string
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllFromString(String input) {
-		List<Token> tokens = new LispLexer(input).tokenize();
-		LispReader reader = new LispReader(tokens);
+		return readAllFromString(input, Features.INTERPRETER);
+	}
+
+	/**
+	 * Read all expressions from the input string. The feature set drives the
+	 * {@code #+}/{@code #-} conditionals and the {@code *features*} substitution, so the
+	 * compile path passes the target backend's features.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllFromString(String input, Features features) {
+		return readAll(input, features, false);
+	}
+
+	/**
+	 * Read all expressions from the input string, skipping {@code #.} read-time-eval
+	 * forms with a warning instead of erroring. Used for {@code .asd} files, whose
+	 * leading {@code #.} version guards would otherwise make the whole file unreadable.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllSkippingReadEval(String input, Features features) {
+		return readAll(input, features, true);
+	}
+
+	private static List<LispVal> readAll(String input, Features features, boolean tolerateReadEval) {
+		List<Token> tokens = new LispLexer(input, features, tolerateReadEval).tokenize();
+		LispReader reader = new LispReader(tokens, features);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
 			result.add(reader.readExpr());
@@ -109,6 +140,17 @@ public final class LispReader {
 			// The mathematical constant pi, read as a self-evaluating double like
 			// nil/t. This gives all three backends parity for free.
 			return new LispDouble(Math.PI);
+		}
+		if (LispNames.FEATURES_VAR.equals(name)) {
+			// The active feature list, substituted at read time like pi: a quoted
+			// list of keywords, so all three backends get parity for free. The list
+			// is fixed at read time -- (setq *features* ...) is not supported.
+			LispVal list = LispNil.INSTANCE;
+			List<String> names = this.features.names();
+			for (int i = names.size() - 1; i >= 0; i--) {
+				list = new LispCons(new LispSymbol(":" + names.get(i)), list);
+			}
+			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(list, LispNil.INSTANCE));
 		}
 		return new LispSymbol(name);
 	}

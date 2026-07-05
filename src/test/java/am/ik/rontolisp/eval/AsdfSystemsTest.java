@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -17,7 +18,7 @@ class AsdfSystemsTest {
 	}
 
 	private static AsdfSystems.LispSystem parse(String source) {
-		return AsdfSystems.parseDefsystem(form(source), null);
+		return AsdfSystems.parseDefsystem(form(source), null, Features.INTERPRETER);
 	}
 
 	private static SourceLoader loaderOf(Map<String, String> files) {
@@ -135,7 +136,7 @@ class AsdfSystemsTest {
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				(in-package :asdf-user)
 				(defsystem :lib :components ((:file "main")))
-				(defsystem :lib/tests :components ((:file "tests")))""", "proj/lib.asd");
+				(defsystem :lib/tests :components ((:file "tests")))""", "proj/lib.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(2);
 		assertThat(systems.get(0).name()).isEqualTo("lib");
 		assertThat(systems.get(0).baseDir()).isEqualTo("proj");
@@ -144,10 +145,87 @@ class AsdfSystemsTest {
 
 	@Test
 	void parseAsdSourceRejectsOtherForms() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(print 1)", "lib.asd"))
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(print 1)", "lib.asd", Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
 			.hasMessageContaining("unsupported form in .asd file");
+	}
+
+	@Test
+	void ifFeatureDisabledComponentContributesNoFiles() {
+		// The split-sequence shape: the CLOS-only file is gated behind other
+		// implementations' features, so it drops out while keeping its graph slot.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "main")
+				               (:file "extended" :depends-on ("main") :if-feature (:or :sbcl :abcl))))""");
+		assertThat(system.files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void ifFeatureEnabledComponentKeepsItsFiles() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "main" :if-feature :rontolisp)
+				               (:file "extra" :if-feature (:not :sbcl))))""");
+		assertThat(system.files()).containsExactly("main.lisp", "extra.lisp");
+	}
+
+	@Test
+	void ifFeatureDisabledComponentStillSatisfiesDependencies() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "b" :depends-on ("a"))
+				               (:file "a" :if-feature :sbcl)))""");
+		assertThat(system.files()).containsExactly("b.lisp");
+	}
+
+	@Test
+	void ifFeatureOnAModuleDropsTheWholeModule() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:module "impl" :if-feature :sbcl :components ((:file "sbcl")))
+				               (:file "main")))""");
+		assertThat(system.files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void ifFeatureIsEvaluatedAgainstTheGivenFeatures() {
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(
+				form("(asdf:defsystem :lib :components ((:file \"jvm\" :if-feature :rontolisp-jvm)))"), null,
+				Features.JVM);
+		assertThat(system.files()).containsExactly("jvm.lisp");
+	}
+
+	@Test
+	void parseAsdSourceSkipsAReadEvalGuardWithAWarning() {
+		// The ASDF-version-guard idiom: a leading top-level #. form is skipped.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				#.(unless (uiop-version<= "3.1" (asdf-version)) (error "too old"))
+				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void parseAsdSourceHonorsFeatureConditionals() {
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defsystem :lib
+				  :components (#+rontolisp (:file "main")
+				               #+sbcl (:file "sbcl-only")))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void designatorsAcceptUninternedSymbols() {
+		// The portable defsystem idiom spells names #:lib.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem #:lib
+				  :depends-on (#:other)
+				  :components ((:file "main")))""");
+		assertThat(system.name()).isEqualTo("lib");
+		assertThat(system.dependsOn()).containsExactly("other");
+		assertThat(AsdfSystems.loadSystemName(form("(asdf:load-system #:lib)"))).isEqualTo("lib");
 	}
 
 	@Test

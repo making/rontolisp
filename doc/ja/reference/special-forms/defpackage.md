@@ -1,22 +1,29 @@
 # defpackage
 
-`(defpackage name (:use package...) (:export symbol...))`
+`(defpackage name (:use package...) (:export symbol...) (:nicknames name...) (:import-from package symbol...))`
 
-`name` という名前の新しいパッケージを定義し、名前のシンボルを返します。`in-package` と同様に、read/コンパイル時に消費されるリテラルなトップレベルディレクティブであり、パッケージはソース順に定義されます。名前と clause の引数はキーワード、裸のシンボル、または文字列です(`:mypkg`、`mypkg`、`"mypkg"`)。
+`name` という名前の新しいパッケージを定義し、名前のシンボルを返します。`in-package` と同様に、read/コンパイル時に消費されるリテラルなトップレベルディレクティブであり、パッケージはソース順に定義されます。名前と clause の引数はキーワード、裸のシンボル、文字列、または uninterned シンボルです(`:mypkg`、`mypkg`、`"mypkg"`、`#:mypkg` — 最後がポータブルな defpackage の慣用形です)。
 
-- `(:use package...)` は、列挙したパッケージの external(export 済み)シンボルを修飾なしで見えるようにします。使用するパッケージは先に存在していなければなりません。`:use` clause がない場合、修飾なしで見えるものは **何もありません** — 標準シンボルを `cl:` プレフィックスなしで使うには `(:use :cl)` と書きます。
+- `(:use package...)` は、列挙したパッケージの external(export 済み)シンボルを修飾なしで見えるようにします。使用するパッケージは先に存在していなければなりません。`:use` clause がない場合、修飾なしで見えるものは **何もありません** — 標準シンボルを `cl:` プレフィックスなしで使うには `(:use :cl)` と書きます。`common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込みニックネームなので、`(:use #:common-lisp)` も動作します。
 - `(:export symbol...)` はパッケージの external シンボルを宣言します: 他のパッケージから `name:symbol` として参照でき、このパッケージを使用するパッケージに継承されます。後から intern されるシンボル(例えば `(in-package name)` の下で定義され `:export` clause に含まれない `defun`)は internal であり、ダブルコロン `name::symbol` が必要です。
+- `(:nicknames name...)` はパッケージの別名を登録します。ニックネームは正規名が解決されるすべての場所で解決されます。既存のパッケージ(またはニックネーム)と衝突するニックネームはエラーです。
+- `(:import-from package symbol...)` は、パッケージ全体を use せずに `package` の指定シンボルだけを修飾なしで見えるようにします。解決はテキストベースです: import された名前はソースパッケージの正規表記に解決されるので、`(:import-from #:common-lisp #:car)` は何も use しないパッケージに `car` だけを与えます。
+- `(:documentation "...")` と `(:size n)` は受理されますが無視されます。
 
-既存パッケージの再定義はエラーで、上記以外の clause(`:nicknames`、`:shadow`、`:import-from`、`:documentation` など)もエラーです。完全なルールは[パッケージ](../packages.md#ユーザー定義パッケージdefpackage)を参照してください。
+既存パッケージの再定義はエラーで、`:shadow`/`:shadowing-import-from`(rontolisp にシンボルのシャドウイングはありません)およびその他の clause(`:intern` など)もエラーです。完全なルールは[パッケージ](../packages.md#ユーザー定義パッケージdefpackage)を参照してください。
 
 ```lisp
 (defpackage :util (:use :cl) (:export :trim)) ; => util
 ```
 
 ```lisp
-(defpackage :mypkg (:use :cl) (:export :greet))
+(defpackage #:mypkg
+  (:use #:common-lisp)
+  (:nicknames #:mp)
+  (:import-from #:rontolisp #:version)
+  (:export #:greet))
 (in-package :mypkg)
 (defun greet (name) (concatenate 'string "hello, " name))
 (in-package :cl-user)
-(mypkg:greet "world") ; => "hello, world"
+(mp:greet "world") ; => "hello, world"
 ```

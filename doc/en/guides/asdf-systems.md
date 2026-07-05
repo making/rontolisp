@@ -79,14 +79,19 @@ directory, so sibling systems in one registry directory find each other.
 ## What is (and is not) supported
 
 - `.asd` files are parsed as **data**: only `defsystem` (bare or
-  `asdf:`-qualified) and `in-package` forms (skipped) may appear. Reader-level
-  ASDF idioms — `#+`/`#-` feature conditionals, `#.` read-time eval — are not
-  supported.
+  `asdf:`-qualified) and `in-package` forms (skipped) may appear. `#+`/`#-`
+  feature conditionals work (evaluated against the target backend's features,
+  see [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)),
+  and a `#.` read-time-eval form — the ASDF-version-guard idiom — is skipped
+  with a warning instead of being the usual read error.
 - `defsystem` supports the metadata options (ignored), `:depends-on`,
   `:serial` and `:components` with `:file`/`:module`/`:static-file` entries;
-  anything else (`:in-order-to`, `:perform`, `:defsystem-depends-on`,
-  `:if-feature`, `(:read-file-form ...)`, ...) is an error naming the clause.
-  There is no `test-op`/`operate` machinery.
+  a component may carry `:if-feature expr`, which drops the component's files
+  when the feature expression does not hold (how libraries gate CLOS-only
+  files behind `(:or :sbcl ...)`) while keeping its place in the dependency
+  order. Anything else (`:in-order-to`, `:perform`, `:defsystem-depends-on`,
+  `(:read-file-form ...)`, ...) is an error naming the clause. There is no
+  `test-op`/`operate` machinery.
 - Loading a system twice is a no-op; circular `:depends-on` chains are
   detected and reported.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;

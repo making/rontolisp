@@ -13,6 +13,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
 - [defstruct.md](defstruct.md) -- `defstruct` expansion into plain defuns, tagged-list representation, setf accessor registry
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
+- [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling
 - [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback

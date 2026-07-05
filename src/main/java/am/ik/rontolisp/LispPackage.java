@@ -1,6 +1,7 @@
 package am.ik.rontolisp;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -19,8 +20,24 @@ import java.util.Set;
  * @param symbols the names of symbols owned by this package
  * @param externals the names of the exported (external) symbols, a subset of
  * {@code symbols}
+ * @param imports the symbols imported from other packages via the {@code defpackage}
+ * {@code :import-from} clause, mapping each imported name to its source package (symbol
+ * resolution is textual, so an imported name simply resolves to the source package's
+ * canonical spelling)
  */
-public record LispPackage(String name, List<String> useList, Set<String> symbols, Set<String> externals) {
+public record LispPackage(String name, List<String> useList, Set<String> symbols, Set<String> externals,
+		Map<String, String> imports) {
+
+	/**
+	 * Creates a package with no imported symbols.
+	 * @param name the package name
+	 * @param useList the names of packages this package uses
+	 * @param symbols the names of symbols owned by this package
+	 * @param externals the names of the exported (external) symbols
+	 */
+	public LispPackage(String name, List<String> useList, Set<String> symbols, Set<String> externals) {
+		this(name, useList, symbols, externals, Map.of());
+	}
 
 	/**
 	 * Creates a package that exports every symbol it owns.

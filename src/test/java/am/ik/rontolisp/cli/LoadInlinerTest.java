@@ -6,6 +6,7 @@ import java.util.Map;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -233,6 +234,21 @@ class LoadInlinerTest {
 						"sq.lisp", "(defun sq (x) (* x x))"));
 		byte[] classBytes = new JvmLispCompiler("TestAsdf").compile(program);
 		assertThat(runMain(classBytes, "TestAsdf")).isEqualTo("49");
+	}
+
+	@Test
+	void loadedFilesAreReadWithTheGivenFeatures() throws Exception {
+		// The compile path passes the target backend's feature set, so #+/#-
+		// conditionals inside loaded files (and .asd files) select per-backend code.
+		List<LispVal> program = LoadInliner.inline(
+				LispReader.readAllFromString("(asdf:load-system :lib) (print (which))", Features.JVM),
+				loaderOf(Map.of("lib.asd",
+						"(defsystem :lib :components ((:file \"jvm\" :if-feature :rontolisp-jvm)"
+								+ " (:file \"wasm\" :if-feature :rontolisp-wasm)))", //
+						"jvm.lisp", "#+rontolisp-jvm (defun which () \"jvm\")")),
+				null, List.of(), Features.JVM);
+		byte[] classBytes = new JvmLispCompiler("TestFeatures").compile(program);
+		assertThat(runMain(classBytes, "TestFeatures")).isEqualTo("\"jvm\"");
 	}
 
 	@Test

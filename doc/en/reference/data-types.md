@@ -79,6 +79,49 @@ arithmetic. The runtime reader emitted for compiled `read`/`load` does not
 parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 `evenp`/`oddp`, `gcd`/`lcm` and `isqrt` remain integer-only.
 
+## Comments, feature conditionals and `*features*`
+
+Besides the `;` line comment, the reader supports the Common Lisp `#| ... |#`
+block comment (nesting, per the standard) and the `#+`/`#-` feature
+conditionals: `#+expr form` keeps `form` only when the feature expression
+holds, `#-expr form` only when it does not. A feature expression is a feature
+name or an `(and ...)`/`(or ...)`/`(not ...)` combination (spelled bare or as
+keywords, case-insensitive). The active features are `:rontolisp` on every
+backend plus one backend-identifying feature — `:rontolisp-interpreter`,
+`:rontolisp-jvm` or `:rontolisp-wasm` — so one source file can select
+per-backend code. The variable `*features*` reads as the active feature list
+(a quoted list of keywords, fixed at read time like `pi`; it cannot be
+assigned).
+
+```lisp
+#| a block comment
+   #| nesting like Common Lisp |#
+   still commented |#
+#+rontolisp (print :ok)             ; kept: :rontolisp is always active
+#-(or sbcl ccl) (print :portable)   ; kept: neither feature is active
+#+sbcl (print (uses #.unsupported-syntax))
+(print (car *features*))            ; the first feature is always :rontolisp
+```
+
+Notes:
+
+- Reading happens once, at the frontend: the interpreter reads with
+  `:rontolisp-interpreter`, and compiling to a `.class`/`.wasm` file reads with
+  `:rontolisp-jvm`/`:rontolisp-wasm`, so a compiled program's feature set is
+  fixed at compile time. Files pulled in by the compile-time `load`/`require`/
+  `asdf:load-system` include are read with the same target features.
+- A form skipped by a failing `#+`/`#-` guard is skipped at the raw character
+  level without being parsed, so it may use syntax rontolisp does not support
+  (that is the point of guarding it).
+- `#.` read-time evaluation is **not** supported and is a clear read error;
+  the one exception is `.asd` files, where a `#.` form is skipped with a
+  warning (see the [Systems guide](../guides/asdf-systems.md)).
+- The runtime reader of compiled programs (`read`, `read-from-string`, runtime
+  `load`) does not know block comments or feature conditionals, like backquote
+  — see [Compiled read/load Limitations](../guides/read-load-limitations.md).
+- `:common-lisp` is deliberately **not** in `*features*`: rontolisp is a
+  subset, not a conforming implementation.
+
 ## Dotted pairs, association lists and property lists
 
 The reader supports Common Lisp dotted-pair notation: `(a . b)` denotes a

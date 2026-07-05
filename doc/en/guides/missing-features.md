@@ -25,8 +25,10 @@ This page lists the most notable omissions. For what **is** available, see the
 | CLOS | not available |
 | `declare` / `the` / `typep` | not available |
 | `coerce` | partial (literal `'list` / `'vector` / `'string` result types; see [`coerce`](../reference/functions/coerce.md)) |
-| `defpackage` (user packages) | partial (`:use`/`:export` only; see [`defpackage`](../reference/special-forms/defpackage.md)) |
+| `defpackage` (user packages) | partial (`:use`/`:export`/`:nicknames`/`:import-from`; see [`defpackage`](../reference/special-forms/defpackage.md)) |
 | `make-package` / `export` / `use-package` (runtime) | not available |
+| `#+` / `#-` / `*features*` / `#\| ... \|#` | available (see [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)) |
+| `#.` read-time eval / `#:` fresh uninterned symbols | not available (`#.` is a read error, tolerated in `.asd` files; `#:name` reads as a plain symbol, accepted as a designator) |
 | `require` / `provide` | available (see [`require`](../reference/functions/require.md)); the `*modules*` variable is not available |
 | dynamic (special) binding via `let` | lexical only |
 | complex numbers | not available |
@@ -127,19 +129,21 @@ literal, like `map`'s); other result types are not supported.
 
 New packages **can** be defined with
 [`defpackage`](../reference/special-forms/defpackage.md), as a literal,
-top-level, read/compile-time directive supporting the `:use` and `:export`
-clauses only (see
-[Packages](../reference/packages.md#user-defined-packages-defpackage)). The
-other `defpackage` clauses (`:nicknames`, `:shadow`, `:import-from`,
-`:documentation`, ...) are errors, and there is no **runtime** package
-manipulation: `make-package`, `export`, `import`, `use-package`,
-`find-package`, and `rename-package` are not available. A package's set of
-exported (external) symbols is fixed when it is defined; the single/double
-colon qualifiers (`pkg:name` for external symbols, `pkg::name` for internal
-ones) work as in Common Lisp (see
-[Packages](../reference/packages.md#external-and-internal-symbols)). When
-several used packages export the same name, the first package in `:use` order
-wins instead of signaling a conflict.
+top-level, read/compile-time directive supporting the `:use`, `:export`,
+`:nicknames` and `:import-from` clauses (`:documentation`/`:size` are accepted
+and ignored; see
+[Packages](../reference/packages.md#user-defined-packages-defpackage)).
+`:shadow` and `:shadowing-import-from` are errors (there is no symbol
+shadowing), and there is no **runtime** package manipulation: `make-package`,
+`export`, `import`, `use-package`, `find-package`, and `rename-package` are
+not available. A package's set of exported (external) symbols is fixed when it
+is defined; the single/double colon qualifiers (`pkg:name` for external
+symbols, `pkg::name` for internal ones) work as in Common Lisp (see
+[Packages](../reference/packages.md#external-and-internal-symbols)). The
+standard nicknames `common-lisp`/`common-lisp-user` resolve to `cl`/`cl-user`,
+and `#:name` designators are accepted. When several used packages export the
+same name, the first package in `:use` order wins instead of signaling a
+conflict.
 
 ## Dynamic (special) variable binding
 

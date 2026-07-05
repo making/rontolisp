@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -103,7 +104,8 @@ public final class LoadInliner {
 	 * Returns a copy of {@code program} with every top-level literal
 	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
 	 * file, and every top-level literal {@code (asdf:load-system NAME)} replaced by the
-	 * system's component files (dependency systems first).
+	 * system's component files (dependency systems first), reading loaded files with the
+	 * interpreter feature set.
 	 * @param program the top-level forms read from the source
 	 * @param loader the loader used to resolve {@code load} paths
 	 * @param baseDir the directory of the entry source against which a top-level relative
@@ -114,21 +116,42 @@ public final class LoadInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath) {
+		return inline(program, loader, baseDir, systemPath, Features.INTERPRETER);
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file, and every top-level literal {@code (asdf:load-system NAME)} replaced by the
+	 * system's component files (dependency systems first). Loaded files and {@code .asd}
+	 * files are read with the given feature set, so the compile path passes the target
+	 * backend's features (the entry program must have been read with the same set).
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source against which a top-level relative
+	 * {@code load} resolves, or {@code null} for working-directory-relative
+	 * @param systemPath extra directories searched for {@code NAME.asd} files, after the
+	 * directory of the loading file
+	 * @param features the reader features for loaded files
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features) {
 		List<LispVal> result = new ArrayList<>();
 		expandInto(program, result, new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(),
-				new HashSet<>(), new ArrayDeque<>(), systemPath), baseDir);
+				new HashSet<>(), new ArrayDeque<>(), systemPath, features), baseDir);
 		return result;
 	}
 
 	/**
 	 * The state threaded through the inline recursion: the loader, the in-progress file
-	 * stack (cycle guard), the provided modules, and the ASDF side -- the registered
-	 * systems, the already-loaded systems, the in-progress system stack (cycle guard) and
-	 * the {@code .asd} search path.
+	 * stack (cycle guard), the provided modules, the ASDF side -- the registered systems,
+	 * the already-loaded systems, the in-progress system stack (cycle guard) and the
+	 * {@code .asd} search path -- and the reader features for loaded files.
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems, Deque<String> loadingSystems,
-			List<String> systemPath) {
+			List<String> systemPath, Features features) {
 	}
 
 	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
@@ -136,7 +159,7 @@ public final class LoadInliner {
 			if (AsdfSystems.isDefsystemForm(form)) {
 				// Register the system for a later load-system and consume the directive
 				// (like provide). Component paths resolve against this file's directory.
-				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir);
+				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir, ctx.features());
 				ctx.systems().put(system.name(), system);
 				out.add(quotedSymbol(system.name()));
 				continue;
@@ -198,7 +221,7 @@ public final class LoadInliner {
 			throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
 		}
 		ctx.loading().addLast(path);
-		expandInto(LispReader.readAllFromString(source), out, ctx, SourceLoader.parentDir(path));
+		expandInto(LispReader.readAllFromString(source, ctx.features()), out, ctx, SourceLoader.parentDir(path));
 		ctx.loading().removeLast();
 	}
 
@@ -223,7 +246,8 @@ public final class LoadInliner {
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path())) {
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
+					ctx.features())) {
 				ctx.systems().putIfAbsent(defined.name(), defined);
 			}
 			system = ctx.systems().get(name);

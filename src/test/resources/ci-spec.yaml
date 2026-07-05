@@ -2361,3 +2361,42 @@ cases:
       ("a" "b")
       ("z" "a" "b")
       ((1 a) (2 b))
+  - name: reader-block-comments
+    source: |
+      #| a block comment
+         #| nesting like Common Lisp |#
+         still commented |#
+      (print (+ 1 #| inline |# 2))
+    expected: |
+      3
+  - name: reader-feature-conditionals
+    source: |
+      #+rontolisp (print :yes)
+      #-rontolisp (print :never)
+      #+sbcl (print :never)
+      #-(or sbcl ccl) (print :portable)
+      #+(and rontolisp (not sbcl)) (print :compound)
+      #+nil (print :never)
+    expected: |
+      :yes
+      :portable
+      :compound
+  - name: reader-per-backend-features
+    source: |
+      (print #+rontolisp-interpreter :interpreter
+             #+rontolisp-jvm :jvm
+             #+rontolisp-wasm :wasm)
+    expected: |
+      :interpreter
+    expectedByBackend:
+      jvm: |
+        :jvm
+      wasm: |
+        :wasm
+  - name: reader-features-variable
+    source: |
+      (print (length *features*))
+      (print (car *features*))
+    expected: |
+      2
+      :rontolisp

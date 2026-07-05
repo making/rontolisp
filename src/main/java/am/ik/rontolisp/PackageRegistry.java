@@ -136,9 +136,19 @@ public final class PackageRegistry {
 	private final Map<String, LispPackage> packages = new HashMap<>();
 
 	/**
+	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
+	 * the standard Common Lisp names ({@code common-lisp} for {@code cl},
+	 * {@code common-lisp-user} for {@code cl-user}) so portable {@code (:use
+	 * #:common-lisp)} clauses resolve; {@code defpackage :nicknames} adds more.
+	 */
+	private final Map<String, String> nicknames = new HashMap<>();
+
+	/**
 	 * Creates a registry seeded with the built-in packages.
 	 */
 	public PackageRegistry() {
+		this.nicknames.put("common-lisp", LispNames.CL_PKG);
+		this.nicknames.put("common-lisp-user", LispNames.CL_USER_PKG);
 		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS, CL_EXTERNALS));
 		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
 		// symbols are reachable as cl-user::name, never cl-user:name.
@@ -231,13 +241,33 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Returns the package with the given name.
+	 * Registers a nickname for a package, so the nickname resolves everywhere the
+	 * canonical name does.
+	 * @param nickname the nickname
+	 * @param packageName the canonical package name
+	 */
+	public void defineNickname(String nickname, String packageName) {
+		this.nicknames.put(nickname, packageName);
+	}
+
+	/**
+	 * Resolves a package designator to the canonical package name: a registered nickname
+	 * maps to the package it names, any other name is returned unchanged.
+	 * @param name the package name or nickname
+	 * @return the canonical package name
+	 */
+	public String canonicalName(String name) {
+		return this.nicknames.getOrDefault(name, name);
+	}
+
+	/**
+	 * Returns the package with the given name (or nickname).
 	 * @param name the package name
 	 * @return the package
 	 * @throws LispPackageException if no such package is registered
 	 */
 	public LispPackage get(String name) {
-		LispPackage pkg = this.packages.get(name);
+		LispPackage pkg = this.packages.get(canonicalName(name));
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + name);
 		}
@@ -245,12 +275,12 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Returns whether a package with the given name is registered.
+	 * Returns whether a package with the given name (or nickname) is registered.
 	 * @param name the package name
 	 * @return {@code true} if the package exists
 	 */
 	public boolean contains(String name) {
-		return this.packages.containsKey(name);
+		return this.packages.containsKey(canonicalName(name));
 	}
 
 	/**

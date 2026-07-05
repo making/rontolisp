@@ -29,6 +29,7 @@ import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -198,9 +199,12 @@ public final class RontoLispCli {
 		// program references the linalg package, and the Lisp-source URL library
 		// when the program references rontolisp:url-* / query-param* (the
 		// interpreter path instead loads the libraries lazily inside LispEvaluator).
-		List<LispVal> program = UrlLibrary
-			.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(LoadInliner
-				.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(), baseDir, systemPath)))));
+		// The whole frontend reads with the target backend's feature set, so
+		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code.
+		Features features = outputFile.endsWith(".wasm") ? Features.WASM : Features.JVM;
+		List<LispVal> program = UrlLibrary.process(LinalgLibrary.process(JsonLibrary
+			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
+					SourceLoader.fileSystem(), baseDir, systemPath, features)))));
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {

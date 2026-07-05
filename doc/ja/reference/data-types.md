@@ -66,6 +66,43 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 `1/3` トークンはシンボルになります)。また `mod`、`evenp`/`oddp`、`gcd`/`lcm`、`isqrt`
 は整数専用のままです。
 
+## コメント・フィーチャー条件・`*features*`
+
+`;` の行コメントに加えて、リーダは Common Lisp の `#| ... |#`
+ブロックコメント(標準どおりネスト可)と `#+`/`#-` フィーチャー条件をサポートします。`#+expr form` はフィーチャー式が成立するときだけ
+`form` を残し、`#-expr form` は成立しないときだけ残します。フィーチャー式はフィーチャー名、または
+`(and ...)`/`(or ...)`/`(not ...)` の組み合わせです(裸のシンボルでもキーワードでもよく、大文字小文字を区別しません)。アクティブなフィーチャーはすべてのバックエンドで
+`:rontolisp`、加えてバックエンドを識別するフィーチャー — `:rontolisp-interpreter`、
+`:rontolisp-jvm`、`:rontolisp-wasm` — が1つで、1つのソースファイルでバックエンドごとのコードを選択できます。変数
+`*features*` はアクティブなフィーチャーのリストとして読まれます(`pi`
+と同様に read 時に固定される quote されたキーワードのリストで、代入はできません)。
+
+```lisp
+#| a block comment
+   #| nesting like Common Lisp |#
+   still commented |#
+#+rontolisp (print :ok)             ; kept: :rontolisp is always active
+#-(or sbcl ccl) (print :portable)   ; kept: neither feature is active
+#+sbcl (print (uses #.unsupported-syntax))
+(print (car *features*))            ; the first feature is always :rontolisp
+```
+
+注意点:
+
+- 読み取りはフロントエンドで一度だけ行われます。インタプリタは
+  `:rontolisp-interpreter` で読み、`.class`/`.wasm` へのコンパイルは
+  `:rontolisp-jvm`/`:rontolisp-wasm` で読むため、コンパイル済みプログラムのフィーチャーセットはコンパイル時に固定されます。コンパイル時の
+  `load`/`require`/`asdf:load-system` インクルードで取り込まれるファイルも、同じターゲットフィーチャーで読まれます。
+- 不成立の `#+`/`#-` ガードでスキップされるフォームは、パースされずに生の文字レベルでスキップされるため、rontolisp
+  がサポートしない構文を使っていても構いません(それがガードの目的です)。
+- `#.` の read 時評価はサポート **されず**、明確な read エラーになります。唯一の例外は
+  `.asd` ファイルで、そこでは `#.` フォームは警告付きでスキップされます([システムガイド](../guides/asdf-systems.md)を参照)。
+- コンパイル済みプログラムのランタイムリーダ(`read`、`read-from-string`、実行時の
+  `load`)は、backquote と同様に、ブロックコメントとフィーチャー条件を知りません —
+  [コンパイル済み read/load の制限](../guides/read-load-limitations.md)を参照してください。
+- `:common-lisp` は意図的に `*features*` に **含まれません**: rontolisp
+  はサブセットであり、準拠実装ではないからです。
+
 ## ドット対・連想リスト・属性リスト
 
 リーダはCommon Lispのドット対記法をサポートします。`(a . b)` は car が `a`、cdr が

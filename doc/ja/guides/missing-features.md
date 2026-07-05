@@ -25,8 +25,10 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | CLOS | 利用不可 |
 | `declare` / `the` / `typep` | 利用不可 |
 | `coerce` | 部分対応(リテラルの `'list` / `'vector` / `'string` 結果型。[`coerce`](../reference/functions/coerce.md) を参照) |
-| `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export` のみ。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
+| `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export`/`:nicknames`/`:import-from`。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
 | `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
+| `#+` / `#-` / `*features*` / `#\| ... \|#` | 利用可能（[データ型](../reference/data-types.md#コメントフィーチャー条件features)参照） |
+| `#.` read 時評価 / `#:` の新規 uninterned シンボル | 利用不可（`#.` は read エラー、`.asd` ファイル内でのみ許容。`#:name` は普通のシンボルとして読まれ、designator として受理される） |
 | `require` / `provide` | 利用可能（[`require`](../reference/functions/require.md) 参照）。`*modules*` 変数は利用不可 |
 | `let` による動的（special）束縛 | レキシカルのみ |
 | 複素数 | 利用不可 |
@@ -127,16 +129,19 @@ The function ignore-errors is undefined
 ## ユーザー定義パッケージ
 
 新しいパッケージは [`defpackage`](../reference/special-forms/defpackage.md) で
-定義 **できます**。これは `:use` と `:export` の clause のみをサポートする、
-リテラルなトップレベルの read/コンパイル時ディレクティブです
-（[パッケージ](../reference/packages.md#ユーザー定義パッケージdefpackage)を参照）。
-それ以外の `defpackage` clause（`:nicknames`、`:shadow`、`:import-from`、
-`:documentation` など）はエラーで、**ランタイム** のパッケージ操作はありません:
+定義 **できます**。これは `:use`、`:export`、`:nicknames`、`:import-from` の
+clause をサポートする、リテラルなトップレベルの read/コンパイル時
+ディレクティブです（`:documentation`/`:size` は受理されるが無視されます。
+[パッケージ](../reference/packages.md#ユーザー定義パッケージdefpackage)を参照）。
+`:shadow` と `:shadowing-import-from` はエラーで(シンボルのシャドウイングは
+ありません)、**ランタイム** のパッケージ操作はありません:
 `make-package`、`export`、`import`、`use-package`、`find-package`、
 `rename-package` は利用できません。パッケージの export(external)シンボルの
 集合は定義時に固定されます。シングル/ダブルコロンの修飾子(external シンボルには
 `pkg:name`、internal シンボルには `pkg::name`)は Common Lisp と同様に
 機能します([パッケージ](../reference/packages.md#external-シンボルと-internal-シンボル)を参照)。
+標準ニックネーム `common-lisp`/`common-lisp-user` は `cl`/`cl-user` に解決され、
+`#:name` の designator も受理されます。
 複数の使用先パッケージが同じ名前を export している場合、コンフリクトをシグナル
 する代わりに `:use` 順で最初のパッケージが優先されます。
 

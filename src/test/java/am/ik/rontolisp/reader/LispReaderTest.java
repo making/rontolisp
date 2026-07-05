@@ -412,4 +412,125 @@ class LispReaderTest {
 			.hasMessageContaining(",@");
 	}
 
+	@Test
+	void readBlockComment() {
+		List<LispVal> result = LispReader.readAllFromString("(+ 1 #| skipped |# 2)");
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void readNestedBlockComment() {
+		List<LispVal> result = LispReader.readAllFromString("#| outer #| inner |# still outer |# 42");
+		assertThat(result).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readUnterminatedBlockCommentFails() {
+		assertThatThrownBy(() -> LispReader.readAllFromString("#| never closed")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("block comment");
+	}
+
+	@Test
+	void readFeatureConditionalPositiveMatch() {
+		List<LispVal> result = LispReader.readAllFromString("#+rontolisp (print 1) (print 2)");
+		assertThat(result).hasSize(2);
+		assertThat(result.get(0).print()).isEqualTo("(print 1)");
+	}
+
+	@Test
+	void readFeatureConditionalPositiveMiss() {
+		List<LispVal> result = LispReader.readAllFromString("#+sbcl (print 1) (print 2)");
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).print()).isEqualTo("(print 2)");
+	}
+
+	@Test
+	void readFeatureConditionalNegative() {
+		List<LispVal> result = LispReader.readAllFromString("#-sbcl (print 1) #-rontolisp (print 2)");
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).print()).isEqualTo("(print 1)");
+	}
+
+	@Test
+	void readFeatureConditionalKeywordSpelling() {
+		List<LispVal> result = LispReader.readAllFromString("#+:rontolisp 1 #+:sbcl 2");
+		assertThat(result).containsExactly(new LispInteger(1));
+	}
+
+	@Test
+	void readFeatureConditionalPerBackend() {
+		assertThat(LispReader.readAllFromString("#+rontolisp-jvm 1", Features.JVM)).containsExactly(new LispInteger(1));
+		assertThat(LispReader.readAllFromString("#+rontolisp-jvm 1", Features.WASM)).isEmpty();
+		assertThat(LispReader.readAllFromString("#+rontolisp-interpreter 1", Features.INTERPRETER))
+			.containsExactly(new LispInteger(1));
+	}
+
+	@Test
+	void readFeatureConditionalCompoundExpression() {
+		assertThat(LispReader.readAllFromString("#+(or sbcl rontolisp) 1")).containsExactly(new LispInteger(1));
+		assertThat(LispReader.readAllFromString("#+(and rontolisp sbcl) 1")).isEmpty();
+		assertThat(LispReader.readAllFromString("#+(not sbcl) 1")).containsExactly(new LispInteger(1));
+		assertThat(LispReader.readAllFromString("#+(:or :sbcl (:and :rontolisp (:not :abcl))) 1"))
+			.containsExactly(new LispInteger(1));
+	}
+
+	@Test
+	void readFeatureConditionalNilIdiom() {
+		// #+nil is the classic "comment out one form" idiom: nil is never a feature.
+		assertThat(LispReader.readAllFromString("#+nil (broken :form) 42")).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readFeatureConditionalSkipsUnsupportedSyntax() {
+		// The skipped form is not tokenized, so syntax rontolisp does not support
+		// (here read-time eval and a nested conditional) must not break the read.
+		List<LispVal> result = LispReader
+			.readAllFromString("#+sbcl (foo #.(bar) #\\) \"str \\\" )\" #+ccl (baz) `(a ,@b)) 42");
+		assertThat(result).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readFeatureConditionalStacked() {
+		assertThat(LispReader.readAllFromString("#+rontolisp #+sbcl 1 2")).containsExactly(new LispInteger(2));
+		assertThat(LispReader.readAllFromString("#+rontolisp #-sbcl 1 2")).containsExactly(new LispInteger(1),
+				new LispInteger(2));
+	}
+
+	@Test
+	void readFeatureConditionalAtEndOfInputFails() {
+		assertThatThrownBy(() -> LispReader.readAllFromString("#+sbcl")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("expected a form to skip");
+		assertThatThrownBy(() -> LispReader.readAllFromString("#+")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("feature expression");
+	}
+
+	@Test
+	void readFeaturesVariable() {
+		LispVal result = LispReader.readFromString("*features*");
+		assertThat(result.print()).isEqualTo("(quote (:rontolisp :rontolisp-interpreter))");
+		List<LispVal> jvm = LispReader.readAllFromString("*features*", Features.JVM);
+		assertThat(jvm.get(0).print()).isEqualTo("(quote (:rontolisp :rontolisp-jvm))");
+	}
+
+	@Test
+	void readReadEvalFails() {
+		assertThatThrownBy(() -> LispReader.readAllFromString("#.(+ 1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("#.");
+	}
+
+	@Test
+	void readReadEvalSkippedInTolerantMode() {
+		List<LispVal> result = LispReader.readAllSkippingReadEval("#.(+ 1 2) 42", Features.INTERPRETER);
+		assertThat(result).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readUninternedSymbol() {
+		// #:foo reads as a plain symbol whose printed name keeps the #: prefix;
+		// package designators strip it (see PackageResolver/AsdfSystems).
+		LispVal result = LispReader.readFromString("#:foo");
+		assertThat(result).isEqualTo(new LispSymbol("#:foo"));
+	}
+
 }

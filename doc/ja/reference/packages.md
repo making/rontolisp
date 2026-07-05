@@ -13,7 +13,10 @@ rontolispには、6つの組み込みパッケージと[`defpackage` による�
 external(export 済み)シンボルに届き、`package::symbol` は internal を含む任意のシンボルに届きます —
 Common Lisp と同じシングル/ダブルコロンの区別です([external シンボルと internal シンボル](#external-シンボルと-internal-シンボル)を参照)。`*package*`
 はカレントパッケージの名前に評価され、`(in-package name)`
-はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。
+はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。標準の Common Lisp 名
+`common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込み **ニックネーム** なので、ポータブルな
+`(:use #:common-lisp)` clause や `common-lisp:car` の参照も解決されます。ユーザーパッケージは `defpackage` の
+`:nicknames` clause で独自のニックネームを登録できます。
 
 ```lisp
 (print *package*)              ; => cl-user
@@ -86,22 +89,33 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 
 `in-package` と同様に、`defpackage` は **read/コンパイル時に消費されるリテラルな
 トップレベルディレクティブ** であり、パッケージは使用より前に、ソース順に
-定義されます。サポートされる clause は `(:use package...)` と
-`(:export symbol...)` で、名前と clause の引数はキーワード、裸のシンボル、
-または文字列です。それ以外の clause(`:nicknames`、`:shadow`、`:import-from`、
-`:documentation` など)はエラーで、既存パッケージの再定義や、まだ存在しない
-パッケージの使用もエラーです。
+定義されます。サポートされる clause は `(:use package...)`、
+`(:export symbol...)`、`(:nicknames name...)`、
+`(:import-from package symbol...)`、および受理されるが無視される
+`(:documentation "...")`/`(:size n)` です。名前と clause の引数はキーワード、
+裸のシンボル、文字列、または uninterned シンボル(`#:name`、ポータブルな
+defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエラーで
+(rontolisp にシンボルのシャドウイングはありません)、それ以外の clause、
+既存パッケージの再定義、まだ存在しないパッケージの使用もエラーです。
 
 - `:use` は、使用するパッケージの **external** シンボルを修飾なしで見えるように
   します(Common Lisp と同様) — 使用先パッケージの internal シンボルには
   依然としてダブルコロンが必要です。`:use` clause がなければ何も継承されない
   (SBCL と同様)ため、`cl` シンボルには `cl:` プレフィックスが必要になります。
-  通常のパッケージでは `(:use :cl)` と書いてください。複数の使用先パッケージが
+  通常のパッケージでは `(:use :cl)`(ポータブルには `(:use #:common-lisp)`)と
+  書いてください。複数の使用先パッケージが
   同じ名前を export している場合、`:use` 順で最初のパッケージが優先されます
   (Common Lisp はコンフリクトをシグナルします)。
 - `:export` はパッケージの external シンボルを宣言します。後から intern される
   シンボル(`(in-package name)` の下で定義され `:export` clause に含まれない
   `defun` や自由変数)は、組み込みパッケージとまったく同様に internal です。
+- `:nicknames` は、正規名が解決されるすべての場所(修飾子、`in-package`、`:use`
+  など)で解決される別名を登録します。既存のパッケージやニックネームと衝突する
+  ニックネームはエラーです。
+- `:import-from` は、パッケージ全体を use せずに、1 つのパッケージの指定シンボル
+  だけを修飾なしで見えるようにします。解決はテキストベースです: import された
+  名前はソースパッケージの正規表記に解決されるため、import して re-export した
+  シンボルの `mypkg:name` は元の定義を参照します。
 
 ランタイムのパッケージ操作はありません: `make-package`、`export`、`import`、
 `use-package`、`find-package` などは利用できず、(トップレベルでない)他の

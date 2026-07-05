@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -106,21 +107,24 @@ public final class AsdfSystems {
 	 * forms (any package spelling) become {@link LispSystem}s whose component files
 	 * resolve against the {@code .asd} file's directory, {@code in-package} forms are
 	 * skipped (the file is never evaluated, so the package does not matter), and any
-	 * other form is a hard error naming the file.
+	 * other form is a hard error naming the file. A {@code #.} read-time-eval form (the
+	 * ASDF-version-guard idiom) is skipped with a warning instead of erroring, and
+	 * {@code #+}/{@code #-} conditionals are evaluated against {@code features}.
 	 * @param source the {@code .asd} source text
 	 * @param asdPath the resolved path of the {@code .asd} file (for the base directory
 	 * and error messages)
+	 * @param features the active reader features
 	 * @return the systems defined by the file
 	 */
-	public static List<LispSystem> parseAsdSource(String source, String asdPath) {
+	public static List<LispSystem> parseAsdSource(String source, String asdPath, Features features) {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
-		for (LispVal form : LispReader.readAllFromString(source)) {
+		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
 			if (operatorMemberIs(form, LispNames.IN_PACKAGE)) {
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
-				systems.add(parseDefsystem(form, baseDir));
+				systems.add(parseDefsystem(form, baseDir, features));
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
@@ -131,14 +135,18 @@ public final class AsdfSystems {
 
 	/**
 	 * Parses a {@code defsystem} form into a {@link LispSystem}, ordering the components
-	 * by their {@code :depends-on}/{@code :serial} constraints. Any option or component
-	 * shape outside the supported subset is a hard error naming the clause.
+	 * by their {@code :depends-on}/{@code :serial} constraints. A component whose
+	 * {@code :if-feature} expression is not satisfied by {@code features} still
+	 * participates in the ordering but contributes no source files (this is how libraries
+	 * gate CLOS-only files behind {@code (:or :sbcl ...)}). Any option or component shape
+	 * outside the supported subset is a hard error naming the clause.
 	 * @param form the {@code defsystem} form
 	 * @param baseDir the directory the component files resolve against, or {@code null}
 	 * for working-directory-relative
+	 * @param features the features the {@code :if-feature} component option tests
 	 * @return the parsed system
 	 */
-	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir) {
+	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features features) {
 		if (!(form instanceof LispCons cons)) {
 			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " expects a system definition form");
 		}
@@ -178,7 +186,7 @@ public final class AsdfSystems {
 						+ " :version :author :maintainer :license :depends-on :serial :components)");
 			}
 		}
-		List<String> files = components == null ? List.of() : orderComponents(name, components, serial, "");
+		List<String> files = components == null ? List.of() : orderComponents(name, components, serial, "", features);
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir);
 	}
 
@@ -238,6 +246,10 @@ public final class AsdfSystems {
 	}
 
 	private static String symbolName(LispSymbol sym) {
+		if (sym.name().startsWith("#:")) {
+			// An uninterned designator (#:lib), the portable defsystem idiom.
+			return sym.name().substring(2);
+		}
 		if (sym.isKeyword()) {
 			return sym.name().substring(1);
 		}
@@ -258,12 +270,12 @@ public final class AsdfSystems {
 	 * order is preserved among unconstrained components), with {@code :serial} adding an
 	 * implicit dependency on the previous sibling; a module's files stay contiguous.
 	 */
-	private static List<String> orderComponents(String systemName, LispVal componentsVal, boolean serial,
-			String prefix) {
+	private static List<String> orderComponents(String systemName, LispVal componentsVal, boolean serial, String prefix,
+			Features features) {
 		List<Component> components = new ArrayList<>();
 		String previous = null;
 		for (LispVal entry : properList(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :components", componentsVal)) {
-			Component component = parseComponent(systemName, entry, prefix);
+			Component component = parseComponent(systemName, entry, prefix, features);
 			List<String> deps = new ArrayList<>(component.dependsOn());
 			if (serial && previous != null) {
 				deps.add(previous);
@@ -306,7 +318,7 @@ public final class AsdfSystems {
 		return List.copyOf(files);
 	}
 
-	private static Component parseComponent(String systemName, LispVal entry, String prefix) {
+	private static Component parseComponent(String systemName, LispVal entry, String prefix, Features features) {
 		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)
 				|| !type.isKeyword()) {
 			throw new IllegalStateException(
@@ -325,6 +337,7 @@ public final class AsdfSystems {
 		}
 		List<String> dependsOn = new ArrayList<>();
 		boolean moduleSerial = false;
+		boolean featureEnabled = true;
 		LispVal nested = null;
 		for (int i = 2; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
@@ -339,6 +352,7 @@ public final class AsdfSystems {
 						dependsOn.add(designator(":depends-on", dep));
 					}
 				}
+				case ":if-feature" -> featureEnabled = features.isEnabled(value);
 				case ":serial" -> {
 					if (!module) {
 						throw unsupportedComponentOption(systemName, type, name, key);
@@ -363,12 +377,14 @@ public final class AsdfSystems {
 					throw new IllegalStateException(
 							"system " + systemName + ": module " + name + " expects a :components option");
 				}
-				yield orderComponents(systemName, nested, moduleSerial, prefix + name + "/");
+				yield orderComponents(systemName, nested, moduleSerial, prefix + name + "/", features);
 			}
 			default -> throw new IllegalStateException("system " + systemName + ": unsupported component type "
 					+ type.name() + " (supported: :file :module :static-file)");
 		};
-		return new Component(name, dependsOn, files);
+		// A feature-disabled component keeps its place in the dependency graph (a
+		// sibling may :depends-on it) but contributes no source files.
+		return new Component(name, dependsOn, featureEnabled ? files : List.of());
 	}
 
 	private static IllegalStateException unsupportedComponentOption(String systemName, LispSymbol type, String name,

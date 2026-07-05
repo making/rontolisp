@@ -1172,8 +1172,20 @@ public final class LispNames {
 	/** The {@code :export} clause keyword of {@code defpackage}. */
 	public static final String EXPORT_KEYWORD = ":export";
 
+	/** The {@code :nicknames} clause keyword of {@code defpackage}. */
+	public static final String NICKNAMES_KEYWORD = ":nicknames";
+
+	/** The {@code :import-from} clause keyword of {@code defpackage}. */
+	public static final String IMPORT_FROM_KEYWORD = ":import-from";
+
 	/** The {@code *package*} variable holding the current package name. */
 	public static final String PACKAGE_VAR = "*package*";
+
+	/**
+	 * The {@code *features*} variable, substituted at read time with the active feature
+	 * list (see {@code reader.Features}).
+	 */
+	public static final String FEATURES_VAR = "*features*";
 
 	/** The {@code version} function provided by the {@code rontolisp} package. */
 	public static final String VERSION = "version";

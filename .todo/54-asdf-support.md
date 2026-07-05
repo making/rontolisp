@@ -25,8 +25,43 @@ blockers, and a phased plan.
 >   `AsdfSystemsTest`, `LispEvaluatorAsdfTest`, asdf cases in `LoadInlinerTest`
 >   (incl. compile-and-run-on-JVM), manual 4-backend verification, and the
 >   native `CiSpecE2eTest` run (572 green, no cross-backend output shifted).
+
+> **Status 2026-07-05 (later the same day): Phase 2 is DONE** (reader + package
+> gaps; details in `.kb/reader-features.md` + `.kb/packages.md`). Notes and
+> deviations from the plan below:
 >
-> Next up: Phase 2 (reader/package gaps) below.
+> - `*features*` + `#+`/`#-` (with `:and`/`:or`/`:not`, keyword or bare, case-
+>   insensitive) live in the frontend lexer/reader (`reader.Features`,
+>   `LispLexer`): the raw "skip one datum" mode exists as planned
+>   (`LispLexer.skipDatum`, handles strings/char literals/comments/nested
+>   `#+`/`#.` like `*read-suppress*`). Features: `:rontolisp` + one of
+>   `:rontolisp-interpreter`/`-jvm`/`-wasm`; the CLI picks by output target and
+>   `LoadInliner`/the playground thread it through, so a compiled program's
+>   feature set is fixed at compile time. `*features*` is substituted at read
+>   time like `pi` (bare spelling only; no `setq`). The compiled runtime
+>   readers (`read`/`read-from-string`/runtime `load`) do NOT know the new
+>   syntax — documented in read-load-limitations.
+> - `#| ... |#` nests per CL. `#:foo` is NOT gensym-renamed (a designator needs
+>   its original name); it reads as a plain symbol, passes through the resolver
+>   unresolved, and every designator (defpackage clauses, asdf) strips `#:`.
+> - Nicknames: `PackageRegistry` nickname map (`common-lisp`/`common-lisp-user`
+>   seeded) + `defpackage :nicknames`; resolution canonicalizes everywhere.
+> - `defpackage`: `:import-from` = textual imports map on `LispPackage`
+>   (checked before the cl branch, so use-nothing packages work; qualified
+>   references redirect to the source package), `:documentation`/`:size`
+>   ignored, `:shadow`/`:shadowing-import-from` tailored errors.
+> - `:if-feature` on components (any type, module included): the component
+>   keeps its dependency-graph slot but contributes no files when disabled.
+> - `#.` is now a clear read error (it used to silently mis-lex); the tolerant
+>   skip-with-warning mode (`readAllSkippingReadEval`) applies to any `#.` in a
+>   `.asd`, not just a leading top-level one (simpler; a mid-defsystem `#.`
+>   still fails clause parsing loudly).
+> - ci-spec: `reader-block-comments` / `reader-feature-conditionals` /
+>   `reader-per-backend-features` (first `expectedByBackend` use) /
+>   `reader-features-variable`; native `CiSpecE2eTest` 588 green on all four
+>   backends.
+>
+> Next up: Phase 3 (language gaps for the "simple library" tier) below.
 
 ## Verdict up front
 
