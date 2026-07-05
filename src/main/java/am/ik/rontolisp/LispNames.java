@@ -853,6 +853,17 @@ public final class LispNames {
 	public static final String NTH_VALUE = "nth-value";
 
 	/**
+	 * The {@code destructuring-bind} macro. Binds the variables of a (possibly nested)
+	 * pattern to the corresponding parts of the evaluated form, supporting
+	 * {@code &optional}/{@code &rest}/{@code &body}/{@code &key}/{@code &aux} inside the
+	 * pattern; expands to a {@code let*} of car/cdr chains (see
+	 * {@code LispMacroExpander.expandDestructuringBind}). Lite semantics: a mismatch
+	 * between the pattern and the value does not signal (missing positions bind to nil,
+	 * surplus elements are ignored); {@code &whole}/{@code &environment} are unsupported.
+	 */
+	public static final String DESTRUCTURING_BIND = "destructuring-bind";
+
+	/**
 	 * The {@code error} macro (signal an error). It builds the message with the
 	 * {@code format} machinery and delegates to {@link #ERROR_INTERNAL}. Like
 	 * {@code format} it has no function value (classified as a macro).

@@ -27,11 +27,16 @@ Supporting it needs the standard depth-tracking expansion algorithm in
 `LispReader.readTemplateElement`. Mostly needed for macro-defining macros;
 those can be written with explicit `list`/`quote` today.
 
-## defmacro lambda lists
+## defmacro lambda lists — DONE
 
-Only required parameters plus one trailing `&rest`/`&body` are supported. CL
-defmacro also has destructuring parameter lists, `&optional`, `&key`, `&whole`
-and `&environment` (see also `.todo/31-lambda-list-extensions.md`).
+Destructuring parameter lists, `&optional` (with defaults), `&key`, and `&aux`
+landed 2026-07-05 via the `destructuring-bind` wrapping in
+`LispEvaluator.evalDefmacro` (details: `.kb/defmacro-backquote.md`; see also
+`.todo/31-lambda-list-extensions.md`). Remaining gaps: `&whole` and
+`&environment` are rejected with an error, and an extended lambda list has lite
+no-mismatch semantics (missing positions bind nil, surplus forms ignored) —
+only a plain "required + `&rest`/`&body`" list keeps the strict
+argument-count check.
 
 ## macroexpand / macroexpand-1 — DONE
 

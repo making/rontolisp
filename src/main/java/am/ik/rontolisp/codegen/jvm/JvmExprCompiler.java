@@ -598,6 +598,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueCall(cons), ctx, className);
 				case LispNames.NTH_VALUE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx, className);
+				case LispNames.DESTRUCTURING_BIND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 				case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);

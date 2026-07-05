@@ -44,3 +44,4 @@ categories:
       - { slug: multiple-value-list, name: multiple-value-list }
       - { slug: multiple-value-call, name: multiple-value-call }
       - { slug: nth-value, name: nth-value }
+      - { slug: destructuring-bind, name: destructuring-bind }

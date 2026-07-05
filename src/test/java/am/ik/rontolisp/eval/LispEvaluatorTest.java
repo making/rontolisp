@@ -2595,6 +2595,56 @@ class LispEvaluatorTest {
 		assertThat(eval("(multiple-value-bind (q r) (floor 7.5) (list q r))").print()).isEqualTo("(7 0.5)");
 	}
 
+	// --- destructuring-bind ---
+
+	@Test
+	void evalDestructuringBindPlainAndNested() {
+		assertThat(eval("(destructuring-bind (a b) '(1 2) (list a b))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (+ a b c d))")).isEqualTo(new LispInteger(10));
+		assertThat(eval("(destructuring-bind (a (b (c))) '(1 (2 (3))) (list a b c))").print()).isEqualTo("(1 2 3)");
+		// Lite semantics: a missing position binds to nil, surplus elements are
+		// ignored.
+		assertThat(eval("(destructuring-bind (a b) '(1) (list a b))").print()).isEqualTo("(1 nil)");
+		assertThat(eval("(destructuring-bind (a) '(1 2 3) a)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(destructuring-bind () '(1) 'ok)").print()).isEqualTo("ok");
+	}
+
+	@Test
+	void evalDestructuringBindOptionalRestKeyAux() {
+		assertThat(eval("(destructuring-bind (a &optional (b 10) c) '(1) (list a b c))").print())
+			.isEqualTo("(1 10 nil)");
+		assertThat(eval("(destructuring-bind (a &optional (b 10 bp)) '(1 2) (list a b bp))").print())
+			.isEqualTo("(1 2 t)");
+		assertThat(eval("(destructuring-bind (a &rest r) '(1 2 3) (list a r))").print()).isEqualTo("(1 (2 3))");
+		assertThat(eval("(destructuring-bind (a &body b) '(1 2 3) (list a b))").print()).isEqualTo("(1 (2 3))");
+		assertThat(eval("(destructuring-bind (a &key k (j 5)) '(1 :k 2) (list a k j))").print()).isEqualTo("(1 2 5)");
+		assertThat(eval("(destructuring-bind (a &aux (b (* a 2))) '(3) (list a b))").print()).isEqualTo("(3 6)");
+		// An &optional default can reference an earlier parameter.
+		assertThat(eval("(destructuring-bind (a &optional (b (+ a 1))) '(4) (list a b))").print()).isEqualTo("(4 5)");
+	}
+
+	@Test
+	void evalDestructuringBindNestedPatternWithKeywords() {
+		assertThat(eval("(destructuring-bind ((a &key k) b) '((1 :k 2) 3) (list a k b))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(destructuring-bind (x (y &optional (z 9))) '(1 (2)) (list x y z))").print())
+			.isEqualTo("(1 2 9)");
+	}
+
+	@Test
+	void evalDestructuringBindUnknownKeywordSignals() {
+		assertThatThrownBy(() -> eval("(destructuring-bind (&key k) '(:other 1) k)"))
+			.hasMessageContaining("Unknown keyword argument");
+		assertThat(eval("(destructuring-bind (&key k &allow-other-keys) '(:other 1) k)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalDestructuringBindRejectsWholeAndEnvironment() {
+		assertThatThrownBy(() -> eval("(destructuring-bind (&whole w a) '(1) a)"))
+			.hasMessageContaining("Unsupported lambda-list keyword");
+		assertThatThrownBy(() -> eval("(destructuring-bind (a &environment e) '(1) a)"))
+			.hasMessageContaining("Unsupported lambda-list keyword");
+	}
+
 	@Test
 	void evalFloorFamilyWithDivisorInSingleValueContext() {
 		// (floor a b) outside a multiple-value consumer yields the quotient only.
@@ -3432,7 +3482,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -4560,9 +4610,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defmacroWithOptionalParameters() {
+		LispVal result = evalMulti("""
+				(defmacro add-defaulted (a &optional (b 10)) `(+ ,a ,b))
+				(list (add-defaulted 1) (add-defaulted 1 2))
+				""");
+		assertThat(result.print()).isEqualTo("(11 3)");
+	}
+
+	@Test
+	void defmacroWithKeyParameters() {
+		LispVal result = evalMulti("""
+				(defmacro scaled (x &key (by 1)) `(* ,x ,by))
+				(list (scaled 5) (scaled 5 :by 3))
+				""");
+		assertThat(result.print()).isEqualTo("(5 15)");
+	}
+
+	@Test
+	void defmacroWithDestructuringParameterList() {
+		LispVal result = evalMulti("""
+				(defmacro with-pair ((a b) &body body)
+				  `(let ((,a 1) (,b 2)) ,@body))
+				(with-pair (p q) (+ p q))
+				""");
+		assertThat(result).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void defmacroDestructuringReceivesUnevaluatedForms() {
+		// The nested pattern binds the argument FORMS, not their values.
+		LispVal result = evalMulti("""
+				(defmacro first-form ((a b)) `(quote ,a))
+				(first-form ((+ 1 2) x))
+				""");
+		assertThat(result.print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
 	void defmacroRejectsUnsupportedLambdaListKeywords() {
-		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (a &optional b) a)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("&rest/&body");
+		// &whole/&environment stay unsupported and signal at definition time.
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (&whole w a) a)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Unsupported lambda-list keyword");
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (a &environment e) a)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Unsupported lambda-list keyword");
 	}
 
 	@Test

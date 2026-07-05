@@ -39,7 +39,7 @@ public final class PackageRegistry {
 			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
 			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET, LispNames.LABELS,
 			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
-			LispNames.NTH_VALUE);
+			LispNames.NTH_VALUE, LispNames.DESTRUCTURING_BIND);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

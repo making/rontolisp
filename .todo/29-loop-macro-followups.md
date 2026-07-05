@@ -54,12 +54,14 @@ core via `LispMacroExpander.expandLoop` + the private `LoopExpander` class
   behind temps (so a later init sees outer bindings) and merges all step pairs
   through `makeStepForms` (the same temp-swap `do` uses) for parallel stepping.
 - **DONE** Destructuring binds (`for (a b) in pairs`, `with (x y) = ...`,
-  `for (a b) = ... then ...`, `for (x) on ...`): `LoopExpander.destructure`
-  walks a pattern into car/cdr accessor chains; `for` patterns bind vars to nil
+  `for (a b) = ... then ...`, `for (x) on ...`): the shared
+  `LispMacroExpander.destructurePairs` walker (lifted out of `LoopExpander`
+  when `destructuring-bind` landed; also its keyword-free fast path) walks a
+  pattern into car/cdr accessor chains; `for` patterns bind vars to nil
   and re-destructure in `preBody` each iteration. Patterns are proper lists only
   — the reader rejects dotted-pair syntax, so `(a . b)` cannot even be written;
-  lambda-list keywords are not recognized. If a general `destructuring-bind`
-  lands later, lift `destructure` to share it.
+  lambda-list keywords are not recognized in loop patterns (use
+  `destructuring-bind` in the body for those).
 
 Tests: `LispEvaluatorTest#evalLoop*`, `JvmLispCompilerTest#compileAndRunLoop*`,
 `WasmLispCompilerIntegrationTest#loopExtendedClausesCompileAndRun`,

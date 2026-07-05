@@ -2921,6 +2921,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void destructuringBindForms() throws Exception {
+		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))"
+				+ " (destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"
+				+ " (destructuring-bind (a &rest r) '(1 2 3) (print (list a r)))"
+				+ " (destructuring-bind (a &key k (j 5)) '(1 :k 2) (print (list a k j)))"
+				+ " (destructuring-bind ((a &key k) b) '((1 :k 2) 3) (print (list a k b)))"
+				+ " (defun db-sum (pair) (destructuring-bind (x y) pair (+ x y))) (print (db-sum '(1 2)))"
+				+ " (print (mapcar (lambda (p) (destructuring-bind (x y) p (* x y))) '((1 2) (3 4))))"))
+			.isEqualTo("10\n(1 10 nil)\n(1 (2 3))\n(1 2 5)\n(1 2 3)\n3\n(2 12)");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -3861,7 +3873,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

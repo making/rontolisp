@@ -881,6 +881,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMultipleValueCall(cons), env);
 				case LispNames.NTH_VALUE:
 					return eval(LispMacroExpander.expandNthValue(cons), env);
+				case LispNames.DESTRUCTURING_BIND:
+					return eval(LispMacroExpander.expandDestructuringBind(cons), env);
 				case LispNames.FLOOR:
 				case LispNames.CEILING:
 				case LispNames.ROUND:
@@ -1002,6 +1004,12 @@ public final class LispEvaluator {
 		return cons.toList().get(1);
 	}
 
+	/**
+	 * Internal rest parameter binding the whole unevaluated argument list of a macro
+	 * whose lambda list needs destructuring (see {@link #evalDefmacro}).
+	 */
+	private static final String MACRO_ARGS_VAR = "__macro_args";
+
 	private LispVal evalDefmacro(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name)) {
@@ -1010,32 +1018,67 @@ public final class LispEvaluator {
 		if (PackageRegistry.isClSymbol(name.name())) {
 			throw new LispEvalException(LispNames.DEFMACRO + " cannot redefine the standard operator " + name.name());
 		}
+		List<LispVal> paramList = parts.get(2) instanceof LispCons paramCons ? paramCons.toList() : List.of();
+		if (!isSimpleMacroLambdaList(paramList)) {
+			// Destructuring/extended lambda list (nested patterns, &optional, &key,
+			// ...): bind the whole unevaluated argument list to an internal rest
+			// parameter and wrap the body in a destructuring-bind over it, so both
+			// macro-expansion consumers (this evaluator and the compile path's
+			// UserMacroExpander, which delegates here) destructure identically.
+			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
+			List<LispVal> dbParts = new ArrayList<>();
+			dbParts.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
+			dbParts.add(parts.get(2));
+			dbParts.add(argsVar);
+			dbParts.addAll(parts.subList(3, parts.size()));
+			LispVal wrapped = LispNil.INSTANCE;
+			for (int i = dbParts.size() - 1; i >= 0; i--) {
+				wrapped = new LispCons(dbParts.get(i), wrapped);
+			}
+			try {
+				// Dry-run the expansion to validate the lambda list at definition time
+				// (&whole/&environment and malformed specs signal here, not at first
+				// use).
+				LispMacroExpander.expandDestructuringBind((LispCons) wrapped);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(LispNames.DEFMACRO + " " + name.name() + ": " + ex.getMessage());
+			}
+			this.userMacros.put(name.name(), new UserMacro(List.of(), argsVar, List.of(wrapped), env));
+			return name;
+		}
 		List<LispSymbol> required = new ArrayList<>();
 		LispSymbol rest = null;
-		if (parts.get(2) instanceof LispCons paramCons) {
-			List<LispVal> paramList = paramCons.toList();
-			for (int i = 0; i < paramList.size(); i++) {
-				if (!(paramList.get(i) instanceof LispSymbol param)) {
-					throw new LispEvalException(
-							LispNames.DEFMACRO + " parameter must be a symbol: " + paramList.get(i).print());
-				}
-				if (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name())) {
-					if (i + 2 != paramList.size() || !(paramList.get(i + 1) instanceof LispSymbol restParam)) {
-						throw new LispEvalException(LispNames.DEFMACRO + ": " + param.name()
-								+ " must be followed by exactly one parameter symbol");
-					}
-					rest = restParam;
-					break;
-				}
-				if (param.name().startsWith("&")) {
-					throw new LispEvalException(LispNames.DEFMACRO + " supports required parameters and &rest/&body"
-							+ " only, got " + param.name());
-				}
-				required.add(param);
+		for (int i = 0; i < paramList.size(); i++) {
+			LispSymbol param = (LispSymbol) paramList.get(i);
+			if (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name())) {
+				rest = (LispSymbol) paramList.get(i + 1);
+				break;
 			}
+			required.add(param);
 		}
 		this.userMacros.put(name.name(), new UserMacro(required, rest, parts.subList(3, parts.size()), env));
 		return name;
+	}
+
+	/**
+	 * Returns whether the macro lambda list is the native shape (required symbols plus an
+	 * optional trailing {@code &rest}/{@code &body} pair). Anything else -- a nested
+	 * pattern, {@code &optional}/{@code &key}/..., a non-symbol -- takes the
+	 * destructuring path.
+	 */
+	private static boolean isSimpleMacroLambdaList(List<LispVal> paramList) {
+		for (int i = 0; i < paramList.size(); i++) {
+			if (!(paramList.get(i) instanceof LispSymbol param)) {
+				return false;
+			}
+			if (param.name().startsWith("&")) {
+				return (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name()))
+						&& i + 2 == paramList.size() && paramList.get(i + 1) instanceof LispSymbol restParam
+						&& !restParam.name().startsWith("&");
+			}
+		}
+		return true;
 	}
 
 	/**

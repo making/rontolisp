@@ -172,6 +172,14 @@ public final class UserMacroExpander {
 					}
 					return rebuild(parts, 2, macroEval, parts.get(1));
 				}
+				case LispNames.DESTRUCTURING_BIND: {
+					// (destructuring-bind pattern form body...): the pattern stays (like
+					// a lambda list), the form and the body are expressions.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					return rebuild(parts, 2, macroEval, parts.get(1));
+				}
 				case LispNames.DOLIST, LispNames.DOTIMES: {
 					// (dolist (var listform result) body...): var stays.
 					LispVal spec = parts.get(1);

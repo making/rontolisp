@@ -203,9 +203,9 @@ docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
    a `(values ...)` tail in a user function collapses to the primary value,
    so split-sequence's index second value will read as nil -- the runtime
    tier (32) is the fix if that matters.
-4. `.todo/58-destructuring-bind-and-defmacro-lambda-lists.md` --
-   `destructuring-bind` + full defmacro lambda lists (shared destructuring
-   walker; lifts LoopExpander.destructure).
+4. `destructuring-bind` + full defmacro lambda lists (shared destructuring
+   walker; lifted LoopExpander.destructure). **DONE 2026-07-05**; the todo
+   file (58) was removed, details live in `.kb/defmacro-backquote.md`.
 5. `.todo/59-string-streams.md` -- `with-output-to-string`
    /`with-input-from-string`/`write-string`/`write-to-string` over the
    existing stream-handle runtime (the rest of 36 stays there).

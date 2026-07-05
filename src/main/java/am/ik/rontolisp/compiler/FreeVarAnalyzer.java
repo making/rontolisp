@@ -168,6 +168,11 @@ public final class FreeVarAnalyzer {
 									globals, freeVars);
 						case LispNames.NTH_VALUE -> collectFreeVars(LispMacroExpander.expandNthValue(cons), boundVars,
 								knownFunctions, globals, freeVars);
+						// Expand before walking: the default walk would misread the
+						// destructuring pattern as a call form.
+						case LispNames.DESTRUCTURING_BIND ->
+							collectFreeVars(LispMacroExpander.expandDestructuringBind(cons), boundVars, knownFunctions,
+									globals, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -302,6 +307,10 @@ public final class FreeVarAnalyzer {
 									knownFunctions, captured, insideLambda);
 						case LispNames.NTH_VALUE -> collectCapturedVars(LispMacroExpander.expandNthValue(cons),
 								localVars, knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.DESTRUCTURING_BIND ->
+							collectCapturedVars(LispMacroExpander.expandDestructuringBind(cons), localVars,
+									knownFunctions, captured, insideLambda);
 						case LispNames.FUNCTION -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {

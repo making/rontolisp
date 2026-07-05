@@ -1,8 +1,8 @@
 # defmacro
 
-`(defmacro name (params... [&rest|&body rest]) body...)`
+`(defmacro name lambda-list body...)`
 
-Defines a user macro named `name` and returns the name symbol. A macro call receives its argument forms **unevaluated**: the `body` runs at expansion time with the parameters bound to the raw forms, and the form it returns (the expansion) is evaluated in place of the call. The lambda list supports required parameters and one trailing `&rest`/`&body` parameter that collects the remaining forms as a list; `&optional`/`&key` are not supported. A standard operator (`when`, `setf`, ...) cannot be redefined, and a macro has no function value (`#'name` is an error).
+Defines a user macro named `name` and returns the name symbol. A macro call receives its argument forms **unevaluated**: the `body` runs at expansion time with the parameters bound to the raw forms, and the form it returns (the expansion) is evaluated in place of the call. The lambda list is a macro lambda list, destructured over the argument forms like [`destructuring-bind`](../macros/destructuring-bind.md): patterns nest in required positions, and `&optional` (with defaults), `&rest`/`&body`, `&key`, and `&aux` are supported; `&whole` and `&environment` are not. With such an extended lambda list, matching is lenient (a missing position binds to nil, surplus forms are ignored); a plain lambda list (required parameters plus one trailing `&rest`/`&body`) keeps the strict argument-count check. A standard operator (`when`, `setf`, ...) cannot be redefined, and a macro has no function value (`#'name` is an error).
 
 Macro bodies usually build the expansion with the backquote template syntax, which is also available anywhere else in a program:
 
@@ -29,4 +29,11 @@ The interpreter expands macro calls at evaluation time (so `defmacro` also works
 (setq y 2)
 (swap! x y)
 (list x y) ; => (2 1)
+```
+
+```lisp
+(defmacro with-point ((x y) form &key (scale 1))
+  `(destructuring-bind (,x ,y) ,form
+     (list (* ,x ,scale) (* ,y ,scale))))
+(with-point (px py) '(3 4) :scale 10) ; => (30 40)
 ```

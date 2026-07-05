@@ -2550,6 +2550,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDestructuringBind() throws Exception {
+		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
+		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))
+			.isEqualTo("(1 10 nil)");
+		assertThat(compileAndRun("(destructuring-bind (a &rest r) '(1 2 3) (print (list a r)))"))
+			.isEqualTo("(1 (2 3))");
+		assertThat(compileAndRun("(destructuring-bind (a &key k (j 5)) '(1 :k 2) (print (list a k j)))"))
+			.isEqualTo("(1 2 5)");
+		assertThat(compileAndRun("(destructuring-bind ((a &key k) b) '((1 :k 2) 3) (print (list a k b)))"))
+			.isEqualTo("(1 2 3)");
+		// Inside a defun and a lambda (the pattern variables are lambda-local).
+		assertThat(compileAndRun(
+				"(defun db-sum (pair) (destructuring-bind (x y) pair (+ x y)))" + " (print (db-sum '(1 2)))"
+						+ " (print (mapcar (lambda (p) (destructuring-bind (x y) p (* x y))) '((1 2) (3 4))))"))
+			.isEqualTo("3\n(2 12)");
+	}
+
+	// defmacro destructuring/extended lambda lists go through the same compile-path
+	// pass as plain defmacro (eval.UserMacroExpander).
+	@Test
+	void compileAndRunUserMacroWithDestructuringLambdaList() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro with-pair ((a b) &body body) `(let ((,a 1) (,b 2)) ,@body))
+				(defmacro scaled (x &key (by 1)) `(* ,x ,by))
+				(print (with-pair (p q) (+ p q)))
+				(print (scaled 5 :by 3))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("3\n15");
+		}
+	}
+
+	@Test
 	void compileAndRunMultipleValueListAndNthValue() throws Exception {
 		assertThat(compileAndRun("(print (multiple-value-list (values 1 2 3)))"
 				+ " (print (multiple-value-list (floor 17 5)))" + " (print (multiple-value-list (+ 1 2)))"
@@ -3383,7 +3432,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

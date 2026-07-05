@@ -97,37 +97,10 @@ public final class LambdaLists {
 		LispSymbol restVar = parsed.rest() != null && parsed.optionals().isEmpty() ? parsed.rest()
 				: new LispSymbol(REST_VAR);
 		List<LispVal> bindings = new ArrayList<>();
-		for (OptionalParam opt : parsed.optionals()) {
-			LispVal supplied = list(new LispSymbol(LispNames.CONSP), restVar);
-			if (opt.suppliedP() != null) {
-				bindings.add(list(opt.suppliedP(), supplied));
-				supplied = opt.suppliedP();
-			}
-			bindings.add(list(opt.name(),
-					list(new LispSymbol(LispNames.IF), supplied, call(LispNames.CAR, restVar), opt.defaultForm())));
-			bindings.add(list(restVar, list(new LispSymbol(LispNames.IF),
-					list(new LispSymbol(LispNames.CONSP), restVar), call(LispNames.CDR, restVar), LispNil.INSTANCE)));
-		}
-		if (parsed.rest() != null && !parsed.optionals().isEmpty()) {
-			bindings.add(list(parsed.rest(), restVar));
-		}
-		LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
-		for (KeyParam key : parsed.keys()) {
-			LispSymbol cell = new LispSymbol(CELL_VAR_PREFIX + key.name().name());
-			bindings.add(list(cell, keyCellScan(keySource, key.keyword())));
-			if (key.suppliedP() != null) {
-				bindings.add(list(key.suppliedP(),
-						list(new LispSymbol(LispNames.IF), cell, LispTrue.INSTANCE, LispNil.INSTANCE)));
-			}
-			bindings.add(list(key.name(), list(new LispSymbol(LispNames.IF), cell,
-					call(LispNames.CAR, call(LispNames.CDR, cell)), key.defaultForm())));
-		}
-		for (AuxParam aux : parsed.auxes()) {
-			bindings.add(list(aux.name(), aux.initForm()));
-		}
+		appendPrologueBindings(parsed, restVar, false, bindings);
 		List<LispVal> letBody = new ArrayList<>();
 		if (!parsed.keys().isEmpty() && !parsed.allowOtherKeys()) {
-			letBody.add(unknownKeyCheck(keySource, parsed.keys()));
+			letBody.add(unknownKeyCheck(parsed.rest() != null ? parsed.rest() : restVar, parsed.keys()));
 		}
 		letBody.addAll(body);
 		List<LispVal> letParts = new ArrayList<>();
@@ -223,6 +196,67 @@ public final class LambdaLists {
 			parts.add(desugar(bodyForm));
 		}
 		return list(parts.toArray(LispVal[]::new));
+	}
+
+	/**
+	 * Appends the {@code let*} bindings desugaring the parsed
+	 * {@code &optional}/{@code &rest}/{@code &key}/{@code &aux} parameters over
+	 * {@code restVar} (the variable holding the argument list tail). When
+	 * {@code aliasRest} is {@code true} the declared {@code &rest} parameter is always
+	 * bound to {@code restVar} (the destructuring path, where {@code restVar} is a
+	 * generated temporary); otherwise the alias is only needed after {@code &optional}
+	 * stepping consumed {@code restVar} (the native-parameter path, where a keyword-free
+	 * {@code &rest} parameter IS the physical rest parameter).
+	 */
+	private static void appendPrologueBindings(Parsed parsed, LispSymbol restVar, boolean aliasRest,
+			List<LispVal> bindings) {
+		for (OptionalParam opt : parsed.optionals()) {
+			LispVal supplied = list(new LispSymbol(LispNames.CONSP), restVar);
+			if (opt.suppliedP() != null) {
+				bindings.add(list(opt.suppliedP(), supplied));
+				supplied = opt.suppliedP();
+			}
+			bindings.add(list(opt.name(),
+					list(new LispSymbol(LispNames.IF), supplied, call(LispNames.CAR, restVar), opt.defaultForm())));
+			bindings.add(list(restVar, list(new LispSymbol(LispNames.IF),
+					list(new LispSymbol(LispNames.CONSP), restVar), call(LispNames.CDR, restVar), LispNil.INSTANCE)));
+		}
+		if (parsed.rest() != null && (aliasRest || !parsed.optionals().isEmpty())) {
+			bindings.add(list(parsed.rest(), restVar));
+		}
+		LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
+		for (KeyParam key : parsed.keys()) {
+			LispSymbol cell = new LispSymbol(CELL_VAR_PREFIX + key.name().name());
+			bindings.add(list(cell, keyCellScan(keySource, key.keyword())));
+			if (key.suppliedP() != null) {
+				bindings.add(list(key.suppliedP(),
+						list(new LispSymbol(LispNames.IF), cell, LispTrue.INSTANCE, LispNil.INSTANCE)));
+			}
+			bindings.add(list(key.name(), list(new LispSymbol(LispNames.IF), cell,
+					call(LispNames.CAR, call(LispNames.CDR, cell)), key.defaultForm())));
+		}
+		for (AuxParam aux : parsed.auxes()) {
+			bindings.add(list(aux.name(), aux.initForm()));
+		}
+	}
+
+	/**
+	 * Appends the {@code let*} bindings destructuring a lambda-list tail (the elements
+	 * from the first lambda-list keyword on) over {@code restVar}, for
+	 * {@code destructuring-bind} and macro lambda lists. The unknown-keyword check (a
+	 * {@code do} loop signalling on an undeclared keyword) is appended as a throwaway
+	 * binding so the whole tail stays a flat binding list.
+	 * @param tailParams the tail elements, starting with a lambda-list keyword
+	 * @param restVar the variable holding the remaining list
+	 * @param out the binding list to append to
+	 */
+	static void appendTailBindings(List<LispVal> tailParams, LispSymbol restVar, List<LispVal> out) {
+		Parsed parsed = parse(tailParams);
+		appendPrologueBindings(parsed, restVar, true, out);
+		if (!parsed.keys().isEmpty() && !parsed.allowOtherKeys()) {
+			LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
+			out.add(list(new LispSymbol("__ll_check"), unknownKeyCheck(keySource, parsed.keys())));
+		}
 	}
 
 	// --- lambda list parsing ---
