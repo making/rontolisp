@@ -2469,6 +2469,11 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+		// values: no runtime multiple-value representation exists, so as a function it
+		// yields its primary value ((values) yields nil). The multiple-value consumers
+		// recognize a literal (values ...) producer syntactically before evaluation.
+		env.defineFunction(LispNames.VALUES,
+				new LispFunction(LispNames.VALUES, args -> args.isEmpty() ? LispNil.INSTANCE : args.get(0)));
 		env.defineFunction(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
 			requireArgCount(LispNames.NTHCDR, args, 2);
 			long n = asLong(args.get(0));

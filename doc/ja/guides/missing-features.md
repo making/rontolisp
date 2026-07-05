@@ -15,7 +15,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `defmacro`（ユーザーマクロ） | 利用可能（[`defmacro`](../reference/special-forms/defmacro.md) 参照） |
 | `&optional` / `&rest` / `&key` / `&aux` | `defun`/`lambda` で利用可能（[`defun`](../reference/special-forms/defun.md) を参照）。`defmacro` は `&rest`/`&body` のみ |
 | `&whole` | 利用不可 |
-| `values` / `multiple-value-bind` | 利用不可 |
+| `values` / `multiple-value-bind` | 利用可、構文的サブセット（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
 | `block` / `return-from` / `tagbody` / `go` | 利用不可 |
 | `catch` / `throw` / `unwind-protect` | 利用不可 |
 | 条件とリスタート（`handler-case` など） | 利用不可 |
@@ -61,14 +61,27 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 ## 多値（`values`、`multiple-value-bind`）
 
-複数の戻り値はありません。関数はちょうど 1 つの値を返します。その結果、
-`floor`、`truncate`、`round`、`ceiling` は**単一の引数**を取り、整数のみを
-返します。除数の引数も、2 番目の（剰余の）値もありません。
+構文的なサブセットが利用できます: [`values`](../reference/functions/values.md)、
+[`multiple-value-bind`](../reference/macros/multiple-value-bind.md)、
+[`multiple-value-list`](../reference/macros/multiple-value-list.md)、
+[`multiple-value-call`](../reference/macros/multiple-value-call.md)、
+[`nth-value`](../reference/macros/nth-value.md)、および
+`floor`/`ceiling`/`round`/`truncate` と `gethash` の 2 番目の値
+（剰余 / present-p）と `floor` ファミリのオプションの除数引数です。
+
+**実行時の多値表現はありません**: コンシューマはプロデューサフォームを
+構文的に認識します（リテラルの `(values ...)` 呼び出しか、上記の 2 値の
+組み込み関数）。**ユーザ定義関数**の末尾の `(values ...)` は呼び出し境界で
+主値に潰れるため、呼び出し側の余った変数は nil になります:
 
 ```console
-> (floor 7 2)
-floor expects 1 arguments, got 2
+> (defun two () (values 1 2))
+> (multiple-value-bind (a b) (two) (list a b))
+(1 nil)
 ```
+
+CL で副次値を持つ他の組み込み関数（`parse-integer`、`read-from-string`、
+`member` など）は単一値のままです。
 
 ## 非局所脱出と制御フロー
 

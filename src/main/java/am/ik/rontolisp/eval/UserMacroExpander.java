@@ -164,6 +164,14 @@ public final class UserMacroExpander {
 					}
 					return rebuild(parts, 2, macroEval, properList(newDefs));
 				}
+				case LispNames.MULTIPLE_VALUE_BIND: {
+					// (multiple-value-bind (vars...) values-form body...): the variable
+					// list stays, the values form and the body are expressions.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					return rebuild(parts, 2, macroEval, parts.get(1));
+				}
 				case LispNames.DOLIST, LispNames.DOTIMES: {
 					// (dolist (var listform result) body...): var stays.
 					LispVal spec = parts.get(1);

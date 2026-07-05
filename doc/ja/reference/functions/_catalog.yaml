@@ -174,6 +174,7 @@ categories:
     functions:
       - { slug: funcall, name: "funcall" }
       - { slug: apply, name: "apply" }
+      - { slug: values, name: "values" }
       - { slug: mapcar, name: "mapcar" }
       - { slug: map, name: "map" }
       - { slug: mapc, name: "mapc" }

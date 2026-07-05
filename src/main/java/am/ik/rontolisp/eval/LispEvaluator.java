@@ -873,6 +873,26 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandFlet(cons), env);
 				case LispNames.LABELS:
 					return eval(LispMacroExpander.expandLabels(cons), env);
+				case LispNames.MULTIPLE_VALUE_BIND:
+					return eval(LispMacroExpander.expandMultipleValueBind(cons), env);
+				case LispNames.MULTIPLE_VALUE_LIST:
+					return eval(LispMacroExpander.expandMultipleValueList(cons), env);
+				case LispNames.MULTIPLE_VALUE_CALL:
+					return eval(LispMacroExpander.expandMultipleValueCall(cons), env);
+				case LispNames.NTH_VALUE:
+					return eval(LispMacroExpander.expandNthValue(cons), env);
+				case LispNames.FLOOR:
+				case LispNames.CEILING:
+				case LispNames.ROUND:
+				case LispNames.TRUNCATE: {
+					// (floor a b) -> (floor (/ a b)); the one-argument form falls
+					// through to the ordinary built-in function.
+					LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
+					if (withDivisor != null) {
+						return eval(withDivisor, env);
+					}
+					break;
+				}
 				case LispNames.LIST_STAR:
 					return eval(LispMacroExpander.expandListStar(cons), env);
 				case LispNames.ACONS:

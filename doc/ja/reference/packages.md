@@ -129,7 +129,7 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
+; => (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
 (print (rontolisp:list-special-forms))
 ; => (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))

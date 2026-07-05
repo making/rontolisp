@@ -2893,6 +2893,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void multipleValueForms() throws Exception {
+		assertThat(compileAndRun("(setq mv-side 0) (setq mv-primary (values 1 (setq mv-side 9)))"
+				+ " (print (list mv-primary mv-side)) (print (values)) (print (funcall #'values 1 2))"
+				+ " (multiple-value-bind (a b c) (values 1 2) (print (list a b c)))"
+				+ " (multiple-value-bind (q r) (floor 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (truncate -7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (floor 7.5) (print (list q r)))"
+				+ " (print (multiple-value-list (floor 17 5)))" + " (print (nth-value 1 (floor 7 2)))"
+				+ " (print (multiple-value-call #'+ (values 1 2)))" + " (defun mv-collect (&rest args) args)"
+				+ " (print (multiple-value-call #'mv-collect 1 (values 2 3) (floor 9 4)))"
+				+ " (print (floor 7 2)) (print (round 7 2))"))
+			.isEqualTo("(1 9)\nnil\n1\n(1 2 nil)\n(3 1)\n(-3 -1)\n(7 0.5)\n(3 2)\n1\n3\n(1 2 3 2 1)\n3\n4");
+	}
+
+	@Test
+	void multipleValueGethash() throws Exception {
+		// The gethash lowering distinguishes a stored nil from a missing key via a
+		// runtime gensym sentinel passed as the gethash default.
+		assertThat(compileAndRun(
+				"(setq mv-h (make-hash-table))" + " (setf (gethash 'x mv-h) nil) (setf (gethash 'y mv-h) 42)"
+						+ " (multiple-value-bind (v p) (gethash 'y mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'x mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'z mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'z mv-h 'dflt) (print (list v p)))"))
+			.isEqualTo("(42 t)\n(nil t)\n(nil nil)\n(dflt nil)");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -3833,7 +3861,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -3844,7 +3872,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("207");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("208");
 	}
 
 	@Test

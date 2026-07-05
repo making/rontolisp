@@ -1,6 +1,16 @@
 # Multiple value system (`values`, `multiple-value-bind`, `multiple-value-call`, etc.)
 
-**Status:** not implemented. HIGH priority — a foundational CL feature for functions that return more than one result.
+**Status:** the core syntactic tier shipped 2026-07-05 (Phase 3 unit 3, see
+`.kb/multiple-values.md`): `values`, `multiple-value-bind`/`-list`/`-call`,
+`nth-value`, secondary values for `floor`/`ceiling`/`round`/`truncate` and
+`gethash`, and the floor-family divisor argument. There is NO runtime
+multiple-value representation -- consumers recognize the producer form
+syntactically, so a `(values ...)` tail in a user function collapses to its
+primary value at the call boundary. What remains here: the runtime
+representation (needed for user-function producers, e.g. split-sequence's
+index value), the long tail of secondary-value built-ins below
+(`parse-integer`, `read-from-string`, `member`, ...), `multiple-values-limit`,
+and `(setf (values ...) ...)`.
 
 ## What's missing
 

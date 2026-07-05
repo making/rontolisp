@@ -407,10 +407,22 @@ final class WasmExprCompiler {
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
 				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);
 				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(cons, ctx);
-				case LispNames.TRUNCATE -> WasmIntConvCompiler.compileTruncate(cons, ctx);
-				case LispNames.FLOOR -> WasmIntConvCompiler.compileFloor(cons, ctx);
-				case LispNames.CEILING -> WasmIntConvCompiler.compileCeiling(cons, ctx);
-				case LispNames.ROUND -> WasmIntConvCompiler.compileRound(cons, ctx);
+				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
+					// (floor a b) -> (floor (/ a b)); the one-argument form compiles
+					// natively.
+					LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
+					if (withDivisor != null) {
+						WasmExprCompiler.compileExpr(withDivisor, ctx);
+					}
+					else {
+						switch (sym.name()) {
+							case LispNames.TRUNCATE -> WasmIntConvCompiler.compileTruncate(cons, ctx);
+							case LispNames.FLOOR -> WasmIntConvCompiler.compileFloor(cons, ctx);
+							case LispNames.CEILING -> WasmIntConvCompiler.compileCeiling(cons, ctx);
+							default -> WasmIntConvCompiler.compileRound(cons, ctx);
+						}
+					}
+				}
 				case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
 				case LispNames.CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx);
 				case LispNames.ECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx);
@@ -508,6 +520,14 @@ final class WasmExprCompiler {
 				case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
 				case LispNames.FLET -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx);
 				case LispNames.LABELS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx);
+				case LispNames.VALUES -> WasmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx);
+				case LispNames.MULTIPLE_VALUE_BIND ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueBind(cons), ctx);
+				case LispNames.MULTIPLE_VALUE_LIST ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueList(cons), ctx);
+				case LispNames.MULTIPLE_VALUE_CALL ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueCall(cons), ctx);
+				case LispNames.NTH_VALUE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx);
 				case LispNames.GCD -> {
 					if (isBinaryCall(cons)) {
 						WasmGcdCompiler.compile(cons, ctx);

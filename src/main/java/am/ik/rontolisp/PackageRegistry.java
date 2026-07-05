@@ -37,8 +37,9 @@ public final class PackageRegistry {
 			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.DO_STAR, LispNames.PROG2,
 			LispNames.PSETQ, LispNames.TYPECASE, LispNames.ECASE, LispNames.ETYPECASE, LispNames.CCASE, LispNames.ERROR,
 			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
-			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET,
-			LispNames.LABELS);
+			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET, LispNames.LABELS,
+			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
+			LispNames.NTH_VALUE);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -87,7 +88,7 @@ public final class PackageRegistry {
 			LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_DIMENSIONS,
 			LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE, LispNames.ROW_MAJOR_AREF,
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND,
-			LispNames.MACROEXPAND_1);
+			LispNames.MACROEXPAND_1, LispNames.VALUES);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);

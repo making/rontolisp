@@ -153,6 +153,21 @@ public final class FreeVarAnalyzer {
 								knownFunctions, globals, freeVars);
 						case LispNames.LABELS -> collectFreeVars(LispMacroExpander.expandLabels(cons), boundVars,
 								knownFunctions, globals, freeVars);
+						// Expand before walking: the default walk would misread the
+						// multiple-value-bind variable list as a call form. The temp
+						// names
+						// are counter-fresh but all bound inside the expansion.
+						case LispNames.MULTIPLE_VALUE_BIND ->
+							collectFreeVars(LispMacroExpander.expandMultipleValueBind(cons), boundVars, knownFunctions,
+									globals, freeVars);
+						case LispNames.MULTIPLE_VALUE_LIST ->
+							collectFreeVars(LispMacroExpander.expandMultipleValueList(cons), boundVars, knownFunctions,
+									globals, freeVars);
+						case LispNames.MULTIPLE_VALUE_CALL ->
+							collectFreeVars(LispMacroExpander.expandMultipleValueCall(cons), boundVars, knownFunctions,
+									globals, freeVars);
+						case LispNames.NTH_VALUE -> collectFreeVars(LispMacroExpander.expandNthValue(cons), boundVars,
+								knownFunctions, globals, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -275,6 +290,18 @@ public final class FreeVarAnalyzer {
 								knownFunctions, captured, insideLambda);
 						case LispNames.LABELS -> collectCapturedVars(LispMacroExpander.expandLabels(cons), localVars,
 								knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.MULTIPLE_VALUE_BIND ->
+							collectCapturedVars(LispMacroExpander.expandMultipleValueBind(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.MULTIPLE_VALUE_LIST ->
+							collectCapturedVars(LispMacroExpander.expandMultipleValueList(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.MULTIPLE_VALUE_CALL ->
+							collectCapturedVars(LispMacroExpander.expandMultipleValueCall(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.NTH_VALUE -> collectCapturedVars(LispMacroExpander.expandNthValue(cons),
+								localVars, knownFunctions, captured, insideLambda);
 						case LispNames.FUNCTION -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {

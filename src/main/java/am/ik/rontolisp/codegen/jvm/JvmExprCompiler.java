@@ -422,10 +422,22 @@ final class JvmExprCompiler {
 				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
 				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);
 				case LispNames.FLOAT -> JvmFloatConvCompiler.compile(cons, ctx, className);
-				case LispNames.TRUNCATE -> JvmIntConvCompiler.compileTruncate(cons, ctx, className);
-				case LispNames.FLOOR -> JvmIntConvCompiler.compileFloor(cons, ctx, className);
-				case LispNames.CEILING -> JvmIntConvCompiler.compileCeiling(cons, ctx, className);
-				case LispNames.ROUND -> JvmIntConvCompiler.compileRound(cons, ctx, className);
+				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
+					// (floor a b) -> (floor (/ a b)); the one-argument form compiles
+					// natively.
+					LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
+					if (withDivisor != null) {
+						JvmExprCompiler.compileExpr(withDivisor, ctx, className);
+					}
+					else {
+						switch (sym.name()) {
+							case LispNames.TRUNCATE -> JvmIntConvCompiler.compileTruncate(cons, ctx, className);
+							case LispNames.FLOOR -> JvmIntConvCompiler.compileFloor(cons, ctx, className);
+							case LispNames.CEILING -> JvmIntConvCompiler.compileCeiling(cons, ctx, className);
+							default -> JvmIntConvCompiler.compileRound(cons, ctx, className);
+						}
+					}
+				}
 				case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
 				case LispNames.CASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx, className);
 				case LispNames.ECASE ->
@@ -576,6 +588,16 @@ final class JvmExprCompiler {
 				case LispNames.FLET -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);
 				case LispNames.LABELS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx, className);
+				case LispNames.VALUES ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx, className);
+				case LispNames.MULTIPLE_VALUE_BIND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueBind(cons), ctx, className);
+				case LispNames.MULTIPLE_VALUE_LIST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueList(cons), ctx, className);
+				case LispNames.MULTIPLE_VALUE_CALL ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueCall(cons), ctx, className);
+				case LispNames.NTH_VALUE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 				case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);

@@ -146,10 +146,10 @@
 | `min` | `(min 3 5)`, `(min 5 2 8 1)` | `3`, `1`(可変長引数) |
 | `max` | `(max 3 5)`, `(max 5 2 8 1)` | `5`, `8`(可変長引数) |
 | `float` | `(float 42)` | `42.0`(doubleに変換) |
-| `truncate` | `(truncate 3.7)`, `(truncate -3.7)` | `3`, `-3`(ゼロ方向) |
-| `floor` | `(floor 3.7)`, `(floor -3.7)` | `3`, `-4`(負の無限大方向) |
-| `ceiling` | `(ceiling 3.2)`, `(ceiling -3.2)` | `4`, `-3`(正の無限大方向) |
-| `round` | `(round 3.5)`, `(round 2.5)` | `4`, `2`(銀行家の丸め) |
+| `truncate` | `(truncate 3.7)`, `(truncate -7 2)` | `3`, `-3`(ゼロ方向。除数を与えると除算の商になり、剰余は `multiple-value-bind` で観測できます) |
+| `floor` | `(floor 3.7)`, `(floor 7 2)` | `3`, `3`(負の無限大方向。除数を与えると除算の商になり、剰余は `multiple-value-bind` で観測できます) |
+| `ceiling` | `(ceiling 3.2)`, `(ceiling 7 2)` | `4`, `4`(正の無限大方向。除数を与えると除算の商になります) |
+| `round` | `(round 3.5)`, `(round 2.5)` | `4`, `2`(銀行家の丸め。オプションの除数を与えると除算の商を丸めます) |
 | `sqrt` | `(sqrt 16)`, `(sqrt 2)` | `4.0`, `1.4142135623730951`(常に浮動小数点) |
 | `isqrt` | `(isqrt 17)` | `4`(整数平方根、実数根の床) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
@@ -177,6 +177,7 @@
 | `mapc` | `(mapc #'print '(1 2 3))` | 副作用のために各要素に関数を適用し、元のリストを返します |
 | `mapcan` | `(mapcan (lambda (x) (list x x)) '(1 2))` | `(1 1 2 2)`(関数を適用し結果リストを連結します。非破壊的な `append` を使用) |
 | `apply` | `(apply #'+ 1 2 '(3 4))` | `10`(先頭の引数と展開された最終リストに関数を適用します) |
+| `values` | `(values 1 2 3)`, `(multiple-value-list (values 1 2 3))` | `1`, `(1 2 3)` -- 多値は構文的にのみ存在します: `multiple-value-bind`/`-list`/`-call`/`nth-value` はリテラルの `(values ...)` 呼び出しまたは 2 値の組み込み関数（`floor` ファミリ、`gethash`）の全ての値を受け取り、それ以外の文脈では主値だけが残ります |
 | `reduce` | `(reduce #'+ '(1 2 3) :initial-value 0)` | 左畳み込み: `(f (f (f init a) b) c)`。素の形式 `(reduce f list)` は最初の要素を初期値に使います。`:initial-value` キーワード(リテラル)は明示的な初期値を与えます |
 | `every` | `(every #'evenp '(2 4 6))` | すべての要素で述語が非nilなら `t`、そうでなければ `nil`(単一リスト形式) |
 | `some` | `(some #'oddp '(2 4 5))` | 最初の非nilな述語結果、すべての要素が失敗すれば `nil`(単一リスト形式) |

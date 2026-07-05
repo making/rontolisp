@@ -15,7 +15,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `defmacro` (user macros) | available (see [`defmacro`](../reference/special-forms/defmacro.md)) |
 | `&optional` / `&rest` / `&key` / `&aux` | available in `defun`/`lambda` (see [`defun`](../reference/special-forms/defun.md)); `defmacro` takes `&rest`/`&body` only |
 | `&whole` | not available |
-| `values` / `multiple-value-bind` | not available |
+| `values` / `multiple-value-bind` | available, syntactic subset (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
 | `block` / `return-from` / `tagbody` / `go` | not available |
 | `catch` / `throw` / `unwind-protect` | not available |
 | conditions & restarts (`handler-case`, ...) | not available |
@@ -58,15 +58,28 @@ built at runtime by the compiled `eval` does not parse lambda-list keywords
 
 ## Multiple values (`values`, `multiple-value-bind`)
 
-There are no multiple return values. A function returns exactly one value.
-Consequently `floor`, `truncate`, `round`, and `ceiling` take a **single argument**
-and return only the integer — there is no divisor argument and no second
-(remainder) value:
+A syntactic subset is available: [`values`](../reference/functions/values.md),
+[`multiple-value-bind`](../reference/macros/multiple-value-bind.md),
+[`multiple-value-list`](../reference/macros/multiple-value-list.md),
+[`multiple-value-call`](../reference/macros/multiple-value-call.md) and
+[`nth-value`](../reference/macros/nth-value.md), plus the second (remainder /
+present-p) value of `floor`/`ceiling`/`round`/`truncate` and `gethash` and the
+optional divisor argument of the `floor` family.
+
+There is **no runtime multiple-value representation**: the consumers recognize
+the producer form syntactically (a literal `(values ...)` call or one of the
+two-value built-ins above). A `(values ...)` at the end of a **user function**
+collapses to its primary value at the call boundary, so the caller's extra
+variables read as nil:
 
 ```console
-> (floor 7 2)
-floor expects 1 arguments, got 2
+> (defun two () (values 1 2))
+> (multiple-value-bind (a b) (two) (list a b))
+(1 nil)
 ```
+
+Other built-ins with secondary values in CL (`parse-integer`,
+`read-from-string`, `member`, ...) remain single-value.
 
 ## Non-local exit and control flow
 

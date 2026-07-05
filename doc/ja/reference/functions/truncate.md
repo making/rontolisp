@@ -1,13 +1,14 @@
 # truncate
 
-`(truncate number)`
+`(truncate number &optional divisor)`
 
-`number` を 0 方向に丸めて整数にし、小数部を切り捨てます。rontolisp では単一の引数を取り、単一の整数値を返します (完全な Common Lisp のような省略可能な除数や 2 番目の剰余値はありません)。
+`number`（除数を与えた場合は `number/divisor`）をゼロ方向に丸めて整数にし、小数部分を捨てます。通常の（単一値の）文脈では結果は商だけです。剰余は 2 番目の値であり、[`multiple-value-bind`](../macros/multiple-value-bind.md) などの多値コンシューマを通して観測できます。
 
 ```lisp
 (truncate 3.7) ; => 3
 ```
 
 ```lisp
-(truncate -3.7) ; => -3
+(multiple-value-bind (q r) (truncate -7 2)
+  (list q r)) ; => (-3 -1)
 ```

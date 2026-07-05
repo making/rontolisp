@@ -196,9 +196,13 @@ docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
 2. `flet`/`labels` via expansion to let-bound lambdas (macrolet stays in 34).
    **DONE 2026-07-05**; the todo file (56) was removed, details live in
    `.kb/flet-labels.md`.
-3. `.todo/57-multiple-values.md` -- `values`/`multiple-value-bind`/`-list`
-   /`-call`/`nth-value` + floor/gethash secondary values (the rest stays
-   in 32). Deepest unit; plan-mode session.
+3. Multiple values (syntactic tier) -- `values`/`multiple-value-bind`/`-list`
+   /`-call`/`nth-value` + floor/gethash secondary values and the floor-family
+   divisor (the rest stays in 32). **DONE 2026-07-05**; the todo file (57)
+   was removed, details live in `.kb/multiple-values.md`. NOTE for unit 7:
+   a `(values ...)` tail in a user function collapses to the primary value,
+   so split-sequence's index second value will read as nil -- the runtime
+   tier (32) is the fix if that matters.
 4. `.todo/58-destructuring-bind-and-defmacro-lambda-lists.md` --
    `destructuring-bind` + full defmacro lambda lists (shared destructuring
    walker; lifts LoopExpander.destructure).

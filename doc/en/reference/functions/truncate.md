@@ -1,13 +1,14 @@
 # truncate
 
-`(truncate number)`
+`(truncate number &optional divisor)`
 
-Rounds `number` toward zero to an integer, discarding any fractional part. In rontolisp it takes a single argument and returns a single integer value (no optional divisor and no second remainder value as in full Common Lisp).
+Rounds `number` (or `number/divisor` when a divisor is given) toward zero to an integer, discarding any fractional part. In an ordinary (single-value) context the result is the quotient only; the remainder is the second value, observable through [`multiple-value-bind`](../macros/multiple-value-bind.md) and the other multiple-value consumers.
 
 ```lisp
 (truncate 3.7) ; => 3
 ```
 
 ```lisp
-(truncate -3.7) ; => -3
+(multiple-value-bind (q r) (truncate -7 2)
+  (list q r)) ; => (-3 -1)
 ```

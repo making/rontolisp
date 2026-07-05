@@ -40,3 +40,7 @@ categories:
       - { slug: eval-when, name: eval-when }
       - { slug: flet, name: flet }
       - { slug: labels, name: labels }
+      - { slug: multiple-value-bind, name: multiple-value-bind }
+      - { slug: multiple-value-list, name: multiple-value-list }
+      - { slug: multiple-value-call, name: multiple-value-call }
+      - { slug: nth-value, name: nth-value }

@@ -814,6 +814,45 @@ public final class LispNames {
 	public static final String LABELS = "labels";
 
 	/**
+	 * The {@code values} function. In an ordinary (single-value) context it expands like
+	 * {@code prog1}: every argument is evaluated and the first is the result (zero
+	 * arguments yield nil). The multiple-value consumers recognize a literal
+	 * {@code (values ...)} producer syntactically and receive all of its values (see
+	 * {@code LispMacroExpander.lowerMvProducer}); there is no runtime multiple-value
+	 * representation.
+	 */
+	public static final String VALUES = "values";
+
+	/**
+	 * The {@code multiple-value-bind} macro. Binds the variables to the values of the
+	 * producer form: a literal {@code (values ...)} call or a recognized two-value
+	 * built-in ({@code floor}/{@code ceiling}/{@code round}/{@code truncate} and
+	 * {@code gethash}); any other producer supplies a single value. Missing values bind
+	 * to nil.
+	 */
+	public static final String MULTIPLE_VALUE_BIND = "multiple-value-bind";
+
+	/**
+	 * The {@code multiple-value-list} macro. Collects the producer's values (recognized
+	 * like {@link #MULTIPLE_VALUE_BIND}) into a list.
+	 */
+	public static final String MULTIPLE_VALUE_LIST = "multiple-value-list";
+
+	/**
+	 * The {@code multiple-value-call} macro. Calls the function with all values of every
+	 * producer form (recognized like {@link #MULTIPLE_VALUE_BIND}) as the arguments;
+	 * lowered to a direct {@code funcall}.
+	 */
+	public static final String MULTIPLE_VALUE_CALL = "multiple-value-call";
+
+	/**
+	 * The {@code nth-value} macro. Returns the n-th (0-based) value of the producer form
+	 * (recognized like {@link #MULTIPLE_VALUE_BIND}); expands to {@code nth} over
+	 * {@code multiple-value-list}.
+	 */
+	public static final String NTH_VALUE = "nth-value";
+
+	/**
 	 * The {@code error} macro (signal an error). It builds the message with the
 	 * {@code format} machinery and delegates to {@link #ERROR_INTERNAL}. Like
 	 * {@code format} it has no function value (classified as a macro).

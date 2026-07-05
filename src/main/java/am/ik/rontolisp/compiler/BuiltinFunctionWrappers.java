@@ -228,7 +228,10 @@ public final class BuiltinFunctionWrappers {
 			// gensym: 0-arity (the literal-prefix form cannot be a first-class value;
 			// macroexpand/macroexpand-1 have no wrapper at all -- the macro table does
 			// not exist at runtime in compiled output)
-			new WrapperDef(LispNames.GENSYM, List.of(), List.of(call(LispNames.GENSYM))));
+			new WrapperDef(LispNames.GENSYM, List.of(), List.of(call(LispNames.GENSYM))),
+			// values: variadic; with no runtime multiple-value representation the
+			// function value yields its primary value ((car nil) is nil for zero args)
+			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"), List.of(call(LispNames.CAR, "r"))));
 
 	private static LispVal listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;

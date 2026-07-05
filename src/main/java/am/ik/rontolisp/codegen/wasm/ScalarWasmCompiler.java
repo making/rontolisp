@@ -2291,6 +2291,15 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.EVAL_WHEN -> LispMacroExpander.expandEvalWhen(cons);
 			case LispNames.FLET -> LispMacroExpander.expandFlet(cons);
 			case LispNames.LABELS -> LispMacroExpander.expandLabels(cons);
+			case LispNames.VALUES -> LispMacroExpander.expandValues(cons);
+			case LispNames.MULTIPLE_VALUE_BIND -> LispMacroExpander.expandMultipleValueBind(cons);
+			case LispNames.MULTIPLE_VALUE_LIST -> LispMacroExpander.expandMultipleValueList(cons);
+			case LispNames.MULTIPLE_VALUE_CALL -> LispMacroExpander.expandMultipleValueCall(cons);
+			case LispNames.NTH_VALUE -> LispMacroExpander.expandNthValue(cons);
+			// Two-argument (floor a b) -> (floor (/ a b)); null (the one-argument
+			// form) falls through to the native rounding conversion.
+			case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND ->
+				LispMacroExpander.expandFloorFamilyDivisor(cons);
 			default -> null;
 		};
 	}

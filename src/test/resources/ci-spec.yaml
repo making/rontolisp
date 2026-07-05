@@ -1020,9 +1020,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
+      (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      207
+      208
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -2464,3 +2464,65 @@ cases:
       720
       (t nil)
       (1 2 3 4)
+  - name: multiple-values-core
+    source: |
+      (print (values 1 2 3))
+      (print (values))
+      (print (funcall #'values 1 2))
+      (multiple-value-bind (a b c) (values 1 2)
+        (print (list a b c)))
+      (multiple-value-bind (q r) (floor 7 2) (print (list q r)))
+      (multiple-value-bind (q r) (truncate -7 2) (print (list q r)))
+      (multiple-value-bind (q r) (ceiling 7 2) (print (list q r)))
+      (multiple-value-bind (q r) (round 7 2) (print (list q r)))
+      (multiple-value-bind (q r) (floor 7.5) (print (list q r)))
+      (print (multiple-value-list (values 1 2 3)))
+      (print (multiple-value-list (floor 17 5)))
+      (print (multiple-value-list (+ 1 2)))
+      (print (nth-value 1 (floor 7 2)))
+      (print (nth-value 0 (values 'a 'b)))
+      (print (multiple-value-call #'+ (values 1 2)))
+      (defun ci-mv-collect (&rest args) args)
+      (print (multiple-value-call #'ci-mv-collect 1 (values 2 3) (floor 9 4)))
+      (setq ci-mv-h (make-hash-table))
+      (setf (gethash 'x ci-mv-h) nil)
+      (setf (gethash 'y ci-mv-h) 42)
+      (multiple-value-bind (v p) (gethash 'y ci-mv-h) (print (list v p)))
+      (multiple-value-bind (v p) (gethash 'x ci-mv-h) (print (list v p)))
+      (multiple-value-bind (v p) (gethash 'z ci-mv-h) (print (list v p)))
+      (multiple-value-bind (v p) (gethash 'z ci-mv-h 'dflt) (print (list v p)))
+      (defun ci-mv-q100r (n)
+        (multiple-value-bind (q r) (floor n 3) (+ (* 100 q) r)))
+      (print (ci-mv-q100r 17))
+      (print (mapcar (lambda (n) (multiple-value-list (floor n 4))) '(9 10 11)))
+      (print (floor 7 2))
+      (print (ceiling 7 2))
+      (print (round 7 2))
+      (print (truncate -7 2))
+    expected: |
+      1
+      nil
+      1
+      (1 2 nil)
+      (3 1)
+      (-3 -1)
+      (4 -1)
+      (4 -1)
+      (7 0.5)
+      (1 2 3)
+      (3 2)
+      (3)
+      1
+      a
+      3
+      (1 2 3 2 1)
+      (42 t)
+      (nil t)
+      (nil nil)
+      (dflt nil)
+      502
+      ((2 1) (2 2) (2 3))
+      3
+      4
+      4
+      -3

@@ -2562,6 +2562,106 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalValuesInSingleValueContext() {
+		// No runtime multiple-value representation: extra values are discarded, all
+		// argument forms still evaluate (prog1 semantics); (values) reads as nil.
+		assertThat(eval("(values 1 2 3)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(values)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(values 42)")).isEqualTo(new LispInteger(42));
+		assertThat(evalMulti("(setq mv-side 0) (list (values 1 (setq mv-side 9)) mv-side)").print()).isEqualTo("(1 9)");
+		assertThat(eval("(funcall #'values 1 2)")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void evalMultipleValueBind() {
+		assertThat(eval("(multiple-value-bind (a b) (values 1 2) (list a b))").print()).isEqualTo("(1 2)");
+		// Missing values bind to nil; surplus values are evaluated and discarded.
+		assertThat(eval("(multiple-value-bind (a b c) (values 1 2) (list a b c))").print()).isEqualTo("(1 2 nil)");
+		assertThat(evalMulti(
+				"(setq mv-side 0)" + " (multiple-value-bind (a) (values 1 (setq mv-side 7)) (list a mv-side))")
+			.print()).isEqualTo("(1 7)");
+		// A single-value producer supplies its primary value only.
+		assertThat(eval("(multiple-value-bind (a b) (+ 1 2) (list a b))").print()).isEqualTo("(3 nil)");
+		assertThat(eval("(multiple-value-bind () (values 1 2) 'ok)").print()).isEqualTo("ok");
+	}
+
+	@Test
+	void evalMultipleValueBindFloorFamily() {
+		assertThat(eval("(multiple-value-bind (q r) (floor 7 2) (list q r))").print()).isEqualTo("(3 1)");
+		assertThat(eval("(multiple-value-bind (q r) (floor -7 2) (list q r))").print()).isEqualTo("(-4 1)");
+		assertThat(eval("(multiple-value-bind (q r) (truncate -7 2) (list q r))").print()).isEqualTo("(-3 -1)");
+		assertThat(eval("(multiple-value-bind (q r) (ceiling 7 2) (list q r))").print()).isEqualTo("(4 -1)");
+		assertThat(eval("(multiple-value-bind (q r) (round 7 2) (list q r))").print()).isEqualTo("(4 -1)");
+		assertThat(eval("(multiple-value-bind (q r) (floor 7.5) (list q r))").print()).isEqualTo("(7 0.5)");
+	}
+
+	@Test
+	void evalFloorFamilyWithDivisorInSingleValueContext() {
+		// (floor a b) outside a multiple-value consumer yields the quotient only.
+		assertThat(eval("(floor 7 2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(ceiling 7 2)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(round 7 2)")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(truncate -7 2)")).isEqualTo(new LispInteger(-3));
+		assertThat(eval("(floor 7.5 2)")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalMultipleValueBindGethash() {
+		String setup = "(progn (setq mv-h (make-hash-table)) (setf (gethash 'x mv-h) nil)"
+				+ " (setf (gethash 'y mv-h) 42)) ";
+		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'y mv-h) (list v p))").print())
+			.isEqualTo("(42 t)");
+		// A stored nil is present (present-p distinguishes it from a missing key).
+		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'x mv-h) (list v p))").print())
+			.isEqualTo("(nil t)");
+		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'z mv-h) (list v p))").print())
+			.isEqualTo("(nil nil)");
+		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'z mv-h 'dflt) (list v p))").print())
+			.isEqualTo("(dflt nil)");
+	}
+
+	@Test
+	void evalMultipleValueList() {
+		assertThat(eval("(multiple-value-list (values 1 2 3))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(multiple-value-list (values))").print()).isEqualTo("nil");
+		assertThat(eval("(multiple-value-list (floor 17 5))").print()).isEqualTo("(3 2)");
+		assertThat(eval("(multiple-value-list (+ 1 2))").print()).isEqualTo("(3)");
+	}
+
+	@Test
+	void evalNthValue() {
+		assertThat(eval("(nth-value 0 (values 'a 'b))").print()).isEqualTo("a");
+		assertThat(eval("(nth-value 1 (floor 7 2))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(nth-value 5 (values 1 2))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalMultipleValueCall() {
+		assertThat(eval("(multiple-value-call #'+ (values 1 2))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(multiple-value-call #'+ 1 2 3)")).isEqualTo(new LispInteger(6));
+		assertThat(
+				eval("(multiple-value-call (lambda (a b c d) (list a b c d)) 1 (values 2 3) (nth-value 1 (floor 9 4)))")
+					.print())
+			.isEqualTo("(1 2 3 1)");
+	}
+
+	@Test
+	void evalMultipleValueUserFunctionCollapsesToPrimary() {
+		// v1 limitation: a (values ...) tail in a user function collapses to the
+		// primary value, so the caller's extra variables read as nil.
+		assertThat(evalMulti("(defun mv-two () (values 4 5))" + " (multiple-value-bind (a b) (mv-two) (list a b))")
+			.print()).isEqualTo("(4 nil)");
+	}
+
+	@Test
+	void evalMultipleValueBindErrors() {
+		assertThatThrownBy(() -> eval("(multiple-value-bind (a) )")).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> eval("(multiple-value-bind (1) (values 1) 'x)"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("must be a symbol");
+	}
+
+	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
@@ -3332,7 +3432,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -3364,7 +3464,7 @@ class LispEvaluatorTest {
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset")
 			.isSorted()
-			.hasSize(207);
+			.hasSize(208);
 	}
 
 	@Test

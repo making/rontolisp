@@ -42,6 +42,10 @@
 | `eval-when` | `(eval-when (situation...) body...)` | 本体を `progn` として評価します。すべての状況指定は「今評価する」として扱われます。トップレベルの本体はスプライスされ、ネストした `defun`/`defmacro` 定義も収集されます |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | 局所的な非再帰の関数束縛（Lisp-2: 呼び出し位置と `#'name`）。定義本体は同名の外側の関数を参照し、兄弟定義は見えません。ラムダリストは `defun` の拡張をサポートします |
 | `labels` | `(labels ((name lambda-list body...)...) body...)` | `flet` と同様ですが定義同士が互いに見えます（再帰と相互再帰） |
+| `multiple-value-bind` | `(multiple-value-bind (var...) values-form body...)` | 変数をプロデューサフォームの値に束縛します。リテラルの `(values ...)` 呼び出しと 2 値の組み込み関数（`floor` ファミリ、`gethash`）は構文的に認識され、それ以外のフォームは単一の値を供給します。余った変数は nil に束縛されます |
+| `multiple-value-list` | `(multiple-value-list values-form)` | プロデューサの値をリストに集めます（`multiple-value-bind` と同様に認識） |
+| `multiple-value-call` | `(multiple-value-call function values-form...)` | 全てのプロデューサの全ての値を引数として関数を呼び出します。直接の `funcall` に展開されます（CL からの逸脱: 特殊オペレータではなくマクロに分類） |
+| `nth-value` | `(nth-value n values-form)` | プロデューサの n 番目（0 始まり）の値、なければ nil。`multiple-value-list` の上の `nth` に展開されます |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

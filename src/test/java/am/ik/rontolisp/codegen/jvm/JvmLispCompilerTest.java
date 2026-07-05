@@ -2507,6 +2507,65 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunValuesInSingleValueContext() throws Exception {
+		// Extra values are discarded but still evaluated (prog1 semantics);
+		// (values) reads as nil; #'values yields the primary value.
+		assertThat(compileAndRun("(setq mv-side 0) (setq mv-primary (values 1 (setq mv-side 9)))"
+				+ " (print (list mv-primary mv-side)) (print (values)) (print (funcall #'values 1 2))"))
+			.isEqualTo("(1 9)\nnil\n1");
+	}
+
+	@Test
+	void compileAndRunMultipleValueBind() throws Exception {
+		assertThat(compileAndRun("(multiple-value-bind (a b c) (values 1 2) (print (list a b c)))"))
+			.isEqualTo("(1 2 nil)");
+		assertThat(compileAndRun("(multiple-value-bind (q r) (floor 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (truncate -7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (ceiling 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (round 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (floor 7.5) (print (list q r)))"))
+			.isEqualTo("(3 1)\n(-3 -1)\n(4 -1)\n(4 -1)\n(7 0.5)");
+		// A single-value producer supplies its primary value only.
+		assertThat(compileAndRun("(multiple-value-bind (a b) (+ 1 2) (print (list a b)))")).isEqualTo("(3 nil)");
+		// (floor a b) in a single-value context yields the quotient.
+		assertThat(compileAndRun("(print (floor 7 2)) (print (ceiling 7 2)) (print (round 7 2))"
+				+ " (print (truncate -7 2)) (print (floor 7.5 2))"))
+			.isEqualTo("3\n4\n4\n-3\n3");
+		// Inside a defun and a lambda.
+		assertThat(compileAndRun("(defun mv-q100r (n) (multiple-value-bind (q r) (floor n 3) (+ (* 100 q) r)))"
+				+ " (print (mv-q100r 17))"
+				+ " (print (mapcar (lambda (n) (multiple-value-list (floor n 4))) '(9 10 11)))"))
+			.isEqualTo("502\n((2 1) (2 2) (2 3))");
+	}
+
+	@Test
+	void compileAndRunMultipleValueBindGethash() throws Exception {
+		assertThat(compileAndRun(
+				"(setq mv-h (make-hash-table))" + " (setf (gethash 'x mv-h) nil) (setf (gethash 'y mv-h) 42)"
+						+ " (multiple-value-bind (v p) (gethash 'y mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'x mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'z mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'z mv-h 'dflt) (print (list v p)))"))
+			.isEqualTo("(42 t)\n(nil t)\n(nil nil)\n(dflt nil)");
+	}
+
+	@Test
+	void compileAndRunMultipleValueListAndNthValue() throws Exception {
+		assertThat(compileAndRun("(print (multiple-value-list (values 1 2 3)))"
+				+ " (print (multiple-value-list (floor 17 5)))" + " (print (multiple-value-list (+ 1 2)))"
+				+ " (print (nth-value 1 (floor 7 2)))" + " (print (nth-value 0 (values 'a 'b)))"))
+			.isEqualTo("(1 2 3)\n(3 2)\n(3)\n1\na");
+	}
+
+	@Test
+	void compileAndRunMultipleValueCall() throws Exception {
+		assertThat(
+				compileAndRun("(print (multiple-value-call #'+ (values 1 2)))" + " (defun mv-collect (&rest args) args)"
+						+ " (print (multiple-value-call #'mv-collect 1 (values 2 3) (floor 9 4)))"))
+			.isEqualTo("3\n(1 2 3 2 1)");
+	}
+
+	@Test
 	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) signals an error
 		// rather than silently returning nil, matching the interpreter (.todo/26).
@@ -3324,7 +3383,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test
@@ -3335,12 +3394,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("207");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("208");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("207");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("208");
 	}
 
 	@Test
