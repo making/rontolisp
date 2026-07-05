@@ -90,6 +90,27 @@ public final class LispEvaluator {
 	private final java.util.Set<String> providedModules = new java.util.HashSet<>();
 
 	/**
+	 * The systems registered by {@code asdf:defsystem} (evaluated inline or read out of a
+	 * {@code NAME.asd} file), by name. Kept per evaluator like the provided-module set.
+	 */
+	private final java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.HashMap<>();
+
+	/**
+	 * The systems already loaded by {@code asdf:load-system} (loading again is a no-op).
+	 */
+	private final java.util.Set<String> loadedSystems = new java.util.HashSet<>();
+
+	/** The systems currently being loaded, for {@code :depends-on} cycle detection. */
+	private final java.util.Deque<String> loadingSystems = new java.util.ArrayDeque<>();
+
+	/**
+	 * Extra directories searched for {@code NAME.asd} files by {@code asdf:load-system},
+	 * after the directory of the loading file (the CLI threads {@code --system-path} and
+	 * {@code RONTOLISP_SOURCE_REGISTRY} here).
+	 */
+	private List<String> systemPath = List.of();
+
+	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
 	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
 	 * as places. Kept per evaluator, like the user macro table.
@@ -137,6 +158,17 @@ public final class LispEvaluator {
 	public void setLoadBaseDir(@Nullable String dir) {
 		this.loadDirStack.clear();
 		this.loadDirStack.addLast(dir == null ? "" : dir);
+	}
+
+	/**
+	 * Sets the extra directories searched for {@code NAME.asd} files by
+	 * {@code asdf:load-system}, after the directory of the loading file. The CLI threads
+	 * the {@code --system-path} option and the {@code RONTOLISP_SOURCE_REGISTRY}
+	 * environment variable here.
+	 * @param systemPath the directories to search, in order
+	 */
+	public void setSystemPath(List<String> systemPath) {
+		this.systemPath = List.copyOf(systemPath);
 	}
 
 	private void registerEval() {
@@ -481,6 +513,18 @@ public final class LispEvaluator {
 			}
 			return new LispSymbol(name);
 		}));
+		// asdf:load-system lives here, next to load/require, because it drives the same
+		// loadFile machinery and the per-evaluator system registry. Unlike the compile
+		// path (LoadInliner), the runtime function accepts a computed system name.
+		String loadSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.LOAD_SYSTEM);
+		this.globalEnv.defineFunction(loadSystemName, new LispFunction(loadSystemName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.ASDF_LOAD_SYSTEM + " expects 1 argument, got " + args.size());
+			}
+			String name = AsdfSystems.designator(LispNames.ASDF_LOAD_SYSTEM, args.get(0));
+			loadSystem(name);
+			return new LispSymbol(name);
+		}));
 		registerJava();
 	}
 
@@ -514,6 +558,69 @@ public final class LispEvaluator {
 		finally {
 			this.loadDirStack.removeLast();
 		}
+	}
+
+	/**
+	 * Loads the named system: dependency systems first (recursively), then the component
+	 * files in their {@code :depends-on}/{@code :serial} order, each through
+	 * {@link #loadFile}. An already-loaded system is a no-op. An unknown system is
+	 * located as {@code NAME.asd} in the directory of the loading file and then on the
+	 * {@link #setSystemPath system path}; the {@code .asd} file is parsed as plain data
+	 * (never evaluated), like the compile-time {@code LoadInliner} pass.
+	 */
+	private void loadSystem(String name) {
+		if (this.loadedSystems.contains(name)) {
+			return;
+		}
+		if (this.loadingSystems.contains(name)) {
+			throw new LispEvalException("Circular system :depends-on detected: "
+					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
+		}
+		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+		if (system == null) {
+			List<String> searchDirs = new java.util.ArrayList<>();
+			String baseDir = this.loadDirStack.peekLast();
+			searchDirs.add(baseDir == null ? "" : baseDir);
+			searchDirs.addAll(this.systemPath);
+			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path())) {
+				this.asdfSystems.putIfAbsent(defined.name(), defined);
+			}
+			system = this.asdfSystems.get(name);
+			if (system == null) {
+				throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
+			}
+		}
+		this.loadingSystems.addLast(name);
+		// Component paths (and a dependency's .asd lookup) resolve against the system's
+		// base directory, not the caller's.
+		this.loadDirStack.addLast(system.baseDir());
+		try {
+			for (String dependency : system.dependsOn()) {
+				loadSystem(dependency);
+			}
+			for (String file : system.files()) {
+				loadFile(LispNames.ASDF_LOAD_SYSTEM, file);
+			}
+		}
+		finally {
+			this.loadDirStack.removeLast();
+			this.loadingSystems.removeLast();
+		}
+		this.loadedSystems.add(name);
+	}
+
+	/**
+	 * Evaluates an {@code (asdf:defsystem NAME ...)} special form: the options are plain
+	 * data (never evaluated), so the form is parsed like a {@code .asd} entry and the
+	 * system registered for a later {@code asdf:load-system}. Component paths resolve
+	 * against the directory of the source being loaded.
+	 */
+	private LispVal evalDefsystem(LispCons cons) {
+		String baseDir = this.loadDirStack.peekLast();
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir);
+		this.asdfSystems.put(system.name(), system);
+		return new LispSymbol(system.name());
 	}
 
 	/**
@@ -640,6 +747,9 @@ public final class LispEvaluator {
 				case LispNames.DEFPARAMETER:
 				case LispNames.DEFCONSTANT:
 					return evalDefvar(cons, env, true);
+				case LispNames.ASDF_DEFSYSTEM:
+					// A special form: the system options are plain data, not evaluated.
+					return evalDefsystem(cons);
 				case LispNames.FUNCTION:
 					return evalFunction(cons, env);
 				case LispNames.PROGN:

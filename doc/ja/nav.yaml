@@ -47,6 +47,8 @@ sections:
         title: HTTPサーバ（http-handler）
       - file: guides/tcp-sockets.md
         title: TCPソケット
+      - file: guides/asdf-systems.md
+        title: システム（asdf）
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
       - file: guides/missing-features.md

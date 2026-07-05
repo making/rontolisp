@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -14,6 +16,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -52,6 +55,18 @@ import org.jspecify.annotations.Nullable;
  * {@code load}, a {@code require}/{@code provide} that is not a literal top-level form
  * cannot be deferred to runtime (the compiled runtime reader does not know them), so the
  * compilers reject any occurrence left after this pass.
+ *
+ * <p>
+ * The same pass also implements the compile-time side of the limited ASDF subset (see
+ * {@link AsdfSystems}). A top-level {@code (asdf:defsystem ...)} registers a system and
+ * is consumed; a top-level literal {@code (asdf:load-system NAME)} resolves the system --
+ * from a prior {@code defsystem}, or by locating {@code NAME.asd} in the directory of the
+ * loading file and then on the system search path -- and splices its dependency systems
+ * and component files in order, exactly like a chain of {@code load}s. Loading the same
+ * system twice is a no-op (like {@code require}). The handling lives inside this
+ * recursion rather than as a separate pass so that a loaded file can call
+ * {@code asdf:load-system} and a spliced component file can {@code load}/{@code require}
+ * its own companions.
  */
 public final class LoadInliner {
 
@@ -81,26 +96,69 @@ public final class LoadInliner {
 	 * @return the program with top-level {@code load} forms inlined
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir) {
+		return inline(program, loader, baseDir, List.of());
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file, and every top-level literal {@code (asdf:load-system NAME)} replaced by the
+	 * system's component files (dependency systems first).
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source against which a top-level relative
+	 * {@code load} resolves, or {@code null} for working-directory-relative
+	 * @param systemPath extra directories searched for {@code NAME.asd} files, after the
+	 * directory of the loading file
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath) {
 		List<LispVal> result = new ArrayList<>();
-		expandInto(program, result, loader, new ArrayDeque<>(), new HashSet<>(), baseDir);
+		expandInto(program, result, new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(),
+				new HashSet<>(), new ArrayDeque<>(), systemPath), baseDir);
 		return result;
 	}
 
-	private static void expandInto(List<LispVal> forms, List<LispVal> out, SourceLoader loader, Deque<String> loading,
-			Set<String> provided, @Nullable String baseDir) {
+	/**
+	 * The state threaded through the inline recursion: the loader, the in-progress file
+	 * stack (cycle guard), the provided modules, and the ASDF side -- the registered
+	 * systems, the already-loaded systems, the in-progress system stack (cycle guard) and
+	 * the {@code .asd} search path.
+	 */
+	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
+			Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems, Deque<String> loadingSystems,
+			List<String> systemPath) {
+	}
+
+	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
 		for (LispVal form : forms) {
+			if (AsdfSystems.isDefsystemForm(form)) {
+				// Register the system for a later load-system and consume the directive
+				// (like provide). Component paths resolve against this file's directory.
+				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir);
+				ctx.systems().put(system.name(), system);
+				out.add(quotedSymbol(system.name()));
+				continue;
+			}
+			String systemName = AsdfSystems.loadSystemName(form);
+			if (systemName != null) {
+				spliceSystem(systemName, out, ctx, baseDir);
+				out.add(quotedSymbol(systemName));
+				continue;
+			}
 			String provideName = provideName(form);
 			if (provideName != null) {
 				// Record the module and consume the directive (a duplicate provide is a
 				// no-op, like Common Lisp).
-				provided.add(provideName);
+				ctx.provided().add(provideName);
 				out.add(quotedSymbol(provideName));
 				continue;
 			}
 			RequireForm require = requireForm(form);
 			String rawPath;
 			if (require != null) {
-				if (provided.contains(require.name())) {
+				if (ctx.provided().contains(require.name())) {
 					// Already provided: consume without loading (this is the whole point
 					// of require over load).
 					out.add(quotedSymbol(require.name()));
@@ -118,24 +176,76 @@ public final class LoadInliner {
 			String operator = require != null ? LispNames.REQUIRE : LispNames.LOAD;
 			// Resolve relative to the loading file's directory (the entry source at the
 			// top level), the same rule the runtime load uses.
-			String path = SourceLoader.resolve(baseDir, rawPath);
-			if (loading.contains(path)) {
-				throw new IllegalStateException(
-						"Circular load detected: " + String.join(" -> ", loading) + " -> " + path);
-			}
-			String source;
-			try {
-				source = loader.load(path);
-			}
-			catch (IOException ex) {
-				throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
-			}
-			loading.addLast(path);
-			// A nested load inside this file resolves relative to this file's directory.
-			expandInto(LispReader.readAllFromString(source), out, loader, loading, provided,
-					SourceLoader.parentDir(path));
-			loading.removeLast();
+			spliceFile(operator, SourceLoader.resolve(baseDir, rawPath), out, ctx);
 		}
+	}
+
+	/**
+	 * Reads the file at the (resolved) path and recursively expands its forms into
+	 * {@code out}, guarding against load cycles. Nested loads inside the file resolve
+	 * relative to the file's directory.
+	 */
+	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx) {
+		if (ctx.loading().contains(path)) {
+			throw new IllegalStateException(
+					"Circular load detected: " + String.join(" -> ", ctx.loading()) + " -> " + path);
+		}
+		String source;
+		try {
+			source = ctx.loader().load(path);
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
+		}
+		ctx.loading().addLast(path);
+		expandInto(LispReader.readAllFromString(source), out, ctx, SourceLoader.parentDir(path));
+		ctx.loading().removeLast();
+	}
+
+	/**
+	 * Splices the named system into {@code out}: dependency systems first (recursively),
+	 * then the component files in their {@code :depends-on}/{@code :serial} order. An
+	 * already-loaded system is a no-op; an unknown system is located as {@code NAME.asd}
+	 * in the directory of the loading file ({@code requestBaseDir}) and then on the
+	 * system search path.
+	 */
+	private static void spliceSystem(String name, List<LispVal> out, Ctx ctx, @Nullable String requestBaseDir) {
+		if (ctx.loadedSystems().contains(name)) {
+			return;
+		}
+		if (ctx.loadingSystems().contains(name)) {
+			throw new IllegalStateException("Circular system :depends-on detected: "
+					+ String.join(" -> ", ctx.loadingSystems()) + " -> " + name);
+		}
+		AsdfSystems.LispSystem system = ctx.systems().get(name);
+		if (system == null) {
+			List<String> searchDirs = new ArrayList<>();
+			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
+			searchDirs.addAll(ctx.systemPath());
+			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path())) {
+				ctx.systems().putIfAbsent(defined.name(), defined);
+			}
+			system = ctx.systems().get(name);
+			if (system == null) {
+				throw new IllegalStateException(asd.path() + " does not define system '" + name + "'");
+			}
+		}
+		ctx.loadingSystems().addLast(name);
+		try {
+			for (String dependency : system.dependsOn()) {
+				// A dependency's .asd most likely sits next to this system's (or on the
+				// search path), so its directory becomes the first search entry.
+				spliceSystem(dependency, out, ctx, system.baseDir());
+			}
+			for (String file : system.files()) {
+				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, ctx);
+			}
+		}
+		finally {
+			ctx.loadingSystems().removeLast();
+		}
+		ctx.loadedSystems().add(name);
 	}
 
 	/**

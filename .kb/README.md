@@ -32,3 +32,4 @@ come here only when you need the "why exactly" behind a constraint.
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
 - [hash-tables.md](hash-tables.md) -- hash table representation per backend
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview
+- [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime)

@@ -47,6 +47,8 @@ sections:
         title: Serving HTTP (http-handler)
       - file: guides/tcp-sockets.md
         title: TCP Sockets
+      - file: guides/asdf-systems.md
+        title: Systems (asdf)
       - file: guides/math-backends.md
         title: Math Function Backends
       - file: guides/missing-features.md

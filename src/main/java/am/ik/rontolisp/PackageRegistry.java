@@ -160,6 +160,11 @@ public final class PackageRegistry {
 		// run on the JVM interpreter only -- the compilers cannot lower them.
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
 				LispNames.JAVA_CALL, LispNames.JAVA_STATIC, LispNames.JAVA_FIELD, LispNames.JAVA_PROXY))));
+		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
+		// files as plain data -- see eval.AsdfSystems). Does not use cl; both symbols
+		// are external.
+		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM))));
 	}
 
 	/**

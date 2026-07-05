@@ -309,3 +309,7 @@ categories:
       - { slug: java-static, name: "java:static" }
       - { slug: java-field, name: "java:field" }
       - { slug: java-proxy, name: "java:proxy" }
+  - title: "asdf Package (System Definitions)"
+    functions:
+      - { slug: asdf-defsystem, name: "asdf:defsystem" }
+      - { slug: asdf-load-system, name: "asdf:load-system" }

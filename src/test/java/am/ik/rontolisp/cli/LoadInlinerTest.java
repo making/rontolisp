@@ -148,6 +148,94 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void loadSystemSplicesTheComponentFilesInDependencyOrder() {
+		List<LispVal> result = inline("(asdf:load-system \"my-lib\") (print (my-lib:greet))", Map.of("my-lib.asd", """
+				(defsystem :my-lib
+				  :components ((:file "main" :depends-on ("package"))
+				               (:file "package")))""", //
+				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
+				"main.lisp", "(in-package :my-lib) (defun greet () 1)"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly(
+				"(defpackage :my-lib (:use :cl) (:export :greet))", "(in-package :my-lib)", "(defun greet nil 1)",
+				"(quote my-lib)", "(print (my-lib:greet))");
+	}
+
+	@Test
+	void loadSystemIsIdempotentAndLoadsDependencySystemsFirst() {
+		List<LispVal> result = inline("(asdf:load-system :app) (asdf:load-system :base)",
+				Map.of("app.asd", "(defsystem :app :depends-on (:base) :components ((:file \"app\")))", //
+						"base.asd", "(defsystem :base :components ((:file \"base\")))", //
+						"base.lisp", "(defun base () 1)", //
+						"app.lisp", "(defun app () (base))"));
+		// base splices once, before app; the second load-system is consumed.
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun base nil 1)", "(defun app nil (base))",
+				"(quote app)", "(quote base)");
+	}
+
+	@Test
+	void inlineDefsystemIsConsumedAndRegisteredForALaterLoadSystem() {
+		List<LispVal> result = inline("""
+				(asdf:defsystem :inline-sys :components ((:file "main")))
+				(asdf:load-system :inline-sys)""", Map.of("main.lisp", "(defun f () 42)"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote inline-sys)", "(defun f nil 42)",
+				"(quote inline-sys)");
+	}
+
+	@Test
+	void systemComponentsResolveAgainstTheAsdDirectoryAndSearchTheSystemPath() {
+		// The .asd is found on the system path, not next to the entry source, and its
+		// component (including a nested module) resolves against the .asd's directory.
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("(asdf:load-system :lib)"),
+				loaderOf(Map.of("registry/lib.asd",
+						"(defsystem :lib :components ((:module \"src\" :components ((:file \"main\")))))",
+						"registry/src/main.lisp", "(defun f () 1)")),
+				"proj", List.of("registry"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun f nil 1)", "(quote lib)");
+	}
+
+	@Test
+	void splicedComponentFilesMayLoadAndRequireTheirOwnCompanions() {
+		List<LispVal> result = inline("(asdf:load-system :lib)",
+				Map.of("lib.asd", "(defsystem :lib :components ((:file \"main\")))", //
+						"main.lisp", "(load \"helper.lisp\") (defun f () (h))", //
+						"helper.lisp", "(defun h () 7)"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun h nil 7)", "(defun f nil (h))",
+				"(quote lib)");
+	}
+
+	@Test
+	void loadSystemNonLiteralNameThrows() {
+		// Unlike the interpreter's runtime function, the compile path cannot evaluate a
+		// computed system name.
+		assertThatThrownBy(() -> inline("(asdf:load-system (concatenate 'string \"l\" \"ib\"))", Map.of()))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("literal system name");
+	}
+
+	@Test
+	void loadSystemMissingSystemNamesTheTriedPaths() {
+		assertThatThrownBy(() -> inline("(asdf:load-system :nope)", Map.of())).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("system 'nope' not found");
+	}
+
+	@Test
+	void circularSystemDependencyThrows() {
+		assertThatThrownBy(() -> inline("(asdf:load-system :a)",
+				Map.of("a.asd", "(defsystem :a :depends-on (:b))", "b.asd", "(defsystem :b :depends-on (:a))")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("Circular system :depends-on");
+	}
+
+	@Test
+	void loadSystemProgramCompilesAndRunsOnJvm() throws Exception {
+		List<LispVal> program = inline("(asdf:load-system :sq) (print (sq 7))",
+				Map.of("sq.asd", "(defsystem :sq :components ((:file \"sq\")))", //
+						"sq.lisp", "(defun sq (x) (* x x))"));
+		byte[] classBytes = new JvmLispCompiler("TestAsdf").compile(program);
+		assertThat(runMain(classBytes, "TestAsdf")).isEqualTo("49");
+	}
+
+	@Test
 	void splitProgramCompilesAndRunsOnJvm() throws Exception {
 		// This is the regression: before compile-time inlining, a console driver that
 		// (load "core.lisp")s its functions failed to compile on the JVM backend because

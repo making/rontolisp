@@ -1438,6 +1438,37 @@ public final class LispNames {
 	 */
 	public static final String JAVA_PROXY = "proxy";
 
+	/**
+	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF: system
+	 * definitions parsed from {@code .asd} files as plain data -- see
+	 * {@code eval.AsdfSystems}). Real ASDF is not ported; only {@code defsystem} and
+	 * {@code load-system} exist.
+	 */
+	public static final String ASDF_PKG = "asdf";
+
+	/**
+	 * {@code asdf:defsystem} -- defines a system (name, {@code :depends-on},
+	 * {@code :serial}, {@code :components}) for a later {@code asdf:load-system}.
+	 * Consumed at compile time by the {@code LoadInliner} pass; a special form (the
+	 * options are data, not evaluated) on the interpreter.
+	 */
+	public static final String DEFSYSTEM = "defsystem";
+
+	/**
+	 * {@code asdf:load-system} -- loads a system by name: dependency systems first, then
+	 * the component files in {@code :depends-on}/{@code :serial} order. The system comes
+	 * from a prior {@code asdf:defsystem} or from {@code NAME.asd} found on the system
+	 * search path. Loading the same system twice is a no-op. Spliced at compile time by
+	 * the {@code LoadInliner} pass; a runtime function on the interpreter.
+	 */
+	public static final String LOAD_SYSTEM = "load-system";
+
+	/** The canonical qualified spelling of {@code asdf:defsystem}. */
+	public static final String ASDF_DEFSYSTEM = ASDF_PKG + ":" + DEFSYSTEM;
+
+	/** The canonical qualified spelling of {@code asdf:load-system}. */
+	public static final String ASDF_LOAD_SYSTEM = ASDF_PKG + ":" + LOAD_SYSTEM;
+
 	private LispNames() {
 	}
 

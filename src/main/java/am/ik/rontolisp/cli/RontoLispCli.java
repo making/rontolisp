@@ -2,6 +2,7 @@ package am.ik.rontolisp.cli;
 
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -12,6 +13,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -65,8 +67,14 @@ public final class RontoLispCli {
 			return;
 		}
 
+		// The .asd search path for asdf:load-system: the --system-path option first,
+		// then the RONTOLISP_SOURCE_REGISTRY environment variable, both accepting
+		// several directories joined with the platform path separator (like PATH). The
+		// directory of the loading file is always searched first, before these.
+		List<String> systemPath = systemPath(options.get("--system-path"), System.getenv("RONTOLISP_SOURCE_REGISTRY"));
+
 		if (!options.containsNoKey()) {
-			repl();
+			repl(systemPath);
 			return;
 		}
 
@@ -79,12 +87,28 @@ public final class RontoLispCli {
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
-			compileToFile(source, baseDir, outputFile, options.contains("--dynamic"), options.contains("--component"),
-					options.contains("--no-wasi"), options.contains("--optimize"), options.contains("--no-gc"));
+			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
+					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
+					options.contains("--no-gc"));
 		}
 		else {
-			interpret(source, baseDir);
+			interpret(source, baseDir, systemPath);
 		}
+	}
+
+	static List<String> systemPath(@Nullable String option, @Nullable String env) {
+		List<String> dirs = new ArrayList<>();
+		for (String joined : new String[] { option, env }) {
+			if (joined == null) {
+				continue;
+			}
+			for (String dir : joined.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+				if (!dir.isEmpty() && !dirs.contains(dir)) {
+					dirs.add(dir);
+				}
+			}
+		}
+		return dirs;
 	}
 
 	private static boolean isJLineAvailable() {
@@ -97,8 +121,9 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl() {
+	private void repl(List<String> systemPath) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
+		evaluator.setSystemPath(systemPath);
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
 			JLineRepl.run(evaluator, this.out, buffer);
@@ -146,17 +171,18 @@ public final class RontoLispCli {
 		buffer.setLength(0);
 	}
 
-	private void interpret(String source, @Nullable String baseDir) {
+	private void interpret(String source, @Nullable String baseDir, List<String> systemPath) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
+		evaluator.setSystemPath(systemPath);
 		List<LispVal> exprs = LispReader.readAllFromString(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
 		}
 	}
 
-	private void compileToFile(String source, @Nullable String baseDir, String outputFile, boolean dynamic,
-			boolean component, boolean noWasi, boolean optimize, boolean noGc) {
+	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
+			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc) {
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -172,8 +198,9 @@ public final class RontoLispCli {
 		// program references the linalg package, and the Lisp-source URL library
 		// when the program references rontolisp:url-* / query-param* (the
 		// interpreter path instead loads the libraries lazily inside LispEvaluator).
-		List<LispVal> program = UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander
-			.expand(LoadInliner.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(), baseDir)))));
+		List<LispVal> program = UrlLibrary
+			.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(LoadInliner
+				.inline(LispReader.readAllFromString(source), SourceLoader.fileSystem(), baseDir, systemPath)))));
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {
@@ -241,6 +268,9 @@ public final class RontoLispCli {
 		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
+		this.out.println("  --system-path DIRS Directories searched for NAME.asd by asdf:load-system");
+		this.out.println("                     (joined with the platform path separator, like PATH; the");
+		this.out.println("                     RONTOLISP_SOURCE_REGISTRY environment variable adds more)");
 	}
 
 	static boolean isBalanced(String input) {
