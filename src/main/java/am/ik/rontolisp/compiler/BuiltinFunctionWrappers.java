@@ -126,16 +126,63 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("a", "b", "c"), List.of(call(name, "a", "b", "c")));
 	}
 
+	// Builds the inner two-argument fold lambda (lambda (a x) (op a x)). The op sits in
+	// call position, so the compilers inline the primitive (the surrounding (setq op
+	// (lambda ...)) wrapper only rebinds the variable namespace, not the function one).
+	private static LispVal foldLambda(String op) {
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(new LispSymbol("a"), new LispSymbol("x"))), call(op, "a", "x")));
+	}
+
+	// (reduce (lambda (a x) (op a x)) list :initial-value init)
+	private static LispVal foldReduce(String op, LispVal list, LispVal init) {
+		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), foldLambda(op), list,
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), init));
+	}
+
+	// Variadic wrapper for an associative operator with an identity (e.g. + -> 0, * ->
+	// 1):
+	// (lambda (&rest r) (reduce (lambda (a x) (op a x)) r :initial-value identity)).
+	private static WrapperDef variadicIdentity(String name, LispVal identity) {
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"),
+				List.of(foldReduce(name, new LispSymbol("r"), identity)));
+	}
+
+	// Variadic wrapper for min/max (needs at least one argument; a single argument
+	// returns itself): (lambda (&rest r) (reduce (lambda (a x) (op a x)) (cdr r)
+	// :initial-value (car r))). Zero args fold over nil with init nil, yielding nil.
+	private static WrapperDef variadicNonEmpty(String name) {
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"),
+				List.of(foldReduce(name, call(LispNames.CDR, "r"), call(LispNames.CAR, "r"))));
+	}
+
+	// Variadic wrapper for - and /, which have distinct one-argument semantics
+	// ((- x) = -x, (/ x) = 1/x) from the multi-argument left fold:
+	// (lambda (&rest r) (if (cdr r) (reduce ... (cdr r) :initial-value (car r))
+	// (op unaryLeft (car r)))).
+	private static WrapperDef variadicUnaryLeft(String name, LispVal unaryLeft) {
+		LispVal multi = foldReduce(name, call(LispNames.CDR, "r"), call(LispNames.CAR, "r"));
+		LispVal single = callV(name, unaryLeft, call(LispNames.CAR, "r"));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CDR, "r"), multi, single));
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
-			// Arithmetic (arity 2)
-			binary(LispNames.ADD), binary(LispNames.SUB), binary(LispNames.MUL), binary(LispNames.DIV),
+			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
+			// (fixed-arity wrappers returned nil on JVM / trapped on WASM for a
+			// mismatched
+			// funcall/apply -- see .todo/64). - and / keep their one-argument semantics.
+			variadicIdentity(LispNames.ADD, new LispInteger(0)), variadicUnaryLeft(LispNames.SUB, new LispInteger(0)),
+			variadicIdentity(LispNames.MUL, new LispInteger(1)), variadicUnaryLeft(LispNames.DIV, new LispInteger(1)),
 			binary(LispNames.MOD), binary(LispNames.REM),
 			// Comparison (arity 2)
 			binary(LispNames.EQ), binary(LispNames.LT), binary(LispNames.GT), binary(LispNames.LE),
 			binary(LispNames.GE), binary(LispNames.NE),
 			// List/utility (arity 2)
 			binary(LispNames.CONS), binary(LispNames.EQ_GENERAL), binary(LispNames.EQL), binary(LispNames.EQUAL),
-			binary(LispNames.MIN), binary(LispNames.MAX), binary(LispNames.NTHCDR), binary(LispNames.APPEND),
+			// min/max are variadic (need at least one argument)
+			variadicNonEmpty(LispNames.MIN), variadicNonEmpty(LispNames.MAX), binary(LispNames.NTHCDR),
+			binary(LispNames.APPEND),
 			// List access (arity 1; first/rest/second/... compile via macro expansion)
 			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
 			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
@@ -164,7 +211,9 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.ROUND),
 			// Math/IO/list (arity 1)
 			unary(LispNames.ABS), unary(LispNames.PRINT), unary(LispNames.PRIN1), unary(LispNames.PRINC),
-			unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING), unary(LispNames.LIST),
+			unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING),
+			// list is variadic: the rest list IS the result
+			new WrapperDef(LispNames.LIST, List.of(LispNames.LAMBDA_REST, "r"), List.of(new LispSymbol("r"))),
 			// Math functions (arity 1)
 			unary(LispNames.SQRT), unary(LispNames.ISQRT), unary(LispNames.SIGNUM), unary(LispNames.EXP),
 			unary(LispNames.LOG), unary(LispNames.SIN), unary(LispNames.COS), unary(LispNames.TAN),

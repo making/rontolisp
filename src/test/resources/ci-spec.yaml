@@ -225,6 +225,31 @@ cases:
       (print (funcall #'square 7))
     expected: |
       49
+  - name: variadic-builtin-wrappers
+    source: |
+      (print (funcall #'+ 1 2 3))
+      (print (funcall #'+))
+      (print (apply #'+ (list 1 2 3 4)))
+      (print (funcall #'* 2 3 4))
+      (print (funcall #'- 10 1 2))
+      (print (funcall #'- 5))
+      (print (funcall #'/ 100 2 5))
+      (print (funcall #'list 1 2 3))
+      (print (apply #'list 1 2 (list 3 4)))
+      (print (funcall #'max 3 7 2))
+      (print (funcall #'min 3 7 2))
+    expected: |
+      6
+      0
+      10
+      24
+      7
+      -5
+      10
+      (1 2 3)
+      (1 2 3 4)
+      7
+      2
   - name: type-predicates
     source: |
       (print (if (null nil) 42 99))

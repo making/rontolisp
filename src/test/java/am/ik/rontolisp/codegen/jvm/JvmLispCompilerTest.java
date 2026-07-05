@@ -1429,6 +1429,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunVariadicBuiltinWrappers() throws Exception {
+		// Regression for .todo/64: funcall/apply of a variadic builtin wrapper with an
+		// arity other than the old fixed one returned nil silently on the JVM.
+		assertThat(compileAndRun("(print (funcall #'+ 1 2 3))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (funcall #'+))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (apply #'+ (list 1 2 3 4)))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (funcall #'* 2 3 4))")).isEqualTo("24");
+		assertThat(compileAndRun("(print (funcall #'- 10 1 2))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (funcall #'- 5))")).isEqualTo("-5");
+		assertThat(compileAndRun("(print (funcall #'/ 100 2 5))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (funcall #'list 1 2 3))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (funcall #'max 3 7 2))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (funcall #'min 3 7 2))")).isEqualTo("2");
+	}
+
+	@Test
 	void compileAndRunFunctionInList() throws Exception {
 		assertThat(compileAndRun("""
 				(defun square (x) (* x x))

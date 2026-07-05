@@ -90,10 +90,12 @@ so PARSE_INTEGER and VALUES_LIST are part of the `injectMvSpillGlobal` scan.
   after it on the compile path (UserMacroExpander runs first), so a USER MACRO
   expanding to `(values ...)` yields all values only when compiled. Literal
   producers behave identically everywhere.
-- `multiple-value-call` with a builtin `#'name` inherits the fixed wrapper
-  arity (pre-existing: wrappers are unary/binary; a mismatched funcall
-  silently yields nil on JVM / traps on WASM -- filed as `.todo/64`). Docs
-  steer to user fns/lambdas.
+- `multiple-value-call` with a builtin `#'name` inherits the wrapper arity.
+  The naturally-variadic ops (`+`/`-`/`*`/`/`/`list`/`min`/`max`) now have
+  variadic `&rest` wrappers (a `reduce` fold over the rest list, `.todo/64`
+  fixed), so those take any argument count; every other multi-arg builtin
+  keeps a fixed unary/binary wrapper (mismatched funcall still yields nil on
+  JVM / traps on WASM). Docs steer to user fns/lambdas for those.
 
 ## Wiring points (the usual checklist)
 

@@ -71,11 +71,12 @@ functions known at compile time (user `defun`s and built-in operators); `#'mapca
 `#'reduce`, `#'apply` and `#'funcall` themselves are not available as values (`#'mapcan`
 and `#'sort` are). `symbol-function` requires a quoted symbol literal argument. In
 `--dynamic` mode an unresolved `#'name` is deferred to the runtime `eval` environment like
-any other unresolved reference. In compiled code `apply` reuses the runtime `eval`
-machinery (it forces the `eval` runtime to be emitted) and dispatches by the actual
-argument count, so the applied function must have a matching arity -- binary built-in
-wrappers (e.g. `(apply #'+ '(1 2))`, `(apply #'cons 1 '(2))`) and user `defun`s of any
-fixed arity work, while variadic built-ins applied to a different count (e.g.
-`(apply #'+ '(1 2 3))`, `(apply #'list ...)`) do not, matching the
-[Compiled `eval` limitations](../guides/eval-limitations.md). The interpreter has no such
-restriction.
+any other unresolved reference. In compiled code `apply`/`funcall` dispatch by the actual
+argument count against a fixed-arity wrapper synthesized for each built-in operator. The
+naturally variadic operators -- `+`, `-`, `*`, `/`, `list`, `min`, `max` -- have variadic
+wrappers, so `(funcall #'+ 1 2 3)`, `(apply #'list ...)` and the like accept any argument
+count. Every other multi-argument built-in keeps a fixed wrapper arity: `#'cons`,
+`#'append`, `#'gcd` and the comparison chains (`#'<`, `#'=`, ...) are binary, so applying
+them to a different count is unsupported on the compile path (matching the
+[Compiled `eval` limitations](../guides/eval-limitations.md)); use a user-defined function
+or a `lambda` for other arities. The interpreter has no such restriction.
