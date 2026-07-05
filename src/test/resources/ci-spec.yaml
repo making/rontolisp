@@ -1020,7 +1020,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
+      (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       207
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
@@ -2423,3 +2423,44 @@ cases:
       :checked2
       :digit
       :abc
+  - name: flet-and-labels-local-functions
+    source: |
+      (flet ((ci-sq (x) (* x x))
+             (ci-dbl (x) (* 2 x)))
+        (print (mapcar #'ci-sq '(1 2 3)))
+        (print (funcall #'ci-dbl 21))
+        (print (ci-sq (ci-dbl 3))))
+      (defun ci-shadow-fn (x) (* 100 x))
+      (print (flet ((ci-shadow-fn (x) (if (= x 0) 'zero (ci-shadow-fn 0))))
+               (ci-shadow-fn 5)))
+      (flet ((ci-g () 1))
+        (flet ((ci-h () (ci-g)))
+          (flet ((ci-g () 2))
+            (print (list (ci-g) (ci-h))))))
+      (flet ((ci-opt (a &optional (b 10) &rest r) (list a b r)))
+        (print (ci-opt 1))
+        (print (ci-opt 1 2 3 4)))
+      (let ((ci-base 100))
+        (flet ((ci-offs (x) (+ ci-base x)))
+          (print (ci-offs 5))))
+      (labels ((ci-fact (n) (if (= n 0) 1 (* n (ci-fact (- n 1))))))
+        (print (ci-fact 6)))
+      (labels ((ci-ev (n) (if (= n 0) t (ci-od (- n 1))))
+               (ci-od (n) (if (= n 0) nil (ci-ev (- n 1)))))
+        (print (list (ci-ev 10) (ci-od 10))))
+      (defun ci-count-down (n)
+        (labels ((ci-go-down (i acc) (if (= i 0) acc (ci-go-down (- i 1) (cons i acc)))))
+          (ci-go-down n nil)))
+      (print (ci-count-down 4))
+    expected: |
+      (1 4 9)
+      42
+      36
+      0
+      (2 1)
+      (1 10 nil)
+      (1 2 (3 4))
+      105
+      720
+      (t nil)
+      (1 2 3 4)

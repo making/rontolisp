@@ -2289,6 +2289,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.PROCLAIM -> LispMacroExpander.expandProclaim(cons);
 			case LispNames.THE -> LispMacroExpander.expandThe(cons);
 			case LispNames.EVAL_WHEN -> LispMacroExpander.expandEvalWhen(cons);
+			case LispNames.FLET -> LispMacroExpander.expandFlet(cons);
+			case LispNames.LABELS -> LispMacroExpander.expandLabels(cons);
 			default -> null;
 		};
 	}

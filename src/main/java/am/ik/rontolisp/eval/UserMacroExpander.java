@@ -136,6 +136,34 @@ public final class UserMacroExpander {
 					}
 					return properList(newParts);
 				}
+				case LispNames.FLET, LispNames.LABELS: {
+					// (flet ((name lambda-list body...)...) body...): the definition
+					// names and lambda lists stay, definition bodies and the body are
+					// expressions.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					if (!(parts.get(1) instanceof LispCons defsCons)) {
+						return rebuild(parts, 2, macroEval, parts.get(1));
+					}
+					List<LispVal> newDefs = new ArrayList<>();
+					for (LispVal def : defsCons.toList()) {
+						if (def instanceof LispCons defCons && defCons.isProperList() && defCons.toList().size() >= 2) {
+							List<LispVal> dp = defCons.toList();
+							List<LispVal> newDef = new ArrayList<>();
+							newDef.add(dp.get(0));
+							newDef.add(dp.get(1));
+							for (int i = 2; i < dp.size(); i++) {
+								newDef.add(expandAll(dp.get(i), macroEval));
+							}
+							newDefs.add(properList(newDef));
+						}
+						else {
+							newDefs.add(def);
+						}
+					}
+					return rebuild(parts, 2, macroEval, properList(newDefs));
+				}
 				case LispNames.DOLIST, LispNames.DOTIMES: {
 					// (dolist (var listform result) body...): var stays.
 					LispVal spec = parts.get(1);

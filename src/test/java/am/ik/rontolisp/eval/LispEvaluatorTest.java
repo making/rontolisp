@@ -2497,6 +2497,71 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFletBasic() {
+		assertThat(eval("(flet ((add1 (x) (+ x 1))) (add1 41))")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(flet ((sq (x) (* x x)) (dbl (x) (* 2 x))) (sq (dbl 3)))")).isEqualTo(new LispInteger(36));
+		assertThat(eval("(flet ((sq (x) (* x x))) (mapcar #'sq '(1 2 3)))").print()).isEqualTo("(1 4 9)");
+		assertThat(eval("(flet ((dbl (x) (* 2 x))) (funcall #'dbl 21))")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(flet () 'ok)").print()).isEqualTo("ok");
+	}
+
+	@Test
+	void evalFletIsNotRecursive() {
+		// The definition body sees the OUTER function binding, not itself.
+		assertThat(evalMulti("(defun shadow-fn (x) (* 100 x))"
+				+ " (flet ((shadow-fn (x) (if (= x 0) 'zero (shadow-fn 0)))) (shadow-fn 5))"))
+			.isEqualTo(new LispInteger(0));
+	}
+
+	@Test
+	void evalFletLambdaListExtensionsAndClosure() {
+		assertThat(eval("(flet ((opt (a &optional (b 10) &rest r) (list a b r))) (opt 1))").print())
+			.isEqualTo("(1 10 nil)");
+		assertThat(eval("(flet ((opt (a &optional (b 10) &rest r) (list a b r))) (opt 1 2 3 4))").print())
+			.isEqualTo("(1 2 (3 4))");
+		assertThat(eval("(let ((base 100)) (flet ((offs (x) (+ base x))) (offs 5)))")).isEqualTo(new LispInteger(105));
+	}
+
+	@Test
+	void evalFletNestedShadowing() {
+		assertThat(eval("(flet ((g () 1)) (flet ((h () (g))) (flet ((g () 2)) (list (g) (h)))))").print())
+			.isEqualTo("(2 1)");
+	}
+
+	@Test
+	void evalFletDoesNotRewriteDataPositions() {
+		// case keys, quoted data, and let binding names are not call positions.
+		assertThat(eval("(flet ((k (x) (* x 10))) (case 2 ((1 2) (k 3)) (t 'other)))")).isEqualTo(new LispInteger(30));
+		assertThat(eval("(flet ((k (x) x)) (car '(k 1)))").print()).isEqualTo("k");
+		assertThat(eval("(flet ((k (x) x)) (let ((k 5)) (k k)))")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalLabelsRecursion() {
+		assertThat(eval("(labels ((fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))) (fact 6))"))
+			.isEqualTo(new LispInteger(720));
+		assertThat(eval("(labels ((tri (n) (if (= n 0) 0 (+ n (tri (- n 1)))))) (apply #'tri '(4)))"))
+			.isEqualTo(new LispInteger(10));
+	}
+
+	@Test
+	void evalLabelsMutualRecursion() {
+		assertThat(eval("(labels ((ev (n) (if (= n 0) t (od (- n 1)))) (od (n) (if (= n 0) nil (ev (- n 1)))))"
+				+ " (list (ev 10) (od 10)))")
+			.print()).isEqualTo("(t nil)");
+	}
+
+	@Test
+	void evalFletErrors() {
+		assertThatThrownBy(() -> eval("(flet ((f () 1) (f () 2)) (f))")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("more than once");
+		assertThatThrownBy(() -> eval("(flet ((if (x) x)) 1)")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("special operator");
+		assertThatThrownBy(() -> eval("(labels (f () 1) 2)")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("definition must be");
+	}
+
+	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
@@ -3267,7 +3332,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

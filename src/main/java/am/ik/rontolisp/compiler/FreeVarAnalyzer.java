@@ -145,6 +145,14 @@ public final class FreeVarAnalyzer {
 								knownFunctions, globals, freeVars);
 						case LispNames.EVAL_WHEN -> collectFreeVars(LispMacroExpander.expandEvalWhen(cons), boundVars,
 								knownFunctions, globals, freeVars);
+						// Expand before walking: the default walk would misread the
+						// definition lists as call forms. The expansion generates fresh
+						// variable names, but they are all bound inside it, so the free
+						// set is the same as the compile-time expansion's.
+						case LispNames.FLET -> collectFreeVars(LispMacroExpander.expandFlet(cons), boundVars,
+								knownFunctions, globals, freeVars);
+						case LispNames.LABELS -> collectFreeVars(LispMacroExpander.expandLabels(cons), boundVars,
+								knownFunctions, globals, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -262,6 +270,11 @@ public final class FreeVarAnalyzer {
 								knownFunctions, captured, insideLambda);
 						case LispNames.EVAL_WHEN -> collectCapturedVars(LispMacroExpander.expandEvalWhen(cons),
 								localVars, knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.FLET -> collectCapturedVars(LispMacroExpander.expandFlet(cons), localVars,
+								knownFunctions, captured, insideLambda);
+						case LispNames.LABELS -> collectCapturedVars(LispMacroExpander.expandLabels(cons), localVars,
+								knownFunctions, captured, insideLambda);
 						case LispNames.FUNCTION -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {

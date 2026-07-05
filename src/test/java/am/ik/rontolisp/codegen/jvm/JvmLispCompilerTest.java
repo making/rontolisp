@@ -2454,6 +2454,59 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFlet() throws Exception {
+		assertThat(compileAndRun("(flet ((add1 (x) (+ x 1))) (print (add1 41)))")).isEqualTo("42");
+		assertThat(compileAndRun("(flet ((sq (x) (* x x)) (dbl (x) (* 2 x)))"
+				+ " (print (mapcar #'sq '(1 2 3))) (print (funcall #'dbl 21)) (print (sq (dbl 3))))"))
+			.isEqualTo("(1 4 9)\n42\n36");
+		// The definition body sees the OUTER function binding, not itself.
+		assertThat(compileAndRun("(defun shadow-fn (x) (* 100 x))"
+				+ " (print (flet ((shadow-fn (x) (if (= x 0) 'zero (shadow-fn 0)))) (shadow-fn 5)))"))
+			.isEqualTo("0");
+		assertThat(compileAndRun("(print (flet () 'ok))")).isEqualTo("ok");
+	}
+
+	@Test
+	void compileAndRunFletLambdaListExtensionsAndClosure() throws Exception {
+		assertThat(compileAndRun(
+				"(flet ((opt (a &optional (b 10) &rest r) (list a b r)))" + " (print (opt 1)) (print (opt 1 2 3 4)))"))
+			.isEqualTo("(1 10 nil)\n(1 2 (3 4))");
+		assertThat(compileAndRun("(let ((base 100)) (flet ((offs (x) (+ base x))) (print (offs 5))))"))
+			.isEqualTo("105");
+	}
+
+	@Test
+	void compileAndRunFletNestedShadowingAndDataPositions() throws Exception {
+		assertThat(compileAndRun("(flet ((g () 1)) (flet ((h () (g))) (flet ((g () 2)) (print (list (g) (h))))))"))
+			.isEqualTo("(2 1)");
+		assertThat(compileAndRun("(flet ((k (x) (* x 10)))"
+				+ " (print (case 2 ((1 2) (k 3)) (t 'other))) (print (car '(k 1))) (print (let ((k 5)) (k k))))"))
+			.isEqualTo("30\nk\n50");
+	}
+
+	@Test
+	void compileAndRunLabelsRecursion() throws Exception {
+		assertThat(compileAndRun("(labels ((fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))) (print (fact 6)))"))
+			.isEqualTo("720");
+		assertThat(compileAndRun("(labels ((ev (n) (if (= n 0) t (od (- n 1))))"
+				+ " (od (n) (if (= n 0) nil (ev (- n 1))))) (print (list (ev 10) (od 10))))"))
+			.isEqualTo("(t nil)");
+		assertThat(compileAndRun("(labels ((tri (n) (if (= n 0) 0 (+ n (tri (- n 1))))))"
+				+ " (print (reduce #'+ (mapcar #'tri '(1 2 3)))))"))
+			.isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunFletInsideDefun() throws Exception {
+		assertThat(compileAndRun("(defun poly (x) (flet ((sq (v) (* v v))) (+ (sq x) x))) (print (poly 5))"))
+			.isEqualTo("30");
+		assertThat(compileAndRun(
+				"(defun count-down (n) (labels ((go-down (i acc) (if (= i 0) acc (go-down (- i 1) (cons i acc)))))"
+						+ " (go-down n nil))) (print (count-down 4))"))
+			.isEqualTo("(1 2 3 4)");
+	}
+
+	@Test
 	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) signals an error
 		// rather than silently returning nil, matching the interpreter (.todo/26).
@@ -3271,7 +3324,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

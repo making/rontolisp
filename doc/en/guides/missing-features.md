@@ -19,7 +19,8 @@ This page lists the most notable omissions. For what **is** available, see the
 | `block` / `return-from` / `tagbody` / `go` | not available |
 | `catch` / `throw` / `unwind-protect` | not available |
 | conditions & restarts (`handler-case`, ...) | not available |
-| `flet` / `labels` / `macrolet` | not available |
+| `flet` / `labels` | available (see [`flet`](../reference/macros/flet.md), [`labels`](../reference/macros/labels.md)) |
+| `macrolet` | not available |
 | `loop` (extended) | partial (simple-loop subset) |
 | `defstruct` | available (see [`defstruct`](../reference/special-forms/defstruct.md)); options/`:include` are not |
 | CLOS | not available |
@@ -95,10 +96,11 @@ signal **cannot be caught from within the language**: `handler-case`,
 The function ignore-errors is undefined
 ```
 
-## Local functions (`flet`, `labels`, `macrolet`)
+## Local macros (`macrolet`)
 
-Functions cannot be defined locally. They exist only at top level via `defun` (or
-as a `lambda` value bound to a variable).
+Local functions **are** available -- see [`flet`](../reference/macros/flet.md)
+and [`labels`](../reference/macros/labels.md). Local macros (`macrolet`) are
+not; macros exist only at top level via `defmacro`.
 
 ## The `loop` macro
 

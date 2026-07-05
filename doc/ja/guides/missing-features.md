@@ -19,7 +19,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `block` / `return-from` / `tagbody` / `go` | 利用不可 |
 | `catch` / `throw` / `unwind-protect` | 利用不可 |
 | 条件とリスタート（`handler-case` など） | 利用不可 |
-| `flet` / `labels` / `macrolet` | 利用不可 |
+| `flet` / `labels` | 利用可能（[`flet`](../reference/macros/flet.md)、[`labels`](../reference/macros/labels.md) 参照） |
+| `macrolet` | 利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
 | `defstruct` | 利用可能（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。オプション/`:include` は利用不可 |
 | CLOS | 利用不可 |
@@ -97,10 +98,12 @@ The function block is undefined
 The function ignore-errors is undefined
 ```
 
-## 局所関数（`flet`、`labels`、`macrolet`）
+## 局所マクロ（`macrolet`）
 
-関数を局所的に定義することはできません。関数は `defun` によってトップレベルで
-のみ存在します（または変数に束縛された `lambda` 値として）。
+局所関数は**利用可能**です -- [`flet`](../reference/macros/flet.md) と
+[`labels`](../reference/macros/labels.md) を参照してください。局所マクロ
+（`macrolet`）は利用できません。マクロは `defmacro` によってトップレベルで
+のみ存在します。
 
 ## `loop` マクロ
 

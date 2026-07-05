@@ -801,6 +801,19 @@ public final class LispNames {
 	public static final String EVAL_WHEN = "eval-when";
 
 	/**
+	 * The {@code flet} macro (local, non-recursive function bindings). Expands to
+	 * let-bound lambdas plus a body rewrite of call position and {@code #'name} (see
+	 * {@code LispMacroExpander.expandFlet}).
+	 */
+	public static final String FLET = "flet";
+
+	/**
+	 * The {@code labels} macro. Like {@link #FLET} but the definitions see each other
+	 * (mutual recursion) via the nil-then-{@code setq} letrec lowering.
+	 */
+	public static final String LABELS = "labels";
+
+	/**
 	 * The {@code error} macro (signal an error). It builds the message with the
 	 * {@code format} machinery and delegates to {@link #ERROR_INTERNAL}. Like
 	 * {@code format} it has no function value (classified as a macro).

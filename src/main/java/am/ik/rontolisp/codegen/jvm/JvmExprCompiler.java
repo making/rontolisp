@@ -573,6 +573,9 @@ final class JvmExprCompiler {
 				case LispNames.THE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx, className);
 				case LispNames.EVAL_WHEN ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
+				case LispNames.FLET -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);
+				case LispNames.LABELS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx, className);
 				case LispNames.FIRST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 				case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);

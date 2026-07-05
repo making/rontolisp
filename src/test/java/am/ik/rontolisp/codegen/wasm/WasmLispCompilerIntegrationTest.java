@@ -2866,6 +2866,33 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fletForms() throws Exception {
+		assertThat(compileAndRun("(flet ((sq (x) (* x x)) (dbl (x) (* 2 x)))"
+				+ " (print (mapcar #'sq '(1 2 3))) (print (funcall #'dbl 21)) (print (sq (dbl 3))))"))
+			.isEqualTo("(1 4 9)\n42\n36");
+		// Non-recursive: the definition body sees the OUTER function binding; nested
+		// flets shadow lexically.
+		assertThat(compileAndRun("(defun shadow-fn (x) (* 100 x))"
+				+ " (print (flet ((shadow-fn (x) (if (= x 0) 'zero (shadow-fn 0)))) (shadow-fn 5)))"
+				+ " (flet ((g () 1)) (flet ((h () (g))) (flet ((g () 2)) (print (list (g) (h))))))"))
+			.isEqualTo("0\n(2 1)");
+		assertThat(compileAndRun(
+				"(flet ((opt (a &optional (b 10) &rest r) (list a b r)))" + " (print (opt 1)) (print (opt 1 2 3 4)))"
+						+ " (let ((base 100)) (flet ((offs (x) (+ base x))) (print (offs 5))))"))
+			.isEqualTo("(1 10 nil)\n(1 2 (3 4))\n105");
+	}
+
+	@Test
+	void labelsForms() throws Exception {
+		assertThat(compileAndRun("(labels ((fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))) (print (fact 6)))"
+				+ " (labels ((ev (n) (if (= n 0) t (od (- n 1))))"
+				+ " (od (n) (if (= n 0) nil (ev (- n 1))))) (print (list (ev 10) (od 10))))"
+				+ " (defun count-down (n) (labels ((go-down (i acc) (if (= i 0) acc (go-down (- i 1) (cons i acc)))))"
+				+ " (go-down n nil))) (print (count-down 4))"))
+			.isEqualTo("720\n(t nil)\n(1 2 3 4)");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -3806,7 +3833,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

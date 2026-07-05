@@ -1,6 +1,7 @@
 # Local function and macro definition (`flet`, `labels`, `macrolet`, `symbol-macrolet`)
 
-**Status:** not implemented. Medium priority — essential for writing modular Lisp code.
+**Status:** `flet`/`labels` DONE 2026-07-05 (expansion route, all backends; see
+`.kb/flet-labels.md`). Remaining: `macrolet`/`symbol-macrolet` below.
 
 ## What's missing
 

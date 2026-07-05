@@ -41,6 +41,8 @@ description and a runnable example you can evaluate in your browser.
 | `proclaim` | `(proclaim declaration)` | Parsed no-op like `declaim` (deviates from CL: classified as a macro, the argument is not evaluated) |
 | `the` | `(the type form)` | Returns the value of `form` unchanged; the type is not checked |
 | `eval-when` | `(eval-when (situation...) body...)` | Evaluates the body as a `progn`; every situation is treated as "evaluate now". Top-level bodies are spliced so nested `defun`/`defmacro` definitions are collected |
+| `flet` | `(flet ((name lambda-list body...)...) body...)` | Local, non-recursive function bindings (Lisp-2: call position and `#'name`). A definition body sees the outer function of the same name, not its siblings. Lambda lists support the `defun` extensions |
+| `labels` | `(labels ((name lambda-list body...)...) body...)` | Like `flet` but the definitions see each other (recursion and mutual recursion) |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

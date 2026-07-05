@@ -193,8 +193,9 @@ docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
    /`proclaim` no-ops, `the`, `eval-when` (+ top-level flattening),
    `check-type`/`assert` lite. **DONE 2026-07-05**; the todo file (55) was
    removed, details live in `.kb/declarations-type-checks.md`.
-2. `.todo/56-flet-labels.md` -- `flet`/`labels` via expansion to let-bound
-   lambdas (macrolet stays in 34).
+2. `flet`/`labels` via expansion to let-bound lambdas (macrolet stays in 34).
+   **DONE 2026-07-05**; the todo file (56) was removed, details live in
+   `.kb/flet-labels.md`.
 3. `.todo/57-multiple-values.md` -- `values`/`multiple-value-bind`/`-list`
    /`-call`/`nth-value` + floor/gethash secondary values (the rest stays
    in 32). Deepest unit; plan-mode session.

@@ -869,6 +869,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandThe(cons), env);
 				case LispNames.EVAL_WHEN:
 					return eval(LispMacroExpander.expandEvalWhen(cons), env);
+				case LispNames.FLET:
+					return eval(LispMacroExpander.expandFlet(cons), env);
+				case LispNames.LABELS:
+					return eval(LispMacroExpander.expandLabels(cons), env);
 				case LispNames.LIST_STAR:
 					return eval(LispMacroExpander.expandListStar(cons), env);
 				case LispNames.ACONS:

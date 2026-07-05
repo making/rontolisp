@@ -35,3 +35,4 @@ come here only when you need the "why exactly" behind a constraint.
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview
 - [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime)
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` (+ top-level flattening), `check-type`/`assert`, shared type-specifier tests
+- [flet-labels.md](flet-labels.md) -- `flet`/`labels` local functions via let-bound lambdas + Lisp-2 call-site rewrite (labels = nil-then-setq letrec)
