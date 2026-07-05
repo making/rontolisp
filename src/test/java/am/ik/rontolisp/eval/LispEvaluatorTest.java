@@ -2424,6 +2424,79 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTypecaseCompoundSpecifiers() {
+		assertThat(eval("(typecase 5 ((integer 0 9) \"digit\") (integer \"int\"))").print()).isEqualTo("\"digit\"");
+		assertThat(eval("(typecase 42 ((integer 0 9) \"digit\") (integer \"int\"))").print()).isEqualTo("\"int\"");
+		assertThat(eval("(typecase 'b ((member a b c) \"abc\") (t \"other\"))").print()).isEqualTo("\"abc\"");
+		assertThat(eval("(typecase 3 ((or string symbol) \"sos\") (t \"other\"))").print()).isEqualTo("\"other\"");
+	}
+
+	@Test
+	void evalDeclareIsANoOp() {
+		assertThat(evalMulti("(defun decl-fn (x) (declare (ignore x)) 42) (decl-fn 1)")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(let ((x 1)) (declare (type integer x) (optimize (speed 3))) (+ x 1))"))
+			.isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void evalDeclaimAndProclaimAreNoOps() {
+		assertThat(eval("(declaim (inline foo) (optimize (safety 0)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(proclaim '(special *x*))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalTheReturnsTheValue() {
+		assertThat(eval("(the integer (+ 1 2))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(the (or null string) \"s\")").print()).isEqualTo("\"s\"");
+	}
+
+	@Test
+	void evalEvalWhenActsAsProgn() {
+		assertThat(eval("(eval-when (:compile-toplevel :load-toplevel :execute) (+ 1 2))"))
+			.isEqualTo(new LispInteger(3));
+		assertThat(eval("(eval-when (:execute))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(eval-when (:execute) (defun ew-fn (x) (* x 2)) (ew-fn 21))")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalEvalWhenWrappedDefmacro() {
+		assertThat(evalMulti("(eval-when (:compile-toplevel :load-toplevel :execute)"
+				+ " (defmacro ew-twice (x) (list '+ x x))) (ew-twice 21)"))
+			.isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalCheckType() {
+		assertThat(eval("(let ((n 5)) (check-type n integer))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((n 5)) (check-type n (integer 0 9)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((s \"x\")) (check-type s (or null string)))")).isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> eval("(let ((n \"5\")) (check-type n integer))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The value of n is \"5\", which is not of type integer.");
+		assertThatThrownBy(() -> eval("(let ((n 12)) (check-type n (integer 0 9) \"a single digit\"))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The value of n is 12, which is not a single digit.");
+	}
+
+	@Test
+	void evalCheckTypeSatisfiesAndMember() {
+		assertThat(evalMulti("(defun small-p (n) (< n 10)) (let ((n 5)) (check-type n (satisfies small-p)))"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> eval("(let ((k 'd)) (check-type k (member a b c)))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("which is not of type (member a b c)");
+	}
+
+	@Test
+	void evalAssert() {
+		assertThat(eval("(assert (= 1 1))")).isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> eval("(assert (= 1 2))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The assertion (= 1 2) failed.");
+		assertThatThrownBy(() -> eval("(let ((x 0)) (assert (> x 0) (x) \"x must be positive, got ~a\" x))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("x must be positive, got 0");
+	}
+
+	@Test
 	void evalSequenceFunctionsAsFirstClass() {
 		assertThat(eval("(funcall #'length '(7 8 9))")).isEqualTo(new LispInteger(3));
 		assertThat(eval("(mapcar #'reverse '((1 2) (3 4)))").print()).isEqualTo("((2 1) (4 3))");
@@ -3194,7 +3267,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

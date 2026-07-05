@@ -499,6 +499,13 @@ final class WasmExprCompiler {
 				case LispNames.PSETQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx);
 				case LispNames.TYPECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons), ctx);
 				case LispNames.ETYPECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons), ctx);
+				case LispNames.CHECK_TYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx);
+				case LispNames.ASSERT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssert(cons), ctx);
+				case LispNames.DECLARE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclare(cons), ctx);
+				case LispNames.DECLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclaim(cons), ctx);
+				case LispNames.PROCLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx);
+				case LispNames.THE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
+				case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
 				case LispNames.GCD -> {
 					if (isBinaryCall(cons)) {
 						WasmGcdCompiler.compile(cons, ctx);

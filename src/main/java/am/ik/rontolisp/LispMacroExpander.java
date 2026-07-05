@@ -58,6 +58,13 @@ public final class LispMacroExpander {
 			case LispNames.ERROR -> expandError(cons);
 			case LispNames.TIME -> expandTime(cons);
 			case LispNames.LOOP -> expandLoop(cons);
+			case LispNames.CHECK_TYPE -> expandCheckType(cons);
+			case LispNames.ASSERT -> expandAssert(cons);
+			case LispNames.DECLARE -> expandDeclare(cons);
+			case LispNames.DECLAIM -> expandDeclaim(cons);
+			case LispNames.PROCLAIM -> expandProclaim(cons);
+			case LispNames.THE -> expandThe(cons);
+			case LispNames.EVAL_WHEN -> expandEvalWhen(cons);
 			default -> null;
 		};
 	}
@@ -5997,14 +6004,52 @@ public final class LispMacroExpander {
 	}
 
 	private static LispVal makeTypecaseTest(LispSymbol var, LispVal typeSpec) {
+		return makeTypeTest(var, typeSpec);
+	}
+
+	/**
+	 * Builds a truthy test form checking that {@code value} is of the given type
+	 * specifier. Shared by {@code typecase}/{@code etypecase} clause heads and
+	 * {@code check-type}. Supports the atomic predicate types plus the compound
+	 * specifiers {@code (or ...)}/{@code (and ...)}/{@code (not ...)},
+	 * {@code (member ...)}, {@code (eql obj)}, {@code (satisfies fn)}, and numeric range
+	 * types like {@code (integer 0 10)} (with {@code *} and {@code (bound)}-exclusive
+	 * bounds). The value form may be evaluated multiple times, so callers bind it to a
+	 * temporary first.
+	 */
+	private static LispVal makeTypeTest(LispVal value, LispVal typeSpec) {
 		if (typeSpec instanceof LispTrue
 				|| (typeSpec instanceof LispSymbol s && LispNames.OTHERWISE.equals(s.name()))) {
 			return LispTrue.INSTANCE;
 		}
-		if (!(typeSpec instanceof LispSymbol sym)) {
-			throw new IllegalArgumentException("typecase type must be a type symbol, got: " + typeSpec.print());
+		if (typeSpec instanceof LispNil) {
+			// The empty type: no object is of type nil.
+			return LispNil.INSTANCE;
 		}
-		String pred = switch (sym.name()) {
+		if (typeSpec instanceof LispCons compound) {
+			return makeCompoundTypeTest(value, compound);
+		}
+		if (!(typeSpec instanceof LispSymbol sym)) {
+			throw new IllegalArgumentException("Unsupported type specifier: " + typeSpec.print());
+		}
+		if ("boolean".equals(sym.name())) {
+			// (or (null value) (eq value t))
+			return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, value),
+					listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), value, LispTrue.INSTANCE))));
+		}
+		String pred = atomicTypePredicate(sym.name());
+		if (pred == null) {
+			throw new IllegalArgumentException("Unsupported type specifier: " + sym.name());
+		}
+		return callOf(pred, value);
+	}
+
+	/**
+	 * Maps an atomic type-specifier name to its predicate function, or null when the type
+	 * is not supported.
+	 */
+	private static @Nullable String atomicTypePredicate(String name) {
+		return switch (name) {
 			case "integer", "fixnum", "bignum" -> LispNames.INTEGERP;
 			case "float", "single-float", "double-float", "short-float", "long-float" -> LispNames.FLOATP;
 			case "number", "real" -> LispNames.NUMBERP;
@@ -6016,9 +6061,261 @@ public final class LispMacroExpander {
 			case "list" -> LispNames.LISTP;
 			case "null" -> LispNames.NULL;
 			case "atom" -> LispNames.ATOM;
-			default -> throw new IllegalArgumentException("typecase does not support the type: " + sym.name());
+			case "character" -> LispNames.CHARACTERP;
+			case "hash-table" -> LispNames.HASH_TABLE_P;
+			default -> null;
 		};
-		return callOf(pred, var);
+	}
+
+	/** Builds the test for a compound (list) type specifier; see makeTypeTest. */
+	private static LispVal makeCompoundTypeTest(LispVal value, LispCons spec) {
+		List<LispVal> parts = spec.toList();
+		if (!(parts.get(0) instanceof LispSymbol head)) {
+			throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+		}
+		switch (head.name()) {
+			case LispNames.OR, LispNames.AND: {
+				List<LispVal> tests = new java.util.ArrayList<>();
+				tests.add(new LispSymbol(head.name()));
+				for (int i = 1; i < parts.size(); i++) {
+					tests.add(makeTypeTest(value, parts.get(i)));
+				}
+				return listToCons(tests);
+			}
+			case LispNames.NOT: {
+				if (parts.size() != 2) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				return makeNot(makeTypeTest(value, parts.get(1)));
+			}
+			case LispNames.MEMBER: {
+				// (member value '(items...)) -- member compares with eql and returns a
+				// truthy tail on a hit.
+				LispVal items = listToCons(parts.subList(1, parts.size()));
+				return listToCons(List.of(new LispSymbol(LispNames.MEMBER), value,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), items))));
+			}
+			case LispNames.EQL: {
+				if (parts.size() != 2) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				return listToCons(List.of(new LispSymbol(LispNames.EQL), value,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), parts.get(1)))));
+			}
+			case "satisfies": {
+				if (parts.size() != 2 || !(parts.get(1) instanceof LispSymbol)) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				return listToCons(List.of(parts.get(1), value));
+			}
+			default: {
+				String pred = atomicTypePredicate(head.name());
+				if (pred == null) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				// A ranged numeric type like (integer 0 10): the base predicate plus
+				// bound checks; * is unbounded and (n) is an exclusive bound.
+				List<LispVal> tests = new java.util.ArrayList<>();
+				tests.add(new LispSymbol(LispNames.AND));
+				tests.add(callOf(pred, value));
+				if (parts.size() > 1) {
+					addRangeBoundTest(tests, value, parts.get(1), true);
+				}
+				if (parts.size() > 2) {
+					addRangeBoundTest(tests, value, parts.get(2), false);
+				}
+				if (parts.size() > 3) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				return listToCons(tests);
+			}
+		}
+	}
+
+	/** Adds one bound check of a ranged numeric type specifier to the test list. */
+	private static void addRangeBoundTest(List<LispVal> tests, LispVal value, LispVal bound, boolean lower) {
+		if (bound instanceof LispSymbol s && "*".equals(s.name())) {
+			return;
+		}
+		if (bound instanceof LispCons exclusive && exclusive.cdr() instanceof LispNil) {
+			// (n) is an exclusive bound: value > n / value < n.
+			tests.add(listToCons(List.of(new LispSymbol(lower ? LispNames.GT : LispNames.LT), value, exclusive.car())));
+			return;
+		}
+		tests.add(listToCons(List.of(new LispSymbol(lower ? LispNames.GE : LispNames.LE), value, bound)));
+	}
+
+	private static final String CHECK_TYPE_VAR = "__check-type";
+
+	/**
+	 * Expands {@code (check-type place typespec [string])} into a temp-bound type test
+	 * that signals an error when the value does not match. Lite version of Common Lisp's
+	 * {@code check-type}: no restarts, so the place cannot be re-stored; the error
+	 * message reports the place, the offending value, and the expected type (or the given
+	 * description string). Type specifiers are the ones {@code makeTypeTest} supports.
+	 * @param cons the check-type expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCheckType(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 4) {
+			throw new IllegalArgumentException("check-type expects a place and a type specifier, got: " + cons.print());
+		}
+		LispVal place = parts.get(1);
+		LispVal typeSpec = parts.get(2);
+		String expected = parts.size() == 4 && parts.get(3) instanceof LispString desc ? desc.value()
+				: "of type " + typeSpec.print();
+		LispSymbol var = new LispSymbol(CHECK_TYPE_VAR);
+		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("The value of " + place.print() + " is ~s, which is not " + expected + "."), var));
+		return makeLet(CHECK_TYPE_VAR, place, makeIf(makeTypeTest(var, typeSpec), LispNil.INSTANCE, errorCall));
+	}
+
+	/**
+	 * Expands {@code (assert test)} into {@code (if test nil (error "The assertion
+	 * ... failed."))}. The full form {@code (assert test (places...) datum args...)} uses
+	 * the datum and its arguments as the error format; the places list is ignored (no
+	 * restart system, so the interactive re-store loop does not exist).
+	 * @param cons the assert expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandAssert(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("assert expects a test form");
+		}
+		LispVal test = parts.get(1);
+		List<LispVal> errorParts = new java.util.ArrayList<>();
+		errorParts.add(new LispSymbol(LispNames.ERROR));
+		if (parts.size() >= 4) {
+			errorParts.addAll(parts.subList(3, parts.size()));
+		}
+		else {
+			errorParts.add(new LispString("The assertion " + test.print() + " failed."));
+		}
+		return makeIf(test, LispNil.INSTANCE, listToCons(errorParts));
+	}
+
+	/**
+	 * Expands {@code (declare ...)} to {@code nil}: declarations are parsed no-ops. The
+	 * arguments are never evaluated or validated, so any standard declaration
+	 * ({@code ignore}, {@code type}, {@code optimize}, ...) is accepted anywhere in a
+	 * body.
+	 * @param cons the declare expression
+	 * @return nil
+	 */
+	public static LispVal expandDeclare(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (declaim ...)} to {@code nil}: file-level declarations are parsed
+	 * no-ops, like {@code declare}.
+	 * @param cons the declaim expression
+	 * @return nil
+	 */
+	public static LispVal expandDeclaim(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (proclaim ...)} to {@code nil}. Deviates from Common Lisp (where
+	 * {@code proclaim} is a function whose argument is evaluated): here it is a parsed
+	 * no-op like {@code declaim}, so the argument is not evaluated either.
+	 * @param cons the proclaim expression
+	 * @return nil
+	 */
+	public static LispVal expandProclaim(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (the type form)} to {@code form}: the type assertion is not checked
+	 * (there is no compiler type system to inform).
+	 * @param cons the the-expression
+	 * @return the value form
+	 */
+	public static LispVal expandThe(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("the expects a type and a form, got: " + cons.print());
+		}
+		return parts.get(2);
+	}
+
+	/**
+	 * Expands {@code (eval-when (situations...) body...)} to {@code (progn body...)}:
+	 * every situation is treated as "evaluate now". The compile path's
+	 * expand-before-codegen pipeline already approximates {@code :compile-toplevel} for
+	 * macros; top-level forms are additionally spliced by {@link #flattenTopLevel} so
+	 * nested {@code defun}/{@code defmacro} definitions are collected.
+	 * @param cons the eval-when expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEvalWhen(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new IllegalArgumentException("eval-when expects a situation list, got: " + cons.print());
+		}
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (body.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (body.size() == 1) {
+			return body.get(0);
+		}
+		return makeProgn(body);
+	}
+
+	/**
+	 * Splices top-level {@code (progn ...)} and {@code (eval-when (situations) ...)}
+	 * forms into the top-level form list (recursively), preserving evaluation order. Used
+	 * on the compile path (and by {@code UserMacroExpander}) so Pass 1 defun collection
+	 * and the compile-time defmacro scan see definitions nested in the
+	 * {@code (eval-when (:compile-toplevel ...) (defmacro ...))} idiom. The interpreter
+	 * needs no flattening: it evaluates {@code eval-when} as {@code progn} natively.
+	 * @param program the top-level forms
+	 * @return the flattened top-level forms
+	 */
+	public static List<LispVal> flattenTopLevel(List<LispVal> program) {
+		// Keep the identity of a program with nothing to splice (callers may rely on
+		// "returned unchanged", e.g. UserMacroExpander's no-macro early return).
+		if (program.stream().noneMatch(LispMacroExpander::isTopLevelSpliceForm)) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		for (LispVal form : program) {
+			flattenTopLevelInto(form, out);
+		}
+		return out;
+	}
+
+	private static boolean isTopLevelSpliceForm(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
+				&& (LispNames.PROGN.equals(sym.name())
+						|| (LispNames.EVAL_WHEN.equals(sym.name()) && cons.toList().size() >= 2));
+	}
+
+	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()) {
+			if (LispNames.PROGN.equals(sym.name())) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i < parts.size(); i++) {
+					flattenTopLevelInto(parts.get(i), out);
+				}
+				return;
+			}
+			if (LispNames.EVAL_WHEN.equals(sym.name())) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() >= 2) {
+					for (int i = 2; i < parts.size(); i++) {
+						flattenTopLevelInto(parts.get(i), out);
+					}
+					return;
+				}
+			}
+		}
+		out.add(form);
 	}
 
 	private static LispCons listToCons(List<LispVal> elements) {

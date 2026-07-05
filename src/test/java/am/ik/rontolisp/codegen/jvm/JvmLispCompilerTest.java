@@ -2405,6 +2405,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDeclarations() throws Exception {
+		assertThat(compileAndRun("(declaim (optimize (speed 3))) (proclaim '(special *x*))"
+				+ " (defun decl-fn (x) (declare (ignore x)) 42) (print (decl-fn 1))"
+				+ " (print (let ((y 1)) (declare (type integer y)) (+ y 1)))"))
+			.isEqualTo("42\n2");
+	}
+
+	@Test
+	void compileAndRunThe() throws Exception {
+		assertThat(compileAndRun("(print (the integer (+ 1 2))) (print (the (or null string) \"s\"))"))
+			.isEqualTo("3\n\"s\"");
+	}
+
+	@Test
+	void compileAndRunEvalWhen() throws Exception {
+		assertThat(compileAndRun("(eval-when (:compile-toplevel :load-toplevel :execute)"
+				+ " (defun ew-fn (x) (* x 2))) (print (ew-fn 21))"))
+			.isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunEvalWhenWrappedDefmacroThroughUserMacroExpander() throws Exception {
+		// The CLI runs UserMacroExpander before the compiler; mirror that here so the
+		// eval-when-wrapped defmacro is consumed at compile time.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString("(eval-when (:compile-toplevel :load-toplevel :execute)"
+					+ " (defmacro ew-twice (x) (list '+ x x))) (print (ew-twice 21))"));
+		assertThat(compileAndRun(program)).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunCheckType() throws Exception {
+		assertThat(compileAndRun("(let ((n 5)) (check-type n (integer 0 9)) (print \"ok\"))"
+				+ " (let ((s \"x\")) (check-type s (or null string)) (print \"ok2\"))"))
+			.isEqualTo("\"ok\"\n\"ok2\"");
+		assertThatThrownBy(() -> compileAndRun("(let ((n \"5\")) (check-type n integer))"))
+			.hasRootCauseMessage("The value of n is \"5\", which is not of type integer.");
+	}
+
+	@Test
+	void compileAndRunAssert() throws Exception {
+		assertThat(compileAndRun("(assert (= 1 1)) (print \"ok\")")).isEqualTo("\"ok\"");
+		assertThatThrownBy(() -> compileAndRun("(assert (= 1 2))"))
+			.hasRootCauseMessage("The assertion (= 1 2) failed.");
+		assertThatThrownBy(() -> compileAndRun("(let ((x 0)) (assert (> x 0) (x) \"x must be positive, got ~a\" x))"))
+			.hasRootCauseMessage("x must be positive, got 0");
+	}
+
+	@Test
 	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) signals an error
 		// rather than silently returning nil, matching the interpreter (.todo/26).
@@ -3222,7 +3271,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

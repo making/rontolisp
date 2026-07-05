@@ -9,5 +9,5 @@
 を参照してください。
 
 ```lisp
-(rontolisp:list-macros) ; => (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
+(rontolisp:list-macros) ; => (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
 ```

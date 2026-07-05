@@ -21,7 +21,7 @@ description and a runnable example you can evaluate in your browser.
 | `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
 | `time` | `(time form)` | Evaluate `form`, print the elapsed real time to standard output (`; Elapsed real time: N ms`), and return the form's value. `N` is an integer of milliseconds on the interpreter/JVM and a float of milliseconds on WASM |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
-| `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | Dispatch on the type of `x`. Supported type names: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom` (plus `t`/`otherwise`). Returns nil if nothing matches |
+| `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | Dispatch on the type of `x`. Supported type names: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean` (plus `t`/`otherwise`), and the compound specifiers `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` and ranged numeric types like `(integer 0 9)`. Returns nil if nothing matches |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | Exhaustive `typecase`: no default clause, and an object whose type matches no clause signals an `error` |
 | `error` | `(error "bad value: ~a" x)` | Signal an error, aborting execution. The first argument must be a literal control string (same directives as `format`: `~a`, `~s`, `~%`). The interpreter and JVM throw an exception carrying the message; WASM traps. Like `format`, it is a macro with no function value (`#'error` is unsupported) |
 | `setf` | `(setf place value)` | Generalized assignment. Supports `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` as places |
@@ -34,6 +34,13 @@ description and a runnable example you can evaluate in your browser.
 | `decf` | `(decf place delta?)` | Expands to `(setf place (- place delta))`. `delta` defaults to 1. Returns the new value |
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | Formatted output to standard output (`t`, returns nil) or to a string (`nil`) |
 | `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | Open a file, bind the stream to `s`, evaluate the body, close the file. Returns the body value. Supports the `:direction` option (`:input` default, `:output`) and the `:element-type` option (`'character` default, `'(unsigned-byte 8)` for a binary stream); both must be literal |
+| `check-type` | `(check-type place typespec [string])` | Signal an error when the value of `place` is not of the given type; return nil when it is. Lite version: no restarts, so the place is never re-stored |
+| `assert` | `(assert test-form [(place...) [datum args...]])` | Signal an error when `test-form` is false; return nil when it is true. The places list is accepted but ignored (no restarts) |
+| `declare` | `(declare declaration...)` | Parsed no-op: evaluates to nil, arguments never evaluated or validated |
+| `declaim` | `(declaim declaration...)` | Parsed no-op like `declare`, for file-level declarations |
+| `proclaim` | `(proclaim declaration)` | Parsed no-op like `declaim` (deviates from CL: classified as a macro, the argument is not evaluated) |
+| `the` | `(the type form)` | Returns the value of `form` unchanged; the type is not checked |
+| `eval-when` | `(eval-when (situation...) body...)` | Evaluates the body as a `progn`; every situation is treated as "evaluate now". Top-level bodies are spliced so nested `defun`/`defmacro` definitions are collected |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

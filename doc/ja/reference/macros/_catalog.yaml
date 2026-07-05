@@ -31,3 +31,10 @@ categories:
       - { slug: decf, name: decf }
       - { slug: format, name: format }
       - { slug: with-open-file, name: with-open-file }
+      - { slug: check-type, name: check-type }
+      - { slug: assert, name: assert }
+      - { slug: declare, name: declare }
+      - { slug: declaim, name: declaim }
+      - { slug: proclaim, name: proclaim }
+      - { slug: the, name: the }
+      - { slug: eval-when, name: eval-when }

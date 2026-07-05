@@ -20,7 +20,7 @@
 | `prog2` | `(prog2 first second body...)` | すべてのフォームを順に評価し、`second` の値を返します |
 | `time` | `(time form)` | `form` を評価し、経過実時間を標準出力に印字し(`; Elapsed real time: N ms`)、formの値を返します。`N` はインタプリタ/JVMではミリ秒の整数、WASMではミリ秒の浮動小数点です |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | 並列代入。いずれかの変数に代入する前にすべての右辺が評価されます。nilを返します |
-| `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | `x` の型によるディスパッチ。サポートされる型名: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`(および `t`/`otherwise`)。何もマッチしなければnilを返します |
+| `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | `x` の型によるディスパッチ。サポートされる型名: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean`(および `t`/`otherwise`)と、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` および `(integer 0 9)` のような範囲付き数値型。何もマッチしなければnilを返します |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | 網羅的な `typecase`。デフォルト節はなく、どの節にも型がマッチしないオブジェクトは `error` を通知します |
 | `error` | `(error "bad value: ~a" x)` | エラーを通知し、実行を中止します。第1引数はリテラルの制御文字列でなければなりません(`format` と同じディレクティブ: `~a`, `~s`, `~%`)。インタプリタとJVMはメッセージを保持する例外をスローし、WASMはトラップします。`format` と同様に関数値を持たないマクロです(`#'error` はサポートされません) |
 | `setf` | `(setf place value)` | 一般化代入。placeとして `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` をサポートします |
@@ -33,6 +33,13 @@
 | `decf` | `(decf place delta?)` | `(setf place (- place delta))` に展開されます。`delta` のデフォルトは1です。新しい値を返します |
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | 標準出力(`t`、nilを返す)または文字列(`nil`)への整形出力 |
 | `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | ファイルを開き、ストリームを `s` に束縛し、bodyを評価し、ファイルを閉じます。bodyの値を返します。サポートされるのは `:direction` オプション(`:input` がデフォルト、`:output`)と `:element-type` オプション(`'character` がデフォルト、バイナリストリームには `'(unsigned-byte 8)`)で、どちらもリテラルでなければなりません |
+| `check-type` | `(check-type place typespec [string])` | `place` の値が指定された型でなければエラーをシグナルし、型に合致していれば nil を返します。ライト版: リスタートがないため place への再格納はありません |
+| `assert` | `(assert test-form [(place...) [datum args...]])` | `test-form` が偽ならエラーをシグナルし、真なら nil を返します。place のリストは受理されますが無視されます（リスタートなし） |
+| `declare` | `(declare declaration...)` | 解析されるだけの no-op: nil に評価され、引数は評価も検証もされません |
+| `declaim` | `(declaim declaration...)` | `declare` と同様の no-op（ファイルレベルの宣言用） |
+| `proclaim` | `(proclaim declaration)` | `declaim` と同様の no-op（CL からの逸脱: マクロとして分類され、引数は評価されません） |
+| `the` | `(the type form)` | `form` の値をそのまま返します。型はチェックされません |
+| `eval-when` | `(eval-when (situation...) body...)` | 本体を `progn` として評価します。すべての状況指定は「今評価する」として扱われます。トップレベルの本体はスプライスされ、ネストした `defun`/`defmacro` 定義も収集されます |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

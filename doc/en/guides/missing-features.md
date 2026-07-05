@@ -23,7 +23,10 @@ This page lists the most notable omissions. For what **is** available, see the
 | `loop` (extended) | partial (simple-loop subset) |
 | `defstruct` | available (see [`defstruct`](../reference/special-forms/defstruct.md)); options/`:include` are not |
 | CLOS | not available |
-| `declare` / `the` / `typep` | not available |
+| `declare` / `declaim` / `proclaim` / `the` | available as parsed no-ops (see [`declare`](../reference/macros/declare.md)) |
+| `check-type` / `assert` | available (lite, no restarts; see [`check-type`](../reference/macros/check-type.md)) |
+| `eval-when` | available (treated as `progn`; see [`eval-when`](../reference/macros/eval-when.md)) |
+| `typep` | not available |
 | `coerce` | partial (literal `'list` / `'vector` / `'string` result types; see [`coerce`](../reference/functions/coerce.md)) |
 | `defpackage` (user packages) | partial (`:use`/`:export`/`:nicknames`/`:import-from`; see [`defpackage`](../reference/special-forms/defpackage.md)) |
 | `make-package` / `export` / `use-package` (runtime) | not available |
@@ -119,8 +122,14 @@ object system (`defclass`, `defgeneric`, `defmethod`, `make-instance`).
 
 ## Type declarations, `typep`, and `coerce`
 
-Type declarations are not parsed: `declare`, `declaim`, `proclaim`, and `the` are
-not available, and neither is the runtime helper `typep`.
+Type declarations **are** accepted as parsed no-ops:
+[`declare`](../reference/macros/declare.md),
+[`declaim`](../reference/macros/declaim.md),
+[`proclaim`](../reference/macros/proclaim.md), and
+[`the`](../reference/macros/the.md) all parse and have no effect, so annotated
+sources load unchanged. [`check-type`](../reference/macros/check-type.md) and
+[`assert`](../reference/macros/assert.md) provide actual runtime checks (lite,
+without restarts). The runtime helper `typep` is not available.
 [`coerce`](../reference/functions/coerce.md) **is** available for the literal
 result types `'list`, `'vector` and `'string` (the result type must be a quoted
 literal, like `map`'s); other result types are not supported.
@@ -172,6 +181,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## Other omissions
 
-`destructuring-bind`, `eval-when`, `symbol-macrolet`, and `progv` are also not
-available. This list is not exhaustive; rontolisp implements a focused core rather
-than the full standard.
+`destructuring-bind`, `symbol-macrolet`, and `progv` are also not available
+([`eval-when`](../reference/macros/eval-when.md) **is**, treated as `progn`).
+This list is not exhaustive; rontolisp implements a focused core rather than the
+full standard.

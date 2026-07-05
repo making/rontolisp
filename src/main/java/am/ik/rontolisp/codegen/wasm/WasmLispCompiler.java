@@ -606,6 +606,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so
 		// the rest of compilation sees canonical names.
 		program = new PackageResolver().resolveProgram(program);
+		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
+		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
+		// direct compiler invocations equivalent).
+		program = LispMacroExpander.flattenTopLevel(program);
 		// Splice top-level defstructs into their generated defuns before lambda-list
 		// desugaring (the generated constructor uses &key) so Pass 1 collects them as
 		// ordinary functions; the registry makes accessors setf-able places.

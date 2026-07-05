@@ -131,6 +131,20 @@ public final class FreeVarAnalyzer {
 								knownFunctions, globals, freeVars);
 						case LispNames.LOOP -> collectFreeVars(LispMacroExpander.expandLoop(cons), boundVars,
 								knownFunctions, globals, freeVars);
+						// Expand before walking: the default walk would misread the raw
+						// shapes (e.g. the type symbol in (the integer x), declaration
+						// specifiers in declare) as variable references.
+						case LispNames.CHECK_TYPE -> collectFreeVars(LispMacroExpander.expandCheckType(cons), boundVars,
+								knownFunctions, globals, freeVars);
+						case LispNames.ASSERT -> collectFreeVars(LispMacroExpander.expandAssert(cons), boundVars,
+								knownFunctions, globals, freeVars);
+						case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
+							// Parsed no-ops: no variable references.
+						}
+						case LispNames.THE -> collectFreeVars(LispMacroExpander.expandThe(cons), boundVars,
+								knownFunctions, globals, freeVars);
+						case LispNames.EVAL_WHEN -> collectFreeVars(LispMacroExpander.expandEvalWhen(cons), boundVars,
+								knownFunctions, globals, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -236,6 +250,18 @@ public final class FreeVarAnalyzer {
 								knownFunctions, captured, insideLambda);
 						case LispNames.LOOP -> collectCapturedVars(LispMacroExpander.expandLoop(cons), localVars,
 								knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.CHECK_TYPE -> collectCapturedVars(LispMacroExpander.expandCheckType(cons),
+								localVars, knownFunctions, captured, insideLambda);
+						case LispNames.ASSERT -> collectCapturedVars(LispMacroExpander.expandAssert(cons), localVars,
+								knownFunctions, captured, insideLambda);
+						case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
+							// Parsed no-ops: no variable references.
+						}
+						case LispNames.THE -> collectCapturedVars(LispMacroExpander.expandThe(cons), localVars,
+								knownFunctions, captured, insideLambda);
+						case LispNames.EVAL_WHEN -> collectCapturedVars(LispMacroExpander.expandEvalWhen(cons),
+								localVars, knownFunctions, captured, insideLambda);
 						case LispNames.FUNCTION -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {

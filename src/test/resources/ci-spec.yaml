@@ -1020,7 +1020,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)
+      (and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       207
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
@@ -2400,3 +2400,26 @@ cases:
     expected: |
       2
       :rontolisp
+  - name: declarations-eval-when-check-type-assert
+    source: |
+      (declaim (optimize (speed 3)))
+      (proclaim '(special *ci-decl*))
+      (defun ci-decl-fn (x) (declare (ignore x)) 42)
+      (print (ci-decl-fn 1))
+      (print (the integer (+ 1 2)))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defun ci-ew-fn (x) (* x 2)))
+      (print (ci-ew-fn 21))
+      (let ((n 5)) (check-type n (integer 0 9)) (print :checked))
+      (let ((s "x")) (check-type s (or null string)) (print :checked2))
+      (assert (= 1 1))
+      (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
+      (print (typecase 'b ((member a b c) :abc) (t :other)))
+    expected: |
+      42
+      3
+      42
+      :checked
+      :checked2
+      :digit
+      :abc

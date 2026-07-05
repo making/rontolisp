@@ -855,6 +855,20 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandTypecase(cons), env);
 				case LispNames.ETYPECASE:
 					return eval(LispMacroExpander.expandEtypecase(cons), env);
+				case LispNames.CHECK_TYPE:
+					return eval(LispMacroExpander.expandCheckType(cons), env);
+				case LispNames.ASSERT:
+					return eval(LispMacroExpander.expandAssert(cons), env);
+				case LispNames.DECLARE:
+					return eval(LispMacroExpander.expandDeclare(cons), env);
+				case LispNames.DECLAIM:
+					return eval(LispMacroExpander.expandDeclaim(cons), env);
+				case LispNames.PROCLAIM:
+					return eval(LispMacroExpander.expandProclaim(cons), env);
+				case LispNames.THE:
+					return eval(LispMacroExpander.expandThe(cons), env);
+				case LispNames.EVAL_WHEN:
+					return eval(LispMacroExpander.expandEvalWhen(cons), env);
 				case LispNames.LIST_STAR:
 					return eval(LispMacroExpander.expandListStar(cons), env);
 				case LispNames.ACONS:

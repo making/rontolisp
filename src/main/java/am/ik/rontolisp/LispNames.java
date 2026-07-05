@@ -759,6 +759,48 @@ public final class LispNames {
 	public static final String CCASE = "ccase";
 
 	/**
+	 * The {@code check-type} macro. Lite version: expands to a type test built from the
+	 * {@code typecase} predicate map (plus compound specifiers) and an {@code error} call
+	 * -- no restarts, no place re-storing.
+	 */
+	public static final String CHECK_TYPE = "check-type";
+
+	/**
+	 * The {@code assert} macro. Lite version: expands to {@code (unless test (error
+	 * ...))} -- the optional places list is ignored (no restarts).
+	 */
+	public static final String ASSERT = "assert";
+
+	/**
+	 * The {@code declare} declaration marker. Parsed no-op: the whole form expands to
+	 * {@code nil} and its arguments are never evaluated or validated.
+	 */
+	public static final String DECLARE = "declare";
+
+	/**
+	 * The {@code declaim} macro. Parsed no-op like {@link #DECLARE}.
+	 */
+	public static final String DECLAIM = "declaim";
+
+	/**
+	 * The {@code proclaim} operator. Parsed no-op like {@link #DECLARE} (classified as a
+	 * macro here, not a function as in CL, so the argument is not evaluated either).
+	 */
+	public static final String PROCLAIM = "proclaim";
+
+	/**
+	 * The {@code the} operator. Expands to its value form (identity; no type checking).
+	 */
+	public static final String THE = "the";
+
+	/**
+	 * The {@code eval-when} operator. Expands to {@code progn} of its body; at top level
+	 * the compile path additionally splices the body into top-level forms (see
+	 * {@code LispMacroExpander.flattenTopLevel}).
+	 */
+	public static final String EVAL_WHEN = "eval-when";
+
+	/**
 	 * The {@code error} macro (signal an error). It builds the message with the
 	 * {@code format} machinery and delegates to {@link #ERROR_INTERNAL}. Like
 	 * {@code format} it has no function value (classified as a macro).

@@ -2848,6 +2848,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void declarationsTheAndEvalWhen() throws Exception {
+		assertThat(compileAndRun("(declaim (optimize (speed 3))) (proclaim '(special *x*))"
+				+ " (defun decl-fn (x) (declare (ignore x)) 42) (print (decl-fn 1))" + " (print (the integer (+ 1 2)))"
+				+ " (eval-when (:compile-toplevel :load-toplevel :execute) (defun ew-fn (x) (* x 2)))"
+				+ " (print (ew-fn 21))"))
+			.isEqualTo("42\n3\n42");
+	}
+
+	@Test
+	void checkTypeAndAssertForms() throws Exception {
+		assertThat(compileAndRun(
+				"(let ((n 5)) (check-type n (integer 0 9)) (print \"ok\"))" + " (assert (= 1 1)) (print \"ok2\")"))
+			.isEqualTo("\"ok\"\n\"ok2\"");
+		compileAndExpectTrap("(let ((n \"5\")) (check-type n integer))");
+		compileAndExpectTrap("(assert (= 1 2))");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("t\nnil");
@@ -3788,7 +3806,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and case ccase cond decf do do* dolist dotimes ecase error etypecase format incf let* loop or pop prog1 prog2 psetq push remf setf time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare do do* dolist dotimes ecase error etypecase eval-when format incf let* loop or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
 	}
 
 	@Test

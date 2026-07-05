@@ -23,7 +23,10 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
 | `defstruct` | 利用可能（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。オプション/`:include` は利用不可 |
 | CLOS | 利用不可 |
-| `declare` / `the` / `typep` | 利用不可 |
+| `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op として利用可能（[`declare`](../reference/macros/declare.md) 参照） |
+| `check-type` / `assert` | 利用可能（ライト版、リスタートなし。[`check-type`](../reference/macros/check-type.md) 参照） |
+| `eval-when` | 利用可能（`progn` として扱う。[`eval-when`](../reference/macros/eval-when.md) 参照） |
+| `typep` | 利用不可 |
 | `coerce` | 部分対応(リテラルの `'list` / `'vector` / `'string` 結果型。[`coerce`](../reference/functions/coerce.md) を参照) |
 | `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export`/`:nicknames`/`:import-from`。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
 | `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
@@ -120,8 +123,15 @@ The function ignore-errors is undefined
 
 ## 型宣言、`typep`、`coerce`
 
-型宣言は解析されません。`declare`、`declaim`、`proclaim`、`the` は利用できず、
-ランタイムヘルパーの `typep` も利用できません。
+型宣言は解析されるだけの no-op として **受理されます**。
+[`declare`](../reference/macros/declare.md)、
+[`declaim`](../reference/macros/declaim.md)、
+[`proclaim`](../reference/macros/proclaim.md)、
+[`the`](../reference/macros/the.md) はいずれもパースされ、効果を持たないため、
+型注釈付きのソースを変更なしにロードできます。
+[`check-type`](../reference/macros/check-type.md) と
+[`assert`](../reference/macros/assert.md) は実際のランタイム検査を提供します
+（ライト版、リスタートなし）。ランタイムヘルパーの `typep` は利用できません。
 [`coerce`](../reference/functions/coerce.md) はリテラルの結果型 `'list`、`'vector`、
 `'string` に限り **利用できます**(結果型は `map` と同様、クォートされたリテラルで
 なければなりません)。その他の結果型はサポートされません。
@@ -172,6 +182,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## その他の省略事項
 
-`destructuring-bind`、`eval-when`、`symbol-macrolet`、`progv` も利用できません。
-この一覧はすべてを網羅したものではありません。rontolisp は完全な標準ではなく、
-焦点を絞ったコアを実装しています。
+`destructuring-bind`、`symbol-macrolet`、`progv` も利用できません
+（[`eval-when`](../reference/macros/eval-when.md) は `progn` として扱われ、
+**利用できます**）。この一覧はすべてを網羅したものではありません。rontolisp は
+完全な標準ではなく、焦点を絞ったコアを実装しています。

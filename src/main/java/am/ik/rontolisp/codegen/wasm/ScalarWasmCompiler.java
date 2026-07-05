@@ -164,6 +164,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		// Resolve packages first, like the other backends, so qualified names
 		// (rontolisp:wasm-export) and in-package directives are canonical.
 		program = new PackageResolver().resolveProgram(program);
+		// Splice top-level (progn ...)/(eval-when ...) so nested defuns are collected,
+		// like the other backends.
+		program = LispMacroExpander.flattenTopLevel(program);
 
 		// Collect defuns and export directives. A --no-gc module is a pure-compute
 		// reactor, so only function definitions and export directives are allowed at top
@@ -2279,6 +2282,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.DO -> LispMacroExpander.expandDo(cons);
 			case LispNames.DO_STAR -> LispMacroExpander.expandDoStar(cons);
 			case LispNames.LOOP -> LispMacroExpander.expandLoop(cons);
+			case LispNames.CHECK_TYPE -> LispMacroExpander.expandCheckType(cons);
+			case LispNames.ASSERT -> LispMacroExpander.expandAssert(cons);
+			case LispNames.DECLARE -> LispMacroExpander.expandDeclare(cons);
+			case LispNames.DECLAIM -> LispMacroExpander.expandDeclaim(cons);
+			case LispNames.PROCLAIM -> LispMacroExpander.expandProclaim(cons);
+			case LispNames.THE -> LispMacroExpander.expandThe(cons);
+			case LispNames.EVAL_WHEN -> LispMacroExpander.expandEvalWhen(cons);
 			default -> null;
 		};
 	}

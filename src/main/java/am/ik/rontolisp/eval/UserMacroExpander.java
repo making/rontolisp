@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -35,6 +36,10 @@ public final class UserMacroExpander {
 	 * @return the program with macro definitions consumed and macro calls expanded
 	 */
 	public static List<LispVal> expand(List<LispVal> program) {
+		// Splice top-level (progn ...)/(eval-when ...) first so a defmacro nested in
+		// the (eval-when (:compile-toplevel ...) (defmacro ...)) idiom is seen (and
+		// nested defuns become top-level for the compilers' Pass 1).
+		program = LispMacroExpander.flattenTopLevel(program);
 		// Also activate for macroexpand/macroexpand-1 calls: their literal quoted
 		// arguments are folded to the expansion here, even when no macro is defined.
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))

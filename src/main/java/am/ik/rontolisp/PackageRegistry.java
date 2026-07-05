@@ -36,7 +36,8 @@ public final class PackageRegistry {
 			LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
 			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.DO_STAR, LispNames.PROG2,
 			LispNames.PSETQ, LispNames.TYPECASE, LispNames.ECASE, LispNames.ETYPECASE, LispNames.CCASE, LispNames.ERROR,
-			LispNames.TIME, LispNames.LOOP);
+			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
+			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

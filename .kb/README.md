@@ -34,3 +34,4 @@ come here only when you need the "why exactly" behind a constraint.
 - [hash-tables.md](hash-tables.md) -- hash table representation per backend
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview
 - [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime)
+- [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` (+ top-level flattening), `check-type`/`assert`, shared type-specifier tests

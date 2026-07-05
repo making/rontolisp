@@ -184,6 +184,33 @@ that `error`), full `defmacro` lambda lists (.todo/44), `loop` gaps (.todo/29),
 Target library to keep honest: **split-sequence** end-to-end (minus
 extended-sequence via `:if-feature`), added to ci-spec once green.
 
+**Split into session-sized units (2026-07-05).** Phase 3 is too large for one
+session; each unit below is one self-contained session (implement + tests +
+docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
+/36/38/44) stay open for the leftovers each unit does not take.
+
+1. Declarations/eval-when/check-type/assert -- `declare`/`declaim`
+   /`proclaim` no-ops, `the`, `eval-when` (+ top-level flattening),
+   `check-type`/`assert` lite. **DONE 2026-07-05**; the todo file (55) was
+   removed, details live in `.kb/declarations-type-checks.md`.
+2. `.todo/56-flet-labels.md` -- `flet`/`labels` via expansion to let-bound
+   lambdas (macrolet stays in 34).
+3. `.todo/57-multiple-values.md` -- `values`/`multiple-value-bind`/`-list`
+   /`-call`/`nth-value` + floor/gethash secondary values (the rest stays
+   in 32). Deepest unit; plan-mode session.
+4. `.todo/58-destructuring-bind-and-defmacro-lambda-lists.md` --
+   `destructuring-bind` + full defmacro lambda lists (shared destructuring
+   walker; lifts LoopExpander.destructure).
+5. `.todo/59-string-streams.md` -- `with-output-to-string`
+   /`with-input-from-string`/`write-string`/`write-to-string` over the
+   existing stream-handle runtime (the rest of 36 stays there).
+6. `.todo/60-symbol-runtime-api.md` -- `intern`/`find-symbol`/`symbol-name`
+   /`make-symbol`/`boundp`/`fboundp`/`symbol-value` (package mutation stays
+   in 38).
+7. `.todo/61-split-sequence-e2e.md` -- the integration target: vendor
+   split-sequence, load via `asdf:load-system` on all four backends, fix the
+   residue, close Phase 3.
+
 ### Phase 4: bigger substrate (medium libraries; still not real ASDF)
 
 Condition system + `unwind-protect` (.todo/39), dynamic/special variable
