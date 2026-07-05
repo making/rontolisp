@@ -10,7 +10,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.io.Writer;
 import java.math.BigInteger;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -1674,29 +1677,97 @@ public final class Environment implements Scope {
 			out.print(text);
 			atLineStart[0] = text.charAt(text.length() - 1) == '\n';
 		};
+		// File streams opened by open/with-open-file (plus the string streams of
+		// with-output-to-string/with-input-from-string): an integer handle indexes this
+		// table, matching the compiled backends (JVM: a static stream table; WASM: the
+		// WASI file descriptor, negative for string streams). Declared before the print
+		// family so their optional stream argument can route into it.
+		Map<Long, Closeable> streams = new HashMap<>();
+		long[] nextStreamHandle = { 0 };
+		// Routes print-family output: an absent, nil, or t destination is standard
+		// output; an integer handle selects a Writer entry in the stream table (file
+		// output streams and string streams).
+		java.util.function.BiConsumer<String, @Nullable LispVal> emitTo = (text, dest) -> {
+			if (dest == null || dest == LispNil.INSTANCE || dest instanceof LispTrue) {
+				emit.accept(text);
+				return;
+			}
+			if (!(dest instanceof LispInteger handle) || !(streams.get(handle.value()) instanceof Writer writer)) {
+				throw new LispEvalException("not an output stream: " + dest.print());
+			}
+			try {
+				writer.write(text);
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		};
 		env.defineFunction(LispNames.PRINT, new LispFunction(LispNames.PRINT, args -> {
-			requireArgCount(LispNames.PRINT, args, 1);
+			requireArgCountBetween(LispNames.PRINT, args, 1, 2);
 			LispVal val = args.get(0);
-			emit.accept(printString(val) + "\n");
+			emitTo.accept(printString(val) + "\n", args.size() > 1 ? args.get(1) : null);
 			return val;
 		}));
 		env.defineFunction(LispNames.PRIN1, new LispFunction(LispNames.PRIN1, args -> {
-			requireArgCount(LispNames.PRIN1, args, 1);
+			requireArgCountBetween(LispNames.PRIN1, args, 1, 2);
 			LispVal val = args.get(0);
-			emit.accept(printString(val));
+			emitTo.accept(printString(val), args.size() > 1 ? args.get(1) : null);
 			return val;
 		}));
 		env.defineFunction(LispNames.PRINC, new LispFunction(LispNames.PRINC, args -> {
-			requireArgCount(LispNames.PRINC, args, 1);
+			requireArgCountBetween(LispNames.PRINC, args, 1, 2);
 			LispVal val = args.get(0);
-			emit.accept(displayString(val));
+			emitTo.accept(displayString(val), args.size() > 1 ? args.get(1) : null);
 			return val;
 		}));
 		env.defineFunction(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
-			requireArgCount(LispNames.TERPRI, args, 0);
-			emit.accept("\n");
+			requireArgCountBetween(LispNames.TERPRI, args, 0, 1);
+			emitTo.accept("\n", args.isEmpty() ? null : args.get(0));
 			return LispNil.INSTANCE;
 		}));
+		env.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, args -> {
+			requireArgCountBetween(LispNames.WRITE_STRING, args, 1, 2);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.WRITE_STRING + " expects a string");
+			}
+			emitTo.accept(str.value(), args.size() > 1 ? args.get(1) : null);
+			return str;
+		}));
+		env.defineFunction(LispNames.WRITE_TO_STRING, new LispFunction(LispNames.WRITE_TO_STRING, args -> {
+			requireArgCount(LispNames.WRITE_TO_STRING, args, 1);
+			return new LispString(printString(args.get(0)));
+		}));
+		// String streams: internal helpers behind with-output-to-string /
+		// with-input-from-string. An output string stream is a StringWriter entry; an
+		// input string stream is a BufferedReader over the string, so read/read-line
+		// consume it like any file stream.
+		env.defineFunction(LispNames.MAKE_STRING_OUTPUT_STREAM,
+				new LispFunction(LispNames.MAKE_STRING_OUTPUT_STREAM, args -> {
+					requireArgCount(LispNames.MAKE_STRING_OUTPUT_STREAM, args, 0);
+					long handle = nextStreamHandle[0]++;
+					streams.put(handle, new StringWriter());
+					return new LispInteger(handle);
+				}));
+		env.defineFunction(LispNames.MAKE_STRING_INPUT_STREAM,
+				new LispFunction(LispNames.MAKE_STRING_INPUT_STREAM, args -> {
+					requireArgCount(LispNames.MAKE_STRING_INPUT_STREAM, args, 1);
+					if (!(args.get(0) instanceof LispString str)) {
+						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM + " expects a string");
+					}
+					long handle = nextStreamHandle[0]++;
+					streams.put(handle, new BufferedReader(new StringReader(str.value())));
+					return new LispInteger(handle);
+				}));
+		env.defineFunction(LispNames.STRING_STREAM_CONTENTS,
+				new LispFunction(LispNames.STRING_STREAM_CONTENTS, args -> {
+					requireArgCount(LispNames.STRING_STREAM_CONTENTS, args, 1);
+					if (!(args.get(0) instanceof LispInteger handle)
+							|| !(streams.get(handle.value()) instanceof StringWriter writer)) {
+						throw new LispEvalException(
+								LispNames.STRING_STREAM_CONTENTS + " expects a string output stream");
+					}
+					return new LispString(writer.toString());
+				}));
 		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
 			requireArgCount(LispNames.FRESH_LINE, args, 0);
 			if (!atLineStart[0]) {
@@ -1746,11 +1817,6 @@ public final class Environment implements Scope {
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
 			throw new LispEvalException(message);
 		}));
-		// File streams opened by open/with-open-file: an integer handle indexes this
-		// table, matching the compiled backends (JVM: a static stream table; WASM: the
-		// WASI file descriptor).
-		Map<Long, Closeable> streams = new HashMap<>();
-		long[] nextStreamHandle = { 0 };
 		env.defineFunction(LispNames.OPEN, new LispFunction(LispNames.OPEN, args -> {
 			requireMinArgCount(LispNames.OPEN, args, 1);
 			if (!(args.get(0) instanceof LispString path)) {
@@ -1824,7 +1890,7 @@ public final class Environment implements Scope {
 				SocketSupport.writeLine(socket, str.value());
 				return str;
 			}
-			if (!(entry instanceof BufferedWriter writer)) {
+			if (!(entry instanceof Writer writer)) {
 				throw new LispEvalException(LispNames.WRITE_LINE + " expects an output stream");
 			}
 			try {
@@ -2938,6 +3004,12 @@ public final class Environment implements Scope {
 	private static void requireMinArgCount(String name, List<LispVal> args, int min) {
 		if (args.size() < min) {
 			throw new LispEvalException(name + " expects at least " + min + " arguments, got " + args.size());
+		}
+	}
+
+	private static void requireArgCountBetween(String name, List<LispVal> args, int min, int max) {
+		if (args.size() < min || args.size() > max) {
+			throw new LispEvalException(name + " expects " + min + " to " + max + " arguments, got " + args.size());
 		}
 	}
 

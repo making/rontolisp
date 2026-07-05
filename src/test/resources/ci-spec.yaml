@@ -1020,9 +1020,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)
+      (and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      208
+      210
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -2316,6 +2316,68 @@ cases:
       4
       10
       99
+  - name: with-output-to-string-print-family
+    source: |
+      (print (with-output-to-string (ss-out)
+        (princ "a=" ss-out)
+        (princ 42 ss-out)
+        (terpri ss-out)
+        (prin1 "q" ss-out)
+        (write-line " end" ss-out)
+        (write-string "tail" ss-out)))
+      (print (with-output-to-string (ss-empty)))
+    expected: |
+      "a=42
+      "q" end
+      tail"
+      ""
+  - name: format-stream-destination
+    source: |
+      (print (with-output-to-string (ss-fmt) (format ss-fmt "x=~a, y=~s~%" 1 "two")))
+      (print (with-output-to-string (ss-fmt2) (print 42 ss-fmt2)))
+    expected: |
+      "x=1, y="two"
+      "
+      "42
+      "
+  - name: with-input-from-string-read-line-and-read
+    source: |
+      (with-input-from-string (ss-in "first line
+      (1 2 3)
+      third")
+        (print (read-line ss-in))
+        (print (read ss-in))
+        (print (read-line ss-in))
+        (print (read-line ss-in)))
+      (with-input-from-string (ss-loop "a
+      b
+      c")
+        (setq ss-line (read-line ss-loop))
+        (while ss-line
+          (princ ss-line)
+          (setq ss-line (read-line ss-loop))))
+      (terpri)
+    expected: |
+      "first line"
+      (1 2 3)
+      "third"
+      nil
+      abc
+  - name: write-string-and-write-to-string
+    source: |
+      (write-string "no")
+      (write-string " newline")
+      (terpri)
+      (print (write-to-string '(a "b" 3)))
+      (princ "x" t)
+      (fresh-line)
+      (princ "done")
+      (terpri)
+    expected: |
+      no newline
+      "(a "b" 3)"
+      x
+      done
   - name: sequence-and-alist-test-key-keywords
     source: |
       (print (assoc "b" '(("a" . 1) ("b" . 2)) :test #'string=))

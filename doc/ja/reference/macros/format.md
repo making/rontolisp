@@ -2,7 +2,7 @@
 
 `(format destination control-string args...)`
 
-Common Lisp の `format` の最小限のサブセットで、インタプリタと両コンパイラで共有されるマクロとして実装されています。`destination` と `control-string` はいずれもリテラルでなければなりません。destination が `t` の場合は `princ`/`prin1`/`terpri` 呼び出しに展開され、標準出力に書き出して nil を返します。destination が `nil` の場合は整形済み文字列を組み立てて返します（`princ-to-string`/`prin1-to-string` 呼び出しに展開され、内部の文字列連結で畳み込まれます）。すべての引数は出力の前に左から右へ評価されます。
+Common Lisp の `format` の最小限のサブセットで、インタプリタと両コンパイラで共有されるマクロとして実装されています。`control-string` はリテラルでなければなりません。destination が `t` の場合は `princ`/`prin1`/`terpri` 呼び出しに展開され、標準出力に書き出して nil を返します。destination が `nil` の場合は整形済み文字列を組み立てて返します（`princ-to-string`/`prin1-to-string` 呼び出しに展開され、内部の文字列連結で畳み込まれます）。それ以外の destination 式の場合は同じ方法で文字列を組み立て、1 回の `write-string` 呼び出しでそのストリーム（`with-output-to-string` の文字列ストリームまたはファイルストリーム）に書き込み、nil を返します。すべての引数は出力の前に左から右へ評価されます。
 
 ```lisp
 (format t "Hello ~a, you are ~d!~%" 'world 42)

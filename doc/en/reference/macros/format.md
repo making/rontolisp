@@ -3,12 +3,14 @@
 `(format destination control-string args...)`
 
 A minimal subset of Common Lisp's `format`, implemented as a macro shared by the
-interpreter and both compilers. The `destination` and `control-string` must both
-be literals: with destination `t` it expands into `princ`/`prin1`/`terpri` calls,
-writes to standard output, and returns nil; with destination `nil` it builds and
-returns the formatted string (expanding into
-`princ-to-string`/`prin1-to-string` calls folded with the internal string
-concatenation). All arguments are evaluated left to right before any output.
+interpreter and both compilers. The `control-string` must be a literal: with
+destination `t` the form expands into `princ`/`prin1`/`terpri` calls, writes to
+standard output, and returns nil; with destination `nil` it builds and returns
+the formatted string (expanding into `princ-to-string`/`prin1-to-string` calls
+folded with the internal string concatenation); with any other destination
+expression it builds the string the same way, writes it to the stream with one
+`write-string` call, and returns nil (a `with-output-to-string` string stream or
+a file stream). All arguments are evaluated left to right before any output.
 
 ```lisp
 (format t "Hello ~a, you are ~d!~%" 'world 42)

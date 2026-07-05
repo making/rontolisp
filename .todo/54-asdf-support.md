@@ -206,9 +206,11 @@ docs + native E2E), in the recommended order. The wishlist todos (29/32/34/35
 4. `destructuring-bind` + full defmacro lambda lists (shared destructuring
    walker; lifted LoopExpander.destructure). **DONE 2026-07-05**; the todo
    file (58) was removed, details live in `.kb/defmacro-backquote.md`.
-5. `.todo/59-string-streams.md` -- `with-output-to-string`
-   /`with-input-from-string`/`write-string`/`write-to-string` over the
-   existing stream-handle runtime (the rest of 36 stays there).
+5. String streams -- `with-output-to-string`/`with-input-from-string`
+   /`write-string`/`write-to-string` over the existing stream-handle runtime,
+   plus print-family optional stream args and format stream destinations.
+   **DONE 2026-07-05**; the todo file (59) was removed, details live in
+   `.kb/read-load-streams.md` (the rest of 36 stays there).
 6. `.todo/60-symbol-runtime-api.md` -- `intern`/`find-symbol`/`symbol-name`
    /`make-symbol`/`boundp`/`fboundp`/`symbol-value` (package mutation stays
    in 38).

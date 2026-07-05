@@ -520,6 +520,74 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void withOutputToStringCollectsPrintFamilyOutput() throws Exception {
+		assertThat(compileAndRun("""
+				(print (with-output-to-string (s)
+				  (princ "a=" s)
+				  (princ 42 s)
+				  (terpri s)
+				  (prin1 "q" s)
+				  (write-line " end" s)
+				  (write-string "tail" s)))""")).isEqualTo("\"a=42\n\"q\" end\ntail\"");
+	}
+
+	@Test
+	void withOutputToStringEmptyBodyIsEmptyString() throws Exception {
+		assertThat(compileAndRun("(print (with-output-to-string (s)))")).isEqualTo("\"\"");
+	}
+
+	@Test
+	void withOutputToStringDoesNotTouchStandardOutput() throws Exception {
+		assertThat(compileAndRun("(with-output-to-string (s) (princ \"hidden\" s)) (princ \"visible\")"))
+			.isEqualTo("visible");
+	}
+
+	@Test
+	void formatStreamDestinationWritesToStringStream() throws Exception {
+		assertThat(compileAndRun("(princ (with-output-to-string (s) (format s \"x=~a, y=~s~%\" 1 \"two\")))"))
+			.isEqualTo("x=1, y=\"two\"");
+	}
+
+	@Test
+	void printToStringStream() throws Exception {
+		assertThat(compileAndRun("(princ (with-output-to-string (s) (print 42 s)))")).isEqualTo("42");
+	}
+
+	@Test
+	void withInputFromStringReadsLinesAndData() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "first line
+				(1 2 3)
+				third")
+				  (print (read-line s))
+				  (print (read s))
+				  (print (read-line s))
+				  (print (read-line s)))""")).isEqualTo("\"first line\"\n(1 2 3)\n\"third\"\nnil");
+	}
+
+	@Test
+	void writeStringWithoutStreamPrintsToStdoutWithoutNewline() throws Exception {
+		assertThat(compileAndRun("(write-string \"no\") (write-string \" newline\")")).isEqualTo("no newline");
+	}
+
+	@Test
+	void writeToStringIsPrin1ToString() throws Exception {
+		assertThat(compileAndRun("(princ (write-to-string '(a \"b\" 3)))")).isEqualTo("(a \"b\" 3)");
+	}
+
+	@Test
+	void princStreamDesignatorTGoesToStandardOutput() throws Exception {
+		assertThat(compileAndRun("(princ \"a\" t) (princ \"b\" nil)")).isEqualTo("ab");
+	}
+
+	@Test
+	void freshLineTracksStreamRoutedStdoutWrites() throws Exception {
+		// princ via the runtime-dispatch path (t designator) must update the column
+		// tracking so a following fresh-line emits a newline.
+		assertThat(compileAndRun("(princ \"x\" t) (fresh-line) (princ \"y\")")).isEqualTo("x\ny");
+	}
+
+	@Test
 	void readLinesInLoop() throws Exception {
 		String file = tempDir.resolve("loop.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
@@ -3432,7 +3500,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
@@ -3443,12 +3511,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("208");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("210");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("208");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("210");
 	}
 
 	@Test

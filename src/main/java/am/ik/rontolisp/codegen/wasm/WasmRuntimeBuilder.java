@@ -774,8 +774,10 @@ final class WasmRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 
 		// Param: 0=fd (i32)
-		// Locals: 1=heap_ptr (i32), 2=pos (i32), 3=nread (i32), 4=eof_flag (i32)
-		w.write(4);
+		// Locals: 1=heap_ptr (i32), 2=pos (i32), 3=nread (i32), 4=eof_flag (i32),
+		// 5=rec (i32), 6=cursor (i32), 7=endp (i32), 8=llen (i32) (5-8 only for the
+		// string-stream branch; 2 and 3 are reused there as scan/copy cursors)
+		w.write(5);
 		w.write(1);
 		w.write(Type.I32); // local 1: heap_ptr
 		w.write(1);
@@ -784,6 +786,13 @@ final class WasmRuntimeBuilder {
 		w.write(Type.I32); // local 3: nread
 		w.write(1);
 		w.write(Type.I32); // local 4: eof_flag
+		w.write(4);
+		w.write(Type.I32); // locals 5-8: rec, cursor, endp, llen
+
+		// A negative fd is a string input stream (see WasmStringStreamRuntimeBuilder):
+		// return the next line of its [cursor, end) byte range as a fresh quote-framed
+		// heap string, or nil at end of input.
+		emitReadLineFromStringStream(w);
 
 		// heap_ptr = memory[HEAP_PTR_ADDR]
 		w.write(Instruction.I32_CONST);
@@ -980,6 +989,234 @@ final class WasmRuntimeBuilder {
 
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Emits the string-input-stream branch of {@code _read_line}: when the fd is
+	 * negative, its absolute value is an input record {@code [kind=0][cursor][end]} in
+	 * linear memory. Returns the next line (up to a newline or the end) as a fresh
+	 * quote-framed heap string with one trailing carriage return stripped (CRLF parity
+	 * with the file path), advances the cursor, and returns nil once the range is
+	 * exhausted. Locals: 0=fd, 1=heap_ptr, 2=scan pos (reused), 3=copy index (reused),
+	 * 5=rec, 6=cursor, 7=endp, 8=llen.
+	 */
+	private static void emitReadLineFromStringStream(WasmWriter w) {
+		final int FD = 0, HEAP = 1, POS = 2, I = 3, REC = 5, CURSOR = 6, ENDP = 7, LLEN = 8;
+		// if (fd < 0) { ... }
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(FD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		// rec = -fd ; cursor = rec.cursor ; endp = rec.end
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(FD);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(REC);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REC);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(CURSOR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REC);
+		w.write(Instruction.I32_LOAD, 0x02, 0x08);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(ENDP);
+		// if (cursor >= endp) return nil
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CURSOR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ENDP);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// pos = cursor ; while (pos < endp && memory[pos] != '\n') pos++
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CURSOR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ENDP);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x0A);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// llen = pos - cursor ; strip one trailing '\r'
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CURSOR);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CURSOR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x0D);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// heap = memory[HEAP_PTR_ADDR] ; grow(heap + llen + 2) ; bump the pointer
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(HEAP);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(HEAP);
+			w.write(Instruction.GET_LOCAL);
+			w.writeSignedLeb128(LLEN);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(2);
+			w.write(Instruction.I32_ADD);
+		});
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAP);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// memory[heap] = '"' ; copy the line bytes ; memory[heap + 1 + llen] = '"'
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(CURSOR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(I);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// rec.cursor = pos < endp ? pos + 1 (skip the newline) : endp
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(REC);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ENDP);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(POS);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(ENDP);
+		w.write(Instruction.END);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		// return struct.new string(heap, llen + 2)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(HEAP);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(LLEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 	}
 
 	/**

@@ -1259,6 +1259,34 @@ public final class LispNames {
 	/** The {@code write-sequence} macro (writes a vector to a binary stream). */
 	public static final String WRITE_SEQUENCE = "write-sequence";
 
+	// String streams
+
+	/** The {@code write-string} built-in function (a string to a stream, no newline). */
+	public static final String WRITE_STRING = "write-string";
+
+	/**
+	 * The {@code write-to-string} built-in function (a {@code prin1-to-string} alias).
+	 */
+	public static final String WRITE_TO_STRING = "write-to-string";
+
+	/** The {@code with-output-to-string} macro (collect output into a string). */
+	public static final String WITH_OUTPUT_TO_STRING = "with-output-to-string";
+
+	/** The {@code with-input-from-string} macro (read from a string as a stream). */
+	public static final String WITH_INPUT_FROM_STRING = "with-input-from-string";
+
+	/** The internal {@code %make-string-output-stream} helper (string-builder stream). */
+	public static final String MAKE_STRING_OUTPUT_STREAM = "%make-string-output-stream";
+
+	/** The internal {@code %make-string-input-stream} helper (read from a string). */
+	public static final String MAKE_STRING_INPUT_STREAM = "%make-string-input-stream";
+
+	/**
+	 * The internal {@code %string-stream-contents} helper (the string accumulated by a
+	 * {@code %make-string-output-stream} stream).
+	 */
+	public static final String STRING_STREAM_CONTENTS = "%string-stream-contents";
+
 	// Packages
 
 	/** The {@code in-package} directive that switches the current package. */

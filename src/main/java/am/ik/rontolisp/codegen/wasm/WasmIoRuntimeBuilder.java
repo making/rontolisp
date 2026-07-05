@@ -106,15 +106,27 @@ final class WasmIoRuntimeBuilder {
 		WasmLispCompiler.StringTable.StringEntry t = st.addString("t");
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: FD_VAL=0 (ref) ; no locals
-		w.write(0);
-		// fd_close(i31.get_s(fd_val)) ; drop errno
+		// param: FD_VAL=0 (ref) ; i32 local: FD=1
+		w.write(1);
+		w.write(1);
+		w.write(Type.I32);
+		final int FD = 1;
+		// fd = i31.get_s(fd_val)
 		getLocal(w, 0);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// fd_close only for a real fd -- a negative handle is a string stream whose
+		// record just becomes garbage (the bump allocator never frees).
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, FD);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
 		w.write(Instruction.DROP);
+		w.write(Instruction.END);
 		// return t
 		i32(w, t.offset());
 		i32(w, t.length());
@@ -134,11 +146,12 @@ final class WasmIoRuntimeBuilder {
 	static byte[] buildWriteLineBody(WasmLispCompiler.StringTable st) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4
+		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5,
+		// CHUNK=6, TAIL=7 (the last three only for the string-stream branch)
 		w.write(1);
-		w.write(3);
+		w.write(6);
 		w.write(Type.I32);
-		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4;
+		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4, REC = 5, CHUNK = 6, TAIL = 7;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 
@@ -163,6 +176,30 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		w.write(Instruction.END);
 		setLocal(w, FD);
+		// A negative handle is a string output stream: append the content and a newline
+		// as chunks (see WasmStringStreamRuntimeBuilder) and return the string.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		WasmStringStreamRuntimeBuilder.emitAppendChunk(w, REC, CHUNK, TAIL, () -> {
+			getLocal(w, OFF);
+			i32(w, 1);
+			w.write(Instruction.I32_ADD);
+		}, () -> {
+			getLocal(w, LEN);
+			i32(w, 2);
+			w.write(Instruction.I32_SUB);
+		});
+		WasmStringStreamRuntimeBuilder.emitAppendChunk(w, REC, CHUNK, TAIL, () -> i32(w, st.newline.offset()),
+				() -> i32(w, st.newline.length()));
+		getLocal(w, STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 		// iov.ptr = off + 1 ; iov.len = len - 2 (strip surrounding quotes)
 		i32(w, IOV);
 		getLocal(w, OFF);

@@ -1,8 +1,8 @@
 # prin1
 
-`(prin1 object)`
+`(prin1 object &optional stream)`
 
-Writes `object` to standard output in its readable form, exactly like `print` but without the trailing newline. Strings are printed with surrounding quotes and characters in `#\` syntax, so the output could be read back by `read`. Returns `object`.
+Writes `object` to standard output in its readable form, exactly like `print` but without the trailing newline. Strings are printed with surrounding quotes and characters in `#\` syntax, so the output could be read back by `read`. With the optional stream argument the output goes to that stream instead of standard output. Returns `object`.
 
 ```lisp
 (prin1 "hello")

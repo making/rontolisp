@@ -231,7 +231,11 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.GENSYM, List.of(), List.of(call(LispNames.GENSYM))),
 			// values: variadic; with no runtime multiple-value representation the
 			// function value yields its primary value ((car nil) is nil for zero args)
-			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"), List.of(call(LispNames.CAR, "r"))));
+			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"), List.of(call(LispNames.CAR, "r"))),
+			// write-string: the 1-arg (standard output) form; write-to-string is a
+			// prin1-to-string alias
+			unary(LispNames.WRITE_STRING),
+			new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a"))));
 
 	private static LispVal listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;

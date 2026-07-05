@@ -72,6 +72,8 @@ public final class LispMacroExpander {
 			case LispNames.MULTIPLE_VALUE_CALL -> expandMultipleValueCall(cons);
 			case LispNames.NTH_VALUE -> expandNthValue(cons);
 			case LispNames.DESTRUCTURING_BIND -> expandDestructuringBind(cons);
+			case LispNames.WITH_OUTPUT_TO_STRING -> expandWithOutputToString(cons);
+			case LispNames.WITH_INPUT_FROM_STRING -> expandWithInputFromString(cons);
 			default -> null;
 		};
 	}
@@ -3483,6 +3485,101 @@ public final class LispMacroExpander {
 	private static final String WOF_RESULT_VAR = "__wof_result";
 
 	/**
+	 * Expands (with-output-to-string (var) body...) into a string-builder stream bound to
+	 * {@code var}; every stream-directed output form in the body appends, and the whole
+	 * form returns the accumulated string.
+	 *
+	 * <pre>
+	 * (with-output-to-string (s) body...) ->
+	 *   (let ((s (%make-string-output-stream)))
+	 *     (progn body...)
+	 *     (let ((__wots_result (%string-stream-contents s)))
+	 *       (close s)
+	 *       __wots_result))
+	 * </pre>
+	 * @param cons the with-output-to-string expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithOutputToString(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || spec.cdr() != LispNil.INSTANCE
+				|| !(spec.car() instanceof LispSymbol var)) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_OUTPUT_TO_STRING + " expects a (var) spec as the first argument");
+		}
+		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		LispSymbol result = new LispSymbol(WOTS_RESULT_VAR);
+		// (let ((__wots_result (%string-stream-contents var))) (close var) __wots_result)
+		LispVal innerBindings = new LispCons(listToCons(List.of(result, callOf(LispNames.STRING_STREAM_CONTENTS, var))),
+				LispNil.INSTANCE);
+		LispVal innerLet = listToCons(
+				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
+		LispVal bindings = new LispCons(
+				listToCons(List.of(var, listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM))))),
+				LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, bodyExpr, innerLet));
+	}
+
+	private static final String WOTS_RESULT_VAR = "__wots_result";
+
+	/**
+	 * Expands (with-input-from-string (var string) body...) into a string-backed input
+	 * stream bound to {@code var}; {@code read}/{@code read-line} consume from the
+	 * string.
+	 *
+	 * <pre>
+	 * (with-input-from-string (s "text") body...) ->
+	 *   (let ((s (%make-string-input-stream "text")))
+	 *     (let ((__wifs_result (progn body...)))
+	 *       (close s)
+	 *       __wifs_result))
+	 * </pre>
+	 * @param cons the with-input-from-string expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithInputFromString(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_INPUT_FROM_STRING + " expects a (var string) spec as the first argument");
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() != 2 || !(specParts.get(0) instanceof LispSymbol var)) {
+			throw new UnsupportedOperationException(
+					LispNames.WITH_INPUT_FROM_STRING + " supports only a (var string) spec");
+		}
+		LispVal string = specParts.get(1);
+		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		LispSymbol result = new LispSymbol(WIFS_RESULT_VAR);
+		// (let ((__wifs_result body-expr)) (close var) __wifs_result)
+		LispVal innerBindings = new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE);
+		LispVal innerLet = listToCons(
+				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
+		// (let ((var (%make-string-input-stream string))) inner-let)
+		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_INPUT_STREAM), string));
+		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
+	}
+
+	private static final String WIFS_RESULT_VAR = "__wifs_result";
+
+	/**
+	 * Wraps a macro body in {@code (progn body...)}, or nil for an empty body (a
+	 * body-less progn does not compile).
+	 * @param body the body forms
+	 * @return the single body expression
+	 */
+	private static LispVal prognOrNil(List<LispVal> body) {
+		if (body.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		List<LispVal> prognParts = new java.util.ArrayList<>();
+		prognParts.add(new LispSymbol(LispNames.PROGN));
+		prognParts.addAll(body);
+		return listToCons(prognParts);
+	}
+
+	/**
 	 * Classifies a literal {@code :element-type} argument: {@code '(unsigned-byte 8)} is
 	 * binary, {@code 'character} is text; anything else (including a non-literal
 	 * expression) is rejected so the compilers can resolve the file mode at compile time.
@@ -3808,15 +3905,16 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (format destination control-string args...). The control string must be a
 	 * literal string and the destination must be the literal {@code t} (print to standard
-	 * output, return nil) or {@code nil} (return the formatted string). Supported
-	 * directives: {@code ~a}/{@code ~A} (princ), {@code ~s}/{@code ~S} (prin1),
-	 * {@code ~d}/{@code ~D} (decimal, with {@code :} comma grouping and {@code @} sign),
-	 * {@code ~f}/{@code ~F} (fixed-decimal float), {@code ~e}/{@code ~E} (exponential
-	 * float), {@code ~$} (monetary), {@code ~%} (newline), {@code ~&} (fresh-line) and
-	 * {@code ~~} (a literal tilde). Directives accept prefix parameters (numbers,
-	 * {@code 'c}, {@code v}, {@code #}) and the {@code :}/{@code @} modifiers; value
-	 * directives that need padding/grouping/rounding expand into the {@code %fmt-*}
-	 * runtime helpers.
+	 * output, return nil), {@code nil} (return the formatted string), or a stream
+	 * expression (build the string like {@code nil}, write it with one
+	 * {@code write-string} call, return nil). Supported directives: {@code ~a}/{@code ~A}
+	 * (princ), {@code ~s}/{@code ~S} (prin1), {@code ~d}/{@code ~D} (decimal, with
+	 * {@code :} comma grouping and {@code @} sign), {@code ~f}/{@code ~F} (fixed-decimal
+	 * float), {@code ~e}/{@code ~E} (exponential float), {@code ~$} (monetary),
+	 * {@code ~%} (newline), {@code ~&} (fresh-line) and {@code ~~} (a literal tilde).
+	 * Directives accept prefix parameters (numbers, {@code 'c}, {@code v}, {@code #}) and
+	 * the {@code :}/{@code @} modifiers; value directives that need
+	 * padding/grouping/rounding expand into the {@code %fmt-*} runtime helpers.
 	 *
 	 * <pre>
 	 * (format t "Hello ~a!~%" name) ->
@@ -3843,6 +3941,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("format expects a destination and a control string");
 		}
 		boolean toString;
+		LispVal streamDest = null;
 		if (parts.get(1) instanceof LispTrue) {
 			toString = false;
 		}
@@ -3850,9 +3949,11 @@ public final class LispMacroExpander {
 			toString = true;
 		}
 		else {
-			throw new UnsupportedOperationException(
-					"format supports only t (standard output) or nil (string) as destination, got: "
-							+ parts.get(1).print());
+			// A stream destination: build the string like format nil, then write it to
+			// the
+			// stream in one (write-string ...) call and return nil.
+			toString = true;
+			streamDest = parts.get(1);
 		}
 		if (!(parts.get(2) instanceof LispString control)) {
 			throw new UnsupportedOperationException(
@@ -3874,7 +3975,18 @@ public final class LispMacroExpander {
 			for (int i = 1; i < forms.size(); i++) {
 				result = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), result, forms.get(i)));
 			}
-			forms = new java.util.ArrayList<>(List.of(result));
+			if (streamDest != null) {
+				// (write-string <string> __format_stream) nil -- the stream temp is
+				// bound first so the destination is evaluated before the arguments.
+				LispSymbol streamVar = new LispSymbol(FORMAT_STREAM_VAR);
+				bindings.add(0, listToCons(List.of(streamVar, streamDest)));
+				forms = new java.util.ArrayList<>(
+						List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), result, streamVar)),
+								LispNil.INSTANCE));
+			}
+			else {
+				forms = new java.util.ArrayList<>(List.of(result));
+			}
 		}
 		else {
 			// format t returns nil
@@ -3892,6 +4004,8 @@ public final class LispMacroExpander {
 	}
 
 	private static final String FORMAT_ARG_VAR = "__format_arg";
+
+	private static final String FORMAT_STREAM_VAR = "__format_stream";
 
 	/**
 	 * A parsed unit of a format control string: either a literal text run, a

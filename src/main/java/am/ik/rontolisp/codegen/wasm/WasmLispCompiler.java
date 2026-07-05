@@ -359,10 +359,26 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_WRITE_BYTE = FUNC_READ_BYTE + 1;
 
+	// String-stream runtime (with-output-to-string / with-input-from-string): a string
+	// stream is a NEGATIVE i31 handle whose absolute value is the address of a record in
+	// linear memory (a real WASI fd is never negative). An output record heads a chunk
+	// list referencing existing string bytes (the bump allocator never moves them); an
+	// input record holds a cursor/end byte range. Appended before FUNC_USER_BASE like the
+	// mod/rem helpers, so no import/FUNC_START index shifts and the component blobs are
+	// unaffected. See WasmStringStreamRuntimeBuilder.
+	static final int FUNC_WRITE_STREAM_STR = FUNC_WRITE_BYTE + 1;
+
+	static final int FUNC_MAKE_STR_OSTREAM = FUNC_WRITE_STREAM_STR + 1;
+
+	static final int FUNC_MAKE_STR_ISTREAM = FUNC_MAKE_STR_OSTREAM + 1;
+
+	static final int FUNC_STR_STREAM_CONTENTS = FUNC_MAKE_STR_ISTREAM + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
-	// promise-await helper, and the two binary stream helpers.
-	static final int FUNC_USER_BASE = FUNC_WRITE_BYTE + 1;
+	// promise-await helper, the two binary stream helpers, and the four string-stream
+	// helpers.
+	static final int FUNC_USER_BASE = FUNC_STR_STREAM_CONTENTS + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -1610,6 +1626,14 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (ref null eq)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _write_byte (byte, stream)
 															// -> (ref null eq)
+				// string-stream runtime helpers
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _write_stream_str (str,
+															// stream) -> (ref null eq)
+				fnDef.addFunction(TYPE_READ_LINE); // _make_str_ostream () -> (ref null
+													// eq)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _make_str_istream (str)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _str_stream_contents
+															// (stream)
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1818,6 +1842,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());
 				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
+				// string-stream runtime helper bodies (FUNC_WRITE_STREAM_STR,
+				// FUNC_MAKE_STR_OSTREAM, FUNC_MAKE_STR_ISTREAM, FUNC_STR_STREAM_CONTENTS)
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildWriteStreamStrBody());
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody());
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody());
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildContentsBody());
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);

@@ -82,6 +82,7 @@ categories:
       - { slug: fresh-line, name: "fresh-line" }
       - { slug: princ-to-string, name: "princ-to-string" }
       - { slug: prin1-to-string, name: "prin1-to-string" }
+      - { slug: write-to-string, name: "write-to-string" }
   - title: "Strings"
     functions:
       - { slug: concatenate, name: "concatenate" }
@@ -230,6 +231,7 @@ categories:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
       - { slug: write-line, name: "write-line" }
+      - { slug: write-string, name: "write-string" }
       - { slug: read-byte, name: "read-byte" }
       - { slug: write-byte, name: "write-byte" }
       - { slug: read-sequence, name: "read-sequence" }

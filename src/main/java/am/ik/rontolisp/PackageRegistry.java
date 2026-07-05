@@ -39,7 +39,8 @@ public final class PackageRegistry {
 			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
 			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET, LispNames.LABELS,
 			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
-			LispNames.NTH_VALUE, LispNames.DESTRUCTURING_BIND);
+			LispNames.NTH_VALUE, LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING,
+			LispNames.WITH_INPUT_FROM_STRING);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -88,7 +89,7 @@ public final class PackageRegistry {
 			LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_DIMENSIONS,
 			LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE, LispNames.ROW_MAJOR_AREF,
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND,
-			LispNames.MACROEXPAND_1, LispNames.VALUES);
+			LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR);
@@ -99,7 +100,8 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
 			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH, LispNames.ASET,
-			LispNames.ROW_MAJOR_ASET);
+			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
+			LispNames.STRING_STREAM_CONTENTS);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

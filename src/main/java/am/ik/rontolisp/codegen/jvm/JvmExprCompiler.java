@@ -195,6 +195,17 @@ final class JvmExprCompiler {
 				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
+				case LispNames.WRITE_STRING -> JvmStringStreamCompiler.compileWriteString(cons, ctx, className);
+				case LispNames.WRITE_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
+				case LispNames.MAKE_STRING_OUTPUT_STREAM ->
+					JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);
+				case LispNames.MAKE_STRING_INPUT_STREAM ->
+					JvmStringStreamCompiler.compileMakeInputStream(cons, ctx, className);
+				case LispNames.STRING_STREAM_CONTENTS -> JvmStringStreamCompiler.compileContents(cons, ctx, className);
+				case LispNames.WITH_OUTPUT_TO_STRING ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons), ctx, className);
+				case LispNames.WITH_INPUT_FROM_STRING ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons), ctx, className);
 				case LispNames.WITH_OPEN_FILE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
 				case LispNames.READ_BYTE -> JvmReadByteCompiler.compile(cons, ctx, className);

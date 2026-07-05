@@ -65,6 +65,26 @@ final class JvmIoRuntimeBuilder {
 
 	static final String WRITE_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String WRITE_STR_METHOD = "_writeStr";
+
+	static final String WRITE_STR_DESC = "(Ljava/lang/String;Ljava/lang/Object;)V";
+
+	static final String WRITE_STRING_METHOD = "_writeString";
+
+	static final String WRITE_STRING_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String MAKE_STRING_OUTPUT_STREAM_METHOD = "_makeStringOutputStream";
+
+	static final String MAKE_STRING_OUTPUT_STREAM_DESC = "()Ljava/lang/Object;";
+
+	static final String MAKE_STRING_INPUT_STREAM_METHOD = "_makeStringInputStream";
+
+	static final String MAKE_STRING_INPUT_STREAM_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String STRING_STREAM_CONTENTS_METHOD = "_stringStreamContents";
+
+	static final String STRING_STREAM_CONTENTS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	private final ConstantPool cp;
 
 	private final FieldrefConstant streamsField;
@@ -152,6 +172,24 @@ final class JvmIoRuntimeBuilder {
 	private final MethodrefConstant printlnStr;
 
 	private final MethodrefConstant readLineHelper;
+
+	private final MethodrefConstant printStr;
+
+	private final MethodrefConstant stringCharAt;
+
+	private final FieldrefConstant colField;
+
+	private final ClassConstant stringWriterClass;
+
+	private final MethodrefConstant stringWriterInit;
+
+	private final MethodrefConstant stringWriterToString;
+
+	private final ClassConstant stringReaderClass;
+
+	private final MethodrefConstant stringReaderInit;
+
+	private final MethodrefConstant writeStrMethod;
 
 	private final ConstantPool.StringConstant tStr;
 
@@ -243,6 +281,23 @@ final class JvmIoRuntimeBuilder {
 		this.quoteStr = cp.addString("\"");
 		this.newlineStr = cp.addString("\n");
 		this.eofStr = cp.addString("read-byte: end of file");
+		ClassConstant printStreamClass = cp.addClass(cp.addUtf8("java/io/PrintStream"));
+		this.printStr = cp.addMethodref(printStreamClass,
+				cp.addNameAndType(cp.addUtf8("print"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.stringCharAt = cp.addMethodref(this.stringClass,
+				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		this.colField = cp.addFieldref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFreshLineCompiler.COL_FIELD),
+				cp.addUtf8(JvmFreshLineCompiler.COL_DESC)));
+		this.stringWriterClass = cp.addClass(cp.addUtf8("java/io/StringWriter"));
+		this.stringWriterInit = cp.addMethodref(this.stringWriterClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+		this.stringWriterToString = cp.addMethodref(this.stringWriterClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		this.stringReaderClass = cp.addClass(cp.addUtf8("java/io/StringReader"));
+		this.stringReaderInit = cp.addMethodref(this.stringReaderClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.writeStrMethod = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(WRITE_STR_METHOD), cp.addUtf8(WRITE_STR_DESC)));
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -266,6 +321,15 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
 				buildWriteByte()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC), 4, 3,
+				buildWriteString()));
+		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_METHOD),
+				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), 5, 2, buildMakeStringOutputStream()));
+		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_METHOD),
+				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 7, 4, buildMakeStringInputStream()));
+		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
+				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 2, buildStringStreamContents()));
 		return ms;
 	}
 
@@ -841,6 +905,286 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.outputStreamWrite.index());
 		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _writeStr(String content, Object handle) -> void}. Writes an
+	 * already-rendered content string to the stream (a {@code Writer} table entry), or to
+	 * standard output (updating the {@code _col} fresh-line tracking) when the handle is
+	 * not a stream handle ({@code null} = nil, {@code "t"} = t). The routing sink of the
+	 * print-family optional stream argument and the write-string built-in.
+	 */
+	private List<Integer> buildWriteStr() {
+		// Slots: 0=content (String), 1=handle
+		List<Integer> code = new ArrayList<>();
+		// if (handle instanceof Long) { ((Writer) _streams[idx]).write(content); return;
+		// }
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifStdoutPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.writerClass.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.writerWrite.index());
+		code.add(Opcode.RETURN);
+		patchBranch(code, ifStdoutPos, code.size());
+		// System.out.print(content);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemOut.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.printStr.index());
+		// if (content.length() != 0) _col = content.charAt(len - 1) == '\n' ? 0 : 1;
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		int ifEmptyPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringCharAt.index());
+		code.add(Opcode.BIPUSH);
+		code.add(10);
+		int ifNotNewlinePos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		code.add(Opcode.ICONST_0);
+		int gotoStorePos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotNewlinePos, code.size());
+		code.add(Opcode.ICONST_1);
+		patchBranch(code, gotoStorePos, code.size());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.colField.index());
+		patchBranch(code, ifEmptyPos, code.size());
+		code.add(Opcode.RETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _writeString(Object str, Object handle) -> str}. Writes the string content
+	 * (without the surrounding quotes) to the stream via {@code _writeStr} -- write-line
+	 * minus the newline.
+	 */
+	private List<Integer> buildWriteString() {
+		// Slots: 0=str, 1=handle, 2=content (String)
+		List<Integer> code = new ArrayList<>();
+		// content = ((String) str).substring(1, length - 1);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringClass.index());
+		code.add(Opcode.ASTORE_2);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringSubstring.index());
+		// _writeStr(content, handle); return str;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.writeStrMethod.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * Emits the shared stream-table prologue: lazy-init {@code _streams}, load the array
+	 * into {@code arrSlot} and the count into {@code countSlot}, growing the table when
+	 * full (the same shape as the {@code _open} prologue).
+	 */
+	private void emitEnsureTableCapacity(List<Integer> code, int arrSlot, int countSlot) {
+		// if (_streams == null) _streams = new Object[16];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		int ifInitPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.BIPUSH);
+		code.add(16);
+		code.add(Opcode.ANEWARRAY);
+		emitU2(code, this.objectClass.index());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.streamsField.index());
+		patchBranch(code, ifInitPos, code.size());
+		// arr = _streams; count = _streamCount;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ASTORE);
+		code.add(arrSlot);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamCountField.index());
+		code.add(Opcode.ISTORE);
+		code.add(countSlot);
+		// if (count >= arr.length) { arr = Arrays.copyOf(arr, count * 2); _streams = arr;
+		// }
+		code.add(Opcode.ILOAD);
+		code.add(countSlot);
+		code.add(Opcode.ALOAD);
+		code.add(arrSlot);
+		code.add(Opcode.ARRAYLENGTH);
+		int ifGrowPos = code.size();
+		code.add(Opcode.IF_ICMPLT);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(arrSlot);
+		code.add(Opcode.ILOAD);
+		code.add(countSlot);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.IMUL);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.arraysCopyOf.index());
+		code.add(Opcode.ASTORE);
+		code.add(arrSlot);
+		code.add(Opcode.ALOAD);
+		code.add(arrSlot);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.streamsField.index());
+		patchBranch(code, ifGrowPos, code.size());
+	}
+
+	/**
+	 * Emits {@code arr[count] = <stream in stack top>; _streamCount = count + 1; return
+	 * Long.valueOf((long) count);} -- the shared stream-table epilogue. The caller must
+	 * have pushed {@code arr}, {@code count} and the new entry.
+	 */
+	private void emitStoreAndReturnHandle(List<Integer> code, int countSlot) {
+		code.add(Opcode.AASTORE);
+		code.add(Opcode.ILOAD);
+		code.add(countSlot);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.streamCountField.index());
+		code.add(Opcode.ILOAD);
+		code.add(countSlot);
+		code.add(Opcode.I2L);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.longValueOf.index());
+		code.add(Opcode.ARETURN);
+	}
+
+	/**
+	 * {@code _makeStringOutputStream() -> Long handle}. Stores a fresh
+	 * {@code StringWriter} in the stream table -- the string-builder stream behind
+	 * with-output-to-string.
+	 */
+	private List<Integer> buildMakeStringOutputStream() {
+		// Slots: 0=arr, 1=count
+		List<Integer> code = new ArrayList<>();
+		emitEnsureTableCapacity(code, 0, 1);
+		// arr[count] = new StringWriter();
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ILOAD_1);
+		code.add(Opcode.NEW);
+		emitU2(code, this.stringWriterClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.stringWriterInit.index());
+		emitStoreAndReturnHandle(code, 1);
+		return code;
+	}
+
+	/**
+	 * {@code _makeStringInputStream(Object str) -> Long handle}. Stores a
+	 * {@code BufferedReader} over the string content (without the surrounding quotes) in
+	 * the stream table, so read-line/read consume it like any input stream -- the
+	 * string-backed stream behind with-input-from-string.
+	 */
+	private List<Integer> buildMakeStringInputStream() {
+		// Slots: 0=str, 1=arr, 2=count, 3=content (String)
+		List<Integer> code = new ArrayList<>();
+		// content = ((String) str).substring(1, length - 1);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringClass.index());
+		code.add(Opcode.ASTORE_3);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringSubstring.index());
+		code.add(Opcode.ASTORE_3);
+		emitEnsureTableCapacity(code, 1, 2);
+		// arr[count] = new BufferedReader(new StringReader(content));
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.NEW);
+		emitU2(code, this.bufferedReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.NEW);
+		emitU2(code, this.stringReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.stringReaderInit.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.bufferedReaderInit.index());
+		emitStoreAndReturnHandle(code, 2);
+		return code;
+	}
+
+	/**
+	 * {@code _stringStreamContents(Object handle) -> String}. Returns the string
+	 * accumulated by a {@code StringWriter} table entry, wrapped in the internal
+	 * {@code '"'} prefix/suffix string format.
+	 */
+	private List<Integer> buildStringStreamContents() {
+		// Slots: 0=handle, 1=content (String)
+		List<Integer> code = new ArrayList<>();
+		// content = ((StringWriter) _streams[idx]).toString();
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringWriterClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringWriterToString.index());
+		code.add(Opcode.ASTORE_1);
+		// return "\"".concat(content).concat("\"");
+		emitLdc(code, this.quoteStr.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringConcat.index());
+		emitLdc(code, this.quoteStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringConcat.index());
 		code.add(Opcode.ARETURN);
 		return code;
 	}

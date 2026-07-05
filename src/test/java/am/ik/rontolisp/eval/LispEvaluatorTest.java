@@ -489,6 +489,77 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalWithOutputToStringCollectsPrintFamilyOutput() {
+		LispVal result = eval("""
+				(with-output-to-string (s)
+				  (princ "a=" s)
+				  (princ 42 s)
+				  (terpri s)
+				  (prin1 "q" s)
+				  (write-line " end" s)
+				  (write-string "tail" s))""");
+		assertThat(result).isEqualTo(new LispString("a=42\n\"q\" end\ntail"));
+	}
+
+	@Test
+	void evalWithOutputToStringEmptyBody() {
+		assertThat(eval("(with-output-to-string (s))")).isEqualTo(new LispString(""));
+	}
+
+	@Test
+	void evalWithOutputToStringDoesNotTouchStandardOutput() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(with-output-to-string (s) (princ \"hidden\" s))"));
+		assertThat(baos.toString()).isEmpty();
+	}
+
+	@Test
+	void evalFormatStreamDestination() {
+		LispVal result = eval("(with-output-to-string (s) (format s \"x=~a, y=~s~%\" 1 \"two\"))");
+		assertThat(result).isEqualTo(new LispString("x=1, y=\"two\"\n"));
+	}
+
+	@Test
+	void evalPrintToStringStream() {
+		LispVal result = eval("(with-output-to-string (s) (print 42 s))");
+		assertThat(result).isEqualTo(new LispString("42\n"));
+	}
+
+	@Test
+	void evalWithInputFromStringReadsLinesAndData() {
+		LispVal result = eval("""
+				(with-input-from-string (s "first line
+				(1 2 3)
+				third")
+				  (list (read-line s) (read s) (read-line s) (read-line s)))""");
+		assertThat(result.print()).isEqualTo("(\"first line\" (1 2 3) \"third\" nil)");
+	}
+
+	@Test
+	void evalWriteStringToStandardOutput() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(write-string \"no newline\")"));
+		assertThat(baos.toString()).isEqualTo("no newline");
+		assertThat(result).isEqualTo(new LispString("no newline"));
+	}
+
+	@Test
+	void evalWriteToString() {
+		assertThat(eval("(write-to-string '(a \"b\" 3))")).isEqualTo(new LispString("(a \"b\" 3)"));
+	}
+
+	@Test
+	void evalPrincStreamDesignatorTAndNilGoToStandardOutput() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(princ \"a\" t)"));
+		evaluator.eval(LispReader.readFromString("(princ \"b\" nil)"));
+		assertThat(baos.toString()).isEqualTo("ab");
+	}
+
+	@Test
 	void evalFormat() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
@@ -810,9 +881,9 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalFormatUnsupportedDestination() {
-		assertThatThrownBy(() -> eval("(format 'foo \"~a\" 1)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("destination");
+	void evalFormatStreamDestinationRejectsNonStream() {
+		assertThatThrownBy(() -> eval("(format 'foo \"~a\" 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("not an output stream");
 	}
 
 	@Test
@@ -3482,7 +3553,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-open-file)");
+				"(and assert case ccase check-type cond decf declaim declare destructuring-bind do do* dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
@@ -3512,9 +3583,11 @@ class LispEvaluatorTest {
 			.contains("gensym", "macroexpand", "macroexpand-1")
 			.contains("require", "provide")
 			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
-			.doesNotContain("%puthash", "%aset", "%row-major-aset")
+			.contains("write-string", "write-to-string")
+			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
+					"%make-string-input-stream", "%string-stream-contents")
 			.isSorted()
-			.hasSize(208);
+			.hasSize(210);
 	}
 
 	@Test
