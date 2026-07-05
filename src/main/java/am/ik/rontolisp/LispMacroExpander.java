@@ -3233,14 +3233,37 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (nconc a b) into a let/while walk that destructively links the last cons of
-	 * {@code a} to {@code b} and returns {@code a} (or {@code b} when {@code a} is
-	 * empty). Both operands are bound once to avoid re-evaluation.
+	 * Expands the variadic (nconc ...) form. {@code (nconc)} yields nil,
+	 * {@code (nconc x)} yields {@code x}, and {@code (nconc a b c ...)} right-associates
+	 * into nested 2-arg {@link #expandNconc2} bodies so each non-nil list's last cons is
+	 * destructively linked to the following argument, returning the first non-nil
+	 * argument. The last argument may be any object.
 	 * @param cons the nconc expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNconc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		// parts.get(0) is the nconc symbol; the operands follow.
+		List<LispVal> operands = parts.subList(1, parts.size());
+		if (operands.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		LispVal result = operands.get(operands.size() - 1);
+		for (int i = operands.size() - 2; i >= 0; i--) {
+			result = expandNconc2(operands.get(i), result);
+		}
+		return result;
+	}
+
+	/**
+	 * Expands (nconc a b) into a let/while walk that destructively links the last cons of
+	 * {@code a} to {@code b} and returns {@code a} (or {@code b} when {@code a} is
+	 * empty). Both operands are bound once to avoid re-evaluation.
+	 * @param aForm the first operand form
+	 * @param bForm the second operand form
+	 * @return the expanded expression
+	 */
+	private static LispVal expandNconc2(LispVal aForm, LispVal bForm) {
 		LispSymbol a = new LispSymbol("__nconc_a");
 		LispSymbol b = new LispSymbol("__nconc_b");
 		LispSymbol tail = new LispSymbol("__nconc_tail");
@@ -3257,8 +3280,7 @@ public final class LispMacroExpander {
 		LispVal innerBindings = new LispCons(listToCons(List.of(tail, a)), LispNil.INSTANCE);
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, whileExpr, rplacd, a));
 		LispVal ifExpr = makeIf(callOf(LispNames.ATOM, a), b, innerLet);
-		LispVal outerBindings = listToCons(
-				List.of(listToCons(List.of(a, parts.get(1))), listToCons(List.of(b, parts.get(2)))));
+		LispVal outerBindings = listToCons(List.of(listToCons(List.of(a, aForm)), listToCons(List.of(b, bForm))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, ifExpr));
 	}
 

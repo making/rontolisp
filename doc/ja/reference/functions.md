@@ -120,7 +120,7 @@
 | `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)`(破壊的な `remove-if-not`) |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(旧要素と `eql` になるすべての要素を新要素に置き換えたコピー。省略可能な `:test`/`:key` キーワードを取ります) |
 | `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(破壊的な `substitute`。マッチするcarをその場で書き換えます。省略可能な `:test`/`:key` キーワードを取ります) |
-| `nconc` | `(nconc (list 1 2) (list 3 4))` | `(1 2 3 4)`(2つのリストを破壊的に連結します。引数は2つのみ) |
+| `nconc` | `(nconc (list 1 2) (list 3 4) (list 5))` | `(1 2 3 4 5)`(任意個数のリストを破壊的に連結し、最初の非 `nil` 引数を返します) |
 | `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)`(リストの浅いコピー) |
 | `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)`(各 `cdr` を繋ぎ替えてリストを破壊的に反転します。戻り値を使ってください) |
 | `make-list` | `(make-list 3)` | `(nil nil nil)`(n個のnil要素のリスト。`:initial-element` なし) |

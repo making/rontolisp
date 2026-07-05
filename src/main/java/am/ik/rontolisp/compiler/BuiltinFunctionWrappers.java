@@ -156,6 +156,18 @@ public final class BuiltinFunctionWrappers {
 				List.of(foldReduce(name, call(LispNames.CDR, "r"), call(LispNames.CAR, "r"))));
 	}
 
+	// Variadic wrapper for nconc: (lambda (&rest r) (if r (reduce (lambda (a x) (nconc a
+	// x)) r) nil)). A left fold over the 2-arg nconc yields correct CL semantics -- each
+	// pair links the accumulator's last cdr to the next argument and the fold returns the
+	// first non-nil argument; reduce returns a lone element unchanged, and the guard maps
+	// zero args to nil.
+	private static WrapperDef variadicNconc() {
+		LispVal reduce = listToCons(
+				List.of(new LispSymbol(LispNames.REDUCE), foldLambda(LispNames.NCONC), new LispSymbol("r")));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), reduce, LispNil.INSTANCE));
+		return new WrapperDef(LispNames.NCONC, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
 	// Variadic wrapper for - and /, which have distinct one-argument semantics
 	// ((- x) = -x, (/ x) = 1/x) from the multi-argument left fold:
 	// (lambda (&rest r) (if (cdr r) (reduce ... (cdr r) :initial-value (car r))
@@ -193,8 +205,8 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.POSITION_IF_NOT), binary(LispNames.COUNT), binary(LispNames.COUNT_IF),
 			binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF), binary(LispNames.RASSOC), ternary(LispNames.ACONS),
 			binary(LispNames.PAIRLIS), unary(LispNames.COPY_ALIST), binary(LispNames.GETF),
-			unary(LispNames.REMOVE_DUPLICATES), binary(LispNames.NCONC), unary(LispNames.IDENTITY),
-			unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE), unary(LispNames.MAKE_LIST), binary(LispNames.UNION),
+			unary(LispNames.REMOVE_DUPLICATES), variadicNconc(), unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST),
+			unary(LispNames.NREVERSE), unary(LispNames.MAKE_LIST), binary(LispNames.UNION),
 			binary(LispNames.INTERSECTION), binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN),
 			binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF),
 			binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE), binary(LispNames.DELETE_IF),

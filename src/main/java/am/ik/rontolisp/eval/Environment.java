@@ -1409,20 +1409,40 @@ public final class Environment implements Scope {
 			return seqResult(args.get(0), result);
 		}));
 		env.defineFunction(LispNames.NCONC, new LispFunction(LispNames.NCONC, args -> {
-			requireArgCount(LispNames.NCONC, args, 2);
-			LispVal a = args.get(0);
-			LispVal b = args.get(1);
-			// Destructively link the last cons of 'a' to 'b'; return 'b' when 'a' is
-			// empty.
-			if (!(a instanceof LispCons head)) {
-				return b;
+			// Variadic: (nconc) = nil, (nconc x) = x, otherwise destructively link each
+			// non-nil list's last cdr to the next argument, returning the first non-nil
+			// argument (the last argument may be any object).
+			LispVal result = LispNil.INSTANCE;
+			LispCons pendingTail = null; // last cons of the accumulated result so far
+			for (int i = 0; i < args.size(); i++) {
+				LispVal cur = args.get(i);
+				boolean last = (i == args.size() - 1);
+				if (cur instanceof LispCons head) {
+					if (pendingTail != null) {
+						pendingTail.setCdr(head);
+					}
+					if (result == LispNil.INSTANCE) {
+						result = head;
+					}
+					LispCons tail = head;
+					while (tail.cdr() instanceof LispCons next) {
+						tail = next;
+					}
+					pendingTail = tail;
+				}
+				else if (last) {
+					// The final argument may be any object; splice it onto the running
+					// tail.
+					if (pendingTail != null) {
+						pendingTail.setCdr(cur);
+					}
+					else {
+						result = cur;
+					}
+				}
+				// non-last nil arguments are skipped
 			}
-			LispCons tail = head;
-			while (tail.cdr() instanceof LispCons next) {
-				tail = next;
-			}
-			tail.setCdr(b);
-			return head;
+			return result;
 		}));
 		env.defineFunction(LispNames.IDENTITY, new LispFunction(LispNames.IDENTITY, args -> {
 			requireArgCount(LispNames.IDENTITY, args, 1);
