@@ -43,9 +43,9 @@ description and a runnable example you can evaluate in your browser.
 | `eval-when` | `(eval-when (situation...) body...)` | Evaluates the body as a `progn`; every situation is treated as "evaluate now". Top-level bodies are spliced so nested `defun`/`defmacro` definitions are collected |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | Local, non-recursive function bindings (Lisp-2: call position and `#'name`). A definition body sees the outer function of the same name, not its siblings. Lambda lists support the `defun` extensions |
 | `labels` | `(labels ((name lambda-list body...)...) body...)` | Like `flet` but the definitions see each other (recursion and mutual recursion) |
-| `multiple-value-bind` | `(multiple-value-bind (var...) values-form body...)` | Binds the variables to the values of the producer form. A literal `(values ...)` call and the two-value built-ins (`floor` family, `gethash`) are recognized syntactically; any other form supplies a single value. Extra variables bind to nil |
+| `multiple-value-bind` | `(multiple-value-bind (var...) values-form body...)` | Binds the variables to the values of the producer form. A literal `(values ...)` call, the multi-value built-ins (`floor` family, `gethash`, `parse-integer`) and a user function returning `(values ...)` supply all of their values. Extra variables bind to nil |
 | `multiple-value-list` | `(multiple-value-list values-form)` | Collects the producer's values into a list (recognized like `multiple-value-bind`) |
-| `multiple-value-call` | `(multiple-value-call function values-form...)` | Calls the function with all values of every producer as the arguments; lowers to a direct `funcall` (deviates from CL: classified as a macro, not a special operator) |
+| `multiple-value-call` | `(multiple-value-call function values-form...)` | Calls the function with all values of every producer as the arguments, including a user function's values spread at runtime (deviates from CL: classified as a macro, not a special operator) |
 | `nth-value` | `(nth-value n values-form)` | The n-th (0-based) value of the producer, or nil; expands to `nth` over `multiple-value-list` |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience

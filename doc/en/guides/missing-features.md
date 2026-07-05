@@ -15,7 +15,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `defmacro` (user macros) | available (see [`defmacro`](../reference/special-forms/defmacro.md)) |
 | `&optional` / `&rest` / `&key` / `&aux` | available in `defun`/`lambda` (see [`defun`](../reference/special-forms/defun.md)); `defmacro` takes `&rest`/`&body` only |
 | `&whole` | not available |
-| `values` / `multiple-value-bind` | available, syntactic subset (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
+| `values` / `multiple-value-bind` | available, including user-function values (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
 | `block` / `return-from` / `tagbody` / `go` | not available |
 | `catch` / `throw` / `unwind-protect` | not available |
 | conditions & restarts (`handler-case`, ...) | not available |
@@ -58,28 +58,35 @@ built at runtime by the compiled `eval` does not parse lambda-list keywords
 
 ## Multiple values (`values`, `multiple-value-bind`)
 
-A syntactic subset is available: [`values`](../reference/functions/values.md),
+Multiple values **are** available: [`values`](../reference/functions/values.md),
+[`values-list`](../reference/functions/values-list.md),
 [`multiple-value-bind`](../reference/macros/multiple-value-bind.md),
 [`multiple-value-list`](../reference/macros/multiple-value-list.md),
 [`multiple-value-call`](../reference/macros/multiple-value-call.md) and
-[`nth-value`](../reference/macros/nth-value.md), plus the second (remainder /
-present-p) value of `floor`/`ceiling`/`round`/`truncate` and `gethash` and the
-optional divisor argument of the `floor` family.
-
-There is **no runtime multiple-value representation**: the consumers recognize
-the producer form syntactically (a literal `(values ...)` call or one of the
-two-value built-ins above). A `(values ...)` at the end of a **user function**
-collapses to its primary value at the call boundary, so the caller's extra
-variables read as nil:
+[`nth-value`](../reference/macros/nth-value.md), plus the secondary values of
+`floor`/`ceiling`/`round`/`truncate` (remainder), `gethash` (present-p) and
+`parse-integer` (stop position), and the optional divisor argument of the
+`floor` family. A `(values ...)` in result position of a **user function**
+reaches the caller's consumer through an internal channel, so the common CL
+idioms work:
 
 ```console
 > (defun two () (values 1 2))
 > (multiple-value-bind (a b) (two) (list a b))
-(1 nil)
+(1 2)
 ```
 
-Other built-ins with secondary values in CL (`parse-integer`,
-`read-from-string`, `member`, ...) remain single-value.
+The remaining deviations from Common Lisp:
+
+- a producer that calls `values` in a **non-tail** position and then returns
+  normally may leave stale extra values behind, so keep `values` in result
+  position;
+- `funcall #'values` (the first-class value) yields the primary value only in
+  compiled programs;
+- `multiple-value-call` with a built-in `#'name` keeps the wrapper's fixed
+  arity — pass a user function or `lambda` for other argument counts;
+- other built-ins with secondary values in CL (`read-from-string`,
+  `macroexpand-1`, `intern`, ...) remain single-value.
 
 ## Non-local exit and control flow
 

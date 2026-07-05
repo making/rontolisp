@@ -48,7 +48,7 @@
 | `write-sequence` | `(write-sequence buf stream)`, `(write-sequence buf stream :start 1 :end 3)` | バイト(0-255)のベクタをバイナリ出力ストリームに書き込みます。シーケンスを返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `read` | `(read)`, `(read stream)` | 標準入力(または `open`/`with-open-file` で開いた入力ストリーム)からS式を1つ読み込みます(3つのバックエンドすべて)。EOFでは `nil` |
 | `read-from-string` | `(read-from-string "(+ 1 2)")` | 文字列からデータを1つパースします(3つのバックエンドすべて)。省略可能な `eof-error-p`/`eof-value` および `:start`/`:end` 引数はサポートされません |
-| `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:radix` と `:junk-allowed` をサポートします。`:start`/`:end` はインタプリタ専用です。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
+| `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
@@ -184,7 +184,7 @@
 | `mapc` | `(mapc #'print '(1 2 3))` | 副作用のために各要素に関数を適用し、元のリストを返します |
 | `mapcan` | `(mapcan (lambda (x) (list x x)) '(1 2))` | `(1 1 2 2)`(関数を適用し結果リストを連結します。非破壊的な `append` を使用) |
 | `apply` | `(apply #'+ 1 2 '(3 4))` | `10`(先頭の引数と展開された最終リストに関数を適用します) |
-| `values` | `(values 1 2 3)`, `(multiple-value-list (values 1 2 3))` | `1`, `(1 2 3)` -- 多値は構文的にのみ存在します: `multiple-value-bind`/`-list`/`-call`/`nth-value` はリテラルの `(values ...)` 呼び出しまたは 2 値の組み込み関数（`floor` ファミリ、`gethash`）の全ての値を受け取り、それ以外の文脈では主値だけが残ります |
+| `values` | `(values 1 2 3)`, `(multiple-value-list (values 1 2 3))` | `1`, `(1 2 3)` -- 通常の文脈では主値だけが残ります。`multiple-value-bind`/`-list`/`-call`/`nth-value` はリテラルの `(values ...)` 呼び出し、多値の組み込み関数（`floor` ファミリ、`gethash`、`parse-integer`、`values-list`）、`(values ...)` を返すユーザ関数の全ての値を受け取ります |
 | `reduce` | `(reduce #'+ '(1 2 3) :initial-value 0)` | 左畳み込み: `(f (f (f init a) b) c)`。素の形式 `(reduce f list)` は最初の要素を初期値に使います。`:initial-value` キーワード(リテラル)は明示的な初期値を与えます |
 | `every` | `(every #'evenp '(2 4 6))` | すべての要素で述語が非nilなら `t`、そうでなければ `nil`(単一リスト形式) |
 | `some` | `(some #'oddp '(2 4 5))` | 最初の非nilな述語結果、すべての要素が失敗すれば `nil`(単一リスト形式) |
