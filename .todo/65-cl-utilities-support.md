@@ -28,8 +28,8 @@ tests + ci-spec case `macrolet-compiler-macro-restart-case` + docs):
 3. **`define-compiler-macro`** -- DONE. Parsed no-op returning nil
    (`expandDefineCompilerMacro`), like `declaim`/`deftype`.
 
-With these, every cl-utilities component file **loads** (top-level forms
-compile/eval) EXCEPT `once-only.lisp`.
+With these (plus `string`, below), every cl-utilities component file **loads**
+(top-level forms compile/eval), including `once-only.lisp`.
 
 ## Remaining blockers for a full `asdf:load-system :cl-utilities`
 
@@ -43,29 +43,43 @@ triage was wrong on two points, and surfaced deeper gaps:
   unaffected. `once-only.lisp` READS and the macro expands correctly (verified
   against SBCL). BUT it also calls `(string name)` -- see the `string` residue
   item below -- so the file still won't fully expand until `string` lands.
-- **`string`** -- MISSING (surfaced by `once-only.lisp`, which does
-  `(gensym (string name))`). Need the CL `string` designator coercion
-  (symbol -> name, string -> itself, char -> 1-char string). Small, all four
-  backends; a `symbol-name`-like builtin.
+- **`string`** -- DONE (2026-07-05, all four backends + tests + ci-spec
+  `symbol-runtime-api` + docs). The CL `string` designator coercion
+  (symbol -> name, string -> itself, char -> 1-char string, `t`/`nil` ->
+  `"t"`/`"nil"`). Interpreter type-checks; compiled backends reuse the
+  `symbol-name`/`princ-to-string` machinery (lenient on non-designators). cl
+  function count 221 -> 222. `once-only.lisp` now fully expands AND runs
+  correctly on all four backends (verified: side-effecting arg evaluated once).
 - **`macrolet` was NOT actually needed by cl-utilities** -- its only occurrence
   (`compose.lisp`) is under `#+nil` (dead code). We implemented it anyway
   because it is a real, reusable feature that unblocks other libraries.
 
 Even once every file LOADS, exercising the functions hits pervasive stdlib
 gaps (runtime, well beyond this task's language features). Observed on the
-interpreter:
+interpreter, now **split into single-session sub-todos** (each self-contained;
+do the lighter ones first):
 
 - variadic `nconc` (ours is 2-arg) -- cl-utilities' own `split-sequence`.
-- `reduce` with `:from-end` -- `compose`, `with-collectors`.
+  -> **`.todo/66-variadic-nconc.md`**
+- `reduce` with `:from-end` (+ `:key`) -- `compose`, `with-collectors`.
+  -> **`.todo/67-reduce-from-end-key.md`**
 - `integer-length`, `logbitp` -- `expt-mod` (non-SBCL branch).
+  -> **`.todo/68-integer-length-logbitp.md`**
+- `multiple-value-setq`, `rotatef` -- `read-delimited`, `with-gensyms`,
+  `extremum`. -> **`.todo/69-multiple-value-setq-rotatef.md`**
+- `byte`/`byte-size`/`ldb`/`dpb` -- `rotate-byte`.
+  -> **`.todo/70-byte-field-ops.md`**
 - `make-array` with `:adjustable`/`:fill-pointer`/`:displaced-to`,
   `array-displacement`, `adjustable-array-p`, `array-has-fill-pointer-p`,
-  `fill-pointer` -- `copy-array`.
-- `byte`/`byte-size`/`ldb`/`dpb` -- `rotate-byte`.
-- `multiple-value-setq`, `rotatef`, `with-slots`, `warn` -- `read-delimited`,
-  `with-gensyms`, `extremum` conditions.
+  `fill-pointer` -- `copy-array` (HEAVIEST, may split further).
+  -> **`.todo/71-adjustable-arrays-copy-array.md`**
+- `with-slots` -- belongs with CLOS/defstruct work, tracked in
+  `.todo/40-clos-and-defstruct.md`.
+- `warn` -- belongs with the condition system, tracked in
+  `.todo/39-condition-system.md`.
 - interpreter macro-expansion ordering for `flet`/`labels` local `collect`
-  inside `collecting`/`with-collectors` (the documented interpreter caveat).
+  inside `collecting`/`with-collectors` (the documented interpreter caveat) --
+  tracked in `.todo/34-local-function-definition.md`.
 
 `with-unique-names`/`with-gensyms` (definition) and simple `compose`/
 `collecting` shapes work on the interpreter, but there is no clean, whole-system
@@ -76,12 +90,12 @@ non-functional E2E.
 
 ## Plan (remaining)
 
-1. Nested backquote in the reader -- DONE (unblocked `once-only`'s expansion;
-   `string` builtin still needed before the file fully expands).
-2. Pick off the stdlib residue above (variadic `nconc`, `reduce :from-end`,
-   `integer-length`/`logbitp`, `multiple-value-setq`, `rotatef`) so a useful
-   subset RUNS; leave `make-array`-displacement / byte-ops (`copy-array`,
-   `rotate-byte`) as the last, heaviest items.
+1. Nested backquote in the reader -- DONE. `string` builtin -- DONE
+   (2026-07-05); `once-only.lisp` now fully expands and runs on all four
+   backends.
+2. Pick off the stdlib residue, now split into `.todo/66`-`71` (do the lighter
+   ones -- 66/67/68/69 -- first; 70/71 are the heavy tail). Each is single-
+   session sized and lands independently on all four backends.
 3. Then vendor + `ClUtilitiesE2eTest` + ci-spec + docs (asdf guide "what can I
    actually load" + `examples/asdf`).
 
