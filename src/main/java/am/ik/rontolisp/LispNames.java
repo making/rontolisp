@@ -867,6 +867,32 @@ public final class LispNames {
 	public static final String DEFINE_CONDITION = "define-condition";
 
 	/**
+	 * The {@code define-compiler-macro} macro. Parsed no-op returning nil, like
+	 * {@link #DECLAIM}/{@link #DEFTYPE}: a compiler macro is only an optimization hint,
+	 * so dropping it leaves the ordinary function definition authoritative (the
+	 * observable behavior is identical, only slower). The {@code &whole} parameter and
+	 * any body are ignored.
+	 */
+	public static final String DEFINE_COMPILER_MACRO = "define-compiler-macro";
+
+	/**
+	 * The {@code restart-case} macro. Lite lowering to its primary form only: there is no
+	 * restart/condition system, so the restart clauses are dead code (they can only be
+	 * reached by {@code invoke-restart}, which does not exist here). A signaling primary
+	 * form therefore signals as usual; see {@code .kb/declarations-type-checks.md} for
+	 * the lite semantics shared with {@code check-type}/{@code assert}.
+	 */
+	public static final String RESTART_CASE = "restart-case";
+
+	/**
+	 * The {@code macrolet} macro (local, lexically scoped macro definitions). Expands its
+	 * body with the local macros active and drops the definitions (see
+	 * {@code LispMacroExpander}/{@code UserMacroExpander}/{@code LispEvaluator} macrolet
+	 * handling). Local macro bodies run at expansion time like {@code defmacro}.
+	 */
+	public static final String MACROLET = "macrolet";
+
+	/**
 	 * The {@code make-condition} operator. Lite expansion to the {@code :format-control}
 	 * value (or the condition type name as a string), so the common
 	 * {@code (error (make-condition 'type :format-control "..."))} idiom signals with the

@@ -43,6 +43,7 @@ categories:
       - { slug: eval-when, name: eval-when }
       - { slug: flet, name: flet }
       - { slug: labels, name: labels }
+      - { slug: macrolet, name: macrolet }
       - { slug: multiple-value-bind, name: multiple-value-bind }
       - { slug: multiple-value-list, name: multiple-value-list }
       - { slug: multiple-value-call, name: multiple-value-call }
@@ -52,5 +53,7 @@ categories:
       - { slug: complex, name: complex }
       - { slug: deftype, name: deftype }
       - { slug: define-condition, name: define-condition }
+      - { slug: define-compiler-macro, name: define-compiler-macro }
+      - { slug: restart-case, name: restart-case }
       - { slug: make-condition, name: make-condition }
       - { slug: documentation, name: documentation }

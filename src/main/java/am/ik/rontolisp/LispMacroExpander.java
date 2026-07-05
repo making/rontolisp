@@ -77,6 +77,8 @@ public final class LispMacroExpander {
 			case LispNames.PUSHNEW -> expandPushnew(cons);
 			case LispNames.DEFTYPE -> expandDeftype(cons);
 			case LispNames.DEFINE_CONDITION -> expandDefineCondition(cons);
+			case LispNames.DEFINE_COMPILER_MACRO -> expandDefineCompilerMacro(cons);
+			case LispNames.RESTART_CASE -> expandRestartCase(cons);
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
 			case LispNames.DOCUMENTATION -> expandDocumentation(cons);
 			case LispNames.COMPLEMENT -> expandComplement(cons);
@@ -6795,6 +6797,37 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandDefineCondition(LispCons cons) {
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (define-compiler-macro name lambda-list body...)} to {@code nil}: a
+	 * compiler macro is only an optimization hint, so dropping it is correct -- the
+	 * ordinary function definition remains authoritative (same result, only slower). Same
+	 * parsed-no-op pattern as {@link #expandDeclaim}/{@link #expandDeftype}.
+	 * @param cons the define-compiler-macro expression
+	 * @return nil
+	 */
+	public static LispVal expandDefineCompilerMacro(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands
+	 * {@code (restart-case form (restart-name (args...) [options...] body...)...)} to
+	 * just {@code form}. Lite: there is no restart/condition system, so the restart
+	 * clauses are unreachable (nothing invokes them) and are discarded; a signaling
+	 * primary form signals as usual. Pairs with the lite
+	 * {@link #expandError}/{@link #expandAssert} and shares the "no condition system"
+	 * semantics documented for {@code check-type}.
+	 * @param cons the restart-case expression
+	 * @return the primary form (nil when absent)
+	 */
+	public static LispVal expandRestartCase(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return LispNil.INSTANCE;
+		}
+		return parts.get(1);
 	}
 
 	/**

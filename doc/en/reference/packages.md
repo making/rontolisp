@@ -118,7 +118,7 @@ inside another form (not top-level) is an error.
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and assert case ccase check-type complement complex cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
+; => (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
 (print (rontolisp:list-special-forms))
 ; => (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))

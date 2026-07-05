@@ -219,6 +219,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx, className);
 				case LispNames.DEFINE_CONDITION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx, className);
+				case LispNames.DEFINE_COMPILER_MACRO ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx, className);
+				case LispNames.RESTART_CASE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRestartCase(cons), ctx, className);
 				case LispNames.MAKE_CONDITION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons), ctx, className);
 				case LispNames.DOCUMENTATION ->

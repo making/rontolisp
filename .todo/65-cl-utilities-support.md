@@ -4,38 +4,85 @@ Follow-up of the real-library loading campaign (split-sequence and
 parse-number load on all four backends, see `.kb/asdf.md` and
 `examples/asdf/`). cl-utilities (public domain, the classic grab-bag:
 `with-unique-names`, `once-only`, `compose`, `extremum`, `collecting`, its own
-`split-sequence`, ...) was triaged 2026-07-05 and is blocked on three
-features; everything else it uses already works.
+`split-sequence`, ...).
 
-## Blockers (in dependency order)
+## Status (2026-07-05)
 
-1. **`macrolet`** (`compose.lisp` uses it inside a function body to stamp out
-   repeated forms) -- the real feature, `.todo/34`'s leftover. The
-   flet/labels precedent applies: a `LispMacroExpander` lowering that
-   registers the local macros and expands their call sites within the body
-   walk (the machinery in `UserMacroExpander`/`rewriteLocalCalls` already
-   knows how to walk bodies with local shadowing).
-2. **`restart-case`** (`read-delimited.lisp` wraps its bounds errors:
-   `(restart-case (error 'read-delimited-bounds-error ...) (continue ...))`).
-   A LITE lowering matching our no-restart reality: expand to the primary
-   form only (the restart clauses are dead without a condition system), so
-   the error simply signals. Document like `check-type`'s lite semantics.
-3. **`define-compiler-macro`** (`compose.lisp`, `split-sequence.lisp`,
-   `expt-mod.lisp`) -- an optimization hint; a parsed no-op returning nil is
-   correct (the ordinary function definition remains authoritative), same
-   pattern as `declaim`/`deftype`.
+The three language features triaged as blockers are DONE (all four backends,
+tests + ci-spec case `macrolet-compiler-macro-restart-case` + docs):
 
-Also present but already handled: `define-condition` (lite no-op),
-`&whole` in the compiler macros (moot once they are no-ops).
+1. **`macrolet`** -- DONE. Local, lexically scoped macros. Interpreter:
+   `LispEvaluator.evalMacrolet` installs the locals into the user-macro table
+   for the dynamic extent of the body (save/restore), sharing the
+   `makeUserMacro` builder with `defmacro`. Compile path:
+   `UserMacroExpander.expandMacrolet` pushes the locals via
+   `LispEvaluator.pushLocalMacro`/`popLocalMacro`, expands the body, and drops
+   the wrapper (single body form returned unwrapped, else `progn`); the
+   activation guard now fires on `usesMacrolet` so a macrolet-only program still
+   runs the pass. No backend codegen (like `defmacro`). `symbol-macrolet` still
+   unsupported. Interpreter scoping caveat (documented): the table is global for
+   the extent, so a function *called* from the body that references a local
+   macro name would also see it (same pre-existing limitation as `flet`).
+2. **`restart-case`** -- DONE. Lite `LispMacroExpander.expandRestartCase` to the
+   primary form only (restart clauses are dead without a condition system).
+3. **`define-compiler-macro`** -- DONE. Parsed no-op returning nil
+   (`expandDefineCompilerMacro`), like `declaim`/`deftype`.
 
-## Plan
+With these, every cl-utilities component file **loads** (top-level forms
+compile/eval) EXCEPT `once-only.lisp`.
 
-- Ship 2 and 3 as cheap lite expansions any time; 1 (`macrolet`) is the real
-  session-sized unit and also unblocks other libraries.
-- Then apply the standard workflow: driver on the interpreter, fix residue,
-  verify all four backends, vendor + `ClUtilitiesE2eTest` + a ci-spec case
-  for whatever new residue surfaces, docs (asdf guide "what can I actually
-  load" + examples/asdf).
-- `anaphora` needs `symbol-macrolet` + `define-setf-expander` (harder than
-  macrolet: a walker that substitutes VARIABLE references); consider after
-  macrolet lands since the walkers overlap.
+## Remaining blockers for a full `asdf:load-system :cl-utilities`
+
+The 2026-07-05 re-triage (probing the real 1.2.4 tarball) found the original
+triage was wrong on two points, and surfaced deeper gaps:
+
+- **Nested backquote (`once-only.lisp`)** -- the REAL gating blocker, not listed
+  before. `once-only` uses `` `(let (,,@... collect ``(,,g ,,n)))`` `` (3 levels
+  of backquote). Our reader expands backquote at read time and rejects nested
+  backquote (`LispReader.readTemplateElement`: "Nested backquote is not
+  supported"). Because `extremum` `:depends-on ("once-only")`, and
+  `asdf:load-system` reads every component, this fails the whole-system load.
+  Implementing read-time nested backquote (Steele/CLtL2 algorithm) is a large,
+  self-contained reader feature -- see `.todo/66`. Blast radius is the reader
+  only (backends unaffected; backquote is fully expanded before codegen).
+- **`macrolet` was NOT actually needed by cl-utilities** -- its only occurrence
+  (`compose.lisp`) is under `#+nil` (dead code). We implemented it anyway
+  because it is a real, reusable feature that unblocks other libraries.
+
+Even once every file LOADS, exercising the functions hits pervasive stdlib
+gaps (runtime, well beyond this task's language features). Observed on the
+interpreter:
+
+- variadic `nconc` (ours is 2-arg) -- cl-utilities' own `split-sequence`.
+- `reduce` with `:from-end` -- `compose`, `with-collectors`.
+- `integer-length`, `logbitp` -- `expt-mod` (non-SBCL branch).
+- `make-array` with `:adjustable`/`:fill-pointer`/`:displaced-to`,
+  `array-displacement`, `adjustable-array-p`, `array-has-fill-pointer-p`,
+  `fill-pointer` -- `copy-array`.
+- `byte`/`byte-size`/`ldb`/`dpb` -- `rotate-byte`.
+- `multiple-value-setq`, `rotatef`, `with-slots`, `warn` -- `read-delimited`,
+  `with-gensyms`, `extremum` conditions.
+- interpreter macro-expansion ordering for `flet`/`labels` local `collect`
+  inside `collecting`/`with-collectors` (the documented interpreter caveat).
+
+`with-unique-names`/`with-gensyms` (definition) and simple `compose`/
+`collecting` shapes work on the interpreter, but there is no clean, whole-system
+runnable subset to anchor a `ClUtilitiesE2eTest` yet -- so vendoring +
+`ClUtilitiesE2eTest` is deferred until nested backquote (`.todo/66`) plus enough
+of the stdlib residue above lands. Do NOT vendor cl-utilities for a
+non-functional E2E.
+
+## Plan (remaining)
+
+1. Nested backquote in the reader (`.todo/66`) -- unblocks `once-only`, hence
+   the full-system LOAD.
+2. Pick off the stdlib residue above (variadic `nconc`, `reduce :from-end`,
+   `integer-length`/`logbitp`, `multiple-value-setq`, `rotatef`) so a useful
+   subset RUNS; leave `make-array`-displacement / byte-ops (`copy-array`,
+   `rotate-byte`) as the last, heaviest items.
+3. Then vendor + `ClUtilitiesE2eTest` + ci-spec + docs (asdf guide "what can I
+   actually load" + `examples/asdf`).
+
+`anaphora` needs `symbol-macrolet` + `define-setf-expander` (harder than
+macrolet: a walker that substitutes VARIABLE references); the macrolet walker
+machinery now in place is a starting point.

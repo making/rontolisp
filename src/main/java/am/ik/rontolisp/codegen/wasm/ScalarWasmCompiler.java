@@ -2302,6 +2302,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.PUSHNEW -> LispMacroExpander.expandPushnew(cons);
 			case LispNames.DEFTYPE -> LispMacroExpander.expandDeftype(cons);
 			case LispNames.DEFINE_CONDITION -> LispMacroExpander.expandDefineCondition(cons);
+			case LispNames.DEFINE_COMPILER_MACRO -> LispMacroExpander.expandDefineCompilerMacro(cons);
+			case LispNames.RESTART_CASE -> LispMacroExpander.expandRestartCase(cons);
 			case LispNames.MAKE_CONDITION -> LispMacroExpander.expandMakeCondition(cons);
 			case LispNames.DOCUMENTATION -> LispMacroExpander.expandDocumentation(cons);
 			// Two-argument (floor a b) -> (floor (/ a b)); null (the one-argument

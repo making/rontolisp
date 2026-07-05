@@ -926,6 +926,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandDeftype(cons), env);
 				case LispNames.DEFINE_CONDITION:
 					return eval(LispMacroExpander.expandDefineCondition(cons), env);
+				case LispNames.DEFINE_COMPILER_MACRO:
+					return eval(LispMacroExpander.expandDefineCompilerMacro(cons), env);
+				case LispNames.RESTART_CASE:
+					return eval(LispMacroExpander.expandRestartCase(cons), env);
+				case LispNames.MACROLET:
+					return evalMacrolet(cons, env);
 				case LispNames.MAKE_CONDITION:
 					return eval(LispMacroExpander.expandMakeCondition(cons), env);
 				case LispNames.DOCUMENTATION:
@@ -1120,19 +1126,29 @@ public final class LispEvaluator {
 		if (PackageRegistry.isClSymbol(name.name())) {
 			throw new LispEvalException(LispNames.DEFMACRO + " cannot redefine the standard operator " + name.name());
 		}
-		List<LispVal> paramList = parts.get(2) instanceof LispCons paramCons ? paramCons.toList() : List.of();
+		this.userMacros.put(name.name(),
+				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
+		return name;
+	}
+
+	/**
+	 * Builds a {@link UserMacro} record from a {@code (name lambda-list body...)}
+	 * definition, shared by {@link #evalDefmacro} and {@link #evalMacrolet}. A native
+	 * "required + &rest/&body" lambda list is stored directly; any extended shape is
+	 * wrapped in a {@code destructuring-bind} over an internal rest parameter (validated
+	 * eagerly by a dry-run expansion) so both macro-expansion consumers destructure
+	 * identically.
+	 */
+	private UserMacro makeUserMacro(String op, LispSymbol name, LispVal paramForm, List<LispVal> body,
+			Environment env) {
+		List<LispVal> paramList = paramForm instanceof LispCons paramCons ? paramCons.toList() : List.of();
 		if (!isSimpleMacroLambdaList(paramList)) {
-			// Destructuring/extended lambda list (nested patterns, &optional, &key,
-			// ...): bind the whole unevaluated argument list to an internal rest
-			// parameter and wrap the body in a destructuring-bind over it, so both
-			// macro-expansion consumers (this evaluator and the compile path's
-			// UserMacroExpander, which delegates here) destructure identically.
 			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
 			List<LispVal> dbParts = new ArrayList<>();
 			dbParts.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
-			dbParts.add(parts.get(2));
+			dbParts.add(paramForm);
 			dbParts.add(argsVar);
-			dbParts.addAll(parts.subList(3, parts.size()));
+			dbParts.addAll(body);
 			LispVal wrapped = LispNil.INSTANCE;
 			for (int i = dbParts.size() - 1; i >= 0; i--) {
 				wrapped = new LispCons(dbParts.get(i), wrapped);
@@ -1144,10 +1160,9 @@ public final class LispEvaluator {
 				LispMacroExpander.expandDestructuringBind((LispCons) wrapped);
 			}
 			catch (IllegalArgumentException ex) {
-				throw new LispEvalException(LispNames.DEFMACRO + " " + name.name() + ": " + ex.getMessage());
+				throw new LispEvalException(op + " " + name.name() + ": " + ex.getMessage());
 			}
-			this.userMacros.put(name.name(), new UserMacro(List.of(), argsVar, List.of(wrapped), env));
-			return name;
+			return new UserMacro(List.of(), argsVar, List.of(wrapped), env);
 		}
 		List<LispSymbol> required = new ArrayList<>();
 		LispSymbol rest = null;
@@ -1159,8 +1174,60 @@ public final class LispEvaluator {
 			}
 			required.add(param);
 		}
-		this.userMacros.put(name.name(), new UserMacro(required, rest, parts.subList(3, parts.size()), env));
-		return name;
+		return new UserMacro(required, rest, body, env);
+	}
+
+	/**
+	 * Evaluates {@code (macrolet ((name lambda-list body...)...) body...)}: each local
+	 * macro is installed into the user-macro table for the dynamic extent of the body
+	 * evaluation (shadowing any outer macro of the same name, restored afterwards) and
+	 * the body is evaluated with the local macros active. Local macros are defined in the
+	 * global environment (CL's null lexical environment for macro functions), so their
+	 * bodies see global helpers but not the surrounding runtime bindings. Lite scoping
+	 * caveat: because the table is global for the extent, a function called from the body
+	 * that happens to reference a local macro name would also see it (same pre-existing
+	 * interpreter limitation as {@code flet}/{@code labels}); the compile path
+	 * (UserMacroExpander) is lexically correct.
+	 */
+	private LispVal evalMacrolet(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new LispEvalException(LispNames.MACROLET + " expects a definition list");
+		}
+		List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
+		java.util.Map<String, UserMacro> saved = new java.util.HashMap<>();
+		java.util.Set<String> added = new java.util.HashSet<>();
+		for (LispVal def : defs) {
+			if (!(def instanceof LispCons defCons) || !defCons.isProperList() || defCons.toList().size() < 2
+					|| !(defCons.toList().get(0) instanceof LispSymbol name) || name.isKeyword()) {
+				throw new LispEvalException(LispNames.MACROLET + " definition must be (name lambda-list body...)");
+			}
+			List<LispVal> dp = defCons.toList();
+			UserMacro macro = makeUserMacro(LispNames.MACROLET, name, dp.get(1), dp.subList(2, dp.size()),
+					this.globalEnv);
+			if (!added.contains(name.name()) && this.userMacros.containsKey(name.name())) {
+				saved.put(name.name(), this.userMacros.get(name.name()));
+			}
+			this.userMacros.put(name.name(), macro);
+			added.add(name.name());
+		}
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (LispVal bodyForm : parts.subList(2, parts.size())) {
+				result = eval(bodyForm, env);
+			}
+			return result;
+		}
+		finally {
+			for (String n : added) {
+				if (saved.containsKey(n)) {
+					this.userMacros.put(n, saved.get(n));
+				}
+				else {
+					this.userMacros.remove(n);
+				}
+			}
+		}
 	}
 
 	/**
@@ -1190,6 +1257,38 @@ public final class LispEvaluator {
 	 */
 	public boolean isUserMacro(String name) {
 		return this.userMacros.containsKey(name);
+	}
+
+	/**
+	 * Installs a lexical (macrolet) local macro into the user-macro table for the compile
+	 * path ({@link am.ik.rontolisp.eval.UserMacroExpander} expands macrolet bodies by
+	 * temporarily registering the locals here). The macro is defined in the global
+	 * environment, matching {@link #evalMacrolet}. Returns the previously bound macro (or
+	 * {@code null}) as an opaque token for {@link #popLocalMacro} to restore.
+	 * @param name the local macro name
+	 * @param paramForm the macro lambda list
+	 * @param body the macro body forms
+	 * @return the previous binding token (may be {@code null})
+	 */
+	public @Nullable Object pushLocalMacro(LispSymbol name, LispVal paramForm, List<LispVal> body) {
+		UserMacro previous = this.userMacros.get(name.name());
+		this.userMacros.put(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
+		return previous;
+	}
+
+	/**
+	 * Restores a user-macro binding saved by {@link #pushLocalMacro}. A {@code null}
+	 * token means the name was unbound before and is removed again.
+	 * @param name the local macro name
+	 * @param previous the token returned by {@link #pushLocalMacro}
+	 */
+	public void popLocalMacro(String name, @Nullable Object previous) {
+		if (previous instanceof UserMacro macro) {
+			this.userMacros.put(name, macro);
+		}
+		else {
+			this.userMacros.remove(name);
+		}
 	}
 
 	/**

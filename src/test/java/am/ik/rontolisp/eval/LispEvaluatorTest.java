@@ -2633,6 +2633,45 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMacroletBasic() {
+		// Local macros expand within the body; the whole form is the body's value.
+		assertThat(eval("(macrolet ((sq (x) `(* ,x ,x))) (sq 6))")).isEqualTo(new LispInteger(36));
+		assertThat(eval("(macrolet ((sq (x) `(* ,x ,x)) (twice (x) `(+ ,x ,x))) (+ (sq 5) (twice 5)))"))
+			.isEqualTo(new LispInteger(35));
+		// The macro body runs at expansion time (splices the unevaluated argument form).
+		assertThat(eval("(macrolet ((swap (a b) `(list ,b ,a))) (swap 1 2))").print()).isEqualTo("(2 1)");
+		assertThat(eval("(macrolet () 'ok)").print()).isEqualTo("ok");
+	}
+
+	@Test
+	void evalMacroletScopingAndRestore() {
+		// A macrolet macro does not leak past the body: a sibling form of the same name
+		// resolves in the function namespace again (here: undefined function).
+		assertThat(eval("(list (macrolet ((m () 1)) (m)) 2)").print()).isEqualTo("(1 2)");
+		// An extended lambda list (rest) is destructured like defmacro.
+		assertThat(eval("(macrolet ((mklist (&rest xs) `(list ,@xs))) (mklist 1 2 3))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalDefineCompilerMacroIsNoOp() {
+		// A compiler macro is only an optimization hint: the ordinary function wins.
+		assertThat(evalMulti("(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (myinc 10)"))
+			.isEqualTo(new LispInteger(11));
+		assertThat(eval("(define-compiler-macro foo (x) x)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalRestartCaseEvaluatesPrimaryForm() {
+		// Lite: no restart system, so the restart clauses are dead and the primary form
+		// is the value (a signaling primary form still signals).
+		assertThat(eval("(restart-case (+ 1 2) (continue () 99))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(restart-case 'done)").print()).isEqualTo("done");
+		assertThatThrownBy(() -> eval("(restart-case (error \"boom\") (continue () 0))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("boom");
+	}
+
+	@Test
 	void evalValuesInSingleValueContext() {
 		// No runtime multiple-value representation: extra values are discarded, all
 		// argument forms still evaluate (prog1 semantics); (values) reads as nil.
@@ -3575,7 +3614,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test

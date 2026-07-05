@@ -43,7 +43,8 @@ public final class UserMacroExpander {
 		// Also activate for macroexpand/macroexpand-1 calls: their literal quoted
 		// arguments are folded to the expansion here, even when no macro is defined.
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
-				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)) {
+				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
+				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)) {
 			return program;
 		}
 		LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
@@ -81,6 +82,19 @@ public final class UserMacroExpander {
 			return true;
 		}
 		return usesMacroexpand(cons.car()) || usesMacroexpand(cons.cdr());
+	}
+
+	// A macrolet anywhere (top level or nested in a body) forces the pass to run so its
+	// local macros are expanded away; the compilers have no macrolet support of their
+	// own.
+	private static boolean usesMacrolet(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
+			return true;
+		}
+		return usesMacrolet(cons.car()) || usesMacrolet(cons.cdr());
 	}
 
 	/**
@@ -169,6 +183,20 @@ public final class UserMacroExpander {
 					}
 					return rebuild(parts, 2, macroEval, properList(newDefs));
 				}
+				case LispNames.MACROLET: {
+					// (macrolet ((name lambda-list body...)...) body...): register the
+					// local macros for the extent of the body walk, expand the body with
+					// them active, and drop the macrolet (its definitions are consumed
+					// here,
+					// like defmacro). Lexically correct: the locals are removed again
+					// after
+					// the body, so they do not leak to sibling forms.
+					if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+						return form; // malformed; leave for the interpreter/compiler to
+										// report
+					}
+					return expandMacrolet(parts, macroEval);
+				}
 				case LispNames.MULTIPLE_VALUE_BIND: {
 					// (multiple-value-bind (vars...) values-form body...): the variable
 					// list stays, the values form and the body are expressions.
@@ -248,6 +276,47 @@ public final class UserMacroExpander {
 			newParts.add(expandAll(part, macroEval));
 		}
 		return properList(newParts);
+	}
+
+	// Expands a macrolet: installs each local macro into the macro-time evaluator, walks
+	// the body with them active (so calls to the locals expand), restores the previous
+	// bindings, and returns the expanded body as a (progn ...) so the macrolet wrapper is
+	// dropped. The compilers never see macrolet; the interpreter handles it natively.
+	private static LispVal expandMacrolet(List<LispVal> parts, LispEvaluator macroEval) {
+		List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
+		java.util.LinkedHashMap<String, Object> saved = new java.util.LinkedHashMap<>();
+		for (LispVal def : defs) {
+			if (def instanceof LispCons defCons && defCons.isProperList()) {
+				List<LispVal> dp = defCons.toList();
+				if (dp.size() >= 2 && dp.get(0) instanceof LispSymbol name && !name.isKeyword()) {
+					Object previous = macroEval.pushLocalMacro(name, dp.get(1), dp.subList(2, dp.size()));
+					// Only remember the binding present before this macrolet (a duplicate
+					// name pushed twice must still restore to the outermost prior value).
+					if (!saved.containsKey(name.name())) {
+						saved.put(name.name(), previous);
+					}
+				}
+			}
+		}
+		try {
+			List<LispVal> body = new ArrayList<>();
+			body.add(new LispSymbol(LispNames.PROGN));
+			for (int i = 2; i < parts.size(); i++) {
+				body.add(expandAll(parts.get(i), macroEval));
+			}
+			if (body.size() == 1) {
+				return LispNil.INSTANCE;
+			}
+			if (body.size() == 2) {
+				return body.get(1);
+			}
+			return properList(body);
+		}
+		finally {
+			for (java.util.Map.Entry<String, Object> entry : saved.entrySet()) {
+				macroEval.popLocalMacro(entry.getKey(), entry.getValue());
+			}
+		}
 	}
 
 	// A dotted tail is only meaningful as data (inside quote); rebuilding a call form

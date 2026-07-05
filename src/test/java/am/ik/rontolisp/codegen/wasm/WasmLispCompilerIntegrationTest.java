@@ -2960,6 +2960,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void macroletForms() throws Exception {
+		// macrolet is consumed by eval.UserMacroExpander (the compilers never see it), so
+		// mirror the CLI by running the pass before compiling.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(macrolet ((sq (x) `(* ,x ,x)) (twice (x) `(+ ,x ,x)))
+				  (print (+ (sq 5) (twice 5))))
+				(defun apply-in-body (n)
+				  (macrolet ((mklist (&rest xs) `(list ,@xs)))
+				    (mklist n (* n n))))
+				(print (apply-in-body 4))
+				"""));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("35\n(4 16)");
+	}
+
+	@Test
+	void defineCompilerMacroAndRestartCase() throws Exception {
+		// define-compiler-macro is a dropped no-op (the function wins); restart-case is a
+		// lite lowering to its primary form.
+		assertThat(compileAndRun(
+				"(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (print (myinc 10))"
+						+ " (print (restart-case (+ 1 2) (continue () 99)))"))
+			.isEqualTo("11\n3");
+	}
+
+	@Test
 	void multipleValueForms() throws Exception {
 		assertThat(compileAndRun("(setq mv-side 0) (setq mv-primary (values 1 (setq mv-side 9)))"
 				+ " (print (list mv-primary mv-side)) (print (values)) (print (funcall #'values 1 2))"
@@ -4036,7 +4065,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test

@@ -231,6 +231,10 @@ final class WasmExprCompiler {
 				case LispNames.DEFTYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx);
 				case LispNames.DEFINE_CONDITION ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx);
+				case LispNames.DEFINE_COMPILER_MACRO ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx);
+				case LispNames.RESTART_CASE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandRestartCase(cons), ctx);
 				case LispNames.MAKE_CONDITION ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons), ctx);
 				case LispNames.DOCUMENTATION ->

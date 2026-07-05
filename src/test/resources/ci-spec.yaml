@@ -1069,7 +1069,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement complex cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
+      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       221
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
@@ -2575,6 +2575,28 @@ cases:
       720
       (t nil)
       (1 2 3 4)
+  - name: macrolet-compiler-macro-restart-case
+    source: |
+      ;; macrolet: local macros expanded away (compile path via UserMacroExpander,
+      ;; interpreter natively); the body's calls to the locals are expanded.
+      (macrolet ((ci-sq (x) `(* ,x ,x))
+                 (ci-twice (x) `(+ ,x ,x)))
+        (print (+ (ci-sq 5) (ci-twice 5))))
+      (defun ci-in-body (n)
+        (macrolet ((ci-mklist (&rest xs) `(list ,@xs)))
+          (ci-mklist n (* n n))))
+      (print (ci-in-body 4))
+      ;; define-compiler-macro: dropped no-op, the ordinary function wins.
+      (defun ci-myinc (x) (+ x 1))
+      (define-compiler-macro ci-myinc (x) `(+ ,x 100))
+      (print (ci-myinc 10))
+      ;; restart-case: lite lowering to the primary form (restart clauses are dead).
+      (print (restart-case (+ 1 2) (continue () 99)))
+    expected: |
+      35
+      (4 16)
+      11
+      3
   - name: multiple-values-core
     source: |
       (print (values 1 2 3))

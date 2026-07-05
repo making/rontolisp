@@ -138,6 +138,43 @@ class UserMacroExpanderTest {
 				""")).isEqualTo("(defstruct pair left right)");
 	}
 
+	// --- macrolet (local macros consumed at compile time) ---
+
+	@Test
+	void macroletExpandsLocalMacroCallsAndDropsTheWrapper() {
+		// The pass activates on macrolet alone (no defmacro); the macrolet is dropped and
+		// its body's local macro calls are expanded. A single body form is returned
+		// unwrapped (no needless progn); multiple forms are wrapped in progn.
+		assertThat(expand("(macrolet ((sq (x) `(* ,x ,x))) (print (sq 6)))")).isEqualTo("(print (* 6 6))");
+		assertThat(expand("(macrolet ((sq (x) `(* ,x ,x))) (print (sq 2)) (print (sq 3)))"))
+			.isEqualTo("(progn (print (* 2 2)) (print (* 3 3)))");
+	}
+
+	@Test
+	void macroletIsLexicalAndDoesNotLeakToSiblingForms() {
+		// The local macro m is only active inside the macrolet body; the sibling (m 1)
+		// stays an ordinary call (m resolves in the function namespace later).
+		assertThat(expand("""
+				(macrolet ((m (x) `(+ ,x 1))) (print (m 5)))
+				(print (m 5))
+				""")).isEqualTo("(print (+ 5 1))\n(print (m 5))");
+	}
+
+	@Test
+	void macroletNestedInADefunBodyIsExpanded() {
+		assertThat(expand("""
+				(defun f (n) (macrolet ((dbl (x) `(* 2 ,x))) (dbl n)))
+				""")).isEqualTo("(defun f (n) (* 2 n))");
+	}
+
+	@Test
+	void macroletMacroSeesGlobalHelperDefun() {
+		assertThat(expand("""
+				(defun h (n) (* n 10))
+				(macrolet ((m (n) `(+ ,(h n) 1))) (print (m 4)))
+				""")).isEqualTo("(defun h (n) (* n 10))\n(print (+ 40 1))");
+	}
+
 	// --- macroexpand / macroexpand-1 folding ---
 
 	@Test

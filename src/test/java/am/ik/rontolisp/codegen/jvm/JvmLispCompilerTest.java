@@ -2692,6 +2692,37 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (flet () 'ok))")).isEqualTo("ok");
 	}
 
+	// macrolet is consumed by the compile-path pass (eval.UserMacroExpander); the
+	// compiler
+	// itself never sees it, so the test mirrors the CLI by running the pass first.
+	@Test
+	void compileAndRunMacroletThroughUserMacroExpander() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(macrolet ((sq (x) `(* ,x ,x)) (twice (x) `(+ ,x ,x)))
+				  (print (+ (sq 5) (twice 5))))
+				(defun apply-in-body (n)
+				  (macrolet ((mklist (&rest xs) `(list ,@xs)))
+				    (mklist n (sq-outer n))))
+				(defun sq-outer (x) (* x x))
+				(print (apply-in-body 4))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("35\n(4 16)");
+	}
+
+	@Test
+	void compileAndRunDefineCompilerMacroIsNoOp() throws Exception {
+		// The compiler macro is dropped; the ordinary function definition wins.
+		assertThat(compileAndRun(
+				"(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (print (myinc 10))"))
+			.isEqualTo("11");
+	}
+
+	@Test
+	void compileAndRunRestartCaseEvaluatesPrimaryForm() throws Exception {
+		// Lite: the restart clauses are dead; the primary form is the value.
+		assertThat(compileAndRun("(print (restart-case (+ 1 2) (continue () 99)))")).isEqualTo("3");
+	}
+
 	@Test
 	void compileAndRunFletLambdaListExtensionsAndClosure() throws Exception {
 		assertThat(compileAndRun(
@@ -3658,7 +3689,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
