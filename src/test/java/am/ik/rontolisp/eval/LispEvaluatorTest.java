@@ -2754,6 +2754,29 @@ class LispEvaluatorTest {
 		assertThat(eval("(multiple-value-bind (q r) (floor 7.5) (list q r))").print()).isEqualTo("(7 0.5)");
 	}
 
+	@Test
+	void evalMultipleValueSetq() {
+		assertThat(eval("(let (a b) (multiple-value-setq (a b) (values 1 2)) (list a b))").print()).isEqualTo("(1 2)");
+		// floor-family producer + returns the primary value.
+		assertThat(eval("(let (a b) (list (multiple-value-setq (a b) (floor 17 5)) a b))").print())
+			.isEqualTo("(3 3 2)");
+		// Extra variables receive nil; a single-value producer supplies its primary only.
+		assertThat(eval("(let (a b c) (multiple-value-setq (a b c) (values 1 2)) (list a b c))").print())
+			.isEqualTo("(1 2 nil)");
+		assertThat(eval("(let (a b) (multiple-value-setq (a b) (+ 1 2)) (list a b))").print()).isEqualTo("(3 nil)");
+	}
+
+	@Test
+	void evalRotatef() {
+		assertThat(eval("(let ((x 1) (y 2)) (rotatef x y) (list x y))").print()).isEqualTo("(2 1)");
+		// rotatef returns nil.
+		assertThat(eval("(let ((x 1) (y 2)) (rotatef x y))")).isEqualTo(LispNil.INSTANCE);
+		// Three-place rotate: each place gets the next place's old value.
+		assertThat(eval("(let ((a 1) (b 2) (c 3)) (rotatef a b c) (list a b c))").print()).isEqualTo("(2 3 1)");
+		// Compound places (car/cdr).
+		assertThat(eval("(let ((x (cons 1 2))) (rotatef (car x) (cdr x)) x)").print()).isEqualTo("(2 . 1)");
+	}
+
 	// --- destructuring-bind ---
 
 	@Test
@@ -3663,7 +3686,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case rotatef setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test

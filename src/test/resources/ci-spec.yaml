@@ -1090,7 +1090,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
+      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case rotatef setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       224
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
@@ -2703,6 +2703,22 @@ cases:
       4
       4
       -3
+  - name: multiple-value-setq-and-rotatef
+    source: |
+      (let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))
+      (let (a b) (print (multiple-value-setq (a b) (floor 17 5))) (print (list a b)))
+      (let (a b c) (multiple-value-setq (a b c) (values 1 2)) (print (list a b c)))
+      (let ((x 1) (y 2)) (rotatef x y) (print (list x y)))
+      (let ((a 1) (b 2) (c 3)) (rotatef a b c) (print (list a b c)))
+      (let ((x (cons 1 2))) (rotatef (car x) (cdr x)) (print x))
+    expected: |
+      (1 2)
+      3
+      (3 2)
+      (1 2 nil)
+      (2 1)
+      (2 3 1)
+      (2 . 1)
   - name: destructuring-bind-and-defmacro-lambda-lists
     source: |
       (destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))

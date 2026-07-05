@@ -983,6 +983,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMultipleValueCall(cons), env);
 				case LispNames.NTH_VALUE:
 					return eval(LispMacroExpander.expandNthValue(cons), env);
+				case LispNames.MULTIPLE_VALUE_SETQ:
+					return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
+				case LispNames.ROTATEF:
+					return eval(LispMacroExpander.expandRotatef(cons), env);
 				case LispNames.DESTRUCTURING_BIND:
 					return eval(LispMacroExpander.expandDestructuringBind(cons), env);
 				case LispNames.FLOOR:

@@ -985,6 +985,20 @@ public final class LispNames {
 	public static final String NTH_VALUE = "nth-value";
 
 	/**
+	 * The {@code multiple-value-setq} macro. Assigns the multiple values of the producer
+	 * form (recognized like {@link #MULTIPLE_VALUE_BIND}) to the existing variables via
+	 * {@code setq} and returns the primary value; extra variables receive nil.
+	 */
+	public static final String MULTIPLE_VALUE_SETQ = "multiple-value-setq";
+
+	/**
+	 * The {@code rotatef} macro. Rotates the values of its setf-able places left (each
+	 * place receives the old value of the next, the last receives the old value of the
+	 * first) and returns nil.
+	 */
+	public static final String ROTATEF = "rotatef";
+
+	/**
 	 * The {@code destructuring-bind} macro. Binds the variables of a (possibly nested)
 	 * pattern to the corresponding parts of the evaluated form, supporting
 	 * {@code &optional}/{@code &rest}/{@code &body}/{@code &key}/{@code &aux} inside the

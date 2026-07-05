@@ -203,6 +203,13 @@ public final class FreeVarAnalyzer {
 						case LispNames.NTH_VALUE -> collectFreeVars(LispMacroExpander.expandNthValue(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: the default walk would misread the
+						// multiple-value-setq variable list as a call form.
+						case LispNames.MULTIPLE_VALUE_SETQ ->
+							collectFreeVars(LispMacroExpander.expandMultipleValueSetq(cons), boundVars, knownFunctions,
+									globals, specialNames, freeVars);
+						case LispNames.ROTATEF -> collectFreeVars(LispMacroExpander.expandRotatef(cons), boundVars,
+								knownFunctions, globals, specialNames, freeVars);
+						// Expand before walking: the default walk would misread the
 						// destructuring pattern as a call form.
 						case LispNames.DESTRUCTURING_BIND ->
 							collectFreeVars(LispMacroExpander.expandDestructuringBind(cons), boundVars, knownFunctions,
@@ -344,6 +351,12 @@ public final class FreeVarAnalyzer {
 									knownFunctions, captured, insideLambda);
 						case LispNames.NTH_VALUE -> collectCapturedVars(LispMacroExpander.expandNthValue(cons),
 								localVars, knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.MULTIPLE_VALUE_SETQ ->
+							collectCapturedVars(LispMacroExpander.expandMultipleValueSetq(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.ROTATEF -> collectCapturedVars(LispMacroExpander.expandRotatef(cons), localVars,
+								knownFunctions, captured, insideLambda);
 						// Expand before walking (same reason as collectFreeVars).
 						case LispNames.DESTRUCTURING_BIND ->
 							collectCapturedVars(LispMacroExpander.expandDestructuringBind(cons), localVars,

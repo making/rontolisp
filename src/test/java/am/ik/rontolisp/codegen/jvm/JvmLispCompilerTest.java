@@ -2890,6 +2890,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMultipleValueSetq() throws Exception {
+		assertThat(compileAndRun("(let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))"))
+			.isEqualTo("(1 2)");
+		// Returns the primary value; floor-family producer; extra vars nil.
+		assertThat(compileAndRun("(let (a b) (print (multiple-value-setq (a b) (floor 17 5))) (print (list a b)))"))
+			.isEqualTo("3\n(3 2)");
+		assertThat(compileAndRun("(let (a b c) (multiple-value-setq (a b c) (values 1 2)) (print (list a b c)))"))
+			.isEqualTo("(1 2 nil)");
+	}
+
+	@Test
+	void compileAndRunRotatef() throws Exception {
+		assertThat(compileAndRun("(let ((x 1) (y 2)) (rotatef x y) (print (list x y)))")).isEqualTo("(2 1)");
+		assertThat(compileAndRun("(let ((a 1) (b 2) (c 3)) (rotatef a b c) (print (list a b c)))"))
+			.isEqualTo("(2 3 1)");
+		assertThat(compileAndRun("(let ((x (cons 1 2))) (rotatef (car x) (cdr x)) (print x))")).isEqualTo("(2 . 1)");
+	}
+
+	@Test
 	void compileAndRunDestructuringBind() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
 		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))
@@ -3772,7 +3791,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case rotatef setf the time typecase unless when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test

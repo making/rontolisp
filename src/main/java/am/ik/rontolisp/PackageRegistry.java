@@ -39,10 +39,10 @@ public final class PackageRegistry {
 			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
 			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET, LispNames.LABELS,
 			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
-			LispNames.NTH_VALUE, LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING,
-			LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
-			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
-			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX);
+			LispNames.NTH_VALUE, LispNames.MULTIPLE_VALUE_SETQ, LispNames.ROTATEF, LispNames.DESTRUCTURING_BIND,
+			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE,
+			LispNames.DEFINE_CONDITION, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET,
+			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

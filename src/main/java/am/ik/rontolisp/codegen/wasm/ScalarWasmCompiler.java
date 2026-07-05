@@ -2298,6 +2298,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.MULTIPLE_VALUE_LIST -> LispMacroExpander.expandMultipleValueList(cons);
 			case LispNames.MULTIPLE_VALUE_CALL -> LispMacroExpander.expandMultipleValueCall(cons);
 			case LispNames.NTH_VALUE -> LispMacroExpander.expandNthValue(cons);
+			case LispNames.MULTIPLE_VALUE_SETQ -> LispMacroExpander.expandMultipleValueSetq(cons);
+			case LispNames.ROTATEF -> LispMacroExpander.expandRotatef(cons);
 			case LispNames.DESTRUCTURING_BIND -> LispMacroExpander.expandDestructuringBind(cons);
 			case LispNames.PUSHNEW -> LispMacroExpander.expandPushnew(cons);
 			case LispNames.DEFTYPE -> LispMacroExpander.expandDeftype(cons);
