@@ -2631,6 +2631,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunIntegerLengthAndLogbitp() throws Exception {
+		assertThat(compileAndRun(
+				"(print (integer-length 0)) (print (integer-length 5)) (print (integer-length 255)) (print (integer-length -1)) (print (integer-length -5))"))
+			.isEqualTo("0\n3\n8\n0\n3");
+		assertThat(compileAndRun(
+				"(print (logbitp 0 5)) (print (logbitp 1 5)) (print (logbitp 2 5)) (print (logbitp 3 -1)) (print (funcall #'integer-length 8)) (print (funcall #'logbitp 1 2))"))
+			.isEqualTo("t\nnil\nt\nt\n4\nt");
+	}
+
+	@Test
 	void compileAndRunListStarAndAcons() throws Exception {
 		assertThat(compileAndRun(
 				"(print (list* 1 2 '(3 4))) (print (list* 1 2 3)) (print (list* 'x)) (print (acons 'a 1 nil))"))
@@ -3773,12 +3783,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("222");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("224");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("222");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("224");
 	}
 
 	@Test

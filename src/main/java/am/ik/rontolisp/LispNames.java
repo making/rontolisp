@@ -155,6 +155,18 @@ public final class LispNames {
 	 */
 	public static final String ASH = "ash";
 
+	/**
+	 * The {@code integer-length} built-in function (number of bits in the
+	 * two's-complement magnitude of the argument, excluding sign).
+	 */
+	public static final String INTEGER_LENGTH = "integer-length";
+
+	/**
+	 * The {@code logbitp} built-in function (tests whether a given bit of the
+	 * two's-complement integer is set).
+	 */
+	public static final String LOGBITP = "logbitp";
+
 	// Comparison
 
 	/** The {@code =} built-in function. */

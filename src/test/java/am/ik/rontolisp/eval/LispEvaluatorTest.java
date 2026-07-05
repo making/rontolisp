@@ -2423,6 +2423,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalIntegerLengthAndLogbitp() {
+		assertThat(eval("(integer-length 0)").print()).isEqualTo("0");
+		assertThat(eval("(integer-length 5)").print()).isEqualTo("3");
+		assertThat(eval("(integer-length 255)").print()).isEqualTo("8");
+		assertThat(eval("(integer-length -1)").print()).isEqualTo("0");
+		assertThat(eval("(integer-length -5)").print()).isEqualTo("3");
+		assertThat(eval("(logbitp 0 5)").print()).isEqualTo("t");
+		assertThat(eval("(logbitp 1 5)").print()).isEqualTo("nil");
+		assertThat(eval("(logbitp 2 5)").print()).isEqualTo("t");
+		assertThat(eval("(logbitp 3 -1)").print()).isEqualTo("t");
+		assertThat(eval("(funcall #'integer-length 8)").print()).isEqualTo("4");
+		assertThat(eval("(funcall #'logbitp 1 2)").print()).isEqualTo("t");
+	}
+
+	@Test
 	void evalListStarAndAcons() {
 		assertThat(eval("(list* 1 2 '(3 4))").print()).isEqualTo("(1 2 3 4)");
 		assertThat(eval("(list* 1 2 3)").print()).isEqualTo("(1 2 . 3)");
@@ -3666,9 +3681,9 @@ class LispEvaluatorTest {
 					"position", "position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if",
 					"getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list",
 					"union", "intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash",
-					"list*", "acons", "endp", "elt", "rassoc", "pairlis", "copy-alist", "revappend", "nreconc",
-					"maplist", "mapcon", "notany", "notevery", "delete", "delete-if", "delete-if-not", "substitute",
-					"nsubstitute", "fresh-line")
+					"integer-length", "logbitp", "list*", "acons", "endp", "elt", "rassoc", "pairlis", "copy-alist",
+					"revappend", "nreconc", "maplist", "mapcon", "notany", "notevery", "delete", "delete-if",
+					"delete-if-not", "substitute", "nsubstitute", "fresh-line")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
@@ -3684,7 +3699,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents")
 			.isSorted()
-			.hasSize(222);
+			.hasSize(224);
 	}
 
 	@Test

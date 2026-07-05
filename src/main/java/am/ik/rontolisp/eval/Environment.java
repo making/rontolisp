@@ -1004,6 +1004,15 @@ public final class Environment implements Scope {
 			long count = asLong(args.get(1));
 			return normalizeBig(value.shiftLeft((int) count));
 		}));
+		env.defineFunction(LispNames.INTEGER_LENGTH, new LispFunction(LispNames.INTEGER_LENGTH, args -> {
+			requireArgCount(LispNames.INTEGER_LENGTH, args, 1);
+			return new LispInteger(asBigInteger(args.get(0)).bitLength());
+		}));
+		env.defineFunction(LispNames.LOGBITP, new LispFunction(LispNames.LOGBITP, args -> {
+			requireArgCount(LispNames.LOGBITP, args, 2);
+			int index = (int) asLong(args.get(0));
+			return asBigInteger(args.get(1)).testBit(index) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
 	}
 
 	private static void defineUnaryDouble(Environment env, String name, DoubleUnaryOperator fn) {

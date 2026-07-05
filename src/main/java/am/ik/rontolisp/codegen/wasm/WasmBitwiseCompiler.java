@@ -8,10 +8,11 @@ import am.ik.wasm.Instruction;
 
 /**
  * Compiles the bitwise integer built-ins ({@code logand}, {@code logior}, {@code logxor},
- * {@code lognot}, {@code ash}). Operates on the i31 integer range; results that overflow
- * 31 bits are truncated, matching the other integer fast paths ({@code gcd},
- * {@code mod}). {@code ash} shifts left for a non-negative count and right (arithmetic)
- * otherwise.
+ * {@code lognot}, {@code ash}, {@code integer-length}, {@code logbitp}). Operates on the
+ * i31 integer range; results that overflow 31 bits are truncated, matching the other
+ * integer fast paths ({@code gcd}, {@code mod}). {@code ash} shifts left for a
+ * non-negative count and right (arithmetic) otherwise. {@code logbitp} likewise reads
+ * bits within the i31 range only (an index at or beyond 32 is masked by the WASM shift).
  */
 final class WasmBitwiseCompiler {
 
@@ -82,6 +83,43 @@ final class WasmBitwiseCompiler {
 		ctx.writer.write(Instruction.I32_GE_S);
 		ctx.writer.write(Instruction.SELECT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	static void compileIntegerLength(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		// integer-length = 32 - clz(x ^ (x >> 31)): the arithmetic-shift term flips a
+		// negative x to its ones' complement (so -5 and 4 share a length), leaves a
+		// non-negative x unchanged. Store the boxed value once, unbox twice.
+		int slot = ctx.allocTemp();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(32);
+		emitGetI32(ctx, slot);
+		emitGetI32(ctx, slot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(31);
+		ctx.writer.write(Instruction.I32_SHR_S);
+		ctx.writer.write(Instruction.I32_XOR);
+		ctx.writer.write(Instruction.I32_CLZ);
+		ctx.writer.write(Instruction.I32_SUB);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	static void compileLogbitp(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		// (logbitp index n) == (n >> index) & 1 (arithmetic shift, so a negative n reads
+		// 1 for indices at or above its sign bit within the i31 range).
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_SHR_S);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_AND);
+		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
 	private static void emitGetI32(WasmLispCompiler.Ctx ctx, int slot) {

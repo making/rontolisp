@@ -543,6 +543,8 @@ final class WasmExprCompiler {
 				}
 				case LispNames.LOGNOT -> WasmBitwiseCompiler.compileLognot(cons, ctx);
 				case LispNames.ASH -> WasmBitwiseCompiler.compileAsh(cons, ctx);
+				case LispNames.INTEGER_LENGTH -> WasmBitwiseCompiler.compileIntegerLength(cons, ctx);
+				case LispNames.LOGBITP -> WasmBitwiseCompiler.compileLogbitp(cons, ctx);
 				case LispNames.LIST_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx);
 				case LispNames.ACONS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx);
 				case LispNames.ENDP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEndp(cons), ctx);

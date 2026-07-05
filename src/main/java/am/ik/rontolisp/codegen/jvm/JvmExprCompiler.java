@@ -595,6 +595,8 @@ final class JvmExprCompiler {
 				}
 				case LispNames.LOGNOT -> JvmBitwiseCompiler.compileLognot(cons, ctx, className);
 				case LispNames.ASH -> JvmBitwiseCompiler.compileAsh(cons, ctx, className);
+				case LispNames.INTEGER_LENGTH -> JvmBitwiseCompiler.compileIntegerLength(cons, ctx, className);
+				case LispNames.LOGBITP -> JvmBitwiseCompiler.compileLogbitp(cons, ctx, className);
 				case LispNames.LIST_STAR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx, className);
 				case LispNames.ACONS ->
