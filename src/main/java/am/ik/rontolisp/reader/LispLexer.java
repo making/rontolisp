@@ -111,6 +111,10 @@ public final class LispLexer {
 				System.err.println("warning: skipping unsupported #. read-time-eval form");
 				this.pos += 2;
 				skipDatum();
+				// Leave a nil placeholder so the surrounding structure is preserved: a
+				// skipped #. inside a plist/alist (e.g. an .asd :long-description value)
+				// must not shift the remaining key/value pairing.
+				tokens.add(new Token.SymbolToken("nil"));
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
 				tokens.add(readChar());

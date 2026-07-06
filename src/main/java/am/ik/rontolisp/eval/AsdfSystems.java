@@ -121,6 +121,12 @@ public final class AsdfSystems {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
 		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
+			// A skipped #. read-time-eval form leaves a nil placeholder (so it does not
+			// shift plist/alist pairing inside a defsystem option); a top-level one is an
+			// ASDF version guard and is simply ignored.
+			if (form instanceof LispNil) {
+				continue;
+			}
 			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
 				continue;
 			}
@@ -174,8 +180,8 @@ public final class AsdfSystems {
 				// Metadata: accepted for .asd compatibility, not recorded anywhere. The
 				// :version value may be any literal form, including ASDF's
 				// (:read-file-form "version.sexp") indirection -- it is never inspected.
-				case ":description", ":long-description", ":version", ":author", ":maintainer", ":license", ":licence",
-						":homepage", ":bug-tracker", ":source-control", ":mailto" ->
+				case ":name", ":description", ":long-description", ":version", ":author", ":maintainer", ":license",
+						":licence", ":homepage", ":bug-tracker", ":source-control", ":mailto" ->
 					{
 					}
 				// Test-op wiring only (there is no operate/test-op machinery to drive):
@@ -190,7 +196,7 @@ public final class AsdfSystems {
 				case ":serial" -> serial = !(value instanceof LispNil);
 				case ":components" -> components = value;
 				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
-						+ ": unsupported option " + key.name() + " (supported: :description :long-description"
+						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
 						+ " :version :author :maintainer :license :depends-on :serial :components)");
 			}
 		}

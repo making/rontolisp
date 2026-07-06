@@ -553,8 +553,11 @@ class LispReaderTest {
 
 	@Test
 	void readReadEvalSkippedInTolerantMode() {
+		// A skipped #. leaves a nil placeholder so it cannot shift the surrounding
+		// structure (e.g. plist/alist pairing inside an .asd option); consumers that
+		// treat top-level forms (AsdfSystems) ignore a bare nil.
 		List<LispVal> result = LispReader.readAllSkippingReadEval("#.(+ 1 2) 42", Features.INTERPRETER);
-		assertThat(result).containsExactly(new LispInteger(42));
+		assertThat(result).containsExactly(LispNil.INSTANCE, new LispInteger(42));
 	}
 
 	@Test

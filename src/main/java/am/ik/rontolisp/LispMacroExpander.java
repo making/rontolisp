@@ -6304,6 +6304,21 @@ public final class LispMacroExpander {
 					int count = fmtCount(params, 0, 1, directive);
 					lit.append("~".repeat(count));
 				}
+				// ~<newline> (line continuation): default ignores the newline and the
+				// following non-newline whitespace; ~@<newline> keeps the newline but
+				// still ignores the whitespace; ~:<newline> keeps the whitespace.
+				case '\n', '\r' -> {
+					if (at) {
+						lit.append('\n');
+					}
+					if (!colon) {
+						int n = this.src.length();
+						while (this.pos < n
+								&& (this.src.charAt(this.pos) == ' ' || this.src.charAt(this.pos) == '\t')) {
+							this.pos++;
+						}
+					}
+				}
 				case '%' -> {
 					flushFmtLiteral(lit, ops);
 					ops.add(new FmtNewline(fmtCount(params, 0, 1, directive)));
