@@ -4,13 +4,15 @@ These demos load REAL third-party Common Lisp libraries -- unmodified
 upstream sources -- through `asdf:load-system` and exercise their public API.
 All run identically on all four backends (interpreter, JVM, WASM Preview 1
 and `--component`); they are the programs the cross-backend E2E tests pin
-(`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`).
+(`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest` /
+`ClWhoE2eTest`).
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
 | [`split-sequence-demo.lisp`](split-sequence-demo.lisp) | split-sequence v2.0.1 (MIT) | <https://github.com/sharplispers/split-sequence> |
 | [`parse-number-demo.lisp`](parse-number-demo.lisp) | parse-number v1.8 (BSD 3-Clause) | <https://github.com/sharplispers/parse-number> |
 | [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
+| [`cl-who-demo.lisp`](cl-who-demo.lisp) | cl-who v1.1.5 (BSD 2-Clause) | <https://github.com/edicl/cl-who> |
 
 ## Where the libraries come from
 
@@ -20,6 +22,7 @@ the demos run out of the box from the repository root:
 - `src/test/resources/split-sequence/`
 - `src/test/resources/parse-number/`
 - `src/test/resources/cl-utilities/`
+- `src/test/resources/cl-who/`
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at
@@ -131,6 +134,16 @@ is self-contained -- running it needs no library files.
 (1 99)
 42
 (2 5)
+```
+
+`cl-who-demo.lisp`:
+
+```console
+<html><head><title>Hi</title></head><body><p>Hello<a href='/x'>link</a></p></body></html>
+<div><span>3</span><span>&lt;a&amp;b&gt;</span><span>3-4</span></div>
+<br />
+<br>
+<p>&#xe9;</p>
 ```
 
 ## What can be loaded today
