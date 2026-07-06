@@ -1,22 +1,7 @@
 package am.ik.rontolisp.e2e;
 
-import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
-
-import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.cli.LoadInliner;
-import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
-import am.ik.rontolisp.eval.LispEvaluator;
-import am.ik.rontolisp.eval.SourceLoader;
-import am.ik.rontolisp.eval.UserMacroExpander;
-import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
-import org.junit.jupiter.api.Test;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The {@code .todo/65} integration target: the REAL cl-utilities v1.2.4 sources (vendored
@@ -30,14 +15,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code with-unique-names}/{@code with-gensyms}/{@code once-only} used from user macros,
  * {@code rotate-byte} ({@code return-from}), the verbatim {@code copy-array}
  * ({@code apply #'make-array}) and {@code compose} ({@code reduce #'funcall
- * :from-end}). The interpreter path drives {@code LispEvaluator} directly; the compile
- * path mirrors the CLI pipeline ({@code LoadInliner} splices the system,
- * {@code UserMacroExpander} expands its defmacros) into {@code JvmLispCompiler}. WASM
- * Preview 1 and {@code --component} are covered by manual four-backend verification (the
- * concatenated ci-spec driver cannot provide the {@code .asd} on disk; the residue
- * language features have their own plain-Lisp ci-spec case).
+ * :from-end}). Runs on all four backends via {@link AsdfLibraryE2eSupport}: the
+ * interpreter path drives {@code LispEvaluator} directly; the compile paths mirror the
+ * CLI pipeline ({@code LoadInliner} splices the system, {@code UserMacroExpander} expands
+ * its defmacros) into the JVM/WASM compilers.
  */
-class ClUtilitiesE2eTest {
+class ClUtilitiesE2eTest extends AsdfLibraryE2eSupport {
 
 	private static final String SYSTEM_DIR = Path.of("src", "test", "resources", "cl-utilities")
 		.toAbsolutePath()
@@ -104,52 +87,24 @@ class ClUtilitiesE2eTest {
 			"(5 t (#\\h #\\e #\\l #\\l #\\o))", "24", "49", "(0 1 4 9 16)", "((2 4 6) (1 3 5))", "1", "1", "(2 1)",
 			"42", "8", "255", "8", "(1 99)", "42", "(2 5)");
 
-	@Test
-	void clUtilitiesLoadsAndRunsOnTheInterpreter() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-		evaluator.setSystemPath(List.of(SYSTEM_DIR));
-		for (LispVal expr : LispReader.readAllFromString(EXERCISE)) {
-			evaluator.eval(expr);
-		}
-		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim))
-			.containsExactlyElementsOf(EXPECTED);
+	@Override
+	protected String systemDir() {
+		return SYSTEM_DIR;
 	}
 
-	@Test
-	void clUtilitiesCompilesAndRunsOnJvm() throws Exception {
-		// The CLI compile pipeline: inline the system's component files, then expand
-		// the user macros they define before the compiler runs.
-		List<LispVal> program = UserMacroExpander
-			.expand(LoadInliner.inline(LispReader.readAllFromString(EXERCISE, Features.JVM), SourceLoader.fileSystem(),
-					null, List.of(SYSTEM_DIR), Features.JVM));
-		byte[] classBytes = new JvmLispCompiler("TestClUtilities").compile(program);
-		assertThat(runMain(classBytes, "TestClUtilities").lines().map(String::trim))
-			.containsExactlyElementsOf(EXPECTED);
+	@Override
+	protected String exercise() {
+		return EXERCISE;
 	}
 
-	// Defines the compiled class from its bytes and runs main, capturing stdout.
-	private static String runMain(byte[] classBytes, String name) throws Exception {
-		ClassLoader loader = new ClassLoader(ClUtilitiesE2eTest.class.getClassLoader()) {
-			@Override
-			protected Class<?> findClass(String n) throws ClassNotFoundException {
-				if (n.equals(name)) {
-					return defineClass(n, classBytes, 0, classBytes.length);
-				}
-				return super.findClass(n);
-			}
-		};
-		java.lang.reflect.Method main = loader.loadClass(name).getMethod("main", String[].class);
-		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		PrintStream oldOut = System.out;
-		System.setOut(new PrintStream(baos));
-		try {
-			main.invoke(null, (Object) new String[0]);
-		}
-		finally {
-			System.setOut(oldOut);
-		}
-		return baos.toString().trim();
+	@Override
+	protected List<String> expected() {
+		return EXPECTED;
+	}
+
+	@Override
+	protected String artifactName() {
+		return "TestClUtilities";
 	}
 
 }

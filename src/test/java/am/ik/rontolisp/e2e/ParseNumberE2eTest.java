@@ -2,21 +2,14 @@ package am.ik.rontolisp.e2e;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.cli.LoadInliner;
-import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
-import am.ik.rontolisp.eval.SourceLoader;
-import am.ik.rontolisp.eval.UserMacroExpander;
-import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -27,11 +20,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * single-escapes ({@code \\(-pos}), init-less {@code let} bindings, the
  * {@code (error 'type args...)} idiom, {@code values-list}, {@code /=}, the
  * {@code parse-integer} expansion (full keywords + second value), runtime-type
- * {@code coerce} and {@code *read-default-float-format*}. WASM Preview 1 and
- * {@code --component} were verified manually (the ci-spec driver cannot provide the
- * {@code .asd}; the residue features have their own ci-spec case).
+ * {@code coerce} and {@code *read-default-float-format*}. Runs on all four backends via
+ * {@link AsdfLibraryE2eSupport}.
  */
-class ParseNumberE2eTest {
+class ParseNumberE2eTest extends AsdfLibraryE2eSupport {
 
 	private static final String SYSTEM_DIR = Path.of("src", "test", "resources", "parse-number")
 		.toAbsolutePath()
@@ -58,16 +50,24 @@ class ParseNumberE2eTest {
 	private static final List<String> EXPECTED = List.of("42", "-13", "3.14", "1/3", "-1/2", "1000.0", "250.0", "255",
 			"5", "511", "5", "5.0", "-42.5", "17");
 
-	@Test
-	void parseNumberLoadsAndRunsOnTheInterpreter() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-		evaluator.setSystemPath(List.of(SYSTEM_DIR));
-		for (LispVal expr : LispReader.readAllFromString(EXERCISE)) {
-			evaluator.eval(expr);
-		}
-		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim))
-			.containsExactlyElementsOf(EXPECTED);
+	@Override
+	protected String systemDir() {
+		return SYSTEM_DIR;
+	}
+
+	@Override
+	protected String exercise() {
+		return EXERCISE;
+	}
+
+	@Override
+	protected List<String> expected() {
+		return EXPECTED;
+	}
+
+	@Override
+	protected String artifactName() {
+		return "TestParseNumber";
 	}
 
 	@Test
@@ -84,40 +84,6 @@ class ParseNumberE2eTest {
 				evaluator.eval(expr);
 			}
 		}).hasMessageContaining("invalid-number").hasMessageContaining("Multiple .'s in number");
-	}
-
-	@Test
-	void parseNumberCompilesAndRunsOnJvm() throws Exception {
-		List<LispVal> program = UserMacroExpander
-			.expand(LoadInliner.inline(LispReader.readAllFromString(EXERCISE, Features.JVM), SourceLoader.fileSystem(),
-					null, List.of(SYSTEM_DIR), Features.JVM));
-		byte[] classBytes = new JvmLispCompiler("TestParseNumber").compile(program);
-		assertThat(runMain(classBytes, "TestParseNumber").lines().map(String::trim))
-			.containsExactlyElementsOf(EXPECTED);
-	}
-
-	// Defines the compiled class from its bytes and runs main, capturing stdout.
-	private static String runMain(byte[] classBytes, String name) throws Exception {
-		ClassLoader loader = new ClassLoader(ParseNumberE2eTest.class.getClassLoader()) {
-			@Override
-			protected Class<?> findClass(String n) throws ClassNotFoundException {
-				if (n.equals(name)) {
-					return defineClass(n, classBytes, 0, classBytes.length);
-				}
-				return super.findClass(n);
-			}
-		};
-		java.lang.reflect.Method main = loader.loadClass(name).getMethod("main", String[].class);
-		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		PrintStream oldOut = System.out;
-		System.setOut(new PrintStream(baos));
-		try {
-			main.invoke(null, (Object) new String[0]);
-		}
-		finally {
-			System.setOut(oldOut);
-		}
-		return baos.toString().trim();
 	}
 
 }
