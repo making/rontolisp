@@ -73,6 +73,31 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 依存システムの `.asd` は、依存する側のシステムのディレクトリから探索が始まるため、
 1 つのレジストリディレクトリに並んだ兄弟システムは互いを見つけられます。
 
+## quickload でダウンロードする
+
+手動ダウンロードを省くには、[`ql:quickload`](../reference/functions/ql-quickload.md)
+を使います。システム (とその依存) を本物の
+[Quicklisp](https://www.quicklisp.org/) ディストリビューションから取得し、上記の
+仕組みでそのままロードします:
+
+```console
+$ rontolisp
+> (ql:quickload "split-sequence")
+(split-sequence)
+> (split-sequence:split-sequence #\, "a,b,c")
+("a" "b" "c")
+```
+
+ダウンロードは Quicklisp の dist メタデータ (依存解決の `systems.txt`、tarball URL の
+`releases.txt`) に基づきます。各リリースは展開され `~/.rontolisp/quicklisp/` 以下に
+キャッシュされる (`RONTOLISP_QUICKLISP_HOME` で変更可能) ため、2 回目以降の
+`quickload` はネットワーク I/O を行いません。ダウンロードはインタプリタ実行時または
+コンパイル時に (Java 側で) 行われ、コンパイル済みプログラムはソースを内包していて
+実行時にはフェッチしないので、`ql:quickload` は 4 バックエンドすべてで動作します。
+ロード自体は `asdf` サブセットを経由するため、同じ制約が当てはまります — ダウンロード
+できたライブラリでも、そのソースが下記のサポート範囲に収まっている場合にのみロード
+できます。
+
 ## サポート範囲 (と非サポート)
 
 - `.asd` ファイルは**データ**として解析されます: `defsystem` (裸または `asdf:` 修飾) と

@@ -205,6 +205,13 @@ public final class PackageRegistry {
 		// are external.
 		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM))));
+		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
+		// (and its dependencies) from the real Quicklisp distribution into a local cache
+		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
+		// spelling is ql; quicklisp is a nickname. Does not use cl; the symbol is
+		// external.
+		this.nicknames.put("quicklisp", LispNames.QL_PKG);
+		define(new LispPackage(LispNames.QL_PKG, List.of(), new HashSet<>(Set.of(LispNames.QUICKLOAD))));
 	}
 
 	/**

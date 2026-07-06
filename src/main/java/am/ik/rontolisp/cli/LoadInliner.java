@@ -16,7 +16,9 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.eval.AsdfSystems;
+import am.ik.rontolisp.eval.QuicklispClient;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -137,9 +139,26 @@ public final class LoadInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features) {
+		return inline(program, loader, baseDir, systemPath, features, QuicklispClient.createDefault());
+	}
+
+	/**
+	 * Same as {@link #inline(List, SourceLoader, String, List, Features)} but with an
+	 * injectable {@link QuicklispClient} for {@code ql:quickload} (a test seam: an
+	 * in-memory downloader over a temporary cache).
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features for loaded files
+	 * @param quicklisp the Quicklisp downloader behind {@code ql:quickload}
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, QuicklispClient quicklisp) {
 		List<LispVal> result = new ArrayList<>();
 		expandInto(program, result, new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(),
-				new HashSet<>(), new ArrayDeque<>(), systemPath, features), baseDir);
+				new HashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp), baseDir);
 		return result;
 	}
 
@@ -147,11 +166,13 @@ public final class LoadInliner {
 	 * The state threaded through the inline recursion: the loader, the in-progress file
 	 * stack (cycle guard), the provided modules, the ASDF side -- the registered systems,
 	 * the already-loaded systems, the in-progress system stack (cycle guard) and the
-	 * {@code .asd} search path -- and the reader features for loaded files.
+	 * (mutable) {@code .asd} search path, which {@code ql:quickload} extends with the
+	 * downloaded cache directories -- the reader features for loaded files, and the
+	 * Quicklisp downloader.
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems, Deque<String> loadingSystems,
-			List<String> systemPath, Features features) {
+			List<String> systemPath, Features features, QuicklispClient quicklisp) {
 	}
 
 	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
@@ -168,6 +189,20 @@ public final class LoadInliner {
 			if (systemName != null) {
 				spliceSystem(systemName, out, ctx, baseDir);
 				out.add(quotedSymbol(systemName));
+				continue;
+			}
+			List<String> quickloadNames = quickloadNames(form);
+			if (quickloadNames != null) {
+				for (String name : quickloadNames) {
+					// Download the system (and its dependencies) into the cache, register
+					// the extracted .asd directories on the search path, then splice it
+					// in
+					// exactly like asdf:load-system -- so the JVM/WASM compilers see the
+					// component files natively and the runtime never fetches.
+					downloadQuicklisp(name, ctx);
+					spliceSystem(name, out, ctx, baseDir);
+					out.add(quotedSymbol(name));
+				}
 				continue;
 			}
 			String provideName = provideName(form);
@@ -270,6 +305,59 @@ public final class LoadInliner {
 			ctx.loadingSystems().removeLast();
 		}
 		ctx.loadedSystems().add(name);
+	}
+
+	/**
+	 * If {@code form} is a top-level literal {@code (ql:quickload NAME)} (or
+	 * {@code (ql:quickload '("a" "b"))}), returns the system names; otherwise
+	 * {@code null}. A non-literal argument is a hard error (the compile path cannot
+	 * evaluate it -- the interpreter's runtime function accepts computed names instead).
+	 */
+	@Nullable private static List<String> quickloadNames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !LispNames.QL_PKG.equals(qn.pkg()) || !LispNames.QUICKLOAD.equals(qn.member())) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() != 2) {
+			throw new IllegalStateException(LispNames.QL_QUICKLOAD
+					+ " expects exactly one system name (or a quoted list of names): " + form.print());
+		}
+		LispVal arg = items.get(1);
+		// A quoted list of names: '("a" "b") reads as (quote ("a" "b")).
+		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
+				&& datumCell.car() instanceof LispCons listDatum && listDatum.isProperList()) {
+			List<String> names = new ArrayList<>();
+			for (LispVal element : listDatum.toList()) {
+				names.add(AsdfSystems.designator(LispNames.QL_QUICKLOAD, element));
+			}
+			return names;
+		}
+		return List.of(AsdfSystems.designator(LispNames.QL_QUICKLOAD, arg));
+	}
+
+	/**
+	 * Downloads the named system (and its dependencies) through the context's
+	 * {@link QuicklispClient} and adds the extracted {@code .asd} directories to the
+	 * search path, so the following {@link #spliceSystem} can locate and splice it.
+	 */
+	private static void downloadQuicklisp(String name, Ctx ctx) {
+		List<String> asdDirs;
+		try {
+			asdDirs = ctx.quicklisp().ensureAvailable(name);
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage(), ex);
+		}
+		for (String dir : asdDirs) {
+			if (!ctx.systemPath().contains(dir)) {
+				ctx.systemPath().add(dir);
+			}
+		}
 	}
 
 	/**

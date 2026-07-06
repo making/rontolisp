@@ -8,6 +8,12 @@ evaluate in your browser. Cross-cutting topics have their own homes: the
 the Data Types page, and each function's deviations from Common Lisp are noted on
 its own page.
 
+## cl Package Functions
+
+The standard Common Lisp functions, in the `cl` package (used by `cl-user`, so
+they are available unqualified in ordinary programs). Each name links to its own
+page.
+
 | Function | Example | Result |
 |----------|---------|--------|
 | `+` | `(+ 1 2 3)`, `(+ 1.5 2.5)` | `6`, `4.0` |
@@ -362,3 +368,30 @@ limitations.
 | `java:static` | `(java:static "java.lang.Math" "max" 3 7)` | the marshalled static-method result |
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | the marshalled field value |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | an interface instance backed by the callable |
+
+## asdf Package Functions
+
+The `asdf` package is a limited, API-compatible subset of ASDF for loading
+multi-file systems from `.asd` definitions. It is **not part of Common Lisp**;
+reference its symbols with the `asdf:` qualifier. Each name below links to its
+own page; the [Systems guide](../guides/asdf-systems.md) gives a full project
+layout and the search-path details.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | define a system (name, `:depends-on`, `:serial`, `:components`) for a later `load-system` |
+| `asdf:load-system` | `(asdf:load-system :my-lib)` | load a system: its dependency systems first, then its component files in order (a literal, top-level form on the compile path) |
+
+## ql Package Functions
+
+The `ql` package is a limited, API-compatible subset of Quicklisp:
+`quickload` downloads a system from the real Quicklisp distribution into a local
+cache and then loads it through the `asdf` subset (`quicklisp` is a built-in
+nickname). It is **not part of Common Lisp**; reference its symbol with the
+`ql:` qualifier. The name below links to its own page; the [Systems
+guide](../guides/asdf-systems.md#downloading-with-quickload) covers the cache
+layout and limitations.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `ql:quickload` | `(ql:quickload "split-sequence")` | download a system (and its dependencies) from Quicklisp, cache it under `~/.rontolisp/quicklisp`, and load it; returns the list of loaded system names |

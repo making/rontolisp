@@ -282,7 +282,8 @@ final class WasmExprCompiler {
 				// consumed by the compile-time LoadInliner pass; anything left is nested
 				// or non-literal, which the compiled runtime reader cannot execute
 				// (unlike a runtime load).
-				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_LOAD_SYSTEM, LispNames.ASDF_DEFSYSTEM ->
+				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_LOAD_SYSTEM, LispNames.ASDF_DEFSYSTEM,
+						LispNames.QL_QUICKLOAD ->
 					throw new UnsupportedOperationException(
 							sym.name() + " is only supported as a literal top-level form on the compile path");
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);

@@ -5,6 +5,12 @@
 [配列](data-types.md#arrays) と [ハッシュテーブル](data-types.md#hash-tables)
 で説明されており、各関数のCommon Lispからの逸脱はそれぞれのページに記載されています。
 
+## cl パッケージの関数
+
+標準の Common Lisp 関数で、`cl` パッケージに属します (`cl-user` が使用するため、
+通常のプログラムでは修飾なしで利用できます)。各関数名はそれぞれのページにリンクして
+います。
+
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
 | `+` | `(+ 1 2 3)`, `(+ 1.5 2.5)` | `6`, `4.0` |
@@ -335,3 +341,28 @@
 | `java:static` | `(java:static "java.lang.Math" "max" 3 7)` | マーシャリングされた静的メソッドの結果 |
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | マーシャリングされたフィールド値 |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | callable を背後に持つインターフェースのインスタンス |
+
+## asdf パッケージの関数
+
+`asdf` パッケージは、`.asd` 定義から複数ファイルのシステムをロードするための、ASDF の
+限定的な API 互換サブセットです。**Common Lisp の一部ではありません**。シンボルは
+`asdf:` 修飾子付きで参照します。各名前は個別のページにリンクしています。プロジェクトの
+全体像と探索パスの詳細は [システムガイド](../guides/asdf-systems.md)を参照してください。
+
+| 関数 | 例 | 結果 |
+|----------|---------|--------|
+| `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | システムを定義する (名前・`:depends-on`・`:serial`・`:components`)。後続の `load-system` 用 |
+| `asdf:load-system` | `(asdf:load-system :my-lib)` | システムをロードする: まず依存システム、次にコンポーネントファイルを順に (コンパイルパスではリテラルかつトップレベルのフォーム) |
+
+## ql パッケージの関数
+
+`ql` パッケージは Quicklisp の限定的な API 互換サブセットです。`quickload` は本物の
+Quicklisp ディストリビューションからシステムをローカルキャッシュにダウンロードし、
+`asdf` サブセットを経由してロードします (`quicklisp` は組み込みのニックネーム)。
+**Common Lisp の一部ではありません**。シンボルは `ql:` 修飾子付きで参照します。
+下記の名前は個別のページにリンクしています。キャッシュのレイアウトと制約については
+[システムガイド](../guides/asdf-systems.md#quickload-でダウンロードする)を参照してください。
+
+| 関数 | 例 | 結果 |
+|----------|---------|--------|
+| `ql:quickload` | `(ql:quickload "split-sequence")` | Quicklisp からシステム (とその依存) をダウンロードし、`~/.rontolisp/quicklisp` にキャッシュしてロードする。ロードしたシステム名のリストを返す |

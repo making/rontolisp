@@ -112,6 +112,13 @@ public final class LispEvaluator {
 	private List<String> systemPath = List.of();
 
 	/**
+	 * The Quicklisp downloader behind {@code ql:quickload}: created lazily on first use
+	 * (so a program that never calls {@code ql:quickload} touches no network/cache), or
+	 * injected by a test via {@link #setQuicklispClient}.
+	 */
+	@Nullable private QuicklispClient quicklispClient;
+
+	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
 	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
 	 * as places. Kept per evaluator, like the user macro table.
@@ -170,6 +177,17 @@ public final class LispEvaluator {
 	 */
 	public void setSystemPath(List<String> systemPath) {
 		this.systemPath = List.copyOf(systemPath);
+	}
+
+	/**
+	 * Installs the Quicklisp downloader used by {@code ql:quickload}. Mainly a test seam
+	 * (inject a client with an in-memory {@link QuicklispClient.Downloader} and a
+	 * temporary cache directory); left {@code null} in production, where the default
+	 * client ({@link QuicklispClient#createDefault}) is created on first use.
+	 * @param client the Quicklisp client
+	 */
+	public void setQuicklispClient(QuicklispClient client) {
+		this.quicklispClient = client;
 	}
 
 	private void registerEval() {
@@ -637,6 +655,31 @@ public final class LispEvaluator {
 			loadSystem(name);
 			return new LispSymbol(name);
 		}));
+		// ql:quickload = auto-download (real Quicklisp dist) + asdf:load-system. It
+		// accepts a single system name or a list of names, downloads each (with its
+		// dependencies) into the cache, adds the extracted .asd directories to the search
+		// path, and then loads through the same asdf machinery. Returns the list of
+		// loaded
+		// system names, like real quickload.
+		String quickloadName = PackageRegistry.qualify(LispNames.QL_PKG, LispNames.QUICKLOAD);
+		this.globalEnv.defineFunction(quickloadName, new LispFunction(quickloadName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.QL_QUICKLOAD + " expects 1 argument, got " + args.size());
+			}
+			List<LispVal> designators = args.get(0) instanceof LispCons list && list.isProperList() ? list.toList()
+					: List.of(args.get(0));
+			List<LispVal> loaded = new java.util.ArrayList<>();
+			for (LispVal designator : designators) {
+				String name = AsdfSystems.designator(LispNames.QL_QUICKLOAD, designator);
+				quickload(name);
+				loaded.add(new LispSymbol(name));
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = loaded.size() - 1; i >= 0; i--) {
+				result = new LispCons(loaded.get(i), result);
+			}
+			return result;
+		}));
 		registerJava();
 	}
 
@@ -680,6 +723,34 @@ public final class LispEvaluator {
 	 * {@link #setSystemPath system path}; the {@code .asd} file is parsed as plain data
 	 * (never evaluated), like the compile-time {@code LoadInliner} pass.
 	 */
+	/**
+	 * Implements {@code ql:quickload}: downloads the named system (and its transitive
+	 * dependencies) from the Quicklisp distribution into the local cache, adds the
+	 * extracted {@code .asd} directories to the system search path, and then loads it
+	 * through {@link #loadSystem} -- so quickload is {@code asdf:load-system} with an
+	 * auto-download step in front.
+	 */
+	private void quickload(String name) {
+		if (this.quicklispClient == null) {
+			this.quicklispClient = QuicklispClient.createDefault();
+		}
+		List<String> asdDirs;
+		try {
+			asdDirs = this.quicklispClient.ensureAvailable(name);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage());
+		}
+		List<String> merged = new java.util.ArrayList<>(this.systemPath);
+		for (String dir : asdDirs) {
+			if (!merged.contains(dir)) {
+				merged.add(dir);
+			}
+		}
+		this.systemPath = List.copyOf(merged);
+		loadSystem(name);
+	}
+
 	private void loadSystem(String name) {
 		if (this.loadedSystems.contains(name)) {
 			return;

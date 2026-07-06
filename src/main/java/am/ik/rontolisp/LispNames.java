@@ -1992,6 +1992,28 @@ public final class LispNames {
 	/** The canonical qualified spelling of {@code asdf:load-system}. */
 	public static final String ASDF_LOAD_SYSTEM = ASDF_PKG + ":" + LOAD_SYSTEM;
 
+	/**
+	 * The {@code ql} package name (a limited, API-compatible subset of Quicklisp). Its
+	 * canonical spelling is {@code ql}; {@code quicklisp} is a nickname. Downloads a
+	 * system (and its dependencies) from the real Quicklisp distribution into a local
+	 * cache and then defers to the {@code asdf} subset to load it -- see
+	 * {@code eval.QuicklispClient}.
+	 */
+	public static final String QL_PKG = "ql";
+
+	/**
+	 * {@code ql:quickload} -- downloads a system by name (with its dependencies) from the
+	 * Quicklisp distribution into the local cache, then loads it like
+	 * {@code asdf:load-system}. The download happens at interpret time or compile time
+	 * (Java-side); a compiled program has the sources spliced in, so the WASM/JVM runtime
+	 * never fetches. Spliced at compile time by the {@code LoadInliner} pass; a runtime
+	 * function on the interpreter.
+	 */
+	public static final String QUICKLOAD = "quickload";
+
+	/** The canonical qualified spelling of {@code ql:quickload}. */
+	public static final String QL_QUICKLOAD = QL_PKG + ":" + QUICKLOAD;
+
 	private LispNames() {
 	}
 

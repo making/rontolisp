@@ -76,6 +76,31 @@ the compile-time `load` include, so the JVM and WASM compilers see every
 A dependency system's `.asd` is searched starting from the depending system's
 directory, so sibling systems in one registry directory find each other.
 
+## Downloading with quickload
+
+To skip the manual download, [`ql:quickload`](../reference/functions/ql-quickload.md)
+fetches a system (and its dependencies) from the real
+[Quicklisp](https://www.quicklisp.org/) distribution and then loads it through
+exactly the machinery above:
+
+```console
+$ rontolisp
+> (ql:quickload "split-sequence")
+(split-sequence)
+> (split-sequence:split-sequence #\, "a,b,c")
+("a" "b" "c")
+```
+
+The Quicklisp dist metadata drives the download (`systems.txt` for dependency
+resolution, `releases.txt` for the tarball URLs); each release is extracted and
+cached under `~/.rontolisp/quicklisp/` (override with `RONTOLISP_QUICKLISP_HOME`),
+so a repeat `quickload` does no network I/O. The download runs at interpret time
+or compile time (Java-side): a compiled program has the sources spliced in and
+never fetches at runtime, so `ql:quickload` works on all four backends. Because
+loading still goes through the `asdf` subset, the same limitations apply — a
+downloaded library only loads if its sources stay inside the supported subset
+below.
+
 ## What is (and is not) supported
 
 - `.asd` files are parsed as **data**: only `defsystem` (bare or

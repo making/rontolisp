@@ -348,3 +348,6 @@ categories:
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
+  - title: "ql パッケージ (Quicklisp)"
+    functions:
+      - { slug: ql-quickload, name: "ql:quickload" }

@@ -1,14 +1,18 @@
 package am.ik.rontolisp.cli;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.eval.QuicklispClient;
+import am.ik.rontolisp.eval.QuicklispTestSupport;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -234,6 +238,51 @@ class LoadInlinerTest {
 						"sq.lisp", "(defun sq (x) (* x x))"));
 		byte[] classBytes = new JvmLispCompiler("TestAsdf").compile(program);
 		assertThat(runMain(classBytes, "TestAsdf")).isEqualTo("49");
+	}
+
+	// --- ql:quickload (compile-time download + asdf splice) ---
+
+	private static final String QL_MYLIB_URL = "http://fake.quicklisp/archive/mylib-1.0.tar.gz";
+
+	private static QuicklispClient quicklispClient(Path home, String componentBody) {
+		return new QuicklispClient(home, QuicklispTestSupport.dist(//
+				"mylib mylib mylib\n", //
+				"mylib " + QL_MYLIB_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				Map.of(QL_MYLIB_URL, QuicklispTestSupport.tarGz(Map.of(//
+						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
+						"mylib-1.0/mylib.lisp", componentBody)))));
+	}
+
+	@Test
+	void quickloadDownloadsAndSplicesTheComponentFiles(@TempDir Path home) {
+		// The downloaded system's component file is spliced in exactly like
+		// asdf:load-system (the download happens here, at compile time).
+		List<LispVal> result = LoadInliner.inline(
+				LispReader.readAllFromString("(ql:quickload \"mylib\") (print (mylib-answer))"),
+				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
+				quicklispClient(home, "(defun mylib-answer () 42)"));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun mylib-answer nil 42)", "(quote mylib)",
+				"(print (mylib-answer))");
+	}
+
+	@Test
+	void quickloadProgramCompilesAndRunsOnJvm(@TempDir Path home) throws Exception {
+		List<LispVal> program = LoadInliner.inline(
+				LispReader.readAllFromString("(ql:quickload \"mylib\") (print (mylib-answer))"),
+				SourceLoader.fileSystem(), null, List.of(), Features.JVM,
+				quicklispClient(home, "(defun mylib-answer () (* 6 7))"));
+		byte[] classBytes = new JvmLispCompiler("TestQuickload").compile(program);
+		assertThat(runMain(classBytes, "TestQuickload")).isEqualTo("42");
+	}
+
+	@Test
+	void quickloadNonLiteralNameThrows(@TempDir Path home) {
+		assertThatThrownBy(() -> LoadInliner.inline(
+				LispReader.readAllFromString("(ql:quickload (concatenate 'string \"my\" \"lib\"))"),
+				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
+				quicklispClient(home, "(defun mylib-answer () 42)")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("literal system name");
 	}
 
 	@Test

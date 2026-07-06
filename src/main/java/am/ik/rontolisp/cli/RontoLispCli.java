@@ -275,6 +275,8 @@ public final class RontoLispCli {
 		this.out.println("  --system-path DIRS Directories searched for NAME.asd by asdf:load-system");
 		this.out.println("                     (joined with the platform path separator, like PATH; the");
 		this.out.println("                     RONTOLISP_SOURCE_REGISTRY environment variable adds more)");
+		this.out.println("                     ql:quickload downloads systems into ~/.rontolisp/quicklisp");
+		this.out.println("                     (override with the RONTOLISP_QUICKLISP_HOME env variable)");
 	}
 
 	static boolean isBalanced(String input) {
