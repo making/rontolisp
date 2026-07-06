@@ -35,7 +35,7 @@ expansion time on interpreter + compiled JVM.
 
 | Gap | Unit |
 | --- | --- |
-| `make-string` (`:initial-element`/`:element-type`), `replace` (seq, `:start1`), `write-sequence` on strings (`:start`/`:end`), `constantp`, `lower-case-p`, `upper-case-p`, `streamp` + `stream` type-specifier in `check-type` | `.todo/77` |
+| `make-string` (`:initial-element`/`:element-type`), `replace` (seq, `:start1`), `write-sequence` on strings (`:start`/`:end`), `constantp`, `lower-case-p`, `upper-case-p`, `streamp` + `stream` type-specifier in `check-type` | `.todo/77` **DONE** (all 4 backends + native E2E) |
 | `defgeneric` + `defmethod` (CLOS-lite: single default method, optional eql-specializer) -- cl-who's `convert-tag-to-string-list` | `.todo/78` |
 | `defun (setf html-mode)` -- setf-function definitions | `.todo/79` |
 | `loop for s being the {external-\|present-}symbols of PACKAGE` (hyperdoc block; lite/empty iteration is acceptable) | `.todo/80` |

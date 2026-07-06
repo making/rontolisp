@@ -4304,6 +4304,11 @@ public final class LispMacroExpander {
 		LispSymbol st = new LispSymbol("__wseq_st");
 		LispSymbol i = new LispSymbol("__wseq_i");
 		LispSymbol end = new LispSymbol("__wseq_end");
+		// String branch: write the (start,end) slice as one write-string, yielding seq.
+		LispVal writeStr = listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING),
+				listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), seq, args.start(), args.end())), st));
+		LispVal stringBranch = makeProgn(List.of(writeStr, seq));
+		// Array branch: the write-byte loop over the (start,end) range.
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), i, end));
 		LispVal writeByte = listToCons(List.of(new LispSymbol(LispNames.WRITE_BYTE),
 				listToCons(List.of(new LispSymbol(LispNames.AREF), seq, i)), st));
@@ -4312,10 +4317,190 @@ public final class LispMacroExpander {
 		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, writeByte, step));
 		LispVal innerBindings = listToCons(
 				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
-		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, seq));
+		LispVal arrayBranch = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, seq));
+		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seq), stringBranch, arrayBranch);
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, dispatch));
+	}
+
+	/**
+	 * Expands {@code (make-string size &key initial-element element-type)} into a fill
+	 * loop that appends {@code initial-element} {@code size} times over
+	 * {@code concatenate}. {@code initial-element} defaults to a space (implementation
+	 * defined); {@code element-type} is parsed and ignored (single string
+	 * representation). The keywords must be literal.
+	 *
+	 * <pre>
+	 * (make-string n :initial-element c) ->
+	 * (let ((__ms_r "") (__ms_c (string c)))
+	 *   (dotimes (__ms_i n) (setq __ms_r (concatenate 'string __ms_r __ms_c)))
+	 *   __ms_r)
+	 * </pre>
+	 * @param cons the make-string expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeString(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() % 2 != 0) {
+			throw new IllegalArgumentException(
+					"make-string expects (make-string size [:initial-element c] [:element-type type])");
+		}
+		LispVal size = parts.get(1);
+		LispVal init = new LispChar(' ');
+		for (int k = 2; k < parts.size(); k += 2) {
+			if (parts.get(k) instanceof LispSymbol key && LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
+				init = parts.get(k + 1);
+			}
+			else if (parts.get(k) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+				// element-type is parsed and ignored (single string representation).
+			}
+			else {
+				throw new UnsupportedOperationException(
+						"make-string supports only the literal :initial-element and :element-type keywords");
+			}
+		}
+		LispSymbol r = new LispSymbol("__ms_r");
+		LispSymbol c = new LispSymbol("__ms_c");
+		LispSymbol idx = new LispSymbol("__ms_i");
+		LispVal concat = fmtCall(LispNames.SETQ, r, fmtCall(LispNames.CONCATENATE, quoteOf("string"), r, c));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(idx, size)), concat));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(r, new LispString(""))),
+				listToCons(List.of(c, fmtCall(LispNames.STRING, init)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, loop, r));
+	}
+
+	/**
+	 * Expands {@code (replace seq1 seq2 &key start1 end1 start2 end2)} into a
+	 * {@code concatenate} of the untouched head/tail of {@code seq1} around the copied
+	 * region of {@code seq2}. String-aware; since strings are immutable values this
+	 * returns a fresh string rather than mutating {@code seq1} in place. The keywords
+	 * must be literal.
+	 *
+	 * <pre>
+	 * (replace s1 s2 :start1 a) ->
+	 * (let* ((__rpl_1 s1) (__rpl_2 s2)
+	 *        (__rpl_s1 a) (__rpl_e1 (length __rpl_1)) (__rpl_s2 0) (__rpl_e2 (length __rpl_2))
+	 *        (__rpl_n (min (- __rpl_e1 __rpl_s1) (- __rpl_e2 __rpl_s2))))
+	 *   (concatenate 'string
+	 *     (subseq __rpl_1 0 __rpl_s1)
+	 *     (subseq __rpl_2 __rpl_s2 (+ __rpl_s2 __rpl_n))
+	 *     (subseq __rpl_1 (+ __rpl_s1 __rpl_n) (length __rpl_1))))
+	 * </pre>
+	 * @param cons the replace expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReplace(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() % 2 == 0) {
+			throw new IllegalArgumentException(
+					"replace expects (replace seq1 seq2 [:start1 s] [:end1 e] [:start2 s] [:end2 e])");
+		}
+		LispSymbol r1 = new LispSymbol("__rpl_1");
+		LispSymbol r2 = new LispSymbol("__rpl_2");
+		LispVal s1 = new LispInteger(0);
+		LispVal e1 = fmtCall(LispNames.LENGTH, r1);
+		LispVal s2 = new LispInteger(0);
+		LispVal e2 = fmtCall(LispNames.LENGTH, r2);
+		for (int k = 3; k < parts.size(); k += 2) {
+			if (!(parts.get(k) instanceof LispSymbol key)) {
+				throw new UnsupportedOperationException("replace supports only literal keyword arguments");
+			}
+			switch (key.name()) {
+				case LispNames.START1_KEYWORD -> s1 = parts.get(k + 1);
+				case LispNames.END1_KEYWORD -> e1 = parts.get(k + 1);
+				case LispNames.START2_KEYWORD -> s2 = parts.get(k + 1);
+				case LispNames.END2_KEYWORD -> e2 = parts.get(k + 1);
+				default -> throw new UnsupportedOperationException(
+						"replace supports only the literal :start1/:end1/:start2/:end2 keywords");
+			}
+		}
+		LispSymbol vs1 = new LispSymbol("__rpl_s1");
+		LispSymbol ve1 = new LispSymbol("__rpl_e1");
+		LispSymbol vs2 = new LispSymbol("__rpl_s2");
+		LispSymbol ve2 = new LispSymbol("__rpl_e2");
+		LispSymbol n = new LispSymbol("__rpl_n");
+		LispVal nInit = fmtCall(LispNames.MIN, fmtCall(LispNames.SUB, ve1, vs1), fmtCall(LispNames.SUB, ve2, vs2));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(r1, parts.get(1))),
+				listToCons(List.of(r2, parts.get(2))), listToCons(List.of(vs1, s1)), listToCons(List.of(ve1, e1)),
+				listToCons(List.of(vs2, s2)), listToCons(List.of(ve2, e2)), listToCons(List.of(n, nInit))));
+		LispVal head = fmtCall(LispNames.SUBSEQ, r1, new LispInteger(0), vs1);
+		LispVal mid = fmtCall(LispNames.SUBSEQ, r2, vs2, fmtCall(LispNames.ADD, vs2, n));
+		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
+		LispVal body = fmtCall(LispNames.CONCATENATE, quoteOf("string"), head, mid, tail);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	/**
+	 * Expands {@code (lower-case-p c)} into {@code (let ((__cc c)) (not (char= __cc
+	 * (char-upcase __cc))))}: a character is lowercase exactly when upcasing changes it.
+	 * Follows the platform's Unicode case tables.
+	 * @param cons the lower-case-p expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLowerCaseP(LispCons cons) {
+		return expandCaseTest(cons, LispNames.LOWER_CASE_P, LispNames.CHAR_UPCASE);
+	}
+
+	/**
+	 * Expands {@code (upper-case-p c)} into {@code (let ((__cc c)) (not (char= __cc
+	 * (char-downcase __cc))))}: a character is uppercase exactly when downcasing changes
+	 * it.
+	 * @param cons the upper-case-p expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUpperCaseP(LispCons cons) {
+		return expandCaseTest(cons, LispNames.UPPER_CASE_P, LispNames.CHAR_DOWNCASE);
+	}
+
+	private static LispVal expandCaseTest(LispCons cons, String name, String flipOp) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(name + " expects exactly one argument");
+		}
+		LispSymbol c = new LispSymbol("__cc");
+		LispVal test = makeNot(fmtCall(LispNames.CHAR_EQ, c, fmtCall(flipOp, c)));
+		return makeLet("__cc", parts.get(1), test);
+	}
+
+	/**
+	 * Expands {@code (constantp form)} into a runtime type test: true for numbers,
+	 * strings, characters, keywords, {@code t}/{@code nil}, and {@code (quote x)} forms
+	 * (lite -- false negatives only push work to runtime).
+	 * @param cons the constantp expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandConstantp(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("constantp expects exactly one argument");
+		}
+		LispSymbol c = new LispSymbol("__cp");
+		LispVal quoteForm = fmtCall(LispNames.AND, callOf(LispNames.CONSP, c),
+				fmtCall(LispNames.EQ_GENERAL, callOf(LispNames.CAR, c), quoteOf(LispNames.QUOTE)));
+		LispVal test = fmtCall(LispNames.OR, callOf(LispNames.NUMBERP, c), callOf(LispNames.STRINGP, c),
+				callOf(LispNames.CHARACTERP, c), callOf(LispNames.KEYWORDP, c),
+				fmtCall(LispNames.EQ_GENERAL, c, LispTrue.INSTANCE), callOf(LispNames.NULL, c), quoteForm);
+		return makeLet("__cp", parts.get(1), test);
+	}
+
+	/**
+	 * Expands {@code (streamp x)} into {@code (integerp x)}: streams are opaque integer
+	 * handles across all backends (lite).
+	 * @param cons the streamp expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandStreamp(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException("streamp expects exactly one argument");
+		}
+		return callOf(LispNames.INTEGERP, parts.get(1));
+	}
+
+	/** Builds a {@code (quote name)} form for the given symbol name. */
+	private static LispVal quoteOf(String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(name)));
 	}
 
 	/**
@@ -7160,6 +7345,7 @@ public final class LispMacroExpander {
 			case "character" -> LispNames.CHARACTERP;
 			case "hash-table" -> LispNames.HASH_TABLE_P;
 			case "function" -> LispNames.FUNCTIONP;
+			case "stream" -> LispNames.STREAMP;
 			default -> null;
 		};
 	}

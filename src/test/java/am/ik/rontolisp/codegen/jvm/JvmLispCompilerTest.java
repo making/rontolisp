@@ -1393,6 +1393,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMakeString() throws Exception {
+		assertThat(compileAndRun("(princ (make-string 3 :initial-element #\\x))")).isEqualTo("xxx");
+		assertThat(compileAndRun("(princ (length (make-string 5)))")).isEqualTo("5");
+		// (length ...) avoids the compileAndRun trim() eating the funcall's trailing
+		// spaces.
+		assertThat(compileAndRun("(princ (length (funcall #'make-string 2)))")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunReplace() throws Exception {
+		assertThat(compileAndRun("(princ (replace (make-string 5 :initial-element #\\a) \"XY\" :start1 1))"))
+			.isEqualTo("aXYaa");
+		assertThat(compileAndRun("(princ (replace \"aaaaa\" \"XY\"))")).isEqualTo("XYaaa");
+		assertThat(compileAndRun("(princ (funcall #'replace \"aaaaa\" \"XY\"))")).isEqualTo("XYaaa");
+	}
+
+	@Test
+	void compileAndRunWriteSequenceString() throws Exception {
+		assertThat(compileAndRun("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
+			.isEqualTo("bc");
+	}
+
+	@Test
+	void compileAndRunCasePredicatesAndConstantp() throws Exception {
+		assertThat(compileAndRun("(print (list (lower-case-p #\\a) (upper-case-p #\\A)))")).isEqualTo("(t t)");
+		assertThat(compileAndRun("(print (list (lower-case-p #\\A) (upper-case-p #\\a)))")).isEqualTo("(nil nil)");
+		assertThat(compileAndRun("(print (list (constantp 5) (constantp 'x) (constantp '(quote y))))"))
+			.isEqualTo("(t nil t)");
+		assertThat(compileAndRun("(print (mapcar #'upper-case-p '(#\\A #\\b)))")).isEqualTo("(t nil)");
+	}
+
+	@Test
+	void compileAndRunStreamp() throws Exception {
+		assertThat(compileAndRun("(princ (with-output-to-string (s) (princ (streamp s) s)))")).isEqualTo("t");
+		assertThat(compileAndRun("(princ (with-output-to-string (s) (check-type s stream) (write-string \"ok\" s)))"))
+			.isEqualTo("ok");
+	}
+
+	@Test
 	void compileAndRunStringEquality() throws Exception {
 		assertThat(compileAndRun("(print (string= \"abc\" \"abc\"))")).isEqualTo("t");
 		assertThat(compileAndRun("(print (string= \"abc\" \"abd\"))")).isEqualTo("nil");
@@ -3837,12 +3876,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("243");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("249");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("243");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("249");
 	}
 
 	@Test

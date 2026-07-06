@@ -946,6 +946,67 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMakeString() {
+		assertThat(eval("(make-string 3 :initial-element #\\x)")).isEqualTo(new LispString("xxx"));
+		assertThat(eval("(length (make-string 5))")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(make-string 0 :initial-element #\\a)")).isEqualTo(new LispString(""));
+		assertThat(eval("(make-string 2 :initial-element #\\z :element-type 'character)"))
+			.isEqualTo(new LispString("zz"));
+		// First-class use via funcall.
+		assertThat(eval("(funcall #'make-string 3)")).isEqualTo(new LispString("   "));
+	}
+
+	@Test
+	void evalReplace() {
+		assertThat(eval("(replace (make-string 5 :initial-element #\\a) \"XY\" :start1 1)"))
+			.isEqualTo(new LispString("aXYaa"));
+		assertThat(eval("(replace \"aaaaa\" \"XY\")")).isEqualTo(new LispString("XYaaa"));
+		assertThat(eval("(replace \"aaaaa\" \"XYZ\" :start1 1 :end1 3)")).isEqualTo(new LispString("aXYaa"));
+		assertThat(eval("(replace \"aaaaa\" \"pqXYr\" :start1 1 :start2 2 :end2 4)"))
+			.isEqualTo(new LispString("aXYaa"));
+		assertThat(eval("(funcall #'replace \"aaaaa\" \"XY\")")).isEqualTo(new LispString("XYaaa"));
+	}
+
+	@Test
+	void evalWriteSequenceString() {
+		assertThat(eval("(with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3))"))
+			.isEqualTo(new LispString("bc"));
+		assertThat(eval("(with-output-to-string (s) (write-sequence \"hello\" s))")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void evalCasePredicates() {
+		assertThat(eval("(lower-case-p #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(lower-case-p #\\A)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(lower-case-p #\\5)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(upper-case-p #\\A)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(upper-case-p #\\a)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(mapcar #'upper-case-p '(#\\A #\\b))").print()).isEqualTo("(t nil)");
+	}
+
+	@Test
+	void evalConstantp() {
+		assertThat(eval("(constantp 5)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp \"str\")")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp :key)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp t)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp nil)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp '(quote x))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp 'x)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(constantp '(+ 1 2))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalStreamp() {
+		assertThat(eval("(with-output-to-string (s) (princ (streamp s) s))")).isEqualTo(new LispString("t"));
+		assertThat(eval("(streamp 5)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(streamp \"x\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(with-output-to-string (s) (check-type s stream) (write-string \"ok\" s))"))
+			.isEqualTo(new LispString("ok"));
+	}
+
+	@Test
 	void evalStringEquality() {
 		assertThat(eval("(string= \"abc\" \"abc\")")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(string= \"abc\" \"abd\")")).isEqualTo(LispNil.INSTANCE);
@@ -3780,7 +3841,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(243);
+			.hasSize(249);
 	}
 
 	@Test

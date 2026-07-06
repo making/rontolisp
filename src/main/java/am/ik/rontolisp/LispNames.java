@@ -1414,6 +1414,21 @@ public final class LispNames {
 	/** The {@code subseq} built-in function (strings only). */
 	public static final String SUBSEQ = "subseq";
 
+	/**
+	 * The {@code make-string} built-in function ({@code (make-string n &key
+	 * initial-element element-type)}). Lowered to a fill loop over {@code concatenate};
+	 * {@code element-type} is parsed and ignored (single string representation).
+	 */
+	public static final String MAKE_STRING = "make-string";
+
+	/**
+	 * The {@code replace} built-in function ({@code (replace seq1 seq2 &key start1 end1
+	 * start2 end2)}). String-aware; lowered to a {@code concatenate} of the untouched
+	 * head/tail of {@code seq1} around the copied region of {@code seq2}. Since strings
+	 * are immutable values, it returns a fresh string rather than mutating in place.
+	 */
+	public static final String REPLACE = "replace";
+
 	/** The {@code string=} built-in function (case-sensitive string equality). */
 	public static final String STRING_EQ = "string=";
 
@@ -1440,6 +1455,21 @@ public final class LispNames {
 
 	/** The {@code functionp} built-in function (is the value a function?). */
 	public static final String FUNCTIONP = "functionp";
+
+	/**
+	 * The {@code constantp} built-in function (true if the form is a constant object).
+	 * Lite: true for self-evaluating objects (numbers, strings, characters, keywords,
+	 * {@code t}/{@code nil}) and {@code (quote x)} forms; false otherwise (false
+	 * negatives only push work to runtime).
+	 */
+	public static final String CONSTANTP = "constantp";
+
+	/**
+	 * The {@code streamp} built-in function (true if the argument is a stream). Streams
+	 * are opaque integer handles across all backends, so this is lowered to
+	 * {@code integerp} (lite).
+	 */
+	public static final String STREAMP = "streamp";
 
 	/**
 	 * The internal {@code %arrayp} predicate (is the value an array?). Used by the
@@ -1511,6 +1541,19 @@ public final class LispNames {
 	public static final String ALPHA_CHAR_P = "alpha-char-p";
 
 	/**
+	 * The {@code lower-case-p} built-in function (true if the character is a lowercase
+	 * letter). Lowered to {@code (not (char= c (char-upcase c)))} so it follows the
+	 * platform's Unicode case tables.
+	 */
+	public static final String LOWER_CASE_P = "lower-case-p";
+
+	/**
+	 * The {@code upper-case-p} built-in function (true if the character is an uppercase
+	 * letter). Lowered to {@code (not (char= c (char-downcase c)))}.
+	 */
+	public static final String UPPER_CASE_P = "upper-case-p";
+
+	/**
 	 * The {@code digit-char-p} built-in function (the weight of a digit character in the
 	 * given radix, or nil).
 	 */
@@ -1527,6 +1570,18 @@ public final class LispNames {
 
 	/** The {@code :end} keyword recognized by {@code parse-integer}. */
 	public static final String END_KEYWORD = ":end";
+
+	/** The {@code :start1} keyword recognized by {@code replace}. */
+	public static final String START1_KEYWORD = ":start1";
+
+	/** The {@code :end1} keyword recognized by {@code replace}. */
+	public static final String END1_KEYWORD = ":end1";
+
+	/** The {@code :start2} keyword recognized by {@code replace}. */
+	public static final String START2_KEYWORD = ":start2";
+
+	/** The {@code :end2} keyword recognized by {@code replace}. */
+	public static final String END2_KEYWORD = ":end2";
 
 	/** The {@code eval} built-in function (interpreter only). */
 	public static final String EVAL = "eval";

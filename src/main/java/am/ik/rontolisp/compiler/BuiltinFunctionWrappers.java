@@ -354,14 +354,15 @@ public final class BuiltinFunctionWrappers {
 									new LispInteger(0))))),
 			// String operations
 			unary(LispNames.STRING), unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE),
-			unary(LispNames.STRING_CAPITALIZE), binary(LispNames.SUBSEQ), binary(LispNames.STRING_EQ),
-			binary(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
-			binary(LispNames.STRING_RIGHT_TRIM),
+			unary(LispNames.STRING_CAPITALIZE), unary(LispNames.MAKE_STRING), binary(LispNames.REPLACE),
+			binary(LispNames.SUBSEQ), binary(LispNames.STRING_EQ), binary(LispNames.STRING_EQUAL),
+			binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM), binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations
 			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CODE_CHAR),
 			unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE), unary(LispNames.CHARACTERP),
-			unary(LispNames.ALPHA_CHAR_P), unary(LispNames.DIGIT_CHAR_P), binary(LispNames.CHAR_EQ),
-			binary(LispNames.CHAR_LT), binary(LispNames.CHAR_LE),
+			unary(LispNames.ALPHA_CHAR_P), unary(LispNames.LOWER_CASE_P), unary(LispNames.UPPER_CASE_P),
+			unary(LispNames.CONSTANTP), unary(LispNames.STREAMP), unary(LispNames.DIGIT_CHAR_P),
+			binary(LispNames.CHAR_EQ), binary(LispNames.CHAR_LT), binary(LispNames.CHAR_LE),
 			// parse-integer / read-from-string: their compiled bodies pull in runtime
 			// helpers emitted only when the program uses the operator, so each backend
 			// excludes these wrappers (via excludedNames) unless the program references

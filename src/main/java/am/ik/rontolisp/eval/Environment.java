@@ -2757,6 +2757,79 @@ public final class Environment implements Scope {
 			int weight = Character.digit(requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint(), radix);
 			return weight < 0 ? LispNil.INSTANCE : new LispInteger(weight);
 		}));
+		env.defineFunction(LispNames.LOWER_CASE_P, new LispFunction(LispNames.LOWER_CASE_P, args -> {
+			requireArgCount(LispNames.LOWER_CASE_P, args, 1);
+			int cp = requireChar(LispNames.LOWER_CASE_P, args.get(0)).codePoint();
+			// A character is lowercase exactly when upcasing changes it.
+			return cp != Character.toUpperCase(cp) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.UPPER_CASE_P, new LispFunction(LispNames.UPPER_CASE_P, args -> {
+			requireArgCount(LispNames.UPPER_CASE_P, args, 1);
+			int cp = requireChar(LispNames.UPPER_CASE_P, args.get(0)).codePoint();
+			// A character is uppercase exactly when downcasing changes it.
+			return cp != Character.toLowerCase(cp) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.STREAMP, new LispFunction(LispNames.STREAMP, args -> {
+			requireArgCount(LispNames.STREAMP, args, 1);
+			// Streams are opaque integer handles (lite: equivalent to integerp).
+			LispVal v = args.get(0);
+			return (v instanceof LispInteger || v instanceof LispBigInteger) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
+			requireMinArgCount(LispNames.CONSTANTP, args, 1);
+			LispVal v = args.get(0);
+			boolean constant = v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispRatio
+					|| v instanceof LispDouble || v instanceof LispString || v instanceof LispChar
+					|| v instanceof LispTrue || v instanceof LispNil
+					|| (v instanceof LispSymbol s && s.name().startsWith(":"))
+					|| (v instanceof LispCons c && c.car() instanceof LispSymbol h && LispNames.QUOTE.equals(h.name()));
+			return constant ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.MAKE_STRING, new LispFunction(LispNames.MAKE_STRING, args -> {
+			requireMinArgCount(LispNames.MAKE_STRING, args, 1);
+			int n = requireIndex(LispNames.MAKE_STRING, args.get(0));
+			int fill = ' ';
+			for (int i = 1; i + 1 < args.size(); i += 2) {
+				if (args.get(i) instanceof LispSymbol key) {
+					if (LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
+						fill = requireChar(LispNames.MAKE_STRING, args.get(i + 1)).codePoint();
+					}
+					else if (!LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+						throw new LispEvalException("make-string: unsupported keyword " + key.name());
+					}
+				}
+			}
+			StringBuilder sb = new StringBuilder();
+			for (int i = 0; i < n; i++) {
+				sb.appendCodePoint(fill);
+			}
+			return new LispString(sb.toString());
+		}));
+		env.defineFunction(LispNames.REPLACE, new LispFunction(LispNames.REPLACE, args -> {
+			requireMinArgCount(LispNames.REPLACE, args, 2);
+			// String-aware (cl-who's only use); lists are not required here.
+			String s1 = requireString(LispNames.REPLACE, args.get(0));
+			String s2 = requireString(LispNames.REPLACE, args.get(1));
+			int start1 = 0;
+			int end1 = s1.length();
+			int start2 = 0;
+			int end2 = s2.length();
+			for (int i = 2; i + 1 < args.size(); i += 2) {
+				if (args.get(i) instanceof LispSymbol key) {
+					switch (key.name()) {
+						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
+						case LispNames.END1_KEYWORD -> end1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
+						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
+						case LispNames.END2_KEYWORD -> end2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
+						default -> throw new LispEvalException("replace: unsupported keyword " + key.name());
+					}
+				}
+			}
+			int copied = Math.min(end1 - start1, end2 - start2);
+			String result = s1.substring(0, start1) + s2.substring(start2, start2 + copied)
+					+ s1.substring(start1 + copied);
+			return new LispString(result);
+		}));
 	}
 
 	private static LispVal charRef(String name, java.util.List<LispVal> args) {

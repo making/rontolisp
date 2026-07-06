@@ -1,5 +1,22 @@
 # 77: cl-who unit 1 -- string/char/sequence primitives batch
 
+> **STATUS: DONE** (2026-07-06). All seven primitives implemented as shared
+> `LispMacroExpander` lowerings over existing cross-backend primitives (no new
+> per-backend compiler classes), dispatched in the interpreter + JVM + WASM
+> compilers, with interpreter `Environment` functions and
+> `BuiltinFunctionWrappers` entries for first-class use. `stream` wired into
+> `makeTypeTest`. Verified on interpreter / JVM / WASM Preview 1 / WASM
+> component; `--no-gc` gives a clean "unsupported operation" compile error as
+> planned. Tests: `LispEvaluatorTest`, `JvmLispCompilerTest`,
+> `WasmLispCompilerIntegrationTest`, ci-spec case `clwho-string-char-primitives`
+> (native `CiSpecE2eTest` green, 688 cases). Docs: per-operator pages +
+> `_catalog.yaml` (en+ja), `write-sequence` page updated for strings.
+> Implementation notes: `replace`/`make-string` return fresh strings (strings
+> are immutable values); `streamp` is lite (= `integerp`, streams are integer
+> handles); `lower-case-p`/`upper-case-p` use `(not (char= c (char-upcase/downcase c)))`
+> so they follow Unicode case tables; introspection function count 243 -> 249.
+
+
 Parent: `.todo/76`. First unit (leaf builtins, no dependencies on the other
 units). One session: implement on all four backends + tests + docs + native
 E2E.

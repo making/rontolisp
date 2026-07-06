@@ -100,7 +100,8 @@ public final class PackageRegistry {
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH,
 			LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY,
 			LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ, LispNames.READ_CHAR,
-			LispNames.VECTORP);
+			LispNames.VECTORP, LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P,
+			LispNames.CONSTANTP, LispNames.STREAMP);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT);
@@ -115,7 +116,7 @@ public final class PackageRegistry {
 	private static final Set<String> CL_TYPES = Set.of("integer", "number", "rational", "ratio", "real", "fixnum",
 			"bignum", "single-float", "double-float", "short-float", "long-float", "unsigned-byte", "signed-byte",
 			"boolean", "sequence", "array", "simple-array", "simple-vector", "simple-string", "base-string",
-			"character", "base-char", "standard-char", "satisfies", "otherwise");
+			"character", "base-char", "standard-char", "satisfies", "otherwise", "stream");
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the

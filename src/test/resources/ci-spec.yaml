@@ -1109,7 +1109,7 @@ cases:
     expected: |
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      243
+      249
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -3108,3 +3108,21 @@ cases:
       (:zero 40)
       nil
       10
+
+  - name: clwho-string-char-primitives
+    source: |
+      (print (make-string 3 :initial-element #\x))
+      (print (replace (make-string 5 :initial-element #\a) "XY" :start1 1))
+      (print (with-output-to-string (s) (write-sequence "abcd" s :start 1 :end 3)))
+      (print (list (lower-case-p #\a) (upper-case-p #\A) (constantp 5) (constantp 'x)))
+      (print (with-output-to-string (s) (check-type s stream) (write-string "ok" s)))
+      (print (length (make-string 4)))
+      (print (mapcar #'upper-case-p '(#\A #\b #\5)))
+    expected: |
+      "xxx"
+      "aXYaa"
+      "bc"
+      (t t t nil)
+      "ok"
+      4
+      (t nil nil)

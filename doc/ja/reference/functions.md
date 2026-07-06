@@ -39,6 +39,8 @@
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"`(各単語の最初の文字) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"`(文字列とリストで機能します。例: `(subseq '(1 2 3 4) 1 3)` => `(2 3)`。`end` 引数は省略可能) |
+| `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- `:initial-element`（デフォルトは空白）を `n` 個並べた新しい文字列。`:element-type` は受け付けるが無視 |
+| `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- `sequence-2` を `sequence-1` にコピー（`:start1`/`:end1`/`:start2`/`:end2`）。文字列対応で、新しい文字列を返す（文字列は不変） |
 | `string=` | `(string= "abc" "abc")` | `t`(大小文字を区別する文字列等価) |
 | `string-equal` | `(string-equal "ABC" "abc")` | `t`(大小文字を区別しない、ASCII) |
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"`(指定した文字集合の文字を両端から取り除きます) |
@@ -51,7 +53,7 @@
 | `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | バイナリ入力ストリームから 1 バイト(0-255)を読み込みます。EOF ではエラーを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `write-byte` | `(write-byte 255 stream)` | バイナリ出力ストリームに生の 1 バイト(0-255)を書き込みます。バイトを返します |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | バイナリ入力ストリームのバイトでベクタを埋めます。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
-| `write-sequence` | `(write-sequence buf stream)`, `(write-sequence buf stream :start 1 :end 3)` | バイト(0-255)のベクタをバイナリ出力ストリームに書き込みます。シーケンスを返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
+| `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | シーケンスをストリームに書き込み、それを返します。文字列は（`write-string` と同様に）文字として書き込まれ、バイト(0-255)のベクタはバイナリ出力ストリームに書き込まれます。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `read` | `(read)`, `(read stream)` | 標準入力(または `open`/`with-open-file` で開いた入力ストリーム)からS式を1つ読み込みます(3つのバックエンドすべて)。EOFでは `nil` |
 | `read-from-string` | `(read-from-string "(+ 1 2)")` | 文字列からデータを1つパースします(3つのバックエンドすべて)。省略可能な `eof-error-p`/`eof-value` および `:start`/`:end` 引数はサポートされません |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
@@ -62,6 +64,7 @@
 | `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A`(WASMバックエンドではASCII大小文字変換) |
 | `characterp` | `(characterp #\a)` | `t` |
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil`(WASMバックエンドではASCII文字) |
+| `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- 大文字化・小文字化で文字が変化するとき真（Unicode ケース表に従う） |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- 指定した基数(デフォルト10)での桁の重み、またはnil |
 | `eval` | `(eval '(+ 1 2))` | 式を評価します(3つのバックエンドすべて)。結果を返します |
 | `load` | `(load "bar.lisp")` | ファイル内のすべてのトップレベルフォームをグローバル環境で読み込んで評価します(3つのバックエンドすべて)。`t` を返します |
@@ -91,6 +94,8 @@
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
+| `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- 自己評価オブジェクト（数値、文字列、文字、キーワード、`t`/`nil`）と `(quote x)` 形式で真（lite） |
+| `streamp` | `(streamp s)` | `s` がストリームなら `t`、そうでなければ `nil`（lite: ストリームは整数ハンドルなので `integerp` に相当。`stream` 型指定子の裏付けでもある） |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1`(`(car nil)` は `nil`) |
 | `cdr` | `(cdr (cons 1 2))` | `2`(`(cdr nil)` は `nil`) |

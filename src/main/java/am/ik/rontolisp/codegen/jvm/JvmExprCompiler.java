@@ -237,6 +237,18 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx, className);
 				case LispNames.WRITE_SEQUENCE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx, className);
+				case LispNames.MAKE_STRING ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx, className);
+				case LispNames.REPLACE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons), ctx, className);
+				case LispNames.LOWER_CASE_P ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx, className);
+				case LispNames.UPPER_CASE_P ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx, className);
+				case LispNames.CONSTANTP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
+				case LispNames.STREAMP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons), ctx, className);
 				case LispNames.STRING_UPCASE -> JvmStringUpcaseCompiler.compileUpcase(cons, ctx, className);
 				case LispNames.STRING_DOWNCASE -> JvmStringUpcaseCompiler.compileDowncase(cons, ctx, className);
 				case LispNames.STRING_CAPITALIZE -> JvmStringCapitalizeCompiler.compile(cons, ctx, className);

@@ -1076,6 +1076,18 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandReadSequence(cons), env);
 				case LispNames.WRITE_SEQUENCE:
 					return eval(LispMacroExpander.expandWriteSequence(cons), env);
+				case LispNames.MAKE_STRING:
+					return eval(LispMacroExpander.expandMakeString(cons), env);
+				case LispNames.REPLACE:
+					return eval(LispMacroExpander.expandReplace(cons), env);
+				case LispNames.LOWER_CASE_P:
+					return eval(LispMacroExpander.expandLowerCaseP(cons), env);
+				case LispNames.UPPER_CASE_P:
+					return eval(LispMacroExpander.expandUpperCaseP(cons), env);
+				case LispNames.CONSTANTP:
+					return eval(LispMacroExpander.expandConstantp(cons), env);
+				case LispNames.STREAMP:
+					return eval(LispMacroExpander.expandStreamp(cons), env);
 				case LispNames.PROG2:
 					return eval(LispMacroExpander.expandProg2(cons), env);
 				case LispNames.PSETQ:

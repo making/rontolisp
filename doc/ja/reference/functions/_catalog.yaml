@@ -83,6 +83,8 @@ categories:
       - { slug: characterp, name: "characterp" }
       - { slug: functionp, name: "functionp" }
       - { slug: vectorp, name: "vectorp" }
+      - { slug: constantp, name: "constantp" }
+      - { slug: streamp, name: "streamp" }
   - title: "出力"
     functions:
       - { slug: print, name: "print" }
@@ -97,6 +99,8 @@ categories:
     functions:
       - { slug: concatenate, name: "concatenate" }
       - { slug: string, name: "string" }
+      - { slug: make-string, name: "make-string" }
+      - { slug: replace, name: "replace" }
       - { slug: string-upcase, name: "string-upcase" }
       - { slug: string-downcase, name: "string-downcase" }
       - { slug: string-capitalize, name: "string-capitalize" }
@@ -114,6 +118,7 @@ categories:
       - { slug: char-compare, name: "char= char< char<=" }
       - { slug: char-case, name: "char-upcase char-downcase" }
       - { slug: alpha-char-p, name: "alpha-char-p" }
+      - { slug: case-char-p, name: "lower-case-p upper-case-p" }
       - { slug: digit-char-p, name: "digit-char-p" }
   - title: "コンスとリストの構築"
     functions:

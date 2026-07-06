@@ -42,6 +42,8 @@ page.
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"` (works on strings and lists, e.g. `(subseq '(1 2 3 4) 1 3)` => `(2 3)`; the `end` argument is optional) |
+| `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- a fresh string of `n` copies of `:initial-element` (default space); `:element-type` is accepted and ignored |
+| `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- copy `sequence-2` into `sequence-1` (`:start1`/`:end1`/`:start2`/`:end2`); string-aware, returns a fresh string (strings are immutable) |
 | `string=` | `(string= "abc" "abc")` | `t` (case-sensitive string equality) |
 | `string-equal` | `(string-equal "ABC" "abc")` | `t` (case-insensitive, ASCII) |
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"` (removes the bag's characters from both ends) |
@@ -54,7 +56,7 @@ page.
 | `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | Read one byte (0-255) from a binary input stream. At EOF, signal an error, or return `eof-value` when `eof-error-p` is `nil` |
 | `write-byte` | `(write-byte 255 stream)` | Write one raw byte (0-255) to a binary output stream. Returns the byte |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | Fill a vector with bytes from a binary input stream. Returns the fill position. `:start`/`:end` must be literal keywords |
-| `write-sequence` | `(write-sequence buf stream)`, `(write-sequence buf stream :start 1 :end 3)` | Write a vector of bytes (0-255) to a binary output stream. Returns the sequence. `:start`/`:end` must be literal keywords |
+| `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | Write a sequence to a stream and return it. A string is written as characters (like `write-string`); a vector of bytes (0-255) is written to a binary output stream. `:start`/`:end` must be literal keywords |
 | `read` | `(read)`, `(read stream)` | Read one S-expression from stdin (or from an input stream opened by `open`/`with-open-file`) (all three backends). `nil` on EOF |
 | `read-from-string` | `(read-from-string "(+ 1 2)")` | Parse one datum from a string (all three backends). The optional `eof-error-p`/`eof-value` and `:start`/`:end` arguments are not supported |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | Parse an integer from a string. Supports `:start`/`:end`/`:radix`/`:junk-allowed` on all backends; the stop position is the second value, observable through `multiple-value-bind`. Without `:junk-allowed`, trailing non-whitespace is an error |
@@ -65,6 +67,7 @@ page.
 | `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A` (ASCII case folding in the WASM backend) |
 | `characterp` | `(characterp #\a)` | `t` |
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil` (ASCII letters in the WASM backend) |
+| `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- true when up/down-casing changes the character (follows the Unicode case tables) |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
@@ -94,6 +97,8 @@ page.
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
+| `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- true for self-evaluating objects (numbers, strings, characters, keywords, `t`/`nil`) and `(quote x)` forms (lite) |
+| `streamp` | `(streamp s)` | `t` if `s` is a stream, else `nil` (lite: streams are integer handles, so equivalent to `integerp`; also backs the `stream` type specifier) |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1` (`(car nil)` is `nil`) |
 | `cdr` | `(cdr (cons 1 2))` | `2` (`(cdr nil)` is `nil`) |
