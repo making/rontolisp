@@ -1160,6 +1160,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandArrayRowMajorIndex(cons), env);
 				case LispNames.COERCE:
 					return eval(LispMacroExpander.expandCoerce(cons), env);
+				case LispNames.MAP_INTO:
+					return eval(LispMacroExpander.expandMapInto(cons), env);
 				case LispNames.RASSOC:
 					return eval(LispMacroExpander.expandRassoc(cons), env);
 				// The sequence/alist functions taking :test/:key evaluate through the

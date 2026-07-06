@@ -2934,6 +2934,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMapIntoList() {
+		// Two source lists; the result list is filled destructively and returned. It
+		// stops
+		// at the shortest sequence, leaving the trailing result element untouched.
+		assertThat(eval("(map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40))").print()).isEqualTo("(11 22 33 0)");
+	}
+
+	@Test
+	void evalMapIntoVector() {
+		assertThat(eval("(map-into (make-array 3) #'* #(2 3 4) #(5 6 7))").print()).isEqualTo("#(10 18 28)");
+	}
+
+	@Test
+	void evalMapIntoSymbolDesignatorAndNoSources() {
+		// A quoted-symbol function designator over one source list.
+		assertThat(eval("(map-into (list nil nil nil) '1+ '(7 8 9))").print()).isEqualTo("(8 9 10)");
+		// With no source sequences the function is called with no arguments per element.
+		assertThat(eval("(map-into (list 0 0 0) (lambda () 42))").print()).isEqualTo("(42 42 42)");
+	}
+
+	@Test
 	void evalMapWithBuiltinCdr() {
 		assertThat(eval("(mapcar #'cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
 	}
@@ -3714,14 +3735,14 @@ class LispEvaluatorTest {
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
-			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "map", "mapc",
-					"every", "some", "remove", "remove-if", "remove-if-not", "find", "find-if", "find-if-not",
-					"position", "position-if", "count", "count-if", "mapcan", "apply", "sort", "member-if", "assoc-if",
-					"getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list", "nreverse", "make-list",
-					"union", "intersection", "set-difference", "adjoin", "logand", "logior", "logxor", "lognot", "ash",
-					"integer-length", "logbitp", "list*", "acons", "endp", "elt", "rassoc", "pairlis", "copy-alist",
-					"revappend", "nreconc", "maplist", "mapcon", "notany", "notevery", "delete", "delete-if",
-					"delete-if-not", "substitute", "nsubstitute", "fresh-line")
+			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "map",
+					"map-into", "mapc", "every", "some", "remove", "remove-if", "remove-if-not", "find", "find-if",
+					"find-if-not", "position", "position-if", "count", "count-if", "mapcan", "apply", "sort",
+					"member-if", "assoc-if", "getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list",
+					"nreverse", "make-list", "union", "intersection", "set-difference", "adjoin", "logand", "logior",
+					"logxor", "lognot", "ash", "integer-length", "logbitp", "list*", "acons", "endp", "elt", "rassoc",
+					"pairlis", "copy-alist", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
+					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
@@ -3740,7 +3761,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(242);
+			.hasSize(243);
 	}
 
 	@Test

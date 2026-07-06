@@ -633,6 +633,17 @@ cases:
       (11 22 33 44)
       ((1 . a) (2 . b))
       (111 222)
+  - name: map-into
+    source: |
+      (print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))
+      (print (map-into (make-array 3) #'* #(2 3 4) #(5 6 7)))
+      (print (map-into (list nil nil nil) '1+ '(7 8 9)))
+      (print (map-into (list 0 0 0) (lambda () 42)))
+    expected: |
+      (11 22 33 0)
+      #(10 18 28)
+      (8 9 10)
+      (42 42 42)
   - name: map
     source: |
       (print (map 'list #'+ '(1 2 3) '(10 20 30)))
@@ -1092,7 +1103,7 @@ cases:
     expected: |
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
       (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
-      242
+      243
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn

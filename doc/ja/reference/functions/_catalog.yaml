@@ -193,6 +193,7 @@ categories:
       - { slug: values-list, name: "values-list" }
       - { slug: mapcar, name: "mapcar" }
       - { slug: map, name: "map" }
+      - { slug: map-into, name: "map-into" }
       - { slug: mapc, name: "mapc" }
       - { slug: mapcan, name: "mapcan" }
       - { slug: maplist, name: "maplist" }

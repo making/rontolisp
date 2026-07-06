@@ -6070,7 +6070,11 @@ public final class LispMacroExpander {
 				List.of(listToCons(List.of(seq, parts.get(1))), listToCons(List.of(idx, parts.get(2)))));
 		LispVal stringCase = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
 		LispVal listCase = listToCons(List.of(new LispSymbol(LispNames.NTH), idx, seq));
-		LispVal body = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), seq)), stringCase, listCase);
+		// A non-string, non-list sequence is an array: read it with aref (nil counts as a
+		// list here, so listp -- not consp -- guards the list case).
+		LispVal arrayCase = listToCons(List.of(new LispSymbol(LispNames.AREF), seq, idx));
+		LispVal listOrArray = makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), seq)), listCase, arrayCase);
+		LispVal body = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), seq)), stringCase, listOrArray);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
 	}
 
@@ -6429,6 +6433,84 @@ public final class LispMacroExpander {
 		}
 		LispVal bindings = listToCons(List.of(listToCons(List.of(x, parts.get(1)))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	/**
+	 * Expands {@code (map-into result-sequence function &rest sequences)} into a
+	 * {@code let*}/{@code do} loop that destructively stores {@code (funcall function
+	 * (elt seq0 i) (elt seq1 i) ...)} into {@code (elt result-sequence i)} for each index
+	 * up to the length of the shortest sequence (the result included), then returns the
+	 * result sequence. Both lists and vectors are supported via
+	 * {@code elt}/{@code length} and the runtime-dispatching {@code (setf (elt ...) ...)}
+	 * place; a result with a fill pointer is filled up to that fill pointer (its
+	 * {@code length}), matching the lite sequence model elsewhere. With no source
+	 * sequences the function is called with no arguments to fill the whole result.
+	 * @param cons the map-into expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMapInto(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new UnsupportedOperationException("map-into expects a result sequence and a function");
+		}
+		LispVal resultForm = parts.get(1);
+		// Normalize a literal (quote name) function designator into (function name) so
+		// the
+		// compilers resolve it against the compile-time function registry (mirrors
+		// FunctionDesignators.normalize, inlined to keep this package free of a
+		// compiler-package dependency).
+		LispVal fnForm = parts.get(2);
+		if (fnForm instanceof LispCons fnCons && fnCons.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()) && fnCons.cdr() instanceof LispCons fnRest
+				&& fnRest.car() instanceof LispSymbol sym && !sym.isKeyword()) {
+			fnForm = listToCons(List.of(new LispSymbol(LispNames.FUNCTION), sym));
+		}
+		int nSeqs = parts.size() - 3;
+
+		LispSymbol resVar = new LispSymbol("__mi_res");
+		LispSymbol fnVar = new LispSymbol("__mi_fn");
+		LispSymbol nVar = new LispSymbol("__mi_n");
+		LispSymbol iVar = new LispSymbol("__mi_i");
+
+		List<LispSymbol> seqVars = new java.util.ArrayList<>();
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(resVar, resultForm)));
+		bindings.add(listToCons(List.of(fnVar, fnForm)));
+		for (int k = 0; k < nSeqs; k++) {
+			LispSymbol seqVar = new LispSymbol("__mi_s" + k);
+			seqVars.add(seqVar);
+			bindings.add(listToCons(List.of(seqVar, parts.get(3 + k))));
+		}
+
+		// (min (length res) (length s0) ...)
+		List<LispVal> minParts = new java.util.ArrayList<>();
+		minParts.add(new LispSymbol(LispNames.MIN));
+		minParts.add(callOf(LispNames.LENGTH, resVar));
+		for (LispSymbol seqVar : seqVars) {
+			minParts.add(callOf(LispNames.LENGTH, seqVar));
+		}
+		bindings.add(listToCons(List.of(nVar, listToCons(minParts))));
+
+		// (funcall fn (elt s0 i) (elt s1 i) ...)
+		List<LispVal> callParts = new java.util.ArrayList<>();
+		callParts.add(new LispSymbol(LispNames.FUNCALL));
+		callParts.add(fnVar);
+		for (LispSymbol seqVar : seqVars) {
+			callParts.add(listToCons(List.of(new LispSymbol(LispNames.ELT), seqVar, iVar)));
+		}
+		LispVal call = listToCons(callParts);
+
+		// (setf (elt res i) call)
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF),
+				listToCons(List.of(new LispSymbol(LispNames.ELT), resVar, iVar)), call));
+
+		// (do ((i 0 (+ i 1))) ((>= i n) res) store)
+		LispVal iStep = listToCons(List.of(new LispSymbol(LispNames.ADD), iVar, new LispInteger(1)));
+		LispVal doBindings = listToCons(List.of(listToCons(List.of(iVar, new LispInteger(0), iStep))));
+		LispVal endClause = listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.GE), iVar, nVar)), resVar));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), doBindings, endClause, store));
+
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), loop));
 	}
 
 	// Builds a (do ...) form collecting the elements of the vector named by {@code vec}

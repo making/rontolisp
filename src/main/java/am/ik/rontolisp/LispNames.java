@@ -755,6 +755,13 @@ public final class LispNames {
 	 */
 	public static final String MAP = "map";
 
+	/**
+	 * The {@code map-into} built-in function (destructively store the results of applying
+	 * a function to successive elements of the argument sequences into the result
+	 * sequence).
+	 */
+	public static final String MAP_INTO = "map-into";
+
 	/** The {@code mapc} built-in function (apply for effect, return the list). */
 	public static final String MAPC = "mapc";
 

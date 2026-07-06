@@ -417,6 +417,7 @@ final class WasmExprCompiler {
 				case LispNames.ARRAY_DISP_TARGET -> WasmArrayCompiler.compileDispTarget(cons, ctx);
 				case LispNames.ARRAY_DISP_OFFSET -> WasmArrayCompiler.compileDispOffset(cons, ctx);
 				case LispNames.COERCE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx);
+				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);

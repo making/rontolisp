@@ -455,6 +455,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMapIntoList() throws Exception {
+		assertThat(compileAndRun("(print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))"))
+			.isEqualTo("(11 22 33 0)");
+	}
+
+	@Test
+	void compileAndRunMapIntoVectorAndSymbolDesignator() throws Exception {
+		assertThat(compileAndRun("(print (map-into (make-array 3) #'* #(2 3 4) #(5 6 7)))")).isEqualTo("#(10 18 28)");
+		assertThat(compileAndRun("(print (map-into (list nil nil nil) '1+ '(7 8 9)))")).isEqualTo("(8 9 10)");
+	}
+
+	@Test
 	void compileAndRunRankThreeArrayRefSetAndPrint() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
@@ -3812,12 +3824,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("242");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("243");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("242");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("243");
 	}
 
 	@Test
