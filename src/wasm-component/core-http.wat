@@ -48,6 +48,7 @@
   (import "wasi:http/types@0.2.0" "[resource-drop]incoming-response" (func (param i32)))
   (import "wasi:http/types@0.2.0" "[resource-drop]incoming-body" (func (param i32)))
   (import "wasi:http/outgoing-handler@0.2.0" "handle" (func (param i32 i32 i32 i32)))
+  (import "wasi:cli/stderr@0.3.0" "write-via-stream" (func (param i32) (result i32)))
   (memory (export "memory") 16)
   (global $hp (mut i32) (i32.const 65536))
   (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32) (global.get $hp))

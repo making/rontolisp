@@ -3,6 +3,7 @@
 ;; uses (the adapter binds these names), exports a memory + cabi_realloc + run.
 (module
   (import "wasi:cli/stdout@0.3.0" "write-via-stream" (func (param i32) (result i32)))
+  (import "wasi:cli/stderr@0.3.0" "write-via-stream" (func (param i32) (result i32)))
   (import "wasi:cli/stdin@0.3.0" "read-via-stream" (func (param i32)))
   (import "wasi:cli/environment@0.3.0" "get-environment" (func (param i32)))
   (import "wasi:clocks/system-clock@0.3.0" "now" (func (param i32)))

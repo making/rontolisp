@@ -25,4 +25,6 @@ world uni-sock {
   import wasi:random/random@0.3.0;
   // --- TCP sockets (rontolisp:tcp-*): WASI 0.3 ---
   import wasi:sockets/types@0.3.0;
+  // --- stderr for warn (fd 2), appended last ---
+  import wasi:cli/stderr@0.3.0;
 }

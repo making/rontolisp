@@ -61,6 +61,7 @@
   (import "mem" "memory" (memory (;0;) 6))
   ;; lowered WASI 0.3 functions
   (import "w" "stdout-write" (func $stdout_write (param i32) (result i32)))
+  (import "w" "stderr-write" (func $stderr_write (param i32) (result i32)))
   (import "w" "stdin-read" (func $stdin_read (param i32)))
   (import "w" "get-environment" (func $getenviron (param i32)))
   (import "w" "sys-now" (func $sys_now (param i32)))
@@ -116,10 +117,12 @@
     (i32.add (i32.const 0x50100)
       (i32.mul (i32.sub (local.get $fd) (i32.const 100)) (i32.const 16))))
 
-  ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout; otherwise a file fd.
-  ;; One full stream is created per call: open it (write-via-stream for stdout,
-  ;; append-via-stream for a file), push every iovec through it, signal EOF by dropping the
-  ;; writable end, then await the operation future.
+  ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout, fd==2 is stderr; fd>=200 a
+  ;; socket; otherwise a file fd. One full stream is created per call (except sockets): open
+  ;; it (write-via-stream for stdout/stderr, append-via-stream for a file), push every iovec
+  ;; through it, signal EOF by dropping the writable end, then await the operation future.
+  ;; stdout and stderr share the wasi:cli error-code (future -cli built-ins); a file uses
+  ;; -fs.
   (func $fd_write (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
     (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32)
     (local $i i32) (local $base i32) (local $ptr i32) (local $len i32) (local $total i32) (local $sl i32)
@@ -149,8 +152,12 @@
       (then
         (local.set $fut (call $stdout_write (local.get $rx))))
       (else
-        (local.set $sl (call $slot (local.get $fd)))
-        (local.set $fut (call $file_append (i32.load (local.get $sl)) (local.get $rx)))))
+        (if (i32.eq (local.get $fd) (i32.const 2))
+          (then
+            (local.set $fut (call $stderr_write (local.get $rx))))
+          (else
+            (local.set $sl (call $slot (local.get $fd)))
+            (local.set $fut (call $file_append (i32.load (local.get $sl)) (local.get $rx)))))))
     (block $done
       (loop $l
         (br_if $done (i32.ge_u (local.get $i) (local.get $cnt)))
@@ -163,8 +170,8 @@
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $l)))
     (call $stream_drop_w (local.get $tx))
-    ;; await + drop the write future with the matching error-code type
-    (if (i32.eq (local.get $fd) (i32.const 1))
+    ;; await + drop the write future with the matching error-code type (fd 1/2 = cli).
+    (if (i32.or (i32.eq (local.get $fd) (i32.const 1)) (i32.eq (local.get $fd) (i32.const 2)))
       (then
         (drop (call $future_read_cli (local.get $fut) (i32.const 0x50000)))
         (call $future_drop_cli (local.get $fut)))

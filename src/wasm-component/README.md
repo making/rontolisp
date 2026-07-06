@@ -62,6 +62,7 @@ import wasi:clocks/monotonic-clock@0.3.0; // now -> u64
 import wasi:filesystem/types@0.3.0;    // descriptor.open-at / read-via-stream / append-via-stream
 import wasi:filesystem/preopens@0.3.0; // get-directories
 import wasi:random/random@0.3.0;       // get-random-u64
+import wasi:cli/stderr@0.3.0;          // write-via-stream (fd 2, for warn); appended last
 ```
 
 `uni.wit` declares **imports only**. The `wasi:cli/run@0.3.0` export is an `async func`,
@@ -88,14 +89,15 @@ stackful lift of the rontolisp core's `run`) is emitted programmatically by
 
 ## The unified import block (`import-block.bin`)
 
-`import-block.bin` is the raw component-model **type + import section bytes** for the 9
-imported WASI 0.3 interfaces (component import instances 0-8, component types 0-11). It is
+`import-block.bin` is the raw component-model **type + import section bytes** for the 10
+imported WASI 0.3 interfaces (component import instances 0-9, component types 0-13). It is
 written verbatim by `ComponentWriter.writeRaw`, after which `WasmComponentBuilder.build`
 does all remaining wiring programmatically (alias the cli/fs error-code + descriptor types
-and the WASI funcs, define the `stream<u8>`/`future`/`result` types as component types
-12-21, lower the WASI funcs + emit the `stream.*`/`future.*` canon built-ins as core funcs
-1-20, group them as the adapter's `"w"` import, instantiate mem/adapter/rontolisp, lift
-`run` against an async function type, and export `wasi:cli/run@0.3.0`).
+and the WASI funcs incl. the stderr write-via-stream, define the
+`stream<u8>`/`future`/`result` types as component types 17-23, lower the WASI funcs + emit
+the `stream.*`/`future.*` canon built-ins as core funcs 1-21, group them as the adapter's
+`"w"` import, instantiate mem/adapter/rontolisp, lift `run` against an async function type,
+and export `wasi:cli/run@0.3.0`).
 
 ### How it is generated (what `regen.sh` does)
 

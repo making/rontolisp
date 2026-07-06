@@ -26,6 +26,7 @@
   (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.send" (func (param i32 i32) (result i32)))
   (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.receive" (func (param i32 i32)))
   (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.get-local-address" (func (param i32 i32)))
+  (import "wasi:cli/stderr@0.3.0" "write-via-stream" (func (param i32) (result i32)))
   (memory (export "memory") 6)
   (global $hp (mut i32) (i32.const 65536))
   (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32) (global.get $hp))

@@ -56,12 +56,13 @@ public final class WasmComponentBuilder {
 	 * Pre-built component type/import sections declaring every imported WASI 0.3
 	 * interface, captured from a {@code wasm-tools}-generated reference for the
 	 * {@code uni} WIT world (see {@code src/wasm-component/uni.wit}). In order, component
-	 * import instances 0-8 are: {@code wasi:cli/types} (the {@code error-code} enum),
+	 * import instances 0-9 are: {@code wasi:cli/types} (the {@code error-code} enum),
 	 * {@code wasi:cli/stdout}, {@code wasi:cli/stdin}, {@code wasi:cli/environment},
 	 * {@code wasi:clocks/system-clock}, {@code wasi:clocks/monotonic-clock},
-	 * {@code wasi:filesystem/types}, {@code wasi:filesystem/preopens} and
-	 * {@code wasi:random/random}. The block defines component types 0-11, so the next
-	 * free component type index is 12.
+	 * {@code wasi:filesystem/types}, {@code wasi:filesystem/preopens},
+	 * {@code wasi:random/random} and {@code wasi:cli/stderr} (appended last, for
+	 * {@code warn} on fd&nbsp;2). The block defines component types 0-13, so the next
+	 * free component type index is 14.
 	 */
 	private static final byte[] IMPORT_BLOCK = resource("import-block.bin");
 
@@ -84,11 +85,12 @@ public final class WasmComponentBuilder {
 	 * The HTTP variant of the import block: the base WASI 0.3 interfaces PLUS the WASI
 	 * 0.2 HTTP machinery for {@code rontolisp:fetch} ({@code wasi:io/poll},
 	 * {@code wasi:io/error}, {@code wasi:io/streams}, {@code wasi:http/types},
-	 * {@code wasi:http/outgoing-handler}). fetch stays on {@code wasi:http@0.2} because
-	 * an async {@code wasi:http@0.3} does not exist upstream yet (see
-	 * {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}). It declares component import
-	 * instances 0-13 and component types 0-24, so the next free component type index is
-	 * 25. Source: {@code src/wasm-component/uni-http.wit} + {@code core-http.wat}.
+	 * {@code wasi:http/outgoing-handler}) plus {@code wasi:cli/stderr@0.3.0} appended
+	 * last (import instance 14, for {@code warn} on fd&nbsp;2). fetch stays on
+	 * {@code wasi:http@0.2} because an async {@code wasi:http@0.3} does not exist
+	 * upstream yet (see {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}). It declares
+	 * component import instances 0-14, so the next free component type index is 27.
+	 * Source: {@code src/wasm-component/uni-http.wit} + {@code core-http.wat}.
 	 */
 	private static final byte[] IMPORT_BLOCK_HTTP = resource("import-block-http.bin");
 
@@ -108,10 +110,11 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * The sockets variant of the import block: the base WASI 0.3 interfaces PLUS
-	 * {@code wasi:sockets/types@0.3.0} appended last (instance 9) for the
-	 * {@code rontolisp:tcp-*} built-ins. Unlike fetch, sockets exist natively in WASI 0.3
-	 * so the variant stays pure 0.3. It declares component import instances 0-9 and
-	 * component types 0-12, so the next free component type index is 13. Source:
+	 * {@code wasi:sockets/types@0.3.0} (instance 9) for the {@code rontolisp:tcp-*}
+	 * built-ins, then {@code wasi:cli/stderr@0.3.0} appended last (instance 10, for
+	 * {@code warn} on fd&nbsp;2). Unlike fetch, sockets exist natively in WASI 0.3 so the
+	 * variant stays pure 0.3. It declares component import instances 0-10 and component
+	 * types 0-14, so the next free component type index is 15. Source:
 	 * {@code src/wasm-component/uni-sock.wit} + {@code core-sock.wat}.
 	 */
 	private static final byte[] IMPORT_BLOCK_SOCK = resource("import-block-sock.bin");
@@ -145,26 +148,31 @@ public final class WasmComponentBuilder {
 
 	private static final int INST_RANDOM = 8;
 
-	// First free component type index after the import block.
-	private static final int T_CLI_ERRCODE = 12;
+	private static final int INST_STDERR = 9;
 
-	private static final int T_FS_ERRCODE = 13;
+	// First free component type index after the import block. The stderr interface
+	// appended
+	// last to uni.wit adds two component types (an aliased cli error-code + the stderr
+	// instance type), so the block now defines types 0-13 and the next free index is 14.
+	private static final int T_CLI_ERRCODE = 14;
 
-	private static final int T_DESCRIPTOR = 14;
+	private static final int T_FS_ERRCODE = 15;
 
-	private static final int T_STREAM = 15;
+	private static final int T_DESCRIPTOR = 16;
 
-	private static final int T_CLI_RESULT = 16;
+	private static final int T_STREAM = 17;
 
-	private static final int T_CLI_FUTURE = 17;
+	private static final int T_CLI_RESULT = 18;
 
-	private static final int T_FS_RESULT = 18;
+	private static final int T_CLI_FUTURE = 19;
 
-	private static final int T_FS_FUTURE = 19;
+	private static final int T_FS_RESULT = 20;
 
-	private static final int T_RUN_RESULT = 20;
+	private static final int T_FS_FUTURE = 21;
 
-	private static final int T_RUN_FUNC = 21;
+	private static final int T_RUN_RESULT = 22;
+
+	private static final int T_RUN_FUNC = 23;
 
 	private WasmComponentBuilder() {
 	}
@@ -259,10 +267,10 @@ public final class WasmComponentBuilder {
 		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the resource/enum types we need (component types 12-14) and the WASI
-		// functions (component funcs 0-9), all in one alias section.
+		// Alias the resource/enum types we need (component types 14-16) and the WASI
+		// functions (component funcs 0-10), all in one alias section.
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
-				// types 12 cli error-code, 13 fs error-code, 14 descriptor
+				// types 14 cli error-code, 15 fs error-code, 16 descriptor
 				ComponentWriter.aliasInstanceType(INST_CLI_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "descriptor"),
@@ -279,23 +287,26 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.append-via-stream"),
 				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.open-at"),
 				ComponentWriter.aliasInstanceFunc(INST_FS_PREOPENS, "get-directories"),
-				ComponentWriter.aliasInstanceFunc(INST_RANDOM, "get-random-u64"))));
-		// Define the async value/function types (component types 15-21). stream<u8> is
+				ComponentWriter.aliasInstanceFunc(INST_RANDOM, "get-random-u64"),
+				// func 10 stderr write-via-stream (appended last, for warn on fd 2)
+				ComponentWriter.aliasInstanceFunc(INST_STDERR, "write-via-stream"))));
+		// Define the async value/function types (component types 17-23). stream<u8> is
 		// structural; the futures differ by their error-code (cli vs filesystem).
 		c.rawSection(ComponentWriter.SEC_TYPE,
-				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 15
-						ComponentWriter.definedResultErr(T_CLI_ERRCODE), // 16
-						ComponentWriter.definedFuture(T_CLI_RESULT), // 17
-						ComponentWriter.definedResultErr(T_FS_ERRCODE), // 18
-						ComponentWriter.definedFuture(T_FS_RESULT), // 19
-						ComponentWriter.definedResultVoid(), // 20 result<_,_> (run
+				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 17
+						ComponentWriter.definedResultErr(T_CLI_ERRCODE), // 18
+						ComponentWriter.definedFuture(T_CLI_RESULT), // 19
+						ComponentWriter.definedResultErr(T_FS_ERRCODE), // 20
+						ComponentWriter.definedFuture(T_FS_RESULT), // 21
+						ComponentWriter.definedResultVoid(), // 22 result<_,_> (run
 																// result)
-						ComponentWriter.asyncFuncTypeResultType(T_RUN_RESULT)))); // 21
+						ComponentWriter.asyncFuncTypeResultType(T_RUN_RESULT)))); // 23
 		// Lower the WASI functions (component funcs 0-9) to core funcs 1-10 and drop the
 		// descriptor resource (core func 11); canonical options mirror wasm-tools'
 		// choices.
 		// Then the async built-ins: stream (core funcs 12-16), futures (core funcs
-		// 17-20).
+		// 17-20), and finally stderr write-via-stream (component func 10 -> core func
+		// 21).
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), // 1
 																											// write-via-stream
 				ComponentWriter.canonLowerMemory(1, 0), // 2 read-via-stream (stdin)
@@ -320,17 +331,18 @@ public final class WasmComponentBuilder {
 				// its
 				// future payload needs realloc (cabi_realloc = core func 0)
 				ComponentWriter.canonFutureRead(T_FS_FUTURE, 0, 0), // 19 future-read-fs
-				ComponentWriter.canonFutureDropReadable(T_FS_FUTURE)))); // 20
-																			// future-drop-fs
-		// Group the 20 lowered/built-in core funcs (1-20) for the adapter's "w" import
+				ComponentWriter.canonFutureDropReadable(T_FS_FUTURE), // 20
+																		// future-drop-fs
+				ComponentWriter.canonLower(10)))); // 21 stderr write-via-stream
+		// Group the 21 lowered/built-in core funcs (1-21) for the adapter's "w" import
 		// (core instance 1). Names match adapter.wat's imports.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-						List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
-								"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc",
-								"stream-new", "stream-read", "stream-write", "stream-drop-r", "stream-drop-w",
-								"future-read-cli", "future-drop-cli", "future-read-fs", "future-drop-fs"),
-						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
+					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
+							"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc", "stream-new",
+							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
+							"future-drop-cli", "future-read-fs", "future-drop-fs", "stderr-write"),
+					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -338,21 +350,21 @@ public final class WasmComponentBuilder {
 		// wasi_snapshot_preview1 = adapter instance 2.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2)))));
-		// Alias rontolisp's run (core func 21 = cabi_realloc + 20 lowered/built-in
+		// Alias rontolisp's run (core func 22 = cabi_realloc + 21 lowered/built-in
 		// funcs).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Lift run (core func 21) into component func 10 with the async function type 21
-		// (stackful async: no callback option). Component func 10 follows the 10 aliased
-		// WASI funcs (0-9).
+		// Lift run (core func 22) into component func 11 with the async function type 23
+		// (stackful async: no callback option). Component func 11 follows the 11 aliased
+		// WASI funcs (0-10).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(21, T_RUN_FUNC))));
-		// Component instance 9 (after import instances 0-8) exporting run, exported as
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(22, T_RUN_FUNC))));
+		// Component instance 10 (after import instances 0-9) exporting run, exported as
 		// the
 		// wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 10))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 9))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10))));
 		return c.toByteArray();
 	}
 
@@ -360,7 +372,7 @@ public final class WasmComponentBuilder {
 	// base
 	// WASI 0.3 instances 0-8 keep the same order as buildBase; the WASI 0.2 HTTP
 	// instances
-	// are appended at 9-13.
+	// are appended at 9-13, and wasi:cli/stderr (for warn) last at 14.
 	private static final int H_INST_CLI_TYPES = 0;
 
 	private static final int H_INST_STDOUT = 1;
@@ -388,46 +400,50 @@ public final class WasmComponentBuilder {
 
 	private static final int H_INST_HTTP_HANDLER = 13;
 
-	// First free component type index after import-block-http.bin (types 0-24 used).
-	// Aliased resource/enum types (component types 25-36).
-	private static final int H_T_CLI_ERRCODE = 25;
+	private static final int H_INST_STDERR = 14;
 
-	private static final int H_T_FS_ERRCODE = 26;
+	// First free component type index after import-block-http.bin. The stderr interface
+	// appended last to uni-http.wit adds two component types (an aliased cli error-code +
+	// the stderr instance type), so the next free index moves from 25 to 27.
+	// Aliased resource/enum types (component types 27-38).
+	private static final int H_T_CLI_ERRCODE = 27;
 
-	private static final int H_T_DESCRIPTOR = 27;
+	private static final int H_T_FS_ERRCODE = 28;
 
-	private static final int H_T_OUTPUT_STREAM = 28;
+	private static final int H_T_DESCRIPTOR = 29;
 
-	private static final int H_T_INPUT_STREAM = 29;
+	private static final int H_T_OUTPUT_STREAM = 30;
 
-	private static final int H_T_POLLABLE = 30;
+	private static final int H_T_INPUT_STREAM = 31;
 
-	private static final int H_T_FIELDS = 31;
+	private static final int H_T_POLLABLE = 32;
 
-	private static final int H_T_OUT_REQ = 32;
+	private static final int H_T_FIELDS = 33;
 
-	private static final int H_T_OUT_BODY = 33;
+	private static final int H_T_OUT_REQ = 34;
 
-	private static final int H_T_FUT_RESP = 34;
+	private static final int H_T_OUT_BODY = 35;
 
-	private static final int H_T_IN_RESP = 35;
+	private static final int H_T_FUT_RESP = 36;
 
-	private static final int H_T_IN_BODY = 36;
+	private static final int H_T_IN_RESP = 37;
 
-	// Defined async value/function types (component types 37-43).
-	private static final int H_T_STREAM = 37;
+	private static final int H_T_IN_BODY = 38;
 
-	private static final int H_T_CLI_RESULT = 38;
+	// Defined async value/function types (component types 39-45).
+	private static final int H_T_STREAM = 39;
 
-	private static final int H_T_CLI_FUTURE = 39;
+	private static final int H_T_CLI_RESULT = 40;
 
-	private static final int H_T_FS_RESULT = 40;
+	private static final int H_T_CLI_FUTURE = 41;
 
-	private static final int H_T_FS_FUTURE = 41;
+	private static final int H_T_FS_RESULT = 42;
 
-	private static final int H_T_RUN_RESULT = 42;
+	private static final int H_T_FS_FUTURE = 43;
 
-	private static final int H_T_RUN_FUNC = 43;
+	private static final int H_T_RUN_RESULT = 44;
+
+	private static final int H_T_RUN_FUNC = 45;
 
 	/**
 	 * Assemble the HTTP-variant component for a {@code rontolisp:fetch} program. It is
@@ -439,7 +455,7 @@ public final class WasmComponentBuilder {
 	 * {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}.
 	 *
 	 * <p>
-	 * All wiring constants (instance indices, the next-free type index 25, the 31 lowered
+	 * All wiring constants (instance indices, the next-free type index 27, the 32 lowered
 	 * functions and their canonical options) were derived from {@code wasm-tools dump} of
 	 * a reference generated by {@code regen.sh} from {@code uni-http.wit} +
 	 * {@code core-http.wat}.
@@ -460,25 +476,25 @@ public final class WasmComponentBuilder {
 		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the resource/enum types to drop or reference (component types 25-36).
+		// Alias the resource/enum types to drop or reference (component types 27-38).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
-				// 25 cli error-code, 26 fs error-code, 27 descriptor
+				// 27 cli error-code, 28 fs error-code, 29 descriptor
 				ComponentWriter.aliasInstanceType(H_INST_CLI_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(H_INST_FS_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(H_INST_FS_TYPES, "descriptor"),
-				// 28 output-stream, 29 input-stream, 30 pollable
+				// 30 output-stream, 31 input-stream, 32 pollable
 				ComponentWriter.aliasInstanceType(H_INST_IO_STREAMS, "output-stream"),
 				ComponentWriter.aliasInstanceType(H_INST_IO_STREAMS, "input-stream"),
 				ComponentWriter.aliasInstanceType(H_INST_IO_POLL, "pollable"),
-				// 31-36 http resources
+				// 33-38 http resources
 				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "fields"),
 				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "outgoing-request"),
 				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "outgoing-body"),
 				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "future-incoming-response"),
 				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "incoming-response"),
 				ComponentWriter.aliasInstanceType(H_INST_HTTP_TYPES, "incoming-body"))));
-		// Alias the WASI functions to lower (component funcs 0-30): 0-9 base WASI 0.3,
-		// 10-30 the WASI 0.2 http / io machinery.
+		// Alias the WASI functions to lower (component funcs 0-31): 0-9 base WASI 0.3,
+		// 10-30 the WASI 0.2 http / io machinery, 31 stderr write-via-stream (for warn).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
 				// base 0-9 (same set/order as buildBase)
 				ComponentWriter.aliasInstanceFunc(H_INST_STDOUT, "write-via-stream"),
@@ -512,16 +528,18 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-response.headers"),
 				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-response.consume"),
 				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_TYPES, "[method]incoming-body.stream"),
-				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_HANDLER, "handle"))));
-		// Define the async value/function types (component types 37-43).
+				ComponentWriter.aliasInstanceFunc(H_INST_HTTP_HANDLER, "handle"),
+				// func 31 stderr write-via-stream (appended last, for warn on fd 2)
+				ComponentWriter.aliasInstanceFunc(H_INST_STDERR, "write-via-stream"))));
+		// Define the async value/function types (component types 39-45).
 		c.rawSection(ComponentWriter.SEC_TYPE,
-				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 37
-						ComponentWriter.definedResultErr(H_T_CLI_ERRCODE), // 38
-						ComponentWriter.definedFuture(H_T_CLI_RESULT), // 39
-						ComponentWriter.definedResultErr(H_T_FS_ERRCODE), // 40
-						ComponentWriter.definedFuture(H_T_FS_RESULT), // 41
-						ComponentWriter.definedResultVoid(), // 42
-						ComponentWriter.asyncFuncTypeResultType(H_T_RUN_RESULT)))); // 43
+				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 39
+						ComponentWriter.definedResultErr(H_T_CLI_ERRCODE), // 40
+						ComponentWriter.definedFuture(H_T_CLI_RESULT), // 41
+						ComponentWriter.definedResultErr(H_T_FS_ERRCODE), // 42
+						ComponentWriter.definedFuture(H_T_FS_RESULT), // 43
+						ComponentWriter.definedResultVoid(), // 44
+						ComponentWriter.asyncFuncTypeResultType(H_T_RUN_RESULT)))); // 45
 		// Lower the 31 WASI funcs (core funcs 1-31), drop the 10 resources (32-41), then
 		// the
 		// async built-ins: stream (42-46), futures (47-50). Canonical options match what
@@ -589,24 +607,26 @@ public final class WasmComponentBuilder {
 																			// future-drop-cli
 				ComponentWriter.canonFutureRead(H_T_FS_FUTURE, 0, 0), // 49 future-read-fs
 																		// (mem+realloc)
-				ComponentWriter.canonFutureDropReadable(H_T_FS_FUTURE)))); // 50
-																			// future-drop-fs
-		// Group the 50 lowered/built-in core funcs (1-50) for the adapter's "w" import
+				ComponentWriter.canonFutureDropReadable(H_T_FS_FUTURE), // 50
+																		// future-drop-fs
+				ComponentWriter.canonLower(31)))); // 51 stderr write-via-stream
+		// Group the 51 lowered/built-in core funcs (1-51) for the adapter's "w" import
 		// (core
 		// instance 1). Names match adapter-http.wat's imports.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(List.of("stdout-write", "stdin-read",
-						"get-environment", "sys-now", "mono-now", "file-read", "file-append", "open-at",
-						"get-directories", "get-random-u64", "poll-block", "io-write", "io-read", "fields-new",
-						"fields-append", "fields-entries", "req-new", "set-method", "set-scheme", "set-authority",
-						"set-path", "req-body", "body-write", "body-finish", "future-subscribe", "future-get",
-						"resp-status", "resp-headers", "resp-consume", "body-stream", "handle", "drop-desc", "drop-out",
-						"drop-in", "drop-pollable", "drop-fields", "drop-req", "drop-outgoing-body", "drop-future",
-						"drop-resp", "drop-body", "stream-new", "stream-read", "stream-write", "stream-drop-r",
-						"stream-drop-w", "future-read-cli", "future-drop-cli", "future-read-fs", "future-drop-fs"),
-						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-								25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-								47, 48, 49, 50)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
+					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
+							"file-append", "open-at", "get-directories", "get-random-u64", "poll-block", "io-write",
+							"io-read", "fields-new", "fields-append", "fields-entries", "req-new", "set-method",
+							"set-scheme", "set-authority", "set-path", "req-body", "body-write", "body-finish",
+							"future-subscribe", "future-get", "resp-status", "resp-headers", "resp-consume",
+							"body-stream", "handle", "drop-desc", "drop-out", "drop-in", "drop-pollable", "drop-fields",
+							"drop-req", "drop-outgoing-body", "drop-future", "drop-resp", "drop-body", "stream-new",
+							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
+							"future-drop-cli", "future-read-fs", "future-drop-fs", "stderr-write"),
+					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+							26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+							49, 50, 51)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -617,62 +637,65 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(2,
 						List.of("mem", "wasi_snapshot_preview1", "sock", "http"), List.of(0, 2, 2, 2)))));
-		// Alias rontolisp's run (core func 51 = cabi_realloc + 50 lowered/built-in
+		// Alias rontolisp's run (core func 52 = cabi_realloc + 51 lowered/built-in
 		// funcs).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Lift run (core func 51) into component func 31 with the async function type 43.
-		// Component func 31 follows the 31 aliased WASI funcs (0-30).
+		// Lift run (core func 52) into component func 32 with the async function type 45.
+		// Component func 32 follows the 32 aliased WASI funcs (0-31).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(51, H_T_RUN_FUNC))));
-		// Component instance 14 (after import instances 0-13) exporting run, exported as
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(52, H_T_RUN_FUNC))));
+		// Component instance 15 (after import instances 0-14) exporting run, exported as
 		// the
 		// wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 31))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 32))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 14))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 15))));
 		return c.toByteArray();
 	}
 
 	// Sockets-variant component import-instance indices (from import-block-sock.bin).
 	// The base WASI 0.3 instances 0-8 keep the same order as buildBase;
-	// wasi:sockets/types is appended at 9.
+	// wasi:sockets/types is appended at 9 and wasi:cli/stderr (for warn) last at 10.
 	private static final int S_INST_SOCKETS = 9;
 
-	// First free component type index after import-block-sock.bin (types 0-12 used).
-	// Aliased resource/enum types (component types 13-17).
-	private static final int S_T_CLI_ERRCODE = 13;
+	private static final int S_INST_STDERR = 10;
 
-	private static final int S_T_FS_ERRCODE = 14;
+	// First free component type index after import-block-sock.bin (types 0-14 used; the
+	// appended stderr interface adds two: an aliased cli error-code + the stderr instance
+	// type). Aliased resource/enum types (component types 15-19).
+	private static final int S_T_CLI_ERRCODE = 15;
 
-	private static final int S_T_DESCRIPTOR = 15;
+	private static final int S_T_FS_ERRCODE = 16;
 
-	private static final int S_T_SOCK_ERRCODE = 16;
+	private static final int S_T_DESCRIPTOR = 17;
 
-	private static final int S_T_TCP_SOCKET = 17;
+	private static final int S_T_SOCK_ERRCODE = 18;
 
-	// Defined async value/function types (component types 18-28).
-	private static final int S_T_STREAM = 18;
+	private static final int S_T_TCP_SOCKET = 19;
 
-	private static final int S_T_CLI_RESULT = 19;
+	// Defined async value/function types (component types 20-30).
+	private static final int S_T_STREAM = 20;
 
-	private static final int S_T_CLI_FUTURE = 20;
+	private static final int S_T_CLI_RESULT = 21;
 
-	private static final int S_T_FS_RESULT = 21;
+	private static final int S_T_CLI_FUTURE = 22;
 
-	private static final int S_T_FS_FUTURE = 22;
+	private static final int S_T_FS_RESULT = 23;
 
-	private static final int S_T_RUN_RESULT = 23;
+	private static final int S_T_FS_FUTURE = 24;
 
-	private static final int S_T_RUN_FUNC = 24;
+	private static final int S_T_RUN_RESULT = 25;
 
-	private static final int S_T_OWN_TCP = 25;
+	private static final int S_T_RUN_FUNC = 26;
 
-	private static final int S_T_ACCEPT_STREAM = 26;
+	private static final int S_T_OWN_TCP = 27;
 
-	private static final int S_T_SOCK_RESULT = 27;
+	private static final int S_T_ACCEPT_STREAM = 28;
 
-	private static final int S_T_SOCK_FUTURE = 28;
+	private static final int S_T_SOCK_RESULT = 29;
+
+	private static final int S_T_SOCK_FUTURE = 30;
 
 	/**
 	 * Assemble the sockets-variant component for a {@code rontolisp:tcp-*} program. It is
@@ -684,9 +707,9 @@ public final class WasmComponentBuilder {
 	 * {@code -S tcp=y -S inherit-network=y} on top of the async flags.
 	 *
 	 * <p>
-	 * All wiring constants (instance index 9, the next-free type index 13, the 17 lowered
-	 * functions and their canonical options) were derived from {@code wasm-tools dump} of
-	 * a reference generated by {@code regen.sh} from {@code uni-sock.wit} +
+	 * All wiring constants (instance indices 9/10, the next-free type index 15, the 18
+	 * lowered functions and their canonical options) were derived from {@code wasm-tools
+	 * dump} of a reference generated by {@code regen.sh} from {@code uni-sock.wit} +
 	 * {@code core-sock.wat}.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @return the WASI 0.3 component binary
@@ -706,11 +729,11 @@ public final class WasmComponentBuilder {
 		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the resource/enum types (component types 13-17) and the WASI functions
-		// (component funcs 0-16), all in one alias section.
+		// Alias the resource/enum types (component types 15-19) and the WASI functions
+		// (component funcs 0-17), all in one alias section.
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
-				// types 13 cli error-code, 14 fs error-code, 15 descriptor,
-				// 16 sockets error-code, 17 tcp-socket
+				// types 15 cli error-code, 16 fs error-code, 17 descriptor,
+				// 18 sockets error-code, 19 tcp-socket
 				ComponentWriter.aliasInstanceType(INST_CLI_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "descriptor"),
@@ -734,24 +757,27 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.listen"),
 				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.send"),
 				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.receive"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.get-local-address"))));
-		// Define the async value/function types (component types 18-28).
+				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.get-local-address"),
+				// func 17: stderr write-via-stream (appended last, for warn on fd 2)
+				ComponentWriter.aliasInstanceFunc(S_INST_STDERR, "write-via-stream"))));
+		// Define the async value/function types (component types 20-30).
 		c.rawSection(ComponentWriter.SEC_TYPE,
-				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 18
-						ComponentWriter.definedResultErr(S_T_CLI_ERRCODE), // 19
-						ComponentWriter.definedFuture(S_T_CLI_RESULT), // 20
-						ComponentWriter.definedResultErr(S_T_FS_ERRCODE), // 21
-						ComponentWriter.definedFuture(S_T_FS_RESULT), // 22
-						ComponentWriter.definedResultVoid(), // 23
-						ComponentWriter.asyncFuncTypeResultType(S_T_RUN_RESULT), // 24
-						ComponentWriter.definedOwn(S_T_TCP_SOCKET), // 25
-						ComponentWriter.definedStreamOfType(S_T_OWN_TCP), // 26 accept
+				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 20
+						ComponentWriter.definedResultErr(S_T_CLI_ERRCODE), // 21
+						ComponentWriter.definedFuture(S_T_CLI_RESULT), // 22
+						ComponentWriter.definedResultErr(S_T_FS_ERRCODE), // 23
+						ComponentWriter.definedFuture(S_T_FS_RESULT), // 24
+						ComponentWriter.definedResultVoid(), // 25
+						ComponentWriter.asyncFuncTypeResultType(S_T_RUN_RESULT), // 26
+						ComponentWriter.definedOwn(S_T_TCP_SOCKET), // 27
+						ComponentWriter.definedStreamOfType(S_T_OWN_TCP), // 28 accept
 																			// stream
-						ComponentWriter.definedResultErr(S_T_SOCK_ERRCODE), // 27
-						ComponentWriter.definedFuture(S_T_SOCK_RESULT)))); // 28
+						ComponentWriter.definedResultErr(S_T_SOCK_ERRCODE), // 29
+						ComponentWriter.definedFuture(S_T_SOCK_RESULT)))); // 30
 		// Lower the base WASI funcs (core funcs 1-10) + descriptor drop (11) + the shared
 		// stream/future built-ins (12-20) exactly as buildBase, then the sockets funcs
-		// (21-27), the tcp-socket resource drop (28) and the sockets built-ins (29-31).
+		// (21-27), the tcp-socket resource drop (28), the sockets built-ins (29-31) and
+		// finally stderr write-via-stream (component func 17 -> core func 32).
 		// Canonical options mirror wasm-tools' choices for each function.
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), // 1
 				ComponentWriter.canonLowerMemory(1, 0), // 2 read-via-stream (stdin)
@@ -790,19 +816,20 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonResourceDrop(S_T_TCP_SOCKET), // 28 drop-tcp
 				ComponentWriter.canonStreamRead(S_T_ACCEPT_STREAM, 0), // 29 accept-read
 				ComponentWriter.canonStreamDropReadable(S_T_ACCEPT_STREAM), // 30
-				ComponentWriter.canonFutureDropReadable(S_T_SOCK_FUTURE)))); // 31
-		// Group the 31 lowered/built-in core funcs (1-31) for the adapter's "w" import
+				ComponentWriter.canonFutureDropReadable(S_T_SOCK_FUTURE), // 31
+				ComponentWriter.canonLower(17)))); // 32 stderr write-via-stream
+		// Group the 32 lowered/built-in core funcs (1-32) for the adapter's "w" import
 		// (core instance 1). Names match adapter-sock.wat's imports.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-						List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
-								"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc",
-								"stream-new", "stream-read", "stream-write", "stream-drop-r", "stream-drop-w",
-								"future-read-cli", "future-drop-cli", "future-read-fs", "future-drop-fs", "tcp-create",
-								"tcp-bind", "tcp-connect-raw", "tcp-listen-raw", "tcp-send", "tcp-receive",
-								"tcp-local-addr", "drop-tcp", "accept-read", "accept-drop-r", "future-drop-sock"),
-						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-								25, 26, 27, 28, 29, 30, 31)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
+					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
+							"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc", "stream-new",
+							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
+							"future-drop-cli", "future-read-fs", "future-drop-fs", "tcp-create", "tcp-bind",
+							"tcp-connect-raw", "tcp-listen-raw", "tcp-send", "tcp-receive", "tcp-local-addr",
+							"drop-tcp", "accept-read", "accept-drop-r", "future-drop-sock", "stderr-write"),
+					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+							26, 27, 28, 29, 30, 31, 32)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -812,20 +839,20 @@ public final class WasmComponentBuilder {
 		// tcp-accept / tcp-local-port).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
 			.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1", "sock"), List.of(0, 2, 2)))));
-		// Alias rontolisp's run (core func 32 = cabi_realloc + 31 lowered/built-in
+		// Alias rontolisp's run (core func 33 = cabi_realloc + 32 lowered/built-in
 		// funcs).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Lift run (core func 32) into component func 17 with the async function type 24
-		// (stackful async: no callback option). Component func 17 follows the 17 aliased
-		// WASI funcs (0-16).
+		// Lift run (core func 33) into component func 18 with the async function type 26
+		// (stackful async: no callback option). Component func 18 follows the 18 aliased
+		// WASI funcs (0-17).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(32, S_T_RUN_FUNC))));
-		// Component instance 10 (after import instances 0-9) exporting run, exported as
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(33, S_T_RUN_FUNC))));
+		// Component instance 11 (after import instances 0-10) exporting run, exported as
 		// the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 17))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11))));
 		return c.toByteArray();
 	}
 
