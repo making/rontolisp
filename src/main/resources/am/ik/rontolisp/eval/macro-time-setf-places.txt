@@ -1,0 +1,16 @@
+# Setf places whose top-level (setf (PLACE ...) VALUE) forms must be REPLAYED into the
+# compile-path macro-time evaluator (UserMacroExpander), so that a macro which reads the
+# underlying global at macro-EXPANSION time observes the mutation as a compile-time
+# constant. Without this, a runtime setf cannot affect an already-compile-time-expanded
+# macro call.
+#
+# This whole mechanism is a WORKAROUND for the absence of dynamic (special) variable
+# binding on the compile path (see .todo/82 and .todo/54 Phase 4). It exists so specific
+# library symbols do NOT have to be branched on in Java source: add the unqualified member
+# name of the setf place here instead of editing UserMacroExpander.
+#
+# Format: one unqualified setf-place member name per line; blank lines and lines starting
+# with '#' are ignored.
+
+# cl-who's (setf (html-mode) :html5) output-mode switch -- .todo/76 / .todo/81
+html-mode

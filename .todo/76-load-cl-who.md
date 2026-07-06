@@ -1,4 +1,10 @@
-# 76: Load cl-who (parent) -- (X)HTML generation macros
+# 76: Load cl-who (parent) -- (X)HTML generation macros -- **DONE 2026-07-06**
+
+**STATUS: DONE.** All units 77-81 landed. `asdf:load-system "cl-who"` +
+`with-html-output-to-string` renders on interpreter / JVM / WASM Preview 1 /
+WASM `--component`, verified. See `.kb/asdf.md` (cl-who paragraph) and the
+[[cl-who-loadable]] memory. Lite limits documented: `:indent` and dynamic
+`let`-rebinding of `*html-mode*` unsupported (use `(setf (html-mode) :html5)`).
 
 Goal: load Edi Weitz's **cl-who** (`asdf:load-system "cl-who"`, BSD, 4 files /
 779 lines) verbatim on all four backends and render HTML, the same standard we
@@ -38,8 +44,8 @@ expansion time on interpreter + compiled JVM.
 | `make-string` (`:initial-element`/`:element-type`), `replace` (seq, `:start1`), `write-sequence` on strings (`:start`/`:end`), `constantp`, `lower-case-p`, `upper-case-p`, `streamp` + `stream` type-specifier in `check-type` | `.todo/77` **DONE** (all 4 backends + native E2E) |
 | `defgeneric` + `defmethod` (widened to the full static CLOS subset: `defclass`/`make-instance`/`slot-value` + `defgeneric`/`defmethod` with eql/class/type specializers) -- cl-who's `convert-tag-to-string-list` | **DONE** 2026-07-06 (all 4 backends + native E2E; `.kb/clos.md`) |
 | `defun (setf html-mode)` -- setf-function definitions | `.todo/79` **DONE** 2026-07-06 (all 4 backends + native E2E; `.kb/defstruct.md`) |
-| `loop for s being the {external-\|present-}symbols of PACKAGE` (hyperdoc block; lite/empty iteration is acceptable) | `.todo/80` |
-| Vendor + 4-backend load + fix residue + ci-spec/e2e | `.todo/81` (integration/close) |
+| `loop for s being the {external-\|present-}symbols of PACKAGE` (hyperdoc block; lite/empty iteration is acceptable) | `.todo/80` **DONE** |
+| Vendor + 4-backend load + fix residue + ci-spec/e2e | `.todo/81` **DONE 2026-07-06** (all 4 backends; `ClWhoE2eTest` interpreter+JVM + manual WASM P1/component; `.kb/asdf.md` cl-who paragraph) |
 
 ### Deferred -- dynamic special variables (NOT a blocker for the first green load)
 

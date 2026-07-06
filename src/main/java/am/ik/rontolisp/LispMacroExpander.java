@@ -4263,10 +4263,19 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandWithOutputToString(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || spec.cdr() != LispNil.INSTANCE
-				|| !(spec.car() instanceof LispSymbol var)) {
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !(spec.car() instanceof LispSymbol var)) {
 			throw new IllegalArgumentException(
-					LispNames.WITH_OUTPUT_TO_STRING + " expects a (var) spec as the first argument");
+					LispNames.WITH_OUTPUT_TO_STRING + " expects a (var ...) spec as the first argument");
+		}
+		// CL spec is (var &optional string-form &key element-type). The fresh-string
+		// behaviour (string-form nil/absent) is the supported case; :element-type is
+		// accepted and ignored (lite -- cl-who passes (s nil :element-type 'character)).
+		// A non-nil string-form (append to an existing fill-pointered string) is not
+		// supported.
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() >= 2 && specParts.get(1) != LispNil.INSTANCE) {
+			throw new UnsupportedOperationException(
+					LispNames.WITH_OUTPUT_TO_STRING + " supports only a nil string-form (fresh-string) spec");
 		}
 		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
 		LispSymbol result = new LispSymbol(WOTS_RESULT_VAR);
@@ -5876,9 +5885,40 @@ public final class LispMacroExpander {
 			toString = true;
 			streamDest = parts.get(1);
 		}
+		// A conditional control string with per-branch controls: distribute the format
+		// over the branches so each compiles with a literal control -- cl-who's
+		// escape-char does (format nil (if (eq *html-mode* :xml) "&#x~x;" "&#~d;") code).
+		if (parts.get(2) instanceof LispCons ctrl && ctrl.car() instanceof LispSymbol ifSym
+				&& LispNames.IF.equals(ifSym.name())) {
+			List<LispVal> ifParts = ctrl.toList();
+			if (ifParts.size() == 4) {
+				LispVal thenFmt = expandFormat((LispCons) replaceFormatControl(parts, ifParts.get(2)));
+				LispVal elseFmt = expandFormat((LispCons) replaceFormatControl(parts, ifParts.get(3)));
+				return listToCons(List.of(new LispSymbol(LispNames.IF), ifParts.get(1), thenFmt, elseFmt));
+			}
+		}
 		if (!(parts.get(2) instanceof LispString control)) {
-			throw new UnsupportedOperationException(
-					"format requires a literal control string, got: " + parts.get(2).print());
+			// A computed (non-literal) control string cannot be lowered to string pieces
+			// at
+			// compile time. Fall back to an inline runtime renderer (cl-who's
+			// escape-string
+			// binds its control to a local variable). Supports the common directives
+			// ~~ ~% ~a ~s ~d ~x ~c; an unknown directive is emitted verbatim.
+			List<LispVal> fargs = parts.subList(3, parts.size());
+			List<LispVal> listCall = new java.util.ArrayList<>();
+			listCall.add(new LispSymbol(LispNames.LIST));
+			listCall.addAll(fargs);
+			LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(),
+					parts.get(2), fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall)));
+			if (streamDest != null) {
+				return makeProgn(
+						List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, streamDest)),
+								LispNil.INSTANCE));
+			}
+			if (toString) {
+				return rendered;
+			}
+			return makeProgn(List.of(callOf(LispNames.PRINC, rendered), LispNil.INSTANCE));
 		}
 		List<LispVal> args = parts.subList(3, parts.size());
 		List<LispVal> bindings = new java.util.ArrayList<>();
@@ -5922,6 +5962,100 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.addAll(forms);
 		return listToCons(letParts);
+	}
+
+	// Rebuilds a (format dest control args...) call with a different control expression,
+	// used to distribute format over a conditional control string.
+	private static LispVal replaceFormatControl(List<LispVal> parts, LispVal newControl) {
+		List<LispVal> rebuilt = new java.util.ArrayList<>(parts);
+		rebuilt.set(2, newControl);
+		return listToCons(rebuilt);
+	}
+
+	@Nullable private static volatile LispVal formatRuntimeLambda;
+
+	// A self-contained (lambda (ctrl args) ...) that renders a format control string at
+	// runtime, used when the control is not a literal (see expandFormat). Built as AST
+	// because this package must not depend on the reader. Handles ~~ ~% ~a ~s ~d ~x ~c;
+	// an unknown directive is emitted verbatim. Cached after first construction.
+	private static LispVal formatRuntimeLambda() {
+		LispVal cached = formatRuntimeLambda;
+		if (cached != null) {
+			return cached;
+		}
+		LispSymbol ctrl = new LispSymbol("__fmt_ctrl");
+		LispSymbol args = new LispSymbol("__fmt_args");
+		LispSymbol out = new LispSymbol("__fmt_out");
+		LispSymbol i = new LispSymbol("__fmt_i");
+		LispSymbol len = new LispSymbol("__fmt_len");
+		LispSymbol c = new LispSymbol("__fmt_c");
+		LispSymbol d = new LispSymbol("__fmt_d");
+		LispSymbol hex = new LispSymbol("__fmt_hex");
+		LispSymbol hn = new LispSymbol("__fmt_n");
+		LispVal one = new LispInteger(1);
+		// (labels ((__fmt_hex (n) (if (< n 16) (string (char "0..f" n))
+		// (concatenate 'string (__fmt_hex (floor n 16)) (string (char "0..f" (mod n
+		// 16)))))))
+		LispVal hexBody = makeIf(fmtCall(LispNames.LT, hn, new LispInteger(16)),
+				fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, new LispString("0123456789abcdef"), hn)),
+				fmtCall(LispNames.CONCATENATE, quoteOf("string"),
+						fmtCall(hex.name(), fmtCall(LispNames.FLOOR, hn, new LispInteger(16))),
+						fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, new LispString("0123456789abcdef"),
+								fmtCall(LispNames.MOD, hn, new LispInteger(16))))));
+		LispVal hexDef = listToCons(List.of(hex, listToCons(List.of(hn)), hexBody));
+		// setq helpers
+		LispVal popArg = fmtCall(LispNames.SETQ, args, fmtCall(LispNames.CDR, args));
+		// cond over the downcased directive char
+		LispVal condForm = listToCons(List.of(new LispSymbol(LispNames.COND),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('~')), new LispString("~"), null),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('%')),
+						fmtCall(LispNames.STRING, new LispChar('\n')), null),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('a')),
+						fmtCall(LispNames.PRINC_TO_STRING, fmtCall(LispNames.CAR, args)), popArg),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('d')),
+						fmtCall(LispNames.PRINC_TO_STRING, fmtCall(LispNames.CAR, args)), popArg),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('s')),
+						fmtCall(LispNames.PRIN1_TO_STRING, fmtCall(LispNames.CAR, args)), popArg),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('x')),
+						fmtCall(hex.name(), fmtCall(LispNames.CAR, args)), popArg),
+				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('c')),
+						fmtCall(LispNames.STRING, fmtCall(LispNames.CAR, args)), popArg),
+				// (t (setq out (concatenate 'string out "~" (string (char ctrl i)))))
+				listToCons(List.of(LispTrue.INSTANCE,
+						fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("string"), out,
+								new LispString("~"), fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, ctrl, i))))))));
+		// (progn (setq i (+ i 1)) (let ((d (char-downcase (char ctrl i)))) cond))
+		LispVal directive = makeProgn(List.of(fmtCall(LispNames.SETQ, i, fmtCall(LispNames.ADD, i, one)),
+				listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(
+								List.of(d, fmtCall(LispNames.CHAR_DOWNCASE, fmtCall(LispNames.CHAR, ctrl, i)))))),
+						condForm))));
+		LispVal charBranch = makeIf(fmtCall(LispNames.CHAR_EQ, c, new LispChar('~')), directive, fmtCall(LispNames.SETQ,
+				out, fmtCall(LispNames.CONCATENATE, quoteOf("string"), out, fmtCall(LispNames.STRING, c))));
+		// (let ((c (char ctrl i))) charBranch (setq i (+ i 1)))
+		LispVal whileBody = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(c, fmtCall(LispNames.CHAR, ctrl, i))))), charBranch,
+				fmtCall(LispNames.SETQ, i, fmtCall(LispNames.ADD, i, one))));
+		LispVal whileForm = listToCons(
+				List.of(new LispSymbol(LispNames.WHILE), fmtCall(LispNames.LT, i, len), whileBody));
+		// (let ((out "") (i 0) (len (length ctrl))) while out)
+		LispVal mainLet = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(out, new LispString(""))),
+						listToCons(List.of(i, new LispInteger(0))),
+						listToCons(List.of(len, fmtCall(LispNames.LENGTH, ctrl))))),
+				whileForm, out));
+		LispVal labelsForm = listToCons(
+				List.of(new LispSymbol(LispNames.LABELS), listToCons(List.of(hexDef)), mainLet));
+		LispVal lambda = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(ctrl, args)), labelsForm));
+		formatRuntimeLambda = lambda;
+		return lambda;
+	}
+
+	// Builds a cond clause (test (setq out (concatenate 'string out value)) [extra]).
+	private static LispVal appendClause(LispSymbol out, LispVal test, LispVal value, @Nullable LispVal extra) {
+		LispVal append = fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("string"), out, value));
+		return extra == null ? listToCons(List.of(test, append)) : listToCons(List.of(test, append, extra));
 	}
 
 	private static final String FORMAT_ARG_VAR = "__format_arg";

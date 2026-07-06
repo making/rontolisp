@@ -126,7 +126,7 @@ below.
 
 ## What can I actually load?
 
-Three real-world libraries load unmodified today, verified on all four
+Four real-world libraries load unmodified today, verified on all four
 backends (interpreter, JVM, WASM Preview 1 and `--component`):
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -148,18 +148,34 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   `with-unique-names`/`with-gensyms`/`once-only` (three-level nested
   backquote) usable from your own macros, `rotate-byte`, `copy-array` and
   `compose`.
+- **[cl-who](https://edicl.github.io/cl-who/) v1.1.5**: Edi Weitz's (X)HTML
+  generation macros. `with-html-output-to-string` (and `with-html-output`)
+  render s-expression HTML with attributes, nested tags and the local
+  `str`/`esc`/`fmt`/`htm` operators; escaping and numeric character entities
+  work. Its macro expansion runs a chain of ordinary defuns **and a generic
+  function** (`convert-tag-to-string-list`) at macro-expansion time — the CLOS
+  static subset plus setf-function definitions (`(defun (setf html-mode) ...)`)
+  make it load. Two lite limitations: **`:indent` (pretty-printed output) is
+  unsupported** — it needs dynamic (special) variable rebinding, so the default
+  compact rendering is what you get; and switching output mode must use
+  **`(setf (html-mode) :html5)`** (which mutates the global — a compile-time
+  constant on the compile path), not a `let` rebinding of `*html-mode*`. The
+  default `:xml` mode and `:html5` both render correctly.
 
-Runnable demos for all three — with the per-backend commands and expected
-output — live in
+Runnable demos for the first three — with the per-backend commands and
+expected output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 
 A library qualifies today roughly when it stays inside: plain
 `defun`/`defmacro`/`defpackage` code, `loop`, `multiple-value-bind` over
 `values`-tailed functions, `check-type`/`etypecase` with the supported type
-specifiers, declarations (parsed no-ops, `deftype` included), and the lite
+specifiers, declarations (parsed no-ops, `deftype` included), the CLOS static
+subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value` with
+single dispatch, plus `(defun (setf name) ...)` setf functions), and the lite
 `define-condition`/`make-condition`/`warn`/`restart-case`/`return-from`
-idioms. Libraries built on CLOS, the condition/restart system, dynamic
-(special) variable binding or pathnames do not load yet (see
+idioms. Libraries built on the full metaobject protocol, the condition/restart
+system, dynamic (special) variable **rebinding** (`let` over a special) or
+pathnames do not load yet (see
 [Unsupported CL Features](missing-features.md)). For anything else, the
 practical use is structuring **your own** multi-file rontolisp projects —
 with `.asd` files that real ASDF can read too.

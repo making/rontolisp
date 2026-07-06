@@ -1749,7 +1749,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.STRING, args, 1);
 			return switch (args.get(0)) {
 				case LispString s -> s;
-				case LispSymbol sym -> new LispString(sym.name());
+				// Coercing a symbol yields its name; a keyword's package colon is a
+				// marker,
+				// not part of the name, so (string :html) is "html" (matches CL, and is
+				// what cl-who's maybe-downcase relies on to emit <html> not <:html>).
+				case LispSymbol sym -> new LispString(sym.isKeyword() ? sym.name().substring(1) : sym.name());
 				case LispChar c -> new LispString(new String(Character.toChars(c.codePoint())));
 				case LispTrue ignored -> new LispString("t");
 				case LispNil ignored -> new LispString("nil");
@@ -1970,14 +1974,14 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
 			requireArgCount(LispNames.STRING_EQ, args, 2);
-			String a = requireString(LispNames.STRING_EQ, args.get(0));
-			String b = requireString(LispNames.STRING_EQ, args.get(1));
+			String a = stringDesignator(LispNames.STRING_EQ, args.get(0));
+			String b = stringDesignator(LispNames.STRING_EQ, args.get(1));
 			return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.STRING_EQUAL, new LispFunction(LispNames.STRING_EQUAL, args -> {
 			requireArgCount(LispNames.STRING_EQUAL, args, 2);
-			String a = requireString(LispNames.STRING_EQUAL, args.get(0));
-			String b = requireString(LispNames.STRING_EQUAL, args.get(1));
+			String a = stringDesignator(LispNames.STRING_EQUAL, args.get(0));
+			String b = stringDesignator(LispNames.STRING_EQUAL, args.get(1));
 			return a.equalsIgnoreCase(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.STRING_TRIM, new LispFunction(LispNames.STRING_TRIM, args -> {
@@ -1999,6 +2003,19 @@ public final class Environment implements Scope {
 			return str.value();
 		}
 		throw new LispEvalException(name + " expects a string, got: " + val.print());
+	}
+
+	// Coerces a Common Lisp string designator (a string, a symbol, or a character) to a
+	// String, dropping a keyword's leading package colon like (string ...) does. Used by
+	// the string comparison functions (string=/string-equal), which accept designators --
+	// cl-who compares tags (keywords) against the empty-tag list with #'string-equal.
+	private static String stringDesignator(String name, LispVal val) {
+		return switch (val) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			case LispChar c -> new String(Character.toChars(c.codePoint()));
+			default -> throw new LispEvalException(name + " expects a string designator, got: " + val.print());
+		};
 	}
 
 	static int requireIndex(String name, LispVal val) {
@@ -2826,6 +2843,13 @@ public final class Environment implements Scope {
 				}
 			}
 			int copied = Math.min(end1 - start1, end2 - start2);
+			// Common Lisp REPLACE is destructive: mutate the target string in place and
+			// return it, so a (make-string ...) buffer filled by successive REPLACE calls
+			// (cl-who's string-list-to-string) accumulates correctly.
+			if (args.get(0) instanceof LispString target) {
+				target.replaceInPlace(start1, s2, start2, copied);
+				return target;
+			}
 			String result = s1.substring(0, start1) + s2.substring(start2, start2 + copied)
 					+ s1.substring(start1 + copied);
 			return new LispString(result);

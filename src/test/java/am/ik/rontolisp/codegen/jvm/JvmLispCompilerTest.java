@@ -236,7 +236,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (string \"foo\")) (print (string 'foo)) (print (string :bar))"
 				+ "(print (string #\\a)) (print (string t)) (print (string nil))"
 				+ "(print (funcall #'string 'xyz)) (print (mapcar #'string '(a b)))"))
-			.isEqualTo("\"foo\"\n\"foo\"\n\":bar\"\n\"a\"\n\"t\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+			.isEqualTo("\"foo\"\n\"foo\"\n\"bar\"\n\"a\"\n\"t\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
 	}
 
 	@Test

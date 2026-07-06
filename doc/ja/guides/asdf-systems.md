@@ -122,7 +122,7 @@ $ rontolisp
 
 ## 実際に何がロードできるか
 
-現在、実世界の 3 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
+現在、実世界の 4 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
 (インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -142,19 +142,36 @@ $ rontolisp
   `read-delimited`、`expt-mod`、`collecting`/`with-collectors`、自作マクロ
   から使える `with-unique-names`/`with-gensyms`/`once-only` (3 段のネスト
   バッククォート)、`rotate-byte`、`copy-array`、`compose`。
+- **[cl-who](https://edicl.github.io/cl-who/) v1.1.5**: Edi Weitz による
+  (X)HTML 生成マクロ。`with-html-output-to-string` (および
+  `with-html-output`) が S 式の HTML を、属性・ネストしたタグ・ローカルな
+  `str`/`esc`/`fmt`/`htm` 演算子とともにレンダリングします。エスケープと
+  数値文字参照も動作します。マクロ展開は通常の defun 群**と総称関数**
+  (`convert-tag-to-string-list`) をマクロ展開時に実行します — CLOS 静的
+  サブセットと setf 関数定義 (`(defun (setf html-mode) ...)`) によりロード
+  できます。2 つの簡易版の制限があります: **`:indent` (整形出力) は未対応**
+  です — 動的 (スペシャル) 変数の再束縛が必要なため、既定のコンパクトな
+  レンダリングになります。また出力モードの切り替えは **`(setf (html-mode)
+  :html5)`** (グローバルを変更 — コンパイル経路ではコンパイル時定数)
+  を使い、`*html-mode*` の `let` による再束縛は使いません。既定の `:xml`
+  モードと `:html5` はどちらも正しくレンダリングされます。
 
-3 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待出力付き —
-は
+最初の 3 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待
+出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。
 
 現時点でロードできるライブラリの目安は、おおよそ次の範囲に収まるものです:
 素の `defun`/`defmacro`/`defpackage` コード、`loop`、`values` を末尾に持つ
 関数への `multiple-value-bind`、サポート済みの型指定子による
-`check-type`/`etypecase`、宣言 (パース済み no-op、`deftype` を含む)、そして
+`check-type`/`etypecase`、宣言 (パース済み no-op、`deftype` を含む)、CLOS
+静的サブセット (単一ディスパッチの
+`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`、および
+`(defun (setf name) ...)` setf 関数)、そして
 簡易版 `define-condition`/`make-condition`/`warn`/`restart-case`/
-`return-from` のイディオム。CLOS、
-コンディション/リスタートシステム、動的 (スペシャル) 変数束縛、パス名の上に
+`return-from` のイディオム。完全なメタオブジェクトプロトコル、
+コンディション/リスタートシステム、動的 (スペシャル) 変数の**再束縛**
+(スペシャル変数への `let`)、パス名の上に
 構築されたライブラリはまだロードできません
 ([未対応のCL機能](missing-features.md)を参照)。それ以外の場合の実用は、
 **自分自身の**複数ファイル rontolisp プロジェクトの構成です — その `.asd` は

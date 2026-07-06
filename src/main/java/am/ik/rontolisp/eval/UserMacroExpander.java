@@ -1,9 +1,15 @@
 package am.ik.rontolisp.eval;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispMacroExpander;
@@ -11,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 
 /**
  * Compile-path expansion of user macros defined with {@code defmacro}. Runs in the CLI
@@ -85,6 +92,26 @@ public final class UserMacroExpander {
 				// form stays in the program for the compilers' own splice.
 				macroEval.eval(expanded);
 			}
+			if (isOperator(expanded, LispNames.DEFVAR) || isOperator(expanded, LispNames.DEFPARAMETER)
+					|| isOperator(expanded, LispNames.DEFCONSTANT)) {
+				// Establish global special variables at macro-expansion time so an
+				// expansion-time function can READ them -- cl-who's tree-to-commands
+				// chain
+				// reads *html-mode*/*downcase-tokens-p*/*html-empty-tags*/... The form
+				// stays in the program so the compilers emit it for runtime as well.
+				macroEval.eval(expanded);
+			}
+			if (isMacroTimeReplaySetf(resolved)) {
+				// A top-level (setf (PLACE ...) ...) whose PLACE is registered as
+				// macro-time-effectful (see macro-time-setf-places.txt): a macro that
+				// reads the underlying global at macro-EXPANSION time must observe the
+				// mutation as a compile-time constant, because a with-html-output-style
+				// macro is expanded at compile time. The form stays in the program so the
+				// runtime global tracks it too. WORKAROUND for no dynamic
+				// special-variable
+				// binding on the compile path -- see .todo/82.
+				macroEval.eval(expanded);
+			}
 			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
 			// canonical form is not always re-resolvable by the compilers' own pass
 			// (a cl: symbol canonicalizes to a bare name, which is an error to spell
@@ -96,6 +123,49 @@ public final class UserMacroExpander {
 
 	private static boolean isOperator(LispVal form, String name) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	// Recognizes a top-level (setf (PLACE ...) VALUE) whose PLACE (in any package
+	// spelling) is registered as macro-time-effectful. The set of place names is data,
+	// loaded from macro-time-setf-places.txt, so no library-specific term appears here.
+	private static boolean isMacroTimeReplaySetf(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.SETF.equals(member(op.name())) || !(cons.cdr() instanceof LispCons rest)
+				|| !(rest.car() instanceof LispCons place) || !(place.car() instanceof LispSymbol placeOp)) {
+			return false;
+		}
+		return MACRO_TIME_SETF_PLACES.contains(member(placeOp.name()));
+	}
+
+	private static String member(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	// Unqualified setf-place member names whose top-level (setf (PLACE ...) ...) forms
+	// are
+	// replayed into the macro-time evaluator. Loaded from the sibling resource so
+	// specific
+	// library terms stay out of this source (WORKAROUND registry -- see .todo/82).
+	private static final Set<String> MACRO_TIME_SETF_PLACES = loadMacroTimeSetfPlaces();
+
+	private static Set<String> loadMacroTimeSetfPlaces() {
+		Set<String> places = new HashSet<>();
+		try (InputStream in = UserMacroExpander.class.getResourceAsStream("macro-time-setf-places.txt")) {
+			if (in == null) {
+				return Set.of();
+			}
+			for (String line : new String(in.readAllBytes(), StandardCharsets.UTF_8).split("\n", -1)) {
+				String trimmed = line.strip();
+				if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
+					places.add(trimmed);
+				}
+			}
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+		return Set.copyOf(places);
 	}
 
 	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --

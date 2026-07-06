@@ -1096,8 +1096,11 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWriteSequence(cons), env);
 				case LispNames.MAKE_STRING:
 					return eval(LispMacroExpander.expandMakeString(cons), env);
-				case LispNames.REPLACE:
-					return eval(LispMacroExpander.expandReplace(cons), env);
+				// REPLACE is intentionally NOT expanded here: the interpreter uses the
+				// destructive built-in (Environment) so a make-string buffer filled by
+				// successive replaces (cl-who's string-list-to-string) mutates in place.
+				// The compilers still expand it to a fresh concatenate (no runtime string
+				// mutation there; cl-who resolves it at macro-expansion time).
 				case LispNames.LOWER_CASE_P:
 					return eval(LispMacroExpander.expandLowerCaseP(cons), env);
 				case LispNames.UPPER_CASE_P:

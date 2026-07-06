@@ -530,17 +530,47 @@ public final class LispLexer {
 	}
 
 	// Skips one datum at the raw character level, without tokenizing it, so a form
-	// guarded by a failing #+/#- may use syntax the reader does not support.
+	// guarded by a failing #+/#- may use syntax the reader does not support. A nested
+	// #+/#- produces NO datum under *read-suppress* (it consumes its feature expression
+	// and guarded form and yields nothing), so this keeps skipping until a real datum is
+	// consumed -- that is what makes the two-form guard idiom
+	// (#+feature #+feature A B, which includes both A and B only when the feature is
+	// present) skip both A and B when it is absent.
 	private void skipDatum() {
-		skipInterTokenSpace();
-		if (this.pos >= this.input.length()) {
-			throw new LispReadException("Unexpected end of input, expected a form to skip");
+		boolean consumedConditional = false;
+		while (true) {
+			skipInterTokenSpace();
+			if (this.pos >= this.input.length()) {
+				if (consumedConditional) {
+					return;
+				}
+				throw new LispReadException("Unexpected end of input, expected a form to skip");
+			}
+			if (this.input.charAt(this.pos) == ')') {
+				// A failing conditional guarded the last form(s) before ')': the nested
+				// conditional yielded nothing, so there is nothing more to skip.
+				if (consumedConditional) {
+					return;
+				}
+				throw new LispReadException("Unexpected ')' where a form to skip was expected");
+			}
+			if (skipDatumOrConditional()) {
+				return;
+			}
+			consumedConditional = true;
 		}
+	}
+
+	// Skips one syntactic unit at the raw character level. Returns true if it consumed a
+	// real datum, false if it consumed only a nested #+/#- conditional (which yields no
+	// datum under *read-suppress*). The caller (skipDatum) has already ensured pos is at
+	// a non-space character that is neither EOF nor ')'.
+	private boolean skipDatumOrConditional() {
 		char c = this.input.charAt(this.pos);
 		if (c == '\'' || c == '`') {
 			this.pos++;
 			skipDatum();
-			return;
+			return true;
 		}
 		if (c == ',') {
 			this.pos++;
@@ -548,47 +578,45 @@ public final class LispLexer {
 				this.pos++;
 			}
 			skipDatum();
-			return;
+			return true;
 		}
 		if (c == '"') {
 			skipStringRaw();
-			return;
+			return true;
 		}
 		if (c == '(') {
 			skipDelimitedList();
-			return;
-		}
-		if (c == ')') {
-			throw new LispReadException("Unexpected ')' where a form to skip was expected");
+			return true;
 		}
 		if (c == '#' && this.pos + 1 < this.input.length()) {
 			char next = this.input.charAt(this.pos + 1);
 			if (next == '\\') {
 				skipCharLiteralRaw();
-				return;
+				return true;
 			}
 			if (next == '\'') {
 				this.pos += 2;
 				skipDatum();
-				return;
+				return true;
 			}
 			if (next == '(') {
 				this.pos++;
 				skipDelimitedList();
-				return;
+				return true;
 			}
 			if (next == '+' || next == '-') {
 				// A nested conditional inside a skipped form: skip its feature
-				// expression and its guarded form, like *read-suppress*.
+				// expression and its guarded form, like *read-suppress*. It yields NO
+				// datum, so report false -- the enclosing skipDatum keeps going.
 				this.pos += 2;
 				skipDatum();
 				skipDatum();
-				return;
+				return false;
 			}
 			if (next == '.') {
 				this.pos += 2;
 				skipDatum();
-				return;
+				return true;
 			}
 			// #2A(...) and friends: skip the symbol-shaped prefix, then a directly
 			// following list (a glued '(' only occurs in array literals here).
@@ -599,12 +627,13 @@ public final class LispLexer {
 			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '(') {
 				skipDelimitedList();
 			}
-			return;
+			return true;
 		}
 		// A symbol or number token.
 		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 			this.pos++;
 		}
+		return true;
 	}
 
 	// Skips a balanced (...) list at the raw character level, honoring strings,

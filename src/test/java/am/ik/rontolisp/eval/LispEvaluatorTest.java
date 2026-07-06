@@ -1028,8 +1028,10 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalFormatNonLiteralControlString() {
-		assertThatThrownBy(() -> eval("(format t x)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("literal control string");
+		// A computed (non-literal) control string is rendered at runtime by the fallback
+		// renderer (used by cl-who's escape-string) rather than being an error.
+		assertThat(eval("(let ((c \"~a-~a\")) (format nil c 1 2))")).isEqualTo(new LispString("1-2"));
+		assertThat(eval("(let ((c \"&#x~x;\")) (format nil c 233))")).isEqualTo(new LispString("&#xe9;"));
 	}
 
 	@Test
@@ -5091,7 +5093,10 @@ class LispEvaluatorTest {
 	void stringCoercesDesignatorsToStrings() {
 		assertThat(evalMulti("(string \"foo\")").print()).isEqualTo("\"foo\"");
 		assertThat(evalMulti("(string 'foo)").print()).isEqualTo("\"foo\"");
-		assertThat(evalMulti("(string :bar)").print()).isEqualTo("\":bar\"");
+		// A keyword's package colon is a marker, not part of the name (matches CL):
+		// cl-who
+		// relies on (string :html) being "html" so it emits <html>, not <:html>.
+		assertThat(evalMulti("(string :bar)").print()).isEqualTo("\"bar\"");
 		assertThat(evalMulti("(string #\\a)").print()).isEqualTo("\"a\"");
 		assertThat(evalMulti("(string t)").print()).isEqualTo("\"t\"");
 		assertThat(evalMulti("(string nil)").print()).isEqualTo("\"nil\"");
