@@ -1,5 +1,6 @@
 package am.ik.rontolisp;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -79,6 +80,7 @@ public final class LispMacroExpander {
 			case LispNames.PUSHNEW -> expandPushnew(cons);
 			case LispNames.DEFTYPE -> expandDeftype(cons);
 			case LispNames.DEFINE_CONDITION -> expandDefineCondition(cons);
+			case LispNames.DEFINE_SETF_EXPANDER -> expandDefineSetfExpander(cons);
 			case LispNames.DEFINE_COMPILER_MACRO -> expandDefineCompilerMacro(cons);
 			case LispNames.RESTART_CASE -> expandRestartCase(cons);
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
@@ -1179,14 +1181,22 @@ public final class LispMacroExpander {
 		}
 
 		/**
-		 * Lite {@code being} package-symbol iteration: {@code for VAR being {the|each}
-		 * {symbols|present-symbols|external-symbols} {of|in} PACKAGE}. rontolisp has no
-		 * runtime intern table (see {@code .kb/symbol-runtime-api.md}), so this parses
-		 * the whole clause, evaluates {@code PACKAGE} once for its side effects, and
-		 * iterates the empty sequence: {@code VAR} is bound to nil and the loop body
-		 * never runs. That is enough for cl-who's hyperdoc table (every lookup returns
-		 * nil). The {@code hash-key}/{@code hash-value} variants of {@code being} are not
-		 * accepted.
+		 * The {@code being} clause: {@code for VAR being {the|each} KIND {of|in} SOURCE
+		 * [using (...)]}.
+		 * <ul>
+		 * <li>{@code hash-keys}/{@code hash-key}/{@code hash-values}/{@code hash-value}
+		 * of a hash table iterate the table's entries: {@code SOURCE} is snapshotted once
+		 * into a {@code (key . value)} alist (via {@code maphash}), then walked like a
+		 * list. {@code VAR} takes the key (for {@code hash-keys}) or value (for
+		 * {@code hash-values}); an optional {@code using (hash-value V)} /
+		 * {@code (hash-key K)} binds the companion variable. Iteration order is
+		 * unspecified (it follows the backend's hash-table order).</li>
+		 * <li>{@code symbols}/{@code present-symbols}/{@code external-symbols} of a
+		 * package are a lite no-op: rontolisp has no runtime intern table (see
+		 * {@code .kb/symbol-runtime-api.md}), so {@code SOURCE} is evaluated once for
+		 * effect and the empty sequence is iterated ({@code VAR} bound to nil, body never
+		 * runs) -- enough for cl-who's hyperdoc table.</li>
+		 * </ul>
 		 */
 		private void parseForBeing(ForPiece piece, LispSymbol var) {
 			pos++; // consume being
@@ -1195,12 +1205,17 @@ public final class LispMacroExpander {
 			if ("the".equals(filler) || "each".equals(filler)) {
 				pos++;
 			}
-			// Symbol kind: symbols | present-symbols | external-symbols (all treated
-			// identically -- the iterated set is empty regardless).
 			String kind = plainName(nextForm());
+			boolean hashKeys = "hash-keys".equals(kind) || "hash-key".equals(kind);
+			boolean hashValues = "hash-values".equals(kind) || "hash-value".equals(kind);
+			if (hashKeys || hashValues) {
+				parseForBeingHash(piece, var, hashKeys);
+				return;
+			}
 			if (!"symbols".equals(kind) && !"present-symbols".equals(kind) && !"external-symbols".equals(kind)) {
 				throw new UnsupportedOperationException(
-						"loop: unsupported being clause (only {external-,present-,}symbols): " + kind);
+						"loop: unsupported being clause (only hash-keys/hash-values/{external-,present-,}symbols): "
+								+ kind);
 			}
 			// `of` | `in` (`in` is a loop keyword, `of` is not -- consume either
 			// literally).
@@ -1215,6 +1230,80 @@ public final class LispMacroExpander {
 			piece.binds.add(new ForBinding(var, LispNil.INSTANCE, true));
 			// Iterate the empty sequence: terminate before the first body pass.
 			piece.endTests.add(LispTrue.INSTANCE);
+		}
+
+		/**
+		 * The hash-table {@code being} variants. {@code iterKeys} selects whether
+		 * {@code VAR} takes the key or the value; an optional
+		 * {@code using (hash-value V)} / {@code (hash-key K)} binds the companion
+		 * variable to the other component.
+		 */
+		private void parseForBeingHash(ForPiece piece, LispSymbol var, boolean iterKeys) {
+			String of = plainName(nextForm());
+			if (!"of".equals(of) && !"in".equals(of)) {
+				throw new IllegalArgumentException("loop: being hash clause expects of/in, got: " + of);
+			}
+			LispVal hashForm = nextForm();
+			LispSymbol usingVar = null;
+			boolean usingKey = false;
+			if ("using".equals(plainName(peekToken()))) {
+				pos++; // consume using
+				LispVal spec = nextForm();
+				if (!(spec instanceof LispCons specCons) || !(specCons.cdr() instanceof LispCons specTail)
+						|| !(specTail.car() instanceof LispSymbol usingSym)) {
+					throw new IllegalArgumentException(
+							"loop: being hash clause expects using (hash-value V) / (hash-key K)");
+				}
+				String specKind = plainName(specCons.car());
+				usingKey = "hash-key".equals(specKind) || "hash-keys".equals(specKind);
+				boolean usingValue = "hash-value".equals(specKind) || "hash-values".equals(specKind);
+				if (!usingKey && !usingValue) {
+					throw new IllegalArgumentException(
+							"loop: being hash `using` expects hash-key/hash-value, got: " + specKind);
+				}
+				usingVar = usingSym;
+			}
+			// Snapshot the table into a (key . value) alist once, then walk it like a
+			// list.
+			LispSymbol cursor = gensym("hcur");
+			piece.binds.add(new ForBinding(cursor, hashPairsForm(hashForm), false));
+			piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
+			piece.binds.add(new ForBinding(var, hashComponent(cursor, iterKeys), true));
+			piece.steps.add(new LispVal[] { cursor, call(LispNames.CDR, cursor) });
+			piece.postSteps.add(setq(var, hashComponent(cursor, iterKeys)));
+			if (usingVar != null) {
+				piece.binds.add(new ForBinding(usingVar, hashComponent(cursor, usingKey), true));
+				piece.postSteps.add(setq(usingVar, hashComponent(cursor, usingKey)));
+			}
+		}
+
+		/**
+		 * The key ({@code (car (car cursor))}) or value ({@code (cdr (car cursor))}) of
+		 * the current entry in a {@code (key . value)} alist cursor. Nil-safe: at an
+		 * exhausted cursor both reduce to nil (the end test fires before the body reads
+		 * them).
+		 */
+		private static LispVal hashComponent(LispSymbol cursor, boolean key) {
+			LispVal entry = call(LispNames.CAR, cursor);
+			return key ? call(LispNames.CAR, entry) : call(LispNames.CDR, entry);
+		}
+
+		/**
+		 * Builds
+		 * {@code (let ((acc nil)) (maphash (lambda (k v) (setq acc (cons (cons k v)
+		 * acc))) HASH) acc)} -- a self-contained expression snapshotting a hash table's
+		 * entries into a {@code (key . value)} alist. Reusing {@code maphash} keeps the
+		 * hash iteration backend-neutral (no new primitive).
+		 */
+		private LispVal hashPairsForm(LispVal hashForm) {
+			LispSymbol acc = gensym("hacc");
+			LispSymbol k = gensym("hk");
+			LispSymbol v = gensym("hv");
+			LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(k, v)),
+					setq(acc, call(LispNames.CONS, call(LispNames.CONS, k, v), acc))));
+			LispVal maphash = listToCons(List.of(new LispSymbol(LispNames.MAPHASH), lambda, hashForm));
+			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE))));
+			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, maphash, acc));
 		}
 
 		private LispVal stepCdr(LispSymbol cursor, @Nullable LispVal byFn) {
@@ -2041,6 +2130,26 @@ public final class LispMacroExpander {
 	 * @param cons the stable-sort expression
 	 * @return the expanded expression
 	 */
+	/**
+	 * If a {@code sort} call carries keyword arguments ({@code :key}) beyond the sequence
+	 * and predicate, rewrites it to {@code stable-sort} and expands that (a stable order
+	 * is a valid {@code sort}; this is how {@code :key} is supported without a separate
+	 * sort codegen path). Returns {@code null} for a plain two-argument
+	 * {@code (sort seq pred)}, which keeps the existing string-sequence-aware path.
+	 * @param cons the sort expression
+	 * @return the {@code stable-sort} expansion, or {@code null} when there are no
+	 * keyword arguments
+	 */
+	public static @Nullable LispVal expandSortWithKey(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() <= 3) {
+			return null;
+		}
+		List<LispVal> stableParts = new ArrayList<>(parts);
+		stableParts.set(0, new LispSymbol(LispNames.STABLE_SORT));
+		return expandStableSort((LispCons) listToCons(stableParts));
+	}
+
 	public static LispVal expandStableSort(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {
@@ -8209,6 +8318,26 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (mapl fn lst) like {@code maplist} but applies the function to successive
+	 * cdrs (tails) of the list for its side effects only, returning the original list
+	 * rather than collecting the results. Single-list only.
+	 * @param cons the mapl expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMapl(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol fn = new LispSymbol("__mapl_fn");
+		LispSymbol lst = new LispSymbol("__mapl_lst");
+		LispSymbol cur = new LispSymbol("__mapl_cur");
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), lst));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
+		LispVal loop = expandDo(
+				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		return wrapMapListGuard(LispNames.MAPL, fn, parts.get(1), lst, parts.get(2), loop);
+	}
+
+	/**
 	 * Wraps a {@code maplist}/{@code mapcon} loop in a guard that binds the function and
 	 * list arguments once (preserving left-to-right evaluation: function then list) and
 	 * signals an error when the list argument is not a list. The list value is bound to
@@ -8708,7 +8837,11 @@ public final class LispMacroExpander {
 	 * that signals an error when the value does not match. Lite version of Common Lisp's
 	 * {@code check-type}: no restarts, so the place cannot be re-stored; the error
 	 * message reports the place, the offending value, and the expected type (or the given
-	 * description string). Type specifiers are the ones {@code makeTypeTest} supports.
+	 * description string). Type specifiers are the ones {@code makeTypeTest} supports; a
+	 * user {@code deftype} name (or any other unsupported specifier) makes the check a
+	 * no-op -- the place is still evaluated, but the assertion is skipped rather than
+	 * signalling a compile error, since there is no {@code deftype} registry to resolve
+	 * the name here. {@code typecase}/{@code etypecase} stay strict.
 	 * @param cons the check-type expression
 	 * @return the expanded expression
 	 */
@@ -8724,7 +8857,17 @@ public final class LispMacroExpander {
 		LispSymbol var = new LispSymbol(CHECK_TYPE_VAR);
 		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString("The value of " + place.print() + " is ~s, which is not " + expected + "."), var));
-		return makeLet(CHECK_TYPE_VAR, place, makeIf(makeTypeTest(var, typeSpec), LispNil.INSTANCE, errorCall));
+		LispVal test;
+		try {
+			test = makeTypeTest(var, typeSpec);
+		}
+		catch (IllegalArgumentException unsupportedType) {
+			// A user deftype / unsupported specifier: skip the assertion (lite) rather
+			// than
+			// failing to compile the whole program.
+			test = LispTrue.INSTANCE;
+		}
+		return makeLet(CHECK_TYPE_VAR, place, makeIf(test, LispNil.INSTANCE, errorCall));
 	}
 
 	/**
@@ -8807,6 +8950,124 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandDefineCondition(LispCons cons) {
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Expands {@code (define-setf-expander name lambda-list body...)} to {@code nil}: the
+	 * full five-value setf-expansion protocol ({@code get-setf-expansion}/
+	 * {@code &environment}) is unsupported, so the newly defined place cannot be used as
+	 * a {@code setf} target. Same parsed-no-op pattern as {@link #expandDefineCondition}.
+	 * @param cons the define-setf-expander expression
+	 * @return nil
+	 */
+	public static LispVal expandDefineSetfExpander(LispCons cons) {
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Returns whether {@code designator} names the {@code keyword} package -- the keyword
+	 * {@code :keyword}, the symbol {@code keyword}, or the string {@code "keyword"} (case
+	 * insensitive). Used to give {@code (intern name :keyword)} keyword semantics;
+	 * symbols otherwise compare by name with no intern table, so any other package
+	 * argument stays unsupported.
+	 * @param designator the package designator argument
+	 * @return true if it designates the keyword package
+	 */
+	public static boolean isKeywordPackageDesignator(LispVal designator) {
+		String name;
+		if (designator instanceof LispSymbol s) {
+			name = s.name();
+			if (!name.isEmpty() && name.charAt(0) == ':') {
+				name = name.substring(1);
+			}
+		}
+		else if (designator instanceof LispString str) {
+			name = str.value();
+		}
+		else {
+			return false;
+		}
+		return name.equalsIgnoreCase("keyword");
+	}
+
+	/**
+	 * Builds {@code (intern (concatenate 'string ":" nameForm))} -- the backend-neutral
+	 * lowering of {@code (intern nameForm :keyword)}. A keyword is a symbol whose stored
+	 * name begins with {@code :}, so prepending the colon and reusing single-argument
+	 * {@code intern} produces the keyword without any per-backend string-representation
+	 * handling.
+	 * @param nameForm the (unevaluated) symbol-name argument
+	 * @return the equivalent single-argument {@code intern} form
+	 */
+	public static LispVal internKeywordForm(LispVal nameForm) {
+		LispVal concat = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.STRING))),
+				new LispString(":"), nameForm));
+		return listToCons(List.of(new LispSymbol(LispNames.INTERN), concat));
+	}
+
+	/**
+	 * Expands {@code (define-modify-macro name (params...) function [doc])} into a
+	 * {@code defmacro} that rewrites {@code (name place args...)} to
+	 * {@code (setf place (function place args...))}. A trailing
+	 * {@code &rest}/{@code &body} parameter is spliced into the function call via
+	 * {@code list*}; {@code &optional} markers are dropped and the optional variables
+	 * passed positionally. Lite: the place subforms may be evaluated more than once (no
+	 * {@code get-setf-expansion} single evaluation) and the optional documentation string
+	 * is ignored.
+	 * @param cons the define-modify-macro expression
+	 * @return an equivalent {@code (defmacro ...)} form
+	 */
+	public static LispVal expandDefineModifyMacro(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 4) {
+			throw new IllegalArgumentException(
+					"define-modify-macro expects (define-modify-macro name (params...) function [doc])");
+		}
+		LispVal name = parts.get(1);
+		LispVal lambdaList = parts.get(2);
+		LispVal function = parts.get(3);
+		// Collect the parameter variables, tracking a trailing &rest/&body variable.
+		List<LispVal> positional = new ArrayList<>();
+		LispVal restVar = null;
+		LispVal ll = lambdaList;
+		boolean nextIsRest = false;
+		while (ll instanceof LispCons llc) {
+			LispVal item = llc.car();
+			if (item instanceof LispSymbol s
+					&& (LispNames.LAMBDA_REST.equals(s.name()) || LispNames.LAMBDA_BODY.equals(s.name()))) {
+				nextIsRest = true;
+			}
+			else if (item instanceof LispSymbol s && LispNames.LAMBDA_OPTIONAL.equals(s.name())) {
+				// drop the marker; optional vars are passed positionally
+			}
+			else if (nextIsRest) {
+				restVar = item;
+			}
+			else {
+				// (var default) for &optional -> take the variable name
+				positional.add(item instanceof LispCons pc ? pc.car() : item);
+			}
+			ll = llc.cdr();
+		}
+		LispSymbol place = new LispSymbol("__modify_place");
+		// Build the function call constructor: (list* 'function place pos... restVar) or
+		// (list 'function place pos...).
+		List<LispVal> builderArgs = new ArrayList<>();
+		builderArgs.add(new LispSymbol(restVar != null ? LispNames.LIST_STAR : LispNames.LIST));
+		builderArgs.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), function)));
+		builderArgs.add(place);
+		builderArgs.addAll(positional);
+		if (restVar != null) {
+			builderArgs.add(restVar);
+		}
+		LispVal builder = listToCons(builderArgs);
+		// (list 'setf place builder)
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LIST),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.SETF))), place, builder));
+		// (defmacro name (place . lambdaList) body)
+		LispVal macroLambdaList = new LispCons(place, lambdaList);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFMACRO), name, macroLambdaList, body));
 	}
 
 	/**

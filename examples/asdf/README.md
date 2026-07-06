@@ -5,7 +5,7 @@ upstream sources -- through `asdf:load-system` and exercise their public API.
 All run identically on all four backends (interpreter, JVM, WASM Preview 1
 and `--component`); they are the programs the cross-backend E2E tests pin
 (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest` /
-`ClWhoE2eTest`).
+`ClWhoE2eTest` / `AssocUtilsE2eTest`).
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
@@ -13,6 +13,7 @@ and `--component`); they are the programs the cross-backend E2E tests pin
 | [`parse-number-demo.lisp`](parse-number-demo.lisp) | parse-number v1.8 (BSD 3-Clause) | <https://github.com/sharplispers/parse-number> |
 | [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
 | [`cl-who-demo.lisp`](cl-who-demo.lisp) | cl-who v1.1.5 (BSD 2-Clause) | <https://github.com/edicl/cl-who> |
+| [`assoc-utils-demo.lisp`](assoc-utils-demo.lisp) | assoc-utils (public domain) | <https://github.com/fukamachi/assoc-utils> |
 
 ## Where the libraries come from
 
@@ -23,6 +24,7 @@ the demos run out of the box from the repository root:
 - `src/test/resources/parse-number/`
 - `src/test/resources/cl-utilities/`
 - `src/test/resources/cl-who/`
+- `src/test/resources/assoc-utils/`
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at
@@ -32,6 +34,7 @@ the directory containing the `.asd` file:
 curl -sL https://github.com/sharplispers/split-sequence/archive/refs/tags/v2.0.1.tar.gz | tar xz
 curl -sL https://github.com/sharplispers/parse-number/archive/refs/tags/v1.8.tar.gz | tar xz
 curl -sL https://common-lisp.net/project/cl-utilities/cl-utilities-latest.tar.gz | tar xz
+curl -sL https://github.com/fukamachi/assoc-utils/archive/refs/heads/master.tar.gz | tar xz
 ```
 
 ## Running (all four backends)
@@ -144,6 +147,22 @@ is self-contained -- running it needs no library files.
 <br />
 <br>
 <p>&#xe9;</p>
+```
+
+`assoc-utils-demo.lisp`:
+
+```console
+"eitaro"
+"none"
+("name" "loc")
+("eitaro" "vienna")
+(:NAME "eitaro" :LOC "vienna")
+(("name" . "eitaro"))
+(("y" . 2))
+(("k" . "v"))
+"eitaro in vienna"
+42
+"equal"
 ```
 
 ## What can be loaded today

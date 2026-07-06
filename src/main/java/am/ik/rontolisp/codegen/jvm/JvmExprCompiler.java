@@ -221,6 +221,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx, className);
 				case LispNames.DEFINE_CONDITION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx, className);
+				case LispNames.DEFINE_SETF_EXPANDER ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineSetfExpander(cons), ctx, className);
 				case LispNames.DEFINE_COMPILER_MACRO ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx, className);
 				case LispNames.RESTART_CASE ->
@@ -494,14 +496,22 @@ final class JvmExprCompiler {
 					}
 				}
 				case LispNames.SORT -> {
-					// A string sequence sorts as a list of its characters and is coerced
-					// back to a string; null when the call is already the inner sort.
-					LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
-					if (wrappedSort != null) {
-						JvmExprCompiler.compileExpr(wrappedSort, ctx, className);
+					// (sort seq pred :key ...) routes through stable-sort; otherwise a
+					// string sequence sorts as a list of its characters and is coerced
+					// back
+					// to a string; null when the call is already the inner sort.
+					LispVal keyedSort = LispMacroExpander.expandSortWithKey(cons);
+					if (keyedSort != null) {
+						JvmExprCompiler.compileExpr(keyedSort, ctx, className);
 					}
 					else {
-						JvmSortCompiler.compile(cons, ctx, className);
+						LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
+						if (wrappedSort != null) {
+							JvmExprCompiler.compileExpr(wrappedSort, ctx, className);
+						}
+						else {
+							JvmSortCompiler.compile(cons, ctx, className);
+						}
 					}
 				}
 				case LispNames.STABLE_SORT ->
@@ -669,6 +679,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaplist(cons), ctx, className);
 				case LispNames.MAPCON ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMapcon(cons), ctx, className);
+				case LispNames.MAPL -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMapl(cons), ctx, className);
 				case LispNames.NOTANY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNotany(cons), ctx, className);
 				case LispNames.NOTEVERY ->

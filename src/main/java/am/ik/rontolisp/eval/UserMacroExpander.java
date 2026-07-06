@@ -45,6 +45,7 @@ public final class UserMacroExpander {
 		// Also activate for macroexpand/macroexpand-1 calls: their literal quoted
 		// arguments are folded to the expansion here, even when no macro is defined.
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)) {
 			return program;
@@ -67,6 +68,14 @@ public final class UserMacroExpander {
 			LispVal resolved = macroEval.resolvePackages(form);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
 				macroEval.eval(resolved);
+				continue;
+			}
+			if (isOperator(resolved, LispNames.DEFINE_MODIFY_MACRO)) {
+				// Lower to a defmacro and register it in the macro evaluator, then drop
+				// the
+				// form: the generated macro is expanded at its call sites like any other
+				// user macro (the compilers never see define-modify-macro).
+				macroEval.eval(LispMacroExpander.expandDefineModifyMacro((LispCons) resolved));
 				continue;
 			}
 			LispVal expanded = expandAll(resolved, macroEval);

@@ -55,6 +55,8 @@ public final class LispEvaluator {
 
 	private boolean linalgLibraryLoaded = false;
 
+	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
+
 	private boolean urlLibraryLoaded = false;
 
 	/**
@@ -1128,6 +1130,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandDeftype(cons), env);
 				case LispNames.DEFINE_CONDITION:
 					return eval(LispMacroExpander.expandDefineCondition(cons), env);
+				case LispNames.DEFINE_MODIFY_MACRO:
+					return eval(LispMacroExpander.expandDefineModifyMacro(cons), env);
+				case LispNames.DEFINE_SETF_EXPANDER:
+					return eval(LispMacroExpander.expandDefineSetfExpander(cons), env);
 				case LispNames.DEFINE_COMPILER_MACRO:
 					return eval(LispMacroExpander.expandDefineCompilerMacro(cons), env);
 				case LispNames.RESTART_CASE:
@@ -1302,6 +1308,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMaplist(cons), env);
 				case LispNames.MAPCON:
 					return eval(LispMacroExpander.expandMapcon(cons), env);
+				case LispNames.MAPL:
+					return eval(LispMacroExpander.expandMapl(cons), env);
 				case LispNames.NOTANY:
 					return eval(LispMacroExpander.expandNotany(cons), env);
 				case LispNames.NOTEVERY:
@@ -1312,6 +1320,15 @@ public final class LispEvaluator {
 					LispVal expandedReduce = LispMacroExpander.expandReduce(cons);
 					if (expandedReduce != null) {
 						return eval(expandedReduce, env);
+					}
+					break;
+				}
+				case LispNames.SORT: {
+					// (sort seq pred :key ...) routes through stable-sort; a plain
+					// (sort seq pred) falls through to the native 2-argument builtin.
+					LispVal expandedSort = LispMacroExpander.expandSortWithKey(cons);
+					if (expandedSort != null) {
+						return eval(expandedSort, env);
 					}
 					break;
 				}
@@ -1757,6 +1774,17 @@ public final class LispEvaluator {
 		if (!this.urlLibraryLoaded && UrlLibrary.isUrlFunction(name)) {
 			this.urlLibraryLoaded = true;
 			for (LispVal form : UrlLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
+		// equalp/string< are recursive rontolisp-source defuns (LispPreludeLibrary),
+		// loaded on first resolution like the linalg/url libraries.
+		if (LispPreludeLibrary.isPreludeFunction(name) && this.loadedPreludeNames.add(name)) {
+			for (LispVal form : LispPreludeLibrary.formsFor(name)) {
 				eval(form, this.globalEnv);
 			}
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

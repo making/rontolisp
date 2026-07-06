@@ -60,8 +60,18 @@ final class JvmSymbolApiCompiler {
 
 	/** intern: strip the surrounding quotes from the runtime string. */
 	static void compileIntern(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		if (cons.toList().size() == 3) {
-			throw new UnsupportedOperationException(LispNames.INTERN + " with a package argument is not supported");
+		List<LispVal> full = cons.toList();
+		if (full.size() == 3) {
+			// (intern name :keyword) -> (intern (concatenate 'string ":" name)): keeps
+			// the
+			// keyword lowering backend-neutral. Any other package argument is
+			// unsupported.
+			if (LispMacroExpander.isKeywordPackageDesignator(full.get(2))) {
+				JvmExprCompiler.compileExpr(LispMacroExpander.internKeywordForm(full.get(1)), ctx, className);
+				return;
+			}
+			throw new UnsupportedOperationException(
+					LispNames.INTERN + " with a non-keyword package argument is not supported");
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.INTERN);
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);

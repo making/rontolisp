@@ -1107,9 +1107,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
+      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
       (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq while)
-      249
+      252
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
       ci-intro-fn
@@ -3206,3 +3206,34 @@ cases:
       (2 3 2)
       (5 5)
       (:html :xhtml :html)
+
+  - name: assoc-utils-features
+    source: |
+      ;; mapl: apply to successive tails for effect, return the original list
+      (let ((tails 0))
+        (mapl (lambda (x) (setq tails (+ tails (length x)))) '(a b c))
+        (print (list (mapl #'identity '(1 2 3)) tails)))
+      ;; equalp: case-insensitive strings/chars, recursive
+      (print (list (equalp "ABC" "abc") (equalp '(1 "A") '(1 "a")) (equalp "a" "b")))
+      ;; string<: mismatch index or nil
+      (print (list (string< "abc" "abd") (string< "abc" "abc") (string< "ab" "abc")))
+      ;; sort with :key (routes through stable-sort)
+      (print (sort (list (cons 3 'c) (cons 1 'a) (cons 2 'b)) #'< :key #'car))
+      ;; (intern name :keyword) builds a keyword
+      (print (list (intern "FOO" :keyword) (keywordp (intern "BAR" :keyword))))
+      ;; define-modify-macro: read-modify-write of a place
+      (define-modify-macro maxf (lo) max)
+      (print (let ((v 3)) (maxf v 5) (maxf v 1) v))
+      ;; loop being the hash-keys ... using (hash-value ...) over a single-entry table
+      (let ((h (make-hash-table :test #'equal)))
+        (setf (gethash "k" h) 42)
+        (print (loop for key being the hash-keys of h using (hash-value val)
+                     collect (cons key val))))
+    expected: |
+      ((1 2 3) 6)
+      (t t nil)
+      (2 nil 2)
+      ((1 . a) (2 . b) (3 . c))
+      (:FOO t)
+      5
+      (("k" . 42))

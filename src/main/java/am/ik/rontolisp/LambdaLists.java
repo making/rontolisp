@@ -218,13 +218,20 @@ public final class LambdaLists {
 		return false;
 	}
 
-	// Quoted data is exempt, like the rest of the desugaring.
+	// Quoted data is exempt, like the rest of the desugaring. A nested lambda/defun is
+	// its
+	// own return-from scope: the rewrite stops at the boundary so the inner function
+	// wraps
+	// its own body in %block (lite: a return-from is scoped to the nearest enclosing
+	// function, so a return-from inside a lambda passed to map*/reduce exits the lambda,
+	// not the outer defun -- otherwise the stripped `return` would land in the lambda's
+	// separately compiled method with no enclosing block).
 	private static boolean containsReturnFrom(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
 		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.QUOTE.equals(op.name()) || isNestedFunction(op.name())) {
 				return false;
 			}
 			if (LispNames.RETURN_FROM.equals(op.name())) {
@@ -239,7 +246,10 @@ public final class LambdaLists {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
+			if (LispNames.QUOTE.equals(op.name()) || isNestedFunction(op.name())) {
+				// Leave the nested function intact; desugar() reaches it later and
+				// expand()
+				// rewrites its own return-from against its own %block.
 				return form;
 			}
 			if (LispNames.RETURN_FROM.equals(op.name())) {
@@ -249,6 +259,10 @@ public final class LambdaLists {
 			}
 		}
 		return new LispCons(stripReturnFrom(cons.car()), stripReturnFrom(cons.cdr()));
+	}
+
+	private static boolean isNestedFunction(String op) {
+		return LispNames.LAMBDA.equals(op) || LispNames.DEFUN.equals(op);
 	}
 
 	private static LispVal rebuildFunction(LispSymbol op, @Nullable LispVal name, Expanded e) {

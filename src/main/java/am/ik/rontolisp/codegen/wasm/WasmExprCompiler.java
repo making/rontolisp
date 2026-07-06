@@ -233,6 +233,8 @@ final class WasmExprCompiler {
 				case LispNames.DEFTYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx);
 				case LispNames.DEFINE_CONDITION ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx);
+				case LispNames.DEFINE_SETF_EXPANDER ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineSetfExpander(cons), ctx);
 				case LispNames.DEFINE_COMPILER_MACRO ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx);
 				case LispNames.RESTART_CASE ->
@@ -468,14 +470,22 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.SORT -> {
-					// A string sequence sorts as a list of its characters and is coerced
-					// back to a string; null when the call is already the inner sort.
-					LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
-					if (wrappedSort != null) {
-						WasmExprCompiler.compileExpr(wrappedSort, ctx);
+					// (sort seq pred :key ...) routes through stable-sort; otherwise a
+					// string sequence sorts as a list of its characters and is coerced
+					// back
+					// to a string; null when the call is already the inner sort.
+					LispVal keyedSort = LispMacroExpander.expandSortWithKey(cons);
+					if (keyedSort != null) {
+						WasmExprCompiler.compileExpr(keyedSort, ctx);
 					}
 					else {
-						WasmSortCompiler.compile(cons, ctx);
+						LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
+						if (wrappedSort != null) {
+							WasmExprCompiler.compileExpr(wrappedSort, ctx);
+						}
+						else {
+							WasmSortCompiler.compile(cons, ctx);
+						}
 					}
 				}
 				case LispNames.STABLE_SORT ->
@@ -602,6 +612,7 @@ final class WasmExprCompiler {
 				case LispNames.NRECONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNreconc(cons), ctx);
 				case LispNames.MAPLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMaplist(cons), ctx);
 				case LispNames.MAPCON -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapcon(cons), ctx);
+				case LispNames.MAPL -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapl(cons), ctx);
 				case LispNames.NOTANY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNotany(cons), ctx);
 				case LispNames.NOTEVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNotevery(cons), ctx);
 				case LispNames.PROG2 -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx);

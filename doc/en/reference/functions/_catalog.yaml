@@ -68,6 +68,7 @@ categories:
       - { slug: eq, name: "eq" }
       - { slug: eql, name: "eql" }
       - { slug: equal, name: "equal" }
+      - { slug: equalp, name: "equalp" }
       - { slug: null, name: "null" }
       - { slug: not, name: "not" }
       - { slug: atom, name: "atom" }
@@ -106,6 +107,7 @@ categories:
       - { slug: string-capitalize, name: "string-capitalize" }
       - { slug: subseq, name: "subseq" }
       - { slug: string-eq, name: "string=" }
+      - { slug: string-lt, name: "string<" }
       - { slug: string-equal, name: "string-equal" }
       - { slug: string-trim, name: "string-trim" }
       - { slug: string-left-trim, name: "string-left-trim" }
@@ -203,6 +205,7 @@ categories:
       - { slug: mapcan, name: "mapcan" }
       - { slug: maplist, name: "maplist" }
       - { slug: mapcon, name: "mapcon" }
+      - { slug: mapl, name: "mapl" }
       - { slug: reduce, name: "reduce" }
       - { slug: every, name: "every" }
       - { slug: some, name: "some" }

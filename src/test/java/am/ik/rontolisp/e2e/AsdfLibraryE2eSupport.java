@@ -11,6 +11,7 @@ import am.ik.rontolisp.cli.LoadInliner;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.reader.Features;
@@ -127,10 +128,13 @@ abstract class AsdfLibraryE2eSupport {
 	}
 
 	// The CLI compile pipeline for the given feature set: inline the system's component
-	// files, then expand the user macros they define before the backend compiler runs.
+	// files, expand the user macros they define, then splice the rontolisp-source prelude
+	// (equalp/string<) when referenced -- mirroring RontoLispCli -- before the backend
+	// compiler runs.
 	private List<LispVal> compileProgram(Features features) {
-		return UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
-				SourceLoader.fileSystem(), null, List.of(systemDir()), features));
+		return LispPreludeLibrary
+			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
+					SourceLoader.fileSystem(), null, List.of(systemDir()), features)));
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.

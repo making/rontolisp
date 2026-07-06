@@ -23,6 +23,7 @@
 | `eq` | `(eq 'foo 'foo)`, `(eq 1.5 1.5)` | `t`, `nil`(オブジェクトの同一性: シンボルと小さい整数は等しく比較されますが、浮動小数点とratioは別々のオブジェクトなので決して `eq` になりません。consセルは参照同一性です) |
 | `eql` | `(eql 1.5 1.5)`, `(eql 3 3.0)` | `t`, `nil`(`eq` と同様ですが、同じ型かつ同じ値の数値は等しくなります — 例: 浮動小数点やratio) |
 | `equal` | `(equal '(1 2 (3)) '(1 2 (3)))`, `(equal "abc" "abc")` | `t`, `t`(構造的等価性: consセルはcarとcdrで再帰的に比較され、それ以外は `eql` と同様) |
+| `equalp` | `(equalp "ABC" "abc")` | `t`(`equal` と同様だが文字列・文字は大小文字を区別せず数値は値で比較。配列・ハッシュテーブルは `eql` にフォールバック) |
 | `<` | `(< 1 2)`, `(< 1 2 3)` | `t`(可変長引数。狭義単調増加のとき真) |
 | `>` | `(> 2 1)`, `(> 3 2 1)` | `t`(可変長引数) |
 | `<=` | `(<= 1 1)` | `t`(可変長引数) |
@@ -42,6 +43,7 @@
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- `:initial-element`（デフォルトは空白）を `n` 個並べた新しい文字列。`:element-type` は受け付けるが無視 |
 | `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- `sequence-2` を `sequence-1` にコピー（`:start1`/`:end1`/`:start2`/`:end2`）。文字列対応で、新しい文字列を返す（文字列は不変） |
 | `string=` | `(string= "abc" "abc")` | `t`(大小文字を区別する文字列等価) |
+| `string<` | `(string< "abc" "abd")` | `2`(大小文字を区別する辞書順の less-than: 不一致のインデックス、なければ nil) |
 | `string-equal` | `(string-equal "ABC" "abc")` | `t`(大小文字を区別しない、ASCII) |
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"`(指定した文字集合の文字を両端から取り除きます) |
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
@@ -150,6 +152,7 @@
 | `nreconc` | `(nreconc '(1 2 3) '(4 5))` | `(3 2 1 4 5)`(破壊的な `revappend`。`(nconc (nreverse x) y)` に展開され、第1リストのconsセルを再利用します) |
 | `maplist` | `(maplist #'identity '(1 2 3))` | `((1 2 3) (2 3) (3))`(連続する末尾に適用し、結果を集めます。単一リスト形式) |
 | `mapcon` | `(mapcon (lambda (x) (list (car x))) '(1 2 3))` | `(1 2 3)`(連続する末尾に適用し、結果リストを連結します。単一リスト形式) |
+| `mapl` | `(mapl #'identity '(1 2 3))` | `(1 2 3)`(連続する末尾に副作用のため適用し、元のリストを返します。単一リスト形式) |
 | `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)`(比較述語でリストを破壊的にソートします。安定ではありません) |
 | `rplaca` | `(rplaca x val)` | consセルのcarを破壊的に置き換え、そのセルを返します |
 | `rplacd` | `(rplacd x val)` | consセルのcdrを破壊的に置き換え、そのセルを返します |

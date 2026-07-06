@@ -47,8 +47,18 @@ final class WasmSymbolApiCompiler {
 	}
 
 	static void compileIntern(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (cons.toList().size() == 3) {
-			throw new UnsupportedOperationException(LispNames.INTERN + " with a package argument is not supported");
+		List<LispVal> full = cons.toList();
+		if (full.size() == 3) {
+			// (intern name :keyword) -> (intern (concatenate 'string ":" name)): keeps
+			// the
+			// keyword lowering backend-neutral. Any other package argument is
+			// unsupported.
+			if (LispMacroExpander.isKeywordPackageDesignator(full.get(2))) {
+				WasmExprCompiler.compileExpr(LispMacroExpander.internKeywordForm(full.get(1)), ctx);
+				return;
+			}
+			throw new UnsupportedOperationException(
+					LispNames.INTERN + " with a non-keyword package argument is not supported");
 		}
 		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx);
 	}

@@ -212,6 +212,14 @@ public final class LispNames {
 	/** The {@code equal} built-in function (structural equality). */
 	public static final String EQUAL = "equal";
 
+	/**
+	 * The {@code equalp} built-in function (like {@code equal} but strings/characters
+	 * compare case-insensitively and numbers by value). Implemented as a recursive
+	 * rontolisp-source {@code defun} shared by every backend (see {@code EqualpLibrary});
+	 * lite: arrays/hash-tables/structures fall back to {@code eql} rather than recursing.
+	 */
+	public static final String EQUALP = "equalp";
+
 	/** The {@code <} built-in function. */
 	public static final String LT = "<";
 
@@ -535,6 +543,12 @@ public final class LispNames {
 	 * list and concatenate the result lists; single-list only).
 	 */
 	public static final String MAPCON = "mapcon";
+
+	/**
+	 * The {@code mapl} built-in function (apply the function to successive cdrs of the
+	 * list for its side effects and return the original list; single-list only).
+	 */
+	public static final String MAPL = "mapl";
 
 	/** The {@code rplaca} built-in function. */
 	public static final String RPLACA = "rplaca";
@@ -1084,6 +1098,22 @@ public final class LispNames {
 	public static final String DEFINE_CONDITION = "define-condition";
 
 	/**
+	 * The {@code define-modify-macro} macro. Lowers to a {@code defmacro} that expands
+	 * {@code (name place args...)} into {@code (setf place (function place args...))}.
+	 * Lite: the place subforms may be evaluated more than once (no
+	 * {@code get-setf-expansion} single-evaluation protocol).
+	 */
+	public static final String DEFINE_MODIFY_MACRO = "define-modify-macro";
+
+	/**
+	 * The {@code define-setf-expander} macro. Parsed no-op returning nil (like
+	 * {@link #DEFINE_CONDITION}): the full five-value setf-expansion protocol
+	 * ({@code get-setf-expansion}/{@code &environment}) is unsupported, so
+	 * {@code (setf (place ...) v)} for the newly defined place is not available.
+	 */
+	public static final String DEFINE_SETF_EXPANDER = "define-setf-expander";
+
+	/**
 	 * The {@code define-compiler-macro} macro. Parsed no-op returning nil, like
 	 * {@link #DECLAIM}/{@link #DEFTYPE}: a compiler macro is only an optimization hint,
 	 * so dropping it leaves the ordinary function definition authoritative (the
@@ -1496,6 +1526,13 @@ public final class LispNames {
 
 	/** The {@code string=} built-in function (case-sensitive string equality). */
 	public static final String STRING_EQ = "string=";
+
+	/**
+	 * The {@code string<} built-in function (case-sensitive lexicographic less-than;
+	 * returns the mismatch index or nil). Implemented as a rontolisp-source {@code defun}
+	 * shared by every backend (see {@code LispPreludeLibrary}).
+	 */
+	public static final String STRING_LT = "string<";
 
 	/** The {@code string-equal} built-in function (case-insensitive string equality). */
 	public static final String STRING_EQUAL = "string-equal";

@@ -23,6 +23,7 @@ import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.ScalarWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
@@ -202,9 +203,9 @@ public final class RontoLispCli {
 		// The whole frontend reads with the target backend's feature set, so
 		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code.
 		Features features = outputFile.endsWith(".wasm") ? Features.WASM : Features.JVM;
-		List<LispVal> program = UrlLibrary.process(LinalgLibrary.process(JsonLibrary
+		List<LispVal> program = LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary
 			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
-					SourceLoader.fileSystem(), baseDir, systemPath, features)))));
+					SourceLoader.fileSystem(), baseDir, systemPath, features))))));
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {

@@ -3820,7 +3820,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
@@ -3839,8 +3839,9 @@ class LispEvaluatorTest {
 					"member-if", "assoc-if", "getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list",
 					"nreverse", "make-list", "union", "intersection", "set-difference", "adjoin", "logand", "logior",
 					"logxor", "lognot", "ash", "integer-length", "logbitp", "list*", "acons", "endp", "elt", "rassoc",
-					"pairlis", "copy-alist", "revappend", "nreconc", "maplist", "mapcon", "notany", "notevery",
-					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line")
+					"pairlis", "copy-alist", "revappend", "nreconc", "maplist", "mapcon", "mapl", "notany", "notevery",
+					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line", "equalp",
+					"string<")
 			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
 			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
 			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
@@ -3859,7 +3860,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(249);
+			.hasSize(252);
 	}
 
 	@Test

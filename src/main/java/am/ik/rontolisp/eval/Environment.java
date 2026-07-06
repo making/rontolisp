@@ -38,6 +38,7 @@ import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPromise;
@@ -1772,7 +1773,13 @@ public final class Environment implements Scope {
 		// package argument is an error until packages exist at runtime.
 		env.defineFunction(LispNames.INTERN, new LispFunction(LispNames.INTERN, args -> {
 			if (args.size() == 2) {
-				throw new LispEvalException(LispNames.INTERN + " with a package argument is not supported");
+				// (intern name :keyword) builds a keyword symbol (name prefixed with
+				// ':');
+				// any other package argument stays unsupported (no runtime intern table).
+				if (LispMacroExpander.isKeywordPackageDesignator(args.get(1))) {
+					return new LispSymbol(":" + requireString(LispNames.INTERN, args.get(0)));
+				}
+				throw new LispEvalException(LispNames.INTERN + " with a non-keyword package argument is not supported");
 			}
 			requireArgCount(LispNames.INTERN, args, 1);
 			return new LispSymbol(requireString(LispNames.INTERN, args.get(0)));
