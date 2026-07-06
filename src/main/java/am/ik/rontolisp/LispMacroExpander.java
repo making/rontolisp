@@ -5077,15 +5077,29 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.DEFMETHOD + " expects a name and a lambda list: " + cons.print());
 		}
-		if (parts.get(2) instanceof LispSymbol qualifier) {
-			throw new UnsupportedOperationException(
-					LispNames.DEFMETHOD + " qualifiers are not supported: " + qualifier.name() + " in " + cons.print());
+		// An optional qualifier (:before/:after/:around) precedes the lambda list.
+		String qualifier = "";
+		int llIndex = 2;
+		if (parts.get(2) instanceof LispSymbol qSym) {
+			String qName = qSym.name();
+			if (":before".equals(qName) || ":after".equals(qName) || ":around".equals(qName)) {
+				qualifier = qName;
+				llIndex = 3;
+			}
+			else {
+				throw new UnsupportedOperationException(
+						LispNames.DEFMETHOD + " qualifier is not supported (only :before/:after/:around): " + qName
+								+ " in " + cons.print());
+			}
+		}
+		if (parts.size() <= llIndex) {
+			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects a lambda list: " + cons.print());
 		}
 		List<String> paramNames = new java.util.ArrayList<>();
 		ClosRegistry.SpecializerKind kind = ClosRegistry.SpecializerKind.DEFAULT;
 		LispVal eqlValue = null;
 		String specializerName = null;
-		if (parts.get(2) instanceof LispCons paramsCons) {
+		if (parts.get(llIndex) instanceof LispCons paramsCons) {
 			List<LispVal> params = paramsCons.toList();
 			for (int i = 0; i < params.size(); i++) {
 				LispVal param = params.get(i);
@@ -5141,7 +5155,7 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		else if (!(parts.get(2) instanceof LispNil)) {
+		else if (!(parts.get(llIndex) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects a lambda list: " + cons.print());
 		}
 		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(nameSym.name());
@@ -5157,20 +5171,95 @@ public final class LispMacroExpander {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
 		String functionName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
 				+ generic.nextMethodIndex();
-		String key = switch (kind) {
+		String specKey = switch (kind) {
 			case DEFAULT -> "t";
 			case EQL -> "eql " + java.util.Objects.requireNonNull(eqlValue).print();
 			case CLASS -> "class " + specializerName;
 			case TYPE -> "type " + specializerName;
 		};
-		generic.methods().put(key, new ClosRegistry.MethodInfo(kind, eqlValue, specializerName, functionName));
+		// Qualifier + specializer form the registry key, so a :before dog method and a
+		// primary dog method coexist while redefining the same qualifier+specializer
+		// replaces (CL semantics).
+		String key = qualifier.isEmpty() ? specKey : qualifier + " " + specKey;
+		List<LispVal> body = parts.subList(llIndex + 1, parts.size());
+		boolean usesNext = usesNextMethod(body);
+		generic.methods()
+			.put(key, new ClosRegistry.MethodInfo(kind, eqlValue, specializerName, functionName, qualifier, usesNext));
+		// Every method-body defun takes a leading %next-method thunk; call-next-method
+		// and
+		// next-method-p in the body are rewritten against it (harmless for methods that
+		// do
+		// not use them -- the dispatcher passes nil).
+		List<LispVal> methodParams = new java.util.ArrayList<>();
+		methodParams.add(new LispSymbol(NEXT_METHOD_VAR));
+		paramNames.stream().<LispVal>map(LispSymbol::new).forEach(methodParams::add);
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
 		defun.add(new LispSymbol(functionName));
-		defun.add(paramNames.isEmpty() ? LispNil.INSTANCE
-				: listToCons(paramNames.stream().<LispVal>map(LispSymbol::new).toList()));
-		defun.addAll(parts.subList(3, parts.size()));
+		defun.add(listToCons(methodParams));
+		for (LispVal form : body) {
+			defun.add(rewriteNextMethod(form, paramNames));
+		}
 		return listToCons(defun);
+	}
+
+	/** The internal name of a method's next-method thunk parameter. */
+	private static final String NEXT_METHOD_VAR = "%next-method";
+
+	/**
+	 * Whether a method body references {@code call-next-method} or {@code next-method-p}.
+	 */
+	private static boolean usesNextMethod(List<LispVal> body) {
+		return body.stream().anyMatch(LispMacroExpander::treeMentionsNextMethod);
+	}
+
+	private static boolean treeMentionsNextMethod(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			String plain = plainTypeName(sym);
+			return LispNames.CALL_NEXT_METHOD.equals(plain) || LispNames.NEXT_METHOD_P.equals(plain);
+		}
+		if (form instanceof LispCons cons) {
+			return cons.toList().stream().anyMatch(LispMacroExpander::treeMentionsNextMethod);
+		}
+		return false;
+	}
+
+	/**
+	 * Rewrites {@code (call-next-method args...)} to a guarded {@code funcall} of the
+	 * method's {@code %next-method} thunk (no args reuse the method's own parameters, so
+	 * a bare {@code (call-next-method)} passes the current arguments) and
+	 * {@code (next-method-p)} to a nil-test of that thunk. Quoted data and other symbols
+	 * are left untouched.
+	 */
+	private static LispVal rewriteNextMethod(LispVal form, List<String> paramNames) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String plain = plainTypeName(head);
+			if (LispNames.CALL_NEXT_METHOD.equals(plain)) {
+				List<LispVal> rawArgs = cons.toList().subList(1, cons.toList().size());
+				List<LispVal> args = rawArgs.isEmpty() ? paramNames.stream().<LispVal>map(LispSymbol::new).toList()
+						: rawArgs.stream().map(a -> rewriteNextMethod(a, paramNames)).toList();
+				List<LispVal> funcall = new java.util.ArrayList<>();
+				funcall.add(new LispSymbol(LispNames.FUNCALL));
+				funcall.add(new LispSymbol(NEXT_METHOD_VAR));
+				funcall.addAll(args);
+				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(funcall), listToCons(
+						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
+			}
+			if (LispNames.NEXT_METHOD_P.equals(plain) && cons.toList().size() == 1) {
+				return callOf(LispNames.NOT, callOf(LispNames.NULL, new LispSymbol(NEXT_METHOD_VAR)));
+			}
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		for (LispVal element : cons.toList()) {
+			out.add(rewriteNextMethod(element, paramNames));
+		}
+		return listToCons(out);
 	}
 
 	/** The literal compared against by an {@code (eql ...)} specializer. */
@@ -5218,21 +5307,12 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("Unknown generic function: " + genericName);
 		}
 		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
-		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
-		methods.sort(java.util.Comparator.comparingInt(m -> specializerRank(m, closRegistry)));
-		ClosRegistry.MethodInfo defaultMethod = methods.stream()
-			.filter(m -> m.kind() == ClosRegistry.SpecializerKind.DEFAULT)
-			.findFirst()
-			.orElse(null);
-		LispVal chain = defaultMethod != null ? methodCall(defaultMethod, params) : listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), new LispString("No applicable method: " + generic.name())));
-		LispVal arg = params.isEmpty() ? LispNil.INSTANCE : params.get(0);
-		for (ClosRegistry.MethodInfo method : methods.reversed()) {
-			if (method.kind() == ClosRegistry.SpecializerKind.DEFAULT) {
-				continue;
-			}
-			chain = makeIf(specializerTest(method, arg, closRegistry), methodCall(method, params), chain);
-		}
+		// The combined (standard method combination) body is generated only when a
+		// qualifier or call-next-method is present; otherwise the historical single-call
+		// dispatcher is emitted unchanged.
+		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
+		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry)
+				: simpleDispatchBody(generic, params, closRegistry);
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
 		defun.add(new LispSymbol(generic.name()));
@@ -5241,11 +5321,222 @@ public final class LispMacroExpander {
 		return listToCons(defun);
 	}
 
-	private static LispVal methodCall(ClosRegistry.MethodInfo method, List<LispVal> params) {
+	/**
+	 * The single-method-per-branch dispatcher body (no qualifiers, no call-next-method).
+	 */
+	private static LispVal simpleDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
+			ClosRegistry closRegistry) {
+		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
+		methods.sort(java.util.Comparator.comparingInt(m -> specializerRank(m, closRegistry)));
+		ClosRegistry.MethodInfo defaultMethod = methods.stream()
+			.filter(m -> m.kind() == ClosRegistry.SpecializerKind.DEFAULT)
+			.findFirst()
+			.orElse(null);
+		LispVal chain = defaultMethod != null ? methodCall(defaultMethod, params) : noApplicableMethod(generic.name());
+		LispVal arg = params.isEmpty() ? LispNil.INSTANCE : params.get(0);
+		for (ClosRegistry.MethodInfo method : methods.reversed()) {
+			if (method.kind() == ClosRegistry.SpecializerKind.DEFAULT) {
+				continue;
+			}
+			chain = makeIf(specializerTest(method, arg, closRegistry), methodCall(method, params), chain);
+		}
+		return chain;
+	}
+
+	/**
+	 * The standard-method-combination dispatcher body: one branch per distinct
+	 * specializer (most specific first) whose value is that branch's effective method
+	 * (its applicable {@code :around}/{@code :before}/primary/{@code :after} methods
+	 * composed with {@code call-next-method}), with the default methods as the fallback
+	 * branch.
+	 */
+	private static LispVal combinedDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
+			ClosRegistry closRegistry) {
+		LispVal arg = params.isEmpty() ? LispNil.INSTANCE : params.get(0);
+		java.util.LinkedHashMap<String, ClosRegistry.MethodInfo> reps = new java.util.LinkedHashMap<>();
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			if (m.kind() != ClosRegistry.SpecializerKind.DEFAULT) {
+				reps.putIfAbsent(specKeyOf(m), m);
+			}
+		}
+		List<ClosRegistry.MethodInfo> branches = new java.util.ArrayList<>(reps.values());
+		branches.sort(java.util.Comparator.comparingInt(m -> specializerRank(m, closRegistry)));
+		LispVal chain = effectiveMethod(null, generic, params, closRegistry);
+		for (ClosRegistry.MethodInfo rep : branches.reversed()) {
+			chain = makeIf(specializerTest(rep, arg, closRegistry), effectiveMethod(rep, generic, params, closRegistry),
+					chain);
+		}
+		return chain;
+	}
+
+	/** The specializer key of a method, ignoring its qualifier. */
+	private static String specKeyOf(ClosRegistry.MethodInfo m) {
+		return switch (m.kind()) {
+			case DEFAULT -> "t";
+			case EQL -> "eql " + java.util.Objects.requireNonNull(m.eqlValue()).print();
+			case CLASS -> "class " + m.specializerName();
+			case TYPE -> "type " + m.specializerName();
+		};
+	}
+
+	/**
+	 * Builds the effective method for one dispatch branch. {@code branchRep} is a
+	 * representative method carrying the branch's specializer, or null for the default
+	 * (fallback) branch. The applicable methods of each role are the ones whose
+	 * specializer a branch instance satisfies (default methods always apply); primaries
+	 * and befores run most specific first, afters least specific first, arounds wrap
+	 * everything.
+	 */
+	private static LispVal effectiveMethod(ClosRegistry.@Nullable MethodInfo branchRep,
+			ClosRegistry.GenericInfo generic, List<LispVal> params, ClosRegistry closRegistry) {
+		List<ClosRegistry.MethodInfo> arounds = applicableMethods(generic, branchRep, ":around", closRegistry);
+		List<ClosRegistry.MethodInfo> befores = applicableMethods(generic, branchRep, ":before", closRegistry);
+		List<ClosRegistry.MethodInfo> primaries = applicableMethods(generic, branchRep, "", closRegistry);
+		List<ClosRegistry.MethodInfo> afters = applicableMethods(generic, branchRep, ":after", closRegistry);
+		afters = afters.reversed();
+		if (primaries.isEmpty() && arounds.isEmpty()) {
+			return noApplicableMethod(generic.name());
+		}
+		LispVal core = buildCore(befores, primaries, afters, params, generic.name());
+		if (arounds.isEmpty()) {
+			return core;
+		}
+		LispVal coreThunk = lambdaOf(params, core);
+		LispVal next = buildNextChain(arounds, 1, coreThunk, params);
+		return callWithNext(arounds.get(0).functionName(), next, params);
+	}
+
+	/**
+	 * The applicable methods of one qualifier role for a branch, sorted most specific
+	 * first.
+	 */
+	private static List<ClosRegistry.MethodInfo> applicableMethods(ClosRegistry.GenericInfo generic,
+			ClosRegistry.@Nullable MethodInfo branchRep, String qualifier, ClosRegistry closRegistry) {
+		List<ClosRegistry.MethodInfo> result = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			if (m.qualifier().equals(qualifier) && appliesToBranch(m, branchRep, closRegistry)) {
+				result.add(m);
+			}
+		}
+		result.sort(java.util.Comparator.comparingInt(m -> specializerRank(m, closRegistry)));
+		return result;
+	}
+
+	/**
+	 * Whether an instance selecting {@code branchRep}'s branch (null = the default
+	 * branch) also satisfies method {@code m}'s specializer. Default methods always
+	 * apply; class methods apply to a class branch when the branch class is a descendant;
+	 * eql/type methods apply only to their own branch (cross-type subtyping among
+	 * specializers is out of scope).
+	 */
+	private static boolean appliesToBranch(ClosRegistry.MethodInfo m, ClosRegistry.@Nullable MethodInfo branchRep,
+			ClosRegistry closRegistry) {
+		if (m.kind() == ClosRegistry.SpecializerKind.DEFAULT) {
+			return true;
+		}
+		if (branchRep == null) {
+			return false;
+		}
+		return switch (m.kind()) {
+			case DEFAULT -> true;
+			case EQL ->
+				branchRep.kind() == ClosRegistry.SpecializerKind.EQL && java.util.Objects.requireNonNull(m.eqlValue())
+					.print()
+					.equals(java.util.Objects.requireNonNull(branchRep.eqlValue()).print());
+			case CLASS -> {
+				if (branchRep.kind() != ClosRegistry.SpecializerKind.CLASS) {
+					yield false;
+				}
+				ClosRegistry.ClassInfo branchClass = closRegistry.classes().get(branchRep.specializerName());
+				yield branchClass != null && branchClass.ancestors().contains(m.specializerName());
+			}
+			case TYPE -> branchRep.kind() == ClosRegistry.SpecializerKind.TYPE
+					&& java.util.Objects.equals(m.specializerName(), branchRep.specializerName());
+		};
+	}
+
+	/**
+	 * The before/primary/after core: run the befores for effect, invoke the primary chain
+	 * (whose value is returned), then run the afters for effect.
+	 */
+	private static LispVal buildCore(List<ClosRegistry.MethodInfo> befores, List<ClosRegistry.MethodInfo> primaries,
+			List<ClosRegistry.MethodInfo> afters, List<LispVal> params, String genericName) {
+		List<LispVal> sequence = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodInfo before : befores) {
+			sequence.add(callWithNext(before.functionName(), LispNil.INSTANCE, params));
+		}
+		LispVal primaryInvocation;
+		if (primaries.isEmpty()) {
+			primaryInvocation = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+					new LispString("No applicable primary method: " + genericName)));
+		}
+		else {
+			LispVal next = buildNextChain(primaries, 1, LispNil.INSTANCE, params);
+			primaryInvocation = callWithNext(primaries.get(0).functionName(), next, params);
+		}
+		sequence.add(primaryInvocation);
+		LispVal beforeAndPrimary = sequence.size() == 1 ? sequence.get(0) : prognOf(sequence);
+		if (afters.isEmpty()) {
+			return beforeAndPrimary;
+		}
+		List<LispVal> let = new java.util.ArrayList<>();
+		let.add(new LispSymbol(LispNames.LET));
+		LispSymbol resultVar = new LispSymbol("%clos-result");
+		let.add(listToCons(List.of(listToCons(List.of(resultVar, beforeAndPrimary)))));
+		for (ClosRegistry.MethodInfo after : afters) {
+			let.add(callWithNext(after.functionName(), LispNil.INSTANCE, params));
+		}
+		let.add(resultVar);
+		return listToCons(let);
+	}
+
+	/**
+	 * Builds the next-method thunk passed to the {@code i-1}-th method of a chain: a
+	 * {@code (lambda (params) (method-i next-{i+1} params))} closing the remaining
+	 * methods, or {@code base} once the chain is exhausted.
+	 */
+	private static LispVal buildNextChain(List<ClosRegistry.MethodInfo> chain, int i, LispVal base,
+			List<LispVal> params) {
+		if (i >= chain.size()) {
+			return base;
+		}
+		LispVal next = buildNextChain(chain, i + 1, base, params);
+		return lambdaOf(params, callWithNext(chain.get(i).functionName(), next, params));
+	}
+
+	/** {@code (functionName next params...)}. */
+	private static LispVal callWithNext(String functionName, LispVal next, List<LispVal> params) {
 		List<LispVal> call = new java.util.ArrayList<>();
-		call.add(new LispSymbol(method.functionName()));
+		call.add(new LispSymbol(functionName));
+		call.add(next);
 		call.addAll(params);
 		return listToCons(call);
+	}
+
+	/** {@code (lambda (params...) body)}. */
+	private static LispVal lambdaOf(List<LispVal> params, LispVal body) {
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				params.isEmpty() ? LispNil.INSTANCE : listToCons(params), body));
+	}
+
+	private static LispVal prognOf(List<LispVal> forms) {
+		List<LispVal> progn = new java.util.ArrayList<>();
+		progn.add(new LispSymbol(LispNames.PROGN));
+		progn.addAll(forms);
+		return listToCons(progn);
+	}
+
+	private static LispVal noApplicableMethod(String genericName) {
+		return listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString("No applicable method: " + genericName)));
+	}
+
+	/**
+	 * The single-call form of the simple dispatcher:
+	 * {@code (functionName nil params...)}.
+	 */
+	private static LispVal methodCall(ClosRegistry.MethodInfo method, List<LispVal> params) {
+		return callWithNext(method.functionName(), LispNil.INSTANCE, params);
 	}
 
 	private static LispVal specializerTest(ClosRegistry.MethodInfo method, LispVal arg, ClosRegistry closRegistry) {

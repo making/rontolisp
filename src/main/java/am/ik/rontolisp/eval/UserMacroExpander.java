@@ -172,13 +172,25 @@ public final class UserMacroExpander {
 				case LispNames.DEFUN:
 					return rebuild(parts, 3, macroEval, parts.get(1), parts.get(2));
 				case LispNames.DEFMETHOD: {
-					// (defmethod name (params...) body...): the name and the lambda list
-					// (specializers included) stay, the body is expressions. A malformed
-					// form (e.g. a qualifier) is left for the expansion to report.
+					// (defmethod name [qualifier] (params...) body...): the name,
+					// optional
+					// qualifier, and lambda list (specializers included) stay, the body
+					// is
+					// expressions. A malformed form is left for the expansion to report.
 					if (parts.size() < 3) {
 						return form;
 					}
-					return rebuild(parts, 3, macroEval, parts.get(1), parts.get(2));
+					// A leading symbol after the name is a qualifier, so the lambda list
+					// (and body) shift by one.
+					int llIndex = parts.get(2) instanceof LispSymbol ? 3 : 2;
+					if (parts.size() <= llIndex) {
+						return form;
+					}
+					LispVal[] kept = new LispVal[llIndex];
+					for (int k = 1; k <= llIndex; k++) {
+						kept[k - 1] = parts.get(k);
+					}
+					return rebuild(parts, llIndex + 1, macroEval, kept);
 				}
 				case LispNames.DEFGENERIC:
 					// (defgeneric name (params...) options...): everything is data.

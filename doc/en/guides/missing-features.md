@@ -149,8 +149,9 @@ A **static CLOS subset** is available:
 [`slot-value`](../reference/macros/slot-value.md) (both with literal quoted
 names), and [`defgeneric`](../reference/special-forms/defgeneric.md) /
 [`defmethod`](../reference/special-forms/defmethod.md) dispatching on the first
-argument (`eql`, class, and built-in-type specializers). Out of scope: method
-qualifiers (`:before`/`:after`/`:around`), `call-next-method`, multiple
+argument (`eql`, class, and built-in-type specializers), including standard
+method combination — `:before`/`:after`/`:around` qualifiers, `call-next-method`,
+and `next-method-p` (for class and default methods). Out of scope: multiple
 inheritance, specializers on later arguments, `slot-boundp`, and the MOP /
 runtime class operations (`find-class`, `change-class`, `add-method`, class
 redefinition) — the class and method sets of a compiled program are fixed at

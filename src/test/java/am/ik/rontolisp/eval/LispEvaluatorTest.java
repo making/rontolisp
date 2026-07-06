@@ -5659,10 +5659,67 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defmethodQualifiersAreNotSupported() {
-		assertThatThrownBy(() -> evalMulti("(defgeneric g (x)) (defmethod g :before (x) x)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("defmethod qualifiers are not supported");
+	void defmethodBeforeAndAfterQualifiersRunAroundThePrimary() {
+		// :before methods run most-specific-first, :after least-specific-first, and the
+		// primary value is returned.
+		assertThat(evalMulti("""
+				(defclass animal () ())
+				(defclass dog (animal) ())
+				(defparameter *log* nil)
+				(defgeneric touch (x))
+				(defmethod touch ((x animal)) (push :primary-animal *log*) :done)
+				(defmethod touch ((x dog)) (push :primary-dog *log*) (call-next-method))
+				(defmethod touch :before ((x animal)) (push :before-animal *log*))
+				(defmethod touch :before ((x dog)) (push :before-dog *log*))
+				(defmethod touch :after ((x animal)) (push :after-animal *log*))
+				(defmethod touch :after ((x dog)) (push :after-dog *log*))
+				(list (touch (make-instance 'dog)) (reverse *log*))
+				""").print())
+			.isEqualTo("(:done (:before-dog :before-animal :primary-dog :primary-animal :after-animal :after-dog))");
+	}
+
+	@Test
+	void callNextMethodChainsPrimariesAndNextMethodP() {
+		assertThat(evalMulti("""
+				(defclass base () ())
+				(defclass mid (base) ())
+				(defclass leaf (mid) ())
+				(defgeneric describe-chain (x))
+				(defmethod describe-chain ((x base)) (list :base (next-method-p)))
+				(defmethod describe-chain ((x mid)) (cons :mid (call-next-method)))
+				(defmethod describe-chain ((x leaf)) (cons :leaf (call-next-method)))
+				(describe-chain (make-instance 'leaf))
+				""").print()).isEqualTo("(:leaf :mid :base nil)");
+	}
+
+	@Test
+	void aroundMethodWrapsAndCallNextMethodInvokesTheCore() {
+		assertThat(evalMulti("""
+				(defclass thing () ())
+				(defgeneric render (x))
+				(defmethod render ((x thing)) :inner)
+				(defmethod render :around ((x thing)) (list :before-around (call-next-method) :after-around))
+				(render (make-instance 'thing))
+				""").print()).isEqualTo("(:before-around :inner :after-around)");
+	}
+
+	@Test
+	void callNextMethodWithNewArguments() {
+		assertThat(evalMulti("""
+				(defgeneric g (x))
+				(defmethod g (x) (list :default x))
+				(defmethod g ((x integer)) (call-next-method (* x 10)))
+				(g 5)
+				""").print()).isEqualTo("(:default 50)");
+	}
+
+	@Test
+	void callNextMethodWithNoNextMethodSignals() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defgeneric g (x))
+				(defmethod g (x) (call-next-method))
+				(g 1)
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("no next method");
 	}
 
 	@Test

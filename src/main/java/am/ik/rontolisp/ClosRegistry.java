@@ -24,6 +24,10 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ClosRegistry {
 
+	/** Creates an empty registry. */
+	public ClosRegistry() {
+	}
+
 	/**
 	 * One slot of a class: the canonical (package-resolved) slot symbol name, its
 	 * package-stripped base name, the {@code :initform} expression AST, the
@@ -74,9 +78,21 @@ public final class ClosRegistry {
 	 * @param eqlValue the literal compared against for {@link SpecializerKind#EQL}
 	 * @param specializerName the normalized class/type name for CLASS/TYPE
 	 * @param functionName the name of the generated method-body defun
+	 * @param qualifier the method qualifier ({@code ""} for a primary method, or
+	 * {@code ":before"}/{@code ":after"}/{@code ":around"})
+	 * @param usesNext whether the method body calls {@code call-next-method} or
+	 * {@code next-method-p} (forces the combined dispatcher even without a qualifier)
 	 */
 	public record MethodInfo(SpecializerKind kind, @Nullable LispVal eqlValue, @Nullable String specializerName,
-			String functionName) {
+			String functionName, String qualifier, boolean usesNext) {
+
+		/**
+		 * Whether this is a primary (unqualified) method.
+		 * @return true when the qualifier is empty
+		 */
+		public boolean isPrimary() {
+			return this.qualifier.isEmpty();
+		}
 	}
 
 	/**

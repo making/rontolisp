@@ -2548,6 +2548,24 @@ cases:
       ("woof" "..." "number" "?")
       ("Rex" "mixed" "Rex")
       "Max!"
+  - name: clos-method-qualifiers-and-call-next-method
+    source: |
+      (defclass clos-mc-animal () ())
+      (defclass clos-mc-dog (clos-mc-animal) ())
+      (defparameter *clos-mc-log* nil)
+      (defgeneric clos-mc-touch (x))
+      (defmethod clos-mc-touch ((x clos-mc-animal)) (push :primary-animal *clos-mc-log*) :done)
+      (defmethod clos-mc-touch ((x clos-mc-dog)) (push :primary-dog *clos-mc-log*) (call-next-method))
+      (defmethod clos-mc-touch :before ((x clos-mc-animal)) (push :before-animal *clos-mc-log*))
+      (defmethod clos-mc-touch :before ((x clos-mc-dog)) (push :before-dog *clos-mc-log*))
+      (defmethod clos-mc-touch :after ((x clos-mc-animal)) (push :after-animal *clos-mc-log*))
+      (defmethod clos-mc-touch :after ((x clos-mc-dog)) (push :after-dog *clos-mc-log*))
+      (defmethod clos-mc-touch :around ((x clos-mc-animal)) (list :around (call-next-method) (next-method-p)))
+      (print (clos-mc-touch (make-instance 'clos-mc-dog)))
+      (print (reverse *clos-mc-log*))
+    expected: |
+      (:around :done t)
+      (:before-dog :before-animal :primary-dog :primary-animal :after-animal :after-dog)
   - name: binary-file-round-trip-with-read-byte-write-byte
     source: |
       (with-open-file (out "bin.dat" :direction :output :element-type '(unsigned-byte 8))

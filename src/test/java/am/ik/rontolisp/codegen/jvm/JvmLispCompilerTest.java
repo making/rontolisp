@@ -5200,6 +5200,38 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMethodQualifiersAndCallNextMethod() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass animal () ())
+				(defclass dog (animal) ())
+				(defparameter *log* nil)
+				(defgeneric touch (x))
+				(defmethod touch ((x animal)) (push :primary-animal *log*) :done)
+				(defmethod touch ((x dog)) (push :primary-dog *log*) (call-next-method))
+				(defmethod touch :before ((x animal)) (push :before-animal *log*))
+				(defmethod touch :before ((x dog)) (push :before-dog *log*))
+				(defmethod touch :after ((x animal)) (push :after-animal *log*))
+				(defmethod touch :after ((x dog)) (push :after-dog *log*))
+				(print (touch (make-instance 'dog)))
+				(print (reverse *log*))
+				""")).isEqualTo(
+				":done\n" + "(:before-dog :before-animal :primary-dog :primary-animal :after-animal :after-dog)");
+	}
+
+	@Test
+	void compileAndRunAroundMethodAndNextMethodP() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass thing () ())
+				(defclass gadget (thing) ())
+				(defgeneric render (x))
+				(defmethod render ((x thing)) (list :thing (next-method-p)))
+				(defmethod render ((x gadget)) (cons :gadget (call-next-method)))
+				(defmethod render :around ((x thing)) (list :around (call-next-method)))
+				(print (render (make-instance 'gadget)))
+				""")).isEqualTo("(:around (:gadget :thing nil))");
+	}
+
+	@Test
 	void compileNestedDefmethodFails() {
 		assertThatThrownBy(() -> compileAndRun("(defun f () (defmethod g (x) x)) (f)"))
 			.isInstanceOf(UnsupportedOperationException.class)

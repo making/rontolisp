@@ -2,8 +2,9 @@
 
 User-facing behavior: `doc/en/reference/special-forms/{defclass,defgeneric,defmethod}.md`,
 `doc/en/reference/macros/{make-instance,slot-value}.md`, and the missing-features
-guide (what is out of scope: qualifiers/`call-next-method` — `.todo/40` Stage 3 —
-multiple inheritance, MOP/runtime class ops permanently).
+guide (what is out of scope: multiple inheritance, MOP/runtime class ops
+permanently). Stages 1+2+3 DONE (2026-07-06): dispatch + standard method
+combination (`:before`/`:after`/`:around` + `call-next-method`/`next-method-p`).
 
 ## Design: the defstruct pattern, one shared registry, one shared dispatcher generator
 
@@ -18,10 +19,19 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   slots (inheritance order) + own slots, so single inheritance keeps positions
   stable in all descendants.
 - `registerDefgeneric` / `expandDefmethod` — record into
-  `ClosRegistry.GenericInfo` (methods keyed by canonical specializer key, so
-  same-specializer redefinition replaces); each defmethod becomes a plain defun
+  `ClosRegistry.GenericInfo` (methods keyed by `qualifier + specializer`, so
+  same-qualifier-same-specializer redefinition replaces while a `:before dog`
+  and a primary `dog` coexist); each defmethod becomes a plain defun
   `%<generic>--m<i>` (body kept verbatim: a leading docstring is evaluated and
-  discarded, `declare` expands to nil).
+  discarded, `declare` expands to nil). Stage 3: an optional `:before`/`:after`/
+  `:around` qualifier precedes the lambda list (stored on `MethodInfo.qualifier`,
+  `""` = primary), and EVERY method-body defun gains a leading `%next-method`
+  thunk parameter — `rewriteNextMethod` turns `(call-next-method args...)` into a
+  guarded `(if %next-method (funcall %next-method args-or-current-params) (error))`
+  and `(next-method-p)` into `(not (null %next-method))`. `call-next-method`/
+  `next-method-p` are matched by package-stripped name (NOT in `CL_SYMBOLS`, so no
+  introspection churn) and are rewritten away before any backend sees them.
+  `MethodInfo.usesNext` records whether a body mentions them.
 - `generateDispatcher(name, registry)` — ONE dispatcher defun per generic: a
   nested-if chain testing arg 1, most specific first (`specializerRank`: eql 0,
   classes 10..99 by descending ancestor-set size = subclass first, built-in
@@ -34,6 +44,24 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   a class test is `(if (consp x) (or (equal (car x) '%class-C) ...) nil)` over
   the statically-known descendant tags. The dispatcher is an ordinary defun, so
   `#'name`/`funcall`/mapcar work with no `BuiltinFunctionWrappers` entry.
+  - Two bodies: `simpleDispatchBody` (unchanged single-call-per-branch) is used
+    when the generic has NO qualifier and NO `call-next-method` usage; otherwise
+    `combinedDispatchBody` emits standard method combination. Combined = one
+    branch per distinct specializer (`specKeyOf`, qualifier-independent) plus the
+    default fallback; each branch's value is `effectiveMethod(branchRep, ...)`.
+  - `effectiveMethod` collects the applicable methods per role (`applicableMethods`
+    filters by `appliesToBranch`: default methods always apply; a class method
+    applies to a class branch whose class has it as an ancestor; eql/type methods
+    apply only to their exact-same branch — cross-type subtyping is out of scope),
+    then composes them: `:around` (most specific first) wrap a `coreThunk`; the
+    core runs `:before` (msf, for effect), the primary chain (msf, value kept via a
+    `%clos-result` let), then `:after` (LEAST specific first). The primary/around
+    chains are built by `buildNextChain` as nested `(lambda (params) (%m next
+    params))` literals passed as each method's `%next-method` — NO free-variable
+    capture (each lambda re-binds params, method names are global), so it is just
+    first-class `lambda`+`funcall`, well supported on all backends. Base next =
+    `nil` for the innermost primary (so `next-method-p` is nil / `call-next-method`
+    errors) and the `coreThunk` for the innermost around.
 
 `ClosRegistry` (in `am.ik.rontolisp`) holds classes, generics, and
 `slotPositions` (slot base name -> 1-based position, `-1` when unrelated classes
@@ -85,9 +113,11 @@ FOUND class's canonical name (not the spelling at the method site).
 
 ## Out of scope / known gaps
 
-- Qualifiers (`:before`/`:after`/`:around`) + `call-next-method`: `.todo/40`
-  Stage 3 (the applicable chain per branch is statically known, so they can
-  compile to direct calls later).
+- Qualifiers (`:before`/`:after`/`:around`) + `call-next-method`/`next-method-p`:
+  DONE (Stage 3, 2026-07-06). Combination is for class + default methods;
+  eql/type-specialized qualified methods combine only with same-specializer
+  primaries + the default method (cross-type subtyping among specializers is not
+  computed).
 - MOP / runtime class ops (`find-class`, `change-class`, `add-method`,
   `compute-applicable-methods`, class redefinition, `update-instance-for-*`):
   permanently out (contradicts the static compile model + `--optimize`).
@@ -109,6 +139,12 @@ Pinning tests: `LispEvaluatorTest#defgeneric*`/`defclass*`/`defmethod*`/
 `compileNestedDefmethodFails`, `WasmLispCompilerIntegrationTest#compileAndRunDefgeneric*`/
 `compileAndRunDefclass*`, `UserMacroExpanderTest#defmethodLambdaListStaysVerbatim*`/
 `defclassKeepsNamesAndOptions*`/`macroBodyMayCallAGenericFunctionAtExpansionTime`,
-ci-spec cases `clos-defgeneric-defmethod-eql-dispatch` and
-`clos-defclass-slots-inheritance-and-dispatch` (all four backends), and the five
-`doc/*/reference/**` pages via `DocExamplesTest`.
+ci-spec cases `clos-defgeneric-defmethod-eql-dispatch`,
+`clos-defclass-slots-inheritance-and-dispatch`, and
+`clos-method-qualifiers-and-call-next-method` (all four backends), and the five
+`doc/*/reference/**` pages via `DocExamplesTest`. Stage 3 pinning:
+`LispEvaluatorTest#{defmethodBeforeAndAfterQualifiersRunAroundThePrimary,
+callNextMethodChainsPrimariesAndNextMethodP,aroundMethodWrapsAndCallNextMethodInvokesTheCore,
+callNextMethodWithNewArguments,callNextMethodWithNoNextMethodSignals}` and the
+`compileAndRun{MethodQualifiersAndCallNextMethod,AroundMethodAndNextMethodP}`
+tests in the JVM/WASM suites.

@@ -151,8 +151,9 @@ The function ignore-errors is undefined
 された名前が必要）、そして第 1 引数でディスパッチする
 [`defgeneric`](../reference/special-forms/defgeneric.md) /
 [`defmethod`](../reference/special-forms/defmethod.md)（`eql`、クラス、組み込み
-型の specializer）です。対象外: メソッド修飾子（`:before`/`:after`/`:around`）、
-`call-next-method`、多重継承、第 2 引数以降の specializer、`slot-boundp`、
+型の specializer）で、標準メソッド結合 — `:before`/`:after`/`:around` 修飾子、
+`call-next-method`、`next-method-p`（クラスメソッドとデフォルトメソッド向け）—
+も含みます。対象外: 多重継承、第 2 引数以降の specializer、`slot-boundp`、
 MOP / 実行時クラス操作（`find-class`、`change-class`、`add-method`、クラス
 再定義）— コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に
 固定されます。

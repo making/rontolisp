@@ -873,6 +873,21 @@ public final class LispNames {
 	public static final String DEFMETHOD = "defmethod";
 
 	/**
+	 * The {@code call-next-method} local operator (static CLOS subset, Stage 3). Valid
+	 * only inside a {@code defmethod} body; {@code LispMacroExpander.expandDefmethod}
+	 * rewrites it to a {@code funcall} of the method's next-method thunk, so it never
+	 * reaches the evaluator/compilers as a symbol.
+	 */
+	public static final String CALL_NEXT_METHOD = "call-next-method";
+
+	/**
+	 * The {@code next-method-p} local operator (static CLOS subset, Stage 3). Valid only
+	 * inside a {@code defmethod} body; rewritten by
+	 * {@code LispMacroExpander.expandDefmethod} to a nil-test of the next-method thunk.
+	 */
+	public static final String NEXT_METHOD_P = "next-method-p";
+
+	/**
 	 * The {@code make-instance} macro (static CLOS subset). Requires a literal quoted
 	 * class name; expands to the class's generated keyword constructor.
 	 */

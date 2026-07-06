@@ -1,11 +1,13 @@
 # CLOS and `defstruct` (the object system)
 
 **Status:** `defstruct` DONE (2026-07, all four backends; `.kb/defstruct.md`).
-CLOS **Stages 1 + 2 DONE** (2026-07-06, all four backends; `.kb/clos.md`):
+CLOS **Stages 1 + 2 + 3 DONE** (2026-07-06, all four backends; `.kb/clos.md`):
 `defclass` (single inheritance) + `make-instance` + `slot-value` + `defgeneric`
-+ `defmethod` (single dispatch on arg 1, `eql`/class/built-in-type specializers).
-**Next action: Stage 3** (qualifiers + `call-next-method`) — see below. Full
-CLOS (MOP, runtime class ops) is permanently out of scope.
++ `defmethod` (single dispatch on arg 1, `eql`/class/built-in-type specializers)
++ standard method combination (`:before`/`:after`/`:around` qualifiers +
+`call-next-method`/`next-method-p`, for class + default methods). **Nothing
+actionable remains** — full CLOS (MOP, runtime class ops) is permanently out of
+scope (see below). This todo can be closed.
 
 ## Out of scope (permanent)
 
@@ -30,19 +32,24 @@ Expands into plain defuns over a tagged-list representation
 - runtime `eval` of compiled output: no defstruct, no accessor setf places
 - `--no-gc`: rejected (cons-based representation)
 
-## Stage 3 — standard method combination (NEXT)
+## Stage 3 — standard method combination (DONE 2026-07-06)
 
-`:before`/`:after`/`:around` qualifiers + `call-next-method`. The applicable
-chain per dispatch branch is statically known, so next-method calls compile to
-direct calls folded into the generated dispatcher (`generateDispatcher`).
-Combinatorial but mechanical. Follow the defstruct/CLOS wiring pattern: grep
-`DEFSTRUCT`/`DEFCLASS` for every site, thread through `ClosRegistry`, expand in
-the shared `LispMacroExpander`, no per-backend codegen. Update the 8 pinned
-introspection outputs if any new name is added (ci-spec
-`rontolisp-package-introspection`, the three backend tests,
-`doc/{en,ja}/reference/packages.md` + `rontolisp-list-{macros,special-forms}.md`).
-Ship the four usual tests + a ci-spec case + per-operator docs, then run
-`-Drontolisp.doc.fix=true`, full DocExamplesTest, and the native-image E2E.
+`:before`/`:after`/`:around` qualifiers + `call-next-method`/`next-method-p`,
+shared in `LispMacroExpander` (no per-backend codegen). `generateDispatcher`
+splits into `simpleDispatchBody` (unchanged when no qualifier / no
+call-next-method) and `combinedDispatchBody` (one branch per specializer, each
+value = `effectiveMethod`: `:around` wrap a core of befores → primary chain →
+afters, built from nested `lambda`+`funcall` next-method thunks with no
+free-variable capture). Every method-body defun gained a leading `%next-method`
+parameter; `rewriteNextMethod` lowers `call-next-method`/`next-method-p` against
+it. `call-next-method`/`next-method-p` are matched by package-stripped name and
+deliberately kept OUT of `CL_SYMBOLS` (no introspection change — the 8 pinned
+introspection outputs were untouched). Combination is for class + default
+methods; eql/type-qualified methods combine only with same-specializer primaries
++ default (documented). Tests: `LispEvaluatorTest` (5 new), JVM + WASM
+`compileAndRun{MethodQualifiersAndCallNextMethod,AroundMethodAndNextMethodP}`,
+ci-spec `clos-method-qualifiers-and-call-next-method`, doc examples on
+`defmethod.md` (en+ja). Details: `.kb/clos.md`.
 
 ## Related
 
