@@ -725,13 +725,20 @@ public final class LispMacroExpander {
 	 * </ul>
 	 *
 	 * <p>
-	 * Limitations: {@code being} (hash/package iteration), {@code named}/
-	 * {@code return-from}, and lambda-list keywords inside destructuring patterns.
-	 * {@code (loop-finish)} must appear in statement position and not inside a nested
-	 * iteration form. Accumulation clauses without {@code into} must all be of the same
-	 * kind (collecting clauses build the list in order; the result list is produced with
-	 * {@code nreverse}) and cannot be combined with {@code thereis}/{@code always}/
-	 * {@code never}.
+	 * <p>
+	 * The {@code for v being {the|each} {symbols|present-symbols|external-symbols}
+	 * {of|in} PACKAGE} clause is accepted but <em>lite</em>: rontolisp has no runtime
+	 * intern table, so it iterates the empty sequence (the loop body never runs and
+	 * accumulation yields nil). It exists so cl-who's hyperdoc table loads.
+	 *
+	 * <p>
+	 * Limitations: {@code being} hash-table iteration ({@code hash-key}/
+	 * {@code hash-value}), {@code named}/ {@code return-from}, and lambda-list keywords
+	 * inside destructuring patterns. {@code (loop-finish)} must appear in statement
+	 * position and not inside a nested iteration form. Accumulation clauses without
+	 * {@code into} must all be of the same kind (collecting clauses build the list in
+	 * order; the result list is produced with {@code nreverse}) and cannot be combined
+	 * with {@code thereis}/{@code always}/ {@code never}.
 	 * @param cons the loop expression
 	 * @return the expanded expression
 	 */
@@ -986,6 +993,7 @@ public final class LispMacroExpander {
 				case "from", "upfrom", "downfrom", "to", "upto", "below", "downto", "above", "by" ->
 					parseForNumeric(piece, requireSymbol(var, "numeric stepping"));
 				case "across" -> parseForAcross(piece, requireSymbol(var, "across"));
+				case "being" -> parseForBeing(piece, requireSymbol(var, "being"));
 				default -> throw new UnsupportedOperationException("loop: unsupported for clause: " + sub);
 			}
 			return piece;
@@ -1168,6 +1176,45 @@ public final class LispMacroExpander {
 			LispVal elt = makeIf(call(LispNames.STRINGP, seq), call(LispNames.CHAR, seq, idx),
 					call(LispNames.AREF, seq, idx));
 			return makeIf(call(LispNames.LT, idx, call(LispNames.LENGTH, seq)), elt, LispNil.INSTANCE);
+		}
+
+		/**
+		 * Lite {@code being} package-symbol iteration: {@code for VAR being {the|each}
+		 * {symbols|present-symbols|external-symbols} {of|in} PACKAGE}. rontolisp has no
+		 * runtime intern table (see {@code .kb/symbol-runtime-api.md}), so this parses
+		 * the whole clause, evaluates {@code PACKAGE} once for its side effects, and
+		 * iterates the empty sequence: {@code VAR} is bound to nil and the loop body
+		 * never runs. That is enough for cl-who's hyperdoc table (every lookup returns
+		 * nil). The {@code hash-key}/{@code hash-value} variants of {@code being} are not
+		 * accepted.
+		 */
+		private void parseForBeing(ForPiece piece, LispSymbol var) {
+			pos++; // consume being
+			// Optional `the`/`each` filler (plain symbols, not loop keywords).
+			String filler = plainName(peekToken());
+			if ("the".equals(filler) || "each".equals(filler)) {
+				pos++;
+			}
+			// Symbol kind: symbols | present-symbols | external-symbols (all treated
+			// identically -- the iterated set is empty regardless).
+			String kind = plainName(nextForm());
+			if (!"symbols".equals(kind) && !"present-symbols".equals(kind) && !"external-symbols".equals(kind)) {
+				throw new UnsupportedOperationException(
+						"loop: unsupported being clause (only {external-,present-,}symbols): " + kind);
+			}
+			// `of` | `in` (`in` is a loop keyword, `of` is not -- consume either
+			// literally).
+			String of = plainName(nextForm());
+			if (!"of".equals(of) && !"in".equals(of)) {
+				throw new IllegalArgumentException("loop: being clause expects of/in, got: " + of);
+			}
+			LispVal pkg = nextForm();
+			// Evaluate PACKAGE for effect, but do not enumerate it (no intern table).
+			LispSymbol ignore = gensym("pkg");
+			piece.binds.add(new ForBinding(ignore, pkg, false));
+			piece.binds.add(new ForBinding(var, LispNil.INSTANCE, true));
+			// Iterate the empty sequence: terminate before the first body pass.
+			piece.endTests.add(LispTrue.INSTANCE);
 		}
 
 		private LispVal stepCdr(LispSymbol cursor, @Nullable LispVal byFn) {
@@ -1632,6 +1679,32 @@ public final class LispMacroExpander {
 
 		private @Nullable String peekKeyword() {
 			return pos < toks.size() ? loopKeyword(toks.get(pos)) : null;
+		}
+
+		private @Nullable LispVal peekToken() {
+			return pos < toks.size() ? toks.get(pos) : null;
+		}
+
+		/**
+		 * The plain, lowercased member name a token denotes (package qualifier and a
+		 * leading keyword colon stripped), or null if it is not a symbol. Used to match
+		 * {@code being}-clause fillers that are not loop keywords
+		 * ({@code the}/{@code each}/ {@code symbols}/{@code of}).
+		 */
+		private static @Nullable String plainName(@Nullable LispVal v) {
+			if (!(v instanceof LispSymbol s)) {
+				return null;
+			}
+			String n = s.name();
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(n);
+			if (qn != null) {
+				n = qn.member();
+			}
+			n = n.toLowerCase(java.util.Locale.ROOT);
+			if (n.startsWith(":") && n.length() > 1) {
+				n = n.substring(1);
+			}
+			return n;
 		}
 
 		/**

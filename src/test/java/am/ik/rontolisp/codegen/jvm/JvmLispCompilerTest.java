@@ -569,6 +569,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLoopBeingSymbols() throws Exception {
+		// Lite `being` package iteration: parses and iterates the empty sequence.
+		assertThat(compileAndRun("(print (loop for s being the external-symbols of :cl collect s))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (loop for s being each present-symbols in :cl-user count s))")).isEqualTo("0");
+	}
+
+	@Test
 	void compileAndRunLoopAccumulators() throws Exception {
 		assertThat(compileAndRun("(print (loop for i from 1 to 5 sum i))")).isEqualTo("15");
 		assertThat(compileAndRun("(print (loop for i from 1 to 10 count (evenp i)))")).isEqualTo("5");

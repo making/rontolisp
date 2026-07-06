@@ -691,6 +691,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (loop for i from 1 do (when (> i 3) (return i))))")).isEqualTo("4");
 		assertThat(compileAndRun("(print (loop for c across \"hello\" collect c))"))
 			.isEqualTo("(#\\h #\\e #\\l #\\l #\\o)");
+		// Lite `being` package iteration: parses and iterates the empty sequence.
+		assertThat(compileAndRun("(print (loop for s being the external-symbols of :cl collect s))")).isEqualTo("nil");
 	}
 
 	@Test

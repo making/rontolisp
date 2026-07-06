@@ -85,4 +85,10 @@ A `for`/`with` variable may be a destructuring pattern — a proper list of vari
 (loop for x across #(1 2 3 4 5) collect (* x x)) ; => (1 4 9 16 25)
 ```
 
-Limitations: `being` (hash-table/package iteration) and `named`/`return-from` are not supported. Destructuring patterns are proper lists of variables — dotted patterns like `(a . b)` are unavailable because the reader rejects dotted-pair syntax, and lambda-list keywords are not recognized. `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.
+The package form of `being` — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — is accepted but **lite**: rontolisp has no runtime intern table, so the clause parses and iterates the *empty* sequence. The body never runs and accumulation yields `nil`. It exists so libraries whose load-time code walks a package (such as cl-who's hyperdoc table) load without error:
+
+```lisp
+(loop for s being the external-symbols of :cl collect s) ; => nil
+```
+
+Limitations: the `being` hash-table iteration (`hash-key`/`hash-value`) and `named`/`return-from` are not supported. Destructuring patterns are proper lists of variables — dotted patterns like `(a . b)` are unavailable because the reader rejects dotted-pair syntax, and lambda-list keywords are not recognized. `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.
