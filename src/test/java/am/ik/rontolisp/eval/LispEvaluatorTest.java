@@ -2955,6 +2955,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalMapIntoMixedListAndVectorOperands() {
+		// The result and each source may independently be a list or a vector; dispatch is
+		// at runtime via per-operand cursors.
+		assertThat(eval("(map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30))").print()).isEqualTo("(11 22 33)");
+		assertThat(eval("(map-into (make-array 3) #'+ '(1 2 3) #(10 20 30))").print()).isEqualTo("#(11 22 33)");
+	}
+
+	@Test
+	void evalMapIntoLargeListStaysLinear() {
+		// Regression guard for todo 75: with all-list operands map-into must stay O(n),
+		// not
+		// re-walk the list from the head each iteration (which would make 20000 elements
+		// an
+		// O(n^2) hang instead of instant).
+		assertThat(eval("(length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000)))").print())
+			.isEqualTo("20000");
+	}
+
+	@Test
 	void evalMapWithBuiltinCdr() {
 		assertThat(eval("(mapcar #'cdr '((1 2) (3 4) (5 6)))").print()).isEqualTo("((2) (4) (6))");
 	}

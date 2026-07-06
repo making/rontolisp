@@ -639,11 +639,17 @@ cases:
       (print (map-into (make-array 3) #'* #(2 3 4) #(5 6 7)))
       (print (map-into (list nil nil nil) '1+ '(7 8 9)))
       (print (map-into (list 0 0 0) (lambda () 42)))
+      (print (map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))
+      (print (map-into (make-array 3) #'+ '(1 2 3) #(10 20 30)))
+      (print (length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))
     expected: |
       (11 22 33 0)
       #(10 18 28)
       (8 9 10)
       (42 42 42)
+      (11 22 33)
+      #(11 22 33)
+      20000
   - name: map
     source: |
       (print (map 'list #'+ '(1 2 3) '(10 20 30)))

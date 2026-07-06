@@ -3223,6 +3223,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void mapIntoMixedOperandsAndLargeList() throws Exception {
+		// Runtime list-or-vector dispatch per operand (result and sources independent).
+		assertThat(compileAndRun("(print (map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))")).isEqualTo("(11 22 33)");
+		assertThat(compileAndRun("(print (map-into (make-array 3) #'+ '(1 2 3) #(10 20 30)))"))
+			.isEqualTo("#(11 22 33)");
+		// Regression guard for todo 75: all-list operands must stay O(n).
+		assertThat(compileAndRun("(print (length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))"))
+			.isEqualTo("20000");
+	}
+
+	@Test
 	void mapcReturnsOriginalList() throws Exception {
 		// mapc prints each element (side effect) and returns the original list.
 		assertThat(compileAndRun("(print (mapc #'print '(10 20)))")).isEqualTo("10\n20\n(10 20)");

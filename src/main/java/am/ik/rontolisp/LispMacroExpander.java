@@ -6482,7 +6482,8 @@ public final class LispMacroExpander {
 			bindings.add(listToCons(List.of(seqVar, parts.get(3 + k))));
 		}
 
-		// (min (length res) (length s0) ...)
+		// (min (length res) (length s0) ...) -- each length is a single O(n) pass, so
+		// the whole loop below stays O(n) rather than re-walking any list per iteration.
 		List<LispVal> minParts = new java.util.ArrayList<>();
 		minParts.add(new LispSymbol(LispNames.MIN));
 		minParts.add(callOf(LispNames.LENGTH, resVar));
@@ -6491,26 +6492,65 @@ public final class LispMacroExpander {
 		}
 		bindings.add(listToCons(List.of(nVar, listToCons(minParts))));
 
-		// (funcall fn (elt s0 i) (elt s1 i) ...)
+		// One cursor per source sequence (and one for the result) advanced alongside the
+		// index. A cursor holds the remaining conses of a list operand, or stays pinned
+		// to
+		// the vector value for a vector operand; the index i handles the vector case.
+		// This
+		// keeps list element access O(1) per iteration instead of an O(i) head-walk.
+		LispSymbol rcurVar = new LispSymbol("__mi_rc");
+		List<LispSymbol> curVars = new java.util.ArrayList<>();
+		for (int k = 0; k < nSeqs; k++) {
+			curVars.add(new LispSymbol("__mi_c" + k));
+		}
+
+		// (funcall fn (if (consp c0) (car c0) (elt s0 i)) ...)
 		List<LispVal> callParts = new java.util.ArrayList<>();
 		callParts.add(new LispSymbol(LispNames.FUNCALL));
 		callParts.add(fnVar);
-		for (LispSymbol seqVar : seqVars) {
-			callParts.add(listToCons(List.of(new LispSymbol(LispNames.ELT), seqVar, iVar)));
+		for (int k = 0; k < nSeqs; k++) {
+			callParts.add(readElement(curVars.get(k), seqVars.get(k), iVar));
 		}
 		LispVal call = listToCons(callParts);
 
-		// (setf (elt res i) call)
-		LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF),
-				listToCons(List.of(new LispSymbol(LispNames.ELT), resVar, iVar)), call));
+		// (let ((val call))
+		// (if (consp rcur) (rplaca rcur val) (setf (elt res i) val)))
+		LispSymbol valVar = new LispSymbol("__mi_v");
+		LispVal storeList = listToCons(List.of(new LispSymbol(LispNames.RPLACA), rcurVar, valVar));
+		LispVal storeVec = listToCons(List.of(new LispSymbol(LispNames.SETF),
+				listToCons(List.of(new LispSymbol(LispNames.ELT), resVar, iVar)), valVar));
+		LispVal store = listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(valVar, call)))),
+						makeIf(callOf(LispNames.CONSP, rcurVar), storeList, storeVec)));
 
-		// (do ((i 0 (+ i 1))) ((>= i n) res) store)
+		// (do ((i 0 (+ i 1))
+		// (rcur res (if (consp rcur) (cdr rcur) rcur))
+		// (c0 s0 (if (consp c0) (cdr c0) c0)) ...)
+		// ((>= i n) res) store)
 		LispVal iStep = listToCons(List.of(new LispSymbol(LispNames.ADD), iVar, new LispInteger(1)));
-		LispVal doBindings = listToCons(List.of(listToCons(List.of(iVar, new LispInteger(0), iStep))));
+		List<LispVal> doBindings = new java.util.ArrayList<>();
+		doBindings.add(listToCons(List.of(iVar, new LispInteger(0), iStep)));
+		doBindings.add(listToCons(List.of(rcurVar, resVar, advanceCursor(rcurVar))));
+		for (int k = 0; k < nSeqs; k++) {
+			doBindings.add(listToCons(List.of(curVars.get(k), seqVars.get(k), advanceCursor(curVars.get(k)))));
+		}
 		LispVal endClause = listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.GE), iVar, nVar)), resVar));
-		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), doBindings, endClause, store));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(doBindings), endClause, store));
 
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), loop));
+	}
+
+	// (if (consp cur) (car cur) (elt seq i)) -- read the i-th element of a possibly
+	// list-or-vector operand: a list from its cursor (O(1)), a vector by index (O(1)).
+	private static LispVal readElement(LispSymbol cur, LispSymbol seq, LispSymbol i) {
+		return makeIf(callOf(LispNames.CONSP, cur), callOf(LispNames.CAR, cur),
+				listToCons(List.of(new LispSymbol(LispNames.ELT), seq, i)));
+	}
+
+	// (if (consp cur) (cdr cur) cur) -- a do-loop step form that walks a list cursor one
+	// cons forward while leaving a vector cursor (never a cons) pinned to its value.
+	private static LispVal advanceCursor(LispSymbol cur) {
+		return makeIf(callOf(LispNames.CONSP, cur), callOf(LispNames.CDR, cur), cur);
 	}
 
 	// Builds a (do ...) form collecting the elements of the vector named by {@code vec}
