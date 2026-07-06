@@ -282,6 +282,11 @@ final class JvmExprCompiler {
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
 				case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
 				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className);
+				case LispNames.PROGV ->
+					// progv binds a runtime-computed list of symbols; the compiler cannot
+					// name the static fields to save/restore. Interpreter only for now.
+					throw new UnsupportedOperationException(
+							LispNames.PROGV + " is not supported on the JVM backend (interpreter only)");
 				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
 				case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
 				case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);

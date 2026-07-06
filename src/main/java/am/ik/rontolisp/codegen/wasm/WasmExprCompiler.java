@@ -300,6 +300,11 @@ final class WasmExprCompiler {
 				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
 				case LispNames.WHILE -> WasmWhileCompiler.compile(cons, ctx);
 				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);
+				case LispNames.PROGV ->
+					// progv binds a runtime-computed list of symbols; the compiler cannot
+					// name the wasm globals to save/restore. Interpreter only for now.
+					throw new UnsupportedOperationException(
+							LispNames.PROGV + " is not supported on the WASM backend (interpreter only)");
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);

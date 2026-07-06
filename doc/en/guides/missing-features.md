@@ -34,7 +34,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `#+` / `#-` / `*features*` / `#\| ... \|#` | available (see [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)) |
 | `#.` read-time eval / `#:` fresh uninterned symbols | not available (`#.` is a read error, tolerated in `.asd` files; `#:name` reads as a plain symbol, accepted as a designator) |
 | `require` / `provide` | available (see [`require`](../reference/functions/require.md)); the `*modules*` variable is not available |
-| dynamic (special) binding via `let` | lexical only |
+| dynamic (special) binding via `let` | available (`defvar`/`defparameter`/`declaim special` proclaim a name special; `progv` is interpreter only) |
 | complex numbers | not available |
 
 ## User-defined macros (`defmacro`)
@@ -193,17 +193,27 @@ conflict.
 
 ## Dynamic (special) variable binding
 
-`defvar` and `defparameter` create global variables, but rontolisp binding is
-**lexical only** — `let` does not establish a dynamic binding for a special
-variable. Rebinding a global in a `let` is not seen by a separately defined
-function called within that scope:
+Dynamic (special) variable binding **is** supported. `defvar`, `defparameter`,
+and `defconstant` proclaim their variable special (as does
+`(declaim (special *x*))`), and a `let`/`let*` of a special name establishes a
+dynamic binding — visible to functions called within the extent and restored on
+exit — rather than a lexical one:
 
 ```console
 > (defvar *factor* 1)
 > (defun scale (n) (* n *factor*))
 > (let ((*factor* 10)) (scale 5))
-5        ; full Common Lisp would return 50
+50
 ```
+
+The bindings are per thread of control, so concurrent
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+requests never see each other's. Two limitations remain on the **compiled**
+backends (the interpreter is unaffected): [`progv`](../reference/special-forms/progv.md)
+(runtime-computed lists of symbols) is interpreter-only and a compile error on
+the JVM/WASM backends, and a `return`/`return-from` that unwinds *across* a
+special `let` boundary does not restore the global there (normal exit and error
+abort are fine).
 
 ## Numeric tower
 
@@ -218,7 +228,8 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## Other omissions
 
-`destructuring-bind`, `symbol-macrolet`, and `progv` are also not available
-([`eval-when`](../reference/macros/eval-when.md) **is**, treated as `progn`).
+`symbol-macrolet` is not available, and `progv` is interpreter-only (a compile
+error on the JVM/WASM backends); [`eval-when`](../reference/macros/eval-when.md)
+**is** available, treated as `progn`.
 This list is not exhaustive; rontolisp implements a focused core rather than the
 full standard.

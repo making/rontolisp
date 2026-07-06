@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
@@ -454,6 +455,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				globals.add(free);
 			}
 		}
+		// Special (dynamically bound) variables. Each needs the same global backing store
+		// (a let of a special save/restores over it), so union them into the globals set
+		// before fields are minted; a let/let* of one of these names becomes a dynamic
+		// binding rather than a lexical slot (JvmLetCompiler).
+		Set<String> specialVars = SpecialVarCollector.collect(topLevelExprs);
+		globals.addAll(specialVars);
 		Map<String, FieldrefConstant> globalFields = new HashMap<>();
 		List<Utf8Constant> globalFieldNameUtfs = new ArrayList<>();
 		Utf8Constant globalFieldDescUtf = cp.addUtf8("Ljava/lang/Object;");
@@ -570,6 +577,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.globals(globals)
+			.specialVars(specialVars)
 			.globalFields(globalFields)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry);
@@ -1813,6 +1821,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> globals = Set.of();
 
 		/**
+		 * Names of special (dynamically bound) variables (a subset of {@link #globals}).
+		 * A {@code let}/{@code let*} of one of these names saves its global static field,
+		 * assigns the init value, and restores the field on normal exit -- a dynamic
+		 * binding -- instead of allocating a fresh lexical slot. Shared across every
+		 * context.
+		 */
+		Set<String> specialVars = Set.of();
+
+		/**
 		 * Maps a global variable name to its backing {@code private static Object} field.
 		 */
 		Map<String, FieldrefConstant> globalFields = Map.of();
@@ -1839,6 +1856,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
+			this.specialVars = builder.specialVars;
 			this.globalFields = builder.globalFields;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
@@ -2006,6 +2024,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private ClosRegistry closRegistry = new ClosRegistry();
 
 			private Set<String> globals = Set.of();
+
+			private Set<String> specialVars = Set.of();
 
 			private Map<String, FieldrefConstant> globalFields = Map.of();
 
@@ -2282,6 +2302,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder globals(Set<String> globals) {
 				this.globals = globals;
+				return this;
+			}
+
+			Builder specialVars(Set<String> specialVars) {
+				this.specialVars = specialVars;
 				return this;
 			}
 

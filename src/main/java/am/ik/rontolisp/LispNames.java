@@ -17,6 +17,13 @@ public final class LispNames {
 	/** The {@code let} special form. */
 	public static final String LET = "let";
 
+	/**
+	 * The {@code progv} special form: establishes dynamic bindings for a runtime-computed
+	 * list of symbols to a runtime-computed list of values, restored on exit. Interpreter
+	 * only; the compilers reject it (the bound symbols are not known at compile time).
+	 */
+	public static final String PROGV = "progv";
+
 	/** The {@code progn} special form. */
 	public static final String PROGN = "progn";
 
@@ -1047,6 +1054,14 @@ public final class LispNames {
 	 * macro here, not a function as in CL, so the argument is not evaluated either).
 	 */
 	public static final String PROCLAIM = "proclaim";
+
+	/**
+	 * The {@code special} declaration identifier. A {@code (special ...)} clause inside a
+	 * top-level {@code declaim}/{@code proclaim} proclaims its variables special (dynamic
+	 * binding), collected by {@code SpecialVarCollector}. Not a callable symbol; only
+	 * meaningful inside a declaration specifier, so it is not registered as a cl symbol.
+	 */
+	public static final String SPECIAL = "special";
 
 	/**
 	 * The {@code the} operator. Expands to its value form (identity; no type checking).

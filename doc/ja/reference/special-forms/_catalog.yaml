@@ -5,6 +5,7 @@ categories:
       - { slug: quote, name: quote }
       - { slug: if, name: if }
       - { slug: let, name: let }
+      - { slug: progv, name: progv }
       - { slug: lambda, name: lambda }
       - { slug: progn, name: progn }
       - { slug: setq, name: setq }

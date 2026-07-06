@@ -25,7 +25,7 @@ public final class PackageRegistry {
 			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
 			LispNames.DEFMACRO, LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD,
 			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN, LispNames.IN_PACKAGE,
-			LispNames.DEFPACKAGE);
+			LispNames.DEFPACKAGE, LispNames.PROGV);
 
 	/**
 	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no

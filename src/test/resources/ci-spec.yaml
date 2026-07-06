@@ -1108,7 +1108,7 @@ cases:
       (print (rontolisp:list-macros :cl-user))
     expected: |
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
-      (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
+      (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq while)
       249
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
@@ -3191,3 +3191,18 @@ cases:
       "ok"
       4
       (t nil nil)
+
+  - name: special-variable-dynamic-binding
+    source: |
+      (defvar *sv* 10)
+      (defun sv-read () *sv*)
+      (print (list *sv* (let ((*sv* 20)) (sv-read)) *sv*))
+      (print (let ((*sv* 1)) (setq *sv* 2) (list *sv* (let ((*sv* 3)) *sv*) *sv*)))
+      (print (let* ((*sv* 5) (sv-x *sv*)) (list *sv* sv-x)))
+      (defparameter *sv-mode* :html)
+      (print (list *sv-mode* (let ((*sv-mode* :xhtml)) *sv-mode*) *sv-mode*))
+    expected: |
+      (10 20 10)
+      (2 3 2)
+      (5 5)
+      (:html :xhtml :html)

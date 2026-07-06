@@ -3878,7 +3878,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq while)");
 	}
 
 	@Test
@@ -5255,6 +5255,72 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(defun f () (defmethod g (x) x)) (f)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("defmethod is only supported as a top-level form");
+	}
+
+	// --- Dynamic (special) variable binding ---
+
+	@Test
+	void specialVarLetHasDynamicExtent() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *x* 10)
+				(print (list *x* (let ((*x* 20)) *x*) *x*))
+				""")).isEqualTo("(10 20 10)");
+	}
+
+	@Test
+	void specialVarBindingVisibleAcrossFunctionCalls() throws Exception {
+		// The dynamic binding is seen by a called function reading the special's static
+		// field.
+		assertThat(compileAndRun("""
+				(defvar *y* 1)
+				(defun get-y () *y*)
+				(print (list (get-y) (let ((*y* 2)) (get-y)) (get-y)))
+				""")).isEqualTo("(1 2 1)");
+	}
+
+	@Test
+	void specialVarNestedBindingsStackAndSetq() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *x* 1)
+				(print (list *x* (let ((*x* 2)) (let ((*x* 3)) *x*)) (let ((*x* 5)) (setq *x* 6) *x*) *x*))
+				""")).isEqualTo("(1 3 6 1)");
+	}
+
+	@Test
+	void specialVarLetStarIsSequential() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *a* 1)
+				(print (let* ((*a* 2) (b *a*)) (list *a* b)))
+				""")).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void defparameterAndDeclaimSpecialAreDynamic() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *p* 5)
+				(print (list (let ((*p* 6)) *p*) *p*))
+				""")).isEqualTo("(6 5)");
+		assertThat(compileAndRun("""
+				(declaim (special *s*))
+				(setq *s* 100)
+				(print (list (let ((*s* 7)) *s*) *s*))
+				""")).isEqualTo("(7 100)");
+	}
+
+	@Test
+	void lexicalGlobalLetStaysLexical() throws Exception {
+		// A top-level setq global that is NOT special is rebound lexically by let.
+		assertThat(compileAndRun("""
+				(setq g 1)
+				(defun read-g () g)
+				(print (list (let ((g 2)) (read-g)) g))
+				""")).isEqualTo("(1 1)");
+	}
+
+	@Test
+	void progvIsRejectedOnJvm() {
+		assertThatThrownBy(() -> compileAndRun("(progv '(a) '(1) a)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("progv");
 	}
 
 }

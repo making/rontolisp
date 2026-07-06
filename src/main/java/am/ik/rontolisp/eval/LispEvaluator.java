@@ -29,6 +29,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -125,6 +126,33 @@ public final class LispEvaluator {
 	 * as places. Kept per evaluator, like the user macro table.
 	 */
 	private final java.util.Map<String, Integer> structAccessors = new java.util.HashMap<>();
+
+	/**
+	 * The names proclaimed <em>special</em> (dynamic binding) by
+	 * {@code defvar}/{@code defparameter}/{@code defconstant} and
+	 * {@code (declaim (special ...))}/{@code (proclaim '(special ...))}, accumulated as
+	 * top-level forms are evaluated. A {@code let}/{@code let*}/{@code progv} of one of
+	 * these names establishes a thread-scoped dynamic binding ({@link #dynamicBindings})
+	 * rather than a lexical binding; variable reads and {@code setq} consult it.
+	 * Concurrent because HTTP-handler requests read it from separate virtual threads
+	 * (they only ever read it -- specials are declared by top-level forms before serving
+	 * begins).
+	 */
+	private final java.util.Set<String> specialVars = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/**
+	 * The thread-scoped dynamic bindings of special variables (see
+	 * {@link DynamicBindings}).
+	 */
+	private final DynamicBindings dynamicBindings = new DynamicBindings();
+
+	/**
+	 * True once any {@code progv} has run. {@code progv} can dynamically bind a symbol
+	 * that was never declared special, so once it is in play the variable-read fast path
+	 * must consult {@link #dynamicBindings} even for names absent from
+	 * {@link #specialVars}. Set-once, never cleared.
+	 */
+	private volatile boolean progvUsed = false;
 
 	/**
 	 * The CLOS registry (classes, generics, slot positions) behind
@@ -239,8 +267,8 @@ public final class LispEvaluator {
 			return switch (args.get(0)) {
 				case LispTrue ignored -> LispTrue.INSTANCE;
 				case LispNil ignored -> LispTrue.INSTANCE;
-				case LispSymbol sym -> sym.isKeyword() || this.globalEnv.lookupOrNull(sym.name()) != null
-						? LispTrue.INSTANCE : LispNil.INSTANCE;
+				case LispSymbol sym -> sym.isKeyword() || this.dynamicBindings.isBound(sym.name())
+						|| this.globalEnv.lookupOrNull(sym.name()) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
 				default ->
 					throw new LispEvalException(LispNames.BOUNDP + " expects a symbol, got " + args.get(0).print());
 			};
@@ -253,6 +281,9 @@ public final class LispEvaluator {
 				case LispSymbol sym -> {
 					if (sym.isKeyword()) {
 						yield sym;
+					}
+					if (this.dynamicBindings.isBound(sym.name())) {
+						yield this.dynamicBindings.get(sym.name());
 					}
 					LispVal value = this.globalEnv.lookupOrNull(sym.name());
 					if (value == null) {
@@ -926,9 +957,28 @@ public final class LispEvaluator {
 			case LispArray a -> a;
 			case LispJavaObject j -> j;
 			case LispPromise p -> p;
-			case LispSymbol sym -> sym.isKeyword() ? sym : env.lookup(sym.name());
+			case LispSymbol sym -> evalSymbolRef(sym, env);
 			case LispCons cons -> evalCons(cons, env);
 		};
+	}
+
+	/**
+	 * Evaluates a bare symbol reference. Keywords self-evaluate. A special variable with
+	 * an active dynamic binding reads that binding (dynamic extent, visible across
+	 * function calls); otherwise the reference falls through to the ordinary
+	 * lexical/global lookup, which finds the special's global default. Non-special names
+	 * never reach the dynamic store, so the cheap emptiness gate keeps ordinary lexical
+	 * reads (the common case) off the thread-local path entirely.
+	 */
+	private LispVal evalSymbolRef(LispSymbol sym, Environment env) {
+		if (sym.isKeyword()) {
+			return sym;
+		}
+		String name = sym.name();
+		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
+			return this.dynamicBindings.get(name);
+		}
+		return env.lookup(name);
 	}
 
 	private LispVal evalCons(LispCons cons, Environment env) {
@@ -946,6 +996,8 @@ public final class LispEvaluator {
 					return evalIf(cons, env);
 				case LispNames.LET:
 					return evalLet(cons, env);
+				case LispNames.PROGV:
+					return evalProgv(cons, env);
 				case LispNames.DEFUN:
 					return evalDefun(cons, env);
 				case LispNames.DEFMACRO:
@@ -1129,8 +1181,12 @@ public final class LispEvaluator {
 				case LispNames.DECLARE:
 					return eval(LispMacroExpander.expandDeclare(cons), env);
 				case LispNames.DECLAIM:
+					// (declaim (special ...)) proclaims specialness before the form
+					// collapses to nil; other declarations remain no-ops.
+					SpecialVarCollector.collectForm(cons, this.specialVars);
 					return eval(LispMacroExpander.expandDeclaim(cons), env);
 				case LispNames.PROCLAIM:
+					SpecialVarCollector.collectForm(cons, this.specialVars);
 					return eval(LispMacroExpander.expandProclaim(cons), env);
 				case LispNames.THE:
 					return eval(LispMacroExpander.expandThe(cons), env);
@@ -1598,12 +1654,15 @@ public final class LispEvaluator {
 	private LispVal evalDefvar(LispCons cons, Environment env, boolean force) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
+		// defvar/defparameter/defconstant proclaim the name special: a later
+		// let/let*/progv of it establishes a dynamic (not lexical) binding.
+		this.specialVars.add(name.name());
 		// defvar is idempotent (Common Lisp semantics): the initial value form is
 		// evaluated and bound in the global environment only if the variable is not
 		// already bound. (defvar name) with no value leaves it unbound. defparameter and
-		// defconstant pass force=true and always (re)assign the initial value. Returns
-		// the
-		// variable name like Common Lisp.
+		// defconstant pass force=true and always (re)assign the initial value. The global
+		// binding is the special's default value, seen whenever no dynamic binding is in
+		// effect. Returns the variable name like Common Lisp.
 		if (parts.size() > 2 && (force || !this.globalEnv.isBound(name.name()))) {
 			this.globalEnv.define(name.name(), eval(parts.get(2), env));
 		}
@@ -1709,21 +1768,118 @@ public final class LispEvaluator {
 		// parts.get(1) is the bindings list: ((x 1) (y 2)); a bare symbol entry is
 		// an init-less binding to nil.
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+		// A special name gets a thread-scoped dynamic binding instead of a lexical one;
+		// dynamicNames records those to pop on any exit (left null on the common
+		// all-lexical
+		// path so there is no per-let allocation or finally cost).
+		List<String> dynamicNames = null;
 		if (bindings instanceof LispCons bindingsCons) {
-			for (LispVal binding : bindingsCons.toList()) {
-				LispCons bindPair = (LispCons) binding;
-				List<LispVal> pair = bindPair.toList();
-				String name = ((LispSymbol) pair.get(0)).name();
-				LispVal value = eval(pair.get(1), env);
-				letEnv.define(name, value);
+			List<LispVal> bindingList = bindingsCons.toList();
+			if (this.specialVars.isEmpty()) {
+				// No name can be special: bind every init lexically. let is parallel, so
+				// each init is evaluated in the OUTER env before the binding takes
+				// effect.
+				for (LispVal binding : bindingList) {
+					List<LispVal> pair = ((LispCons) binding).toList();
+					letEnv.define(((LispSymbol) pair.get(0)).name(), eval(pair.get(1), env));
+				}
+			}
+			else {
+				// Some names may be special: evaluate ALL inits in the outer env first
+				// (parallel let -- a later init must not see an earlier binding in the
+				// same
+				// let), then establish the lexical and dynamic bindings.
+				int n = bindingList.size();
+				String[] names = new String[n];
+				LispVal[] vals = new LispVal[n];
+				for (int i = 0; i < n; i++) {
+					List<LispVal> pair = ((LispCons) bindingList.get(i)).toList();
+					names[i] = ((LispSymbol) pair.get(0)).name();
+					vals[i] = eval(pair.get(1), env);
+				}
+				for (int i = 0; i < n; i++) {
+					if (this.specialVars.contains(names[i])) {
+						if (dynamicNames == null) {
+							dynamicNames = new java.util.ArrayList<>(2);
+						}
+						this.dynamicBindings.push(names[i], vals[i]);
+						dynamicNames.add(names[i]);
+					}
+					else {
+						letEnv.define(names[i], vals[i]);
+					}
+				}
 			}
 		}
-		// Evaluate body expressions
-		LispVal result = LispNil.INSTANCE;
-		for (int i = 2; i < parts.size(); i++) {
-			result = eval(parts.get(i), letEnv);
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 2; i < parts.size(); i++) {
+				result = eval(parts.get(i), letEnv);
+			}
+			return result;
 		}
-		return result;
+		finally {
+			// Restore on ANY exit: normal return, a non-local exit (LispReturnSignal), or
+			// an error unwind (LispEvalException) -- both are unchecked, so finally
+			// fires.
+			if (dynamicNames != null) {
+				for (int i = dynamicNames.size() - 1; i >= 0; i--) {
+					this.dynamicBindings.pop(dynamicNames.get(i));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Evaluates {@code (progv symbols values body...)}: binds each symbol in the
+	 * runtime-computed {@code symbols} list dynamically to the corresponding value in
+	 * {@code values} (nil when the values list is shorter), for the extent of the body,
+	 * restored on any exit. Unlike {@code let}, the bound symbols need not have been
+	 * proclaimed special and are not permanently marked special.
+	 */
+	private LispVal evalProgv(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new LispEvalException(LispNames.PROGV + " expects a symbols list, a values list, and a body");
+		}
+		List<LispVal> symbols = properListElements(eval(parts.get(1), env), LispNames.PROGV);
+		List<LispVal> values = properListElements(eval(parts.get(2), env), LispNames.PROGV);
+		// From here on, variable reads must consult the dynamic store even for names that
+		// were never declared special (progv can bind an arbitrary symbol dynamically).
+		this.progvUsed = true;
+		List<String> pushed = new java.util.ArrayList<>(symbols.size());
+		try {
+			for (int i = 0; i < symbols.size(); i++) {
+				if (!(symbols.get(i) instanceof LispSymbol sym)) {
+					throw new LispEvalException(
+							LispNames.PROGV + " expects a list of symbols, got " + symbols.get(i).print());
+				}
+				LispVal value = i < values.size() ? values.get(i) : LispNil.INSTANCE;
+				this.dynamicBindings.push(sym.name(), value);
+				pushed.add(sym.name());
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 3; i < parts.size(); i++) {
+				result = eval(parts.get(i), env);
+			}
+			return result;
+		}
+		finally {
+			for (int i = pushed.size() - 1; i >= 0; i--) {
+				this.dynamicBindings.pop(pushed.get(i));
+			}
+		}
+	}
+
+	/** Returns the elements of a proper list value ({@code nil} or a cons chain). */
+	private static List<LispVal> properListElements(LispVal value, String operator) {
+		if (value instanceof LispNil) {
+			return List.of();
+		}
+		if (value instanceof LispCons cons) {
+			return cons.toList();
+		}
+		throw new LispEvalException(operator + " expects a list, got " + value.print());
 	}
 
 	private LispVal evalProgn(LispCons cons, Environment env) {
@@ -1744,7 +1900,16 @@ public final class LispEvaluator {
 		for (int i = 1; i < parts.size(); i += 2) {
 			LispSymbol name = (LispSymbol) parts.get(i);
 			value = eval(parts.get(i + 1), env);
-			env.set(name.name(), value);
+			String n = name.name();
+			// A special with an active dynamic binding is assigned in that binding
+			// (visible to callees within the extent); otherwise env.set walks to the
+			// global default (a special never has a lexical binding to shadow).
+			if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(n)) {
+				this.dynamicBindings.setCurrent(n, value);
+			}
+			else {
+				env.set(n, value);
+			}
 		}
 		return value;
 	}

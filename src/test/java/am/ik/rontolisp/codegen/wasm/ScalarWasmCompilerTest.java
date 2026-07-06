@@ -144,6 +144,18 @@ class ScalarWasmCompilerTest {
 	}
 
 	@Test
+	void rejectsSpecialVariableDeclaration() {
+		// Special (dynamically bound) variables need a global backing store the scalar
+		// backend does not have; a top-level defvar is rejected outright (only defun and
+		// wasm-export are allowed at top level), so a special can never be declared here.
+		assertThatThrownBy(() -> compile("""
+				(defvar *x* 1)
+				(defun f (n) (let ((*x* n)) *x*))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("--no-gc supports only");
+	}
+
+	@Test
 	void rejectsListIteration() {
 		// dolist iterates a list (car/cdr), which is ineligible; it is not an expanded
 		// core

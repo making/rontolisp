@@ -7,7 +7,8 @@ and a runnable example you can evaluate in your browser.
 |------|--------|-------------|
 | `quote` | `(quote expr)` or `'expr` | Returns the expression unevaluated |
 | `if` | `(if cond then else?)` | Conditional. `nil` is false, everything else is true |
-| `let` | `(let ((x 1) (y 2)) body...)` | Local variable bindings |
+| `let` | `(let ((x 1) (y 2)) body...)` | Local variable bindings (parallel). A name proclaimed special (`defvar`/`declaim`) is bound dynamically instead of lexically |
+| `progv` | `(progv symbols values body...)` | Dynamically bind a runtime-computed list of `symbols` to `values` for the body, restored on exit (interpreter only) |
 | `lambda` | `(lambda (params...) body...)` | Anonymous function |
 | `progn` | `(progn expr1 expr2...)` | Evaluate expressions in sequence, return the last |
 | `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |
@@ -18,8 +19,8 @@ and a runnable example you can evaluate in your browser.
 | `defclass` | `(defclass name (super?) ((slot options...)...))` | Define a class (static CLOS subset: single inheritance; `:initarg`/`:initform`/`:reader`/`:accessor` slot options). Returns the name |
 | `defgeneric` | `(defgeneric name (param...))` | Define a generic function dispatching on its first argument. Returns the name |
 | `defmethod` | `(defmethod name (param...) body...)` | Add a method to a generic function; the first parameter may carry an `(var (eql literal))`, class, or built-in-type specializer. Returns the name |
-| `defvar` | `(defvar name value?)` | Define a global variable, binding `value` only if `name` is not already bound (idempotent). With no `value`, leaves it unbound. Returns the name |
-| `defparameter` | `(defparameter name value)` | Define a global variable, **always** (re)binding `value` even if `name` is already bound. Returns the name |
+| `defvar` | `(defvar name value?)` | Define a global variable and proclaim it special, binding `value` only if `name` is not already bound (idempotent). With no `value`, leaves it unbound. Returns the name |
+| `defparameter` | `(defparameter name value)` | Define a global variable and proclaim it special, **always** (re)binding `value` even if `name` is already bound. Returns the name |
 | `defconstant` | `(defconstant name value)` | Like `defparameter` (rontolisp does not enforce constancy). Returns the name |
 | `function` | `(function name)` or `#'name` | Look up a function in the function namespace and return it as a value |
 | `defpackage` | `(defpackage name (:use ...) (:export ...))` | Define a new package (a top-level, read/compile-time directive; `:use` and `:export` clauses only). Returns the name |

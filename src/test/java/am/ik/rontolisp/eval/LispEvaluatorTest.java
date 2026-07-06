@@ -3826,7 +3826,7 @@ class LispEvaluatorTest {
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq while)");
 	}
 
 	@Test
@@ -6027,6 +6027,173 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(make-array 4 :displaced-to (make-array 3) :displaced-index-offset 2)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("too small");
+	}
+
+	// --- Dynamic (special) variable binding ---
+
+	@Test
+	void specialVarLetBindingHasDynamicExtent() {
+		// let of a defvar special rebinds it dynamically; the old value is restored on
+		// exit.
+		assertThat(evalMulti("""
+				(defvar *x* 10)
+				(list *x* (let ((*x* 20)) *x*) *x*)
+				""").print()).isEqualTo("(10 20 10)");
+	}
+
+	@Test
+	void specialVarBindingVisibleAcrossFunctionCalls() {
+		// The dynamic binding is visible to a called function, not just lexically nested
+		// code.
+		assertThat(evalMulti("""
+				(defvar *y* 1)
+				(defun get-y () *y*)
+				(list (get-y) (let ((*y* 2)) (get-y)) (get-y))
+				""").print()).isEqualTo("(1 2 1)");
+	}
+
+	@Test
+	void specialVarLetIsParallel() {
+		// let is parallel: a later init sees the OUTER value of an earlier special
+		// binding.
+		assertThat(evalMulti("""
+				(defvar *a* 1)
+				(let ((*a* 2) (b *a*)) (list *a* b))
+				""").print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void specialVarLetStarIsSequential() {
+		// let* is sequential: a later init sees the NEW value of an earlier special
+		// binding.
+		assertThat(evalMulti("""
+				(defvar *a* 1)
+				(let* ((*a* 2) (b *a*)) (list *a* b))
+				""").print()).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void specialVarSetqAffectsCurrentBinding() {
+		// setq of a bound special changes the dynamic binding, not the global default.
+		assertThat(evalMulti("""
+				(defvar *x* 10)
+				(list (let ((*x* 1)) (setq *x* 2) *x*) *x*)
+				""").print()).isEqualTo("(2 10)");
+	}
+
+	@Test
+	void specialVarNestedBindingsStack() {
+		assertThat(evalMulti("""
+				(defvar *x* 1)
+				(list *x* (let ((*x* 2)) (let ((*x* 3)) *x*)) (let ((*x* 2)) *x*) *x*)
+				""").print()).isEqualTo("(1 3 2 1)");
+	}
+
+	@Test
+	void specialVarRestoredOnNonLocalExit() {
+		// A return that unwinds through the special let must still restore the binding.
+		assertThat(evalMulti("""
+				(defvar *x* 0)
+				(defun outer () (dolist (i '(1)) (let ((*x* 9)) (return *x*))))
+				(list (outer) *x*)
+				""").print()).isEqualTo("(9 0)");
+	}
+
+	@Test
+	void specialVarRestoredOnErrorUnwind() {
+		// An error unwinding out of the let restores the binding (interpreter keeps
+		// running).
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(defvar *x* 7)"));
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(let ((*x* 99)) (error \"boom\"))")))
+			.isInstanceOf(LispEvalException.class);
+		assertThat(evaluator.eval(LispReader.readFromString("*x*")).print()).isEqualTo("7");
+	}
+
+	@Test
+	void defparameterIsSpecial() {
+		assertThat(evalMulti("""
+				(defparameter *p* 5)
+				(list (let ((*p* 6)) *p*) *p*)
+				""").print()).isEqualTo("(6 5)");
+	}
+
+	@Test
+	void declaimSpecialMakesVariableDynamic() {
+		assertThat(evalMulti("""
+				(declaim (special *s*))
+				(setq *s* 100)
+				(list (let ((*s* 7)) *s*) *s*)
+				""").print()).isEqualTo("(7 100)");
+	}
+
+	@Test
+	void proclaimSpecialMakesVariableDynamic() {
+		assertThat(evalMulti("""
+				(proclaim '(special *s*))
+				(setq *s* 100)
+				(list (let ((*s* 7)) *s*) *s*)
+				""").print()).isEqualTo("(7 100)");
+	}
+
+	@Test
+	void lexicalVariablesUnaffectedBySpecials() {
+		// A non-special var is still lexical: it does not leak into a called function.
+		assertThat(evalMulti("""
+				(defvar *x* 1)
+				(defun f (n) n)
+				(let ((x 5)) (f 10))
+				""").print()).isEqualTo("10");
+		// Shadowing a plain lexical stays lexical.
+		assertThat(evalMulti("(let ((a 1)) (let ((a 2)) a))").print()).isEqualTo("2");
+	}
+
+	@Test
+	void progvBindsRuntimeComputedSpecials() {
+		assertThat(evalMulti("(progv '(foo bar) '(10 20) (list (symbol-value 'foo) (symbol-value 'bar)))").print())
+			.isEqualTo("(10 20)");
+		// A progv-bound symbol reads directly too, and is unbound again after the extent.
+		assertThat(evalMulti("(progv '(foo) '(42) foo)").print()).isEqualTo("42");
+		assertThat(evalMulti("(progv '(foo) '(42) foo) (boundp 'foo)").print()).isEqualTo("nil");
+	}
+
+	@Test
+	void symbolValueAndBoundpSeeDynamicBinding() {
+		assertThat(evalMulti("""
+				(defvar *x* 1)
+				(let ((*x* 42)) (list (symbol-value '*x*) (boundp '*x*)))
+				""").print()).isEqualTo("(42 t)");
+	}
+
+	@Test
+	void specialVariablesAreThreadScoped() throws Exception {
+		// The flagship acceptance case: one shared evaluator (like the HTTP handler,
+		// which
+		// serves one virtual thread per request), concurrent dynamic bindings of the same
+		// special must not leak across threads.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(defvar *ctx* 0)"));
+		int threads = 8;
+		java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+		java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(threads);
+		java.util.List<java.util.concurrent.Future<String>> futures = new java.util.ArrayList<>();
+		for (int t = 1; t <= threads; t++) {
+			final int id = t;
+			futures.add(pool.submit(() -> {
+				barrier.await();
+				// Bind *ctx* to this thread's id, churn (widening the overlap window),
+				// and
+				// read it back; a shared-global implementation would see another thread's
+				// id.
+				LispVal r = evaluator
+					.eval(LispReader.readFromString("(let ((*ctx* " + id + ")) (dotimes (i 20000) (+ i 1)) *ctx*)"));
+				return r.print();
+			}));
+		}
+		for (int t = 1; t <= threads; t++) {
+			assertThat(futures.get(t - 1).get()).isEqualTo(String.valueOf(t));
+		}
+		pool.shutdown();
 	}
 
 }

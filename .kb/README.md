@@ -39,4 +39,5 @@ come here only when you need the "why exactly" behind a constraint.
 - [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime)
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` (+ top-level flattening), `check-type`/`assert`, shared type-specifier tests
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` local functions via let-bound lambdas + Lisp-2 call-site rewrite (labels = nil-then-setq letrec)
+- [dynamic-special-variables.md](dynamic-special-variables.md) -- dynamic (special) variable binding (`defvar`/`declaim special` + `let`/`let*`/`progv`): thread-scoped shallow binding on the interpreter, static-field/module-global save/restore on the compilers
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering (no runtime representation); floor-family + gethash secondary values, floor-family divisor

@@ -1,10 +1,39 @@
 # 84: Dynamic (special) variable binding
 
-Status: **not started** (design task). Elevated from `.todo/54` Phase 4's
-one-line "Dynamic/special variable binding" bullet into its own tracked item,
-because it is the shared root cause behind two live workarounds (`.todo/82`,
-`.todo/83`) and a hard prerequisite for the condition system (`.todo/39`). A deep
-evaluator/compiler change -- worth designing properly before writing code.
+Status: **DONE (2026-07-06)** for the core feature; two compile-path lite limits
+deferred (see "Shipped" below). Elevated from `.todo/54` Phase 4's one-line
+"Dynamic/special variable binding" bullet into its own tracked item, because it is
+the shared root cause behind two live workarounds (`.todo/82`, `.todo/83`) and a
+hard prerequisite for the condition system (`.todo/39`).
+
+## Shipped (2026-07-06)
+
+Model chosen: **shallow binding** -- a special's value lives in its ordinary
+global cell; a dynamic `let`/`let*`/`progv` is a save/set/restore over that cell.
+Specialness comes from `defvar`/`defparameter`/`defconstant` +
+`(declaim/proclaim (special ...))`, collected by the shared `SpecialVarCollector`.
+
+- **Interpreter** -- full fidelity: `DynamicBindings`, a per-evaluator
+  `ThreadLocal` of per-name value stacks (thread-scoped, so concurrent
+  HTTP-handler virtual threads don't clobber each other), restore in a `finally`
+  on normal / non-local (`return`) / error exit. `let`/`let*`/`progv`,
+  read/`setq`/`symbol-value`/`boundp` all dynamic-aware. `progv` is a special form.
+- **JVM / WASM (incl. component)** -- shallow binding over the static field /
+  module global: `Jvm/WasmLetCompiler` save the global into a temp, set the init,
+  restore after the body. Reads/`setq` already hit the global. Verified on all
+  four backends via the `special-variable-dynamic-binding` ci-spec case.
+- **`--no-gc`**: specials rejected (no globals; `defvar`/`declaim` already error at
+  top level).
+
+Deferred compile-path lite limits (interpreter is unaffected): (1) `progv` =
+compile error on JVM/WASM (runtime-computed symbol names can't index static
+fields / wasm globals); (2) a `return`/`return-from` unwinding ACROSS a
+special-`let` boundary does not restore the global (normal exit + error abort are
+fine) -- covering it needs pending-restores threaded through the
+`%block`/`return` machinery; (3) `symbol-value`/`eval` on a compiled backend see
+the global default, not an active dynamic binding (the `_genv` mirror isn't
+updated). Also not done: local `(declare (special x))`. Full mechanics:
+`.kb/dynamic-special-variables.md`.
 
 ## The gap
 
@@ -104,15 +133,22 @@ save/restore facility replacing the per-variable hand-rolled pair.
 - Does landing this let `.todo/82` be deleted, or only reframed as a principled
   "macro-time configuration" model (the expansion is still at compile time)?
 
-## Acceptance
+## Acceptance (as resolved)
 
-- `(let ((*x* 2)) ...)` restores `*x*` on normal exit, non-local exit and error
-  unwind, on all four backends; nested and `progv` work; concurrent HTTP-handler
-  requests do not see each other's bindings.
-- `.todo/83`'s `pushPackage`/`popPackage` are re-expressed through the shared
-  scoped-resolver-state facility (and `*readtable*` rides along), OR a conscious
-  decision is recorded to keep them separate.
-- Reassess `.todo/82`: delete or reframe.
+- `(let ((*x* 2)) ...)` restore + nested + concurrent-request isolation: **met on
+  all four backends** (interpreter fully; compilers on normal exit + error abort).
+  `progv`: **interpreter only** (compile error on JVM/WASM -- deferred). Non-local
+  exit across a special-`let`: **interpreter only** (compile-path deferred).
+- The `*package*` load-scoping fix's `pushPackage`/`popPackage` (former
+  `.todo/83`, shipped in git `1980e31`; details in `.kb/packages.md`):
+  **conscious decision recorded to keep it separate** -- `*package*` is
+  compile-time resolver state, not a runtime special, so the runtime mechanism
+  here does not (and should not) subsume it.
+  (`*readtable*` riding along on a keyed resolver stack remains a nice-to-have,
+  not done; the existing package-only pair is untouched.)
+- `.todo/82`: **reframed, not deleted** -- see that file. cl-who reads
+  `*html-mode*` at macro-expansion time, which a runtime special binding cannot
+  affect, so the replay is still required.
 
 Related: `.todo/54` Phase 4, `.todo/39` (conditions), `.todo/82` (setf replay),
 `.todo/83` (load/`*package*`), `.todo/41` (readtables), `.kb/packages.md`

@@ -156,11 +156,12 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   function** (`convert-tag-to-string-list`) at macro-expansion time — the CLOS
   static subset plus setf-function definitions (`(defun (setf html-mode) ...)`)
   make it load. Two lite limitations: **`:indent` (pretty-printed output) is
-  unsupported** — it needs dynamic (special) variable rebinding, so the default
-  compact rendering is what you get; and switching output mode must use
-  **`(setf (html-mode) :html5)`** (which mutates the global — a compile-time
-  constant on the compile path), not a `let` rebinding of `*html-mode*`. The
-  default `:xml` mode and `:html5` both render correctly.
+  unsupported**, so the default compact rendering is what you get; and switching
+  output mode must use **`(setf (html-mode) :html5)`** — cl-who reads the mode at
+  macro-expansion (compile) time, so a runtime `let` rebinding of `*html-mode*`
+  is not observed by the already-expanded macro (even though special variable
+  binding otherwise works). The default `:xml` mode and `:html5` both render
+  correctly.
 
 Runnable demos for the first three — with the per-backend commands and
 expected output — live in
@@ -173,9 +174,9 @@ specifiers, declarations (parsed no-ops, `deftype` included), the CLOS static
 subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value` with
 single dispatch, plus `(defun (setf name) ...)` setf functions), and the lite
 `define-condition`/`make-condition`/`warn`/`restart-case`/`return-from`
-idioms. Libraries built on the full metaobject protocol, the condition/restart
-system, dynamic (special) variable **rebinding** (`let` over a special) or
-pathnames do not load yet (see
+idioms, and dynamic (special) variable binding (`let`/`let*` over a `defvar`
+special). Libraries built on the full metaobject protocol, the condition/restart
+system, or pathnames do not load yet (see
 [Unsupported CL Features](missing-features.md)). For anything else, the
 practical use is structuring **your own** multi-file rontolisp projects —
 with `.asd` files that real ASDF can read too.

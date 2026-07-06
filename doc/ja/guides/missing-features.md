@@ -34,7 +34,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `#+` / `#-` / `*features*` / `#\| ... \|#` | 利用可能（[データ型](../reference/data-types.md#コメントフィーチャー条件features)参照） |
 | `#.` read 時評価 / `#:` の新規 uninterned シンボル | 利用不可（`#.` は read エラー、`.asd` ファイル内でのみ許容。`#:name` は普通のシンボルとして読まれ、designator として受理される） |
 | `require` / `provide` | 利用可能（[`require`](../reference/functions/require.md) 参照）。`*modules*` 変数は利用不可 |
-| `let` による動的（special）束縛 | レキシカルのみ |
+| `let` による動的（special）束縛 | 利用可能（`defvar`/`defparameter`/`declaim special` が名前を special 宣言する。`progv` はインタプリタのみ） |
 | 複素数 | 利用不可 |
 
 ## ユーザー定義マクロ（`defmacro`）
@@ -194,17 +194,26 @@ clause をサポートする、リテラルなトップレベルの read/コン�
 
 ## 動的（special）変数束縛
 
-`defvar` と `defparameter` はグローバル変数を作成しますが、rontolisp の束縛は
-**レキシカルのみ**です。`let` は special 変数に対して動的束縛を確立しません。
-`let` 内でグローバルを再束縛しても、そのスコープ内で呼び出される別途定義された
-関数からはそれが見えません。
+動的（special）変数束縛は **サポートされています**。`defvar`、`defparameter`、
+`defconstant`(および `(declaim (special *x*))`)は変数を special 宣言し、special
+な名前に対する `let`/`let*` は、レキシカルではなく **動的** 束縛を確立します。
+これはエクステント内で呼ばれた関数からも見え、脱出時に復元されます。
 
 ```console
 > (defvar *factor* 1)
 > (defun scale (n) (* n *factor*))
 > (let ((*factor* 10)) (scale 5))
-5        ; full Common Lisp would return 50
+50
 ```
+
+束縛は制御のスレッドごとに保持されるため、並行する
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+リクエストが互いの束縛を見ることはありません。**コンパイル済み** バックエンドに
+限り、2 つの制限があります(インタプリタには影響しません)。実行時に計算される
+シンボルのリストを束縛する [`progv`](../reference/special-forms/progv.md) は
+インタプリタのみで、JVM/WASM ではコンパイルエラーになります。また special な
+`let` の境界を **越えて** 脱出する `return`/`return-from` は、そこでグローバルを
+復元しません(通常の脱出とエラーによる中断は問題ありません)。
 
 ## 数値タワー
 
@@ -219,7 +228,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## その他の省略事項
 
-`destructuring-bind`、`symbol-macrolet`、`progv` も利用できません
-（[`eval-when`](../reference/macros/eval-when.md) は `progn` として扱われ、
-**利用できます**）。この一覧はすべてを網羅したものではありません。rontolisp は
+`symbol-macrolet` は利用できず、`progv` はインタプリタのみです(JVM/WASM では
+コンパイルエラー)。[`eval-when`](../reference/macros/eval-when.md) は `progn`
+として扱われ、**利用できます**。この一覧はすべてを網羅したものではありません。rontolisp は
 完全な標準ではなく、焦点を絞ったコアを実装しています。

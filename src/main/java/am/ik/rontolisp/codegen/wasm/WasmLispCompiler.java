@@ -23,6 +23,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -840,6 +841,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A reference compiles to global.get from any function body, so a defun/lambda
 		// can read a defvar/defparameter global. Indices follow declaration order.
 		Set<String> globals = GlobalVarCollector.collect(topLevelExprs);
+		// Special (dynamically bound) variables need the same module-global backing store
+		// (a
+		// let of a special save/restores over it), so union them in before indices are
+		// assigned; a let/let* of one of these names becomes a dynamic binding
+		// (WasmLetCompiler).
+		Set<String> specialVars = SpecialVarCollector.collect(topLevelExprs);
+		globals.addAll(specialVars);
 		Map<String, Integer> globalIndices = new HashMap<>();
 		int nextGlobalIndex = GLOBAL_FENV + 1;
 		for (String g : globals) {
@@ -902,6 +910,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
 			.globals(globals)
+			.specialVars(specialVars)
 			.globalIndices(globalIndices);
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
@@ -2259,6 +2268,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> globals = Set.of();
 
 		/**
+		 * Names of special (dynamically bound) variables (a subset of {@link #globals}).
+		 * A {@code let}/{@code let*} of one of these names saves its module-level wasm
+		 * global, assigns the init value, and restores the global on normal exit -- a
+		 * dynamic binding -- instead of allocating a fresh lexical local.
+		 */
+		Set<String> specialVars = Set.of();
+
+		/**
 		 * Maps a top-level global variable name to its module-level wasm global index.
 		 */
 		Map<String, Integer> globalIndices = Map.of();
@@ -2299,6 +2316,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
+			this.specialVars = builder.specialVars;
 			this.globalIndices = builder.globalIndices;
 		}
 
@@ -2333,6 +2351,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private ClosRegistry closRegistry = new ClosRegistry();
 
 			private Set<String> globals = Set.of();
+
+			private Set<String> specialVars = Set.of();
 
 			private Map<String, Integer> globalIndices = Map.of();
 
@@ -2398,6 +2418,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder globals(Set<String> globals) {
 				this.globals = globals;
+				return this;
+			}
+
+			Builder specialVars(Set<String> specialVars) {
+				this.specialVars = specialVars;
 				return this;
 			}
 

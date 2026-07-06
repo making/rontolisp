@@ -6,7 +6,8 @@
 |------|--------|-------------|
 | `quote` | `(quote expr)` or `'expr` | 式を評価せずに返します |
 | `if` | `(if cond then else?)` | 条件分岐。`nil` は偽、それ以外はすべて真です |
-| `let` | `(let ((x 1) (y 2)) body...)` | ローカル変数の束縛 |
+| `let` | `(let ((x 1) (y 2)) body...)` | ローカル変数の束縛(並列)。スペシャル宣言された名前(`defvar`/`declaim`)はレキシカルではなくダイナミックに束縛されます |
+| `progv` | `(progv symbols values body...)` | 実行時に計算した `symbols` のリストを `values` に本体の間ダイナミック束縛し、脱出時に復元します(インタプリタのみ) |
 | `lambda` | `(lambda (params...) body...)` | 無名関数 |
 | `progn` | `(progn expr1 expr2...)` | 式を順に評価し、最後の値を返します |
 | `setq` | `(setq name value ...)` | 変数に値を代入します。複数の `name value` ペアを受け付け、左から右へ代入し、最後の値を返します |
@@ -17,8 +18,8 @@
 | `defclass` | `(defclass name (super?) ((slot options...)...))` | クラスを定義します(静的 CLOS サブセット: 単一継承、`:initarg`/`:initform`/`:reader`/`:accessor` スロットオプション)。名前を返します |
 | `defgeneric` | `(defgeneric name (param...))` | 第 1 引数でディスパッチする総称関数を定義します。名前を返します |
 | `defmethod` | `(defmethod name (param...) body...)` | 総称関数にメソッドを追加します。第 1 引数に `(var (eql literal))`・クラス・組み込み型の specializer を付けられます。名前を返します |
-| `defvar` | `(defvar name value?)` | グローバル変数を定義します。`name` がまだ束縛されていない場合のみ `value` を束縛します(冪等)。`value` がなければ未束縛のままにします。名前を返します |
-| `defparameter` | `(defparameter name value)` | グローバル変数を定義します。`name` がすでに束縛されていても **常に** `value` を(再)束縛します。名前を返します |
+| `defvar` | `(defvar name value?)` | グローバル変数を定義してスペシャル宣言します。`name` がまだ束縛されていない場合のみ `value` を束縛します(冪等)。`value` がなければ未束縛のままにします。名前を返します |
+| `defparameter` | `(defparameter name value)` | グローバル変数を定義してスペシャル宣言します。`name` がすでに束縛されていても **常に** `value` を(再)束縛します。名前を返します |
 | `defconstant` | `(defconstant name value)` | `defparameter` と同様(rontolispは定数性を強制しません)。名前を返します |
 | `function` | `(function name)` or `#'name` | 関数名前空間から関数を検索し、値として返します |
 | `defpackage` | `(defpackage name (:use ...) (:export ...))` | 新しいパッケージを定義します(トップレベルの read/コンパイル時ディレクティブ。clause は `:use` と `:export` のみ)。名前を返します |
