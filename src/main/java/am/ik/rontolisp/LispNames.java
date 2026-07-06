@@ -1768,6 +1768,23 @@ public final class LispNames {
 	 */
 	public static final String DEFPACKAGE = "defpackage";
 
+	/**
+	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
+	 * loaded file: it makes the {@code PackageResolver} save the current package so a
+	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp
+	 * binding {@code *package*} around a {@code load}. Consumed by the resolver, never
+	 * reaching the backends. Paired with {@link #POP_PACKAGE}.
+	 */
+	public static final String PUSH_PACKAGE = "%push-package";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} after the spliced forms of a loaded
+	 * file: it makes the {@code PackageResolver} restore the package saved by the
+	 * matching {@link #PUSH_PACKAGE}. Consumed by the resolver, never reaching the
+	 * backends.
+	 */
+	public static final String POP_PACKAGE = "%pop-package";
+
 	/** The {@code :use} clause keyword of {@code defpackage}. */
 	public static final String USE_KEYWORD = ":use";
 

@@ -62,5 +62,6 @@ or it is replaced by a documented, data-driven "macro-time configuration"
 subsystem that no longer needs the setf-only special case -- and cl-who's
 `(setf (html-mode) :html5)` still switches mode on all four backends.
 
-Related: `.kb/asdf.md` (cl-who paragraph), `.todo/54` Phase 4 (special vars),
+Related: `.kb/asdf.md` (cl-who paragraph), `.todo/84` (dynamic special variable
+binding -- the root-cause feature), `.todo/54` Phase 4 (special vars),
 `.todo/76`/`.todo/81` (cl-who), `[[cl-who-loadable]]` memory.

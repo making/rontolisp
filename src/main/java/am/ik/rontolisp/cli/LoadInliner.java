@@ -256,8 +256,46 @@ public final class LoadInliner {
 			throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
 		}
 		ctx.loading().addLast(path);
-		expandInto(LispReader.readAllFromString(source, ctx.features()), out, ctx, SourceLoader.parentDir(path));
+		List<LispVal> forms = LispReader.readAllFromString(source, ctx.features());
+		// A file that selects a package with a top-level (in-package ...) must not leak
+		// it
+		// past the load: bracket the spliced forms with package save/restore markers so
+		// the
+		// PackageResolver (and, ahead of it, UserMacroExpander's resolver) restores the
+		// caller's package after the file, mirroring Common Lisp binding *package* for
+		// the
+		// duration of load. Files that never change the package (the common case -- a
+		// plain
+		// file of defuns) are spliced verbatim, so their output is unchanged. See
+		// .todo/83.
+		boolean bracket = selectsAPackage(forms);
+		if (bracket) {
+			out.add(marker(LispNames.PUSH_PACKAGE));
+		}
+		expandInto(forms, out, ctx, SourceLoader.parentDir(path));
+		if (bracket) {
+			out.add(marker(LispNames.POP_PACKAGE));
+		}
 		ctx.loading().removeLast();
+	}
+
+	/**
+	 * Whether any top-level form of a loaded file is an {@code (in-package ...)}
+	 * directive (in any package spelling, e.g. {@code (cl:in-package ...)}) -- the only
+	 * form that changes the resolver's current package and so the only one whose effect
+	 * must be confined to the load.
+	 */
+	private static boolean selectsAPackage(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+				String member = qn == null ? op.name() : qn.member();
+				if (LispNames.IN_PACKAGE.equals(member)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -455,6 +493,14 @@ public final class LoadInliner {
 
 	private static LispVal quotedSymbol(String name) {
 		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+	}
+
+	/**
+	 * A bare {@code (%push-package)} / {@code (%pop-package)} directive consumed by the
+	 * package resolver (see {@link #spliceFile}).
+	 */
+	private static LispVal marker(String name) {
+		return new LispCons(new LispSymbol(name), LispNil.INSTANCE);
 	}
 
 	private record RequireForm(String name, @Nullable String path) {

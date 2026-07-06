@@ -1,7 +1,48 @@
 # 83: `asdf:load-system` / `load` leaks `*package*` to the caller
 
-Status: **known divergence, worked around in an example** (found 2026-07-06 while
-adding `examples/http-handler-cl-who.lisp`). Low priority; a real fidelity gap.
+Status: **DONE (2026-07-06)**. The loading machinery now saves/restores the
+current package around a loaded file, so a file's internal `in-package` no longer
+leaks to the caller. The workaround `(in-package :cl-user)` was removed from
+`examples/http-handler-cl-who.lisp`.
+
+This fix is a hand-rolled dynamic binding of one variable (`*package*`); the
+general facility and how this can be folded into it are tracked in
+**`.todo/84` (dynamic special variable binding)**.
+
+## Fix (as shipped)
+
+A shared save/restore on the `PackageResolver` (`pushPackage`/`popPackage`, over
+an internal package stack), driven on both paths:
+
+- **Interpreter** (`LispEvaluator.loadFile`): wraps the per-file eval loop in
+  `packageResolver.pushPackage()` / `popPackage()` (in the existing `finally`), so
+  `load`/`require`/`asdf:load-system`/component files each bind the package for
+  their duration.
+- **Compile path** (`LoadInliner.spliceFile`): brackets a spliced file with
+  internal `(%push-package)` / `(%pop-package)` marker forms -- but ONLY when the
+  file has a top-level `in-package` (the common plain-defun file is spliced
+  verbatim, so existing output is byte-identical). `PackageResolver.resolve`
+  consumes the markers (save/restore, then replaced by a quoted package symbol,
+  like `in-package`); `UserMacroExpander` treats them as package directives so its
+  own resolver stack tracks the same save/restore and keeps them verbatim for the
+  compilers' resolution pass. `LispNames.PUSH_PACKAGE` / `POP_PACKAGE`.
+
+## Verification
+
+- `LispEvaluatorAsdfTest`: `*package*` stays `cl-user` after `asdf:load-system`,
+  and an unqualified `handle` defined after the load resolves via `'handle`.
+- `LoadInlinerTest`: the JVM compile path resolves a post-load unqualified defun,
+  and the marker bracketing is asserted.
+- Manually verified on all four backends (interpreter / JVM / WASM Preview 1 /
+  component): the leak repro prints `cl-user`, and the reworked
+  `examples/http-handler-cl-who.lisp` serves HTTP 200 with no `(in-package)`
+  workaround.
+
+---
+
+Original report (for context):
+
+Low priority; a real fidelity gap.
 
 ## Symptom
 

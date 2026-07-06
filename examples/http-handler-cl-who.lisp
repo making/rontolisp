@@ -8,9 +8,10 @@
 ;; The library is loaded with asdf, so pass its directory with --system-path
 ;; (the sources are vendored under src/test/resources/cl-who); the compile
 ;; paths splice the system in at compile time, so the produced class /
-;; component is self-contained. asdf:load-system leaves *package* pointing at
-;; the freshly loaded cl-who package, so switch back to cl-user before defining
-;; the handler that http-handler references by its (quoted) symbol.
+;; component is self-contained. asdf:load-system scopes the loaded sources'
+;; in-package to the load (like Common Lisp binding *package* around load), so
+;; the handler defined below stays in cl-user and http-handler resolves it by
+;; its (quoted) symbol.
 ;;
 ;; Supported on the interpreter and JVM backends (a blocking server on :8080,
 ;; one virtual thread per request) and the WASI component backend (--component),
@@ -28,7 +29,6 @@
 ;; Talk to it with:  curl http://127.0.0.1:8080/world
 
 (asdf:load-system :cl-who)
-(in-package :cl-user)
 
 (defun handle (request)
   (let ((path (getf request :path)))

@@ -114,6 +114,43 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void loadSystemDoesNotLeakTheCurrentPackageToTheCaller() {
+		// A component file's (in-package :my-lib) must be scoped to the load: after
+		// asdf:load-system returns, *package* is restored to the caller's package
+		// (cl-user), like Common Lisp's load binding *package* dynamically.
+		String output = run("""
+				(asdf:load-system :my-lib)
+				(princ *package*)""", Map.of(//
+				"my-lib.asd", """
+						(defsystem :my-lib
+						  :components ((:file "package") (:file "main" :depends-on ("package"))))""", //
+				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
+				"main.lisp", """
+						(in-package :my-lib)
+						(defun greet () 1)"""), List.of());
+		assertThat(output).isEqualTo("cl-user");
+	}
+
+	@Test
+	void aFunctionDefinedAfterALoadResolvesInTheCallersPackage() {
+		// The end-to-end shape of examples/http-handler-cl-who.lisp: a top-level defun
+		// AFTER the load, handed to a caller by unqualified quoted symbol, must resolve
+		// (the leaked package would define/quote it under the loaded system's package).
+		String output = run("""
+				(asdf:load-system :my-lib)
+				(defun handle () 42)
+				(print (funcall (symbol-function 'handle)))""", Map.of(//
+				"my-lib.asd", """
+						(defsystem :my-lib
+						  :components ((:file "package") (:file "main" :depends-on ("package"))))""", //
+				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
+				"main.lisp", """
+						(in-package :my-lib)
+						(defun greet () 1)"""), List.of());
+		assertThat(output).contains("42");
+	}
+
+	@Test
 	void missingSystemNamesTheTriedPathsAndTheRegistryOptions() {
 		assertThatThrownBy(() -> run("(asdf:load-system :nope)", Map.of(), List.of("registry")))
 			.isInstanceOf(IllegalStateException.class)

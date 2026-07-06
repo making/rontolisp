@@ -1,6 +1,8 @@
 package am.ik.rontolisp;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -37,6 +39,15 @@ public final class PackageResolver {
 	private final PackageRegistry registry;
 
 	private String currentPackage = LispNames.CL_USER_PKG;
+
+	/**
+	 * The stack of packages saved by a {@code %push-package} marker (and around a runtime
+	 * {@code load}), restored by the matching {@code %pop-package}. Keeps a loaded file's
+	 * internal {@code in-package} from leaking past the load, mirroring Common Lisp
+	 * binding {@code *package*} for the duration of {@code load} (see
+	 * {@link #pushPackage}).
+	 */
+	private final Deque<String> packageStack = new ArrayDeque<>();
 
 	/**
 	 * Whether resolution is inside a {@code defmacro}/{@code macrolet} definition, where
@@ -88,8 +99,38 @@ public final class PackageResolver {
 			if (LispNames.DEFPACKAGE.equals(member)) {
 				return resolveDefpackage(cons);
 			}
+			if (LispNames.PUSH_PACKAGE.equals(member)) {
+				pushPackage();
+				return quotedSymbol(this.currentPackage);
+			}
+			if (LispNames.POP_PACKAGE.equals(member)) {
+				popPackage();
+				return quotedSymbol(this.currentPackage);
+			}
 		}
 		return resolveForm(form);
+	}
+
+	/**
+	 * Saves the current package on the internal stack. Called by the runtime {@code load}
+	 * machinery (and via the {@code %push-package} marker on the compile path) before
+	 * descending into a loaded file, so the file's internal {@code in-package} is scoped
+	 * to the load and does not leak to the caller -- mirroring Common Lisp binding
+	 * {@code *package*} for the duration of {@code load}.
+	 */
+	public void pushPackage() {
+		this.packageStack.addLast(this.currentPackage);
+	}
+
+	/**
+	 * Restores the package saved by the matching {@link #pushPackage}. A pop without a
+	 * prior push leaves the current package unchanged (defensive: the marker pairs are
+	 * always balanced in practice).
+	 */
+	public void popPackage() {
+		if (!this.packageStack.isEmpty()) {
+			this.currentPackage = this.packageStack.removeLast();
+		}
 	}
 
 	private LispVal resolveInPackage(LispCons cons) {

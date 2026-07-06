@@ -178,7 +178,12 @@ public final class UserMacroExpander {
 		String name = sym.name();
 		int colon = name.lastIndexOf(':');
 		String member = colon >= 0 ? name.substring(colon + 1) : name;
-		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member);
+		// The %push-package/%pop-package markers LoadInliner brackets a loaded file with
+		// are package directives too: the macro evaluator's resolver must track their
+		// save/restore so a defmacro after a load resolves in the caller's package, and
+		// they are kept verbatim for the compilers' own resolution pass (see .todo/83).
+		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member)
+				|| LispNames.PUSH_PACKAGE.equals(member) || LispNames.POP_PACKAGE.equals(member);
 	}
 
 	private static boolean usesMacroexpand(LispVal form) {

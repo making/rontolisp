@@ -7,6 +7,7 @@ import java.util.Map;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.eval.QuicklispClient;
+import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.QuicklispTestSupport;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
@@ -160,9 +161,11 @@ class LoadInlinerTest {
 				               (:file "package")))""", //
 				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
 				"main.lisp", "(in-package :my-lib) (defun greet () 1)"));
+		// main.lisp selects a package, so it is bracketed with package save/restore
+		// markers (package.lisp has no in-package, so it is spliced verbatim).
 		assertThat(result.stream().map(LispVal::print)).containsExactly(
-				"(defpackage :my-lib (:use :cl) (:export :greet))", "(in-package :my-lib)", "(defun greet nil 1)",
-				"(quote my-lib)", "(print (my-lib:greet))");
+				"(defpackage :my-lib (:use :cl) (:export :greet))", "(%push-package)", "(in-package :my-lib)",
+				"(defun greet nil 1)", "(%pop-package)", "(quote my-lib)", "(print (my-lib:greet))");
 	}
 
 	@Test
@@ -238,6 +241,27 @@ class LoadInlinerTest {
 						"sq.lisp", "(defun sq (x) (* x x))"));
 		byte[] classBytes = new JvmLispCompiler("TestAsdf").compile(program);
 		assertThat(runMain(classBytes, "TestAsdf")).isEqualTo("49");
+	}
+
+	@Test
+	void loadSystemDoesNotLeakTheCurrentPackageToTheCallerOnJvm() throws Exception {
+		// A component file's (in-package :my-lib) must not leak past the load: a defun
+		// AFTER the load-system (referenced by unqualified quoted symbol) must resolve in
+		// the caller's package, the shape of examples/http-handler-cl-who.lisp. Without
+		// the package save/restore markers, `handle` would be defined under my-lib and
+		// the
+		// quoted 'handle lookup would fail (see .todo/83).
+		List<LispVal> program = UserMacroExpander.expand(inline("""
+				(asdf:load-system :my-lib)
+				(defun handle () 42)
+				(print (funcall (symbol-function 'handle)))""", Map.of(//
+				"my-lib.asd", """
+						(defsystem :my-lib
+						  :components ((:file "package") (:file "main" :depends-on ("package"))))""", //
+				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
+				"main.lisp", "(in-package :my-lib) (defun greet () 1)")));
+		byte[] classBytes = new JvmLispCompiler("TestPkgLeak").compile(program);
+		assertThat(runMain(classBytes, "TestPkgLeak")).isEqualTo("42");
 	}
 
 	// --- ql:quickload (compile-time download + asdf splice) ---
