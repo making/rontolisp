@@ -2519,6 +2519,17 @@ cases:
       (10 20)
       25
       (t nil)
+  - name: setf-function-definitions
+    source: |
+      (defvar *sf-mode* :xml)
+      (defun (setf sf-mode) (m) (setq *sf-mode* m))
+      (setf (sf-mode) :html5)
+      (print *sf-mode*)
+      (funcall #'(setf sf-mode) :sgml)
+      (print *sf-mode*)
+    expected: |
+      :html5
+      :sgml
   - name: clos-defgeneric-defmethod-eql-dispatch
     source: |
       (defgeneric clos-describe-it (x))

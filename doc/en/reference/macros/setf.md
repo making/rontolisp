@@ -13,3 +13,12 @@ Multiple place/value pairs assign sequentially (each pair sees the effects of th
 ```lisp
 (let ((x (list 1 2 3))) (setf (car x) 9 (second x) 8) x) ; => (9 8 3)
 ```
+
+Beyond the built-in places, a `defstruct` accessor, a CLOS `:accessor`, and a user-defined *setf-function* (`(defun (setf name) ...)`) are also places: `(setf (name arg...) value)` calls the writer with the new value first. See [defun](../special-forms/defun.md) for setf-function definitions.
+
+```lisp
+(defvar *mode* :xml)
+(defun (setf my-mode) (m) (setq *mode* m))
+(setf (my-mode) :html5)
+*mode* ; => :html5
+```

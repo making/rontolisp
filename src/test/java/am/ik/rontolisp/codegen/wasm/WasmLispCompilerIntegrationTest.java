@@ -5315,6 +5315,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAndRunSetfFunctionDefinition() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *mode* :xml)
+				(defun (setf my-mode) (m) (setq *mode* m))
+				(setf (my-mode) :html5)
+				(print *mode*)
+				(funcall #'(setf my-mode) :sgml)
+				(print *mode*)
+				""")).isEqualTo(":html5\n:sgml");
+	}
+
+	@Test
 	void compileAndRunDefgenericDefmethodEqlDispatch() throws Exception {
 		assertThat(compileAndRun("""
 				(defgeneric describe-it (x))

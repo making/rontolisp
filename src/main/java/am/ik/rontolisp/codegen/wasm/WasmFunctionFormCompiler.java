@@ -36,6 +36,12 @@ final class WasmFunctionFormCompiler {
 			WasmLambdaCompiler.compileValue(lambdaForm, ctx);
 			return;
 		}
+		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(designator);
+		if (setfPlace != null) {
+			// #'(setf name): the writer defun installed under the mangled internal name.
+			compileNamed(LispMacroExpander.setfFunctionName(setfPlace.name()), ctx);
+			return;
+		}
 		if (designator instanceof LispSymbol sym) {
 			compileNamed(sym.name(), ctx);
 			return;

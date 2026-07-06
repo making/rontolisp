@@ -2402,6 +2402,23 @@ public final class LispMacroExpander {
 				{
 					Integer structSlot = structAccessors.get(accessor);
 					if (structSlot != null) {
+						if (structSlot == SETF_FUNCTION_MARKER) {
+							// (setf (name args...) val) -> (funcall #'%setf-name val
+							// args...):
+							// the CL setf-function convention passes the new value as the
+							// first
+							// argument (it is the last required param of the setf lambda
+							// list).
+							List<LispVal> call = new java.util.ArrayList<>();
+							call.add(new LispSymbol(LispNames.FUNCALL));
+							call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+									new LispSymbol(setfFunctionName(accessor)))));
+							call.add(value);
+							for (int i = 1; i < placeParts.size(); i++) {
+								call.add(placeParts.get(i));
+							}
+							yield listToCons(call);
+						}
 						// (setf (point-x p) val) -> (setf (nth <position> p) val)
 						LispVal nthcdrExpr = listToCons(List.of(new LispSymbol(LispNames.NTHCDR),
 								new LispInteger(structSlot), placeParts.get(1)));
@@ -2421,6 +2438,42 @@ public final class LispMacroExpander {
 	private static final String SETF_VAR = "__setf";
 
 	private static final String SETF_TARGET_VAR = "__setf_tgt";
+
+	/**
+	 * Registry marker (a struct-accessor "slot position") flagging a setf-function place
+	 * rather than a defstruct slot. Slot positions are always 1-based (&gt;= 1), so a
+	 * negative value is an unambiguous sentinel that lets {@code (defun (setf NAME) ...)}
+	 * share the same {@code structAccessors} map that {@code expandSetf} already threads
+	 * through every backend.
+	 */
+	public static final int SETF_FUNCTION_MARKER = -1;
+
+	/**
+	 * Internal function-namespace name for a {@code (setf NAME)} writer function.
+	 * {@code (defun (setf html-mode) ...)} installs a plain defun under this mangled
+	 * name, and {@code (setf (html-mode) v)} / {@code #'(setf html-mode)} resolve to it.
+	 * @param placeName the accessor name in the {@code (setf NAME)} designator
+	 * @return the mangled internal function name
+	 */
+	public static String setfFunctionName(String placeName) {
+		return "%setf-" + placeName;
+	}
+
+	/**
+	 * If {@code nameForm} is a {@code (setf NAME)} function-name designator (as used in
+	 * {@code defun} and {@code #'}), returns the place {@code NAME} symbol; otherwise
+	 * {@code null}.
+	 * @param nameForm the candidate function-name designator
+	 * @return the place symbol, or {@code null} if not a setf-function designator
+	 */
+	public static @Nullable LispSymbol setfFunctionPlaceName(LispVal nameForm) {
+		if (nameForm instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.SETF.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol place
+				&& rest.cdr() instanceof LispNil) {
+			return place;
+		}
+		return null;
+	}
 
 	private static LispVal expandSetfWithRplaca(LispVal target, LispVal value) {
 		// (let ((__setf_tgt target)) (let ((__setf value)) (rplaca __setf_tgt __setf)
@@ -5630,14 +5683,20 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
-		if (program.stream().noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f))) {
+		if (program.stream().noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f))) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
 		java.util.Set<String> placedDispatchers = new java.util.HashSet<>();
 		for (LispVal form : program) {
-			if (isDefstructForm(form)) {
+			if (isSetfFunctionDefun(form)) {
+				// (defun (setf name) ...) -> a plain (defun %setf-name ...); register the
+				// place so (setf (name ...) v) expands to a call through the writer
+				// defun.
+				out.add(rewriteSetfFunctionDefun((LispCons) form, structAccessors));
+			}
+			else if (isDefstructForm(form)) {
 				out.addAll(expandDefstruct((LispCons) form, structAccessors));
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
@@ -5666,6 +5725,20 @@ public final class LispMacroExpander {
 			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry));
 		}
 		return out;
+	}
+
+	private static boolean isSetfFunctionDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && setfFunctionPlaceName(rest.car()) != null;
+	}
+
+	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol place = java.util.Objects.requireNonNull(setfFunctionPlaceName(parts.get(1)));
+		structAccessors.put(place.name(), SETF_FUNCTION_MARKER);
+		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
+		rewritten.set(1, new LispSymbol(setfFunctionName(place.name())));
+		return listToCons(rewritten);
 	}
 
 	private static boolean isClosDefinitionForm(LispVal form) {

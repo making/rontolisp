@@ -13,3 +13,12 @@
 ```lisp
 (let ((x (list 1 2 3))) (setf (car x) 9 (second x) 8) x) ; => (9 8 3)
 ```
+
+組み込みの place のほかに、`defstruct` のアクセサ、CLOS の `:accessor`、そしてユーザー定義の *setf 関数* (`(defun (setf name) ...)`) も place になります。`(setf (name arg...) value)` は新しい値を先頭にして書き込み関数を呼び出します。setf 関数の定義については [defun](../special-forms/defun.md) を参照してください。
+
+```lisp
+(defvar *mode* :xml)
+(defun (setf my-mode) (m) (setq *mode* m))
+(setf (my-mode) :html5)
+*mode* ; => :html5
+```

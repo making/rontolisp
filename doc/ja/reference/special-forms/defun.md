@@ -50,3 +50,16 @@
 > (f 1)
 Function expects 2 arguments, got 1
 ```
+
+## setf 関数名
+
+`name` にはプレーンなシンボルの代わりに `(setf name)` のリストを指定できます。これは *setf 関数* を定義します。すなわち、`name` を `setf` のプレースとして使ったときに呼び出される書き込み用の関数です。新しい値は最初の引数として渡されます(Common Lisp の慣習どおり、setf ラムダリストの最後の必須パラメータになります)。したがって `(setf (name arg...) value)` は書き込み関数を `value` に続いて `arg...` の順で呼び出します。`#'(setf name)` を通じてファーストクラス値としても扱えます。
+
+```lisp
+(defvar *mode* :xml)
+(defun (setf my-mode) (m) (setq *mode* m))
+(setf (my-mode) :html5)
+*mode* ; => :html5
+```
+
+サポートされるのは `(setf name)` 形式(2 要素のリスト)のみです。`(setf ...)` 名に対する `symbol-function`/`fboundp` はサポートされません。

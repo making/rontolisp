@@ -54,6 +54,30 @@ those sites, so struct places compose with them for free. The zero-arg
 `expandSetf(cons)` (used by `macroexpand-1`) sees an empty registry, so
 macroexpand of a struct-place setf errors — known, minor.
 
+## setf-functions: `(defun (setf name) ...)` reuse the same registry
+
+`(defun (setf name) (args... newval) body)` defines a *setf-function* — the
+writer invoked by `(setf (name arg...) val)`. It reuses the `structAccessors`
+map as another place kind: the name is stored with the sentinel value
+`LispMacroExpander.SETF_FUNCTION_MARKER` (`-1`; real slot positions are always
+`>= 1`), so no new registry has to be threaded through the three setf dispatch
+sites. The writer defun is installed under the mangled internal name
+`LispMacroExpander.setfFunctionName(name)` = `%setf-<name>` (a `%`-prefixed
+symbol, already JVM/WASM-compilable), NOT in the ordinary function namespace.
+`expandSetf`'s default branch, on seeing the marker, expands
+`(setf (name arg...) val)` to `(funcall #'%setf-name val arg...)` — the new
+value first, per the CL setf lambda-list convention. `#'(setf name)` resolves to
+`#'%setf-name` in `evalFunction` (interpreter) and the two
+`Jvm/WasmFunctionFormCompiler`s. `LispMacroExpander.setfFunctionPlaceName`
+recognizes the `(setf name)` two-element designator everywhere. Registration
+happens in `evalDefun` (interpreter) and, on the compile path, in
+`expandTopLevelDefinitions` (which also rewrites the defun name to `%setf-name`
+so Pass 1 collects it as an ordinary defun; its early-return guard now also
+fires on a setf-function defun). Non-goal: `symbol-function`/`fboundp` of a
+`(setf ...)` name. Pinning: `LispEvaluatorTest#setfFunction*`,
+`Jvm/WasmLispCompilerIntegrationTest#compileAndRunSetfFunctionDefinition`,
+ci-spec `setf-function-definitions`. Roadmap: `.todo/79`.
+
 ## Package-qualified names
 
 Expansion happens POST-resolution, so names are derived textually from the

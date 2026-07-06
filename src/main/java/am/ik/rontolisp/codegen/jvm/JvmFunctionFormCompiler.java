@@ -35,6 +35,12 @@ final class JvmFunctionFormCompiler {
 			JvmLambdaCompiler.compileValue(lambdaForm, ctx, className);
 			return;
 		}
+		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(designator);
+		if (setfPlace != null) {
+			// #'(setf name): the writer defun installed under the mangled internal name.
+			compileNamed(LispMacroExpander.setfFunctionName(setfPlace.name()), ctx, className);
+			return;
+		}
 		if (designator instanceof LispSymbol sym) {
 			compileNamed(sym.name(), ctx, className);
 			return;

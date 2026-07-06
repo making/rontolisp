@@ -5585,6 +5585,26 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setfFunctionDefinitionAndCallSite() {
+		assertThat(evalMulti("""
+				(defvar *mode* :xml)
+				(defun (setf my-mode) (m) (setq *mode* m))
+				(setf (my-mode) :html5)
+				*mode*
+				""").print()).isEqualTo(":html5");
+	}
+
+	@Test
+	void setfFunctionIsFirstClassViaFunctionQuote() {
+		assertThat(evalMulti("""
+				(defvar *mode* :xml)
+				(defun (setf my-mode) (m) (setq *mode* m))
+				(funcall #'(setf my-mode) :sgml)
+				*mode*
+				""").print()).isEqualTo(":sgml");
+	}
+
+	@Test
 	void defgenericDefmethodEqlDispatchAndFuncall() {
 		assertThat(evalMulti("""
 				(defgeneric describe-it (x))

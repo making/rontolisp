@@ -1275,13 +1275,24 @@ public final class LispEvaluator {
 
 	private LispVal evalDefun(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol name = (LispSymbol) parts.get(1);
+		LispVal nameForm = parts.get(1);
+		// (defun (setf name) ...): a setf-function. Install it under the mangled internal
+		// name %setf-name and register the place so (setf (name ...) v) dispatches to it.
+		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(nameForm);
+		String funcName;
+		if (setfPlace != null) {
+			funcName = LispMacroExpander.setfFunctionName(setfPlace.name());
+			this.structAccessors.put(setfPlace.name(), LispMacroExpander.SETF_FUNCTION_MARKER);
+		}
+		else {
+			funcName = ((LispSymbol) nameForm).name();
+		}
 		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()));
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
-		this.globalEnv.defineFunction(name.name(),
+		this.globalEnv.defineFunction(funcName,
 				new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
-		return name;
+		return nameForm;
 	}
 
 	private LispVal evalDefstruct(LispCons cons, Environment env) {
@@ -1600,6 +1611,11 @@ public final class LispEvaluator {
 		if (designator instanceof LispCons lambdaForm && lambdaForm.car() instanceof LispSymbol op
 				&& LispNames.LAMBDA.equals(op.name())) {
 			return evalLambdaForm(lambdaForm, env);
+		}
+		// #'(setf name): the writer function installed by (defun (setf name) ...).
+		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(designator);
+		if (setfPlace != null) {
+			return resolveFunction(LispMacroExpander.setfFunctionName(setfPlace.name()));
 		}
 		if (designator instanceof LispSymbol sym) {
 			return resolveFunction(sym.name());

@@ -37,7 +37,7 @@ expansion time on interpreter + compiled JVM.
 | --- | --- |
 | `make-string` (`:initial-element`/`:element-type`), `replace` (seq, `:start1`), `write-sequence` on strings (`:start`/`:end`), `constantp`, `lower-case-p`, `upper-case-p`, `streamp` + `stream` type-specifier in `check-type` | `.todo/77` **DONE** (all 4 backends + native E2E) |
 | `defgeneric` + `defmethod` (widened to the full static CLOS subset: `defclass`/`make-instance`/`slot-value` + `defgeneric`/`defmethod` with eql/class/type specializers) -- cl-who's `convert-tag-to-string-list` | **DONE** 2026-07-06 (all 4 backends + native E2E; `.kb/clos.md`) |
-| `defun (setf html-mode)` -- setf-function definitions | `.todo/79` |
+| `defun (setf html-mode)` -- setf-function definitions | `.todo/79` **DONE** 2026-07-06 (all 4 backends + native E2E; `.kb/defstruct.md`) |
 | `loop for s being the {external-\|present-}symbols of PACKAGE` (hyperdoc block; lite/empty iteration is acceptable) | `.todo/80` |
 | Vendor + 4-backend load + fix residue + ci-spec/e2e | `.todo/81` (integration/close) |
 
@@ -54,7 +54,7 @@ lite limitations rather than fixed here:
 - **`:indent t` is broken** (indentation reads the global, not the `let`
   rebinding) and **`(let ((*html-mode* :sgml)) ...)` rebinding is ignored**.
 - **The supported way to switch mode is `(setf (html-mode) :html5)`** -- that
-  mutates the global and works once `.todo/79` lands.
+  mutates the global and works now that `.todo/79` has landed.
 
 True fix = dynamic/special variable binding, which is the "Dynamic/special
 variable binding" item in `.todo/54` Phase 4 (a deep evaluator+compiler

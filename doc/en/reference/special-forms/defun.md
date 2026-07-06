@@ -50,3 +50,16 @@ Calling a function with too few required arguments (or too many, for a fixed-ari
 > (f 1)
 Function expects 2 arguments, got 1
 ```
+
+## setf-function names
+
+The `name` may be a `(setf name)` list instead of a plain symbol. This defines a *setf-function*: the writer invoked when `name` is used as a `setf` place. The new value is passed as the first argument (it is the last required parameter of the setf lambda list, per the Common Lisp convention), so `(setf (name arg...) value)` calls the writer with `value` followed by `arg...`. The function is also first-class through `#'(setf name)`.
+
+```lisp
+(defvar *mode* :xml)
+(defun (setf my-mode) (m) (setq *mode* m))
+(setf (my-mode) :html5)
+*mode* ; => :html5
+```
+
+Only the `(setf name)` form is supported (a two-element list); `symbol-function`/`fboundp` of a `(setf ...)` name is not.
