@@ -77,6 +77,14 @@ public final class UserMacroExpander {
 				// Register (no body execution) so later macro bodies can call it.
 				macroEval.eval(expanded);
 			}
+			if (isOperator(expanded, LispNames.DEFCLASS) || isOperator(expanded, LispNames.DEFGENERIC)
+					|| isOperator(expanded, LispNames.DEFMETHOD)) {
+				// Register the CLOS definitions too (constructor/accessor/method defuns
+				// plus the generic's dispatcher) so a macro body can call a generic
+				// function at expansion time -- cl-who's process-tag chain does. The
+				// form stays in the program for the compilers' own splice.
+				macroEval.eval(expanded);
+			}
 			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
 			// canonical form is not always re-resolvable by the compilers' own pass
 			// (a cl: symbol canonicalizes to a bare name, which is an error to spell
@@ -163,6 +171,49 @@ public final class UserMacroExpander {
 					return rebuild(parts, 2, macroEval, parts.get(1));
 				case LispNames.DEFUN:
 					return rebuild(parts, 3, macroEval, parts.get(1), parts.get(2));
+				case LispNames.DEFMETHOD: {
+					// (defmethod name (params...) body...): the name and the lambda list
+					// (specializers included) stay, the body is expressions. A malformed
+					// form (e.g. a qualifier) is left for the expansion to report.
+					if (parts.size() < 3) {
+						return form;
+					}
+					return rebuild(parts, 3, macroEval, parts.get(1), parts.get(2));
+				}
+				case LispNames.DEFGENERIC:
+					// (defgeneric name (params...) options...): everything is data.
+					return form;
+				case LispNames.DEFCLASS: {
+					// (defclass name (super) ((slot options...)...) options...): names
+					// and options stay, only :initform values are expressions.
+					if (parts.size() < 4 || !(parts.get(3) instanceof LispCons slotsCons)) {
+						return form;
+					}
+					List<LispVal> newSlots = new ArrayList<>();
+					for (LispVal slot : slotsCons.toList()) {
+						if (slot instanceof LispCons slotCons && slotCons.isProperList()) {
+							List<LispVal> slotParts = slotCons.toList();
+							List<LispVal> newSlot = new ArrayList<>();
+							newSlot.add(slotParts.get(0));
+							for (int i = 1; i < slotParts.size(); i += 2) {
+								newSlot.add(slotParts.get(i));
+								if (i + 1 < slotParts.size()) {
+									boolean initform = slotParts.get(i) instanceof LispSymbol key
+											&& ":initform".equals(key.name());
+									newSlot.add(initform ? expandAll(slotParts.get(i + 1), macroEval)
+											: slotParts.get(i + 1));
+								}
+							}
+							newSlots.add(properList(newSlot));
+						}
+						else {
+							newSlots.add(slot);
+						}
+					}
+					List<LispVal> newParts = new ArrayList<>(parts);
+					newParts.set(3, properList(newSlots));
+					return properList(newParts);
+				}
 				case LispNames.DEFSTRUCT: {
 					// (defstruct name (slot default)...): the struct and slot names stay,
 					// only slot defaults are expressions.

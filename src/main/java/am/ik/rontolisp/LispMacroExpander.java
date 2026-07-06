@@ -2272,6 +2272,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors) {
+		return expandSetf(cons, structAccessors, EMPTY_CLOS_REGISTRY);
+	}
+
+	/**
+	 * Like {@link #expandSetf(LispCons, java.util.Map)}, but additionally treats
+	 * {@code (slot-value obj 'slot)} as a place through the CLOS class registry:
+	 * {@code (setf (slot-value obj 'slot) val)} expands like
+	 * {@code (setf (nth <position> obj) val)}.
+	 * @param cons the setf expression
+	 * @param structAccessors accessor name to 1-based slot position
+	 * @param closRegistry the CLOS registry resolving slot-value places
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors,
+			ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() > 3) {
 			if (parts.size() % 2 == 0) {
@@ -2281,7 +2296,7 @@ public final class LispMacroExpander {
 			for (int i = 1; i < parts.size(); i += 2) {
 				forms.add(expandSetf(
 						(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), parts.get(i), parts.get(i + 1))),
-						structAccessors));
+						structAccessors, closRegistry));
 			}
 			return makeProgn(forms);
 		}
@@ -2341,6 +2356,14 @@ public final class LispMacroExpander {
 				case LispNames.FILL_POINTER ->
 					// (setf (fill-pointer vector) val) -> (%set-fill-pointer vector val).
 					listToCons(List.of(new LispSymbol(LispNames.SET_FILL_POINTER), placeParts.get(1), value));
+				case LispNames.SLOT_VALUE -> {
+					// (setf (slot-value obj 'slot) val) -> (setf (nth <position> obj)
+					// val): the position comes from the CLOS class registry.
+					List<LispVal> nthParts = ((LispCons) expandSlotValue(placeCons, closRegistry)).toList();
+					LispVal nthcdrExpr = listToCons(
+							List.of(new LispSymbol(LispNames.NTHCDR), nthParts.get(1), nthParts.get(2)));
+					yield expandSetfWithRplaca(nthcdrExpr, value);
+				}
 				case LispNames.NTH -> {
 					// (setf (nth n x) val) -> (let ((__setf val)) (rplaca (nthcdr n x)
 					// __setf) __setf)
@@ -4697,6 +4720,670 @@ public final class LispMacroExpander {
 	private static boolean isDefstructForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& LispNames.DEFSTRUCT.equals(sym.name());
+	}
+
+	private static final String CLOS_OBJ_VAR = "__obj";
+
+	/** A shared never-mutated registry for the expandSetf overloads without CLOS. */
+	private static final ClosRegistry EMPTY_CLOS_REGISTRY = new ClosRegistry();
+
+	/**
+	 * Expands {@code (defclass name (superclass?) ((slot options...)...) options...)}
+	 * into the defuns it generates -- an internal keyword constructor plus one defun per
+	 * {@code :reader}/{@code :accessor} -- and records the class (slot layout, ancestor
+	 * set) in the registry. An instance is a tagged proper list
+	 * {@code (%class-<name> value...)} whose slot layout is the superclass slots (in
+	 * inheritance order) followed by the class's own slots, so single inheritance keeps
+	 * every inherited slot at the same position in all descendants.
+	 *
+	 * <pre>
+	 * (defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed))) ->
+	 * (defun %make-dog (&amp;key ((:name name) nil) ((:breed breed) "mixed")) (list '%class-dog name breed))
+	 * (defun dog-breed (__obj) (nth 2 __obj))
+	 * </pre>
+	 *
+	 * Lite subset: at most one superclass; a slot's {@code :initarg} defaults to the
+	 * slot-name keyword and its {@code :initform} to nil (no unbound-slot state);
+	 * {@code :accessor} names are also recorded in {@code structAccessors} so they are
+	 * {@code setf} places. Unsupported class/slot options throw
+	 * {@link UnsupportedOperationException}; the class option
+	 * {@code (:documentation ...)} is accepted and ignored.
+	 * @param cons the defclass expression (canonical, package-resolved spelling)
+	 * @param closRegistry mutated: the class is registered
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @return the generated top-level forms, in definition order
+	 */
+	public static List<LispVal> expandDefclass(LispCons cons, ClosRegistry closRegistry,
+			java.util.Map<String, Integer> structAccessors) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new IllegalArgumentException(
+					LispNames.DEFCLASS + " expects a class name and a superclass list: " + cons.print());
+		}
+		String className = nameSym.name();
+		// Superclass list: empty or exactly one defclass-defined class.
+		ClosRegistry.ClassInfo superInfo = null;
+		if (parts.get(2) instanceof LispCons superCons) {
+			List<LispVal> supers = superCons.toList();
+			if (supers.size() > 1) {
+				throw new UnsupportedOperationException(LispNames.DEFCLASS
+						+ " supports at most one superclass (no multiple inheritance): " + cons.print());
+			}
+			if (!(supers.get(0) instanceof LispSymbol superSym)) {
+				throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a superclass name: " + cons.print());
+			}
+			superInfo = closRegistry.findClass(superSym.name());
+			if (superInfo == null) {
+				throw new IllegalArgumentException(LispNames.DEFCLASS + ": unknown superclass " + superSym.name()
+						+ " (a superclass must be defined by defclass first)");
+			}
+		}
+		else if (!(parts.get(2) instanceof LispNil)) {
+			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a superclass list: " + cons.print());
+		}
+		// Class options after the slot list: only (:documentation "...") is accepted.
+		for (int i = 4; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& ":documentation".equals(optSym.name()))) {
+				throw new UnsupportedOperationException(
+						LispNames.DEFCLASS + " option is not supported: " + parts.get(i).print());
+			}
+		}
+		List<ClosRegistry.SlotSpec> ownSlots = new java.util.ArrayList<>();
+		if (parts.size() > 3 && parts.get(3) instanceof LispCons slotsCons) {
+			for (LispVal spec : slotsCons.toList()) {
+				ownSlots.add(parseDefclassSlot(spec, cons));
+			}
+		}
+		else if (parts.size() > 3 && !(parts.get(3) instanceof LispNil)) {
+			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a slot list: " + cons.print());
+		}
+		List<ClosRegistry.SlotSpec> slots = new java.util.ArrayList<>(
+				superInfo == null ? List.of() : superInfo.slots());
+		for (ClosRegistry.SlotSpec own : ownSlots) {
+			if (slots.stream().anyMatch(s -> s.baseName().equals(own.baseName()))) {
+				throw new IllegalArgumentException(LispNames.DEFCLASS + ": slot " + own.baseName()
+						+ " is already defined in a superclass: " + cons.print());
+			}
+			slots.add(own);
+		}
+		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
+		if (superInfo != null) {
+			ancestors.addAll(superInfo.ancestors());
+		}
+		ancestors.add(ClosRegistry.normalize(className));
+		closRegistry.registerClass(new ClosRegistry.ClassInfo(className, superInfo == null ? null : superInfo.name(),
+				List.copyOf(slots), java.util.Set.copyOf(ancestors)));
+		for (int i = 0; i < slots.size(); i++) {
+			closRegistry.registerSlotPosition(slots.get(i).baseName(), i + 1);
+		}
+		// (defun %make-<base> (&key ((:initarg slot) initform)...) (list '%class-<name>
+		// slot...))
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(className);
+		String prefix = qn == null ? "" : qn.pkg() + "::";
+		String base = qn == null ? className : qn.member();
+		LispVal quotedTag = listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + className)));
+		List<LispVal> lambdaList = new java.util.ArrayList<>();
+		if (!slots.isEmpty()) {
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_KEY));
+			for (ClosRegistry.SlotSpec slot : slots) {
+				LispVal keywordAndVar = listToCons(
+						List.of(new LispSymbol(slot.initargKeyword()), new LispSymbol(slot.name())));
+				lambdaList.add(listToCons(List.of(keywordAndVar, slot.initform())));
+			}
+		}
+		List<LispVal> listCall = new java.util.ArrayList<>();
+		listCall.add(new LispSymbol(LispNames.LIST));
+		listCall.add(quotedTag);
+		for (ClosRegistry.SlotSpec slot : slots) {
+			listCall.add(new LispSymbol(slot.name()));
+		}
+		List<LispVal> forms = new java.util.ArrayList<>();
+		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + "%make-" + base),
+				lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList), listToCons(listCall))));
+		// Reader/accessor defuns for the class's OWN slots (inherited slots keep the
+		// defuns their defining class generated; positions are shared).
+		LispSymbol obj = new LispSymbol(CLOS_OBJ_VAR);
+		LispVal params = listToCons(List.<LispVal>of(obj));
+		for (int i = 0; i < slots.size(); i++) {
+			ClosRegistry.SlotSpec slot = slots.get(i);
+			if (!ownSlots.contains(slot)) {
+				continue;
+			}
+			int position = i + 1;
+			LispVal body = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(position), obj));
+			for (String reader : slot.readers()) {
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(reader), params, body)));
+			}
+			for (String accessor : slot.accessors()) {
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, body)));
+				structAccessors.put(accessor, position);
+			}
+		}
+		return forms;
+	}
+
+	/** Parses one defclass slot specification; see {@link #expandDefclass}. */
+	private static ClosRegistry.SlotSpec parseDefclassSlot(LispVal spec, LispCons defclassForm) {
+		LispSymbol slotSym;
+		LispVal initform = LispNil.INSTANCE;
+		String initarg = null;
+		List<String> readers = new java.util.ArrayList<>();
+		List<String> accessors = new java.util.ArrayList<>();
+		if (spec instanceof LispSymbol s) {
+			slotSym = s;
+		}
+		else if (spec instanceof LispCons specCons && specCons.car() instanceof LispSymbol s) {
+			slotSym = s;
+			List<LispVal> specParts = specCons.toList();
+			if (specParts.size() % 2 == 0) {
+				throw new IllegalArgumentException(
+						LispNames.DEFCLASS + " expects (slot-name option value ...): " + spec.print());
+			}
+			for (int i = 1; i < specParts.size(); i += 2) {
+				if (!(specParts.get(i) instanceof LispSymbol keySym && keySym.isKeyword())) {
+					throw new IllegalArgumentException(
+							LispNames.DEFCLASS + " expects a keyword slot option, got " + specParts.get(i).print());
+				}
+				LispVal optValue = specParts.get(i + 1);
+				switch (keySym.name()) {
+					case ":initarg" -> {
+						if (!(optValue instanceof LispSymbol kw && kw.isKeyword())) {
+							throw new IllegalArgumentException(
+									LispNames.DEFCLASS + " :initarg expects a keyword: " + spec.print());
+						}
+						initarg = kw.name();
+					}
+					case ":initform" -> initform = optValue;
+					case ":reader" -> readers.add(requireSlotFunctionName(optValue, spec));
+					case ":accessor" -> accessors.add(requireSlotFunctionName(optValue, spec));
+					default -> throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option "
+							+ keySym.name() + " is not supported: " + spec.print());
+				}
+			}
+		}
+		else {
+			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a slot name or (name options...), got "
+					+ spec.print() + " in " + defclassForm.print());
+		}
+		PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(slotSym.name());
+		String baseName = slotQn == null ? slotSym.name() : slotQn.member();
+		return new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initarg == null ? ":" + baseName : initarg,
+				List.copyOf(readers), List.copyOf(accessors));
+	}
+
+	private static String requireSlotFunctionName(LispVal value, LispVal spec) {
+		if (!(value instanceof LispSymbol sym) || sym.isKeyword()) {
+			throw new IllegalArgumentException(
+					LispNames.DEFCLASS + " :reader/:accessor expects a function name: " + spec.print());
+		}
+		return sym.name();
+	}
+
+	/**
+	 * Expands {@code (make-instance 'name :initarg value ...)} into a call of the class's
+	 * generated keyword constructor. The class name must be a literal quoted symbol
+	 * naming a class already defined by {@code defclass} (the static subset has no
+	 * runtime class table).
+	 * @param cons the make-instance expression
+	 * @param closRegistry the class registry
+	 * @return the constructor call
+	 */
+	public static LispVal expandMakeInstance(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + " expects a class name: " + cons.print());
+		}
+		LispSymbol classSym = quotedSymbol(parts.get(1));
+		if (classSym == null) {
+			throw new UnsupportedOperationException(
+					LispNames.MAKE_INSTANCE + " requires a literal quoted class name: " + cons.print());
+		}
+		ClosRegistry.ClassInfo info = closRegistry.findClass(classSym.name());
+		if (info == null) {
+			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name());
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+		String ctor = qn == null ? "%make-" + info.name() : qn.pkg() + "::%make-" + qn.member();
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(ctor));
+		call.addAll(parts.subList(2, parts.size()));
+		return listToCons(call);
+	}
+
+	/**
+	 * Expands {@code (slot-value obj 'slot)} into the slot's {@code nth} position. The
+	 * slot name must be a literal quoted symbol whose position is the same in every class
+	 * declaring it (guaranteed within one inheritance chain; two unrelated classes
+	 * reusing a slot name at different positions make it ambiguous -- use the accessor
+	 * instead).
+	 * @param cons the slot-value expression
+	 * @param closRegistry the class registry
+	 * @return the {@code (nth position obj)} expression
+	 */
+	public static LispVal expandSlotValue(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(
+					LispNames.SLOT_VALUE + " expects (slot-value obj 'slot): " + cons.print());
+		}
+		LispSymbol slotSym = quotedSymbol(parts.get(2));
+		if (slotSym == null) {
+			throw new UnsupportedOperationException(
+					LispNames.SLOT_VALUE + " requires a literal quoted slot name: " + cons.print());
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		String baseName = qn == null ? slotSym.name() : qn.member();
+		Integer position = closRegistry.slotPosition(baseName);
+		if (position == null) {
+			throw new IllegalArgumentException(LispNames.SLOT_VALUE + ": unknown slot " + baseName);
+		}
+		if (position == -1) {
+			throw new UnsupportedOperationException(LispNames.SLOT_VALUE + ": slot name " + baseName
+					+ " has different positions in unrelated classes; use the accessor");
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(position), parts.get(1)));
+	}
+
+	/** The symbol inside a literal {@code (quote sym)} form, or null. */
+	private static @Nullable LispSymbol quotedSymbol(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons cdr && cdr.car() instanceof LispSymbol sym) {
+			return sym;
+		}
+		return null;
+	}
+
+	/**
+	 * Registers {@code (defgeneric name (params...) options...)} in the registry.
+	 * Required parameters only (lite); the only supported option is
+	 * {@code (:documentation "...")}. A generic implicitly created by an earlier
+	 * {@code defmethod} is updated (congruence-checked) instead of redefined.
+	 * @param cons the defgeneric expression
+	 * @param closRegistry mutated: the generic is registered
+	 * @return the normalized generic-function name
+	 */
+	public static String registerDefgeneric(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new IllegalArgumentException(
+					LispNames.DEFGENERIC + " expects a name and a lambda list: " + cons.print());
+		}
+		List<String> paramNames = parseRequiredOnlyLambdaList(parts.get(2), LispNames.DEFGENERIC, cons);
+		String documentation = null;
+		for (int i = 3; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& ":documentation".equals(optSym.name()) && optCons.cdr() instanceof LispCons docCons
+					&& docCons.car() instanceof LispString doc) {
+				documentation = doc.value();
+				continue;
+			}
+			throw new UnsupportedOperationException(
+					LispNames.DEFGENERIC + " option is not supported: " + parts.get(i).print());
+		}
+		ClosRegistry.GenericInfo existing = closRegistry.findGeneric(nameSym.name());
+		if (existing != null) {
+			if (existing.paramNames().size() != paramNames.size()) {
+				throw new IllegalArgumentException(
+						LispNames.DEFGENERIC + " " + nameSym.name() + ": lambda list does not match its methods ("
+								+ existing.paramNames().size() + " required parameters)");
+			}
+			existing.paramNames(paramNames);
+			existing.documentation(documentation);
+		}
+		else {
+			ClosRegistry.GenericInfo info = new ClosRegistry.GenericInfo(nameSym.name(), paramNames);
+			info.documentation(documentation);
+			closRegistry.registerGeneric(info);
+		}
+		return ClosRegistry.normalize(nameSym.name());
+	}
+
+	private static List<String> parseRequiredOnlyLambdaList(LispVal lambdaList, String operator, LispCons form) {
+		List<String> names = new java.util.ArrayList<>();
+		if (lambdaList instanceof LispNil) {
+			return names;
+		}
+		if (!(lambdaList instanceof LispCons paramsCons)) {
+			throw new IllegalArgumentException(operator + " expects a lambda list: " + form.print());
+		}
+		for (LispVal param : paramsCons.toList()) {
+			if (!(param instanceof LispSymbol sym) || sym.name().startsWith("&")) {
+				throw new UnsupportedOperationException(
+						operator + " lambda lists support required parameters only: " + form.print());
+			}
+			names.add(sym.name());
+		}
+		return names;
+	}
+
+	/**
+	 * Registers {@code (defmethod name (params...) body...)} in the registry and expands
+	 * it into the method-body defun ({@code %<name>--m<i>}). Only the FIRST parameter may
+	 * carry a specializer: {@code (var (eql literal))}, {@code (var
+	 * class-name)} for a {@code defclass} class, {@code (var type-name)} for a built-in
+	 * type, or {@code (var t)}/plain {@code var} for the default method. Method
+	 * qualifiers ({@code :before}/{@code :after}/{@code :around}) are not supported.
+	 * Defining the same specializer again replaces the previous method. The caller
+	 * regenerates the dispatcher with {@link #generateDispatcher}.
+	 * @param cons the defmethod expression
+	 * @param closRegistry mutated: the method is registered (and the generic implicitly
+	 * created when no defgeneric preceded it)
+	 * @return the generated method-body defun
+	 */
+	public static LispVal expandDefmethod(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new IllegalArgumentException(
+					LispNames.DEFMETHOD + " expects a name and a lambda list: " + cons.print());
+		}
+		if (parts.get(2) instanceof LispSymbol qualifier) {
+			throw new UnsupportedOperationException(
+					LispNames.DEFMETHOD + " qualifiers are not supported: " + qualifier.name() + " in " + cons.print());
+		}
+		List<String> paramNames = new java.util.ArrayList<>();
+		ClosRegistry.SpecializerKind kind = ClosRegistry.SpecializerKind.DEFAULT;
+		LispVal eqlValue = null;
+		String specializerName = null;
+		if (parts.get(2) instanceof LispCons paramsCons) {
+			List<LispVal> params = paramsCons.toList();
+			for (int i = 0; i < params.size(); i++) {
+				LispVal param = params.get(i);
+				if (param instanceof LispSymbol sym) {
+					if (sym.name().startsWith("&")) {
+						throw new UnsupportedOperationException(LispNames.DEFMETHOD
+								+ " lambda lists support required parameters only: " + cons.print());
+					}
+					paramNames.add(sym.name());
+					continue;
+				}
+				if (!(param instanceof LispCons paramCons) || !(paramCons.car() instanceof LispSymbol varSym)
+						|| paramCons.toList().size() != 2) {
+					throw new IllegalArgumentException(
+							LispNames.DEFMETHOD + " expects var or (var specializer), got " + param.print());
+				}
+				if (i > 0) {
+					throw new UnsupportedOperationException(LispNames.DEFMETHOD
+							+ " supports a specializer on the first parameter only: " + cons.print());
+				}
+				paramNames.add(varSym.name());
+				LispVal spec = paramCons.toList().get(1);
+				if (spec instanceof LispCons specCons && specCons.car() instanceof LispSymbol specHead
+						&& LispNames.EQL.equals(plainTypeName(specHead))) {
+					kind = ClosRegistry.SpecializerKind.EQL;
+					eqlValue = parseEqlSpecializerValue(specCons, cons);
+				}
+				else if (spec instanceof LispSymbol specSym) {
+					String plainName = plainTypeName(specSym);
+					ClosRegistry.ClassInfo specClass = closRegistry.findClass(specSym.name());
+					if ("t".equals(plainName)) {
+						kind = ClosRegistry.SpecializerKind.DEFAULT;
+					}
+					else if (specClass != null) {
+						kind = ClosRegistry.SpecializerKind.CLASS;
+						specializerName = ClosRegistry.normalize(specClass.name());
+					}
+					else if (isSupportedTypeSpecializer(plainName)) {
+						kind = ClosRegistry.SpecializerKind.TYPE;
+						specializerName = plainName;
+					}
+					else {
+						throw new IllegalArgumentException(LispNames.DEFMETHOD + ": unknown specializer "
+								+ specSym.name() + " (a class must be defined by defclass before the method)");
+					}
+				}
+				else if (spec instanceof LispTrue) {
+					kind = ClosRegistry.SpecializerKind.DEFAULT;
+				}
+				else {
+					throw new IllegalArgumentException(
+							LispNames.DEFMETHOD + ": unsupported specializer " + spec.print());
+				}
+			}
+		}
+		else if (!(parts.get(2) instanceof LispNil)) {
+			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects a lambda list: " + cons.print());
+		}
+		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(nameSym.name());
+		if (generic == null) {
+			generic = new ClosRegistry.GenericInfo(nameSym.name(), paramNames);
+			closRegistry.registerGeneric(generic);
+		}
+		else if (generic.paramNames().size() != paramNames.size()) {
+			throw new IllegalArgumentException(
+					LispNames.DEFMETHOD + " " + nameSym.name() + ": lambda list does not match the generic function ("
+							+ generic.paramNames().size() + " required parameters)");
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
+		String functionName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
+				+ generic.nextMethodIndex();
+		String key = switch (kind) {
+			case DEFAULT -> "t";
+			case EQL -> "eql " + java.util.Objects.requireNonNull(eqlValue).print();
+			case CLASS -> "class " + specializerName;
+			case TYPE -> "type " + specializerName;
+		};
+		generic.methods().put(key, new ClosRegistry.MethodInfo(kind, eqlValue, specializerName, functionName));
+		List<LispVal> defun = new java.util.ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(new LispSymbol(functionName));
+		defun.add(paramNames.isEmpty() ? LispNil.INSTANCE
+				: listToCons(paramNames.stream().<LispVal>map(LispSymbol::new).toList()));
+		defun.addAll(parts.subList(3, parts.size()));
+		return listToCons(defun);
+	}
+
+	/** The literal compared against by an {@code (eql ...)} specializer. */
+	private static LispVal parseEqlSpecializerValue(LispCons specCons, LispCons defmethodForm) {
+		List<LispVal> specParts = specCons.toList();
+		if (specParts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects (eql literal), got " + specCons.print());
+		}
+		LispVal value = specParts.get(1);
+		LispSymbol quoted = quotedSymbol(value);
+		if (quoted != null) {
+			value = quoted;
+		}
+		if (value instanceof LispSymbol || value instanceof LispInteger || value instanceof LispBigInteger
+				|| value instanceof LispDouble || value instanceof LispRatio || value instanceof LispChar
+				|| value instanceof LispTrue || value instanceof LispNil) {
+			return value;
+		}
+		throw new UnsupportedOperationException(LispNames.DEFMETHOD
+				+ " eql specializers support keyword/symbol/number/character literals only: " + defmethodForm.print());
+	}
+
+	/** Whether a plain (package-stripped) type name is usable as a TYPE specializer. */
+	private static boolean isSupportedTypeSpecializer(String plainName) {
+		return atomicTypePredicate(plainName) != null || switch (plainName) {
+			case "boolean", "unsigned-byte", "vector", "simple-vector", "array", "simple-array", "sequence" -> true;
+			default -> false;
+		};
+	}
+
+	/**
+	 * Generates the dispatcher defun of a generic function: a chain testing the first
+	 * argument against each method's specializer, most specific first ({@code eql}
+	 * methods, then class methods -- subclass before superclass -- then specific built-in
+	 * types, then general built-in types), falling back to the default method or, without
+	 * one, to {@code (error "No applicable method: ...")}. The dispatcher is an ordinary
+	 * defun, so {@code #'name}/{@code funcall} work naturally.
+	 * @param genericName the generic-function name (any spelling)
+	 * @param closRegistry the registry holding the generic and the class ancestor sets
+	 * @return the dispatcher defun
+	 */
+	public static LispVal generateDispatcher(String genericName, ClosRegistry closRegistry) {
+		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
+		if (generic == null) {
+			throw new IllegalArgumentException("Unknown generic function: " + genericName);
+		}
+		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
+		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
+		methods.sort(java.util.Comparator.comparingInt(m -> specializerRank(m, closRegistry)));
+		ClosRegistry.MethodInfo defaultMethod = methods.stream()
+			.filter(m -> m.kind() == ClosRegistry.SpecializerKind.DEFAULT)
+			.findFirst()
+			.orElse(null);
+		LispVal chain = defaultMethod != null ? methodCall(defaultMethod, params) : listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString("No applicable method: " + generic.name())));
+		LispVal arg = params.isEmpty() ? LispNil.INSTANCE : params.get(0);
+		for (ClosRegistry.MethodInfo method : methods.reversed()) {
+			if (method.kind() == ClosRegistry.SpecializerKind.DEFAULT) {
+				continue;
+			}
+			chain = makeIf(specializerTest(method, arg, closRegistry), methodCall(method, params), chain);
+		}
+		List<LispVal> defun = new java.util.ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(new LispSymbol(generic.name()));
+		defun.add(params.isEmpty() ? LispNil.INSTANCE : listToCons(params));
+		defun.add(chain);
+		return listToCons(defun);
+	}
+
+	private static LispVal methodCall(ClosRegistry.MethodInfo method, List<LispVal> params) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(method.functionName()));
+		call.addAll(params);
+		return listToCons(call);
+	}
+
+	private static LispVal specializerTest(ClosRegistry.MethodInfo method, LispVal arg, ClosRegistry closRegistry) {
+		return switch (method.kind()) {
+			case EQL -> makeEqlSpecializerTest(arg, java.util.Objects.requireNonNull(method.eqlValue()));
+			case CLASS -> {
+				// (if (consp arg) (or (equal (car arg) '%class-X) ...) nil): the tag
+				// set of the class and its (statically known) descendants; equal is
+				// content-safe on WASM, like the defstruct predicate.
+				List<LispVal> tests = new java.util.ArrayList<>();
+				LispVal carArg = callOf(LispNames.CAR, arg);
+				String className = java.util.Objects.requireNonNull(method.specializerName());
+				for (String tag : closRegistry.descendantTags(className)) {
+					tests.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), carArg,
+							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(tag))))));
+				}
+				LispVal tagTest = tests.size() == 1 ? tests.get(0) : orOf(tests);
+				yield makeIf(callOf(LispNames.CONSP, arg), tagTest, LispNil.INSTANCE);
+			}
+			case TYPE -> makeTypeTest(arg, new LispSymbol(java.util.Objects.requireNonNull(method.specializerName())));
+			case DEFAULT -> LispTrue.INSTANCE;
+		};
+	}
+
+	private static LispVal orOf(List<LispVal> tests) {
+		List<LispVal> or = new java.util.ArrayList<>();
+		or.add(new LispSymbol(LispNames.OR));
+		or.addAll(tests);
+		return listToCons(or);
+	}
+
+	/**
+	 * The test of an {@code (eql literal)} specializer. Symbols (including keywords)
+	 * compare with {@code equal} -- content-safe on WASM, where symbols are interned
+	 * strings -- and numbers/characters with {@code eql}.
+	 */
+	private static LispVal makeEqlSpecializerTest(LispVal arg, LispVal value) {
+		if (value instanceof LispNil) {
+			return callOf(LispNames.NULL, arg);
+		}
+		if (value instanceof LispSymbol || value instanceof LispTrue) {
+			LispVal literal = value instanceof LispSymbol ? listToCons(List.of(new LispSymbol(LispNames.QUOTE), value))
+					: value;
+			return listToCons(List.of(new LispSymbol(LispNames.EQUAL), arg, literal));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.EQL), arg, value));
+	}
+
+	/**
+	 * The specificity rank of a method (smaller dispatches earlier): eql (0), classes
+	 * (10-99, deeper subclass first), built-in types (200s, subtypes before their
+	 * supertypes), default (1000). The sort is stable, so equally-ranked (disjoint)
+	 * specializers keep definition order.
+	 */
+	private static int specializerRank(ClosRegistry.MethodInfo method, ClosRegistry closRegistry) {
+		return switch (method.kind()) {
+			case EQL -> 0;
+			case CLASS -> {
+				ClosRegistry.ClassInfo info = closRegistry.classes().get(method.specializerName());
+				yield Math.max(10, 100 - (info == null ? 1 : info.ancestors().size()));
+			}
+			case TYPE -> switch (java.util.Objects.requireNonNull(method.specializerName())) {
+				case "null" -> 200;
+				case "keyword", "unsigned-byte" -> 210;
+				case "boolean" -> 212;
+				case "rational", "ratio" -> 225;
+				case "number", "real", "vector", "simple-vector", "simple-string", "base-string" -> 230;
+				case "list", "array", "simple-array" -> 235;
+				case "sequence", "atom" -> 240;
+				default -> 220;
+			};
+			case DEFAULT -> 1000;
+		};
+	}
+
+	/**
+	 * Splices every top-level {@code defstruct}/{@code defclass}/{@code defgeneric}/
+	 * {@code defmethod} of a program into its generated defuns. Extends
+	 * {@link #expandTopLevelDefstructs}: classes and methods are collected across the
+	 * WHOLE program first, then each generic's dispatcher defun is inserted at its
+	 * defgeneric's position (or its first defmethod's position when no defgeneric
+	 * exists), so class-specializer descendant sets and method sets are complete
+	 * regardless of definition order (Pass 1 collects all defuns before compiling
+	 * bodies). The compilers run this after package resolution and before lambda-list
+	 * desugaring (the generated constructors use {@code &key}); a CLOS form anywhere else
+	 * is rejected by the expression compilers.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated: classes, generics, and methods
+	 * @return the program with each definition replaced by its generated defuns
+	 */
+	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
+		if (program.stream().noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f))) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
+		java.util.Set<String> placedDispatchers = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			if (isDefstructForm(form)) {
+				out.addAll(expandDefstruct((LispCons) form, structAccessors));
+			}
+			else if (isNamedForm(form, LispNames.DEFCLASS)) {
+				out.addAll(expandDefclass((LispCons) form, closRegistry, structAccessors));
+			}
+			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
+				String generic = registerDefgeneric((LispCons) form, closRegistry);
+				if (placedDispatchers.add(generic)) {
+					dispatcherSlots.put(out.size(), generic);
+					out.add(LispNil.INSTANCE);
+				}
+			}
+			else if (isNamedForm(form, LispNames.DEFMETHOD)) {
+				out.add(expandDefmethod((LispCons) form, closRegistry));
+				String generic = ClosRegistry.normalize(((LispSymbol) ((LispCons) form).toList().get(1)).name());
+				if (placedDispatchers.add(generic)) {
+					dispatcherSlots.put(out.size(), generic);
+					out.add(LispNil.INSTANCE);
+				}
+			}
+			else {
+				out.add(form);
+			}
+		}
+		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
+			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry));
+		}
+		return out;
+	}
+
+	private static boolean isClosDefinitionForm(LispVal form) {
+		return isNamedForm(form, LispNames.DEFCLASS) || isNamedForm(form, LispNames.DEFGENERIC)
+				|| isNamedForm(form, LispNames.DEFMETHOD);
+	}
+
+	private static boolean isNamedForm(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
 	/**

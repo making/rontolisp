@@ -36,7 +36,7 @@ expansion time on interpreter + compiled JVM.
 | Gap | Unit |
 | --- | --- |
 | `make-string` (`:initial-element`/`:element-type`), `replace` (seq, `:start1`), `write-sequence` on strings (`:start`/`:end`), `constantp`, `lower-case-p`, `upper-case-p`, `streamp` + `stream` type-specifier in `check-type` | `.todo/77` **DONE** (all 4 backends + native E2E) |
-| `defgeneric` + `defmethod` (CLOS-lite: single default method, optional eql-specializer) -- cl-who's `convert-tag-to-string-list` | `.todo/78` |
+| `defgeneric` + `defmethod` (widened to the full static CLOS subset: `defclass`/`make-instance`/`slot-value` + `defgeneric`/`defmethod` with eql/class/type specializers) -- cl-who's `convert-tag-to-string-list` | **DONE** 2026-07-06 (all 4 backends + native E2E; `.kb/clos.md`) |
 | `defun (setf html-mode)` -- setf-function definitions | `.todo/79` |
 | `loop for s being the {external-\|present-}symbols of PACKAGE` (hyperdoc block; lite/empty iteration is acceptable) | `.todo/80` |
 | Vendor + 4-backend load + fix residue + ci-spec/e2e | `.todo/81` (integration/close) |

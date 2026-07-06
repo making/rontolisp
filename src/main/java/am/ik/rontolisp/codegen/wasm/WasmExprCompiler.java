@@ -309,6 +309,13 @@ final class WasmExprCompiler {
 					// reaching this compiler is nested inside another form.
 					throw new UnsupportedOperationException(
 							LispNames.DEFSTRUCT + " is only supported as a top-level form");
+				case LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD ->
+					// Like defstruct: the CLOS forms are spliced before Pass 1.
+					throw new UnsupportedOperationException(sym.name() + " is only supported as a top-level form");
+				case LispNames.MAKE_INSTANCE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry), ctx);
+				case LispNames.SLOT_VALUE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx);
 				case LispNames.DEFVAR -> WasmDefvarCompiler.compile(cons, ctx, false);
 				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> WasmDefvarCompiler.compile(cons, ctx, true);
 				case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
@@ -318,8 +325,8 @@ final class WasmExprCompiler {
 				case LispNames.NTHCDR -> WasmNthcdrCompiler.compile(cons, ctx);
 				case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
 				case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
-				case LispNames.SETF ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors), ctx);
+				case LispNames.SETF -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx);
 				case LispNames.PUSH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx);
 				case LispNames.POP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx);
 				case LispNames.REMF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx);

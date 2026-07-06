@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -652,11 +653,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
-		// Splice top-level defstructs into their generated defuns before lambda-list
-		// desugaring (the generated constructor uses &key) so Pass 1 collects them as
-		// ordinary functions; the registry makes accessors setf-able places.
+		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
+		// generated defuns before lambda-list desugaring (the generated constructors
+		// use &key) so Pass 1 collects them as ordinary functions; the registries make
+		// accessors setf-able places and resolve make-instance/slot-value/dispatch.
 		Map<String, Integer> structAccessors = new HashMap<>();
-		program = LispMacroExpander.expandTopLevelDefstructs(program, structAccessors);
+		ClosRegistry closRegistry = new ClosRegistry();
+		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -897,6 +900,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.component(this.component)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.structAccessors(structAccessors)
+			.closRegistry(closRegistry)
 			.globals(globals)
 			.globalIndices(globalIndices);
 
@@ -2242,6 +2246,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> structAccessors = Map.of();
 
 		/**
+		 * The CLOS registry (classes, generics, slot positions), collected by the
+		 * pre-pass in {@link WasmLispCompiler#compile}; {@code make-instance}/
+		 * {@code slot-value} expansion resolves through it. Shared across every context.
+		 */
+		ClosRegistry closRegistry = new ClosRegistry();
+
+		/**
 		 * Names of top-level global variables; each has a wasm global in
 		 * {@link #globalIndices}.
 		 */
@@ -2286,6 +2297,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.component = builder.component;
 			this.userDefunNames = builder.userDefunNames;
 			this.structAccessors = builder.structAccessors;
+			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
 			this.globalIndices = builder.globalIndices;
 		}
@@ -2317,6 +2329,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> userDefunNames = Set.of();
 
 			private Map<String, Integer> structAccessors = Map.of();
+
+			private ClosRegistry closRegistry = new ClosRegistry();
 
 			private Set<String> globals = Set.of();
 
@@ -2374,6 +2388,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder structAccessors(Map<String, Integer> structAccessors) {
 				this.structAccessors = structAccessors;
+				return this;
+			}
+
+			Builder closRegistry(ClosRegistry closRegistry) {
+				this.closRegistry = closRegistry;
 				return this;
 			}
 

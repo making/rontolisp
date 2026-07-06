@@ -60,4 +60,6 @@ categories:
       - { slug: define-compiler-macro, name: define-compiler-macro }
       - { slug: restart-case, name: restart-case }
       - { slug: make-condition, name: make-condition }
+      - { slug: make-instance, name: make-instance }
+      - { slug: slot-value, name: slot-value }
       - { slug: documentation, name: documentation }

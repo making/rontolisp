@@ -1107,8 +1107,8 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
-      (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
+      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)
+      (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
       249
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
       (call field new proxy static)
@@ -2519,6 +2519,35 @@ cases:
       (10 20)
       25
       (t nil)
+  - name: clos-defgeneric-defmethod-eql-dispatch
+    source: |
+      (defgeneric clos-describe-it (x))
+      (defmethod clos-describe-it (x) (list :default x))
+      (defmethod clos-describe-it ((x (eql :br))) (list :special x))
+      (print (list (clos-describe-it 5) (clos-describe-it :br)))
+      (print (funcall #'clos-describe-it 9))
+    expected: |
+      ((:default 5) (:special :br))
+      (:default 9)
+  - name: clos-defclass-slots-inheritance-and-dispatch
+    source: |
+      (defclass clos-animal () ((name :initarg :name :accessor clos-animal-name)))
+      (defclass clos-dog (clos-animal) ((breed :initarg :breed :initform "mixed" :reader clos-dog-breed)))
+      (defgeneric clos-speak (x))
+      (defmethod clos-speak ((x clos-dog)) "woof")
+      (defmethod clos-speak ((x clos-animal)) "...")
+      (defmethod clos-speak ((x integer)) "number")
+      (defmethod clos-speak (x) "?")
+      (setq clos-d (make-instance 'clos-dog :name "Rex"))
+      (print (list (clos-speak clos-d) (clos-speak (make-instance 'clos-animal :name "A")) (clos-speak 1) (clos-speak "s")))
+      (print (list (clos-animal-name clos-d) (clos-dog-breed clos-d) (slot-value clos-d 'name)))
+      (setf (clos-animal-name clos-d) "Max")
+      (setf (slot-value clos-d 'name) (concatenate 'string (slot-value clos-d 'name) "!"))
+      (print (clos-animal-name clos-d))
+    expected: |
+      ("woof" "..." "number" "?")
+      ("Rex" "mixed" "Rex")
+      "Max!"
   - name: binary-file-round-trip-with-read-byte-write-byte
     source: |
       (with-open-file (out "bin.dat" :direction :output :element-type '(unsigned-byte 8))

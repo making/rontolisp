@@ -13,6 +13,9 @@ categories:
       - { slug: defun, name: defun }
       - { slug: defmacro, name: defmacro }
       - { slug: defstruct, name: defstruct }
+      - { slug: defclass, name: defclass }
+      - { slug: defgeneric, name: defgeneric }
+      - { slug: defmethod, name: defmethod }
       - { slug: defvar, name: defvar }
       - { slug: defparameter, name: defparameter }
       - { slug: defconstant, name: defconstant }

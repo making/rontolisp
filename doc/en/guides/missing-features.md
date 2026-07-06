@@ -23,7 +23,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `macrolet` | not available |
 | `loop` (extended) | partial (simple-loop subset) |
 | `defstruct` | available (see [`defstruct`](../reference/special-forms/defstruct.md)); options/`:include` are not |
-| CLOS | not available |
+| CLOS | partial (static subset: [`defclass`](../reference/special-forms/defclass.md), [`defgeneric`](../reference/special-forms/defgeneric.md), [`defmethod`](../reference/special-forms/defmethod.md), [`make-instance`](../reference/macros/make-instance.md), [`slot-value`](../reference/macros/slot-value.md)) |
 | `declare` / `declaim` / `proclaim` / `the` | available as parsed no-ops (see [`declare`](../reference/macros/declare.md)) |
 | `check-type` / `assert` | available (lite, no restarts; see [`check-type`](../reference/macros/check-type.md)) |
 | `eval-when` | available (treated as `progn`; see [`eval-when`](../reference/macros/eval-when.md)) |
@@ -140,8 +140,21 @@ Structures **are** available with
 [`defstruct`](../reference/special-forms/defstruct.md), which generates a
 keyword constructor, a predicate, a copier and `setf`-able accessors. The
 `defstruct` options syntax (`:conc-name`, `:constructor`, ...), `:include`
-inheritance, and the `#S(...)` print/read syntax are not supported. There is no
-object system (`defclass`, `defgeneric`, `defmethod`, `make-instance`).
+inheritance, and the `#S(...)` print/read syntax are not supported.
+
+A **static CLOS subset** is available:
+[`defclass`](../reference/special-forms/defclass.md) (single inheritance,
+`:initarg`/`:initform`/`:reader`/`:accessor` slot options),
+[`make-instance`](../reference/macros/make-instance.md) and
+[`slot-value`](../reference/macros/slot-value.md) (both with literal quoted
+names), and [`defgeneric`](../reference/special-forms/defgeneric.md) /
+[`defmethod`](../reference/special-forms/defmethod.md) dispatching on the first
+argument (`eql`, class, and built-in-type specializers). Out of scope: method
+qualifiers (`:before`/`:after`/`:around`), `call-next-method`, multiple
+inheritance, specializers on later arguments, `slot-boundp`, and the MOP /
+runtime class operations (`find-class`, `change-class`, `add-method`, class
+redefinition) — the class and method sets of a compiled program are fixed at
+compile time.
 
 ## Type declarations, `typep`, and `coerce`
 

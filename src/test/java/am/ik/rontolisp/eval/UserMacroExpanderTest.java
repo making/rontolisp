@@ -138,6 +138,45 @@ class UserMacroExpanderTest {
 				""")).isEqualTo("(defstruct pair left right)");
 	}
 
+	@Test
+	void defmethodLambdaListStaysVerbatimButBodyExpands() {
+		// The specializer (x (eql :br)) must not be mistaken for a call of a user
+		// macro named eql/x; the body is expressions.
+		assertThat(expand("""
+				(defmacro x (v) `(g ,v))
+				(defmethod f ((x (eql :br)) y) (x y))
+				""")).isEqualTo("(defmethod f ((x (eql :br)) y) (g y))");
+	}
+
+	@Test
+	void defclassKeepsNamesAndOptionsButExpandsInitforms() {
+		// The rebuilt form prints the empty superclass list as nil (same datum).
+		assertThat(expand("""
+				(defmacro dflt () '(h))
+				(defclass c () ((s :initarg :s :initform (dflt) :accessor c-s)))
+				""")).isEqualTo("(defclass c nil ((s :initarg :s :initform (h) :accessor c-s)))");
+	}
+
+	@Test
+	void macroBodyMayCallAGenericFunctionAtExpansionTime() {
+		// The cl-who pattern: with-html-output's expansion-time chain calls the
+		// generic convert-tag-to-string-list; the CLOS definitions register into the
+		// macro-time evaluator AND stay in the program for the compilers.
+		assertThat(expand("""
+				(defgeneric conv (tag))
+				(defmethod conv (tag) (list tag :end))
+				(defmethod conv ((tag (eql :br))) (list :br-tag))
+				(defmacro tag-of (tag) `(list ,@(conv tag)))
+				(print (tag-of :p))
+				(print (tag-of :br))
+				""")).isEqualTo("""
+				(defgeneric conv (tag))
+				(defmethod conv (tag) (list tag :end))
+				(defmethod conv ((tag (eql :br))) (list :br-tag))
+				(print (list :p :end))
+				(print (list :br-tag))""");
+	}
+
 	// --- macrolet (local macros consumed at compile time) ---
 
 	@Test

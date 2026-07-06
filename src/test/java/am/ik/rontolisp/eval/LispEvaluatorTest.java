@@ -3802,13 +3802,13 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -5582,6 +5582,137 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(defstruct point x y) (make-point :z 1)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("Unknown keyword argument: :z");
+	}
+
+	@Test
+	void defgenericDefmethodEqlDispatchAndFuncall() {
+		assertThat(evalMulti("""
+				(defgeneric describe-it (x))
+				(defmethod describe-it (x) (list :default x))
+				(defmethod describe-it ((x (eql :br))) (list :special x))
+				(list (describe-it 5) (describe-it :br) (funcall #'describe-it 9))
+				""").print()).isEqualTo("((:default 5) (:special :br) (:default 9))");
+	}
+
+	@Test
+	void defclassSlotsAccessorsInheritanceAndClassDispatch() {
+		assertThat(evalMulti("""
+				(defclass animal () ((name :initarg :name :accessor animal-name)))
+				(defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
+				(defgeneric speak (x))
+				(defmethod speak ((x dog)) "woof")
+				(defmethod speak ((x animal)) "...")
+				(defmethod speak ((x integer)) "number")
+				(defmethod speak (x) "?")
+				(setq d (make-instance 'dog :name "Rex"))
+				(list (speak d) (speak (make-instance 'animal :name "A")) (speak 1) (speak "s")
+				      (animal-name d) (dog-breed d) (slot-value d 'name))
+				""").print()).isEqualTo("(\"woof\" \"...\" \"number\" \"?\" \"Rex\" \"mixed\" \"Rex\")");
+	}
+
+	@Test
+	void defclassAccessorAndSlotValueAreSetfPlaces() {
+		assertThat(evalMulti("""
+				(defclass counter () ((n :initarg :n :accessor counter-n)))
+				(setq c (make-instance 'counter :n 1))
+				(setf (counter-n c) 10)
+				(incf (counter-n c))
+				(setf (slot-value c 'n) (+ (slot-value c 'n) 100))
+				(counter-n c)
+				""").print()).isEqualTo("111");
+	}
+
+	@Test
+	void defclassDefinedAfterMethodExtendsClassDispatch() {
+		// The interpreter regenerates class-specialized dispatchers on defclass, so a
+		// subclass defined AFTER the method still matches it.
+		assertThat(evalMulti("""
+				(defclass animal () ())
+				(defgeneric speak (x))
+				(defmethod speak ((x animal)) :animal)
+				(defclass cat (animal) ())
+				(speak (make-instance 'cat))
+				""").print()).isEqualTo(":animal");
+	}
+
+	@Test
+	void defmethodRedefinitionReplacesSameSpecializer() {
+		assertThat(evalMulti("""
+				(defgeneric f (x))
+				(defmethod f (x) :old)
+				(defmethod f (x) :new)
+				(defmethod f ((x (eql 1))) :one)
+				(defmethod f ((x (eql 1))) :uno)
+				(list (f 0) (f 1))
+				""").print()).isEqualTo("(:new :uno)");
+	}
+
+	@Test
+	void defgenericReturnsNameAndRecordsDocumentation() {
+		assertThat(eval("(defgeneric g (x) (:documentation \"doc\"))").print()).isEqualTo("g");
+	}
+
+	@Test
+	void defgenericNoApplicableMethodSignals() {
+		assertThatThrownBy(() -> evalMulti("(defgeneric g (x)) (g 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("No applicable method: g");
+	}
+
+	@Test
+	void defmethodQualifiersAreNotSupported() {
+		assertThatThrownBy(() -> evalMulti("(defgeneric g (x)) (defmethod g :before (x) x)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("defmethod qualifiers are not supported");
+	}
+
+	@Test
+	void defmethodSpecializerOnLaterParameterIsNotSupported() {
+		assertThatThrownBy(() -> eval("(defmethod g (a (b integer)) b)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("specializer on the first parameter only");
+	}
+
+	@Test
+	void defmethodLambdaListMustMatchTheGeneric() {
+		assertThatThrownBy(() -> evalMulti("(defgeneric g (x y)) (defmethod g (x) x)"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("does not match the generic function");
+	}
+
+	@Test
+	void defclassMultipleInheritanceIsNotSupported() {
+		assertThatThrownBy(() -> evalMulti("(defclass a () ()) (defclass b () ()) (defclass c (a b) ())"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("at most one superclass");
+	}
+
+	@Test
+	void defclassUnsupportedSlotOptionSignals() {
+		assertThatThrownBy(() -> eval("(defclass a () ((x :allocation :class)))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("slot option :allocation is not supported");
+	}
+
+	@Test
+	void makeInstanceRequiresALiteralClassName() {
+		assertThatThrownBy(() -> evalMulti("(defclass a () ()) (setq n 'a) (make-instance n)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("requires a literal quoted class name");
+	}
+
+	@Test
+	void closInUserPackage() {
+		assertThat(evalMulti("""
+				(defpackage :zoo (:use :cl) (:export :speak :make-dog))
+				(in-package :zoo)
+				(defclass dog () ((name :initarg :name :accessor dog-name)))
+				(defgeneric speak (x))
+				(defmethod speak ((x dog)) (list :woof (dog-name x)))
+				(defmethod speak (x) :silence)
+				(defun make-dog (name) (make-instance 'dog :name name))
+				(in-package :cl-user)
+				(list (zoo:speak (zoo:make-dog "Rex")) (zoo:speak 42))
+				""").print()).isEqualTo("((:woof \"Rex\") :silence)");
 	}
 
 	@Test

@@ -4209,13 +4209,13 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
 	void listSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -5312,6 +5312,36 @@ class WasmLispCompilerIntegrationTest {
 				(setq gp (geo::make-pt :x 3 :y 4))
 				(print (list (geo::pt-x gp) (geo::pt-p gp) (geo::pt-p p)))
 				""")).isEqualTo("(99 7)\n(10 20)\n(3 t nil)");
+	}
+
+	@Test
+	void compileAndRunDefgenericDefmethodEqlDispatch() throws Exception {
+		assertThat(compileAndRun("""
+				(defgeneric describe-it (x))
+				(defmethod describe-it (x) (list :default x))
+				(defmethod describe-it ((x (eql :br))) (list :special x))
+				(print (list (describe-it 5) (describe-it :br)))
+				(print (funcall #'describe-it 9))
+				""")).isEqualTo("((:default 5) (:special :br))\n(:default 9)");
+	}
+
+	@Test
+	void compileAndRunDefclassSlotsAccessorsAndDispatch() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass animal () ((name :initarg :name :accessor animal-name)))
+				(defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
+				(defgeneric speak (x))
+				(defmethod speak ((x dog)) "woof")
+				(defmethod speak ((x animal)) "...")
+				(defmethod speak ((x integer)) "number")
+				(defmethod speak (x) "?")
+				(setq d (make-instance 'dog :name "Rex"))
+				(print (list (speak d) (speak (make-instance 'animal :name "A")) (speak 1) (speak "s")))
+				(print (list (animal-name d) (dog-breed d) (slot-value d 'name)))
+				(setf (animal-name d) "Max")
+				(setf (slot-value d 'name) (concatenate 'string (slot-value d 'name) "!"))
+				(print (animal-name d))
+				""")).isEqualTo("(\"woof\" \"...\" \"number\" \"?\")\n(\"Rex\" \"mixed\" \"Rex\")\n\"Max!\"");
 	}
 
 }

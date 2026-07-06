@@ -292,6 +292,13 @@ final class JvmExprCompiler {
 					// reaching this compiler is nested inside another form.
 					throw new UnsupportedOperationException(
 							LispNames.DEFSTRUCT + " is only supported as a top-level form");
+				case LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD ->
+					// Like defstruct: the CLOS forms are spliced before Pass 1.
+					throw new UnsupportedOperationException(sym.name() + " is only supported as a top-level form");
+				case LispNames.MAKE_INSTANCE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SLOT_VALUE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
 				case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className, false);
 				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT ->
 					JvmDefvarCompiler.compile(cons, ctx, className, true);
@@ -302,8 +309,8 @@ final class JvmExprCompiler {
 				case LispNames.NTHCDR -> JvmNthcdrCompiler.compile(cons, ctx, className);
 				case LispNames.RPLACA -> JvmRplacaCompiler.compile(cons, ctx, className);
 				case LispNames.RPLACD -> JvmRplacdCompiler.compile(cons, ctx, className);
-				case LispNames.SETF -> JvmExprCompiler
-					.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors), ctx, className);
+				case LispNames.SETF -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx, className);
 				case LispNames.PUSH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx, className);
 				case LispNames.POP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx, className);
 				case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);

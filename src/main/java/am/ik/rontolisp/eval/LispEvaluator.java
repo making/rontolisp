@@ -6,6 +6,7 @@ import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
@@ -124,6 +125,13 @@ public final class LispEvaluator {
 	 * as places. Kept per evaluator, like the user macro table.
 	 */
 	private final java.util.Map<String, Integer> structAccessors = new java.util.HashMap<>();
+
+	/**
+	 * The CLOS registry (classes, generics, slot positions) behind
+	 * {@code defclass}/{@code defgeneric}/{@code defmethod}/{@code make-instance}/
+	 * {@code slot-value}. Kept per evaluator, like the struct accessor registry.
+	 */
+	private final ClosRegistry closRegistry = new ClosRegistry();
 
 	/**
 	 * Create a new evaluator with the given output stream.
@@ -939,6 +947,16 @@ public final class LispEvaluator {
 					return evalDefmacro(cons, env);
 				case LispNames.DEFSTRUCT:
 					return evalDefstruct(cons, env);
+				case LispNames.DEFCLASS:
+					return evalDefclass(cons, env);
+				case LispNames.DEFGENERIC:
+					return evalDefgeneric(cons, env);
+				case LispNames.DEFMETHOD:
+					return evalDefmethod(cons, env);
+				case LispNames.MAKE_INSTANCE:
+					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
+				case LispNames.SLOT_VALUE:
+					return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
@@ -1024,7 +1042,7 @@ public final class LispEvaluator {
 				case LispNames.FOURTH:
 					return eval(LispMacroExpander.expandFourth(cons), env);
 				case LispNames.SETF:
-					return eval(LispMacroExpander.expandSetf(cons, this.structAccessors), env);
+					return eval(LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry), env);
 				case LispNames.PUSH:
 					return eval(LispMacroExpander.expandPush(cons), env);
 				case LispNames.POP:
@@ -1273,6 +1291,37 @@ public final class LispEvaluator {
 			eval(form, env);
 		}
 		// defstruct returns the structure name, like Common Lisp.
+		return cons.toList().get(1);
+	}
+
+	private LispVal evalDefclass(LispCons cons, Environment env) {
+		// Expand into the generated defuns (constructor, readers/accessors) and
+		// evaluate each, then regenerate the dispatchers that test class specializers:
+		// the new class may extend one of their descendant tag sets.
+		for (LispVal form : LispMacroExpander.expandDefclass(cons, this.closRegistry, this.structAccessors)) {
+			eval(form, env);
+		}
+		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
+			if (generic.hasClassMethod()) {
+				eval(LispMacroExpander.generateDispatcher(generic.name(), this.closRegistry), env);
+			}
+		}
+		return cons.toList().get(1);
+	}
+
+	private LispVal evalDefgeneric(LispCons cons, Environment env) {
+		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry);
+		eval(LispMacroExpander.generateDispatcher(generic, this.closRegistry), env);
+		return cons.toList().get(1);
+	}
+
+	private LispVal evalDefmethod(LispCons cons, Environment env) {
+		// Evaluate the generated method-body defun, then redefine the dispatcher so it
+		// sees the new method (calls by name always dispatch through the fresh one; a
+		// #'name captured earlier keeps the previous dispatcher).
+		eval(LispMacroExpander.expandDefmethod(cons, this.closRegistry), env);
+		String generic = ((LispSymbol) cons.toList().get(1)).name();
+		eval(LispMacroExpander.generateDispatcher(generic, this.closRegistry), env);
 		return cons.toList().get(1);
 	}
 

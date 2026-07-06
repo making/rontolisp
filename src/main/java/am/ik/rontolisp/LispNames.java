@@ -849,6 +849,41 @@ public final class LispNames {
 	 */
 	public static final String DEFSTRUCT = "defstruct";
 
+	/**
+	 * The {@code defclass} special form (static CLOS subset). Expanded into the defuns it
+	 * generates (keyword constructor, reader/accessor functions) by
+	 * {@code LispMacroExpander.expandDefclass}: the interpreter expands at evaluation
+	 * time, the compilers splice top-level forms before Pass 1.
+	 */
+	public static final String DEFCLASS = "defclass";
+
+	/**
+	 * The {@code defgeneric} special form (static CLOS subset). Registers a generic
+	 * function and defines its dispatcher defun (see
+	 * {@code LispMacroExpander.generateDispatcher}).
+	 */
+	public static final String DEFGENERIC = "defgeneric";
+
+	/**
+	 * The {@code defmethod} special form (static CLOS subset). Registers a method
+	 * (optionally specialized on the FIRST parameter with an {@code eql} literal, a
+	 * {@code defclass} class, or a built-in type) and regenerates the generic's
+	 * dispatcher defun.
+	 */
+	public static final String DEFMETHOD = "defmethod";
+
+	/**
+	 * The {@code make-instance} macro (static CLOS subset). Requires a literal quoted
+	 * class name; expands to the class's generated keyword constructor.
+	 */
+	public static final String MAKE_INSTANCE = "make-instance";
+
+	/**
+	 * The {@code slot-value} macro (static CLOS subset). Requires a literal quoted slot
+	 * name; expands to the slot's {@code nth} position and is a {@code setf} place.
+	 */
+	public static final String SLOT_VALUE = "slot-value";
+
 	/** The {@code &rest} lambda-list keyword. */
 	public static final String LAMBDA_REST = "&rest";
 

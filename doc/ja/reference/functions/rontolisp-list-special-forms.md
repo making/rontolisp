@@ -9,5 +9,5 @@
 を参照してください。
 
 ```lisp
-(rontolisp:list-special-forms) ; => (defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
+(rontolisp:list-special-forms) ; => (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 ```

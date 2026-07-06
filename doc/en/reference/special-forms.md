@@ -15,6 +15,9 @@ and a runnable example you can evaluate in your browser.
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`/`loop`), which evaluates to `value` (or nil) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
 | `defmacro` | `(defmacro name (params...) body...)` | Define a user macro; a call is expanded (the body runs with unevaluated argument forms bound) and the expansion is evaluated. Supports `&rest`/`&body`. Returns the name |
+| `defclass` | `(defclass name (super?) ((slot options...)...))` | Define a class (static CLOS subset: single inheritance; `:initarg`/`:initform`/`:reader`/`:accessor` slot options). Returns the name |
+| `defgeneric` | `(defgeneric name (param...))` | Define a generic function dispatching on its first argument. Returns the name |
+| `defmethod` | `(defmethod name (param...) body...)` | Add a method to a generic function; the first parameter may carry an `(var (eql literal))`, class, or built-in-type specializer. Returns the name |
 | `defvar` | `(defvar name value?)` | Define a global variable, binding `value` only if `name` is not already bound (idempotent). With no `value`, leaves it unbound. Returns the name |
 | `defparameter` | `(defparameter name value)` | Define a global variable, **always** (re)binding `value` even if `name` is already bound. Returns the name |
 | `defconstant` | `(defconstant name value)` | Like `defparameter` (rontolisp does not enforce constancy). Returns the name |

@@ -23,7 +23,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `macrolet` | 利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
 | `defstruct` | 利用可能（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。オプション/`:include` は利用不可 |
-| CLOS | 利用不可 |
+| CLOS | 一部対応（静的サブセット: [`defclass`](../reference/special-forms/defclass.md)、[`defgeneric`](../reference/special-forms/defgeneric.md)、[`defmethod`](../reference/special-forms/defmethod.md)、[`make-instance`](../reference/macros/make-instance.md)、[`slot-value`](../reference/macros/slot-value.md)） |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op として利用可能（[`declare`](../reference/macros/declare.md) 参照） |
 | `check-type` / `assert` | 利用可能（ライト版、リスタートなし。[`check-type`](../reference/macros/check-type.md) 参照） |
 | `eval-when` | 利用可能（`progn` として扱う。[`eval-when`](../reference/macros/eval-when.md) 参照） |
@@ -142,8 +142,20 @@ The function ignore-errors is undefined
 です。キーワードコンストラクタ、述語、コピー関数、`setf` 可能なアクセサを
 生成します。`defstruct` のオプション構文（`:conc-name`、`:constructor` など）、
 `:include` による継承、`#S(...)` の印字/読み取り構文はサポートされません。
-オブジェクトシステム（`defclass`、`defgeneric`、`defmethod`、`make-instance`）は
-ありません。
+
+**静的な CLOS サブセット**が利用可能です:
+[`defclass`](../reference/special-forms/defclass.md)（単一継承、
+`:initarg`/`:initform`/`:reader`/`:accessor` スロットオプション）、
+[`make-instance`](../reference/macros/make-instance.md) と
+[`slot-value`](../reference/macros/slot-value.md)（どちらもリテラルのクォート
+された名前が必要）、そして第 1 引数でディスパッチする
+[`defgeneric`](../reference/special-forms/defgeneric.md) /
+[`defmethod`](../reference/special-forms/defmethod.md)（`eql`、クラス、組み込み
+型の specializer）です。対象外: メソッド修飾子（`:before`/`:after`/`:around`）、
+`call-next-method`、多重継承、第 2 引数以降の specializer、`slot-boundp`、
+MOP / 実行時クラス操作（`find-class`、`change-class`、`add-method`、クラス
+再定義）— コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に
+固定されます。
 
 ## 型宣言、`typep`、`coerce`
 

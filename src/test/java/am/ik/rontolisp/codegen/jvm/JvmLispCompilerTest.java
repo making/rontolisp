@@ -3865,13 +3865,13 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
 	}
 
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defconstant defmacro defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)");
 	}
 
 	@Test
@@ -5117,6 +5117,93 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(defun f () (defstruct point x y)) (f)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("defstruct is only supported as a top-level form");
+	}
+
+	@Test
+	void compileAndRunDefgenericDefmethodEqlDispatch() throws Exception {
+		assertThat(compileAndRun("""
+				(defgeneric describe-it (x))
+				(defmethod describe-it (x) (list :default x))
+				(defmethod describe-it ((x (eql :br))) (list :special x))
+				(print (list (describe-it 5) (describe-it :br)))
+				(print (funcall #'describe-it 9))
+				""")).isEqualTo("((:default 5) (:special :br))\n(:default 9)");
+	}
+
+	@Test
+	void compileAndRunDefclassSlotsAccessorsAndDispatch() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass animal () ((name :initarg :name :accessor animal-name)))
+				(defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
+				(defgeneric speak (x))
+				(defmethod speak ((x dog)) "woof")
+				(defmethod speak ((x animal)) "...")
+				(defmethod speak ((x integer)) "number")
+				(defmethod speak (x) "?")
+				(setq d (make-instance 'dog :name "Rex"))
+				(print (list (speak d) (speak (make-instance 'animal :name "A")) (speak 1) (speak "s")))
+				(print (list (animal-name d) (dog-breed d) (slot-value d 'name)))
+				(setf (animal-name d) "Max")
+				(setf (slot-value d 'name) (concatenate 'string (slot-value d 'name) "!"))
+				(print (animal-name d))
+				""")).isEqualTo("(\"woof\" \"...\" \"number\" \"?\")\n(\"Rex\" \"mixed\" \"Rex\")\n\"Max!\"");
+	}
+
+	@Test
+	void compileAndRunDefmethodBeforeDefclassSubclassStillDispatches() throws Exception {
+		// The pre-pass collects the whole program before generating dispatchers, so a
+		// subclass defined AFTER the method still matches its class specializer.
+		assertThat(compileAndRun("""
+				(defclass animal () ())
+				(defgeneric speak (x))
+				(defmethod speak ((x animal)) :animal)
+				(defclass cat (animal) ())
+				(print (speak (make-instance 'cat)))
+				""")).isEqualTo(":animal");
+	}
+
+	@Test
+	void compileAndRunClosInUserPackage() throws Exception {
+		assertThat(compileAndRun("""
+				(defpackage :zoo (:use :cl) (:export :speak :make-dog))
+				(in-package :zoo)
+				(defclass dog () ((name :initarg :name :accessor dog-name)))
+				(defgeneric speak (x))
+				(defmethod speak ((x dog)) (list :woof (dog-name x)))
+				(defmethod speak (x) :silence)
+				(defun make-dog (name) (make-instance 'dog :name name))
+				(in-package :cl-user)
+				(print (zoo:speak (zoo:make-dog "Rex")))
+				(print (zoo:speak 42))
+				""")).isEqualTo("(:woof \"Rex\")\n:silence");
+	}
+
+	@Test
+	void compileAndRunMacroCallingGenericAtExpansionTime() throws Exception {
+		// The cl-who pattern: a defmacro whose expansion-time helper chain calls a
+		// generic function (with an eql-specialized method). Pre-processed with
+		// UserMacroExpander like the CLI compile path.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defgeneric convert-tag (tag body)
+				  (:documentation "Convert a tag."))
+				(defmethod convert-tag (tag body)
+				  "The standard method which is not specialized."
+				  (declare (optimize speed space))
+				  (list "<" tag ">" body "</" tag ">"))
+				(defmethod convert-tag ((tag (eql :br)) body)
+				  (list "<br/>"))
+				(defun process-tag (tag body) (convert-tag tag body))
+				(defmacro html (tag body) `(list ,@(process-tag tag body)))
+				(print (html "p" "hi"))
+				(print (html :br nil))
+				""")))).isEqualTo("(\"<\" \"p\" \">\" \"hi\" \"</\" \"p\" \">\")\n(\"<br/>\")");
+	}
+
+	@Test
+	void compileNestedDefmethodFails() {
+		assertThatThrownBy(() -> compileAndRun("(defun f () (defmethod g (x) x)) (f)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("defmethod is only supported as a top-level form");
 	}
 
 }

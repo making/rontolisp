@@ -1,11 +1,12 @@
 # CLOS and `defstruct` (the object system)
 
 **Status:** `defstruct` is DONE (2026-07, all four backends; see `.kb/defstruct.md`).
-CLOS: a staged *static subset* plan is agreed (see "Implementation approach"
-below). **Next action: Stage 1 only** (`defclass` single inheritance +
-`make-instance` + slots) — it is specced there down to the wiring checklist;
-do not start Stage 2 in the same round. Full CLOS (MOP, runtime class ops) is
-permanently out of scope.
+CLOS **Stages 1 + 2 are DONE** (2026-07-06, all four backends; see `.kb/clos.md`):
+`defclass` (single inheritance) + `make-instance` + `slot-value` + `defgeneric`
++ `defmethod` (single dispatch on arg 1, `eql`/class/built-in-type specializers),
+implemented together as one design (see `.kb/clos.md`). **Next action: Stage 3**
+(`:before`/`:after`/`:around` qualifiers + `call-next-method`) — see "Implementation
+approach" below. Full CLOS (MOP, runtime class ops) is permanently out of scope.
 
 ## Defstruct — implemented
 
@@ -83,7 +84,7 @@ like the defstruct options — do not attempt.
 
 Ship each stage independently, in order:
 
-**Stage 1 — `defclass` (single inheritance) + `make-instance` + slots. START HERE.**
+**Stage 1 — `defclass` (single inheritance) + `make-instance` + slots. DONE (2026-07-06, `.kb/clos.md`).**
 
 Scope:
 - `(defclass name (superclass) ((slot :initarg :k :initform e :accessor a :reader r) ...))`
@@ -144,7 +145,7 @@ Wiring checklist (identical shape to defstruct; grep `DEFSTRUCT` for every site)
    as `&amp;key`; `web/dist` is generated (don't commit); `--no-gc` rejects via
    its generic top-level error (fine); run the native-image E2E before push.
 
-**Stage 2 — `defgeneric`/`defmethod`, single dispatch on the first argument.**
+**Stage 2 — `defgeneric`/`defmethod`, single dispatch on the first argument. DONE (2026-07-06, `.kb/clos.md`).**
 Literal top-level defmethods only. A compile-time pass collects methods per
 generic, sorts by specificity (subclass before superclass; class specializers
 before built-in-type specializers before `t`), and generates ONE dispatcher
