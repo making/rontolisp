@@ -36,12 +36,6 @@
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"
-      },
-      {
-        "condition": {
-          "typeReachable": "am.ik.rontolisp.eval.UserMacroExpander"
-        },
-        "pattern": "am/ik/rontolisp/eval/macro-time-setf-places\\.txt"
       }
     ]
   }

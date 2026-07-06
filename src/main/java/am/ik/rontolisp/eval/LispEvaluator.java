@@ -1548,6 +1548,34 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Returns the body forms of the {@code (setf PLACE)} writer function installed by
+	 * {@code (defun (setf PLACE) ...)}, or {@code null} if no such user-defined writer is
+	 * registered. The compile-path macro expander ({@link UserMacroExpander}) uses this
+	 * to judge whether a top-level {@code (setf (PLACE ...) V)} is a pure configuration
+	 * setter safe to replay into this macro-time evaluator.
+	 * @param place the resolved place name
+	 * @return the writer's body forms, or {@code null}
+	 */
+	public @Nullable List<LispVal> setfWriterBody(String place) {
+		return this.globalEnv
+			.lookupFunctionOrNull(LispMacroExpander.setfFunctionName(place)) instanceof LispLambda lambda
+					? lambda.body() : null;
+	}
+
+	/**
+	 * Returns whether {@code name} designates a special variable (proclaimed by
+	 * {@code defvar}/{@code defparameter}/{@code defconstant} or a {@code special}
+	 * declaration) or an otherwise-bound global variable. Used to confirm that a
+	 * candidate config setter mutates global configuration state rather than a lexical or
+	 * a data structure.
+	 * @param name the resolved variable name
+	 * @return {@code true} if the name is a special or bound global variable
+	 */
+	public boolean isGlobalOrSpecialVariable(String name) {
+		return this.specialVars.contains(name) || this.globalEnv.isBound(name);
+	}
+
+	/**
 	 * Installs a lexical (macrolet) local macro into the user-macro table for the compile
 	 * path ({@link am.ik.rontolisp.eval.UserMacroExpander} expands macrolet bodies by
 	 * temporarily registering the locals here). The macro is defined in the global

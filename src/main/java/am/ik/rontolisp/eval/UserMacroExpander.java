@@ -1,13 +1,8 @@
 package am.ik.rontolisp.eval;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -101,15 +96,19 @@ public final class UserMacroExpander {
 				// stays in the program so the compilers emit it for runtime as well.
 				macroEval.eval(expanded);
 			}
-			if (isMacroTimeReplaySetf(resolved)) {
-				// A top-level (setf (PLACE ...) ...) whose PLACE is registered as
-				// macro-time-effectful (see macro-time-setf-places.txt): a macro that
-				// reads the underlying global at macro-EXPANSION time must observe the
-				// mutation as a compile-time constant, because a with-html-output-style
-				// macro is expanded at compile time. The form stays in the program so the
-				// runtime global tracks it too. WORKAROUND for no dynamic
-				// special-variable
-				// binding on the compile path -- see .todo/82.
+			if (isPureConfigSetf(expanded, macroEval)) {
+				// A top-level (setf (PLACE ...) V) whose (defun (setf PLACE) ...) writer
+				// is
+				// a PURE CONFIGURATION SETTER -- its body only assigns special/global
+				// variables via side-effect-free computation, and V is itself pure -- is
+				// replayed into the macro-time evaluator, so a macro that reads the
+				// underlying global at macro-EXPANSION time (e.g. cl-who's
+				// with-html-output
+				// reading *html-mode*) observes the mutation as a compile-time constant.
+				// The
+				// form stays in the program so the runtime global tracks it too. The
+				// purity walk is conservative (deny by default), so an impure writer or
+				// value is never double-run at compile time.
 				macroEval.eval(expanded);
 			}
 			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
@@ -125,16 +124,198 @@ public final class UserMacroExpander {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
-	// Recognizes a top-level (setf (PLACE ...) VALUE) whose PLACE (in any package
-	// spelling) is registered as macro-time-effectful. The set of place names is data,
-	// loaded from macro-time-setf-places.txt, so no library-specific term appears here.
-	private static boolean isMacroTimeReplaySetf(LispVal form) {
+	// --- Pure-config-setter detection ------------------------------------------------
+	//
+	// rontolisp expands ALL macros at compile time, so a macro that reads a global at
+	// macro-EXPANSION time (cl-who's with-html-output reads *html-mode*) cannot see a
+	// runtime (setf (place) ...). The fix is to REPLAY such a top-level setf into the
+	// macro-time evaluator -- but only when doing so cannot double-run an external side
+	// effect. The walk below is a static purity judgment that replaces the old
+	// library-specific data file (macro-time-setf-places.txt): a setf is replayed iff its
+	// (defun (setf PLACE) ...) writer is a pure configuration setter and its value is
+	// pure.
+
+	// A top-level (setf (PLACE args...) VALUE) is a replayable pure config setter when:
+	// the
+	// value and any place args are pure expressions, and the user-defined (setf PLACE)
+	// writer's body only assigns special/global variables via side-effect-free
+	// computation.
+	// The bar is asymmetric -- deny by default -- so an impure writer/value is never
+	// replayed (a false positive would double-run side effects at compile time); a false
+	// negative merely fails to propagate a config change to expansion time.
+	private static boolean isPureConfigSetf(LispVal form, LispEvaluator macroEval) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
 				|| !LispNames.SETF.equals(member(op.name())) || !(cons.cdr() instanceof LispCons rest)
-				|| !(rest.car() instanceof LispCons place) || !(place.car() instanceof LispSymbol placeOp)) {
+				|| !(rest.car() instanceof LispCons place) || !(place.car() instanceof LispSymbol placeOp)
+				|| !(rest.cdr() instanceof LispCons valTail) || !(valTail.cdr() instanceof LispNil)) {
+			// Only the single place/value shape (setf (PLACE args...) VALUE) is handled;
+			// a
+			// multi-pair setf or a non-accessor place is left for runtime only.
 			return false;
 		}
-		return MACRO_TIME_SETF_PLACES.contains(member(placeOp.name()));
+		// The value written and any subforms of the place are evaluated on replay, so
+		// they
+		// must be pure (no side effect, no mutation).
+		if (!isPure(valTail.car(), false, macroEval)) {
+			return false;
+		}
+		for (LispVal arg : cdrList(place)) {
+			if (!isPure(arg, false, macroEval)) {
+				return false;
+			}
+		}
+		// The (setf PLACE) writer must be a user-defined pure config setter: no writer (a
+		// built-in place or none) is not replayable.
+		List<LispVal> body = macroEval.setfWriterBody(placeOp.name());
+		if (body == null) {
+			return false;
+		}
+		for (LispVal bodyForm : body) {
+			if (!isPure(bodyForm, true, macroEval)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Whether FORM is a side-effect-free expression. With allowSpecialMutation, a
+	// setq/setf of a special/global variable is permitted (the config-setter body);
+	// otherwise any assignment is impure. Deny by default: an operator outside the pure
+	// allow-list (I/O, destructive ops, incf/push, funcall/apply, error, an unknown or
+	// user function, ...) makes the form impure.
+	private static boolean isPure(LispVal form, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons)) {
+			// A number/string/character/keyword literal, nil/t, or a variable read.
+			return true;
+		}
+		if (!cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+			// A dotted datum, or a computed operator ((lambda ...) / ((f) ...)): reject.
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		return switch (member(op.name())) {
+			case LispNames.QUOTE -> true; // quoted literal data
+			case LispNames.SETQ -> allowSpecialMutation && isPureAssignment(parts, macroEval);
+			case LispNames.SETF -> allowSpecialMutation && isPureAssignment(parts, macroEval);
+			case LispNames.LET, LispNames.LET_STAR -> isPureLet(parts, allowSpecialMutation, macroEval);
+			case LispNames.COND -> isPureCond(parts, allowSpecialMutation, macroEval);
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE ->
+				isPureCase(parts, allowSpecialMutation, macroEval);
+			case LispNames.THE ->
+				// (the type value): the type is data; only the value is evaluated.
+				parts.size() >= 3 && isPure(parts.get(2), allowSpecialMutation, macroEval);
+			default -> {
+				if (!PURE_OPERATORS.contains(member(op.name()))) {
+					yield false;
+				}
+				// A pure control form / pure builtin: every argument is an expression.
+				for (int i = 1; i < parts.size(); i++) {
+					if (!isPure(parts.get(i), allowSpecialMutation, macroEval)) {
+						yield false;
+					}
+				}
+				yield true;
+			}
+		};
+	}
+
+	// (setq v1 e1 ...) / (setf p1 e1 ...): every target must be a special/global variable
+	// symbol (a non-symbol place is a data-structure mutation; a lexical/unknown target
+	// is
+	// not config state), and every value must be pure.
+	private static boolean isPureAssignment(List<LispVal> parts, LispEvaluator macroEval) {
+		if (parts.size() < 3 || (parts.size() - 1) % 2 != 0) {
+			return false;
+		}
+		for (int i = 1; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol target) || !macroEval.isGlobalOrSpecialVariable(target.name())
+					|| !isPure(parts.get(i + 1), true, macroEval)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// (let/let* (bindings) body...): bound NAMES are new lexicals (skipped); each init
+	// and
+	// body form is an expression.
+	private static boolean isPureLet(List<LispVal> parts, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		if (parts.size() < 2) {
+			return false;
+		}
+		if (parts.get(1) instanceof LispCons bindings) {
+			if (!bindings.isProperList()) {
+				return false;
+			}
+			for (LispVal binding : bindings.toList()) {
+				if (binding instanceof LispSymbol) {
+					continue; // (let (x) ...): bound to nil
+				}
+				if (!(binding instanceof LispCons pair) || !pair.isProperList()) {
+					return false;
+				}
+				List<LispVal> pairParts = pair.toList();
+				for (int i = 1; i < pairParts.size(); i++) {
+					if (!isPure(pairParts.get(i), allowSpecialMutation, macroEval)) {
+						return false;
+					}
+				}
+			}
+		}
+		else if (!(parts.get(1) instanceof LispNil)) {
+			return false;
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			if (!isPure(parts.get(i), allowSpecialMutation, macroEval)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// (cond (test body...)...): every subform of every clause is an expression.
+	private static boolean isPureCond(List<LispVal> parts, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		for (int i = 1; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispNil) {
+				continue;
+			}
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				return false;
+			}
+			for (LispVal f : clause.toList()) {
+				if (!isPure(f, allowSpecialMutation, macroEval)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// (case/ecase/... keyform (keys body...)...): the keyform and clause bodies are
+	// expressions; the keys are unevaluated data (skipped).
+	private static boolean isPureCase(List<LispVal> parts, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		if (parts.size() < 2 || !isPure(parts.get(1), allowSpecialMutation, macroEval)) {
+			return false;
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispNil) {
+				continue;
+			}
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				return false;
+			}
+			List<LispVal> clauseParts = clause.toList();
+			for (int j = 1; j < clauseParts.size(); j++) {
+				if (!isPure(clauseParts.get(j), allowSpecialMutation, macroEval)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	private static List<LispVal> cdrList(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest && rest.isProperList() ? rest.toList() : List.of();
 	}
 
 	private static String member(String name) {
@@ -142,31 +323,23 @@ public final class UserMacroExpander {
 		return qn == null ? name : qn.member();
 	}
 
-	// Unqualified setf-place member names whose top-level (setf (PLACE ...) ...) forms
-	// are
-	// replayed into the macro-time evaluator. Loaded from the sibling resource so
-	// specific
-	// library terms stay out of this source (WORKAROUND registry -- see .todo/82).
-	private static final Set<String> MACRO_TIME_SETF_PLACES = loadMacroTimeSetfPlaces();
-
-	private static Set<String> loadMacroTimeSetfPlaces() {
-		Set<String> places = new HashSet<>();
-		try (InputStream in = UserMacroExpander.class.getResourceAsStream("macro-time-setf-places.txt")) {
-			if (in == null) {
-				return Set.of();
-			}
-			for (String line : new String(in.readAllBytes(), StandardCharsets.UTF_8).split("\n", -1)) {
-				String trimmed = line.strip();
-				if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
-					places.add(trimmed);
-				}
-			}
-		}
-		catch (IOException ex) {
-			throw new UncheckedIOException(ex);
-		}
-		return Set.copyOf(places);
-	}
+	// Operators whose every argument is an expression AND which have no side effect: pure
+	// control forms and side-effect-free builtins (arithmetic, comparison, logic, type
+	// predicates, and non-destructive constructors/readers). An operator absent from this
+	// set (and from the structural cases in isPure) is treated as impure. Deliberately
+	// EXCLUDES anything that mutates or does I/O: print/format, rplaca/rplacd, aset,
+	// push/pop/incf/decf, nconc/nreverse/sort/delete, funcall/apply, error, file/stream
+	// ops.
+	private static final Set<String> PURE_OPERATORS = Set.of("if", "when", "unless", "and", "or", "not", "progn",
+			"prog1", "prog2", "values", "identity", "+", "-", "*", "/", "1+", "1-", "mod", "rem", "abs", "min", "max",
+			"expt", "sqrt", "isqrt", "gcd", "lcm", "floor", "ceiling", "round", "truncate", "float", "signum", "=",
+			"/=", "<", ">", "<=", ">=", "eq", "eql", "equal", "equalp", "char=", "char<", "char>", "char<=", "char>=",
+			"string=", "string<", "string>", "string<=", "string>=", "string-equal", "null", "atom", "consp", "listp",
+			"symbolp", "keywordp", "stringp", "numberp", "integerp", "floatp", "characterp", "functionp", "zerop",
+			"plusp", "minusp", "evenp", "oddp", "endp", "car", "cdr", "caar", "cadr", "cdar", "cddr", "caddr", "first",
+			"second", "third", "fourth", "rest", "last", "nth", "nthcdr", "elt", "length", "list", "list*", "cons",
+			"reverse", "append", "member", "assoc", "getf", "position", "find", "string", "symbol-name", "char-code",
+			"code-char");
 
 	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --
 	// the resolver consumes these, so they must be recognized BEFORE resolution to be

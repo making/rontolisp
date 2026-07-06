@@ -3,8 +3,8 @@
 Status: **DONE (2026-07-06)** for the core feature; two compile-path lite limits
 deferred (see "Shipped" below). Elevated from `.todo/54` Phase 4's one-line
 "Dynamic/special variable binding" bullet into its own tracked item, because it is
-the shared root cause behind two live workarounds (`.todo/82`, `.todo/83`) and a
-hard prerequisite for the condition system (`.todo/39`).
+the shared root cause behind two workarounds (`.todo/82`, `.todo/83`, both since
+resolved) and a hard prerequisite for the condition system (`.todo/39`).
 
 ## Shipped (2026-07-06)
 
@@ -51,7 +51,8 @@ Consequences already felt:
 - **`.todo/82` (macro-time setf replay)**: cl-who reads the global `*html-mode*`
   at macro-EXPANSION time; a top-level `(setf (html-mode) :html5)` has to be
   replayed into the macro-time evaluator because there is no special-variable
-  model to bind/observe. Pure hack, data-driven registry.
+  model to bind/observe. Was a data-driven registry; since RESOLVED -- replaced by
+  a static pure-config-setter judgment (no data file).
 - **`.todo/83` (load/`*package*` leak)** -- FIXED, but with a hand-rolled
   dynamic binding: `load`/`asdf:load-system` must bind `*package*` for the
   duration of the load and restore it after (CL binds `*package*` and
@@ -146,10 +147,13 @@ save/restore facility replacing the per-variable hand-rolled pair.
   here does not (and should not) subsume it.
   (`*readtable*` riding along on a keyed resolver stack remains a nice-to-have,
   not done; the existing package-only pair is untouched.)
-- `.todo/82`: **reframed, not deleted** -- see that file. cl-who reads
-  `*html-mode*` at macro-expansion time, which a runtime special binding cannot
-  affect, so the replay is still required.
+- `.todo/82` (macro-time setf replay): **RESOLVED (2026-07-06), file deleted** --
+  cl-who reads `*html-mode*` at macro-expansion time, which a runtime special
+  binding cannot affect, so the compile-time replay is still required; the old
+  `macro-time-setf-places.txt` data file was replaced by a static purity judgment
+  (`UserMacroExpander.isPureConfigSetf`, auto-detects a pure config setter). See
+  `.kb/asdf.md` (cl-who paragraph).
 
-Related: `.todo/54` Phase 4, `.todo/39` (conditions), `.todo/82` (setf replay),
-`.todo/83` (load/`*package*`), `.todo/41` (readtables), `.kb/packages.md`
+Related: `.todo/54` Phase 4, `.todo/39` (conditions), `.todo/82` (setf replay --
+resolved), `.todo/83` (load/`*package*`), `.todo/41` (readtables), `.kb/packages.md`
 (load/`*package*` scoping), `.kb/symbol-runtime-api.md` (globals-only `boundp`).

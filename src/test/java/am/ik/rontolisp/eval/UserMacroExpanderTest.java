@@ -274,4 +274,94 @@ class UserMacroExpanderTest {
 				""")).isEqualTo("(print (* 2 (car (quote ((a . 1))))))");
 	}
 
+	// --- pure-config-setter replay (macro-time (setf (place) ...) auto-detect) ---
+
+	@Test
+	void pureConfigSetterIsReplayedSoAMacroSeesTheNewValueAtExpansionTime() {
+		// The cl-who (setf (html-mode) :html5) pattern: a (defun (setf mode) ...) whose
+		// body only assigns a special variable is a pure config setter, so a top-level
+		// (setf (mode) :b) is replayed into the macro-time evaluator and a macro reading
+		// the special at expansion time sees :b (not the defvar default :a).
+		assertThat(expand("""
+				(defvar *mode* :a)
+				(defun (setf mode) (v) (setf *mode* v))
+				(defmacro current-mode () (list 'quote *mode*))
+				(setf (mode) :b)
+				(print (current-mode))
+				""")).isEqualTo("""
+				(defvar *mode* :a)
+				(defun (setf mode) (v) (setf *mode* v))
+				(setf (mode) :b)
+				(print (quote :b))""");
+	}
+
+	@Test
+	void configSetterUsingEcaseOverSpecialsIsReplayed() {
+		// cl-who's real (setf html-mode) writer dispatches with ecase and assigns several
+		// specials per branch; the purity walk must accept that shape.
+		assertThat(expand("""
+				(defvar *mode* :a)
+				(defvar *end* " />")
+				(defun (setf mode) (m)
+				  (ecase m
+				    ((:sgml) (setf *mode* :sgml *end* ">"))
+				    ((:xml) (setf *mode* :xml *end* " />"))))
+				(defmacro current-end () *end*)
+				(setf (mode) :sgml)
+				(print (current-end))
+				""")).endsWith("(print \">\")");
+	}
+
+	@Test
+	void impureSetterWithIoIsNotReplayed() {
+		// The writer performs I/O (print), so it is NOT a pure config setter: the setf is
+		// left for runtime only and the expansion-time read still sees the defvar
+		// default.
+		assertThat(expand("""
+				(defvar *mode* :a)
+				(defun (setf mode) (v) (print v) (setf *mode* v))
+				(defmacro current-mode () (list 'quote *mode*))
+				(setf (mode) :b)
+				(print (current-mode))
+				""")).endsWith("(print (quote :a))");
+	}
+
+	@Test
+	void impureSetfValueIsNotReplayed() {
+		// Even with a pure writer, a top-level setf whose VALUE has a side effect is not
+		// replayed -- replaying evaluates the value and would double-run the effect.
+		assertThat(expand("""
+				(defvar *mode* :a)
+				(defun (setf mode) (v) (setf *mode* v))
+				(defmacro current-mode () (list 'quote *mode*))
+				(setf (mode) (progn (print 'x) :b))
+				(print (current-mode))
+				""")).endsWith("(print (quote :a))");
+	}
+
+	@Test
+	void setterMutatingANonSpecialDataStructureIsNotReplayed() {
+		// A writer that mutates a data structure (rplaca) rather than a special/global
+		// variable is impure config-wise and is not replayed.
+		assertThat(expand("""
+				(defvar *cell* (list 1))
+				(defun (setf head) (v) (rplaca *cell* v))
+				(defmacro current-head () (list 'quote (car *cell*)))
+				(setf (head) 9)
+				(print (current-head))
+				""")).endsWith("(print (quote 1))");
+	}
+
+	@Test
+	void setfOfAnUndefinedWriterIsNotReplayed() {
+		// No (defun (setf foo) ...) writer exists: nothing to judge, so no replay (and
+		// the
+		// setf survives for the compilers/interpreter to reject or handle).
+		assertThat(expand("""
+				(defmacro m (x) `(+ ,x 1))
+				(setf (foo) 3)
+				(print (m 1))
+				""")).isEqualTo("(setf (foo) 3)\n(print (+ 1 1))");
+	}
+
 }

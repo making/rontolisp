@@ -103,17 +103,21 @@ it on all backends (pinned in `ci-spec.yaml`, the three backend tests, and
 
 ## Relationship to the two hand-rolled precedents
 
-- **`.todo/83` (`*package*` load scoping) stays separate** -- a conscious
-  decision. `*package*` is resolved at read/compile time by `PackageResolver`
+- **`*package*` load scoping stays separate** -- a conscious decision.
+  `*package*` is resolved at read/compile time by `PackageResolver`
   (`pushPackage`/`popPackage` + `%push-package`/`%pop-package` markers), NOT as a
   runtime variable, so the runtime special-binding mechanism here does not cover
   it. Two distinct models (runtime specials vs compile-time resolver state); see
   `.kb/packages.md`.
-- **`.todo/82` (macro-time setf replay) is reframed, not deleted.** cl-who reads
-  `*html-mode*` at macro-EXPANSION (compile) time; a runtime special binding is
-  invisible to an already-expanded macro, so the `macro-time-setf-places.txt`
-  replay is still needed. It is a "macro-time configuration" concern, orthogonal
-  to runtime dynamic binding.
+- **Macro-time setf replay stays separate too.** cl-who reads `*html-mode*` at
+  macro-EXPANSION (compile) time; a runtime special binding is invisible to an
+  already-expanded macro, so `UserMacroExpander` replays a top-level `(setf (PLACE)
+  ...)` into its macro-time evaluator. The decision to replay is a **static purity
+  judgment** (`isPureConfigSetf`/`isPure`): a pure config setter -- one that only
+  assigns special/global variables via a side-effect-free allow-list -- is
+  auto-detected and replayed, deny-by-default so no external effect double-runs.
+  It is a "macro-time configuration" concern, orthogonal to runtime dynamic
+  binding. Details: `.kb/asdf.md` (cl-who paragraph).
 
 ## Tests
 

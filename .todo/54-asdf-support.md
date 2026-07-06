@@ -42,9 +42,9 @@ component/dependency order ourselves, drive the existing `load` machinery.
 The next frontier. None started as of 2026-07-06:
 
 - Condition system + `unwind-protect` (.todo/39)
-- Dynamic/special variable binding (.todo/84) -- today `defvar` is a plain
-  global, scoping is lexical-only; a deep evaluator/compiler change. Root cause
-  behind .todo/82 and .todo/83.
+- Dynamic/special variable binding (.todo/84, since DONE) -- was the root cause
+  behind the former `.todo/82` (macro-time setf replay) and `.todo/83`
+  (`*package*` load scoping) workarounds, both since resolved.
 - CLOS subset (.todo/40)
 - Pathname layer (`merge-pathnames`, `probe-file`, `*load-pathname*`)
 - Readtables (.todo/41)
