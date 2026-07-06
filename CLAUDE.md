@@ -220,5 +220,5 @@ does not need rebuilding unless Java sources changed).
 - Native E2E: build the native image and run `CiSpecE2eTest` against it (see
   "Verifying the Native Image End-to-End"). Required whenever `ci-spec.yaml` or
   any cross-backend output changed — `./mvnw test` does not cover it.
-- Javadoc: `./mvnw javadoc:jar` - confirm 0 warnings/errors
+- Javadoc: `./mvnw javadoc:jar` - confirm 0 warnings/errors (except for errors about `Version` class)
 - Notify: `osascript -e 'display notification "<Message Body>" with title "<Message Title>"'`
