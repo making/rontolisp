@@ -83,6 +83,23 @@ class ScalarWasmCompilerTest {
 	}
 
 	@Test
+	void longBoundaryKeepsTheHostSignatureI64WithNoWrapOrExtend() {
+		// :long pins both the internal i64 representation AND the host boundary to i64,
+		// so
+		// the wrapper signature is (i64,i64)->i64 -- identical to the internal function,
+		// unlike :int which is (i32,...)->i32 with wrap/extend in the wrapper.
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections(compile("""
+				(defun sumsquared (a b) (* (+ a b) (+ a b)))
+				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
+				""")).get(1)));
+		// type 0 = internal, type 1 = wrapper; both (i64,i64) -> i64.
+		assertThat(types.get(0)[0]).containsExactly(0x7E, 0x7E); // i64,i64 params
+		assertThat(types.get(0)[1]).containsExactly(0x7E); // i64 result
+		assertThat(types.get(1)[0]).containsExactly(0x7E, 0x7E); // i64,i64 host params
+		assertThat(types.get(1)[1]).containsExactly(0x7E); // i64 host result
+	}
+
+	@Test
 	void iterationAndLocalMutationCompileToAPlainMvpModule() {
 		// dotimes + a let-bound accumulator mutated by setq: no heap, no GC types, still
 		// a

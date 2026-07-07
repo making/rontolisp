@@ -1151,6 +1151,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 						w.write(Instruction.I64_TRUNC_S_F64);
 					}
 				}
+				else if (WasmExportCompiler.T_LONG.equals(hostType)) {
+					// host i64 -> internal i64 (INT): identity, no conversion. :long pins
+					// the parameter to INT, so the FLOAT branch is defensive only.
+					if (internal == Ty.FLOAT) {
+						w.write(Instruction.F64_CONVERT_S_I64);
+					}
+				}
 				else {
 					// host i32 (:int/:bool) -> internal
 					if (internal == Ty.INT) {
@@ -1173,6 +1180,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				}
 				else {
 					w.write(Instruction.I32_TRUNC_S_F64);
+				}
+			}
+			case WasmExportCompiler.T_LONG -> {
+				// internal i64 -> host i64 is identity; a FLOAT result truncates to i64.
+				if (ret == Ty.FLOAT) {
+					w.write(Instruction.I64_TRUNC_S_F64);
 				}
 			}
 			case WasmExportCompiler.T_FLOAT -> {
@@ -1204,7 +1217,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			}
 			case WasmExportCompiler.T_VOID -> w.write(Instruction.DROP);
 			default -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
-					+ decl.returnType() + " (only :int/:float/:bool/:string/:void)");
+					+ decl.returnType() + " (only :int/:long/:float/:bool/:string/:void)");
 		}
 		w.write(Instruction.END);
 		return withLocals(bodyStream.toByteArray(), wrapperLocals);
@@ -2332,10 +2345,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					+ decl.name()
 					+ "' (it needs a cons/reader/printer runtime; only :int/:float/:bool/:string/:void are supported)");
 		}
-		if (!WasmExportCompiler.T_INT.equals(type) && !WasmExportCompiler.T_FLOAT.equals(type)
-				&& !WasmExportCompiler.T_BOOL.equals(type) && !WasmExportCompiler.T_STRING.equals(type)) {
-			throw new UnsupportedOperationException("--no-gc supports only :int/:float/:bool/:string export types, "
-					+ "got " + type + " for '" + decl.name() + "'");
+		if (!WasmExportCompiler.T_INT.equals(type) && !WasmExportCompiler.T_LONG.equals(type)
+				&& !WasmExportCompiler.T_FLOAT.equals(type) && !WasmExportCompiler.T_BOOL.equals(type)
+				&& !WasmExportCompiler.T_STRING.equals(type)) {
+			throw new UnsupportedOperationException(
+					"--no-gc supports only :int/:long/:float/:bool/:string export types, " + "got " + type + " for '"
+							+ decl.name() + "'");
 		}
 	}
 

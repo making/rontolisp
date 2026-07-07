@@ -30,10 +30,17 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
 | `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
+| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the scalar backend's internal `i64` (no `wrap`/`extend` at the boundary) |
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+
+デフォルト (GC) バックエンドでは、`:int` は境界を `i32` として渡りますが、内部の
+整数は `i31ref` であるため、`:int` 経由で返す値は 32 ビット境界を超えると切り詰め
+られます。非 GC バックエンド (`--no-gc`) では整数を `i64` で計算するため、引数や
+戻り値が 32 ビット範囲を超えうる場合は `:long` を使ってください。`wrap`/`extend`
+変換なしで全幅を公開します。
 
 ## 制限事項
 
@@ -46,6 +53,7 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 - エクスポートされる関数は純粋計算です。あらゆる I/O (出力、入力、時刻、乱数、
   トップレベルの I/O フォーム) は `--no-wasi` ではトラップし、それ以外ではサポート
   されません。
-- 非 GC バックエンド (`--no-gc`) は `:int`/`:float`/`:bool`/`:string` をサポート
-  しますが、cons/リーダ/プリンタのランタイムを必要とする `:s-expr` はサポートしま
-  せん。
+- 非 GC バックエンド (`--no-gc`) は `:int`/`:long`/`:float`/`:bool`/`:string` を
+  サポートしますが、cons/リーダ/プリンタのランタイムを必要とする `:s-expr` は
+  サポートしません。`:long` は `--no-gc` 専用です。GC バックエンドは (整数が `i64`
+  を保持できない `i31ref` であるため) これを拒否し、`--no-gc` を使うよう促します。

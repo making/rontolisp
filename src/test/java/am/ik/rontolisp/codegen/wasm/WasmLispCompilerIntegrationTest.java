@@ -395,6 +395,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcLongBoundaryCrossesTheFull64BitRange() throws Exception {
+		// :long makes both the parameter and the result i64 at the host boundary (no
+		// wrap/extend), so a value beyond the 32-bit range round-trips exactly. With
+		// :int, (100000+100000)^2 = 4e10 would be i32.wrap_i64-truncated to 1345294336;
+		// :long returns the true 40000000000.
+		String program = """
+				(defun sumsquared (a b) (* (+ a b) (+ a b)))
+				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "sumsquared", "3", "4")).isEqualTo("49");
+		assertThat(compileNoGcAndInvoke(false, program, "sumsquared", "100000", "100000")).isEqualTo("40000000000");
+		assertThat(compileNoGcAndInvoke(true, program, "sumsquared", "100000", "100000")).isEqualTo("40000000000");
+	}
+
+	@Test
 	void noGcComposesWithOptimize() throws Exception {
 		// --no-gc --optimize: the (GC-agnostic) tree shaker runs on the non-GC module
 		// too,

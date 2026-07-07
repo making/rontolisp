@@ -27,6 +27,9 @@ import am.ik.wasm.Type;
  * Supported type designators and their boundary representations:
  * <ul>
  * <li>{@code :int} -- {@code i32} (boxed as {@code i31ref}; 31-bit signed range)</li>
+ * <li>{@code :long} -- {@code i64} ({@code --no-gc} only; matches the scalar backend's
+ * internal {@code i64} integer representation, so the full 2^63 range crosses the
+ * boundary with no {@code wrap}/{@code extend})</li>
  * <li>{@code :float} -- {@code f64} (boxed as a float struct)</li>
  * <li>{@code :bool} -- {@code i32} (0 = nil, non-zero = the symbol {@code t})</li>
  * <li>{@code :string} -- {@code (ptr,len)} bytes in linear memory</li>
@@ -44,6 +47,13 @@ final class WasmExportCompiler {
 
 	static final String T_INT = ":int";
 
+	/**
+	 * A 64-bit signed integer ({@code i64}). Supported by the {@code --no-gc} scalar
+	 * backend only (whose internal integer representation is {@code i64}); the GC backend
+	 * rejects it, since its integers are {@code i31ref}.
+	 */
+	static final String T_LONG = ":long";
+
 	static final String T_FLOAT = ":float";
 
 	static final String T_BOOL = ":bool";
@@ -59,7 +69,7 @@ final class WasmExportCompiler {
 	 */
 	static final String T_VOID = ":void";
 
-	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_FLOAT, T_BOOL, T_STRING, T_S_EXPR);
+	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_LONG, T_FLOAT, T_BOOL, T_STRING, T_S_EXPR);
 
 	private WasmExportCompiler() {
 	}
@@ -344,6 +354,7 @@ final class WasmExportCompiler {
 	static void appendWasmTypes(List<Type> types, String type) {
 		switch (type) {
 			case T_INT, T_BOOL -> types.add(Type.I32);
+			case T_LONG -> types.add(Type.I64);
 			case T_FLOAT -> types.add(Type.F64);
 			case T_STRING, T_S_EXPR -> {
 				types.add(Type.I32);

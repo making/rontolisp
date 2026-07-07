@@ -31,10 +31,17 @@ The type designators and their boundary representations are:
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
 | `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
+| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the scalar backend's internal `i64` (no `wrap`/`extend` at the boundary) |
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+
+With the default (GC) backend, `:int` crosses the boundary as `i32` but the
+internal integer is an `i31ref`, so a value returned through `:int` is truncated
+past the 32-bit boundary. On the non-GC backend (`--no-gc`) integers are computed
+as `i64`, so use `:long` when a parameter or result can exceed the 32-bit range —
+it exposes the full width with no `wrap`/`extend` conversion.
 
 ## Limitations
 
@@ -47,5 +54,7 @@ The type designators and their boundary representations are:
 - The exported function is pure-compute: any I/O (printing, reading, time,
   random, or a top-level I/O form) traps under `--no-wasi` and is otherwise
   unsupported.
-- The non-GC backend (`--no-gc`) supports `:int`/`:float`/`:bool`/`:string` but
-  not `:s-expr`, which needs the cons/reader/printer runtime.
+- The non-GC backend (`--no-gc`) supports `:int`/`:long`/`:float`/`:bool`/`:string`
+  but not `:s-expr`, which needs the cons/reader/printer runtime. `:long` is
+  `--no-gc`-only: the GC backend rejects it (its integers are `i31ref`, which
+  cannot hold an `i64`), pointing you at `--no-gc`.

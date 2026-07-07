@@ -48,12 +48,13 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | 指定子 | WASM 境界 | 備考 |
 | --- | --- | --- |
 | `:int` | `i32` | 31 ビット符号付き範囲（内部の `i31ref`） |
+| `:long` | `i64` | `--no-gc` 専用。スカラーバックエンドの内部 `i64` に一致する完全な 64 ビット符号付き範囲 |
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` は `nil`、それ以外の非ゼロ値は `t` |
 | `:string` | `(ptr, len)` | リニアメモリ内の UTF-8 バイト列 |
 | `:s-expr` | `(ptr, len)` | リニアメモリ内の S 式テキスト（関数以外の任意の値） |
 
-デフォルトの wasm-GC 出力は 5 つすべての指定子をサポートします（上記の `:int` の範囲は内部の `i31ref` です）。非 GC バックエンド（[`--no-gc`](#non-gc-output---no-gc)）は `:int`/`:float`/`:bool`/`:string` をサポートします（内部の整数範囲はより広くなります）が、cons/リーダー/プリンターのランタイムを必要とする `:s-expr` はサポートしません。
+デフォルトの wasm-GC 出力は `:int`/`:float`/`:bool`/`:string`/`:s-expr` をサポートします（上記の `:int` の範囲は内部の `i31ref` です）。非 GC バックエンド（[`--no-gc`](#non-gc-output---no-gc)）は `:int`/`:long`/`:float`/`:bool`/`:string` をサポートしますが、cons/リーダー/プリンターのランタイムを必要とする `:s-expr` はサポートしません。非 GC バックエンドは整数を `i64` で計算するため、パラメータや結果が 32 ビット範囲を超えうる場合は `:long` を使ってください。`wrap`/`extend` なしで `i64` として境界を渡ります。`:long` は `--no-gc` 専用で、GC バックエンドは（整数が `i31ref` であるため）これを拒否します。
 
 副作用のある関数は、`:returns` を省略する（あるいは `nil`、`'()`、`:void` として指定する）ことで **void** の結果を宣言できます。その場合、ラッパーは Lisp の戻り値を破棄し、WASM の結果を持ちません。同様に、`:params` を省略するか `nil` または `'()` とした場合は引数なしを意味します。
 
@@ -70,7 +71,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 (rontolisp:wasm-export 'draw-board :as "drawBoard" :params '(:int :int) :returns :int)
 ```
 
-パラメータと結果がすべてスカラー（`:int`/`:float`/`:bool`）である関数は素の数値シグネチャを持つため、`wasmtime --invoke` から直接呼び出せます。メモリを介する `:string` および `:s-expr` 指定子は、モジュールがエクスポートする `memory` を通じてポインタ/長さのペアを受け渡すため、それを読み書きできるホスト（例えば JavaScript）が必要です。入力用に、モジュールはバンプアロケータ `__ronto_alloc(size)` もエクスポートします。これは引数のバイト列を書き込むためのスクラッチ領域のオフセットを返します。
+パラメータと結果がすべてスカラー（`:int`/`:long`/`:float`/`:bool`）である関数は素の数値シグネチャを持つため、`wasmtime --invoke` から直接呼び出せます。メモリを介する `:string` および `:s-expr` 指定子は、モジュールがエクスポートする `memory` を通じてポインタ/長さのペアを受け渡すため、それを読み書きできるホスト（例えば JavaScript）が必要です。入力用に、モジュールはバンプアロケータ `__ronto_alloc(size)` もエクスポートします。これは引数のバイト列を書き込むためのスクラッチ領域のオフセットを返します。
 
 ```js
 const { instance } = await WebAssembly.instantiate(bytes, { wasi_snapshot_preview1: stubs });

@@ -72,15 +72,19 @@ The type designators and their boundary representations are:
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
 | `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
+| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the scalar backend's internal `i64` |
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
 
-The default wasm-GC output supports all five designators (the `:int` range above is the
-internal `i31ref`). The non-GC backend ([`--no-gc`](#non-gc-output---no-gc)) supports
-`:int`/`:float`/`:bool`/`:string` — with a wider internal integer range — but not
-`:s-expr`, which needs the cons/reader/printer runtime.
+The default wasm-GC output supports `:int`/`:float`/`:bool`/`:string`/`:s-expr` (the
+`:int` range above is the internal `i31ref`). The non-GC backend
+([`--no-gc`](#non-gc-output---no-gc)) supports `:int`/`:long`/`:float`/`:bool`/`:string`
+but not `:s-expr`, which needs the cons/reader/printer runtime. Because the non-GC
+backend computes integers as `i64`, use `:long` there when a parameter or result can
+exceed the 32-bit range — it crosses the boundary as `i64` with no `wrap`/`extend`.
+`:long` is `--no-gc`-only; the GC backend rejects it (its integers are `i31ref`).
 
 A side-effecting function can declare a **void** result by omitting `:returns` (or giving it
 as `nil`, `'()` or `:void`); the wrapper then discards the Lisp return value and has no WASM
@@ -99,7 +103,7 @@ idiomatic Lisp symbol, e.g. camelCase for JavaScript:
 (rontolisp:wasm-export 'draw-board :as "drawBoard" :params '(:int :int) :returns :int)
 ```
 
-Functions whose parameters and result are all scalar (`:int`/`:float`/`:bool`) get a plain
+Functions whose parameters and result are all scalar (`:int`/`:long`/`:float`/`:bool`) get a plain
 numeric signature, so they can be called straight from `wasmtime --invoke`. The
 memory-backed `:string` and `:s-expr` designators pass a pointer/length pair through the
 module's exported `memory`, so they need a host that can read and write it (e.g.

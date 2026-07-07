@@ -1118,6 +1118,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
 			int wrapperTypeIndex = TYPE_PROMISE + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
+				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
+						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
+					throw new UnsupportedOperationException("rontolisp:wasm-export :long requires --no-gc for '"
+							+ decl.name() + "' (the GC backend represents integers as i31ref, not i64; use :int)");
+				}
 				WasmFunctionInfo target = functions.get(decl.name());
 				if (target == null || !userDefinedNames.contains(decl.name())) {
 					throw new UnsupportedOperationException(

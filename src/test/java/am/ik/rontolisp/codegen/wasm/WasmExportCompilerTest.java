@@ -156,6 +156,15 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void rejectsLongDesignatorOnTheGcBackend() {
+		// :long maps to i64, which the GC backend cannot represent (its integers are
+		// i31ref); it is a --no-gc-only designator, rejected with a pointer to --no-gc.
+		assertThatThrownBy(() -> compile("(defun f (a b) (* (+ a b) (+ a b)))"
+				+ "(rontolisp:wasm-export 'f :params '(:long :long) :returns :long)"))
+			.hasMessageContaining(":long requires --no-gc");
+	}
+
+	@Test
 	void rejectsExportOfUnknownFunction() {
 		assertThatThrownBy(() -> compile("(rontolisp:wasm-export 'nope :params '(:int) :returns :int)"))
 			.hasMessageContaining("unknown function");
