@@ -520,6 +520,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass);
 
+		// Whether the program can produce a packed float array (a #f(...) literal or
+		// make-array :element-type 'double-float). When true, the array op compilers
+		// route through the _fv* dispatch helpers so a packed double[] and a general
+		// ArrayList are both handled; when false the default build is byte-identical.
+		boolean usesFloatArray = programUsesFloatArray(program);
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
@@ -574,6 +580,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.httpHandlerRuntime(httpHandlerRuntime)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
+			.usesFloatArray(usesFloatArray)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.globals(globals)
@@ -837,18 +844,32 @@ public final class JvmLispCompiler implements LispCompiler {
 		// two array-printing helpers (_arrayToString / _arrayToDisplayString) so a
 		// literal
 		// or make-array result prints as #(...) / #2A(...).
-		boolean usesArrays = programUsesAnyArrayOp(program);
+		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray;
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
 					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass));
+			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
+			// delegate to the general _array* helpers above for a non-packed array, so
+			// they are emitted alongside (and depend on) them.
+			if (usesFloatArray) {
+				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
+			}
 			arrayMethods = built;
 		}
 		else {
 			arrayMethods = List.of();
 		}
+		// The packed-array print branch: _lispToString/_lispToDisplayString render a
+		// double[] by converting it to a general array (_fvToGeneral) and reusing
+		// _arrayToString; non-null only when the program uses packed float arrays.
+		ClassConstant doubleArrayClassForPrint = usesFloatArray ? cp.addClass(cp.addUtf8("[D")) : null;
+		MethodrefConstant fvToGeneralMethod = usesFloatArray
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL),
+						cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC)))
+				: null;
 		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
 		MethodrefConstant arrayToStringMethod = usesArrays
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING),
@@ -886,7 +907,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, javaPrint, promisePrint);
+				arrayListClassForPrint, arrayToStringMethod, javaPrint, promisePrint, doubleArrayClassForPrint,
+				fvToGeneralMethod);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -894,7 +916,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
-				javaPrint, promisePrint);
+				javaPrint, promisePrint, doubleArrayClassForPrint, fvToGeneralMethod);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -1461,11 +1483,59 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean containsArrayLiteral(LispVal val) {
-		if (val instanceof am.ik.rontolisp.LispArray) {
+		// A packed #f(...) literal lowers to a general array here, so it counts as an
+		// array
+		// literal for the runtime/print gate exactly like #(...)/#nA.
+		if (val instanceof am.ik.rontolisp.LispArray || val instanceof am.ik.rontolisp.LispFloatArray) {
 			return true;
 		}
 		if (val instanceof LispCons cons) {
 			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
+		}
+		return false;
+	}
+
+	// True when the program can produce a packed float array: a #f(...) literal
+	// (LispFloatArray) or a (make-array ... :element-type 'double-float ...) form. Gates
+	// the _fv* dispatch helpers and their routing; when false the array op compilers call
+	// the general _array* helpers directly, keeping the default build byte-identical.
+	private static boolean programUsesFloatArray(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (usesFloatArray(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesFloatArray(LispVal val) {
+		if (val instanceof am.ik.rontolisp.LispFloatArray) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
+					&& makeArrayIsDoubleFloat(cons)) {
+				return true;
+			}
+			return usesFloatArray(cons.car()) || usesFloatArray(cons.cdr());
+		}
+		return false;
+	}
+
+	// Whether a (make-array ...) call carries :element-type 'double-float (a literal
+	// quoted symbol at the call site, package qualifier ignored).
+	private static boolean makeArrayIsDoubleFloat(LispCons makeArray) {
+		List<LispVal> args = makeArray.toList();
+		for (int i = 2; i + 1 < args.size(); i++) {
+			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+				LispVal type = args.get(i + 1);
+				if (type instanceof LispCons q && q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
+						&& q.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ts) {
+					String name = ts.name();
+					int colon = name.lastIndexOf(':');
+					return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+				}
+			}
 		}
 		return false;
 	}
@@ -1780,6 +1850,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		/**
+		 * True when the program can produce a packed float array (a {@code #f(...)}
+		 * literal or {@code make-array :element-type 'double-float}). When set, the array
+		 * op compilers route through the {@code _fv*} dispatch helpers (which handle both
+		 * the packed {@code double[]} and the general {@code ArrayList} representation)
+		 * instead of calling the general {@code _array*} helper directly; the default
+		 * build (no packed arrays) is byte-identical. Shared across every context.
+		 */
+		boolean usesFloatArray = false;
+
+		/**
 		 * True for the single context that compiles top-level forms (the {@code main}
 		 * body), false for defun/lambda bodies. When the embedded {@code eval} runtime is
 		 * present, a top-level global variable binding is mirrored into the runtime's
@@ -1851,6 +1931,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		private Ctx(Builder builder) {
 			this.dynamic = builder.dynamic;
+			this.usesFloatArray = builder.usesFloatArray;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
 			this.structAccessors = builder.structAccessors;
@@ -2014,6 +2095,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private boolean dynamic = false;
+
+			private boolean usesFloatArray = false;
 
 			private String className = "";
 
@@ -2277,6 +2360,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder dynamic(boolean dynamic) {
 				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder usesFloatArray(boolean usesFloatArray) {
+				this.usesFloatArray = usesFloatArray;
 				return this;
 			}
 

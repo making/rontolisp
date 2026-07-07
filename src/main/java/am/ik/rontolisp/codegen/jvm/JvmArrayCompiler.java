@@ -7,7 +7,9 @@ import org.jspecify.annotations.Nullable;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
@@ -24,6 +26,14 @@ import am.ik.rontolisp.LispVal;
 final class JvmArrayCompiler {
 
 	private JvmArrayCompiler() {
+	}
+
+	// The packed float-array dispatch helper name when the program uses packed arrays,
+	// otherwise the general array helper. Both share the same descriptor, so only the
+	// invoked method name changes; the default build (no packed arrays) is
+	// byte-identical.
+	private static String fvOr(JvmLispCompiler.Ctx ctx, String fvName, String generalName) {
+		return ctx.usesFloatArray ? fvName : generalName;
 	}
 
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -51,8 +61,26 @@ final class JvmArrayCompiler {
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
+		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
+		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
+		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		if (ctx.usesFloatArray && isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
+				&& fillPointer == null && adjustable == null) {
+			// A plain :element-type 'double-float array (no fill pointer / adjustable /
+			// displacement) is a packed double[]: _fvMake(dims, init) allocates it and
+			// fills with the coerced init (default 0.0 inside the helper).
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue, ctx, className);
+			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		compileKeywordValueOrNull(findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD), ctx, className);
+		if (initValue == null && isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
+			// An :element-type 'double-float array with a fill pointer / adjustable falls
+			// back to a general array; default its elements to 0.0, not nil.
+			initValue = new LispDouble(0.0);
+		}
+		compileKeywordValueOrNull(initValue, ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
 		compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
@@ -171,18 +199,21 @@ final class JvmArrayCompiler {
 		if (rank == 1) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1_DESC);
+			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
+					JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
 		else if (rank == 2) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
-			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2_DESC);
+			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2),
+					JvmArrayRuntimeBuilder.AREF2_DESC);
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			emitSubscriptArray(args, 2, rank, ctx, className);
-			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN_DESC);
+			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN),
+					JvmArrayRuntimeBuilder.AREFN_DESC);
 		}
 	}
 
@@ -196,7 +227,8 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1_DESC);
+		invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
+				JvmArrayRuntimeBuilder.AREF1_DESC);
 	}
 
 	static void compileRowMajorAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -209,7 +241,21 @@ final class JvmArrayCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
-		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1_DESC);
+		invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
+				JvmArrayRuntimeBuilder.ASET1_DESC);
+	}
+
+	static void compileElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (array-element-type array): double-float for a packed array, else t. Only used
+		// when the program uses packed float arrays; otherwise array-element-type expands
+		// to the lite (progn array t).
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
+				JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
 	}
 
 	static void compileDims(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -218,7 +264,8 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.DIMS, JvmArrayRuntimeBuilder.DIMS_DESC);
+		invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.DIMS, JvmArrayRuntimeBuilder.DIMS),
+				JvmArrayRuntimeBuilder.DIMS_DESC);
 	}
 
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -230,20 +277,23 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1_DESC);
+			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
+					JvmArrayRuntimeBuilder.ASET1_DESC);
 		}
 		else if (rank == 2) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2_DESC);
+			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2),
+					JvmArrayRuntimeBuilder.ASET2_DESC);
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			emitSubscriptArray(args, 2, rank, ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN_DESC);
+			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
+					JvmArrayRuntimeBuilder.ASETN_DESC);
 		}
 	}
 
@@ -260,6 +310,24 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(args.get(firstSub + i), ctx, className);
 			ctx.emit(Opcode.AASTORE);
 		}
+	}
+
+	// Whether a make-array :element-type value designates double-float. On the compile
+	// path the value is a literal quoted symbol -- (quote double-float) -- so the quote
+	// is
+	// unwrapped and the symbol name matched (ignoring any package qualifier).
+	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
+		LispVal sym = elementType;
+		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			sym = rest.car();
+		}
+		if (sym instanceof LispSymbol s) {
+			String name = s.name();
+			int colon = name.lastIndexOf(':');
+			return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+		}
+		return false;
 	}
 
 	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {

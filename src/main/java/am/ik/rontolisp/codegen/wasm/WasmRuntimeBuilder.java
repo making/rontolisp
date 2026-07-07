@@ -2234,6 +2234,31 @@ final class WasmRuntimeBuilder {
 		castBuckets(w);
 	}
 
+	// Pushes the f64 data array (field 1) of the TYPE_FARRAY held in slot, cast to
+	// TYPE_F64ARR.
+	private static void farrayData(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// Pushes the dims buckets (field 0, a TYPE_HASH_BUCKETS held as eq) of the
+	// TYPE_FARRAY
+	// in slot.
+	private static void farrayDims(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeSignedLeb128(0);
+	}
+
 	// Pushes the header cons (cell.field0) of the TYPE_CELL value in param 0.
 	private static void cellHeader(WasmWriter w) {
 		getLocal(w, 0);
@@ -2264,6 +2289,85 @@ final class WasmRuntimeBuilder {
 	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
 			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot) {
+		// A packed float array (TYPE_FARRAY) is rendered by converting it in place to an
+		// equivalent general array (a TYPE_CELL with boxed TYPE_FLOAT elements) stored
+		// back
+		// into param 0, then reusing the general-array printer below. The farray's dims
+		// buckets are reused directly; only its unboxed f64 data is boxed per element.
+		// This
+		// reuses the whole renderer with no dedicated packed print path and no new
+		// function
+		// index (the fixed FUNC_* indices the component blobs depend on stay put). The
+		// dims/data/idx/len slots used here are all re-set by the general logic
+		// afterwards.
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.IF, 0x40);
+		// dataSlot = the farray; lenSlot = array.len(farray.data)
+		getLocal(w, 0);
+		setLocal(w, dataSlot);
+		farrayData(w, dataSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		setLocal(w, lenSlot);
+		// dimsSlot = newBuckets = array.new $hash_buckets (null, len)
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		getLocal(w, lenSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		setLocal(w, dimsSlot);
+		// for (idx = 0; idx < len; idx++) newBuckets[idx] = float(farray.data[idx])
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, idxSlot);
+		getLocal(w, lenSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		getBucketsLocal(w, dimsSlot);
+		getLocal(w, idxSlot);
+		farrayData(w, dataSlot);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(w, idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// param0 = cell(cons(dims, cons(cons(null, cons(null, i31 0)), newBuckets)))
+		farrayDims(w, dataSlot);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		getBucketsLocal(w, dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		setLocal(w, 0);
+		w.write(Instruction.END); // if (farray)
+
 		// if (param0 is TYPE_CELL)
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);

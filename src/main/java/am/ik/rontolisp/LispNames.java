@@ -1768,6 +1768,13 @@ public final class LispNames {
 	/** The {@code character} type specifier symbol used in {@code :element-type}. */
 	public static final String CHARACTER_TYPE = "character";
 
+	/**
+	 * The {@code double-float} type specifier symbol. As the {@code :element-type} of
+	 * {@code make-array} (and the element type of a {@code #f(...)} literal) it selects
+	 * the packed {@link am.ik.rontolisp.LispFloatArray} representation.
+	 */
+	public static final String DOUBLE_FLOAT = "double-float";
+
 	/** The {@code read-byte} built-in function (binary streams only). */
 	public static final String READ_BYTE = "read-byte";
 

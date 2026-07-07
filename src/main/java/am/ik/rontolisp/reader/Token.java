@@ -47,6 +47,14 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Packed-double array literal open ({@code #f(}) token; closed by the
+	 * {@link RightParen} matching the opening parenthesis. The rank is inferred from the
+	 * nesting depth of the contents at read time.
+	 */
+	record FloatArrayOpen() implements Token {
+	}
+
+	/**
 	 * Integer number token.
 	 *
 	 * @param value the integer value

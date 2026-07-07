@@ -1,0 +1,847 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import am.ik.jvm.ConstantPool;
+import am.ik.jvm.ConstantPool.ClassConstant;
+import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.Opcode;
+import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
+
+/**
+ * Builds the JVM bytecode for the packed float-array runtime helpers ({@code _fv*}). A
+ * packed float array is represented at runtime as a bare {@code double[]} carrying an
+ * embedded dimension header: {@code [rank, dim_0, ..., dim_{rank-1}, e_0, ...,
+ * e_{total-1}]} (rank and dims stored as doubles). The data offset is {@code 1 + rank}. A
+ * {@code double[]} is disjoint from the {@code Object[]} shape of a cons / function ref /
+ * ratio and from the {@code ArrayList} shape of a general array, so no
+ * value-discriminator changes are needed anywhere else in the backend.
+ *
+ * <p>
+ * These helpers are emitted only when the program can produce a packed float array (a
+ * {@code #f(...)} literal or {@code make-array :element-type 'double-float}; see
+ * {@code JvmLispCompiler.Ctx#usesFloatArray}). Each accessor dispatches on
+ * {@code instanceof double[]}: a packed array is handled natively (header-aware), any
+ * other array shape delegates to the matching general {@code _array*} helper, so a value
+ * whose static type is "an array" works whichever representation it holds at runtime.
+ */
+final class JvmFloatArrayRuntimeBuilder {
+
+	static final String OBJ = "Ljava/lang/Object;";
+
+	static final String TO_GENERAL = "_fvToGeneral";
+
+	static final String TO_GENERAL_DESC = "(" + OBJ + ")" + OBJ;
+
+	static final String AREF1 = "_fvAref1";
+
+	static final String AREF2 = "_fvAref2";
+
+	static final String AREFN = "_fvArefN";
+
+	static final String ASET1 = "_fvAset1";
+
+	static final String ASET2 = "_fvAset2";
+
+	static final String ASETN = "_fvAsetN";
+
+	static final String DIMS = "_fvDims";
+
+	static final String LENGTH = "_fvLength";
+
+	static final String LENGTH_DESC = "(" + OBJ + ")" + OBJ;
+
+	static final String MAKE = "_fvMake";
+
+	static final String MAKE_DESC = "(" + OBJ + OBJ + ")" + OBJ;
+
+	static final String ELEMENT_TYPE = "_fvElementType";
+
+	static final String ELEMENT_TYPE_DESC = "(" + OBJ + ")" + OBJ;
+
+	private JvmFloatArrayRuntimeBuilder() {
+	}
+
+	/**
+	 * Builds the packed float-array helper methods emitted into the program class.
+	 * @param cp the constant pool
+	 * @param objectClass the {@code java/lang/Object} class constant
+	 * @param objectArrayClass the {@code [Ljava/lang/Object;} class constant
+	 * @param selfClass the generated program class (for self-referencing invokestatic)
+	 * @return the helper methods
+	 */
+	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
+			ClassConstant selfClass) {
+		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
+		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
+		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
+		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
+		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+		MethodrefConstant alAdd = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		MethodrefConstant longIntValue = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
+		MethodrefConstant longValueOf = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
+		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
+		MethodrefConstant numberDoubleValue = cp.addMethodref(numberClass,
+				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
+		// Self-referencing static helpers to delegate to / reuse.
+		MethodrefConstant dbl = self(cp, selfClass, JvmNumericRuntimeBuilder.DBL, "(" + OBJ + ")" + OBJ);
+		MethodrefConstant lengthHelper = self(cp, selfClass, JvmLengthRuntimeBuilder.METHOD,
+				JvmLengthRuntimeBuilder.DESC);
+		MethodrefConstant toGeneral = self(cp, selfClass, TO_GENERAL, TO_GENERAL_DESC);
+		MethodrefConstant aref1 = self(cp, selfClass, JvmArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1_DESC);
+		MethodrefConstant aref2 = self(cp, selfClass, JvmArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2_DESC);
+		MethodrefConstant arefN = self(cp, selfClass, JvmArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN_DESC);
+		MethodrefConstant aset1 = self(cp, selfClass, JvmArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1_DESC);
+		MethodrefConstant aset2 = self(cp, selfClass, JvmArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2_DESC);
+		MethodrefConstant asetN = self(cp, selfClass, JvmArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN_DESC);
+		MethodrefConstant arrayDims = self(cp, selfClass, JvmArrayRuntimeBuilder.DIMS,
+				JvmArrayRuntimeBuilder.DIMS_DESC);
+
+		List<ArrayMethod> methods = new ArrayList<>();
+		methods.add(buildToGeneral(cp, doubleArrayClass, arrayListClass, objectClass, alInit, alAdd, longValueOf,
+				doubleValueOf));
+		methods.add(buildAref1(cp, doubleArrayClass, longClass, doubleClass, longIntValue, doubleValueOf, aref1));
+		methods.add(buildAref2(cp, doubleArrayClass, longClass, doubleClass, longIntValue, doubleValueOf, aref2));
+		methods.add(buildArefN(cp, doubleArrayClass, objectArrayClass, longClass, doubleClass, longIntValue,
+				doubleValueOf, arefN));
+		methods.add(buildAset1(cp, doubleArrayClass, longClass, numberClass, longIntValue, numberDoubleValue,
+				doubleValueOf, dbl, aset1));
+		methods.add(buildAset2(cp, doubleArrayClass, longClass, numberClass, longIntValue, numberDoubleValue,
+				doubleValueOf, dbl, aset2));
+		methods.add(buildAsetN(cp, doubleArrayClass, objectArrayClass, longClass, numberClass, longIntValue,
+				numberDoubleValue, doubleValueOf, dbl, asetN));
+		methods.add(buildDims(cp, doubleArrayClass, objectClass, longValueOf, arrayDims));
+		methods.add(buildLength(cp, doubleArrayClass, longValueOf, toGeneral, lengthHelper));
+		methods.add(buildMake(cp, doubleArrayClass, objectArrayClass, longClass, numberClass, longIntValue,
+				numberDoubleValue, dbl));
+		methods.add(buildElementType(cp, doubleArrayClass));
+		return methods;
+	}
+
+	private static MethodrefConstant self(ConstantPool cp, ClassConstant selfClass, String name, String desc) {
+		return cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	}
+
+	// _fvToGeneral(o): convert a packed double[] into an equivalent general array (an
+	// ArrayList whose slot 0 is the {dims, null, null} header and slots 1.. are boxed
+	// Doubles), so the existing _arrayToString / equality / coercion helpers render and
+	// compare it exactly like a general double array. Locals: 0=o, 1=d (double[]),
+	// 2=rank, 3=off, 4=total, 5=dimsArr, 6=list, 7=k, 8=f.
+	private static ArrayMethod buildToGeneral(ConstantPool cp, ClassConstant doubleArrayClass,
+			ClassConstant arrayListClass, ClassConstant objectClass, MethodrefConstant alInit, MethodrefConstant alAdd,
+			MethodrefConstant longValueOf, MethodrefConstant doubleValueOf) {
+		int o = 0, d = 1, rank = 2, off = 3, total = 4, dimsArr = 5, list = 6, k = 7, f = 8;
+		JvmAsm a = new JvmAsm();
+		a.aload(o);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.istore(off);
+		a.aload(d);
+		a.arraylength();
+		a.iload(off);
+		a.op(Opcode.ISUB);
+		a.istore(total);
+		a.iload(rank);
+		a.anewarray(objectClass);
+		a.astore(dimsArr);
+		a.iconst(0);
+		a.istore(k);
+		int kLoop = a.label();
+		int kDone = a.label();
+		a.bind(kLoop);
+		a.iload(k);
+		a.iload(rank);
+		a.branch(Opcode.IF_ICMPGE, kDone);
+		a.aload(dimsArr);
+		a.iload(k);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(k);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.d2i();
+		a.op(Opcode.I2L);
+		a.invokestatic(longValueOf);
+		a.aastore();
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, kLoop);
+		a.bind(kDone);
+		a.anew(arrayListClass);
+		a.dup();
+		a.invokespecial(alInit);
+		a.astore(list);
+		a.aload(list);
+		a.iconst(3);
+		a.anewarray(objectClass);
+		a.dup();
+		a.iconst(0);
+		a.aload(dimsArr);
+		a.aastore();
+		a.invokevirtual(alAdd);
+		a.pop();
+		a.iconst(0);
+		a.istore(f);
+		int fLoop = a.label();
+		int fDone = a.label();
+		a.bind(fLoop);
+		a.iload(f);
+		a.iload(total);
+		a.branch(Opcode.IF_ICMPGE, fDone);
+		a.aload(list);
+		a.aload(d);
+		a.iload(off);
+		a.iload(f);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.invokestatic(doubleValueOf);
+		a.invokevirtual(alAdd);
+		a.pop();
+		a.iinc(f, 1);
+		a.branch(Opcode.GOTO, fLoop);
+		a.bind(fDone);
+		a.aload(list);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(TO_GENERAL), cp.addUtf8(TO_GENERAL_DESC), 6, 9, a.finish());
+	}
+
+	// _fvAref1(arr, i): packed -> Double.valueOf(d[1 + rank + (int) i]); else _aref1.
+	// Serves rank-1 aref and row-major-aref (rank read from the header). Locals:
+	// 0=arr, 1=i, 2=d, 3=rank.
+	private static ArrayMethod buildAref1(ConstantPool cp, ClassConstant doubleArrayClass, ClassConstant longClass,
+			ClassConstant doubleClass, MethodrefConstant longIntValue, MethodrefConstant doubleValueOf,
+			MethodrefConstant aref1) {
+		int arr = 0, i = 1, d = 2, rank = 3;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.aload(i);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.invokestatic(doubleValueOf);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(i);
+		a.invokestatic(aref1);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 5, 4, a.finish());
+	}
+
+	// _fvAref2(arr, i, j): packed -> Double.valueOf(d[1 + rank + i * cols + j]) with
+	// cols = (int) d[2]; else _aref2. Locals: 0=arr, 1=i, 2=j, 3=d, 4=rank, 5=cols.
+	private static ArrayMethod buildAref2(ConstantPool cp, ClassConstant doubleArrayClass, ClassConstant longClass,
+			ClassConstant doubleClass, MethodrefConstant longIntValue, MethodrefConstant doubleValueOf,
+			MethodrefConstant aref2) {
+		int arr = 0, i = 1, j = 2, d = 3, rank = 4, cols = 5;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.aload(d);
+		a.iconst(2);
+		a.daload();
+		a.d2i();
+		a.istore(cols);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.aload(i);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.iload(cols);
+		a.op(Opcode.IMUL);
+		a.op(Opcode.IADD);
+		a.aload(j);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.invokestatic(doubleValueOf);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(i);
+		a.aload(j);
+		a.invokestatic(aref2);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(JvmArrayRuntimeBuilder.AREF2_DESC), 6, 6, a.finish());
+	}
+
+	// _fvArefN(arr, subs): packed -> Horner flat index over the header dims; else _arefN.
+	// Locals: 0=arr, 1=subs, 2=d, 3=subsArr, 4=rank, 5=flat, 6=k.
+	private static ArrayMethod buildArefN(ConstantPool cp, ClassConstant doubleArrayClass,
+			ClassConstant objectArrayClass, ClassConstant longClass, ClassConstant doubleClass,
+			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant arefN) {
+		int arr = 0, subs = 1, d = 2, subsArr = 3, rank = 4, flat = 5, k = 6;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(subs);
+		a.checkcast(objectArrayClass);
+		a.astore(subsArr);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.aload(subsArr);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(flat);
+		a.iconst(1);
+		a.istore(k);
+		int loop = a.label();
+		int done = a.label();
+		a.bind(loop);
+		a.iload(k);
+		a.iload(rank);
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.iload(flat);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(k);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.d2i();
+		a.op(Opcode.IMUL);
+		a.aload(subsArr);
+		a.iload(k);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.istore(flat);
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.iload(flat);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.invokestatic(doubleValueOf);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(subs);
+		a.invokestatic(arefN);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(JvmArrayRuntimeBuilder.AREFN_DESC), 5, 7, a.finish());
+	}
+
+	// _fvAset1(arr, i, val): packed -> d[1 + rank + (int) i] = coerce(val), return the
+	// stored Double (matching the interpreter, which returns the coerced double); else
+	// _aset1. Locals: 0=arr, 1=i, 2=val, 3=d, 4=rank, 5=idx, 6..7=dval.
+	private static ArrayMethod buildAset1(ConstantPool cp, ClassConstant doubleArrayClass, ClassConstant longClass,
+			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue,
+			MethodrefConstant doubleValueOf, MethodrefConstant dbl, MethodrefConstant aset1) {
+		int arr = 0, i = 1, val = 2, d = 3, rank = 4, idx = 5, dval = 6;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.aload(i);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.istore(idx);
+		a.aload(val);
+		a.invokestatic(dbl);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(dval);
+		a.aload(d);
+		a.iload(idx);
+		a.dload(dval);
+		a.dastore();
+		a.dload(dval);
+		a.invokestatic(doubleValueOf);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(i);
+		a.aload(val);
+		a.invokestatic(aset1);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), 4, 8, a.finish());
+	}
+
+	// _fvAset2(arr, i, j, val): packed store at i*cols+j; else _aset2.
+	// Locals: 0=arr, 1=i, 2=j, 3=val, 4=d, 5=rank, 6=cols, 7=idx, 8..9=dval.
+	private static ArrayMethod buildAset2(ConstantPool cp, ClassConstant doubleArrayClass, ClassConstant longClass,
+			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue,
+			MethodrefConstant doubleValueOf, MethodrefConstant dbl, MethodrefConstant aset2) {
+		int arr = 0, i = 1, j = 2, val = 3, d = 4, rank = 5, cols = 6, idx = 7, dval = 8;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.aload(d);
+		a.iconst(2);
+		a.daload();
+		a.d2i();
+		a.istore(cols);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.aload(i);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.iload(cols);
+		a.op(Opcode.IMUL);
+		a.op(Opcode.IADD);
+		a.aload(j);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.istore(idx);
+		a.aload(val);
+		a.invokestatic(dbl);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(dval);
+		a.aload(d);
+		a.iload(idx);
+		a.dload(dval);
+		a.dastore();
+		a.dload(dval);
+		a.invokestatic(doubleValueOf);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(i);
+		a.aload(j);
+		a.aload(val);
+		a.invokestatic(aset2);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(JvmArrayRuntimeBuilder.ASET2_DESC), 5, 10, a.finish());
+	}
+
+	// _fvAsetN(arr, subs, val): packed Horner store; else _asetN.
+	// Locals: 0=arr, 1=subs, 2=val, 3=d, 4=subsArr, 5=rank, 6=flat, 7=k, 8=idx,
+	// 9..10=dval.
+	private static ArrayMethod buildAsetN(ConstantPool cp, ClassConstant doubleArrayClass,
+			ClassConstant objectArrayClass, ClassConstant longClass, ClassConstant numberClass,
+			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf,
+			MethodrefConstant dbl, MethodrefConstant asetN) {
+		int arr = 0, subs = 1, val = 2, d = 3, subsArr = 4, rank = 5, flat = 6, k = 7, idx = 8, dval = 9;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(subs);
+		a.checkcast(objectArrayClass);
+		a.astore(subsArr);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.aload(subsArr);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(flat);
+		a.iconst(1);
+		a.istore(k);
+		int loop = a.label();
+		int done = a.label();
+		a.bind(loop);
+		a.iload(k);
+		a.iload(rank);
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.iload(flat);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(k);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.d2i();
+		a.op(Opcode.IMUL);
+		a.aload(subsArr);
+		a.iload(k);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IADD);
+		a.istore(flat);
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.iload(flat);
+		a.op(Opcode.IADD);
+		a.istore(idx);
+		a.aload(val);
+		a.invokestatic(dbl);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(dval);
+		a.aload(d);
+		a.iload(idx);
+		a.dload(dval);
+		a.dastore();
+		a.dload(dval);
+		a.invokestatic(doubleValueOf);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.aload(subs);
+		a.aload(val);
+		a.invokestatic(asetN);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(JvmArrayRuntimeBuilder.ASETN_DESC), 5, 11, a.finish());
+	}
+
+	// _fvDims(arr): packed -> a fresh cons list of the header dims as Longs; else
+	// _arrayDims. Locals: 0=arr, 1=d, 2=rank, 3=result, 4=j.
+	private static ArrayMethod buildDims(ConstantPool cp, ClassConstant doubleArrayClass, ClassConstant objectClass,
+			MethodrefConstant longValueOf, MethodrefConstant arrayDims) {
+		int arr = 0, d = 1, rank = 2, result = 3, j = 4;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.aconstNull();
+		a.astore(result);
+		a.iload(rank);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.istore(j);
+		int loop = a.label();
+		int done = a.label();
+		a.bind(loop);
+		a.iload(j);
+		a.branch(Opcode.IFLT, done);
+		a.iconst(2);
+		a.anewarray(objectClass);
+		a.dup();
+		a.iconst(0);
+		a.aload(d);
+		a.iconst(1);
+		a.iload(j);
+		a.op(Opcode.IADD);
+		a.daload();
+		a.d2i();
+		a.op(Opcode.I2L);
+		a.invokestatic(longValueOf);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.aload(result);
+		a.aastore();
+		a.astore(result);
+		a.iinc(j, -1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		a.aload(result);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.invokestatic(arrayDims);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), 6, 5, a.finish());
+	}
+
+	// _fvLength(arr): packed rank-1 -> Long.valueOf(count); packed rank-n -> delegate via
+	// _length(_fvToGeneral(arr)) for exact parity with the general array; else _length.
+	// Locals: 0=arr, 1=d, 2=rank.
+	private static ArrayMethod buildLength(ConstantPool cp, ClassConstant doubleArrayClass,
+			MethodrefConstant longValueOf, MethodrefConstant toGeneral, MethodrefConstant lengthHelper) {
+		int arr = 0, d = 1, rank = 2;
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		int rankN = a.label();
+		a.aload(arr);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.aload(arr);
+		a.checkcast(doubleArrayClass);
+		a.astore(d);
+		a.aload(d);
+		a.iconst(0);
+		a.daload();
+		a.d2i();
+		a.istore(rank);
+		a.iload(rank);
+		a.iconst(1);
+		a.branch(Opcode.IF_ICMPNE, rankN);
+		// rank 1: count = d.length - 2
+		a.aload(d);
+		a.arraylength();
+		a.iconst(2);
+		a.op(Opcode.ISUB);
+		a.op(Opcode.I2L);
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.bind(rankN);
+		a.aload(arr);
+		a.invokestatic(toGeneral);
+		a.invokestatic(lengthHelper);
+		a.areturn();
+		a.bind(notPacked);
+		a.aload(arr);
+		a.invokestatic(lengthHelper);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(LENGTH_DESC), 3, 3, a.finish());
+	}
+
+	// _fvMake(dims, init): build a packed double[] with a dimension header, filled with
+	// coerce(init) (default 0.0). dims is a Long (rank-1 shorthand) or a cons list of
+	// Longs. Always produces a packed array (the compiler routes here only for
+	// :element-type 'double-float without fill-pointer/adjustable/displacement). Locals:
+	// 0=dims, 1=init, 2..3=initVal, 4=rank, 5=total, 6=arr, 7=cur, 8=k, 9=off, 10=i.
+	private static ArrayMethod buildMake(ConstantPool cp, ClassConstant doubleArrayClass,
+			ClassConstant objectArrayClass, ClassConstant longClass, ClassConstant numberClass,
+			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant dbl) {
+		int dims = 0, init = 1, initVal = 2, rank = 4, total = 5, arr = 6, cur = 7, k = 8, off = 9, i = 10;
+		JvmAsm a = new JvmAsm();
+		// initVal = init == null ? 0.0 : ((Number) _dbl(init)).doubleValue()
+		int haveInit = a.label();
+		int initDone = a.label();
+		a.aload(init);
+		a.branch(Opcode.IFNONNULL, haveInit);
+		a.op(Opcode.DCONST_0);
+		a.dstore(initVal);
+		a.branch(Opcode.GOTO, initDone);
+		a.bind(haveInit);
+		a.aload(init);
+		a.invokestatic(dbl);
+		a.checkcast(numberClass);
+		a.invokevirtual(numberDoubleValue);
+		a.dstore(initVal);
+		a.bind(initDone);
+		// parse dims
+		int listCase = a.label();
+		int fill = a.label();
+		a.aload(dims);
+		a.instanceOf(longClass);
+		a.branch(Opcode.IFEQ, listCase);
+		// rank-1 shorthand: total = (int) dims; arr = new double[2 + total];
+		// arr[0]=1.0; arr[1]=(double) total; off=2
+		a.aload(dims);
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.istore(total);
+		a.iconst(2);
+		a.iload(total);
+		a.op(Opcode.IADD);
+		a.newarrayDouble();
+		a.astore(arr);
+		a.aload(arr);
+		a.iconst(0);
+		a.op(Opcode.DCONST_1);
+		a.dastore();
+		a.aload(arr);
+		a.iconst(1);
+		a.iload(total);
+		a.i2d();
+		a.dastore();
+		a.iconst(2);
+		a.istore(off);
+		a.branch(Opcode.GOTO, fill);
+		// cons list of dims: count rank + product, then allocate and write header
+		a.bind(listCase);
+		a.iconst(0);
+		a.istore(rank);
+		a.iconst(1);
+		a.istore(total);
+		a.aload(dims);
+		a.astore(cur);
+		int countLoop = a.label();
+		int countDone = a.label();
+		a.bind(countLoop);
+		a.aload(cur);
+		a.instanceOf(objectArrayClass);
+		a.branch(Opcode.IFEQ, countDone);
+		a.iinc(rank, 1);
+		a.iload(total);
+		a.aload(cur);
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.op(Opcode.IMUL);
+		a.istore(total);
+		a.aload(cur);
+		a.checkcast(objectArrayClass);
+		a.iconst(1);
+		a.aaload();
+		a.astore(cur);
+		a.branch(Opcode.GOTO, countLoop);
+		a.bind(countDone);
+		a.iconst(1);
+		a.iload(rank);
+		a.op(Opcode.IADD);
+		a.istore(off);
+		a.iload(off);
+		a.iload(total);
+		a.op(Opcode.IADD);
+		a.newarrayDouble();
+		a.astore(arr);
+		a.aload(arr);
+		a.iconst(0);
+		a.iload(rank);
+		a.i2d();
+		a.dastore();
+		// write dims into arr[1..rank]
+		a.aload(dims);
+		a.astore(cur);
+		a.iconst(0);
+		a.istore(k);
+		int dimLoop = a.label();
+		int dimDone = a.label();
+		a.bind(dimLoop);
+		a.aload(cur);
+		a.instanceOf(objectArrayClass);
+		a.branch(Opcode.IFEQ, dimDone);
+		a.aload(arr);
+		a.iconst(1);
+		a.iload(k);
+		a.op(Opcode.IADD);
+		a.aload(cur);
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(longIntValue);
+		a.i2d();
+		a.dastore();
+		a.aload(cur);
+		a.checkcast(objectArrayClass);
+		a.iconst(1);
+		a.aaload();
+		a.astore(cur);
+		a.iinc(k, 1);
+		a.branch(Opcode.GOTO, dimLoop);
+		a.bind(dimDone);
+		// fill data slots with initVal
+		a.bind(fill);
+		a.iconst(0);
+		a.istore(i);
+		int fillLoop = a.label();
+		int fillDone = a.label();
+		a.bind(fillLoop);
+		a.iload(i);
+		a.iload(total);
+		a.branch(Opcode.IF_ICMPGE, fillDone);
+		a.aload(arr);
+		a.iload(off);
+		a.iload(i);
+		a.op(Opcode.IADD);
+		a.dload(initVal);
+		a.dastore();
+		a.iinc(i, 1);
+		a.branch(Opcode.GOTO, fillLoop);
+		a.bind(fillDone);
+		a.aload(arr);
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 6, 12, a.finish());
+	}
+
+	// _fvElementType(arr): packed -> the symbol double-float; else the symbol t (general
+	// arrays are element-type t, matching the lite expandArrayElementType). Locals:
+	// 0=arr.
+	private static ArrayMethod buildElementType(ConstantPool cp, ClassConstant doubleArrayClass) {
+		JvmAsm a = new JvmAsm();
+		int notPacked = a.label();
+		a.aload(0);
+		a.instanceOf(doubleArrayClass);
+		a.branch(Opcode.IFEQ, notPacked);
+		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.DOUBLE_FLOAT));
+		a.areturn();
+		a.bind(notPacked);
+		a.ldcString(cp.addString("t"));
+		a.areturn();
+		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 1, 1, a.finish());
+	}
+
+}

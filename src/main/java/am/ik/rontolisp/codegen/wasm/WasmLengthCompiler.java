@@ -15,7 +15,9 @@ import am.ik.wasm.Type;
  * lacks the leading quote) is not a sequence and yields zero, matching the interpreter; a
  * hash table likewise yields zero. A rank-2 array is not a sequence and traps. An array
  * and a hash table are both {@code TYPE_CELL} boxes; the header's car distinguishes them
- * (a bucket array for an array, an i31 count for a hash table).
+ * (a bucket array for an array, an i31 count for a hash table). A packed float vector
+ * ({@code TYPE_FARRAY}) is handled first: a rank-1 one yields its {@code dims[0]}, a
+ * higher-rank one traps like a general rank-n array.
  */
 final class WasmLengthCompiler {
 
@@ -28,6 +30,50 @@ final class WasmLengthCompiler {
 		int valSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(valSlot);
+
+		// A packed float array (TYPE_FARRAY): a rank-1 vector's length is dims[0]; a
+		// higher-rank array is not a sequence and traps (like a general rank-n array).
+		// Falls through to the general string/array/list logic otherwise.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		int fdimsSlot = ctx.allocTemp();
+		// fdimsSlot = farray.dims (field 0, held as eq; cast to buckets on each use)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(fdimsSlot);
+		// rank != 1 -> trap
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(fdimsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_NE);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// dims[0] (already an i31)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(fdimsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.ELSE);
 
 		// if (val is a TYPE_STRING struct)
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -221,6 +267,7 @@ final class WasmLengthCompiler {
 
 		ctx.writer.write(Instruction.END); // array/hash-table-vs-list if
 		ctx.writer.write(Instruction.END); // outer if (string)
+		ctx.writer.write(Instruction.END); // outermost if (packed farray)
 	}
 
 }

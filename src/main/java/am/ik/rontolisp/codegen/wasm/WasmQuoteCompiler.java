@@ -35,6 +35,51 @@ final class WasmQuoteCompiler {
 		compileQuotedArray(array, ctx);
 	}
 
+	/**
+	 * Emits a packed float-array literal ({@code #f(...)}) as a {@code TYPE_FARRAY}
+	 * struct {@code (dims . data)}: {@code dims} a {@code TYPE_HASH_BUCKETS} of i31
+	 * dimension sizes (as for a general array), {@code data} a {@code TYPE_F64ARR} of the
+	 * unboxed row-major {@code f64} elements. This is the native packed representation,
+	 * disjoint from the general array's {@code TYPE_CELL}. Shared by the {@code quote}
+	 * path and the bare-literal path in {@link WasmExprCompiler}.
+	 * @param fa the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compilePackedLiteral(am.ik.rontolisp.LispFloatArray fa, WasmLispCompiler.Ctx ctx) {
+		double[] data = fa.data();
+		int[] dims = fa.dims();
+		// data: array.new TYPE_F64ARR (0.0, data.length), then array.set each element.
+		f64Const(ctx, 0.0);
+		i32Const(ctx, data.length);
+		f64ArrayNew(ctx);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		for (int i = 0; i < data.length; i++) {
+			getF64Arr(ctx, dataSlot);
+			i32Const(ctx, i);
+			f64Const(ctx, data[i]);
+			f64ArraySet(ctx);
+		}
+		// dims: array.new TYPE_HASH_BUCKETS (null, dims.length), filled with i31 sizes.
+		refNull(ctx);
+		i32Const(ctx, dims.length);
+		arrayNew(ctx);
+		int dimsSlot = ctx.allocTemp();
+		setLocal(ctx, dimsSlot);
+		for (int d = 0; d < dims.length; d++) {
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, d);
+			i32Const(ctx, dims[d]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			arraySet(ctx);
+		}
+		// struct.new TYPE_FARRAY (dims, data)
+		getLocal(ctx, dimsSlot);
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
 	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
 		switch (val) {
 			case LispInteger i -> {
@@ -71,6 +116,7 @@ final class WasmQuoteCompiler {
 			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx);
 			case LispArray array -> compileQuotedArray(array, ctx);
+			case am.ik.rontolisp.LispFloatArray fa -> compilePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}
@@ -149,9 +195,37 @@ final class WasmQuoteCompiler {
 		ctx.writer.writeSignedLeb128(value);
 	}
 
+	private static void f64Const(WasmLispCompiler.Ctx ctx, double value) {
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(value);
+	}
+
 	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(slot);
+	}
+
+	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+	}
+
+	// Pushes the f64 array stored in slot, cast to TYPE_F64ARR.
+	private static void getF64Arr(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	private static void f64ArrayNew(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	private static void f64ArraySet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	// Pushes the bucket array stored in slot, cast to TYPE_HASH_BUCKETS.

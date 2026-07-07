@@ -70,6 +70,7 @@ final class WasmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx);
 			case am.ik.rontolisp.LispArray array -> WasmQuoteCompiler.compileLiteralArray(array, ctx);
+			case am.ik.rontolisp.LispFloatArray fa -> WasmQuoteCompiler.compilePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}
@@ -427,8 +428,7 @@ final class WasmExprCompiler {
 				case LispNames.SET_FILL_POINTER -> WasmArrayCompiler.compileSetFillPointer(cons, ctx);
 				case LispNames.ARRAY_HAS_FILL_POINTER_P -> WasmArrayCompiler.compileHasFillPointer(cons, ctx);
 				case LispNames.ADJUSTABLE_ARRAY_P -> WasmArrayCompiler.compileAdjustableArrayP(cons, ctx);
-				case LispNames.ARRAY_ELEMENT_TYPE ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayElementType(cons), ctx);
+				case LispNames.ARRAY_ELEMENT_TYPE -> WasmArrayCompiler.compileElementType(cons, ctx);
 				case LispNames.VECTOR_PUSH -> WasmArrayCompiler.compileVectorPush(cons, ctx);
 				case LispNames.VECTOR_POP -> WasmArrayCompiler.compileVectorPop(cons, ctx);
 				case LispNames.VECTOR_PUSH_EXTEND -> WasmArrayCompiler.compileVectorPushExtend(cons, ctx);

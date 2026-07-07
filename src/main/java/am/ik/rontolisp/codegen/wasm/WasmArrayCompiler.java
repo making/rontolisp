@@ -5,7 +5,9 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
@@ -38,9 +40,23 @@ import am.ik.wasm.Type;
  * semantics, enforced at compile time because make-array keywords are literal).
  *
  * <p>
- * Everything is emitted inline (no runtime helper function and no new heap type), so the
- * static function-import indices stay identical across Preview 1 and {@code --component}
- * modes and the component blobs are unaffected.
+ * A packed float array ({@code #f(...)} or {@code make-array :element-type 'double-float}
+ * without a fill pointer / adjustable / displacement) is a distinct {@code TYPE_FARRAY}
+ * struct {@code (dims . data)} holding unboxed {@code f64} elements (see
+ * {@link WasmQuoteCompiler#compilePackedLiteral}) -- disjoint from the general array's
+ * {@code TYPE_CELL}. Every accessor here ({@code aref}/{@code %aset}/{@code row-major-*}/
+ * {@code array-dimensions}/{@code make-array}) opens with a {@code ref.test $farray}
+ * branch: the packed arm reads/writes the {@code TYPE_F64ARR} directly (flat index via
+ * {@link #emitPackedFlatIndex}, boxing each element into a {@code TYPE_FLOAT} on read and
+ * coercing to {@code f64} via {@link WasmEmitHelper#castFloatGetF64} on write), while the
+ * general arm runs the cell logic unchanged. This test must precede any
+ * {@code castCellGet0}, which traps on a non-cell.
+ *
+ * <p>
+ * Everything is emitted inline (no runtime helper function); the packed types are the
+ * only new heap types and they are added at the END of the type section, so the static
+ * function-import indices stay identical across Preview 1 and {@code --component} modes
+ * and the component blobs are unaffected.
  */
 final class WasmArrayCompiler {
 
@@ -56,10 +72,25 @@ final class WasmArrayCompiler {
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
+		boolean doubleFloat = isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
+		LispVal adjArg = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
+		if (doubleFloat && fpArg == null && adjArg == null) {
+			// A plain :element-type 'double-float array (no fill pointer / adjustable /
+			// displacement) is a packed farray: emitParseDims for the shape, then a
+			// TYPE_F64ARR of the coerced init (default 0.0).
+			compilePackedMake(args, ctx);
+			return;
+		}
 		// dims -> dimsSlot, init -> initSlot
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
 		LispVal init = findInitialElement(args);
+		if (init == null && doubleFloat) {
+			// An :element-type 'double-float array with a fill pointer / adjustable falls
+			// back to a general array; default its elements to 0.0, not nil.
+			init = new LispDouble(0.0);
+		}
 		if (init != null) {
 			WasmExprCompiler.compileExpr(init, ctx);
 		}
@@ -258,6 +289,39 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
 	}
 
+	// (make-array dims :element-type 'double-float [:initial-element x]): a packed
+	// farray.
+	// dims is parsed exactly like the general path (emitParseDims -> a buckets array of
+	// i31 sizes + the total element count); data is a TYPE_F64ARR filled with the coerced
+	// init (default 0.0). No fill pointer / adjustable / displacement -- a packed array
+	// never has them, and the caller has already routed those cases to the general path.
+	private static void compilePackedMake(List<LispVal> args, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int dimsSlot = setTemp(ctx);
+		int dimsArrSlot = ctx.allocTemp();
+		int totalSlot = ctx.allocTemp();
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		// init f64 (coerced; a non-real value traps, matching the packed element type)
+		LispVal init = findInitialElement(args);
+		if (init != null) {
+			WasmExprCompiler.compileExpr(init, ctx);
+			WasmEmitHelper.castFloatGetF64(ctx);
+		}
+		else {
+			f64Const(ctx, 0.0);
+		}
+		// data = array.new TYPE_F64ARR (initF64, total)
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		f64ArrayNew(ctx);
+		int dataArrSlot = setTemp(ctx);
+		// struct.new TYPE_FARRAY (dims, data)
+		getLocal(ctx, dimsArrSlot);
+		getLocal(ctx, dataArrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
 	// Parses the make-array dimensions value in dimsSlot (an i31 for the rank-1
 	// shorthand, otherwise a cons list of sizes) into a fresh buckets array of i31 sizes
 	// (dimsArrSlot) and the boxed-i31 total element count (totalSlot).
@@ -406,14 +470,30 @@ final class WasmArrayCompiler {
 	static void compileAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		int rank = args.size() - 2;
-		// arr -> header (the (dims . (meta . data)) cons)
+		// Evaluate the array once; a packed farray reads its unboxed f64 store directly,
+		// a
+		// general array resolves the displacement chain into its buckets.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed: box(data[Horner(subscripts)]).
+		int pdimsSlot = ctx.allocTemp();
+		farrayField(ctx, arrSlot, 0);
+		setLocal(ctx, pdimsSlot);
+		getFarrayData(ctx, arrSlot);
+		emitPackedFlatIndex(ctx, pdimsSlot, args, 2, rank);
+		f64ArrayGet(ctx);
+		boxFloat(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		// general: arr -> header (the (dims . (meta . data)) cons), then data[flat].
+		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
-		// data[flat], resolving the displacement chain first.
 		emitFlatIndex(ctx, headerSlot, args, 2, rank);
 		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileRowMajorAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -425,12 +505,25 @@ final class WasmArrayCompiler {
 					"row-major-aref expects an array and an index, got " + (args.size() - 1) + " argument(s)");
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed: box(data[index]).
+		getFarrayData(ctx, arrSlot);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		f64ArrayGet(ctx);
+		boxFloat(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		// general: resolve the displacement chain, then data[index].
+		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileRowMajorAset(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -441,8 +534,31 @@ final class WasmArrayCompiler {
 			throw new UnsupportedOperationException("%row-major-aset expects an array, an index and a value, got "
 					+ (args.size() - 1) + " argument(s)");
 		}
-		int valSlot = ctx.allocTemp();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed: coerce value -> f64, store at data[index], return the boxed coerced
+		// value (matching the interpreter/JVM, which return the coerced double).
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		boxI31(ctx);
+		int pIdxSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(3), ctx);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		boxFloat(ctx);
+		int pBoxSlot = setTemp(ctx);
+		getFarrayData(ctx, arrSlot);
+		getLocal(ctx, pIdxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, pBoxSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		f64ArraySet(ctx);
+		getLocal(ctx, pBoxSlot);
+		ctx.writer.write(Instruction.ELSE);
+		// general: resolve the displacement chain, store, and leave the value.
+		int valSlot = ctx.allocTemp();
+		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
@@ -453,6 +569,7 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileDims(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -460,10 +577,18 @@ final class WasmArrayCompiler {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
 		}
-		// arr -> header (the (dims . data) cons) -> the dims buckets array in a temp.
+		// arr -> the dims buckets array (a packed farray's field 0, else the general
+		// header's car) in a temp; the cons-list build below is shared.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		farrayField(ctx, arrSlot, 0);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.END);
 		int dimsSlot = setTemp(ctx);
 		int resultSlot = ctx.allocTemp();
 		int jSlot = ctx.allocTemp();
@@ -510,11 +635,37 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		int rank = args.size() - 3;
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed: store the coerced f64 at data[Horner(subscripts)], returning the boxed
+		// coerced value (matching the interpreter/JVM). Evaluation order: array (done),
+		// subscripts, then value.
+		int pdimsSlot = ctx.allocTemp();
+		farrayField(ctx, arrSlot, 0);
+		setLocal(ctx, pdimsSlot);
+		emitPackedFlatIndex(ctx, pdimsSlot, args, 2, rank);
+		boxI31(ctx);
+		int pIdxSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		boxFloat(ctx);
+		int pBoxSlot = setTemp(ctx);
+		getFarrayData(ctx, arrSlot);
+		getLocal(ctx, pIdxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, pBoxSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		f64ArraySet(ctx);
+		getLocal(ctx, pBoxSlot);
+		ctx.writer.write(Instruction.ELSE);
+		// general: data[flat] = val, leaving val as the result. tee keeps the value on
+		// the
+		// stack for array.set.
+		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		int valSlot = ctx.allocTemp();
-		// data[flat] = val, leaving val as the result. Evaluation order: array (done),
-		// subscripts, then value; tee keeps the value on the stack for array.set.
 		emitFlatIndex(ctx, headerSlot, args, 2, rank);
 		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
@@ -522,6 +673,7 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.END);
 	}
 
 	// Resolves the displacement chain: expects the i32 flat index on the stack; leaves
@@ -592,6 +744,44 @@ final class WasmArrayCompiler {
 			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.I32_ADD);
 		}
+	}
+
+	// The Horner fold for a packed farray: the same shape as emitFlatIndex, but the
+	// per-dimension strides come from the farray's own dims buckets (held in dimsSlot as
+	// eq) rather than a general-array header. A rank-1 access never touches dimsSlot.
+	private static void emitPackedFlatIndex(WasmLispCompiler.Ctx ctx, int dimsSlot, List<LispVal> args, int firstSub,
+			int rank) {
+		WasmExprCompiler.compileExpr(args.get(firstSub), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		for (int k = 1; k < rank; k++) {
+			// flat = flat * dims[k] + subscript_k
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, k);
+			arrayGet(ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_MUL);
+			WasmExprCompiler.compileExpr(args.get(firstSub + k), ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_ADD);
+		}
+	}
+
+	static void compileElementType(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (array-element-type array): the symbol double-float for a packed farray, else t
+		// (the general array's lite element type, matching the (progn arr t) expansion).
+		// Emitted unconditionally -- the farray types always exist on the GC backend.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmEmitHelper.compileStringLiteral(LispNames.DOUBLE_FLOAT, ctx);
+		ctx.writer.write(Instruction.ELSE);
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileFillPointer(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -1005,6 +1195,25 @@ final class WasmArrayCompiler {
 		return null;
 	}
 
+	// Whether a make-array :element-type value designates double-float. On the compile
+	// path the value is a literal quoted symbol -- (quote double-float) -- so the quote
+	// is
+	// unwrapped and the symbol name matched (ignoring any package qualifier). Mirrors the
+	// JVM JvmArrayCompiler.isDoubleFloatElementType.
+	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
+		LispVal sym = elementType;
+		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			sym = rest.car();
+		}
+		if (sym instanceof LispSymbol s) {
+			String name = s.name();
+			int colon = name.lastIndexOf(':');
+			return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+		}
+		return false;
+	}
+
 	// --- helpers -------------------------------------------------------------
 
 	private static int setTemp(WasmLispCompiler.Ctx ctx) {
@@ -1036,6 +1245,71 @@ final class WasmArrayCompiler {
 	// Boxes the i32 on the stack as an i31ref (temps are (ref null eq) locals).
 	private static void boxI31(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	// --- packed float-array (TYPE_FARRAY) helpers ----------------------------
+
+	// Pushes f64.const value.
+	private static void f64Const(WasmLispCompiler.Ctx ctx, double value) {
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(value);
+	}
+
+	// Boxes the f64 on the stack into a TYPE_FLOAT struct (an eqref value).
+	private static void boxFloat(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+	}
+
+	// Pushes an i32: whether the value in slot is a TYPE_FARRAY (packed float array).
+	private static void testFarray(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+	}
+
+	// Opens an IF whose result type is (ref null eq); pairs with ELSE/END.
+	private static void emitIfEq(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	// Pushes the given field of the TYPE_FARRAY held (as eq) in slot: field 0 = dims
+	// buckets (a TYPE_HASH_BUCKETS held as eq), field 1 = f64 data (a TYPE_F64ARR as eq).
+	private static void farrayField(WasmLispCompiler.Ctx ctx, int slot, int field) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeSignedLeb128(field);
+	}
+
+	// Pushes the f64 data array (field 1) of the TYPE_FARRAY in slot, cast to
+	// TYPE_F64ARR.
+	private static void getFarrayData(WasmLispCompiler.Ctx ctx, int slot) {
+		farrayField(ctx, slot, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// array.new TYPE_F64ARR: [f64 init, i32 size] -> [array].
+	private static void f64ArrayNew(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// array.get TYPE_F64ARR: [array, i32 index] -> [f64].
+	private static void f64ArrayGet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// array.set TYPE_F64ARR: [array, i32 index, f64] -> [].
+	private static void f64ArraySet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	// array.new TYPE_HASH_BUCKETS: [init, size] -> [array].

@@ -2205,6 +2205,42 @@ cases:
       3
       0
 
+  # Packed float arrays (.todo/94): #f(...) literals and make-array :element-type
+  # 'double-float are a dedicated rank-n unboxed-double array type on every backend
+  # (interpreter double[]/int[]; JVM bare double[] with a dims header; wasm-GC a distinct
+  # TYPE_FARRAY struct of an (array (mut f64)); the component path reuses the same core
+  # module). aref/(setf aref) coerce elements to double; introspection (array-rank/
+  # -dimensions/-element-type=double-float), length, row-major-aref, coerce and the
+  # array/vector type discriminators all agree byte-for-byte across the four backends.
+  - name: packed-float-arrays-cross-backend
+    source: |
+      (defun ci-packed-float ()
+        (let ((m #f((1 2 3) (4 5 6))))
+          (print (list (array-rank m) (array-dimensions m) (aref m 1 2)))
+          (print m))
+        (let ((v #f(1.0 2.0 3.0)))
+          (setf (aref v 1) 42)
+          (print v))
+        (let ((a (make-array 3 :element-type 'double-float :initial-element 2.5)))
+          (setf (aref a 0) 9)
+          (print (list a (length a) (array-element-type a))))
+        (let ((mm (make-array (list 2 2) :element-type 'double-float)))
+          (dotimes (i 2) (dotimes (j 2) (setf (aref mm i j) (+ (* i 10) j))))
+          (print mm))
+        (print (row-major-aref #f((1 2) (3 4)) 3))
+        (print (coerce #f(1 2 3) 'list))
+        (print (typecase #f(1 2 3) (array 'arr) (t 'no))))
+      (ci-packed-float)
+    expected: |
+      (2 (2 3) 6.0)
+      #2A((1.0 2.0 3.0) (4.0 5.0 6.0))
+      #(1.0 42.0 3.0)
+      (#(9.0 2.5 2.5) 3 double-float)
+      #2A((0.0 1.0) (10.0 11.0))
+      4.0
+      (1.0 2.0 3.0)
+      arr
+
   # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

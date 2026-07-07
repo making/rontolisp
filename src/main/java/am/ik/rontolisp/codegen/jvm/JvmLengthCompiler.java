@@ -22,8 +22,12 @@ final class JvmLengthCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
-				ctx.cp.addUtf8(JvmLengthRuntimeBuilder.METHOD), ctx.cp.addUtf8(JvmLengthRuntimeBuilder.DESC)));
+		// When the program uses packed float arrays, route through _fvLength (which
+		// handles a packed double[] and delegates the general case to _length); the
+		// descriptors match, so the default build is unchanged.
+		String method = ctx.usesFloatArray ? JvmFloatArrayRuntimeBuilder.LENGTH : JvmLengthRuntimeBuilder.METHOD;
+		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(JvmLengthRuntimeBuilder.DESC)));
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ref.index());
 	}

@@ -4954,6 +4954,79 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1))")).isEqualTo("6");
 	}
 
+	// --- packed float arrays (#f / :element-type 'double-float) -------------
+
+	@Test
+	void compilePackedFloatVectorLiteralArefAndPrint() throws Exception {
+		assertThat(compileAndRun("(print (aref #f(1.0 2.5 3.0) 1))")).isEqualTo("2.5");
+		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void compilePackedFloatMatrixLiteralIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((m #f((1 2 3) (4 5 6))))
+				  (print (list (array-rank m) (array-dimensions m) (aref m 1 2))))
+				""")).isEqualTo("(2 (2 3) 6.0)");
+		assertThat(compileAndRun("(print #f((1 2) (3 4)))")).isEqualTo("#2A((1.0 2.0) (3.0 4.0))");
+	}
+
+	@Test
+	void compilePackedFloatArefSetCoercesToDouble() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((v #f(1.0 2.0 3.0)))
+				  (setf (aref v 1) 42)
+				  (print v))
+				""")).isEqualTo("#(1.0 42.0 3.0)");
+	}
+
+	@Test
+	void compileMakeArrayDoubleFloatIsPacked() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((a (make-array 3 :element-type 'double-float :initial-element 2.5)))
+				  (setf (aref a 0) 9)
+				  (print (list a (length a) (array-element-type a))))
+				""")).isEqualTo("(#(9.0 2.5 2.5) 3 double-float)");
+	}
+
+	@Test
+	void compileMakeArrayDoubleFloatRankTwo() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((m (make-array (list 2 2) :element-type 'double-float)))
+				  (dotimes (i 2) (dotimes (j 2) (setf (aref m i j) (+ (* i 10) j))))
+				  (print m))
+				""")).isEqualTo("#2A((0.0 1.0) (10.0 11.0))");
+	}
+
+	@Test
+	void compilePackedFloatRowMajorArefAndElementType() throws Exception {
+		assertThat(compileAndRun("(print (row-major-aref #f((1 2) (3 4)) 3))")).isEqualTo("4.0");
+		assertThat(compileAndRun("(print (array-element-type #f(1 2 3)))")).isEqualTo("double-float");
+	}
+
+	@Test
+	void compilePackedFloatIsAnArrayAndVector() throws Exception {
+		assertThat(compileAndRun("(print (typecase #f(1 2 3) (array 'arr) (t 'no)))")).isEqualTo("arr");
+		assertThat(compileAndRun("(print (typecase #f(1 2 3) (vector 'vec) (t 'no)))")).isEqualTo("vec");
+	}
+
+	@Test
+	void compilePackedFloatDotProductLoop() throws Exception {
+		assertThat(compileAndRun("""
+				(defun dot (a b n)
+				  (let ((s 0.0) (i 0))
+				    (loop while (< i n) do
+				      (setf s (+ s (* (aref a i) (aref b i)))) (setf i (+ i 1)))
+				    s))
+				(print (dot #f(1 2 3) #f(4 5 6) 3))
+				""")).isEqualTo("32.0");
+	}
+
+	@Test
+	void compilePackedFloatCoerceToList() throws Exception {
+		assertThat(compileAndRun("(print (coerce #f(1 2 3) 'list))")).isEqualTo("(1.0 2.0 3.0)");
+	}
+
 	@Test
 	void compileLengthOfVectorReturnsElementCount() throws Exception {
 		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");

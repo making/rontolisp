@@ -198,6 +198,84 @@ final class JvmAsm {
 		JvmRuntimeBuilder.emitU2(this.code, f.index());
 	}
 
+	// --- double / double[] support (used by the packed float-array runtime) ---
+
+	/** The {@code newarray double} instruction (atype 7 = {@code T_DOUBLE}). */
+	void newarrayDouble() {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(7);
+	}
+
+	void daload() {
+		this.code.add(Opcode.DALOAD);
+	}
+
+	void dastore() {
+		this.code.add(Opcode.DASTORE);
+	}
+
+	void dload(int slot) {
+		this.code.add(Opcode.DLOAD);
+		this.code.add(slot);
+	}
+
+	void dstore(int slot) {
+		this.code.add(Opcode.DSTORE);
+		this.code.add(slot);
+	}
+
+	void dreturn() {
+		this.code.add(Opcode.DRETURN);
+	}
+
+	void dup2() {
+		this.code.add(Opcode.DUP2);
+	}
+
+	void i2d() {
+		this.code.add(Opcode.I2D);
+	}
+
+	void d2i() {
+		this.code.add(Opcode.D2I);
+	}
+
+	void l2d() {
+		this.code.add(Opcode.L2D);
+	}
+
+	void dadd() {
+		this.code.add(Opcode.DADD);
+	}
+
+	void dsub() {
+		this.code.add(Opcode.DSUB);
+	}
+
+	void dmul() {
+		this.code.add(Opcode.DMUL);
+	}
+
+	void dcmpl() {
+		this.code.add(Opcode.DCMPL);
+	}
+
+	void dcmpg() {
+		this.code.add(Opcode.DCMPG);
+	}
+
+	/** Pushes a wide double constant via {@code ldc2_w}. */
+	void ldc2Double(am.ik.jvm.ConstantPool.DoubleConstant dc) {
+		this.code.add(Opcode.LDC2_W);
+		JvmRuntimeBuilder.emitU2(this.code, dc.index());
+	}
+
+	/** Pushes a wide long constant via {@code ldc2_w}. */
+	void ldc2Long(am.ik.jvm.ConstantPool.LongConstant lc) {
+		this.code.add(Opcode.LDC2_W);
+		JvmRuntimeBuilder.emitU2(this.code, lc.index());
+	}
+
 	void putstatic(FieldrefConstant f) {
 		this.code.add(Opcode.PUTSTATIC);
 		JvmRuntimeBuilder.emitU2(this.code, f.index());

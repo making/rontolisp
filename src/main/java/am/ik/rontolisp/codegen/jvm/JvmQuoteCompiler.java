@@ -41,6 +41,62 @@ final class JvmQuoteCompiler {
 		compileQuotedArray(array, ctx, className);
 	}
 
+	/**
+	 * Emits a packed float-array literal ({@code #f(...)}) as a bare {@code double[]}
+	 * with an embedded dimension header: {@code [rank, dim_0, ..., dim_{rank-1}, e_0,
+	 * ..., e_{total-1}]} (rank and dims stored as doubles, exact for realistic sizes).
+	 * The data offset is {@code 1 + rank}. This is the native packed representation used
+	 * across the whole JVM backend (a {@code double[]} is disjoint from the
+	 * {@code Object[]}/ {@code ArrayList} shapes of conses, function refs and general
+	 * arrays, so no discriminator changes are needed). The list reference is kept on the
+	 * stack and {@code DUP}ed for each store, so the operand stack stays shallow
+	 * regardless of the element count.
+	 * @param fa the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compilePackedLiteral(am.ik.rontolisp.LispFloatArray fa, JvmLispCompiler.Ctx ctx) {
+		double[] data = fa.data();
+		int[] dims = fa.dims();
+		int rank = dims.length;
+		int off = 1 + rank;
+		int len = off + data.length;
+		JvmEmitHelper.emitIntConst(ctx, len);
+		ctx.emit(Opcode.NEWARRAY);
+		ctx.emit(7); // T_DOUBLE
+		emitRawDoubleStore(ctx, 0, rank);
+		for (int d = 0; d < rank; d++) {
+			emitRawDoubleStore(ctx, 1 + d, dims[d]);
+		}
+		for (int f = 0; f < data.length; f++) {
+			emitRawDoubleStore(ctx, off + f, data[f]);
+		}
+	}
+
+	// Assumes the double[] is on top of the stack; stores value at index (DUP; index;
+	// raw double; DASTORE), leaving the array on the stack.
+	private static void emitRawDoubleStore(JvmLispCompiler.Ctx ctx, int index, double value) {
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitIntConst(ctx, index);
+		emitRawDouble(ctx, value);
+		ctx.emit(Opcode.DASTORE);
+	}
+
+	// Pushes an unboxed double constant (no Double.valueOf), the raw value to store into
+	// a double[].
+	private static void emitRawDouble(JvmLispCompiler.Ctx ctx, double value) {
+		if (value == 0.0 && Double.doubleToRawLongBits(value) == 0L) {
+			ctx.emit(Opcode.DCONST_0);
+		}
+		else if (value == 1.0) {
+			ctx.emit(Opcode.DCONST_1);
+		}
+		else {
+			am.ik.jvm.ConstantPool.DoubleConstant dc = ctx.cp.addDouble(value);
+			ctx.emit(Opcode.LDC2_W);
+			ctx.emitU2(dc.index());
+		}
+	}
+
 	private static void compileQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
 		switch (val) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
@@ -54,6 +110,9 @@ final class JvmQuoteCompiler {
 			case LispSymbol sym -> JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx, className);
 			case LispArray array -> compileQuotedArray(array, ctx, className);
+			// A packed #f(...) literal compiles to a native double[] with a dimension
+			// header (the packed representation), disjoint from the general array.
+			case am.ik.rontolisp.LispFloatArray fa -> compilePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}

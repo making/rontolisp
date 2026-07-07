@@ -187,7 +187,9 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable PromisePrint promisePrint) {
+			@org.jspecify.annotations.Nullable PromisePrint promisePrint,
+			@org.jspecify.annotations.Nullable ClassConstant doubleArrayClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant fvToGeneralMethod) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -202,9 +204,10 @@ final class JvmRuntimeBuilder {
 		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (only when the
 		// program can create promises)
 		emitPromiseBranch(code, promisePrint);
+		// if (val instanceof double[]) return _arrayToString(_fvToGeneral(val)); and
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
 		// used)
-		emitArrayBranch(code, arrayListClass, arrayToStringMethod);
+		emitArrayBranch(code, arrayListClass, arrayToStringMethod, doubleArrayClass, fvToGeneralMethod);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -495,7 +498,9 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable PromisePrint promisePrint) {
+			@org.jspecify.annotations.Nullable PromisePrint promisePrint,
+			@org.jspecify.annotations.Nullable ClassConstant doubleArrayClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant fvToGeneralMethod) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -509,8 +514,10 @@ final class JvmRuntimeBuilder {
 		patchBranch(code, ifNonnullPos, code.size());
 		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (promises only)
 		emitPromiseBranch(code, promisePrint);
+		// if (val instanceof double[]) return _arrayToDisplayString(_fvToGeneral(val));
+		// and
 		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
-		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod);
+		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, doubleArrayClass, fvToGeneralMethod);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -855,12 +862,32 @@ final class JvmRuntimeBuilder {
 
 	// Emits "if (val instanceof ArrayList) return arrayToString(val);" at the current
 	// position, used by both the prin1 and princ string builders. A no-op when arrays are
-	// not used (both args null), keeping the branch out of array-free programs.
+	// not used (both args null), keeping the branch out of array-free programs. When the
+	// program uses packed float arrays a preceding "if (val instanceof double[]) return
+	// arrayToString(_fvToGeneral(val));" branch renders a packed double[] identically to
+	// its general counterpart.
 	private static void emitArrayBranch(List<Integer> code,
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod) {
+			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
+			@org.jspecify.annotations.Nullable ClassConstant doubleArrayClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant fvToGeneralMethod) {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
+		}
+		if (doubleArrayClass != null && fvToGeneralMethod != null) {
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, doubleArrayClass.index());
+			int ifNotPackedPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, fvToGeneralMethod.index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, arrayToStringMethod.index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotPackedPos, code.size());
 		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);

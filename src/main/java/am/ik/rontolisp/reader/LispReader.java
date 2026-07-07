@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -109,6 +110,7 @@ public final class LispReader {
 			case Token.LeftParen ignored -> readList();
 			case Token.VectorOpen ignored -> readVector();
 			case Token.ArrayOpen array -> readArray(array.rank());
+			case Token.FloatArrayOpen ignored -> readFloatArray();
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
@@ -205,16 +207,8 @@ public final class LispReader {
 	// Reads a rank-1 vector literal #(e1 e2 ... en) into a self-evaluating LispArray.
 	// The elements are read as ordinary data (not evaluated), matching Common Lisp.
 	private LispVal readVector() {
-		List<LispVal> elements = new ArrayList<>();
-		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
-			elements.add(readExpr());
-		}
-		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input, expected ')'");
-		}
-		this.pos++; // consume ')'
-		LispVal[] data = elements.toArray(new LispVal[0]);
-		return new LispArray(new int[] { data.length }, data);
+		List<LispVal> elements = readGroupedElements();
+		return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
 	}
 
 	// Reads a rank-n array literal #nA((...) ...) into a self-evaluating LispArray.
@@ -225,6 +219,36 @@ public final class LispReader {
 		if (rank < 1) {
 			throw new LispReadException("#" + rank + "A: array rank must be >= 1");
 		}
+		List<LispVal> rows = readGroupedElements();
+		String label = "#" + rank + "A";
+		int[] dims = arrayDimensions(rows, rank, label);
+		List<LispVal> flat = new ArrayList<>();
+		flattenArrayContents(rows, 0, dims, label, flat);
+		return new LispArray(dims, flat.toArray(new LispVal[0]));
+	}
+
+	// Reads a #f(...) packed-double array literal into a self-evaluating LispFloatArray
+	// (element-type double-float). Every leaf is coerced to a double, and the rank is
+	// inferred from the nesting depth (numpy style): #f(1.0 2.0) is rank-1,
+	// #f((1.0 2.0) (3.0 4.0)) is rank-2, and so on. Leaves must be real numbers and every
+	// level must be uniformly shaped (ragged or mixed number/list contents are a read
+	// error), reusing the #nA validation. #f = "float"; free in CL, not Scheme's
+	// #f=false.
+	private LispVal readFloatArray() {
+		List<LispVal> rows = readGroupedElements();
+		int rank = inferFloatArrayRank(rows);
+		int[] dims = arrayDimensions(rows, rank, "#f");
+		List<LispVal> flat = new ArrayList<>();
+		flattenArrayContents(rows, 0, dims, "#f", flat);
+		double[] data = new double[flat.size()];
+		for (int i = 0; i < data.length; i++) {
+			data[i] = coerceFloatLeaf(flat.get(i));
+		}
+		return new LispFloatArray(data, dims);
+	}
+
+	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.
+	private List<LispVal> readGroupedElements() {
 		List<LispVal> rows = new ArrayList<>();
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
 			rows.add(readExpr());
@@ -233,43 +257,77 @@ public final class LispReader {
 			throw new LispReadException("Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
-		// The dimensions come from the first-element chain; an empty level makes
-		// every remaining dimension 0 (e.g., #2A() has dimensions (0 0)).
+		return rows;
+	}
+
+	// The dimension sizes for a rank-n literal, taken from the first-element chain; an
+	// empty level makes every remaining dimension 0 (e.g., #2A() has dimensions (0 0)).
+	private static int[] arrayDimensions(List<LispVal> rows, int rank, String label) {
 		int[] dims = new int[rank];
 		dims[0] = rows.size();
 		List<LispVal> level = rows;
 		for (int d = 1; d < rank; d++) {
-			level = level.isEmpty() ? List.of() : arrayLevelContents(level.get(0), rank);
+			level = level.isEmpty() ? List.of() : arrayLevelContents(level.get(0), label);
 			dims[d] = level.size();
 		}
-		List<LispVal> flat = new ArrayList<>();
-		flattenArrayContents(rows, 0, dims, rank, flat);
-		return new LispArray(dims, flat.toArray(new LispVal[0]));
+		return dims;
 	}
 
-	// Validates one level of #nA contents against the expected dimension and appends
+	// The rank of a #f literal: 1 when the top level holds numbers (leaves), one more per
+	// nested-list level. An empty top level (#f()) is rank-1; an empty nested level caps
+	// the rank there (#f(()) is rank-2 with dimensions (1 0)).
+	private static int inferFloatArrayRank(List<LispVal> rows) {
+		int rank = 1;
+		if (!rows.isEmpty()) {
+			LispVal probe = rows.get(0);
+			while (probe instanceof LispCons || probe instanceof LispNil) {
+				rank++;
+				if (probe instanceof LispCons cons) {
+					probe = cons.car();
+				}
+				else {
+					break; // empty nested level: cannot descend further
+				}
+			}
+		}
+		return rank;
+	}
+
+	// Coerces a #f leaf to a double, or a read error when it is not a real number.
+	private static double coerceFloatLeaf(LispVal leaf) {
+		return switch (leaf) {
+			case LispDouble d -> d.value();
+			case LispInteger i -> (double) i.value();
+			case LispBigInteger b -> b.value().doubleValue();
+			case LispRatio r -> r.doubleValue();
+			default -> throw new LispReadException("#f: expected a number, got " + leaf.print());
+		};
+	}
+
+	// Validates one level of #nA/#f contents against the expected dimension and appends
 	// the elements to `out` in row-major order.
-	private void flattenArrayContents(List<LispVal> items, int depth, int[] dims, int rank, List<LispVal> out) {
+	private void flattenArrayContents(List<LispVal> items, int depth, int[] dims, String label, List<LispVal> out) {
 		if (items.size() != dims[depth]) {
 			throw new LispReadException(
-					"#" + rank + "A: ragged contents, expected " + dims[depth] + " elements, got " + items.size());
+					label + ": ragged contents, expected " + dims[depth] + " elements, got " + items.size());
 		}
 		if (depth == dims.length - 1) {
 			out.addAll(items);
 			return;
 		}
 		for (LispVal item : items) {
-			flattenArrayContents(arrayLevelContents(item, rank), depth + 1, dims, rank, out);
+			flattenArrayContents(arrayLevelContents(item, label), depth + 1, dims, label, out);
 		}
 	}
 
-	// Converts one nested level of #nA contents (a proper list or nil) to its elements.
-	private static List<LispVal> arrayLevelContents(LispVal level, int rank) {
+	// Converts one nested level of #nA/#f contents (a proper list or nil) to its
+	// elements.
+	private static List<LispVal> arrayLevelContents(LispVal level, String label) {
 		if (level instanceof LispNil) {
 			return List.of();
 		}
 		if (!(level instanceof LispCons)) {
-			throw new LispReadException("#" + rank + "A: expected a nested list, got " + level.print());
+			throw new LispReadException(label + ": expected a nested list, got " + level.print());
 		}
 		List<LispVal> items = new ArrayList<>();
 		LispVal tail = level;
@@ -278,7 +336,7 @@ public final class LispReader {
 			tail = cons.cdr();
 		}
 		if (!(tail instanceof LispNil)) {
-			throw new LispReadException("#" + rank + "A: contents must be proper lists");
+			throw new LispReadException(label + ": contents must be proper lists");
 		}
 		return items;
 	}

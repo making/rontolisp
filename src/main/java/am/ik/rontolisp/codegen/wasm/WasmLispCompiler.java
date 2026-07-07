@@ -558,6 +558,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// on the GC heap. Appended after TYPE_STR_TO_MEM.
 	static final int TYPE_WRITE_STR_GC = TYPE_STR_TO_MEM + 1; // 38
 
+	// Packed float-array data storage: array (mut f64). A bare array comptype (implicitly
+	// sub final), so a subtype of eq -- it stores in TYPE_FARRAY's (ref null eq) data
+	// field and readers ref.cast it before array.get / array.len. The unboxed f64 storage
+	// of a packed float array. Appended after TYPE_WRITE_STR_GC.
+	static final int TYPE_F64ARR = TYPE_WRITE_STR_GC + 1; // 39
+
+	// Packed float array: struct {(ref null eq) dims, (ref null eq) data} -- the rank-n
+	// double-float array as a distinct first-class type (disjoint from TYPE_CELL, so
+	// arrayp/print/length discriminate it with a plain ref.test). `dims` is a
+	// TYPE_HASH_BUCKETS of i31 dimension sizes (as for a general array), `data` a
+	// TYPE_F64ARR of the row-major elements. No fill pointer / adjustable / displacement
+	// (a packed array is a pure compute buffer). Appended after TYPE_F64ARR; the
+	// export/import wrapper type indices below shift past it.
+	static final int TYPE_FARRAY = TYPE_F64ARR + 1; // 40
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
@@ -1175,7 +1190,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if ((!this.component || this.serve) && !exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
-			int wrapperTypeIndex = TYPE_WRITE_STR_GC + 1;
+			int wrapperTypeIndex = TYPE_FARRAY + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
 						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
@@ -1223,7 +1238,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// types; the WasmImportInjector post-pass prepends the matching import entries
 		// and resolves the placeholder call indices after the module is assembled.
 		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
-		int importTypeIndex = TYPE_WRITE_STR_GC + 1 + exportPlans.size();
+		int importTypeIndex = TYPE_FARRAY + 1 + exportPlans.size();
 		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
@@ -1614,9 +1629,26 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.I32);
 					w.write(0);
 				});
+				// type 39 (TYPE_F64ARR): array (mut f64) -- packed float-array data
+				// storage.
+				// A bare array comptype (implicitly sub final), a subtype of eq.
+				types.add(w -> {
+					w.write(Type.ARRAY_TYPE);
+					w.write(Type.F64);
+					w.write(am.ik.wasm.Mutability.VAR);
+				});
+				// type 40 (TYPE_FARRAY): struct {(ref null eq) dims, (ref null eq) data}
+				// --
+				// a packed rank-n double-float array (dims = a TYPE_HASH_BUCKETS of i31
+				// sizes, data = a TYPE_F64ARR). Both fields immutable (aset mutates the
+				// f64 array contents, not the struct).
+				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+				}));
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed
-				// type (TYPE_WRITE_STR_GC). One per (rontolisp:wasm-export ...)
+				// type (TYPE_FARRAY). One per (rontolisp:wasm-export ...)
 				// directive.
 				for (ExportPlan p : exportPlans) {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),

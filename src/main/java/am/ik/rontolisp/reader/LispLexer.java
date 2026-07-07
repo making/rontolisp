@@ -123,6 +123,17 @@ public final class LispLexer {
 				tokens.add(new Token.VectorOpen());
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'f' || this.input.charAt(this.pos + 1) == 'F')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #f( opens a packed-double array literal (e.g., #f(1.0 2.0 3.0)); the
+				// contents are read as a nested-list structure and the rank is inferred
+				// at
+				// read time. #f not followed by '(' falls through to symbol reading
+				// below.
+				tokens.add(new Token.FloatArrayOpen());
+				this.pos += 3;
+			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
 				// #nA( opens a rank-n array literal (e.g., #2A((1 2) (3 4))). Anything
 				// else after #<digits> falls through to symbol reading, preserving the

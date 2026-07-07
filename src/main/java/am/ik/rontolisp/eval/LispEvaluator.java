@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispInteger;
@@ -957,6 +958,7 @@ public final class LispEvaluator {
 			case LispLambda l -> l;
 			case LispHashTable h -> h;
 			case LispArray a -> a;
+			case LispFloatArray fa -> fa;
 			case LispJavaObject j -> j;
 			case LispPromise p -> p;
 			case LispSymbol sym -> evalSymbolRef(sym, env);

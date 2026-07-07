@@ -47,6 +47,9 @@ final class JvmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx, className);
 			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
+			// A packed #f(...) literal compiles to a native double[] with a dimension
+			// header (the packed representation), disjoint from the general array.
+			case am.ik.rontolisp.LispFloatArray fa -> JvmQuoteCompiler.compilePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}
@@ -440,8 +443,14 @@ final class JvmExprCompiler {
 				case LispNames.SET_FILL_POINTER -> JvmArrayCompiler.compileSetFillPointer(cons, ctx, className);
 				case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
 				case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
-				case LispNames.ARRAY_ELEMENT_TYPE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayElementType(cons), ctx, className);
+				case LispNames.ARRAY_ELEMENT_TYPE -> {
+					if (ctx.usesFloatArray) {
+						JvmArrayCompiler.compileElementType(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayElementType(cons), ctx, className);
+					}
+				}
 				case LispNames.VECTOR_PUSH -> JvmArrayCompiler.compileVectorPush(cons, ctx, className);
 				case LispNames.VECTOR_POP -> JvmArrayCompiler.compileVectorPop(cons, ctx, className);
 				case LispNames.VECTOR_PUSH_EXTEND -> JvmArrayCompiler.compileVectorPushExtend(cons, ctx, className);
