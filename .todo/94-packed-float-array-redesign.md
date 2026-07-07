@@ -361,9 +361,9 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
 
 ### Resumption facts (post-compaction)
 
-- **Branch `feat/packed-float-array` off `develop` (440056c). ALL WORK IS UNCOMMITTED WIP in the
-  working tree** (no commits on the branch) — it survives on disk through compaction; consider a
-  WIP commit for durability (ask first per CLAUDE.md). Full suite green: 2879, skip 2 (WASM Docker).
+- **Branch `feat/packed-float-array` off `develop` (440056c). Phase 1+2+3 COMMITTED at `f3d5ccd`**
+  (the branch's first commit; working tree clean afterwards). Full suite green: 2879, skip 2 (WASM
+  Docker). Phase 4+ work starts fresh on top of `f3d5ccd`.
 - **Done:** Phase 0 (CliOptions `--simd` + `CliOptionsTest`), Phase 1 (frontend + interpreter REAL
   rank-n packed: `LispFloatArray`, reader `#f`, Environment dispatch, `LispNames.DOUBLE_FLOAT`;
   `LispFloatArrayTest` 13), **Phase 2 (JVM real rank-n packed `double[]`, Option X — see "Phase 2
