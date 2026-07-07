@@ -1098,6 +1098,23 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		List<Ty> wrapperLocals = new ArrayList<>();
 		int nextLocal = WasmExportCompiler.paramSlotCount(decl);
 
+		// Auto-reset the bump heap for scalar-return exports (todo 88). Anything the
+		// exported function allocates during the call (the internal :string copy below,
+		// plus any concatenate/subseq/... scratch) is dead the moment a non-memory scalar
+		// is returned -- no heap pointer escapes to the host. Snapshot the heap-pointer
+		// global (index 0) at wrapper entry and restore it at exit so a long-lived,
+		// repeatedly-called instance stops growing. Gated on the return type NOT being a
+		// memory designator (:string/:s-expr, whose result pointer must stay live) and on
+		// mem.used() (a pure-numeric export has no heap global at all).
+		boolean resetHeap = mem.used() && !WasmExportCompiler.T_STRING.equals(decl.returnType())
+				&& !WasmExportCompiler.T_S_EXPR.equals(decl.returnType());
+		int mark = -1;
+		if (resetHeap) {
+			mark = nextLocal++;
+			wrapperLocals.add(Ty.STRING);
+			w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(mark);
+		}
+
 		// Box each host argument into the internal value of the inferred parameter type,
 		// in
 		// order, then call the internal function.
@@ -1218,6 +1235,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case WasmExportCompiler.T_VOID -> w.write(Instruction.DROP);
 			default -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
 					+ decl.returnType() + " (only :int/:long/:float/:bool/:string/:void)");
+		}
+		// Restore the heap pointer for scalar returns. local.get pushes mark above the
+		// host result already on the stack, global.set pops it -- the result stays on top
+		// (for :void the stack is empty and this is still valid).
+		if (resetHeap) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
 		}
 		w.write(Instruction.END);
 		return withLocals(bodyStream.toByteArray(), wrapperLocals);

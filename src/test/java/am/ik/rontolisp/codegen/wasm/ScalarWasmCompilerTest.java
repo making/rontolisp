@@ -300,6 +300,57 @@ class ScalarWasmCompilerTest {
 		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("fact");
 	}
 
+	@Test
+	void scalarReturnExportResetsTheBumpHeapAtWrapperExit() {
+		// A :string param copies the host bytes into a fresh internal [len][bytes] header
+		// via __ronto_alloc inside the wrapper; with a scalar return that copy is dead
+		// the
+		// moment the call returns, so the wrapper snapshots and restores heap global 0
+		// (todo 88). Assert both :int and :long returns carry the reset in the wrapper
+		// body.
+		for (String ret : List.of(":int", ":long")) {
+			byte[] module = compile("""
+					(defun count-vowels (s)
+					  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+					(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns %s)
+					""".formatted(ret));
+			Map<Integer, byte[]> sections = sections(module);
+			byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+					exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "cv"));
+			assertThat(containsGlobalReset(wrapper)).as("wrapper for :string -> %s resets heap global 0", ret).isTrue();
+		}
+	}
+
+	@Test
+	void stringReturnExportDoesNotResetTheHeap() {
+		// A :string result is a live heap pointer the host is about to read, so the
+		// wrapper
+		// must NOT reset the heap (that would free the returned string).
+		byte[] module = compile("""
+				(defun echo (s) (concatenate 'string s s))
+				(rontolisp:wasm-export 'echo :params '(:string) :returns :string)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "echo"));
+		assertThat(containsGlobalReset(wrapper)).as("wrapper for :string -> :string does not reset the heap").isFalse();
+	}
+
+	@Test
+	void pureNumericExportEmitsNoHeapReset() {
+		// A pure-numeric export has no linear memory at all (no global 0 exists), so no
+		// reset is emitted -- the wrapper is byte-for-byte the pre-todo-88 shape.
+		byte[] module = compile("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(6); // no global section
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "fact"));
+		assertThat(containsGlobalReset(wrapper)).as("pure-numeric wrapper has no heap reset").isFalse();
+	}
+
 	// --- minimal binary parsing helpers ------------------------------------------------
 
 	// Splits a module into a map of section id -> section payload bytes (skipping the
@@ -377,6 +428,63 @@ class ScalarWasmCompilerTest {
 			readUleb(exportSection, p); // index
 		}
 		return names;
+	}
+
+	// Extracts the body (locals decl + instructions) of the function at the given index
+	// in
+	// the code section (id 10). No imports exist in a --no-gc module, so the function
+	// index
+	// equals the code-section entry index.
+	private static byte[] functionBody(byte[] codeSection, int index) {
+		int[] p = { 0 };
+		int count = readUleb(codeSection, p);
+		for (int i = 0; i < count; i++) {
+			int size = readUleb(codeSection, p);
+			if (i == index) {
+				byte[] body = new byte[size];
+				System.arraycopy(codeSection, p[0], body, 0, size);
+				return body;
+			}
+			p[0] += size;
+		}
+		throw new IllegalArgumentException("no function at index " + index);
+	}
+
+	// Returns the function index of the export with the given name (external kind 0x00).
+	private static int exportedFuncIndex(byte[] exportSection, String name) {
+		int[] p = { 0 };
+		int count = readUleb(exportSection, p);
+		for (int i = 0; i < count; i++) {
+			int len = readUleb(exportSection, p);
+			String n = new String(exportSection, p[0], len, StandardCharsets.UTF_8);
+			p[0] += len;
+			int kind = exportSection[p[0]++] & 0xFF;
+			int idx = readUleb(exportSection, p);
+			if (kind == 0x00 && n.equals(name)) {
+				return idx;
+			}
+		}
+		throw new IllegalArgumentException("no exported function named " + name);
+	}
+
+	// True if the body contains both a global.get 0 (0x23 0x00) and a global.set 0
+	// (0x24 0x00) -- the heap snapshot/restore pair. The wrapper never calls the
+	// allocator
+	// inline, so its only global ops are the todo-88 reset.
+	private static boolean containsGlobalReset(byte[] body) {
+		boolean getGlobal0 = false;
+		boolean setGlobal0 = false;
+		for (int i = 0; i + 1 < body.length; i++) {
+			int op = body[i] & 0xFF;
+			int operand = body[i + 1] & 0xFF;
+			if (op == 0x23 && operand == 0x00) {
+				getGlobal0 = true;
+			}
+			if (op == 0x24 && operand == 0x00) {
+				setGlobal0 = true;
+			}
+		}
+		return getGlobal0 && setGlobal0;
 	}
 
 	private static int readUleb(byte[] bytes, int[] p) {

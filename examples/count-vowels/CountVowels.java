@@ -11,8 +11,11 @@
 // boundary as a pointer/length pair of raw UTF-8 bytes in the module's linear
 // memory. The module exports its `memory` and a bump allocator
 // `__ronto_alloc(size)` for exactly this: reserve space, write the bytes, then
-// call `count_vowels(ptr, len)`. (There is no `dealloc` -- __ronto_alloc is a
-// bump allocator that never frees; the whole instance is discarded instead.)
+// call `count_vowels(ptr, len)`. There is no general `dealloc` (__ronto_alloc is
+// a bump allocator), but `count_vowels` returns a scalar, so its wrapper
+// auto-frees the per-call internal string copy on return -- repeated calls on one
+// instance don't leak it. For a long-lived host, reserve one input buffer with
+// __ronto_alloc and reuse it across calls (here we call once and exit).
 //
 // Build the module, then run this host:
 //   java -jar ../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar count-vowels.lisp \

@@ -13,9 +13,12 @@ linear memory. `(rontolisp:wasm-export 'count-vowels :as "count_vowels" :params
 '(:string) :returns :int)` sets that up: the compiled module exports its `memory`
 plus a bump allocator `__ronto_alloc(size)`, so the host reserves space, writes
 the bytes, then calls `count_vowels(ptr, len)`. This is exactly the
-alloc / writeString / call flow of the Chicory tutorial. (There is no `dealloc`:
-`__ronto_alloc` is a bump allocator that never frees -- the instance is discarded
-instead.)
+alloc / writeString / call flow of the Chicory tutorial. There is no general
+`dealloc` (`__ronto_alloc` is a bump allocator), but `count_vowels` returns a
+scalar `:int`, so the wrapper auto-frees its per-call internal string copy on
+return: **repeated calls on one instance no longer leak that copy**. The host is
+still responsible for its own `__ronto_alloc` input buffer -- allocate it once and
+reuse it across calls (or discard the instance).
 
 Compiled with `--no-gc` the result is a plain MVP module: no wasm-GC, no WASI
 imports, so **any** WebAssembly engine runs it -- including Chicory, which has no
