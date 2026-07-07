@@ -171,19 +171,11 @@ final class WasmExportRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0x22);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// memory[HEAP_PTR_ADDR] = dst + len + 2
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(len);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(2);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new TYPE_STRING { dst, len + 2 }
+		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the quoted bytes into
+		// a
+		// fresh GC array with a counter id, so the scratch region is reused. (The host's
+		// source buffer at ptr is __ronto_alloc'd and owned by the host, untouched.)
+		// return _str_fresh(dst, len + 2)
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(dst);
 		w.write(Instruction.GET_LOCAL);
@@ -191,8 +183,7 @@ final class WasmExportRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(2);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

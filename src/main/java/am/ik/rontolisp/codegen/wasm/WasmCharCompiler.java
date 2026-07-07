@@ -23,22 +23,17 @@ final class WasmCharCompiler {
 	/** {@code (char string index)} / {@code (schar string index)}. */
 	static void compileChar(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// offset of the string content's first byte
+		// the string's byte array
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(0); // field 0: offset
-		// + index
+		WasmEmitHelper.emitStrBytesArray(ctx);
+		// array index = 1 (skip the opening quote at index 0) + the Lisp index
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		ctx.writer.write(Instruction.I32_ADD);
-		// + 1 (skip the opening quote)
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.I32_ADD);
-		ctx.writer.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		makeChar(ctx);
 	}
 

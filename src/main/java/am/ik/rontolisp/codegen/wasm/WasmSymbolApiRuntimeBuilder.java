@@ -41,13 +41,27 @@ final class WasmSymbolApiRuntimeBuilder {
 	static byte[] buildMakeSymbol() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		final int STR = 0, OFF = 1, LEN = 2, START = 3, K = 4;
-		// four extra i32 locals
-		w.write(1);
-		w.writeUnsignedLeb128(4);
+		final int STR = 0, LEN = 1, START = 2, K = 3, ARR = 4;
+		// three i32 locals + one $str_bytes ref (the content read source)
+		w.write(2);
+		w.writeUnsignedLeb128(3);
 		w.write(Type.I32);
-		// off = content offset (skip the opening quote), len = content length
-		emitContentRange(w, STR, OFF, LEN);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		// arr = STR.data; len = content length (the name minus its surrounding quotes)
+		get(w, STR);
+		WasmEmitHelper.emitStrBytesArray(w);
+		set(w, ARR);
+		get(w, STR);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(1);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		set(w, LEN);
 		// start = mem[HEAP_PTR_ADDR]; ensure start + len + 2 fits
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -83,10 +97,12 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		get(w, K);
 		w.write(Instruction.I32_ADD);
-		get(w, OFF);
+		get(w, ARR);
+		i32(w, 1);
 		get(w, K);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		get(w, K);
 		i32(w, 1);
@@ -96,21 +112,17 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeSignedLeb128(0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		// mem[HEAP_PTR_ADDR] = start + len + 2
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		get(w, START);
-		get(w, LEN);
-		w.write(Instruction.I32_ADD);
-		i32(w, 2);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new string(start, len + 2)
+		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the #:name bytes into
+		// a
+		// fresh GC array and stamps a unique counter id, so each make-symbol is a
+		// distinct
+		// uninterned symbol (eq only to itself) even as the scratch offset is reused.
+		// return _str_fresh(start, len + 2)
 		get(w, START);
 		get(w, LEN);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -125,15 +137,36 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(1);
 		w.writeUnsignedLeb128(2);
 		w.write(Type.I32);
-		emitContentRange(w, STR, OFF, LEN);
-		// struct.new string(_intern(off, len), len)
+		// Copy the string's bytes into linear scratch at HEAP_PTR (not advanced here).
+		// The
+		// bytes live on the GC heap, so _str_to_mem bridges them into the linear range
+		// _intern scans. off = HEAP_PTR ; len = _str_to_mem(str, off) - 2 (bare content).
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, OFF);
+		get(w, STR);
+		get(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		set(w, LEN);
+		// off = off + 1 (skip the opening quote -> the bare content start)
+		get(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, OFF);
+		// struct.new string(_intern(off, len), len): _intern compacts the token down to
+		// the stable pool at HEAP_PTR on a miss (advancing HEAP_PTR permanently) or
+		// returns
+		// an existing offset on a hit, so the interned symbol keeps a stable id (eq
+		// across
+		// occurrences) even though the scratch it was copied into is reused.
 		get(w, OFF);
 		get(w, LEN);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_INTERN);
 		get(w, LEN);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -274,31 +307,6 @@ final class WasmSymbolApiRuntimeBuilder {
 	}
 
 	/**
-	 * Emits {@code off = content offset, len = content length} for the string struct in
-	 * {@code strSlot} (skipping the surrounding quotes).
-	 */
-	private static void emitContentRange(WasmWriter w, int strSlot, int offSlot, int lenSlot) {
-		get(w, strSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(0);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, offSlot);
-		get(w, strSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(1);
-		i32(w, 2);
-		w.write(Instruction.I32_SUB);
-		set(w, lenSlot);
-	}
-
-	/**
 	 * Emits the shared boundp/symbol-value prologue: {@code onNil} runs for nil,
 	 * {@code onSelf} for {@code t} and keywords, {@code onOther} for a non-string value;
 	 * each must leave the function (return or trap). Falls through with the symbol's
@@ -334,8 +342,11 @@ final class WasmSymbolApiRuntimeBuilder {
 		onSelf.run();
 		w.write(Instruction.END);
 		// a keyword (first content byte ':') is self-bound
-		get(w, offSlot);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		get(w, symSlot);
+		WasmEmitHelper.emitStrBytesArray(w);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		i32(w, ':');
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
@@ -346,8 +357,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	private static void emitTrue(WasmWriter w, int tOffset) {
 		i32(w, tOffset);
 		i32(w, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 	}
 
 	private static void emitNull(WasmWriter w) {

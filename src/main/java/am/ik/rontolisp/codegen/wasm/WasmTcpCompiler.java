@@ -89,17 +89,22 @@ final class WasmTcpCompiler {
 			WasmExprCompiler.compileExpr(hostExpr, ctx);
 			w.write(Instruction.SET_LOCAL);
 			w.writeSignedLeb128(hostTmp);
-			// hostPtr = offset + 1, hostLen = length - 2 (strip the surrounding quotes)
-			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(hostTmp);
-			refCast(w, WasmLispCompiler.TYPE_STRING);
-			structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+			// The host string's bytes live on the GC heap: copy them into linear scratch
+			// at
+			// HEAP_PTR (consumed immediately by the sockets call below) and push (ptr,
+			// len).
+			// ptr = HEAP_PTR + 1 (skip the opening quote) ; len = _str_to_mem(host,
+			// HEAP_PTR) - 2 (strip the quotes). i32 intermediates stay on the stack (ctx
+			// temps are ref-typed).
+			i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+			w.write(Instruction.I32_LOAD, 0x02, 0x00);
 			i32(w, 1);
 			w.write(Instruction.I32_ADD);
 			w.write(Instruction.GET_LOCAL);
 			w.writeSignedLeb128(hostTmp);
-			refCast(w, WasmLispCompiler.TYPE_STRING);
-			structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+			i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+			w.write(Instruction.I32_LOAD, 0x02, 0x00);
+			WasmEmitHelper.emitStrToMemCall(w);
 			i32(w, 2);
 			w.write(Instruction.I32_SUB);
 		}
@@ -142,17 +147,6 @@ final class WasmTcpCompiler {
 	private static void call(WasmWriter w, int func) {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(func);
-	}
-
-	private static void refCast(WasmWriter w, int heapType) {
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(heapType);
-	}
-
-	private static void structGet(WasmWriter w, int type, int field) {
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
 	}
 
 }

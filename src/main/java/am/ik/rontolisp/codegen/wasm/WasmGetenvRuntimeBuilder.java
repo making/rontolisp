@@ -18,7 +18,7 @@ final class WasmGetenvRuntimeBuilder {
 
 	private static final int NAME = 0; // param: the variable name (a string struct)
 
-	private static final int NAME_OFF = 1;
+	// slot 1 is spare (the old NAME_OFF linear content offset, now read via NAME_ARR).
 
 	private static final int NAME_LEN = 2;
 
@@ -38,6 +38,8 @@ final class WasmGetenvRuntimeBuilder {
 
 	private static final int HEAP = 10;
 
+	private static final int NAME_ARR = 11; // the name string's $str_bytes data array
+
 	private static final int QUOTE = 0x22;
 
 	private static final int EQUALS = 0x3d; // '='
@@ -49,18 +51,21 @@ final class WasmGetenvRuntimeBuilder {
 		final ByteArrayOutputStream body = new ByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 
-		// 10 i32 locals (indices 1..10; index 0 is the name parameter).
-		w.write(1);
+		// 10 i32 locals (indices 1..10; index 0 is the name parameter) + one $str_bytes
+		// ref
+		// (index 11, the name string's data array).
+		w.write(2);
 		w.writeUnsignedLeb128(10);
 		w.write(Type.I32);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
 
-		// nameOff = string.offset + 1 ; nameLen = string.length - 2 (strip the quotes).
+		// nameArr = the name string's data array ; nameLen = length - 2 (strip the
+		// quotes).
 		getLocal(w, NAME);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, NAME_OFF);
+		WasmEmitHelper.emitStrBytesArray(w);
+		setLocal(w, NAME_ARR);
 		getLocal(w, NAME);
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
@@ -115,15 +120,17 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
 		w.writeSignedLeb128(1); // br to $cmpDone
-		// if p[j] != name[nameOff + j]: ok = 0 ; break
+		// if p[j] != nameArr[1 + j]: ok = 0 ; break (name content past the opening quote)
 		getLocal(w, P);
 		getLocal(w, J);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		getLocal(w, NAME_OFF);
+		getLocal(w, NAME_ARR);
+		i32(w, 1);
 		getLocal(w, J);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.IF, 0x40);
 		i32(w, 0);
@@ -245,20 +252,15 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		i32(w, QUOTE);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// memory[HEAP_PTR_ADDR] = heap + valLen + 2
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		getLocal(w, HEAP);
-		getLocal(w, J);
-		w.write(Instruction.I32_ADD);
-		i32(w, 2);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new string(heap, valLen + 2)
+		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the value into a
+		// fresh
+		// GC array with a counter id, so the scratch region is reused for the next build.
+		// return _str_fresh(heap, valLen + 2)
 		getLocal(w, HEAP);
 		getLocal(w, J);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 
 		w.write(Instruction.END); // end if/else
 		w.write(Instruction.END); // end function

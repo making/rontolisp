@@ -24,37 +24,54 @@ final class WasmReadFromStringCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(val);
-		// cursor = offset + 1 (skip the opening quote)
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_CURSOR_ADDR);
-		structField(ctx, val, 0);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.I32_ADD);
-		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
-		// end = offset + length - 1 (before the closing quote)
+		// The string's bytes live on the GC heap, so copy them into the reader input
+		// scratch at HEAP_PTR and point the cursor/end there. sp = HEAP_PTR (all i32
+		// intermediates stay on the stack / in memory -- ctx temps are ref-typed). The
+		// scratch is then RESERVED (HEAP_PTR = sp + totalLen) so symbols interned and
+		// strings built during the parse stack above the still-unparsed input.
+		// end = sp + _str_to_mem(val, sp) - 1 (before the closing quote)
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_END_ADDR);
-		structField(ctx, val, 0);
-		structField(ctx, val, 1);
+		loadHeapPtr(ctx);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(val);
+		loadHeapPtr(ctx);
+		WasmEmitHelper.emitStrToMemCall(ctx.writer);
 		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.I32_SUB);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		// cursor = sp + 1 (skip the opening quote); sp is still HEAP_PTR (_str_to_mem
+		// does
+		// not advance it)
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_CURSOR_ADDR);
+		loadHeapPtr(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		// reserve: HEAP_PTR = READ_END + 1 = sp + totalLen
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_END_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 		// parse one datum
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 	}
 
-	private static void structField(WasmLispCompiler.Ctx ctx, int slot, int field) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(field);
+	// Pushes mem[HEAP_PTR_ADDR] (the reader input scratch base).
+	private static void loadHeapPtr(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
 	}
 
 }

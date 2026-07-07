@@ -85,20 +85,15 @@ final class WasmFetchRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		i32(w, QUOTE);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// memory[HEAP_PTR_ADDR] = heap + len + 2
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		getLocal(w, HEAP);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_ADD);
-		i32(w, 2);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new string(heap, len + 2)
+		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the response bytes
+		// into
+		// a fresh GC array with a counter id, so the scratch region is reused.
+		// return _str_fresh(heap, len + 2)
 		getLocal(w, HEAP);
 		getLocal(w, LEN);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -217,16 +212,23 @@ final class WasmFetchRuntimeBuilder {
 	// memory at local P as len:u32 followed by the unquoted bytes, advancing P. OFF/LEN/K
 	// are i32 scratch locals.
 	private static void emitWriteField(WasmWriter w, int STR, int OFF, int LEN, int K, int P) {
-		// off = STR.offset + 1 ; len = STR.length - 2 (strip the quotes)
+		// The string's bytes live on the GC heap: copy them into linear scratch at
+		// HEAP_PTR
+		// (consumed immediately by the wire copy below), then off = scratch + 1, len =
+		// total - 2 (strip the quotes). _str_to_mem bridges the array to the linear
+		// range.
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, OFF);
 		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		setLocal(w, LEN);
+		getLocal(w, OFF);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, OFF);
-		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		getLocal(w, LEN);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);

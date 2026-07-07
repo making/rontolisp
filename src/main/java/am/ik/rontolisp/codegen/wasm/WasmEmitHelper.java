@@ -438,8 +438,94 @@ final class WasmEmitHelper {
 		ctx.writer.writeSignedLeb128(entry.offset());
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.length());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		emitStrBuildCall(ctx.writer);
+	}
+
+	/**
+	 * Emits {@code call FUNC_STR_BUILD}: consumes an {@code (off, len)} pair on the stack
+	 * (a linear byte offset + byte length) and pushes the {@code TYPE_STRING} built by
+	 * copying {@code linear[off..off+len)} into a fresh {@code $str_bytes} GC array (id =
+	 * off). A drop-in replacement for the old two-field {@code struct.new TYPE_STRING}
+	 * (which popped the same {@code (offset, length)} pair), so every string/symbol build
+	 * moves its bytes onto the GC heap. See
+	 * {@link WasmStringRuntimeBuilder#buildStrBuildBody()}.
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitStrBuildCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+	}
+
+	/**
+	 * Emits {@code call FUNC_STR_FRESH}: the same {@code (off, len) -> TYPE_STRING} shape
+	 * as {@link #emitStrBuildCall(WasmWriter)}, but the resulting string's id is a fresh
+	 * monotonic counter value rather than {@code off}. Every RUNTIME string build uses
+	 * this so that reusing the assembly scratch offset (the heap is a stack now) cannot
+	 * make two distinct runtime strings / uninterned symbols compare {@code eq}. Interned
+	 * names (literals, {@code _intern}'d symbols, t) keep using {@code emitStrBuildCall}.
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitStrFreshCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_FRESH);
+	}
+
+	/**
+	 * Emits {@code call FUNC_STR_TO_MEM}: consumes a {@code (str, ptr)} pair (a
+	 * {@code TYPE_STRING} ref and a linear byte offset) and pushes the byte count after
+	 * copying the string's {@code $str_bytes} array (quotes included) into
+	 * {@code linear[ptr..)}. Used where a linear pointer is still required (WASI iovecs,
+	 * the reader input scratch, the fetch wire, the host {@code :string} boundary,
+	 * intern).
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitStrToMemCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_TO_MEM);
+	}
+
+	/**
+	 * Emits {@code call FUNC_WRITE_STR_GC}: consumes a {@code (str, from, to)} triple and
+	 * writes bytes {@code [from, to)} of the string value to the current print sink from
+	 * its GC array (capture buffer append or stdout). The print path for string values.
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitWriteStrGcCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR_GC);
+	}
+
+	/**
+	 * Given a value on the stack that is a {@code TYPE_STRING}, replaces it with its
+	 * {@code $str_bytes} data array (field 2), cast to the concrete array type so callers
+	 * can {@code array.get_u} / {@code array.len} it. The array holds the same
+	 * quote-framed bytes the string's linear representation held, so a byte at old
+	 * {@code linear[id+i]} is now {@code array[i]}. Emits
+	 * {@code ref.cast TYPE_STRING; struct.get 2; ref.cast
+	 * $str_bytes} (the cast to TYPE_STRING is redundant when the value is already a
+	 * TYPE_STRING ref, but harmless).
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitStrBytesArray(WasmLispCompiler.Ctx ctx) {
+		emitStrBytesArray(ctx.writer);
+	}
+
+	/**
+	 * The raw-{@link WasmWriter} counterpart of
+	 * {@link #emitStrBytesArray(WasmLispCompiler.Ctx)}, for the runtime builders that
+	 * emit into a {@code WasmWriter} directly. Consumes a {@code TYPE_STRING} ref on the
+	 * stack and leaves its {@code $str_bytes} data array (field 2), cast to the concrete
+	 * array type so callers can {@code array.get_u} / {@code array.len} it.
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitStrBytesArray(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
 	}
 
 }

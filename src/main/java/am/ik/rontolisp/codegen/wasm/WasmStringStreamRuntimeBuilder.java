@@ -16,11 +16,14 @@ import am.ik.wasm.WasmWriter;
  * 12-byte record bump-allocated in linear memory -- a real WASI file descriptor is never
  * negative, so every stream-taking built-in can dispatch on the sign. An output record is
  * {@code [kind=1][head][tail]} heading a linked list of {@code [off][len][next]} chunks;
- * a chunk references the ORIGINAL string bytes (static data and the bump-allocated heap
- * never move), so appending copies nothing and {@code _str_stream_contents} concatenates
- * the chunks into one fresh heap string. An input record is {@code [kind=0][cursor][end]}
- * over the source string's content bytes; {@code _read_line} (and therefore
- * {@code _read}, which loops over it) consumes it line by line.
+ * since a string's bytes now live on the GC heap (no stable linear address), appending
+ * COPIES the content into a persistent linear buffer and the chunk references that copy,
+ * so {@code _str_stream_contents} concatenates the chunks into one fresh heap string. An
+ * input record is {@code [kind=0][cursor][end]} over a persistent linear COPY of the
+ * source string's content bytes; {@code _read_line} (and therefore {@code _read}, which
+ * loops over it) consumes it line by line. (These per-stream copies + records are
+ * bump-allocated and not reclaimed -- a string stream is short-lived and comparatively
+ * rare, unlike the reclaimable runtime strings the GC-array representation targets.)
  */
 final class WasmStringStreamRuntimeBuilder {
 
@@ -48,16 +51,21 @@ final class WasmStringStreamRuntimeBuilder {
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 
-		// off = string.offset + 1 ; len = string.length - 2 (content without quotes)
-		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		// The string's bytes live on the GC heap: copy them into linear scratch at
+		// HEAP_PTR
+		// so OFF/LEN name a real linear range (the content, without the quotes). HEAP_PTR
+		// is
+		// NOT advanced yet -- the fd_write / stdout branches consume the copy
+		// immediately,
+		// while the string-output-stream branch PERSISTS it (advances HEAP_PTR) before
+		// linking a chunk that references it. off = HEAP_PTR + 1 ; len = _str_to_mem - 2.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, OFF);
 		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		WasmEmitHelper.emitStrToMemCall(w);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
@@ -83,6 +91,15 @@ final class WasmStringStreamRuntimeBuilder {
 		getLocal(w, H);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, REC);
+		// Persist the content copy: HEAP_PTR = OFF + LEN + 1 (past the copy's closing
+		// quote position), so the chunk's referenced bytes survive the next write.
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		emitAppendChunk(w, REC, CHUNK, TAIL, () -> getLocal(w, OFF), () -> getLocal(w, LEN));
 		getLocal(w, STR);
 		w.write(Instruction.RETURN);
@@ -164,14 +181,24 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Type.I32);
 		final int STR = 0, REC = 1, OFF = 2, LEN = 3;
 
-		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		// The source string's bytes live on the GC heap: copy them into a PERSISTENT
+		// linear
+		// buffer at HEAP_PTR (the input record's cursor/end are read incrementally over
+		// the
+		// stream's lifetime, so the bytes must outlive this call), then point cursor/end
+		// into the copy. off = HEAP_PTR ; len = _str_to_mem(str, off) ; HEAP_PTR = off +
+		// len.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		setLocal(w, OFF);
 		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
 		setLocal(w, LEN);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		emitAllocRecord(w, REC);
 		// kind = 0 (input), cursor = off + 1, end = off + len - 1
 		getLocal(w, REC);
@@ -256,11 +283,9 @@ final class WasmStringStreamRuntimeBuilder {
 			getLocal(w, TOTAL);
 			w.write(Instruction.I32_ADD);
 		});
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		getLocal(w, START);
-		getLocal(w, TOTAL);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the concatenated
+		// result
+		// into a fresh GC array below, so the assembly scratch at `start` is reused.
 		// memory[start] = '"' ; cur = start + 1
 		getLocal(w, START);
 		i32(w, 0x22);
@@ -324,14 +349,15 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// memory[cur] = '"' ; return struct.new string(start, total)
+		// memory[cur] = '"' ; return _str_fresh(start, total) -- the contents is a
+		// runtime
+		// string, so it gets a fresh counter id.
 		getLocal(w, CUR);
 		i32(w, 0x22);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		getLocal(w, START);
 		getLocal(w, TOTAL);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

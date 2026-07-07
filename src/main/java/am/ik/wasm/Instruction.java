@@ -551,14 +551,35 @@ public interface Instruction {
 	/** {@code ARRAY_NEW} (0x06). */
 	int ARRAY_NEW = 0x06;
 
+	/** {@code ARRAY_NEW_DEFAULT} (0x07). */
+	int ARRAY_NEW_DEFAULT = 0x07;
+
+	/** {@code ARRAY_NEW_FIXED} (0x08). */
+	int ARRAY_NEW_FIXED = 0x08;
+
+	/** {@code ARRAY_NEW_DATA} (0x09). */
+	int ARRAY_NEW_DATA = 0x09;
+
 	/** {@code ARRAY_GET} (0x0B). */
 	int ARRAY_GET = 0x0B;
+
+	/** {@code ARRAY_GET_S} (0x0C). */
+	int ARRAY_GET_S = 0x0C;
+
+	/** {@code ARRAY_GET_U} (0x0D). */
+	int ARRAY_GET_U = 0x0D;
 
 	/** {@code ARRAY_SET} (0x0E). */
 	int ARRAY_SET = 0x0E;
 
 	/** {@code ARRAY_LEN} (0x0F). */
 	int ARRAY_LEN = 0x0F;
+
+	/** {@code ARRAY_FILL} (0x10). */
+	int ARRAY_FILL = 0x10;
+
+	/** {@code ARRAY_COPY} (0x11). */
+	int ARRAY_COPY = 0x11;
 
 	/** {@code REF_TEST} (0x14). */
 	int REF_TEST = 0x14;

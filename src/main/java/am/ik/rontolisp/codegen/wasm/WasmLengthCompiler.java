@@ -41,12 +41,11 @@ final class WasmLengthCompiler {
 		// A string struct or a symbol struct -- distinguish by the leading '"' byte.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(0); // field 0: offset
-		ctx.writer.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		WasmEmitHelper.emitStrBytesArray(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(34); // '"'
 		ctx.writer.write(Instruction.I32_EQ);

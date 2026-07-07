@@ -305,26 +305,31 @@ final class WasmExportCompiler {
 		int tmp = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmp);
-		// pointer = offset + 1 (skip the leading quote)
-		emitStringField(ctx, tmp, 0);
+		// The string's bytes live on the GC heap; copy them into linear scratch at
+		// HEAP_PTR (not advanced -- the host reads the returned (ptr,len) right after
+		// this
+		// call returns, before the next string op reuses the scratch) and return the
+		// content pointer/length. ptr = HEAP_PTR + 1 (skip the leading quote); len =
+		// _str_to_mem(str, HEAP_PTR) - 2 (strip both quotes). All i32 intermediates stay
+		// on the stack (ctx temps are ref-typed).
+		loadHeapPtr(ctx);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.I32_ADD);
-		// length = stored length - 2 (strip both quotes)
-		emitStringField(ctx, tmp, 1);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmp);
+		loadHeapPtr(ctx);
+		WasmEmitHelper.emitStrToMemCall(ctx.writer);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(2);
 		ctx.writer.write(Instruction.I32_SUB);
 	}
 
-	private static void emitStringField(WasmLispCompiler.Ctx ctx, int slot, int field) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(field);
+	// Pushes mem[HEAP_PTR_ADDR] (the transient host-result scratch base).
+	private static void loadHeapPtr(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
 	}
 
 	// Stores ptr (addEnd=false) or ptr+len (addEnd=true) for the s-expression parameter

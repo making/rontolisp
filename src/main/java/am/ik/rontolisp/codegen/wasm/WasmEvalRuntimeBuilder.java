@@ -528,8 +528,9 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, OFF);
-		getLocal(w, OFF);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		// A leading quote marks a string literal (self-evaluating); else it is a symbol
+		// (variable reference). OFF stays the field-0 id for _env_lookup.
+		strByteAt(w, VAL, () -> i32(w, 0));
 		i32(w, 0x22);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
@@ -672,7 +673,7 @@ final class WasmEvalRuntimeBuilder {
 		// lambdaForm = cons("lambda", cdr(REST))
 		i32(w, off.of(LispNames.LAMBDA));
 		i32(w, 6); // "lambda".length()
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		emitCdrOf(w, REST);
 		structNew(w, WasmLispCompiler.TYPE_CONS);
 		setLocal(w, TMP);
@@ -777,7 +778,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		i32(w, off.of("t"));
 		i32(w, 1);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		getLocal(w, REST);
@@ -1430,7 +1431,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// (c) car/cdr composition such as cadr (operator matches c[ad]+r)
-		emitCarCdrComposition(w, OFF, LEN, REST, ENV, ACC, IDX, CH, ARITY);
+		emitCarCdrComposition(w, OP, LEN, REST, ENV, ACC, IDX, CH, ARITY);
 		// (d) unknown operator
 		emitNull(w);
 		w.write(Instruction.RETURN);
@@ -1557,30 +1558,41 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 	}
 
+	// Pushes the unsigned content byte arr[idx] of the string value in strValSlot, where
+	// pushIdx emits the 0-based array index. Reads go through the GC $str_bytes array
+	// (old
+	// linear[field0 + idx] == arr[idx]); recomputes the array per call, fine for the rare
+	// eval-time symbol-name parsing path.
+	private static void strByteAt(WasmWriter w, int strValSlot, Runnable pushIdx) {
+		getLocal(w, strValSlot);
+		WasmEmitHelper.emitStrBytesArray(w);
+		pushIdx.run();
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+	}
+
 	/**
 	 * Emits handling for {@code car}/{@code cdr} composition operators ({@code c[ad]+r},
-	 * e.g. {@code cadr}). When the operator name at {@code offSlot}/{@code lenSlot}
-	 * matches the pattern, evaluates the single argument and applies the car/cdr
-	 * operations from right to left, then returns. Otherwise falls through. Clobbers the
-	 * supplied scratch locals.
+	 * e.g. {@code cadr}). When the operator name in {@code strValSlot} (length
+	 * {@code lenSlot}) matches the pattern, evaluates the single argument and applies the
+	 * car/cdr operations from right to left, then returns. Otherwise falls through.
+	 * Clobbers the supplied scratch locals.
 	 */
-	private static void emitCarCdrComposition(WasmWriter w, int offSlot, int lenSlot, int restSlot, int envSlot,
+	private static void emitCarCdrComposition(WasmWriter w, int strValSlot, int lenSlot, int restSlot, int envSlot,
 			int accSlot, int idxSlot, int chSlot, int validSlot) {
-		// first/last byte check: len>=3 && mem[off]=='c' && mem[off+len-1]=='r'
+		// first/last byte check: len>=3 && arr[0]=='c' && arr[len-1]=='r'
 		getLocal(w, lenSlot);
 		i32(w, 3);
 		w.write(Instruction.I32_GE_S);
-		getLocal(w, offSlot);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> i32(w, 0));
 		i32(w, 0x63);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
-		getLocal(w, offSlot);
-		getLocal(w, lenSlot);
-		w.write(Instruction.I32_ADD);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> {
+			getLocal(w, lenSlot);
+			i32(w, 1);
+			w.write(Instruction.I32_SUB);
+		});
 		i32(w, 0x72);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
@@ -1598,10 +1610,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
-		getLocal(w, offSlot);
-		getLocal(w, idxSlot);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
 		setLocal(w, chSlot);
 		getLocal(w, chSlot);
 		i32(w, 0x61);
@@ -1637,10 +1646,7 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.BR_IF, 1);
-		getLocal(w, offSlot);
-		getLocal(w, idxSlot);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
 		i32(w, 0x61);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
@@ -2065,7 +2071,7 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, -1);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
-		emitCarCdrStoreTarget(w, OFF, LEN, TMP, ENV, TARGET, FIELD, IDX, CH);
+		emitCarCdrStoreTarget(w, OP, LEN, TMP, ENV, TARGET, FIELD, IDX, CH);
 		w.write(Instruction.END);
 
 		// store: if a target was resolved and is a cons, set car (FIELD 0) or cdr (FIELD
@@ -2175,29 +2181,27 @@ final class WasmEvalRuntimeBuilder {
 
 	/**
 	 * Emits the {@code _store} handling of {@code car}/{@code cdr} and the
-	 * {@code c[ad]+r} compositions (e.g. {@code cadr}). When the operator name at
-	 * {@code offSlot}/{@code
-	 * lenSlot} matches the pattern, evaluates the single argument, applies the inner
+	 * {@code c[ad]+r} compositions (e.g. {@code cadr}). When the operator name in
+	 * {@code strValSlot} (length {@code
+	 * lenSlot}) matches the pattern, evaluates the single argument, applies the inner
 	 * operations into {@code targetSlot}, and sets {@code fieldSlot} to 0 (the outer op
 	 * is {@code a}) or 1 (it is {@code d}). Otherwise leaves {@code fieldSlot} unchanged.
 	 */
-	private static void emitCarCdrStoreTarget(WasmWriter w, int offSlot, int lenSlot, int argsSlot, int envSlot,
+	private static void emitCarCdrStoreTarget(WasmWriter w, int strValSlot, int lenSlot, int argsSlot, int envSlot,
 			int targetSlot, int fieldSlot, int idxSlot, int validSlot) {
-		// first/last byte check: len>=3 && mem[off]=='c' && mem[off+len-1]=='r'
+		// first/last byte check: len>=3 && arr[0]=='c' && arr[len-1]=='r'
 		getLocal(w, lenSlot);
 		i32(w, 3);
 		w.write(Instruction.I32_GE_S);
-		getLocal(w, offSlot);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> i32(w, 0));
 		i32(w, 0x63);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
-		getLocal(w, offSlot);
-		getLocal(w, lenSlot);
-		w.write(Instruction.I32_ADD);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> {
+			getLocal(w, lenSlot);
+			i32(w, 1);
+			w.write(Instruction.I32_SUB);
+		});
 		i32(w, 0x72);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
@@ -2215,16 +2219,10 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
-		getLocal(w, offSlot);
-		getLocal(w, idxSlot);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
 		i32(w, 0x61);
 		w.write(Instruction.I32_NE);
-		getLocal(w, offSlot);
-		getLocal(w, idxSlot);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
 		i32(w, 0x64);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.I32_AND);
@@ -2256,10 +2254,7 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, 2);
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.BR_IF, 1);
-		getLocal(w, offSlot);
-		getLocal(w, idxSlot);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
 		i32(w, 0x61);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
@@ -2276,13 +2271,10 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// field = (mem[off+1] == 'd') ? 1 : 0
+		// field = (arr[1] == 'd') ? 1 : 0
 		i32(w, 0);
 		setLocal(w, fieldSlot);
-		getLocal(w, offSlot);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		strByteAt(w, strValSlot, () -> i32(w, 1));
 		i32(w, 0x64);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);

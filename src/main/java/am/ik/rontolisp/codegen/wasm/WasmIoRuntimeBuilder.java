@@ -40,14 +40,16 @@ final class WasmIoRuntimeBuilder {
 		w.write(Type.I32);
 		final int PATH = 0, MODE = 1, OFF = 2, PLEN = 3;
 
-		// off = string.offset ; plen = string.length - 2 (strip surrounding quotes)
-		getLocal(w, PATH);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		// The path bytes live on the GC heap, so copy them into linear scratch at
+		// HEAP_PTR
+		// (not advanced -- path_open consumes them immediately) and derive the pointer +
+		// length it needs. off = HEAP_PTR ; plen = _str_to_mem(path, off) - 2 (strip the
+		// surrounding quotes).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		setLocal(w, OFF);
 		getLocal(w, PATH);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, PLEN);
@@ -130,8 +132,7 @@ final class WasmIoRuntimeBuilder {
 		// return t
 		i32(w, t.offset());
 		i32(w, t.length());
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -155,14 +156,17 @@ final class WasmIoRuntimeBuilder {
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 
-		// off = string.offset ; len = string.length
-		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		// The string's bytes live on the GC heap: copy them into linear scratch at
+		// HEAP_PTR
+		// so OFF/LEN name a real linear range (off = base, len = total incl. quotes).
+		// HEAP_PTR is NOT advanced yet -- the fd_write branch consumes the copy
+		// immediately,
+		// while the string-output-stream branch below PERSISTS it before linking a chunk.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		setLocal(w, OFF);
 		getLocal(w, STR);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
 		setLocal(w, LEN);
 		// fd = stream is nil ? 1 (stdout) : i31.get_s(stream)
 		getLocal(w, FD_VAL);
@@ -186,6 +190,13 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, FD);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, REC);
+		// Persist the content copy: HEAP_PTR = OFF + LEN (past the copy), so the chunk's
+		// referenced bytes survive the next write.
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		WasmStringStreamRuntimeBuilder.emitAppendChunk(w, REC, CHUNK, TAIL, () -> {
 			getLocal(w, OFF);
 			i32(w, 1);

@@ -222,11 +222,12 @@ final class WasmReadRuntimeBuilder {
 	static byte[] buildInternBody(int internBase, int internCount) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: off=0, len=1 ; locals: IDX=2, EOFF=3, ELEN=4, K=5, COUNT=6
+		// params: off=0, len=1 ; locals: IDX=2, EOFF=3, ELEN=4, K=5, COUNT=6, POOL=7,
+		// CK=8
 		w.write(1);
-		w.write(5);
+		w.write(7);
 		w.write(Type.I32);
-		final int OFF = 0, LEN = 1, IDX = 2, EOFF = 3, ELEN = 4, K = 5, COUNT = 6;
+		final int OFF = 0, LEN = 1, IDX = 2, EOFF = 3, ELEN = 4, K = 5, COUNT = 6, POOL = 7, CK = 8;
 
 		// The runtime table's base is not a constant: it is seeded at instantiation
 		// (RT_INTERN_BASE_ADDR cell) from the program's actual static-data size, so the
@@ -240,14 +241,59 @@ final class WasmReadRuntimeBuilder {
 		loadMem32(w, WasmLispCompiler.RT_INTERN_COUNT_ADDR);
 		setLocal(w, COUNT);
 		emitInternScan(w, emitRtBase, OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
-		// 3. miss: append (off, len) and return off
-		// mem[rtBase + count*8] = off
+		// 3. miss: copy the token into stable heap storage at HEAP_PTR (advanced
+		// PERMANENTLY -- an interned symbol's bytes legitimately persist across calls,
+		// unlike a transient string build which stack-pops HEAP_PTR). This makes the
+		// record and the returned canonical offset independent of the caller's source
+		// bytes (which for a runtime string / a reused reader input buffer no longer
+		// persist once the string heap is a stack). Append (poolOff, len), return
+		// poolOff.
+		// pool = HEAP_PTR
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, POOL);
+		// Ensure [pool, pool+len) is within linear memory.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, POOL);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+		});
+		// ck = 0 ; while (ck < len) { mem[pool+ck] = mem[off+ck]; ck++ }
+		i32(w, 0);
+		setLocal(w, CK);
+		block(w);
+		loop(w);
+		getLocal(w, CK);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 1);
+		getLocal(w, POOL);
+		getLocal(w, CK);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, OFF);
+		getLocal(w, CK);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, CK);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, CK);
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+		// HEAP_PTR = pool + len (permanent -- the pooled token is the symbol's stable id)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, POOL);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// mem[rtBase + count*8] = pool
 		emitRtBase.run();
 		getLocal(w, COUNT);
 		i32(w, 8);
 		w.write(Instruction.I32_MUL);
 		w.write(Instruction.I32_ADD);
-		getLocal(w, OFF);
+		getLocal(w, POOL);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// mem[rtBase + count*8 + 4] = len
 		emitRtBase.run();
@@ -265,7 +311,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		getLocal(w, OFF);
+		getLocal(w, POOL);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -411,7 +457,7 @@ final class WasmReadRuntimeBuilder {
 		// return cons(quoteSym, cdr)
 		i32(w, quoteOffset);
 		i32(w, QUOTE_LEN);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		getLocal(w, CDR);
 		structNew(w, WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.RETURN);
@@ -450,7 +496,7 @@ final class WasmReadRuntimeBuilder {
 		// return cons(functionSym, cdr)
 		i32(w, functionOffset);
 		i32(w, FUNCTION_LEN);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		getLocal(w, CDR);
 		structNew(w, WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.RETURN);
@@ -538,7 +584,7 @@ final class WasmReadRuntimeBuilder {
 		// symbol struct
 		getLocal(w, OFF);
 		getLocal(w, LEN);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -816,9 +862,11 @@ final class WasmReadRuntimeBuilder {
 
 	/**
 	 * Emits an inline reader for a {@code "..."} string literal (cursor at the opening
-	 * quote). Allocates a fresh string in the heap with surrounding {@code "} markers and
-	 * processed {@code \n \t \\ \"} escapes, advances the heap pointer, and leaves the
-	 * resulting {@code TYPE_STRING} struct on the stack.
+	 * quote). Assembles the string with surrounding {@code "} markers and processed
+	 * {@code \n \t \\ \"} escapes in the reused heap scratch (HEAP is NOT advanced -- a
+	 * stack pop), finalizes it into a fresh {@code $str_bytes} GC array via
+	 * {@code _str_fresh}, and leaves the resulting {@code TYPE_STRING} struct on the
+	 * stack.
 	 */
 	private static void emitReadString(WasmWriter w, int BYTE, int POS, int HPL, int ESC) {
 		advanceCursor(w); // skip opening quote
@@ -891,16 +939,14 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, POS);
-		// advance heap pointer: mem[HEAP] = hp + pos
-		i32(w, HEAP);
+		// HEAP is NOT advanced (a stack pop): _str_fresh copies the literal into a fresh
+		// GC
+		// array with a counter id, so the scratch (which sits above the reserved reader
+		// input) is reused for the next datum. A read string literal is a runtime string.
+		// push _str_fresh(hp, pos)
 		getLocal(w, HPL);
 		getLocal(w, POS);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// push struct STRING(hp, pos)
-		getLocal(w, HPL);
-		getLocal(w, POS);
-		structNew(w, WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 	}
 
 	/**
@@ -1125,14 +1171,16 @@ final class WasmReadRuntimeBuilder {
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		end(w);
-		// off = string.offset, len = string.length
-		getLocal(w, V);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		// The line V's bytes live on the GC heap: copy them into the reader input scratch
+		// at HEAP_PTR, point the cursor/end there, and RESERVE the scratch (HEAP_PTR =
+		// off
+		// + len) so symbols interned and strings built while parsing the line stack above
+		// the still-unparsed input. off = HEAP_PTR ; len = _str_to_mem(V, off).
+		loadMem32(w, HEAP);
 		setLocal(w, OFF);
 		getLocal(w, V);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
 		setLocal(w, LEN);
 		// cursor = off + 1 (skip opening quote)
 		i32(w, CURSOR);
@@ -1147,6 +1195,12 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// reserve HEAP_PTR = off + len
+		i32(w, HEAP);
+		getLocal(w, OFF);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// retry with the next line if nothing remains after whitespace/comments
 		emitSkipWs(w);
@@ -1185,14 +1239,15 @@ final class WasmReadRuntimeBuilder {
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 		final int FD_ADDR = WasmLispCompiler.READ_FD_ADDR;
 
-		// off = string.offset ; plen = string.length - 2 (strip surrounding quotes)
-		getLocal(w, PATH);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		// The path bytes live on the GC heap: copy them into linear scratch at HEAP_PTR
+		// (not advanced -- path_open consumes them immediately, and the file read below
+		// reuses the same scratch base). off = HEAP_PTR ; plen = _str_to_mem(path, off) -
+		// 2.
+		loadMem32(w, HEAP);
 		setLocal(w, OFF);
 		getLocal(w, PATH);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, PLEN);

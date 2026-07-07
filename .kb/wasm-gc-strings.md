@@ -1,0 +1,121 @@
+# WASM GC backend: strings as wasm-GC byte arrays
+
+Detail behind the CLAUDE.md constraint. Scope: the **GC WASM backend only**
+(`codegen.wasm`). `--no-gc` (`ScalarWasmCompiler`), the interpreter, and the JVM
+backend are unaffected -- their strings are already reclaimable.
+
+## What changed and why
+
+Originally a WASM string was `TYPE_STRING = struct { i32 offset, i32 length }`: the
+struct was GC-managed but the BYTES lived in **linear memory** (the static data
+segment for literals/interned symbols, a bump heap at `HEAP_PTR_ADDR` for runtime
+strings). That linear string bump heap only ever grew (see
+[[27-wasm-gc-heap-never-grows]]), so a resident reactor building strings across many
+calls grew without bound. Now the bytes live on the wasm-GC heap and the engine
+reclaims them like cons cells and closures.
+
+## Representation
+
+```
+TYPE_STRING (rec-group type 4) = struct { i32 id, i32 len, (ref null eq) data }
+$str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
+```
+
+- **field 0 = id** -- the canonical i32 identity, compared with `i32.eq` for
+  `eq`/`eql`/symbol-identity/`_env_lookup`/`_lookup`/special-form dispatch. For an
+  interned name it is the string's stable static/intern offset; for a runtime string
+  it is a fresh monotonic counter (see below). Every identity site is byte-for-byte
+  unchanged from the old `offset` field.
+- **field 1 = len** -- the stored byte length (kept as a plain i32; every LEN read
+  stays `struct.get 1`).
+- **field 2 = data** -- the `$str_bytes` GC array holding the SAME quote-framed bytes
+  linear memory held: a string `"foo"` is 5 bytes `" f o o "` (leading/trailing
+  `0x22`), a symbol is bare, a keyword leads with `:`. So old `linear[id + i]` == new
+  `array[i]`; the discriminator is `array.get_u data 0 == 0x22` (string) / `0x3A`
+  (keyword). Readers `ref.cast $str_bytes` before `array.get_u` / `array.len`
+  (`WasmEmitHelper.emitStrBytesArray`).
+
+## HEAP_PTR is a stack pointer; identity is a counter (the leak fix)
+
+`HEAP_PTR_ADDR` linear memory is now used essentially ONLY as a reused byte-assembly
+scratch (cons/closures/symbols-as-structs are GC objects, not linear). Two disciplines
+share it:
+
+- **Transient (save on entry, pop on exit)** -- every runtime string build. A builder
+  assembles bytes at `start = HEAP_PTR`, calls `_str_fresh(start, len)` (copies the
+  bytes into a fresh `$str_bytes` array + stamps `id = STRING_ID_CTR++`), then does NOT
+  advance HEAP_PTR. Because the scratch offset is reused across builds, the COUNTER --
+  not the offset -- is what keeps distinct runtime strings and uninterned symbols
+  (`gensym`/`make-symbol`) `eq`-distinct. `STRING_ID_CTR_ADDR` (cell 156) is seeded at
+  `heapBase`, so runtime ids are always `>= heapBase >` every interned/rt-intern
+  offset (identity with literals is preserved) and never repeat.
+- **Permanent (advance, never pop)** -- the interned-symbol byte pool. `_intern`
+  (`WasmReadRuntimeBuilder.buildInternBody`) now COPIES a first-seen token into stable
+  heap storage at `HEAP_PTR` and advances it, so the intern record + returned canonical
+  offset no longer depend on the caller's (transient) bytes. HEAP_PTR's low-water = the
+  interned high-water, which grows only with distinct runtime symbols (legitimate,
+  bounded), not with string-building activity.
+
+The three fixed helpers (always emitted, indices right after `FUNC_STR_BUILD`; bodies
+in `WasmStringRuntimeBuilder`):
+
+- `FUNC_STR_BUILD` `_str_build(off,len)` -- id = off. INTERNED names: literals
+  (`compileStringLiteral`), `t`/`nil`/`quote`/`function`/`lambda`/keyword symbols,
+  reader symbols (via `_intern`), `intern`. Two occurrences share a dedup/intern
+  offset -> `eq`.
+- `FUNC_STR_FRESH` `_str_fresh(off,len)` -- id = counter++. RUNTIME strings:
+  concatenate/subseq/case/trim, read string literals, read-line, the capture path
+  (`princ-to-string`/`prin1-to-string`/`concatenate`), `gensym`/`make-symbol`, getenv,
+  fetch response, the host `:string` boundary, string-stream contents.
+- `FUNC_STR_TO_MEM` `_str_to_mem(str,ptr)->len` -- copies a string's array (quotes
+  included) into `linear[ptr..)`; the array->linear bridge for the paths that still
+  need a linear pointer: `open`/`load` path, the reader input scratch
+  (`read-from-string`/`read`, which RESERVE the scratch so parse-time interns/builds
+  stack above the unparsed input), `intern`, the host `:string` boundary
+  (`WasmExportCompiler.emitStringResult`, reused by imports), the fetch wire, `tcp`
+  host, and the string-stream copies.
+- `FUNC_WRITE_STR_GC` `_write_str_gc(str,from,to)` -- the print path for a string
+  value: appends `[from,to)` straight from the GC array to `CAPTURE_CUR` in capture
+  mode (no linear staging, so it can never alias the capture buffer while printing
+  inside a `*-to-string` capture) or stages into HEAP_PTR scratch + `_write_str` for
+  stdout. `princ` passes `(1,len-1)` to strip quotes, `prin1` `(0,len)`.
+
+## String streams (eager copy)
+
+`WasmStringStreamRuntimeBuilder` chunks / input records referenced string bytes by
+linear offset, which a GC array cannot provide. Now appending / opening COPIES the
+content into a PERSISTENT linear buffer (`_str_to_mem`, bump-advanced) and the chunk /
+cursor references that copy; `_str_stream_contents` / the string-stream read-line
+finalize via `_str_fresh`. These per-stream copies + 12-byte records bump-allocate and
+are not reclaimed -- a string stream is short-lived and comparatively rare, unlike the
+reclaimable runtime strings this representation targets. Details:
+[[read-load-streams]].
+
+## Grow guards kept
+
+The `emitGrowHeapTo` guards at string builders are KEPT: a single string can exceed
+the current linear size, so the scratch is grown ON DEMAND (once), not per-build. What
+is retired is the UNBOUNDED HEAP_PTR advance; peak linear memory is now bounded by the
+largest single live string, not the sum of all builds.
+
+## Component byte-safety
+
+No `DataCount`/`array.new_data`/segment reorder: `_str_build`/`_str_fresh` copy from
+linear, so no new core section. Adding `TYPE_STR_TO_MEM`/`TYPE_WRITE_STR_GC` shifts the
+export/import wrapper TYPE base (`TYPE_WRITE_STR_GC + 1`) and adding the three helper
+FUNCTIONS shifts `FUNC_USER_BASE`, but the component embeds the core opaquely and binds
+by export name, so it is unaffected (re-verified: `--component` + serve output
+identical). See [[wasi-component]].
+
+## Verifying the leak fix
+
+`(dotimes (i N) (grow "..." 10))` building ~16KB strings via concatenate-doubling on a
+wasm-GC host (wasmtime `-W gc`, Node/V8; NOT Chicory/Endive -- no wasm-GC): peak RSS is
+FLAT vs N (N=50000 -> ~94MB, N=200000 -> ~91MB). A leak would scale linearly (multi-GB).
+
+## Related
+- [[27-wasm-gc-heap-never-grows]] -- the linear string heap this retires.
+- [[read-load-streams]] -- string streams + the reader.
+- [[symbol-runtime-api]] -- `intern`/`make-symbol`/`gensym` identity.
+- [[no-gc-scalar-wasm]] -- the `--no-gc` backend (unaffected; keeps its own heap
+  reset in [[88-no-gc-export-wrapper-heap-reset]]/[[89-no-gc-heap-mark-release]]).

@@ -402,11 +402,39 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts and the component blobs are unaffected.
 	static final int FUNC_READ_CHAR = FUNC_FBOUNDP + 1;
 
+	// _str_build (off, len) -> (ref null eq): allocates a $str_bytes GC array of
+	// length len, copies linear[off..off+len) into it, and returns a TYPE_STRING
+	// {id=off, len, data=arr}. Every compiled string/symbol build calls this (it has
+	// the same (i32,i32)->ref stack shape the old 2-field struct.new had), so string
+	// bytes live on the GC heap. Fixed index just before FUNC_USER_BASE; the component
+	// embeds the core opaquely and binds it by export name, so shifting the user/lambda
+	// indices below is safe.
+	static final int FUNC_STR_BUILD = FUNC_READ_CHAR + 1;
+
+	// _str_fresh (off, len) -> (ref null eq): like _str_build, but stamps a fresh id
+	// from the monotonic STRING_ID_CTR counter instead of id=off. Every RUNTIME string
+	// build (concatenate/subseq/case/trim, read, gensym/make-symbol, getenv, fetch, the
+	// capture path, string-stream contents, the host :string boundary) calls this. Its
+	// scratch offset is reused across builds (HEAP_PTR is a stack pointer now), so a
+	// counter id -- not the reused offset -- is what keeps distinct runtime strings and
+	// uninterned symbols eq-distinct. Interned names (literals, _intern'd symbols, t)
+	// keep calling _str_build (id=stable offset). Same (i32,i32)->ref shape.
+	static final int FUNC_STR_FRESH = FUNC_STR_BUILD + 1;
+
+	// _str_to_mem (str, ptr) -> i32 (TYPE_STR_TO_MEM): copies a string's GC byte array
+	// into linear[ptr..) and returns its length. See the type comment.
+	static final int FUNC_STR_TO_MEM = FUNC_STR_FRESH + 1;
+
+	// _write_str_gc (str, from, to) -> () (TYPE_WRITE_STR_GC): prints bytes [from, to)
+	// of a string value straight from its GC array. See the type comment.
+	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// promise-await helper, the two binary stream helpers, the four string-stream
-	// helpers, the five symbol-API helpers, and the read-char helper.
-	static final int FUNC_USER_BASE = FUNC_READ_CHAR + 1;
+	// helpers, the five symbol-API helpers, the read-char helper, and the four string
+	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc).
+	static final int FUNC_USER_BASE = FUNC_WRITE_STR_GC + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -507,6 +535,29 @@ public final class WasmLispCompiler implements LispCompiler {
 	// is awaited).
 	static final int TYPE_PROMISE = TYPE_HASH_BUCKETS + 1; // 35
 
+	// String byte array: array (mut i8) -- the GC-managed byte storage for a
+	// TYPE_STRING's `data` field (field 2). A bare array comptype (implicitly sub
+	// final), so it is a subtype of eq and stores in the (ref null eq) data field;
+	// readers ref.cast it before array.get_u / array.len. Appended right after
+	// TYPE_PROMISE so the export/import wrapper type indices shift by one (see
+	// wrapperTypeIndex / importTypeIndex, both TYPE_WRITE_STR_GC + 1 based).
+	static final int TYPE_STR_BYTES = TYPE_PROMISE + 1; // 36
+
+	// _str_to_mem ((ref null eq) str, i32 ptr) -> i32: copies a string's $str_bytes
+	// array (with its surrounding quotes) into linear[ptr..) and returns the byte
+	// count. The array->linear bridge for the paths that still need a linear pointer
+	// (WASI iovecs for write-line/open, the reader input scratch, the fetch wire, the
+	// host :string boundary, runtime intern). Appended after TYPE_STR_BYTES.
+	static final int TYPE_STR_TO_MEM = TYPE_STR_BYTES + 1; // 37
+
+	// _write_str_gc ((ref null eq) str, i32 from, i32 to) -> (): writes bytes
+	// [from, to) of a string's $str_bytes array to the current print sink -- appended
+	// directly to the capture buffer when capture mode is on (no linear staging, so it
+	// never aliases the capture buffer), else staged into heap scratch and handed to
+	// _write_str for stdout. The print path for string values now that their bytes live
+	// on the GC heap. Appended after TYPE_STR_TO_MEM.
+	static final int TYPE_WRITE_STR_GC = TYPE_STR_TO_MEM + 1; // 38
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
@@ -585,6 +636,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// seeded by an active data segment at instantiation from the program's actual
 	// static-data size.
 	static final int RT_INTERN_BASE_ADDR = 152;
+
+	// Monotonic counter cell handing out the id (field 0) of every RUNTIME-built string
+	// and uninterned symbol via _str_fresh. Seeded at instantiation to heapBase, so
+	// runtime ids are always >= heapBase > every interned/rt-intern offset (identity
+	// with literals/interned symbols is preserved) and never repeat even though the
+	// bump scratch offset they were assembled at is reused (HEAP_PTR is a stack pointer
+	// -- see FUNC_STR_FRESH). This is what retires the linear string heap leak.
+	static final int STRING_ID_CTR_ADDR = 156;
 
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
@@ -1116,7 +1175,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if ((!this.component || this.serve) && !exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
-			int wrapperTypeIndex = TYPE_PROMISE + 1;
+			int wrapperTypeIndex = TYPE_WRITE_STR_GC + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
 						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
@@ -1164,7 +1223,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// types; the WasmImportInjector post-pass prepends the matching import entries
 		// and resolves the placeholder call indices after the module is assembled.
 		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
-		int importTypeIndex = TYPE_PROMISE + 1 + exportPlans.size();
+		int importTypeIndex = TYPE_WRITE_STR_GC + 1 + exportPlans.size();
 		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
@@ -1356,10 +1415,17 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					});
-					// type 4: string struct
+					// type 4: string struct {i32 id, i32 len, (ref null eq) data}. id is
+					// the
+					// canonical integer identity (interned offset or runtime id, compared
+					// with i32.eq); len is the byte length; data is the $str_bytes GC
+					// array
+					// holding the quote-framed bytes (nil until a builder fills it -- see
+					// FUNC_STR_BUILD).
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.write(Type.I32));
+						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					});
 					// type 5: cell struct {(mut ref null eq) value}
 					rec.addSubFinalStruct(fields -> {
@@ -1517,9 +1583,40 @@ public final class WasmLispCompiler implements LispCompiler {
 					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 				}));
+				// type 36 (TYPE_STR_BYTES): array (mut i8) -- a string's byte storage.
+				// A bare array comptype (implicitly sub final), so a subtype of eq: it
+				// stores in TYPE_STRING's (ref null eq) data field and readers ref.cast
+				// it.
+				// The element is the packed storage type i8 (0x78; no Type constant).
+				types.add(w -> {
+					w.write(Type.ARRAY_TYPE);
+					w.write(0x78); // i8 packed storage type
+					w.write(am.ik.wasm.Mutability.VAR);
+				});
+				// type 37 (TYPE_STR_TO_MEM): _str_to_mem ((ref null eq), i32) -> i32
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.I32);
+				});
+				// type 38 (TYPE_WRITE_STR_GC): _write_str_gc ((ref null eq), i32, i32) ->
+				// ()
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(3);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(0);
+				});
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed
-				// type (TYPE_PROMISE). One per (rontolisp:wasm-export ...)
+				// type (TYPE_WRITE_STR_GC). One per (rontolisp:wasm-export ...)
 				// directive.
 				for (ExportPlan p : exportPlans) {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
@@ -1739,6 +1836,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_char (stream,
 															// eof-error-p, eof-value) ->
 															// (ref null eq)
+				// _str_build (off, len) -> (ref null eq): reuses the (i32,i32)->ref shape
+				fnDef.addFunction(TYPE_RAT_NEW); // _str_build (FUNC_STR_BUILD)
+				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
+				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -1961,6 +2063,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(fboundpBody);
 				// read-char runtime helper body (FUNC_READ_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadCharBody());
+				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a
+				// TYPE_STRING backed by a $str_bytes GC array.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrBuildBody());
+				// _str_fresh (FUNC_STR_FRESH): like _str_build but id = STRING_ID_CTR++.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrFreshBody());
+				// _str_to_mem (FUNC_STR_TO_MEM): copy a string's GC array into
+				// linear[ptr..).
+				code.addFunction(WasmStringRuntimeBuilder.buildStrToMemBody());
+				// _write_str_gc (FUNC_WRITE_STR_GC): print a string value from its GC
+				// array.
+				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -1990,6 +2103,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// functions without running _start.
 				data.addActiveData(0, HEAP_PTR_ADDR, littleEndian32(heapBase));
 				data.addActiveData(0, RT_INTERN_BASE_ADDR, littleEndian32(rtInternBase));
+				// Runtime string ids start at heapBase (above every interned/rt-intern
+				// offset) and only increase, so they never collide with an interned id
+				// nor
+				// with each other even as the assembly scratch offset is reused.
+				data.addActiveData(0, STRING_ID_CTR_ADDR, littleEndian32(heapBase));
 				if (stringData.length > 0) {
 					data.addActiveData(0, DATA_BASE_OFFSET, stringData);
 				}

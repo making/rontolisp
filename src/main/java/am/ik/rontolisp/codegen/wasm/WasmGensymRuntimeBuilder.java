@@ -127,21 +127,19 @@ final class WasmGensymRuntimeBuilder {
 		w.write(Instruction.BR_IF);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.END); // loop
-		// cur += d; mem[HEAP_PTR_ADDR] = cur
+		// cur += d. HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the #:g<n>
+		// bytes into a fresh GC array with a unique counter id (each gensym is a distinct
+		// uninterned symbol), so the scratch region is reused for the next build.
 		get(w, CUR);
 		get(w, D);
 		w.write(Instruction.I32_ADD);
 		set(w, CUR);
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		get(w, CUR);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new string(start, cur - start)
+		// return _str_fresh(start, cur - start)
 		get(w, START);
 		get(w, CUR);
 		get(w, START);
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		WasmEmitHelper.emitStrFreshCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
