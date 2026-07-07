@@ -646,10 +646,14 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	 * @param memcpyIndex the function index of the {@code __memcpy} byte-copy helper
 	 * @param streqIndex the function index of the {@code __streq} string-compare helper
 	 * @param itoaIndex the function index of the {@code __itoa} integer-to-string helper
+	 * @param markIndex the function index of the {@code __ronto_alloc_mark}
+	 * arena-snapshot export
+	 * @param resetIndex the function index of the {@code __ronto_alloc_reset}
+	 * arena-restore export
 	 * @param used whether the module uses linear memory at all
 	 */
 	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int allocIndex,
-			int memcpyIndex, int streqIndex, int itoaIndex, boolean used) {
+			int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex, boolean used) {
 	}
 
 	private static final int STR_DATA_BASE = 8;
@@ -700,8 +704,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
 		int itoaIndex = streqIndex + 1;
+		// The host arena API (todo 89): two more exported functions over the same
+		// heap-pointer global, appended after the four string helpers. --no-gc has no
+		// fixed-index invariant, so appending is free (nothing renumbers).
+		int markIndex = itoaIndex + 1;
+		int resetIndex = markIndex + 1;
 		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, allocIndex, memcpyIndex, streqIndex,
-				itoaIndex, used);
+				itoaIndex, markIndex, resetIndex, used);
 	}
 
 	/** String-producing operators that require linear memory even with no literal. */
@@ -764,11 +773,15 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32 }, new Type[0]);
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
 					typeSec.addFunc(new Type[] { Type.I64 }, new Type[] { Type.I32 });
+					// __ronto_alloc_mark () -> i32 and __ronto_alloc_reset (i32) -> ()
+					// (the host arena API; todo 89).
+					typeSec.addFunc(new Type[0], new Type[] { Type.I32 });
+					typeSec.addFunc(new Type[] { Type.I32 }, new Type[0]);
 				}
 			})
 			// Function section: function index k uses type index k (1:1).
 			.writeFunction(func -> {
-				int total = helperTypeBase + (mem.used() ? 4 : 0);
+				int total = helperTypeBase + (mem.used() ? 6 : 0);
 				for (int k = 0; k < total; k++) {
 					func.addFunction(k);
 				}
@@ -794,6 +807,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				if (mem.used()) {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
 					exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, mem.allocIndex());
+					// The host arena API (todo 89): snapshot the bump-heap top before the
+					// host allocates its own input buffer, then restore it after the call
+					// so a
+					// resident instance stays flat regardless of how many times it is
+					// called.
+					exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, mem.markIndex());
+					exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, mem.resetIndex());
 				}
 			})
 			// Code section: internal bodies, wrappers, then the memory helpers, matching
@@ -811,6 +831,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					code.addFunction(memcpyBody());
 					code.addFunction(streqBody());
 					code.addFunction(itoaBody(mem.allocIndex()));
+					code.addFunction(markBody());
+					code.addFunction(resetBody());
 				}
 			});
 		// Data section: the string-literal headers, only when present.
@@ -1044,6 +1066,34 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
 		w.write(Instruction.END); // function
 		return withLocals(b.toByteArray(), List.of(Ty.INT, Ty.STRING, Ty.STRING, Ty.STRING));
+	}
+
+	// __ronto_alloc_mark() -> i32: the host arena API (todo 89). Returns the current
+	// bump-heap top (heap-pointer global 0). A resident host snapshots this BEFORE it
+	// allocates its own input buffer with __ronto_alloc, then pops back to it with
+	// __ronto_alloc_reset after the call, so a repeatedly-called instance stays flat
+	// (todo 88 already reclaims the wrapper's own internal scratch on a scalar return;
+	// this reclaims the host's pre-call buffer too). No locals.
+	private static byte[] markBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_GLOBAL, 0x00);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of());
+	}
+
+	// __ronto_alloc_reset(mark i32) -> (): the host arena API (todo 89). Restores the
+	// bump-heap top to a value previously returned by __ronto_alloc_mark -- an
+	// absolute-restore of a stack/arena, not a per-block free. Popping to a mark taken
+	// AFTER live data (or reading a :string result whose bytes sit above the mark) is
+	// caller error; see the --no-gc docs. Param 0 = mark, no locals.
+	private static byte[] resetBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.SET_GLOBAL, 0x00);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of());
 	}
 
 	private static Type[] wasmParamTypes(String name, Types types) {

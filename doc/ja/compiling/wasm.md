@@ -282,6 +282,47 @@ $ node -e '(async () => {
 })()'
 ```
 
+### メモリの回収（アリーナ API）
+
+`__ronto_alloc` は解放を行わないバンプアロケータです。そのため、単一のインスタンスを生かし続けてループで呼び出し、毎回新しい入力バッファを確保する **常駐（resident）** ホストは、リニアメモリを際限なく成長させてしまいます。これをフラットに保つ仕組みは 2 つあります。
+
+- **スカラー返り値では自動。** エクスポートが非メモリのスカラー（`:int`/`:long`/`:float`/`:bool`/`:void`）を返す場合、そのラッパーはエントリでヒープトップをスナップショットし、終了時に復元します。したがって、その *呼び出し* が確保したもの（`:string` 引数の内部コピーや、`concatenate`/`subseq`/`princ-to-string` の作業領域）は復帰時に回収されます。ホスト側で行うことはありません。
+- **ホスト自身のバッファは手動。** ホストは入力バッファを呼び出しの *前* に確保するため、それはラッパーの自動リセットマークより下に位置し、生きたまま残ります。これも回収するために、文字列を使うモジュールは同じヒープポインタ上で対になる 2 つの関数もエクスポートします。
+
+| エクスポート | シグネチャ | 意味 |
+| --- | --- | --- |
+| `__ronto_alloc_mark` | `() -> i32` | 現在のバンプヒープトップをスナップショットする |
+| `__ronto_alloc_reset` | `(i32 mark) -> ()` | トップを保存したマークへ復元する |
+
+入力を確保する **前** にスナップショットを取り、結果を読み出した **後** に復元すれば、常駐インスタンスは何回呼び出されても完全にフラットなままです。
+
+```bash
+node -e '(async () => {
+  const ex = (await WebAssembly.instantiate(
+    require("fs").readFileSync("count_vowels.wasm"), {})).instance.exports;
+  const enc = new TextEncoder();
+  const countVowels = (s) => {
+    const b = enc.encode(s);
+    const mark = ex.__ronto_alloc_mark();        // snapshot BEFORE allocating input
+    const ptr = ex.__ronto_alloc(b.length);
+    new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+    const n = ex.count_vowels(ptr, b.length);    // scalar result read out here
+    ex.__ronto_alloc_reset(mark);                // pop the input + wrapper scratch
+    return n;
+  };
+  const before = ex.memory.buffer.byteLength;
+  for (let i = 0; i < 100000; i++) countVowels("Hello, World! " + i);
+  console.log(before, "->", ex.memory.buffer.byteLength);   // 65536 -> 65536 (flat)
+})()'
+```
+
+アリーナはガベージコレクタではなく手動のスタックなので、2 つのルールがあります。
+
+- リセットするマークは、まだ生きているすべてのデータより **前** に取ったものだけにしてください。まだ必要なデータより *後* に取ったマークへ戻すと、そのデータが解放されます。
+- `:string` を **返す** エクスポートは自動リセットしません（その結果は生きたヒープポインタです）。**`__ronto_alloc_reset` を呼ぶ前に、返されたバイト列をメモリから読み出してください** — 先にリセットすると文字列が解放され、次の確保で上書きされます。
+
+[`count-vowels` の例](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)では、Node と [Endive](https://endive.run)（Java）双方のホストでこのレシピを説明しています。
+
 ### 組み合わせ
 
 `--no-gc` は純粋計算リアクターです。`--no-wasi` と同様に何もインポートせず、各 `rontolisp:wasm-export` 関数をその名前でエクスポートします（そのため I/O はできず、出力を行うトップレベルフォームは拒否されます）。`--optimize` と組み合わせられますが、`--component` とは組み合わせられません（そのパスは wasm-GC に依存します）。JavaScript からの呼び出しは GC リアクターと同じ「インスタンス化してからエクスポートを呼び出す」です（[付録](#appendix-calling-a-module-from-javascript) を参照）。ただしここではモジュールは wasm-GC サポートを必要とせず **任意の** WebAssembly エンジンで動作します。

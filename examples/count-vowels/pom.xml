@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>am.ik.rontolisp.examples</groupId>
+	<artifactId>count-vowels</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>jar</packaging>
+
+	<name>rontolisp count-vowels host (Endive)</name>
+	<description>
+		A pure-Java Endive host that shares a string with a rontolisp --no-gc Wasm module
+		through linear memory (the counterpart of Endive/Chicory's "share data" tutorial).
+	</description>
+
+	<properties>
+		<maven.compiler.release>17</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<endive.version>1.0.0</endive.version>
+		<!-- The rontolisp compiler jar used to build count_vowels.wasm. Build it once from
+			 the repository root with `./mvnw -q clean package -DskipTests`, or override with
+			 `-Drontolisp.jar=/path/to/rontolisp-*-exec.jar`. -->
+		<rontolisp.jar>${project.basedir}/../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar</rontolisp.jar>
+	</properties>
+
+	<dependencies>
+		<!-- Endive: a native-JVM WebAssembly runtime (the successor to Chicory). A no-gc
+			 module imports nothing, so no import object is needed to instantiate it. -->
+		<dependency>
+			<groupId>run.endive</groupId>
+			<artifactId>runtime</artifactId>
+			<version>${endive.version}</version>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>exec-maven-plugin</artifactId>
+				<version>3.5.0</version>
+				<executions>
+					<!-- Compile count-vowels.lisp to count_vowels.wasm before the Java
+						 sources compile, so `mvn compile exec:java` is a single command. -->
+					<execution>
+						<id>compile-wasm</id>
+						<phase>generate-resources</phase>
+						<goals>
+							<goal>exec</goal>
+						</goals>
+						<configuration>
+							<executable>java</executable>
+							<arguments>
+								<argument>-jar</argument>
+								<argument>${rontolisp.jar}</argument>
+								<argument>${project.basedir}/count-vowels.lisp</argument>
+								<argument>-o</argument>
+								<argument>${project.basedir}/count_vowels.wasm</argument>
+								<argument>--no-gc</argument>
+								<argument>--optimize</argument>
+							</arguments>
+						</configuration>
+					</execution>
+				</executions>
+				<!-- `mvn exec:java` runs the host in Maven's JVM; it reads count_vowels.wasm
+					 from this directory. Pass the input with -Dexec.args="...". -->
+				<configuration>
+					<mainClass>CountVowels</mainClass>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

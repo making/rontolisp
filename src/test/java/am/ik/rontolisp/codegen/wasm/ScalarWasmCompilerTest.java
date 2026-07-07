@@ -351,6 +351,54 @@ class ScalarWasmCompilerTest {
 		assertThat(containsGlobalReset(wrapper)).as("pure-numeric wrapper has no heap reset").isFalse();
 	}
 
+	@Test
+	void stringModuleExportsTheHostArenaApi() {
+		// A module that uses linear memory exports the two arena functions
+		// (__ronto_alloc_mark / __ronto_alloc_reset, todo 89) alongside memory and
+		// __ronto_alloc, so a resident host can bracket its own input allocation.
+		byte[] module = compile("""
+				(defun count-vowels (s)
+				  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+				(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("cv", "memory", "__ronto_alloc",
+				"__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void pureNumericModuleOmitsTheHostArenaApi() {
+		// No linear memory (no heap-pointer global exists), so neither arena function is
+		// emitted -- a pure-numeric module stays byte-identical to the pre-todo-89 shape.
+		byte[] module = compile("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).doesNotContain("__ronto_alloc_mark",
+				"__ronto_alloc_reset");
+	}
+
+	@Test
+	void hostArenaApiBodiesAreTheHeapPointerGetAndSet() {
+		// __ronto_alloc_mark is `global.get 0; end` (no locals) and __ronto_alloc_reset
+		// is
+		// `local.get 0; global.set 0; end` (no locals) -- the two halves of a bump-arena
+		// snapshot/restore over heap-pointer global 0.
+		byte[] module = compile("""
+				(defun echo (s) (concatenate 'string s s))
+				(rontolisp:wasm-export 'echo :params '(:string) :returns :string)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		byte[] exports = Objects.requireNonNull(sections.get(7));
+		byte[] mark = functionBody(code, exportedFuncIndex(exports, "__ronto_alloc_mark"));
+		byte[] reset = functionBody(code, exportedFuncIndex(exports, "__ronto_alloc_reset"));
+		// [locals=0][global.get 0][end]
+		assertThat(mark).containsExactly(0x00, 0x23, 0x00, 0x0B);
+		// [locals=0][local.get 0][global.set 0][end]
+		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
+	}
+
 	// --- minimal binary parsing helpers ------------------------------------------------
 
 	// Splits a module into a map of section id -> section payload bytes (skipping the

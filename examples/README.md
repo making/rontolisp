@@ -88,7 +88,7 @@ through linear memory.
 
 | Directory | What it demonstrates |
 | --- | --- |
-| [`count-vowels/`](count-vowels) | The rontolisp counterpart of Chicory's *"Using Memory to share data"* tutorial: `count-vowels` is exported with `(rontolisp:wasm-export 'count-vowels :as "count_vowels" :params '(:string) :returns :int)` and compiled with `--no-gc` to a plain MVP module (no wasm-GC, no WASI imports) that **any** engine runs. A string crosses the boundary as a `(pointer, length)` pair of raw UTF-8 bytes, so the module also exports its `memory` and a bump allocator `__ronto_alloc(size)` -- the host reserves space, writes the bytes, then calls `count_vowels(ptr, len)`, exactly the alloc / writeString / call flow of the tutorial. Driven from a pure-Java [Chicory](https://chicory.dev) host ([`CountVowels.java`](count-vowels/CountVowels.java)) and, equivalently, a three-line Node script |
+| [`count-vowels/`](count-vowels) | The rontolisp counterpart of the classic *"share a string through Wasm memory"* host tutorial: `count-vowels` is exported with `(rontolisp:wasm-export 'count-vowels :as "count_vowels" :params '(:string) :returns :int)` and compiled with `--no-gc` to a plain MVP module (no wasm-GC, no WASI imports) that **any** engine runs. A string crosses the boundary as a `(pointer, length)` pair of raw UTF-8 bytes, so the module also exports its `memory` and a bump allocator `__ronto_alloc(size)` -- the host reserves space, writes the bytes, then calls `count_vowels(ptr, len)`, exactly the alloc / writeString / call flow of the tutorial. Driven from a pure-Java [Endive](https://endive.run) host (a Maven project, [`src/main/java/CountVowels.java`](count-vowels/src/main/java/CountVowels.java)) and, equivalently, a three-line Node script |
 
 ## Running
 

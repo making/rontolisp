@@ -125,7 +125,9 @@ wasm-GC byte array:
 - [ ] A resident host loop that builds/returns strings across N=100000 calls on ONE
   instance shows bounded/steady linear memory (the string heap no longer grows;
   only GC arrays churn, reclaimed by the engine). Behavioral test on a persistent
-  instance (Node / Chicory-with-GC or wasmtime embedding).
+  instance with a wasm-GC-capable host (Node or a wasmtime embedding -- NOT
+  Endive/Chicory, which have no wasm-GC support; that is the `--no-gc` arena story
+  of todo 89 instead).
 - [ ] Full parity: interpreter / JVM / WASM-GC Preview1 / WASM component produce
   identical output on the whole suite; `stringp`/`symbolp`, symbol `eq`,
   `equal`/`equalp`, hash-table string keys, `char`/`char-code`, string streams,

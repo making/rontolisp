@@ -396,6 +396,62 @@ $ node -e '(async () => {
 })()'
 ```
 
+### Reclaiming memory (the arena API)
+
+`__ronto_alloc` is a bump allocator that never frees, so a **resident** host — one
+that keeps a single instance alive and calls it in a loop, allocating a fresh input
+buffer each time — grows its linear memory without bound. Two mechanisms keep it flat:
+
+- **Automatic, for scalar returns.** When an export returns a non-memory scalar
+  (`:int`/`:long`/`:float`/`:bool`/`:void`), its wrapper snapshots the heap top on
+  entry and restores it on exit, so everything the *call* allocates (the internal
+  copy of a `:string` argument, plus any `concatenate`/`subseq`/`princ-to-string`
+  scratch) is reclaimed on return. Nothing to do host-side.
+- **Manual, for the host's own buffer.** The host allocates its input buffer *before*
+  the call, so it sits below the wrapper's auto-reset mark and is left live. To
+  reclaim it too, the string-using module also exports a matched pair over the same
+  heap pointer:
+
+| export | signature | meaning |
+| --- | --- | --- |
+| `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
+| `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+Snapshot **before** allocating the input, restore **after** reading the result, and
+a resident instance stays perfectly flat no matter how many times it is called:
+
+```bash
+node -e '(async () => {
+  const ex = (await WebAssembly.instantiate(
+    require("fs").readFileSync("count_vowels.wasm"), {})).instance.exports;
+  const enc = new TextEncoder();
+  const countVowels = (s) => {
+    const b = enc.encode(s);
+    const mark = ex.__ronto_alloc_mark();        // snapshot BEFORE allocating input
+    const ptr = ex.__ronto_alloc(b.length);
+    new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+    const n = ex.count_vowels(ptr, b.length);    // scalar result read out here
+    ex.__ronto_alloc_reset(mark);                // pop the input + wrapper scratch
+    return n;
+  };
+  const before = ex.memory.buffer.byteLength;
+  for (let i = 0; i < 100000; i++) countVowels("Hello, World! " + i);
+  console.log(before, "->", ex.memory.buffer.byteLength);   // 65536 -> 65536 (flat)
+})()'
+```
+
+The arena is a manual stack, not a garbage collector, so two rules apply:
+
+- Only reset to a mark taken **before** everything still live — popping to a mark
+  taken *after* data you still need frees that data.
+- A `:string`-**returning** export does *not* auto-reset (its result is a live heap
+  pointer). **Read the returned bytes out of memory before calling
+  `__ronto_alloc_reset`** — resetting first frees the string and the next allocation
+  overwrites it.
+
+The [`count-vowels` example](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)
+walks through this recipe with both a Node and an [Endive](https://endive.run) (Java) host.
+
 ### Composition
 
 `--no-gc` is a pure-compute reactor: like `--no-wasi` it imports nothing and exports each
