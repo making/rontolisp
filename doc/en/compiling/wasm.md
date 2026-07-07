@@ -179,12 +179,12 @@ const imports = { math: { sin: Math.sin, cos: Math.cos } };
 const { instance } = await WebAssembly.instantiate(bytes, imports);
 ```
 
-The [WebGL triangle example](https://github.com/making/rontolisp/tree/develop/examples/webgl-triangle)
+The [WebGL triangle example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-triangle)
 is the hello world of this pattern: ten imported functions, no exports, and a colored
 triangle drawn entirely from Lisp. The
-[WebGL cube example](https://github.com/making/rontolisp/tree/develop/examples/webgl-cube)
+[WebGL cube example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-cube)
 adds 3D: the perspective and rotation matrices are computed in Lisp every frame. The
-[WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+[WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 is the same idea grown into a complete browser program: the entire WebGL pipeline is driven from
 Lisp -- the GLSL shaders live in the Lisp source, and Lisp compiles, links, buffers and
 issues every draw call through 34 imported host functions, while JavaScript supplies
@@ -382,12 +382,12 @@ exported memory (JavaScript, a small Node script, the browser playground) rather
 `wasmtime --invoke`. The [appendix](#passing-strings-string) walks through the JS side.
 
 This is what lets the ASCII-art Mandelbrot renderer run with no wasm-GC:
-[`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/mandelbrot-nogc.lisp)
+[`examples/console/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot-nogc.lisp)
 keeps the floating-point escape-time loop but returns the rendered grid as one string
 instead of printing it:
 
 ```console
-$ rontolisp examples/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
+$ rontolisp examples/console/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
 $ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;

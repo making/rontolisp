@@ -63,7 +63,7 @@
 
 実際のサーバーは固定ポートをバインドし、acceptループで接続を処理します。
 以下を `echo-server.lisp` として保存してください
-([`examples/echo-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/echo-server.lisp)
+([`examples/net/echo-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/echo-server.lisp)
 としても同梱されています)。acceptしたハンドルは `read-line` が `nil` を返す
 まで (クライアントが切断するまで) 1行ずつ読まれ、各行はそのまま書き戻され
 ます:
@@ -151,9 +151,9 @@ PKCS12 キーストアファイルを受け取り(自己署名キーストアを
 出力)から直接提供するには、
 [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md)
 を使ってください。以下のサーバーの TLS 版は `examples/` ディレクトリにあります —
-[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
 と
-[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp):
+[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp):
 
 ```console
 (let* ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443))
@@ -169,21 +169,21 @@ PKCS12 キーストアファイルを受け取り(自己署名キーストアを
 にはさらに多くのソケットプログラムがあり、それぞれのヘッダーコメントに
 バックエンドごとの実行手順が書かれています:
 
-- [`echo-client.lisp`](https://github.com/making/rontolisp/blob/develop/examples/echo-client.lisp)
+- [`echo-client.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/echo-client.lisp)
   — echoサーバーに対応するクライアント: 標準入力の行をサーバーに送り、
   応答をそれぞれ表示します。サーバーとクライアントは *別々の* バックエンドで
   実行できます。
-- [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/http-hello.lisp)
+- [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/http-hello.lisp)
   — `curl` やブラウザが理解する最小のHTTP/1.1サーバー。ソケットハンドル上の
   `read-line`/`write-line` で構築されています (CRLFのリクエスト行はどの
   バックエンドでも普通の行として読めます)。TLS版の
-  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
   は同じページをHTTPSで提供します (`curl -k https://127.0.0.1:8443/`)。
-- [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server.lisp)
+- [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server.lisp)
   — ミニチュアの **Redis互換** インメモリkey-valueサーバー: 本物の
   `redis-cli` が動く程度のRESP2を話し (`PING`/`SET`/`GET`/`DEL`/`INCR`/...)、
   ハッシュテーブルの状態は接続をまたいで保持されます。TLS版の
-  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
+  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp)
   は同じプロトコルをTLSで提供します (`redis-cli --tls --insecure -p 6380`)。
 
 HTTPについては、どちらの向きでもソケット上でプロトコルを手書きする必要は

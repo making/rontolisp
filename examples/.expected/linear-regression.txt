@@ -1,0 +1,14 @@
+samples:      xs=(-2 -1 0 1 2) ys=(12 4 2 0 3)
+vandermonde:  #2A((1 -2 4) (1 -1 1) (1 0 0) (1 1 1) (1 2 4))  shape (5 3)
+normal matrix A^T A: #2A((5 0 10) (0 10 0) (10 0 34))  (det 700)
+coefficients (c0 c1 c2): #(37/35 -11/5 11/7)
+exact solution check: t
+
+    x      y      fitted   residual
+  -2  12  411/35  9/35
+  -1  4  169/35  -29/35
+  0  2  37/35  33/35
+  1  0  3/7  -3/7
+  2  3  103/35  2/35
+
+squared residual norm (exact): 64/35

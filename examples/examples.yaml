@@ -1,0 +1,189 @@
+# Manifest of the non-GUI examples: the backends each can be verified on, plus
+# the inputs it needs and the expected result to check.
+#
+# Consumed by src/test/java/am/ik/rontolisp/e2e/ExamplesE2eTest.java, which turns
+# every (example x backend) pair into one JUnit dynamic test. See that class and
+# examples/README.md for how to run it.
+#
+# backend tokens
+# --------------
+#   RUN (the program runs to completion; we assert exit 0 and check the output):
+#     interpreter     <driver> FILE [args]
+#     jvm             <driver> FILE -o Prog.class   then  java -cp . Prog [args]
+#     wasm            <driver> FILE -o prog.wasm --optimize   then  wasmtime run -W gc --dir . prog.wasm [args]
+#   COMPILE (blocking servers / host-invoked modules never return on their own,
+#   so we only build them and assert the compile succeeds):
+#     jvm-compile     <driver> FILE -o Prog.class
+#     wasm-component  <driver> FILE -o prog.wasm --component --optimize
+#     no-gc           <driver> FILE -o prog.wasm --no-gc --optimize
+#
+# Every WASM compile passes --optimize (the dead-code tree-shaker); it is a
+# no-op under --component. The `wasm` (run) backend is skipped when wasmtime is
+# not on PATH; the compile backends need no runtime.
+#
+# per-example fields (all optional except path/backends)
+# ------------------------------------------------------
+#   args         command-line arguments appended when the program is run
+#   stdin        text fed to the program's standard input (inline)
+#   stdinFile    ...or from a file, resolved under examples/
+#   expect       how to check RUN output -- exactly one of:
+#                  equals:    stdout must equal this text (hard-coded here)
+#                  file:      stdout must equal this file's contents (under examples/)
+#                  contains:  every listed substring must appear (partial match)
+#                  skip: true do not check output (random / non-repeatable results)
+#                omit expect entirely -> baseline "exit 0 and non-empty output".
+#                equals/file are compared against ALL run backends, so a per-backend
+#                divergence is a real failure.
+#   systemPath   directory added as --system-path (ASDF source registry)
+#   note         free-form comment
+#
+# GUI examples (jvm/, minesweeper, rainbow/, the webgl-*/ and other browser
+# demos) are intentionally absent: they open a window or run in a page and
+# cannot be checked headless.
+
+examples:
+  # --- console: pure, cross-backend algorithms & I/O -------------------------
+  - path: console/calc.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/calc.txt
+  - path: console/contact-book.lisp
+    backends: [interpreter, jvm, wasm]
+    note: per-contact listing order follows hash-table iteration, which varies by backend
+    expect:
+      contains:
+        - "Contact Book (3 entries):"
+        - "Alice -> alice@newdomain.com"
+        - "Alice (alice@newdomain.com)"
+  - path: console/hanoi.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/hanoi.txt
+  - path: console/l-system.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the character-distribution lines follow hash-table iteration order
+    expect:
+      contains:
+        - "L-system String Rewriting"
+        - "Total length: 611"
+        - "At iteration 12:"
+        - "Length: 16382 characters"
+  - path: console/life.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/life.txt
+  - path: console/line-numbers.lisp
+    backends: [interpreter, jvm, wasm]
+    note: writes poem.txt / poem-numbered.txt into the working directory
+    expect:
+      file: .expected/line-numbers.txt
+  - path: console/mandelbrot.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/mandelbrot.txt
+  - path: console/nqueens.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/nqueens.txt
+  - path: console/parse-numbers.lisp
+    backends: [interpreter, jvm, wasm]
+    note: writes numbers.txt into the working directory; small output hard-coded inline
+    expect:
+      equals: |
+        count=5 sum=97 min=3 max=42
+        letters=9 digits=6
+  - path: console/roman.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/roman.txt
+  - path: console/sieve.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/sieve.txt
+  - path: console/sorting.lisp
+    backends: [interpreter, jvm, wasm]
+    note: small, fully deterministic output hard-coded inline
+    expect:
+      equals: |
+        input:               (5 -3 8 -1 2 -7 4 0 6)
+        quicksort   (<):     (-7 -3 -1 0 2 4 5 6 8)
+        merge-sort  (<):     (-7 -3 -1 0 2 4 5 6 8)
+        built-in sort (<):   (-7 -3 -1 0 2 4 5 6 8)
+        quicksort |x| desc:  (8 -7 6 5 4 -3 2 -1 0)
+  - path: console/word-frequency.lisp
+    backends: [interpreter, jvm, wasm]
+    note: ranks with tied counts reorder by hash-table iteration order
+    expect:
+      contains:
+        - "Total unique words: 30"
+        - "Top 10 words:"
+        - '"to" 4'
+        - "Words appearing exactly once:"
+
+  # --- ml: numerical computing & machine learning ----------------------------
+  - path: ml/deep-digits.lisp
+    backends: [interpreter, jvm, wasm]
+    note: deterministic (fixed-seed LCG init, integer-scaled loss)
+    expect:
+      file: .expected/deep-digits.txt
+  - path: ml/heat3d.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/heat3d.txt
+  - path: ml/linear-regression.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/linear-regression.txt
+  - path: ml/maze-rl.lisp
+    backends: [interpreter, jvm, wasm]
+    note: unseeded random -- path, value count and the drawn maze differ every run
+    expect:
+      skip: true
+  - path: ml/mlp.lisp
+    backends: [interpreter, jvm, wasm]
+    note: random init/data -- only the fixed header lines are stable
+    expect:
+      contains:
+        - "Circle classification, 2-8-1 MLP"
+        - "train=150 examples, test=60 examples"
+        - "Final train accuracy:"
+  - path: ml/nn.lisp
+    backends: [interpreter, jvm, wasm]
+    note: random weight init -- losses/predictions vary, headings are stable
+    expect:
+      contains:
+        - "Training XOR (2-4-1 network)..."
+        - "Predictions after training:"
+
+  # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
+  - path: console/mandelbrot-nogc.lisp
+    backends: [no-gc]
+
+  # --- net: sockets / HTTP servers & clients (blocking -> compile-only) -------
+  - path: net/echo-server.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/echo-client.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/http-hello.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/http-handler.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/http-handler-cl-who.lisp
+    backends: [jvm-compile, wasm-component]
+    systemPath: src/test/resources/cl-who
+  - path: net/httpbin.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/magic-8-ball.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/dog-fetcher.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/linalg-api.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/kv-server.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/https-hello.lisp
+    backends: [jvm-compile]
+    note: TLS is a compile error on WASM -- JVM/interpreter only
+  - path: net/kv-server-tls.lisp
+    backends: [jvm-compile]
+    note: TLS is a compile error on WASM -- JVM/interpreter only

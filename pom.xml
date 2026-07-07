@@ -427,7 +427,7 @@ public final class Version {
 											 are checked in, so no compilation is needed here; the example's
 											 index.html uses relative URLs and works under any subpath. -->
 										<copy todir="${web.dist}/wasm-browser">
-											<fileset dir="${project.basedir}/examples/wasm-browser"/>
+											<fileset dir="${project.basedir}/examples/browser/wasm-browser"/>
 										</copy>
 										<!-- Stage the handwritten-hiragana recognition demo as another
 											 subpath (/hiragana/). Only the four runtime files the browser
@@ -436,7 +436,7 @@ public final class Version {
 											 are excluded to keep the Pages payload small. The demo's
 											 index.html uses relative URLs and works under any subpath. -->
 										<copy todir="${web.dist}/hiragana">
-											<fileset dir="${project.basedir}/examples/hiragana">
+											<fileset dir="${project.basedir}/examples/browser/hiragana">
 												<include name="index.html"/>
 												<include name="wasi-shim.js"/>
 												<include name="glyphs.js"/>
@@ -448,7 +448,7 @@ public final class Version {
 											 the two runtime files the browser loads are copied; the demo's
 											 index.html uses relative URLs and works under any subpath. -->
 										<copy todir="${web.dist}/webgl-galaxy">
-											<fileset dir="${project.basedir}/examples/webgl-galaxy">
+											<fileset dir="${project.basedir}/examples/browser/webgl-galaxy">
 												<include name="index.html"/>
 												<include name="galaxy.wasm"/>
 											</fileset>
@@ -457,31 +457,31 @@ public final class Version {
 											 further subpaths (/webgl-triangle/, /webgl-cube/), same shape as
 											 the galaxy demo above. -->
 										<copy todir="${web.dist}/webgl-triangle">
-											<fileset dir="${project.basedir}/examples/webgl-triangle">
+											<fileset dir="${project.basedir}/examples/browser/webgl-triangle">
 												<include name="index.html"/>
 												<include name="triangle.wasm"/>
 											</fileset>
 										</copy>
 										<copy todir="${web.dist}/webgl-cube">
-											<fileset dir="${project.basedir}/examples/webgl-cube">
+											<fileset dir="${project.basedir}/examples/browser/webgl-cube">
 												<include name="index.html"/>
 												<include name="cube.wasm"/>
 											</fileset>
 										</copy>
 										<copy todir="${web.dist}/webgl-heat3d">
-											<fileset dir="${project.basedir}/examples/webgl-heat3d">
+											<fileset dir="${project.basedir}/examples/browser/webgl-heat3d">
 												<include name="index.html"/>
 												<include name="heat3d.wasm"/>
 											</fileset>
 										</copy>
 										<copy todir="${web.dist}/webgl-robot-arm">
-											<fileset dir="${project.basedir}/examples/webgl-robot-arm">
+											<fileset dir="${project.basedir}/examples/browser/webgl-robot-arm">
 												<include name="index.html"/>
 												<include name="robot-arm.wasm"/>
 											</fileset>
 										</copy>
 										<copy todir="${web.dist}/webgl-platformer">
-											<fileset dir="${project.basedir}/examples/webgl-platformer">
+											<fileset dir="${project.basedir}/examples/browser/webgl-platformer">
 												<include name="index.html"/>
 												<include name="platformer.wasm"/>
 											</fileset>
@@ -492,9 +492,9 @@ public final class Version {
 											 /minesweeper/; its fetch of ./minesweeper.wasm uses a relative
 											 URL and works under any subpath. The .lisp source is not shipped
 											 (the page links to it on GitHub). -->
-										<copy file="${project.basedir}/examples/minesweeper/minesweeper.html"
+										<copy file="${project.basedir}/examples/browser/minesweeper/minesweeper.html"
 											  tofile="${web.dist}/minesweeper/index.html"/>
-										<copy file="${project.basedir}/examples/minesweeper/minesweeper.wasm"
+										<copy file="${project.basedir}/examples/browser/minesweeper/minesweeper.wasm"
 											  todir="${web.dist}/minesweeper"/>
 										<echo message="Web playground staged in ${web.dist} (examples at ${web.dist}/wasm-browser, ${web.dist}/hiragana and ${web.dist}/minesweeper)"/>
 										<echo message="Serve it: cd web/dist &amp;&amp; jwebserver -p 8000"/>

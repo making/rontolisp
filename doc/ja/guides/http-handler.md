@@ -20,7 +20,7 @@
 ```
 
 これを `app.lisp` として保存し
-（[`examples/http-handler.lisp`](https://github.com/making/rontolisp/blob/develop/examples/http-handler.lisp)
+（[`examples/net/http-handler.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/http-handler.lisp)
 としても同梱されています）、以下の 3 つのバックエンドのいずれかで実行します。
 
 ## インタープリタで実行する
@@ -170,7 +170,7 @@ $ wasmtime serve -W gc=y -S http=y proxy.wasm
 ```
 
 完全な例は
-[`examples/dog-fetcher.lisp`](https://github.com/making/rontolisp/blob/develop/examples/dog-fetcher.lisp)
+[`examples/net/dog-fetcher.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/dog-fetcher.lisp)
 です。[wasmCloud の dog-fetcher の例](https://wasmcloud.com/docs/v1/examples/rust/component/dog-fetcher/)
 の再現で、リクエストごとに dog.ceo API からランダムな犬の画像 URL を取得して
 JSON で応答します。

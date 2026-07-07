@@ -128,7 +128,7 @@ handshake failure surface at first-I/O time, not accept time).
   `WasmLispCompilerTest#tlsConnectIsCompileErrorInBothWasmModes` /
   `#tlsListenIsCompileErrorInBothWasmModes` /
   `#tlsListenPemIsCompileErrorInBothWasmModes`.
-- **Examples**: `examples/https-hello.lisp` and `examples/kv-server-tls.lisp`
+- **Examples**: `examples/net/https-hello.lisp` and `examples/net/kv-server-tls.lisp`
   are the TLS twins of `http-hello.lisp` / `kv-server.lisp` (only the listen
   call differs; both headers carry the keytool one-liner that generates
   `tls-server.p12`).

@@ -26,7 +26,7 @@ closes the loop in **two phases**, both client-side:
 2. **Execute** — enter a function name and arguments; the page builds a call
    expression (e.g. `(fib 20)`), feeds it to the kept module on stdin, and
    **runs it in your browser's own WebAssembly runtime** through the WASI shim
-   from [`examples/wasm-browser/`](../examples/wasm-browser) (`runWasmModule`),
+   from [`examples/browser/wasm-browser/`](../examples/browser/wasm-browser) (`runWasmModule`),
    showing the printed result. The module is compiled once and reused, so
    changing the arguments and calling again does **not** recompile.
 
@@ -172,9 +172,9 @@ site (no compilation needed — their `.wasm` files are committed and their
 `index.html` uses relative URLs):
 
 - `/wasm-browser/` — prebuilt WASM run in plain HTML/JS
-  (from [`examples/wasm-browser/`](../examples/wasm-browser)).
+  (from [`examples/browser/wasm-browser/`](../examples/browser/wasm-browser)).
 - `/hiragana/` — handwritten-hiragana recognition demo
-  (from [`examples/hiragana/`](../examples/hiragana); only the four runtime files
+  (from [`examples/browser/hiragana/`](../examples/browser/hiragana); only the four runtime files
   the browser loads — `index.html`, `wasi-shim.js`, `glyphs.js`, `infer.wasm` —
   are staged; the offline training artifacts are excluded).
 

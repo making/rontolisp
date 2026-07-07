@@ -37,9 +37,9 @@ keytool -genkeypair -alias my-server -keyalg EC -dname CN=localhost \
 ```
 
 完全なサーバーは `examples/` ディレクトリにあります:
-[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
 (`curl -k` が理解する HTTPS サーバー)と
-[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
+[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp)
 (本物の `redis-cli --tls` が話せる、TLS で提供されるミニ Redis)です。
 
 ## バックエンドのサポート

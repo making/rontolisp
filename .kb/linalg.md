@@ -53,9 +53,9 @@ rank <= 2 only (everything else is rank-generic); results are fresh arrays
 (inputs are never mutated);
 `norm`/non-terminating floats print differently on WASM, so deterministic
 cross-backend output should print exact ratios or scaled integers (see
-`examples/linear-regression.lisp` and `examples/deep-digits.lisp` for the
+`examples/ml/linear-regression.lisp` and `examples/ml/deep-digits.lisp` for the
 idioms, incl. an i31-safe fixed-seed LCG and matrix backpropagation;
-`examples/heat3d.lisp` covers the rank-3 idioms and shows that repeated exact
+`examples/ml/heat3d.lisp` covers the rank-3 idioms and shows that repeated exact
 ratio arithmetic must keep intermediates inside the WASM i31 fixnum range --
 its denominators grow 8^step, so it stops after 4 steps).
 

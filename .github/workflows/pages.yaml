@@ -12,15 +12,15 @@ on:
     - develop
     paths:
     - web/**
-    - examples/wasm-browser/**
-    - examples/hiragana/**
-    - examples/minesweeper/**
-    - examples/webgl-galaxy/**
-    - examples/webgl-heat3d/**
-    - examples/webgl-robot-arm/**
-    - examples/webgl-platformer/**
-    - examples/webgl-triangle/**
-    - examples/webgl-cube/**
+    - examples/browser/wasm-browser/**
+    - examples/browser/hiragana/**
+    - examples/browser/minesweeper/**
+    - examples/browser/webgl-galaxy/**
+    - examples/browser/webgl-heat3d/**
+    - examples/browser/webgl-robot-arm/**
+    - examples/browser/webgl-platformer/**
+    - examples/browser/webgl-triangle/**
+    - examples/browser/webgl-cube/**
     - src/**
     - pom.xml
     - doc/**

@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>platformer.lisp — a one-stage 3D platformer, in Lisp</title>
+    <style>
+      :root {
+        --sky: #0b0d14;
+        --ink: #ffffff;
+        --muted: #d7e6ff;
+        --accent: #ffd54a;
+        --panel: #0b1a2acc;
+        --line: #ffffff33;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--sky);
+        color: var(--ink);
+        font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      }
+
+      /* The stage is the page: the canvas fills the viewport and the HUD
+         floats over it. */
+      #stage {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      #stage.dragging { cursor: grabbing; }
+
+      .hud {
+        position: fixed;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        padding: 1rem 1.15rem;
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .hud > * { pointer-events: auto; }
+
+      .hud.top-left { top: 0; left: 0; max-width: 32rem; }
+
+      h1 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-shadow: 0 1px 3px #0008;
+      }
+
+      h1 .lisp { color: var(--accent); }
+
+      .tagline {
+        margin: 0;
+        font-size: 0.74rem;
+        line-height: 1.55;
+        color: var(--muted);
+        text-shadow: 0 1px 2px #0006;
+      }
+
+      .tagline em { font-style: normal; color: var(--ink); }
+
+      .hud.top-right { top: 0; right: 0; align-items: flex-end; }
+
+      .meters {
+        display: flex;
+        gap: 1.3rem;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.55rem 0.9rem;
+        backdrop-filter: blur(6px);
+      }
+
+      .meter { text-align: right; }
+
+      .meter b {
+        display: block;
+        font-size: 1rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .meter b.coins { color: var(--accent); }
+
+      .meter span {
+        font-size: 0.6rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .hud.bottom-left { bottom: 0; left: 0; }
+
+      .keys {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.55rem 0.9rem;
+        font-size: 0.72rem;
+        line-height: 1.7;
+        color: var(--muted);
+        backdrop-filter: blur(6px);
+      }
+
+      .keys kbd {
+        display: inline-block;
+        min-width: 1.4em;
+        padding: 0 0.3em;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        text-align: center;
+        font: inherit;
+        color: var(--ink);
+      }
+
+      .keys a { color: var(--accent); }
+
+      /* center overlays: course clear / the fall */
+      #banner {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        text-align: center;
+        z-index: 2;
+        pointer-events: none;
+      }
+
+      #banner .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 1.4rem 2.2rem;
+        backdrop-filter: blur(8px);
+      }
+
+      #banner h2 {
+        margin: 0 0 0.4rem;
+        font-size: 1.5rem;
+        letter-spacing: 0.14em;
+        color: var(--accent);
+      }
+
+      #banner p { margin: 0; font-size: 0.8rem; color: var(--muted); }
+
+      #banner button {
+        pointer-events: auto;
+        margin-top: 0.9rem;
+        font: inherit;
+        font-size: 0.8rem;
+        color: var(--ink);
+        background: #ffffff1c;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.4rem 1.1rem;
+        cursor: pointer;
+      }
+
+      #banner button:hover { background: #ffffff30; }
+
+      #banner button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      #error {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 2rem;
+        text-align: center;
+        font-size: 0.85rem;
+        line-height: 1.7;
+        background: var(--sky);
+        z-index: 3;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 640px) {
+        .hud.top-left { max-width: 60vw; }
+        .tagline { display: none; }
+        .meters { gap: 0.8rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage" aria-label="A 3D platformer stage: run into the distance, jump the pits, stomp the patrolling enemies and reach the flag pole"></canvas>
+
+    <header class="hud top-left">
+      <h1><span class="lisp">platformer.lisp</span> → WebGL</h1>
+      <p class="tagline">
+        A one-stage 3D platformer whose every rule lives in Lisp compiled to
+        WebAssembly: the physics (jump buffering, coyote time and all), the
+        per-axis AABB collision, the enemy patrols and the stomp rule, the
+        follow camera and each of the rotated boxes it is built from.
+        JavaScript is one-line WebGL bindings, this HUD and the keyboard.
+      </p>
+    </header>
+
+    <aside class="hud top-right">
+      <div class="meters" role="status">
+        <div class="meter"><b class="coins" id="m-coins">0/0</b><span>coins</span></div>
+        <div class="meter"><b id="m-time">0.0</b><span>time</span></div>
+        <div class="meter"><b id="m-falls">0</b><span>falls</span></div>
+        <div class="meter"><b id="m-fps">—</b><span>fps</span></div>
+      </div>
+    </aside>
+
+    <aside class="hud bottom-left">
+      <p class="keys">
+        <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> run ·
+        <kbd>Space</kbd> jump ·
+        <kbd>R</kbd> restart ·
+        drag orbits · scroll zooms —
+        stomp the walkers, grab the coins, reach the flag ·
+        <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-platformer">source</a>
+      </p>
+    </aside>
+
+    <div id="banner">
+      <div class="card">
+        <h2 id="banner-title">COURSE CLEAR</h2>
+        <p id="banner-text"></p>
+        <button id="banner-retry" type="button">play again (R)</button>
+      </div>
+    </div>
+
+    <div id="error" role="alert"></div>
+
+    <script type="module">
+      const canvas = document.getElementById("stage");
+      const errorBox = document.getElementById("error");
+      const mCoins = document.getElementById("m-coins");
+      const mTime = document.getElementById("m-time");
+      const mFalls = document.getElementById("m-falls");
+      const mFps = document.getElementById("m-fps");
+      const banner = document.getElementById("banner");
+      const bannerTitle = document.getElementById("banner-title");
+      const bannerText = document.getElementById("banner-text");
+      const bannerRetry = document.getElementById("banner-retry");
+
+      function fail(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = "grid";
+      }
+
+      // ---- the WebGL2 context: created here, driven entirely from Lisp -----
+
+      const gl2 = canvas.getContext("webgl2", { antialias: true });
+      if (!gl2) {
+        fail("This page needs WebGL2. Any current Chrome, Firefox, Safari or Edge has it.");
+        throw new Error("no webgl2");
+      }
+
+      // ---- the import object: everything Lisp asked for --------------------
+      //
+      // platformer.lisp declares the same host boundary as the other webgl-*
+      // demos: GL objects cross as integer handles into `handles`, the
+      // bindings are one line each, and the game itself — physics, collision,
+      // enemies, camera, every triangle — lives in the Lisp source.
+
+      let lisp; // the module's exports, assigned after instantiation below
+
+      const handles = [];
+      const H = (obj) => handles.push(obj) - 1;
+
+      // A :string parameter arrives as (ptr, len) into the module's exported
+      // linear memory; a :string result is written back through the module's
+      // exported __ronto_alloc bump allocator and returned as [ptr, len].
+      const utf8 = new TextDecoder();
+      const str = (ptr, len) => utf8.decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+      const retStr = (s) => {
+        const bytes = new TextEncoder().encode(s);
+        const ptr = lisp.__ronto_alloc(bytes.length);
+        new Uint8Array(lisp.memory.buffer).set(bytes, ptr);
+        return [ptr, bytes.length];
+      };
+
+      // The staging array: Lisp fills it one 9-float vertex (position,
+      // normal, color) at a time and uploads slices with uploadVertices;
+      // `floats` carries the mat4 uniform — the same idea as webgl-cube.
+      const solidStaging = new Float32Array(9 * 8192);
+      const floats = new Float32Array(16);
+      const curColor = [1, 1, 1]; // latched by setColor, stamped by setVertex
+
+      const imports = {
+        gl: {
+          createShader: (type) => H(gl2.createShader(type)),
+          shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
+          compileShader: (sh) => gl2.compileShader(handles[sh]),
+          getShaderParameter: (sh, pname) => gl2.getShaderParameter(handles[sh], pname),
+          getShaderInfoLog: (sh) => retStr(gl2.getShaderInfoLog(handles[sh]) ?? ""),
+          createProgram: () => H(gl2.createProgram()),
+          attachShader: (pr, sh) => gl2.attachShader(handles[pr], handles[sh]),
+          linkProgram: (pr) => gl2.linkProgram(handles[pr]),
+          getProgramParameter: (pr, pname) => gl2.getProgramParameter(handles[pr], pname),
+          getProgramInfoLog: (pr) => retStr(gl2.getProgramInfoLog(handles[pr]) ?? ""),
+          useProgram: (pr) => gl2.useProgram(handles[pr]),
+          getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
+          uniform3f: (loc, x, y, z) => gl2.uniform3f(handles[loc], x, y, z),
+          uniformMatrix4fv: (loc) => gl2.uniformMatrix4fv(handles[loc], false, floats),
+          enable: (cap) => gl2.enable(cap),
+          createBuffer: () => H(gl2.createBuffer()),
+          bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),
+          bufferData: (target, size, usage) => gl2.bufferData(target, size, usage),
+          uploadVertices: (off, count) =>
+            gl2.bufferSubData(gl2.ARRAY_BUFFER, off * 4, solidStaging, off, count),
+          createVertexArray: () => H(gl2.createVertexArray()),
+          bindVertexArray: (vao) => gl2.bindVertexArray(handles[vao]),
+          enableVertexAttribArray: (i) => gl2.enableVertexAttribArray(i),
+          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
+            gl2.vertexAttribPointer(i, sz, ty, norm, stride, off),
+          viewport: (x, y, w, h) => gl2.viewport(x, y, w, h),
+          clearColor: (r, g, b, a) => gl2.clearColor(r, g, b, a),
+          clear: (mask) => gl2.clear(mask),
+          drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
+          setColor: (r, g, b) => { curColor[0] = r; curColor[1] = g; curColor[2] = b; },
+          setVertex: (i, x, y, z, nx, ny, nz) => {
+            const o = i * 9;
+            solidStaging[o] = x;
+            solidStaging[o + 1] = y;
+            solidStaging[o + 2] = z;
+            solidStaging[o + 3] = nx;
+            solidStaging[o + 4] = ny;
+            solidStaging[o + 5] = nz;
+            solidStaging[o + 6] = curColor[0];
+            solidStaging[o + 7] = curColor[1];
+            solidStaging[o + 8] = curColor[2];
+          },
+          setFloat: (i, v) => { floats[i] = v; },
+        },
+        canvas: {
+          width: () => canvas.width,
+          height: () => canvas.height,
+        },
+        math: { sin: Math.sin, cos: Math.cos, atan2: Math.atan2 },
+        ui: {
+          fail: (p, n) => {
+            fail(str(p, n));
+            throw new Error("platformer.lisp failed");
+          },
+        },
+      };
+
+      // ---- UI: canvas sizing ------------------------------------------------
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(canvas.clientWidth * dpr);
+        canvas.height = Math.round(canvas.clientHeight * dpr);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      // ---- load the reactor -------------------------------------------------
+
+      try {
+        const bytes = await (await fetch("./platformer.wasm")).arrayBuffer();
+        ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
+      }
+      catch (e) {
+        fail(
+          "Could not instantiate platformer.wasm — this page needs WebAssembly GC support " +
+          "(Chrome 119+, Firefox 120+, Safari 18.2+, Edge 119+).\n" + e
+        );
+        throw e;
+      }
+      // --no-wasi reactor init: runs the top-level forms, including (setup-gl)
+      // and the level bake, so the whole stage is on the GPU — from Lisp —
+      // before this line returns.
+      lisp._initialize();
+
+      // Poke the game from the DevTools console: lisp.getPx(), lisp.restart(), ...
+      window.lisp = lisp;
+
+      // ---- keyboard: the page only maps keys to codes ------------------------
+      //
+      // 0 = A/left, 1 = D/right, 2 = W/away, 3 = S/toward, 4 = Space/jump.
+      // The arrow keys are aliases. Held state, buffering and coyote time are
+      // Lisp's business.
+
+      const keyCodes = new Map([
+        ["KeyA", 0], ["ArrowLeft", 0],
+        ["KeyD", 1], ["ArrowRight", 1],
+        ["KeyW", 2], ["ArrowUp", 2],
+        ["KeyS", 3], ["ArrowDown", 3],
+        ["Space", 4],
+      ]);
+
+      window.addEventListener("keydown", (e) => {
+        if (e.code === "KeyR" && !e.repeat) {
+          lisp.restart();
+          banner.style.display = "none";
+          return;
+        }
+        const code = keyCodes.get(e.code);
+        if (code === undefined) return;
+        e.preventDefault();
+        if (!e.repeat) lisp.setKey(code, 1);
+      });
+
+      window.addEventListener("keyup", (e) => {
+        const code = keyCodes.get(e.code);
+        if (code === undefined) return;
+        e.preventDefault();
+        lisp.setKey(code, 0);
+      });
+
+      // Keys can be released while the tab is unfocused; let none stick.
+      window.addEventListener("blur", () => {
+        for (const code of new Set(keyCodes.values())) lisp.setKey(code, 0);
+      });
+
+      bannerRetry.addEventListener("click", () => {
+        lisp.restart();
+        banner.style.display = "none";
+        bannerRetry.blur();
+      });
+
+      // ---- pointer gestures: drag orbits, scroll zooms ------------------------
+      //
+      // The page only measures the gesture; the camera itself lives in Lisp
+      // (`orbit` and `zoom` are exported Lisp functions).
+
+      let dragging = false;
+      let lastX = 0, lastY = 0;
+
+      canvas.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        canvas.classList.add("dragging");
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+      });
+
+      canvas.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        lisp.orbit((e.clientX - lastX) / canvas.clientHeight,
+                   (e.clientY - lastY) / canvas.clientHeight);
+        lastX = e.clientX;
+        lastY = e.clientY;
+      });
+
+      canvas.addEventListener("pointerup", () => {
+        dragging = false;
+        canvas.classList.remove("dragging");
+      });
+
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        lisp.zoom(e.deltaY * 0.002);
+      }, { passive: false });
+
+      // ---- HUD + the frame loop ----------------------------------------------
+
+      const coinTotal = lisp.coinTotal();
+      let shownState = 0;
+      let lastFpsUpdate = 0;
+      let framesSince = 0;
+      const start = performance.now();
+
+      function updateHud(now) {
+        mCoins.textContent = `${lisp.getCoins()}/${coinTotal}`;
+        mTime.textContent = lisp.getTime().toFixed(1);
+        mFalls.textContent = lisp.getDeaths();
+        if (now - lastFpsUpdate > 500) {
+          mFps.textContent = Math.round((framesSince * 1000) / (now - lastFpsUpdate));
+          lastFpsUpdate = now;
+          framesSince = 0;
+        }
+        const state = lisp.getState();
+        if (state !== shownState) {
+          shownState = state;
+          if (state === 2) {
+            bannerTitle.textContent = "COURSE CLEAR";
+            bannerText.textContent =
+              `${lisp.getTime().toFixed(1)}s · ${lisp.getCoins()}/${coinTotal} coins · ${lisp.getDeaths()} falls`;
+            banner.style.display = "grid";
+          }
+          else {
+            banner.style.display = "none";
+          }
+        }
+      }
+
+      function tick(now) {
+        lisp.frame((now - start) / 1000); // Lisp steps the world and draws
+        framesSince++;
+        updateHud(now);
+        requestAnimationFrame(tick);
+      }
+
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>

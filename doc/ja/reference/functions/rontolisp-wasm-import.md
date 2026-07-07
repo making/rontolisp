@@ -10,7 +10,7 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 エラーを通知するスタブを定義する (呼び出すべきホストが存在しない) ため、同じ
 ソースはすべてのバックエンドでロードできます。詳細は
 [WebAssembly へのコンパイル](../../compiling/wasm.md) を、完全なブラウザ
-プログラムは [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+プログラムは [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 を参照してください。
 
 ```lisp

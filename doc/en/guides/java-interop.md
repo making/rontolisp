@@ -147,7 +147,7 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 
 ## A Swing example
 
-`examples/java-interop.lisp` builds a small window directly through the package
+`examples/jvm/java-interop.lisp` builds a small window directly through the package
 (interpret it -- or compile it to a `.class` -- on a machine with a display):
 
 ```console
@@ -174,9 +174,9 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 (java:call *frame* "setVisible" t)
 ```
 
-`examples/swing.lisp` builds a reusable grid-window helper on top of these five
+`examples/jvm/swing.lisp` builds a reusable grid-window helper on top of these five
 functions -- wrapped in a `swing` [package](../reference/packages.md) of its own,
-spliced in with `(require :swing "swing.lisp")` -- and `examples/life-gui.lisp`
+spliced in with `(require :swing "swing.lisp")` -- and `examples/jvm/life-gui.lisp`
 animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...).
 
 ## Limitations

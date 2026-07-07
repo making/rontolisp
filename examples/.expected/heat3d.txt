@@ -1,0 +1,37 @@
+tensor:      #3A(((0 1) (2 3)) ((4 5) (6 7)))
+rank/dims:   3 (2 2 2) (8 elements)
+add 10:      #3A(((10 11) (12 13)) ((14 15) (16 17)))
+flat [1 0 1]: index 5 value 5
+round trip:  t
+
+step 0: total 1000, centre 1000, hottest (2 2 2)
+     
+     
+  #  
+     
+     
+step 1: total 1000, centre 250, hottest (2 2 2)
+     
+  #  
+ ### 
+  #  
+     
+step 2: total 1000, centre 625/4, hottest (2 2 2)
+  .  
+ +++ 
+.+#+.
+ +++ 
+  .  
+step 3: total 1000, centre 1375/16, hottest (2 2 2)
+ .+. 
+.+#+.
++###+
+.+#+.
+ .+. 
+step 4: total 1000, centre 15625/256, hottest (2 2 2)
+..+..
+.+#+.
++###+
+.+#+.
+..+..
+conserved:   t

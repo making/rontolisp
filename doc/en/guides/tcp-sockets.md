@@ -60,7 +60,7 @@ accepted handle:
 
 A real server binds a fixed port and serves connections in an accept loop.
 Save the following as `echo-server.lisp` (also shipped as
-[`examples/echo-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/echo-server.lisp)).
+[`examples/net/echo-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/echo-server.lisp)).
 Each accepted handle is read line by line until `read-line` returns `nil`
 (the client closed), and every line is written straight back:
 
@@ -147,9 +147,9 @@ straight from PEM files (certbot / OpenSSL output) instead of a PKCS12
 keystore, use
 [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md).
 The TLS variants of the servers below are in the `examples/` directory —
-[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
 and
-[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp):
+[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp):
 
 ```console
 (let* ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443))
@@ -165,22 +165,22 @@ The [`examples/` directory](https://github.com/making/rontolisp/tree/develop/exa
 contains further socket programs, each with per-backend run instructions in
 its header comment:
 
-- [`echo-client.lisp`](https://github.com/making/rontolisp/blob/develop/examples/echo-client.lisp)
+- [`echo-client.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/echo-client.lisp)
   — the matching client for the echo server: pipes standard-input lines to
   the server and prints each reply. Server and client can each run on a
   *different* backend.
-- [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/http-hello.lisp)
+- [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/http-hello.lisp)
   — a minimal HTTP/1.1 server that `curl` and browsers understand, built from
   `read-line`/`write-line` over the socket handle (CRLF request lines read as
   plain lines on every backend). Its TLS twin
-  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
   serves the same page over HTTPS (`curl -k https://127.0.0.1:8443/`).
-- [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server.lisp)
+- [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server.lisp)
   — a miniature **Redis-compatible** in-memory key-value server: speaks
   enough RESP2 that the real `redis-cli` works (`PING`/`SET`/`GET`/`DEL`/
   `INCR`/...), with hash-table state surviving across connections. Its TLS
   twin
-  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
+  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp)
   serves the same protocol over TLS (`redis-cli --tls --insecure -p 6380`).
 
 For HTTP there is no need to hand-roll the protocol over a socket in either

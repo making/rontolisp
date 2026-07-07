@@ -36,9 +36,9 @@ The example below is a one-connection TLS echo server; test it with
 ```
 
 Complete servers live in the `examples/` directory:
-[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/https-hello.lisp)
+[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
 (an HTTPS server `curl -k` understands) and
-[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/kv-server-tls.lisp)
+[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp)
 (a mini-Redis served over TLS that the real `redis-cli --tls` talks to).
 
 ## Backend support

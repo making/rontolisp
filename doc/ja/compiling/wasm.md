@@ -134,12 +134,12 @@ const imports = { math: { sin: Math.sin, cos: Math.cos } };
 const { instance } = await WebAssembly.instantiate(bytes, imports);
 ```
 
-[WebGL triangle example](https://github.com/making/rontolisp/tree/develop/examples/webgl-triangle)
+[WebGL triangle example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-triangle)
 はこのパターンの hello world です。インポートする関数は 10 個、エクスポートはなしで、
 色付きの三角形を Lisp だけで描画します。
-[WebGL cube example](https://github.com/making/rontolisp/tree/develop/examples/webgl-cube)
+[WebGL cube example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-cube)
 は 3D 版で、透視投影と回転の行列を毎フレーム Lisp で計算します。
-[WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+[WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 は同じ発想を完全なブラウザプログラムに育てたものです。WebGL パイプライン全体が Lisp から
 駆動されます -- GLSL シェーダは Lisp ソース内に文字列として置かれ、シェーダのコンパイル、
 リンク、バッファ設定、すべての draw call を 34 個のインポートしたホスト関数経由で Lisp が
@@ -270,10 +270,10 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 
 文字列を使用するモジュールは（拡張可能な）リニアメモリを持ち、その `memory` と `__ronto_alloc(size)` バンプアロケータを関数とともにエクスポートします。`:string` パラメータはホストがメモリに書き込む `(ptr, len)` ペアとして渡され、`:string` の結果も同じ方法で返されます。そのため、文字列を返すエクスポートは、`wasmtime --invoke` だけではなく、エクスポートされたメモリを読み書きできるホスト（JavaScript、小さな Node スクリプト、ブラウザのプレイグラウンド）を必要とします。[付録](#passing-strings-string) で JS 側を詳しく説明します。
 
-これにより、ASCII アートのマンデルブロレンダラを wasm-GC なしで実行できます。[`examples/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/mandelbrot-nogc.lisp) は浮動小数点のエスケープタイムループを維持しつつ、描画したグリッドを出力する代わりに 1 つの文字列として返します。
+これにより、ASCII アートのマンデルブロレンダラを wasm-GC なしで実行できます。[`examples/console/mandelbrot-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot-nogc.lisp) は浮動小数点のエスケープタイムループを維持しつつ、描画したグリッドを出力する代わりに 1 つの文字列として返します。
 
 ```console
-$ rontolisp examples/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
+$ rontolisp examples/console/mandelbrot-nogc.lisp --no-gc --optimize -o mandelbrot.wasm
 $ node -e '(async () => {
   const ex = (await WebAssembly.instantiate(
     require("fs").readFileSync("mandelbrot.wasm"), {})).instance.exports;

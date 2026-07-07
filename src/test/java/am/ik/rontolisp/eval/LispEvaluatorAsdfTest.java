@@ -133,7 +133,8 @@ class LispEvaluatorAsdfTest {
 
 	@Test
 	void aFunctionDefinedAfterALoadResolvesInTheCallersPackage() {
-		// The end-to-end shape of examples/http-handler-cl-who.lisp: a top-level defun
+		// The end-to-end shape of examples/net/http-handler-cl-who.lisp: a top-level
+		// defun
 		// AFTER the load, handed to a caller by unqualified quoted symbol, must resolve
 		// (the leaked package would define/quote it under the loaded system's package).
 		String output = run("""

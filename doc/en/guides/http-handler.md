@@ -21,7 +21,7 @@ model as
 ```
 
 Save it as `app.lisp` (also shipped as
-[`examples/http-handler.lisp`](https://github.com/making/rontolisp/blob/develop/examples/http-handler.lisp)),
+[`examples/net/http-handler.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/http-handler.lisp)),
 then run it on any of the three supported backends below.
 
 ## On the interpreter
@@ -168,7 +168,7 @@ $ wasmtime serve -W gc=y -S http=y proxy.wasm
 ```
 
 A complete example is
-[`examples/dog-fetcher.lisp`](https://github.com/making/rontolisp/blob/develop/examples/dog-fetcher.lisp),
+[`examples/net/dog-fetcher.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/dog-fetcher.lisp),
 a reproduction of
 [wasmCloud's dog-fetcher example](https://wasmcloud.com/docs/v1/examples/rust/component/dog-fetcher/):
 every request fetches a random dog picture URL from the dog.ceo API and

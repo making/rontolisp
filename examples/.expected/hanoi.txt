@@ -1,0 +1,19 @@
+Tower of Hanoi (3 disks):
+  Move disk 1 from A to B
+  Move disk 2 from A to C
+  Move disk 1 from B to C
+  Move disk 3 from A to B
+  Move disk 1 from C to A
+  Move disk 2 from C to B
+  Move disk 1 from A to B
+
+Total moves: 7 (expected: 7 = 2^3 - 1)
+
+Tower of Hanoi (4 disks) — first 5 moves:
+Total: 15 moves (expected: 15)
+  α -> γ
+  α -> β
+  γ -> β
+  α -> γ
+  β -> α
+  ... (10 more)

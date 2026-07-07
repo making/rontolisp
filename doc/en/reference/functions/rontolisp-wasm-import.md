@@ -9,7 +9,7 @@ exactly like a top-level `defun` — including `#'name`, `funcall`, `mapcar` and
 **interpreter** and **JVM** backends it defines a stub that signals an error
 when called (there is no host to call), so the same source still loads on every
 backend. See [Compiling to WebAssembly](../../compiling/wasm.md) for the full
-guide and the [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/webgl-galaxy)
+guide and the [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 for a complete browser program.
 
 ```lisp

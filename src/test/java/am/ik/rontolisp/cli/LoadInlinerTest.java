@@ -247,7 +247,8 @@ class LoadInlinerTest {
 	void loadSystemDoesNotLeakTheCurrentPackageToTheCallerOnJvm() throws Exception {
 		// A component file's (in-package :my-lib) must not leak past the load: a defun
 		// AFTER the load-system (referenced by unqualified quoted symbol) must resolve in
-		// the caller's package, the shape of examples/http-handler-cl-who.lisp. Without
+		// the caller's package, the shape of examples/net/http-handler-cl-who.lisp.
+		// Without
 		// the package save/restore markers, `handle` would be defined under my-lib and
 		// the
 		// quoted 'handle lookup would fail (see .todo/83).

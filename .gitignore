@@ -39,7 +39,7 @@ build/
 web/dist/
 web/playground-screenshot.png
 # Generated real-data (Kuzushiji-49) weights for the hiragana demo (B) path.
-examples/hiragana/weights-k49.lisp
+examples/browser/hiragana/weights-k49.lisp
 
 ### Test scratch files (ci-spec file-stream cases run in-process by the corpus tests) ###
 /bin.dat
