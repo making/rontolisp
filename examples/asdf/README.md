@@ -157,6 +157,7 @@ is self-contained -- running it needs no library files.
 ("name" "loc")
 ("eitaro" "vienna")
 (:NAME "eitaro" :LOC "vienna")
+(("name" . "eitaro") ("loc" . "vienna"))
 (("name" . "eitaro"))
 (("y" . 2))
 (("k" . "v"))

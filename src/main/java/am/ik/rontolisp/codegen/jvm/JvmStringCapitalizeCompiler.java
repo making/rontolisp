@@ -1,9 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.List;
-
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
@@ -19,7 +16,6 @@ final class JvmStringCapitalizeCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		List<LispVal> args = cons.toList();
 		ClassConstant sbClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant sbInit = ctx.cp.addMethodref(sbClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
@@ -36,10 +32,9 @@ final class JvmStringCapitalizeCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("toLowerCase"), ctx.cp.addUtf8("(C)C")));
 		MethodrefConstant stringLength = JvmEmitHelper.stringMethod(ctx, "length", "()I");
 
-		// s = (String) arg
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
+		// s = the argument coerced to a quoted string designator (string / symbol /
+		// keyword)
+		JvmStringDesignatorHelper.emitCoerce(cons, ctx, className);
 		int sSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(sSlot);

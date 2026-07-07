@@ -1909,15 +1909,15 @@ public final class Environment implements Scope {
 	private static void registerStringOps(Environment env) {
 		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE, args -> {
 			requireArgCount(LispNames.STRING_UPCASE, args, 1);
-			return new LispString(requireString(LispNames.STRING_UPCASE, args.get(0)).toUpperCase(Locale.ROOT));
+			return new LispString(stringDesignator(LispNames.STRING_UPCASE, args.get(0)).toUpperCase(Locale.ROOT));
 		}));
 		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE, args -> {
 			requireArgCount(LispNames.STRING_DOWNCASE, args, 1);
-			return new LispString(requireString(LispNames.STRING_DOWNCASE, args.get(0)).toLowerCase(Locale.ROOT));
+			return new LispString(stringDesignator(LispNames.STRING_DOWNCASE, args.get(0)).toLowerCase(Locale.ROOT));
 		}));
 		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE, args -> {
 			requireArgCount(LispNames.STRING_CAPITALIZE, args, 1);
-			return new LispString(capitalizeString(requireString(LispNames.STRING_CAPITALIZE, args.get(0))));
+			return new LispString(capitalizeString(stringDesignator(LispNames.STRING_CAPITALIZE, args.get(0))));
 		}));
 		// subseq: strings and lists. (seq start [end]); end defaults to the sequence
 		// length.

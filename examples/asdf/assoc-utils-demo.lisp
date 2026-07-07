@@ -15,11 +15,11 @@
 (print (assoc-utils:alist-keys *a*))
 (print (assoc-utils:alist-values *a*))
 
-;; alist-plist ((intern name :keyword) over the keys)
-;; NOTE: the inverse plist-alist is omitted -- it calls (string-downcase key) on
-;; keyword keys, and string-downcase/-upcase/-capitalize require an actual string
-;; (no symbol/keyword designator coercion yet on the compile path).
+;; alist-plist ((intern name :keyword) over the keys) and the inverse plist-alist
+;; ((string-downcase key) over the keyword keys -- string-downcase accepts a string
+;; designator, so a keyword coerces to its name).
 (print (assoc-utils:alist-plist *a*))
+(print (assoc-utils:plist-alist (list :name "eitaro" :loc "vienna")))
 
 ;; remove-from-alist (remove-if) and the define-modify-macro place variant
 (print (assoc-utils:remove-from-alist *a* "loc"))

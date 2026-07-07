@@ -34,6 +34,7 @@ class AssocUtilsE2eTest extends AsdfLibraryE2eSupport {
 			  (format t "~a~%" (assoc-utils:alist-keys a))
 			  (format t "~a~%" (assoc-utils:alist-values a))
 			  (format t "~a~%" (assoc-utils:alist-plist a))
+			  (format t "~a~%" (assoc-utils:plist-alist (assoc-utils:alist-plist a)))
 			  (format t "~a~%" (assoc-utils:remove-from-alist a "loc"))
 			  (format t "~a~%" (assoc-utils:with-keys ((nm "name") (lc "loc")) a
 			                     (format nil "~a@~a" nm lc))))
@@ -51,7 +52,8 @@ class AssocUtilsE2eTest extends AsdfLibraryE2eSupport {
 			""";
 
 	private static final List<String> EXPECTED = List.of("eitaro", "none", "(name loc)", "(eitaro vienna)",
-			"(:NAME eitaro :LOC vienna)", "((name . eitaro))", "eitaro@vienna", "((y . 2))", "((k . v))", "42", "eq");
+			"(:NAME eitaro :LOC vienna)", "((name . eitaro) (loc . vienna))", "((name . eitaro))", "eitaro@vienna",
+			"((y . 2))", "((k . v))", "42", "eq");
 
 	@Override
 	protected String systemDir() {

@@ -1314,6 +1314,12 @@ cases:
       (print (string-equal "ABC" "abc"))
       (princ (string-trim " " "  hi  "))
       (terpri)
+      (princ (string-downcase :FooBar))
+      (terpri)
+      (princ (string-upcase :FooBar))
+      (terpri)
+      (princ (string-capitalize :foo-bar))
+      (terpri)
     expected: |
       HELLO
       hello
@@ -1323,6 +1329,9 @@ cases:
       t
       t
       hi
+      foobar
+      FOOBAR
+      Foo-Bar
   - name: the-pi-constant-output-kept-backend
     source: |
       (print (truncate pi))

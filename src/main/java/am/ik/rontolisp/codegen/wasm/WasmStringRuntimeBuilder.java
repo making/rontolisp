@@ -23,6 +23,8 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int QUOTE = 0x22;
 
+	private static final int COLON = 0x3A;
+
 	// Transform modes for the shared build core.
 	private static final int COPY = 0;
 
@@ -44,10 +46,10 @@ final class WasmStringRuntimeBuilder {
 	static byte[] buildCaseConvertBody(boolean upcase) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// Locals 1..5: pos, end, start, cur, b (all i32).
-		declareI32Locals(w, 5);
-		int pos = 1, end = 2, start = 3, cur = 4, b = 5;
-		emitContentRange(w, 0, pos, end);
+		// Locals 1..6: pos, end, start, cur, b, fb (all i32).
+		declareI32Locals(w, 6);
+		int pos = 1, end = 2, start = 3, cur = 4, b = 5, fb = 6;
+		emitDesignatorContentRange(w, 0, pos, end, fb);
 		emitBuildCore(w, pos, end, start, cur, b, -1, upcase ? UPCASE : DOWNCASE);
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -60,10 +62,10 @@ final class WasmStringRuntimeBuilder {
 	static byte[] buildCapitalizeBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// Locals 1..6: pos, end, start, cur, b, atWordStart.
-		declareI32Locals(w, 6);
-		int pos = 1, end = 2, start = 3, cur = 4, b = 5, ws = 6;
-		emitContentRange(w, 0, pos, end);
+		// Locals 1..7: pos, end, start, cur, b, atWordStart, fb.
+		declareI32Locals(w, 7);
+		int pos = 1, end = 2, start = 3, cur = 4, b = 5, ws = 6, fb = 7;
+		emitDesignatorContentRange(w, 0, pos, end, fb);
 		emitBuildCore(w, pos, end, start, cur, b, ws, CAPITALIZE);
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -501,6 +503,57 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		set(w, endLocal);
+	}
+
+	// Sets posLocal/endLocal to the string-designator content byte range of the value at
+	// the given param local, so the case functions accept a symbol/keyword as well as a
+	// string (CL string-designator coercion). A real string ({@code "abc"}) uses the
+	// range
+	// between its surrounding quotes; a symbol (bare name, no quotes) uses its whole name
+	// minus a leading keyword colon. Either way the build core re-wraps the copied
+	// content
+	// in quotes, yielding a proper string. fbLocal is scratch for the first content byte.
+	private static void emitDesignatorContentRange(WasmWriter w, int paramLocal, int posLocal, int endLocal,
+			int fbLocal) {
+		// posLocal := offset; fbLocal := mem[offset] (the first byte)
+		emitStrOffset(w, paramLocal);
+		set(w, posLocal);
+		get(w, posLocal);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		set(w, fbLocal);
+		// A leading quote marks a real string; anything else is a symbol name.
+		get(w, fbLocal);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// String: pos = offset + 1; end = offset + len - 1 (strip the surrounding
+		// quotes).
+		get(w, posLocal);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, posLocal);
+		emitStrOffset(w, paramLocal);
+		emitStrLen(w, paramLocal);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, endLocal);
+		w.write(Instruction.ELSE);
+		// Symbol: drop a leading keyword colon; content runs to the full length.
+		get(w, fbLocal);
+		i32(w, COLON);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, posLocal);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, posLocal);
+		w.write(Instruction.END);
+		emitStrOffset(w, paramLocal);
+		emitStrLen(w, paramLocal);
+		w.write(Instruction.I32_ADD);
+		set(w, endLocal);
+		w.write(Instruction.END);
 	}
 
 	// Copies bytes [posLocal, endLocal) into a fresh heap string (wrapped in quotes),
