@@ -81,6 +81,15 @@ These are directories rather than single files: a Lisp program is compiled to
 | [`webgl-platformer/`](webgl-platformer) | A one-stage 3D platformer played with W/A/S/D + Space: the whole game -- gravity, jump buffering and coyote time, per-axis AABB collision against the level blocks, enemy patrols with the stomp-or-die rule, coin pickups, the goal flag and the follow camera -- lives in the Lisp source, which also tessellates every rotated box of the world, the robot explorer and the walkers each frame; JavaScript is one-line bindings, keyboard forwarding and the HUD |
 | [`webgl-common/`](webgl-common) | Not a demo but the shared `gl` package the WebGL demos above (except the deliberately self-contained `webgl-triangle`) splice in with a compile-time `(require :gl "../webgl-common/gl.lisp")`: the WebGL2 `rontolisp:wasm-import` boundary, the enum constants and the `gl:make-shader`/`gl:build-program` helpers in one `defpackage` -- `--optimize` tree-shakes the entries a demo never calls, so each page still only provides the bindings its own demo reaches |
 
+## Embedding a rontolisp Wasm module in a host
+
+Exporting a Lisp function to a host runtime and sharing data across the boundary
+through linear memory.
+
+| Directory | What it demonstrates |
+| --- | --- |
+| [`count-vowels/`](count-vowels) | The rontolisp counterpart of Chicory's *"Using Memory to share data"* tutorial: `count-vowels` is exported with `(rontolisp:wasm-export 'count-vowels :as "count_vowels" :params '(:string) :returns :int)` and compiled with `--no-gc` to a plain MVP module (no wasm-GC, no WASI imports) that **any** engine runs. A string crosses the boundary as a `(pointer, length)` pair of raw UTF-8 bytes, so the module also exports its `memory` and a bump allocator `__ronto_alloc(size)` -- the host reserves space, writes the bytes, then calls `count_vowels(ptr, len)`, exactly the alloc / writeString / call flow of the tutorial. Driven from a pure-Java [Chicory](https://chicory.dev) host ([`CountVowels.java`](count-vowels/CountVowels.java)) and, equivalently, a three-line Node script |
+
 ## Running
 
 Each example can be run by the interpreter, compiled to a JVM `.class`, or
