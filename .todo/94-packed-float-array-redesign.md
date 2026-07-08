@@ -421,9 +421,8 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
 
 - **Branch `feat/packed-float-array` off `develop` (440056c). Phase 1+2+3 COMMITTED at `f3d5ccd`**
   (branch's first commit) + doc follow-up `48066c0`. **Phase 4A COMMITTED at `b7e20d7`** + doc `ed715a7`.
-  **The accel push (Phase 2C + 4B + 5a-simd + 6-simd) is DONE + verified but UNCOMMITTED** (working tree
-  dirty — awaiting the user's commit request). Full suite green **2904**, skip 2 (WASM Docker); native
-  `CiSpecE2eTest` **724** green.
+  **The accel push (Phase 2C + 4B + 5a-simd + 6-simd) is DONE + verified + COMMITTED at `ebe6bac`.**
+  Full suite green **2904**, skip 2 (WASM Docker); native `CiSpecE2eTest` **724** green.
 - **Done:** Phase 0, Phase 1 (interpreter), Phase 2 (JVM packed), Phase 3 (wasm-GC), Phase 4A (`--no-gc`
   F64VEC), **Phase 2C (JVM `--simd` Vector-API bridge over packed `double[]`; dead-flag-proven; +7 tests),
   Phase 4B (`--no-gc` native `v128`/`f64x2.*`; wasmtime-verified; +3 tests), Phase 5a (simd.lisp +
