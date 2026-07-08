@@ -18,8 +18,12 @@
 ;;;; The network is a plist (:w1 W1 :b1 b1 :w2 W2 :b2 b2) read with getf, and it
 ;;;; is immutable: linalg and vec return fresh packed arrays, so train-example
 ;;;; produces a NEW plist each step rather than mutating in place -- a functional
-;;;; SGD loop. Everything is double-float (linalg always produces double); the
-;;;; same source runs on every backend.
+;;;; SGD loop. Everything is single-float (#f): linalg is width-polymorphic and
+;;;; PRESERVES the packed #f width through every op (a constructor opts in with a
+;;;; trailing 'single-float; the transforms follow their input), so a weight update
+;;;; (linalg:sub W ...) never widens back to double -- on the JVM --simd path the
+;;;; forward and backward pass stay f32 end to end. The same source runs on every
+;;;; backend (on wasm-GC the vec: kernels still compute in f64, but the values match).
 
 ;;; --- random weights via the built-in random ---
 ;;; random returns a value in [0, limit) of the limit's type. On the interpreter
@@ -27,14 +31,16 @@
 ;;; from the WASI random_get host function (so every run differs).
 (defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)
 
-;;; --- array construction (packed double-float, shared by vec and linalg) ---
-;;; A weight matrix is a rank-2 linalg array; a bias vector is a rank-1 vec array.
+;;; --- array construction (packed single-float #f, shared by vec and linalg) ---
+;;; A weight matrix is a rank-2 linalg array; a bias vector is a rank-1 array. Both
+;;; opt into single-float: linalg:zeros takes a trailing 'single-float, and a bias
+;;; is a bare single-float make-array (the packed type vec: and linalg: both ride on).
 (defun random-matrix (rows cols)
-  (let ((m (linalg:zeros (list rows cols))))
+  (let ((m (linalg:zeros (list rows cols) 'single-float)))
     (dotimes (i rows m)
       (dotimes (j cols) (setf (aref m i j) (random-weight))))))
 (defun random-vector (n)
-  (let ((v (vec:zeros n)))
+  (let ((v (make-array n :element-type 'single-float :initial-element 0.0)))
     (dotimes (i n v) (setf (aref v i) (random-weight)))))
 
 ;;; --- activation ---
@@ -92,13 +98,13 @@
     net))
 
 ;;; --- run: learn XOR ---
-;;; Inputs and targets are packed double-float vector literals (#d(...)) read
+;;; Inputs and targets are packed single-float vector literals (#f(...)) read
 ;;; directly as rank-1 arrays. They are never mutated -- only the weights change.
 (defparameter *xor-data*
-  (list (list #d(0.0 0.0) #d(0.0))
-        (list #d(0.0 1.0) #d(1.0))
-        (list #d(1.0 0.0) #d(1.0))
-        (list #d(1.0 1.0) #d(0.0))))
+  (list (list #f(0.0 0.0) #f(0.0))
+        (list #f(0.0 1.0) #f(1.0))
+        (list #f(1.0 0.0) #f(1.0))
+        (list #f(1.0 1.0) #f(0.0))))
 
 (defparameter *net* (init-net 2 4 1))
 (format t "Training XOR (2-4-1 network, vec + linalg)...~%")

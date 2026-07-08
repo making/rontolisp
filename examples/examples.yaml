@@ -156,7 +156,7 @@ examples:
         - "Predictions after training:"
   - path: ml/nn-vec.lisp
     backends: [interpreter, jvm, wasm]
-    note: nn.lisp rewritten with the vec (vec:matvec GEMV, Hadamard deltas) and linalg (transpose/outer/emap) packages instead of hand-written loops; random init, so only the headings are stable
+    note: nn.lisp rewritten with the vec (vec:matvec GEMV, Hadamard deltas) and linalg (transpose/outer/emap) packages instead of hand-written loops; single-float (#f) throughout -- linalg is width-polymorphic and preserves the #f width, so the JVM --simd pass stays f32; random init, so only the headings are stable
     expect:
       contains:
         - "Training XOR (2-4-1 network, vec + linalg)..."

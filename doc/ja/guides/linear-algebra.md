@@ -8,7 +8,7 @@ JSON ライブラリと同様に、`linalg` は Lisp ソース（`linalg.lisp`�
 
 linalg のコンストラクタは [packed float 配列](../reference/data-types.md) を作ります。これは `#d(...)` リテラルと同じ、アンボックスな `(array double-float)` です。ベクタはランク 1 の配列で `#d(1.0 2.0 ...)` と印字され、行列はランク 2 の配列でネストした `#d((...) ...)` 形式で印字されます。`#d` はアンボックスな packed 表現を表すため、その印字結果を読み戻すと packed 配列になります。個々の要素は `aref` で読み書きでき、プログラムの他の場所で構築された配列 (packed でも一般のボックス配列でも) も linalg 関数に渡せます。より高いランクの配列も扱えます。要素ごとの演算、リダクション、`reshape`/`flatten`、`array-equal` はフラットな行優先順で要素を走査するため任意のランクを受け付けます。一方 `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` は numpy の専用ルーチンと同様、ベクタと行列 (ランク 2 以下) に対して定義されたままです。[`linalg:from-list`](../reference/functions/linalg-from-list.md) / [`linalg:to-list`](../reference/functions/linalg-to-list.md) は配列とリストを相互に変換します。
 
-linalg は速度を優先して浮動小数点で計算します。すべてのコンストラクタと配列を生成する演算は packed double-float 配列を返し、[`linalg:det`](../reference/functions/linalg-det.md)、[`linalg:inv`](../reference/functions/linalg-inv.md)、[`linalg:solve`](../reference/functions/linalg-solve.md) は (numpy と同様に) 浮動小数点で計算されるため、一般の逆行列には通常の丸めが生じ、ほぼ特異な行列式は厳密な `0` ではなく微小値になることがあります。リダクションは numpy と同様に要素の型に従います。packed または float 配列に対するリダクションは double を、素の整数配列 (`#(1 2 3)` のようなリテラル) に対するリダクションは整数または厳密な比を返します。[`linalg:norm`](../reference/functions/linalg-norm.md) は `sqrt` が浮動小数点数を返すため常に浮動小数点数です。クロスバックエンドの注意点が 1 つあります。WASM バックエンドは非終端の浮動小数点数をインタプリタや JVM より少ない有効桁数で印字するため、丸めのある逆行列や無理数のノルムは、内部の `double` が同一でもバックエンド間で見た目が異なることがあります。
+linalg は速度を優先して浮動小数点で計算します。すべてのコンストラクタと配列を生成する演算はデフォルトで packed double-float 配列を返し（単精度も利用できます。[単精度浮動小数点](#単精度浮動小数点)を参照）、[`linalg:det`](../reference/functions/linalg-det.md)、[`linalg:inv`](../reference/functions/linalg-inv.md)、[`linalg:solve`](../reference/functions/linalg-solve.md) は (numpy と同様に) 浮動小数点で計算されるため、一般の逆行列には通常の丸めが生じ、ほぼ特異な行列式は厳密な `0` ではなく微小値になることがあります。リダクションは numpy と同様に要素の型に従います。packed または float 配列に対するリダクションは double を、素の整数配列 (`#(1 2 3)` のようなリテラル) に対するリダクションは整数または厳密な比を返します。[`linalg:norm`](../reference/functions/linalg-norm.md) は `sqrt` が浮動小数点数を返すため常に浮動小数点数です。クロスバックエンドの注意点が 1 つあります。WASM バックエンドは非終端の浮動小数点数をインタプリタや JVM より少ない有効桁数で印字するため、丸めのある逆行列や無理数のノルムは、内部の `double` が同一でもバックエンド間で見た目が異なることがあります。
 
 ## 実例
 
@@ -33,6 +33,18 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 (linalg:add #(1 2 3) 10)        ; => #d(11.0 12.0 13.0)
 (linalg:mul 2 #2A((1 2) (3 4))) ; => #d((2.0 4.0) (6.0 8.0))
 (linalg:div #(1 2 3) 2)         ; => #d(0.5 1.0 1.5)
+```
+
+## 単精度浮動小数点
+
+linalg はデフォルトで `double-float` で計算しますが、**幅多相 (width-polymorphic)** です。メモリが半分で SIMD レーン数が倍になる packed **単精度浮動小数点** (`#f`) 配列を受け付け、その幅を保持します。すべてのコンストラクタは末尾に省略可能な `element-type` を取り（デフォルトは `'double-float`。`#f` の結果が欲しければ `'single-float` を渡します）、すべての変換 -- `add`/`sub`/`mul`/`div`/`emap`、`transpose`/`reshape`、`dot`/`matmul`/`outer`、`inv`/`solve` -- は入力の幅を保持します。したがって単精度の値は最後まで単精度のまま流れます。関数的な重み更新 `(linalg:sub W grad)` は `W` の幅を保持し、暗黙に double へ戻す（JVM の [`--simd`](simd-acceleration.md) パスでは、続く `vec:matvec` で幅不一致エラーを強制する）ことはありません。`f32` の速度とメモリが欲しく精度の低下を許容できるときは単精度を使い、`det`/`inv`/`solve` のような精度が重要な処理にはデフォルトの倍精度を使ってください。
+
+```lisp
+(linalg:zeros 3 'single-float)                   ; => #f(0.0 0.0 0.0)
+(linalg:from-list '((1 2) (3 4)) 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
+(linalg:add (linalg:from-list '(1 2 3) 'single-float) 10) ; => #f(11.0 12.0 13.0)
+(array-element-type
+  (linalg:transpose (linalg:eye 2 'single-float)))        ; => single-float
 ```
 
 ## 第一級関数

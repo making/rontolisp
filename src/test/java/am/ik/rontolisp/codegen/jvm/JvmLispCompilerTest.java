@@ -4898,6 +4898,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLinalgSingleFloatWidthPolymorphism() throws Exception {
+		// todo-97: linalg is width-polymorphic -- a constructor opts into single-float
+		// (#f) with a trailing element-type, and every transform PRESERVES the input
+		// width, so a #f value is never silently widened to double (which would force a
+		// mixed-width --simd error on a following vec:matvec). Double stays the default.
+		// f32-exact values (integers / halves) so the printed form is byte-identical to
+		// the interpreter and WASM.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:zeros '(2 2) 'single-float))
+				(print (linalg:zeros '(2 2)))
+				(print (linalg:arange 0 8 2 'single-float))
+				(print (linalg:from-list '((1 2) (3 4)) 'single-float))
+				(let ((w (linalg:from-list '((1 2) (3 4)) 'single-float)))
+				  (print (linalg:sub w (linalg:mul (linalg:ones '(2 2) 'single-float) 0.5)))
+				  (print (array-element-type (linalg:transpose w)))
+				  (print (linalg:matmul w (linalg:eye 2 'single-float))))
+				(print (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10)))
+				(print (linalg:dot (linalg:from-list '(1 2 3) 'single-float)
+				                   (linalg:from-list '(1 2 3) 'single-float)))
+				""")).isEqualTo("#f((0.0 0.0) (0.0 0.0))\n#d((0.0 0.0) (0.0 0.0))\n#f(0.0 2.0 4.0 6.0)\n"
+				+ "#f((1.0 2.0) (3.0 4.0))\n#f((0.5 1.5) (2.5 3.5))\nsingle-float\n"
+				+ "#f((1.0 2.0) (3.0 4.0))\ndouble-float\n14.0");
+	}
+
+	@Test
 	void compileAndRunJsonParseReturnsPlistByDefault() throws Exception {
 		assertThat(
 				compileAndRunJson("(print (rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\"))"))

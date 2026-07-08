@@ -4846,6 +4846,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgSingleFloatWidthPolymorphism() {
+		// todo-97: a linalg constructor opts into single-float (#f) with a trailing
+		// element-type (double stays the default), and every transform PRESERVES the
+		// input width, so a #f array is never silently widened back to double.
+		LispVal result = evalMulti("""
+				(let ((w (linalg:from-list '((1 2) (3 4)) 'single-float)))
+				  (list (array-element-type (linalg:zeros 3 'single-float))
+				        (array-element-type (linalg:zeros 3))
+				        (linalg:sub w (linalg:mul (linalg:ones '(2 2) 'single-float) 0.5))
+				        (array-element-type (linalg:transpose w))
+				        (array-element-type (linalg:dot w (linalg:from-list '(1 1) 'single-float)))
+				        (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10))))
+				""");
+		assertThat(result.print())
+			.isEqualTo("(single-float double-float #f((0.5 1.5) (2.5 3.5)) single-float single-float double-float)");
+	}
+
+	@Test
 	void rowMajorArefReadsAndWritesFlat() {
 		LispVal result = evalMulti("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

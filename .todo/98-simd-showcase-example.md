@@ -61,4 +61,7 @@ works at scale and is a clean, deterministic, single-file `examples/` addition; 
   (deterministic ML), the `examples.yaml` `contains`/`skip` idioms.
 - llama2 refs: kishida Llama.java (f32, FloatVector, GEMV), karpathy llama2.c
   (`matmul(xout,x,w,n,d)` = GEMV, `stories15M.bin` format).
-- True f32 end-to-end needs **todo-97** (single-float linalg output); f64 works today.
+- True f32 end-to-end: **todo-97 (single-float linalg output) is DONE** -- linalg is
+  width-polymorphic (constructors opt in with a trailing `'single-float`; transforms preserve
+  the input width) and produces `#f` on all four backends, so a benchmark or demo can run in
+  true f32 now (`examples/ml/nn-vec.lisp` is already all-`#f`); f64 works too.

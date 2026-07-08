@@ -6,8 +6,10 @@ runs identically on all backends. 33 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
 `add`/`sub`/`mul`/`div`/`emap`, products `dot`/`matmul`/`outer`, reductions,
 and floating-point Gaussian-elimination `det`/`inv`/`solve`) over the built-in
-arrays. The library computes in packed double-float (speed over exactness), so
-constructors and array-building ops produce packed double-float arrays.
+arrays. The library computes in packed float (speed over exactness), **double by
+default** but **width-polymorphic** (`.todo/97`): a constructor opts into packed
+single-float (`#f`) with a trailing `element-type` argument, and every transform
+PRESERVES its input width (see "Single-float / width polymorphism" below).
 Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
 walk elements via `row-major-aref`, so they work for any rank; `dot`/`matmul`/
 `outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for rank <= 2.
@@ -66,6 +68,51 @@ short decimals). See `examples/ml/linear-regression.lisp`,
 `examples/ml/deep-digits.lisp` and `examples/ml/heat3d.lisp` for worked idioms
 (incl. an i31-safe fixed-seed LCG, matrix backpropagation and the rank-3 idioms).
 
+## Single-float / width polymorphism (`.todo/97`)
+
+linalg is **double by default** (precision) but accepts and preserves packed
+single-float (`#f`) so a `#f` value flowing in from `vec:` is never silently
+widened back to double -- the widening would force a mixed-width `--simd` error on
+the next `vec:matvec` (a `#d` matrix x a `#f` vector). Two orthogonal mechanisms:
+
+- **Constructor opt-in.** Every constructor takes a trailing optional
+  `element-type` (positional symbol, default `'double-float`):
+  `(linalg:zeros '(3 4) 'single-float)`, `(linalg:ones n 'single-float)`,
+  `(linalg:full shape v 'single-float)`, `(linalg:eye n 'single-float)`,
+  `(linalg:linspace a b n 'single-float)`, `(linalg:from-list lst 'single-float)`,
+  and `(linalg:arange ... 'single-float)`. `arange` is variadic (`&optional b
+  step`), so it disambiguates by type -- `step` is always a number and an
+  `element-type` a non-nil symbol, so `(linalg:arange 0 10 'single-float)` reads
+  the symbol as the type (step defaulting) and `(linalg:arange 0 10 2 'single-float)`
+  keeps both. It is a **positional** symbol, NOT a `:element-type` keyword: a `&key`
+  cannot follow `arange`'s `&optional` (the optional greedily eats the keyword), so
+  the whole family uses a trailing optional for uniformity.
+- **Width-following transforms.** `add`/`sub`/`mul`/`div`/`emap` (via
+  `%la-like`), `transpose`/`reshape`/`flatten`, `dot`/`matmul`/`outer` and
+  `inv`/`solve` all PRESERVE the (first) array input's width -- a `#f` stays `#f`,
+  a `#d` stays `#d` -- so a functional weight update `(linalg:sub W grad)` keeps
+  `W`'s single-float width. No API change; it is automatic.
+
+The seam is `linalg::%la-make (dims init &optional element-type)`: `(if (eq
+element-type 'single-float) (make-array ... 'single-float ...) (make-array ...
+'double-float ...))`. Both branches take a **literal** `:element-type`, so every
+backend -- interpreter, JVM AND **wasm-GC** -- picks the `double[]`/`float[]`
+(`TYPE_F64ARR`/`TYPE_F32ARR`) repr statically and produces `#f` directly; a
+runtime-computed element-type could not. `linalg::%la-etype a` returns the literal
+symbol matching `a`'s width (a general/boxed array reads back as `t`, so it maps to
+`'double-float`), and `%la-like` threads it. **No `#+/#-rontolisp-wasm` reader
+conditional is needed** -- unlike `vec::%make-like`, whose split (double-only on
+wasm) predates the wasm-GC `TYPE_F32ARR` (`.todo/95` Phase 4) and is now vestigial:
+`vec:` still renders a `#f` element-wise result as `#d` on wasm-GC while linalg
+renders `#f` on every backend. Because single-float trades precision for speed,
+precision-critical `det`/`inv`/`solve` are best left double (the default); a `#f`
+input to `inv`/`solve` computes (and returns) in single-float, matching numpy.
+
+Cross-backend determinism: like double results, a non-terminating `#f` decimal
+prints differently on WASM, so a cross-backend `#f` pin must use f32-EXACT values
+(integers / halves) -- see the `linalg-single-float-cross-backend` ci-spec case,
+which is byte-identical on all four backends.
+
 ## Wiring
 
 - **Package**: `linalg` is a built-in package registered in the
@@ -103,10 +150,11 @@ short decimals). See `examples/ml/linear-regression.lisp`,
   first (fixed 2026-07-03 in `Jvm/WasmLambdaCompiler`; the ci-spec
   `dynamic-function-selection` case defines a global `f` and broke `linalg:add`
   before the rename — the rename stays because it is harmless).
-- Arithmetic runs in packed double-float (speed over exactness); the
+- Arithmetic runs in packed float (speed over exactness), double by default but
+  width-polymorphic (see "Single-float / width polymorphism"); the
   `linalg-package-cross-backend` ci-spec case uses power-of-two matrices for
   `det`/`inv`/`solve` so their float results are exact and print identically on
-  every backend.
+  every backend, and `linalg-single-float-cross-backend` pins the `#f` path.
 - Flat iteration uses `row-major-aref` / `(setf (row-major-aref ...))`
   directly (the former `%la-cols`/`%la-fref`/`%la-fset` cols-encoding helpers
   were deleted when rank-n arrays landed), which is what makes the elementwise

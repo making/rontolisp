@@ -182,9 +182,21 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 
 ## Not done / follow-ups
 
-- `linalg:` acceleration (`.todo/93`): linalg.lisp still builds general arrays
-  (`:initial-element 0`); migrating it to packed changes its output int→double and needs
-  the linalg doc/test reconciliation + a linalg-kernel interceptor. A distinct step.
+- `linalg:` is now packed-float and **width-polymorphic** (`.todo/97`): double by default,
+  `#f` opt-in via a trailing constructor `element-type`, and every transform preserves the
+  input width (so a `#f` from `vec:` is never force-widened to `#d`). See `.kb/linalg.md`.
+- **`vec::%make-like`'s `#+/#-rontolisp-wasm` split is now vestigial** and causes a vec-only
+  cross-backend width divergence: `vec:add`/`sub`/`mul`/`scale`/`matvec` of a `#f` operand
+  return `#f` on interpreter/JVM but `#d` on wasm-GC. The split predates the wasm-GC
+  `TYPE_F32ARR` (`.todo/95` Phase 4); the todo-97 finding proves a runtime-selected-width
+  `make-array` (both branches literal-typed) compiles and runs on wasm-GC/component, so
+  `linalg::%la-make` produces `#f` on every backend WITHOUT a split. Removing vec's split
+  (making `vec::%make-like` unconditional, dropping the `VecLibrary` wasm forms variant)
+  would make vec `#f`-everywhere and consistent with linalg -- a clean follow-up, left out
+  of `.todo/97` to keep that change scoped to linalg (`--simd` is JVM-only, where vec
+  already preserves `#f`, so vec's wasm `#d` costs no SIMD perf).
+- `linalg:` acceleration (`.todo/93`): a linalg-kernel `--simd`/`v128` interceptor (like the
+  `vec:` bridge) is still a distinct step -- linalg runs the scalar packed defuns everywhere.
 - Full matrix×matrix **GEMM** (`matmul`): NOT `vec:` (it produces a matrix) — it belongs in
   `linalg:` and needs a transpose that GEMV avoids. `vec:matvec` (GEMV) is the mat×vec case
   llama2's single-token decode needs; GEMM is deferred (prefill batching only).

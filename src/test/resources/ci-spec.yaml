@@ -2340,6 +2340,64 @@ cases:
       14.0
       12.0
 
+  # linalg single-float (.todo/97): linalg is width-polymorphic -- a constructor opts
+  # into packed single-float (#f) with a trailing element-type (double stays the default
+  # for precision), and every transform PRESERVES the input width, so a #f value flowing
+  # in (e.g. from vec:) is never silently widened back to double (which would force a
+  # mixed-width --simd error on the next vec:matvec). Unlike the earlier vec::%make-like
+  # assumption, wasm-GC produces #f directly -- both linalg::%la-make branches take a
+  # literal :element-type, so the compiled backend picks the TYPE_F32ARR/F64ARR repr
+  # statically -- and the output is byte-identical on all four backends, using only
+  # f32-EXACT values (integers / halves) so the WASM float printer agrees. Reductions
+  # fold to an f64 scalar; the last two element-type probes pin width-preservation vs the
+  # double default.
+  - name: linalg-single-float-cross-backend
+    source: |
+      (defun ci-linalg-single ()
+        (print (linalg:zeros '(2 2) 'single-float))
+        (print (linalg:zeros '(2 2)))
+        (print (linalg:eye 2 'single-float))
+        (print (linalg:arange 0 8 2 'single-float))
+        (print (linalg:from-list '((1 2) (3 4)) 'single-float))
+        (let ((a (linalg:from-list '(1 2 3) 'single-float))
+              (b (linalg:from-list '(4 5 6) 'single-float)))
+          (print (linalg:add a b))
+          (print (linalg:sub b a))
+          (print (linalg:mul a b))
+          (print (linalg:add a 10)))
+        (let ((w (linalg:from-list '((1 2) (3 4)) 'single-float)))
+          (print (linalg:transpose w))
+          (print (linalg:matmul w (linalg:eye 2 'single-float)))
+          (print (linalg:dot w (linalg:from-list '(1 1) 'single-float))))
+        (print (linalg:outer (linalg:from-list '(1 2) 'single-float)
+                             (linalg:from-list '(1 1 1) 'single-float)))
+        (let ((w2 (linalg:from-list '((1 2) (3 4)) 'single-float)))
+          (print (array-element-type
+                   (linalg:sub w2 (linalg:mul (linalg:ones '(2 2) 'single-float) 0.5)))))
+        (print (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10)))
+        (print (linalg:sum (linalg:from-list '(1 2 3 4) 'single-float)))
+        (print (linalg:dot (linalg:from-list '(1 2 3) 'single-float)
+                           (linalg:from-list '(1 2 3) 'single-float))))
+      (ci-linalg-single)
+    expected: |
+      #f((0.0 0.0) (0.0 0.0))
+      #d((0.0 0.0) (0.0 0.0))
+      #f((1.0 0.0) (0.0 1.0))
+      #f(0.0 2.0 4.0 6.0)
+      #f((1.0 2.0) (3.0 4.0))
+      #f(5.0 7.0 9.0)
+      #f(3.0 3.0 3.0)
+      #f(4.0 10.0 18.0)
+      #f(11.0 12.0 13.0)
+      #f((1.0 3.0) (2.0 4.0))
+      #f((1.0 2.0) (3.0 4.0))
+      #f(3.0 7.0)
+      #f((1.0 1.0 1.0) (2.0 2.0 2.0))
+      single-float
+      double-float
+      10.0
+      14.0
+
   # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

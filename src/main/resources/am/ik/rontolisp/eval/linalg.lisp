@@ -7,14 +7,22 @@
 ;; Portability constraints honored here (like json.lisp, see .kb/json.md):
 ;; - do loops always declare at least one variable; parameters are never
 ;;   assigned with setq (let-rebound instead).
-;; - Arrays are packed double-float: every constructor allocates through the one
-;;   linalg::%la-make funnel (an unboxed (array double-float) via make-array
-;;   :element-type 'double-float), and element reads coerce to double. Routing
-;;   all allocation through a single helper is a forward-compat seam for a later
-;;   single-float production mode. linalg is speed-oriented, not exact --
-;;   integer/ratio inputs become doubles (numpy's model), so det/inv/solve
-;;   compute in floating point (a singular integer matrix's determinant may be
-;;   a tiny epsilon rather than exactly 0).
+;; - Arrays are packed float arrays, DOUBLE by default: every allocation flows
+;;   through the one linalg::%la-make funnel (make-array :element-type, an unboxed
+;;   (array double-float) / (array single-float)), and element reads coerce to
+;;   double. linalg is width-polymorphic (todo-97): a constructor takes an
+;;   optional element-type (default 'double-float; opt in with 'single-float for
+;;   half the memory / 2x the SIMD lanes), and every transform PRESERVES its input
+;;   width -- a #f (single-float) array stays #f through add/sub/mul/emap/transpose/
+;;   dot/matmul/... (via linalg::%la-etype), so a #f value flowing in from vec: is
+;;   never silently widened back to double (which would force a mixed-width --simd
+;;   error on the next vec:matvec). Both %la-make branches take a LITERAL
+;;   element-type so each backend picks the float[]/double[] (TYPE_F32ARR/F64ARR)
+;;   repr statically -- interpreter, JVM AND wasm-GC all produce #f; only --no-gc is
+;;   unsupported (no array type). linalg is speed-oriented, not exact -- integer/
+;;   ratio inputs become doubles (numpy's model), and single-float trades precision
+;;   for speed, so precision-critical det/inv/solve are best left double (the
+;;   default; a singular integer matrix's determinant may be a tiny epsilon).
 ;;
 ;; Internal helpers use the linalg::%la- prefix. An array is walked with a
 ;; flat row-major index k via row-major-aref, so the elementwise operations
@@ -23,20 +31,30 @@
 
 ;; --- internal helpers --------------------------------------------------------
 
-(defun linalg::%la-make (dims init)
+(defun linalg::%la-make (dims init &optional element-type)
   ;; The single funnel through which EVERY linalg result-array allocation flows.
-  ;; Today it always builds a packed double-float array; it exists as a
-  ;; forward-compat seam so that a later "produce single-float too" change is a
-  ;; one-touch add here (branch on a literal :element-type) instead of editing
-  ;; every constructor. The :element-type MUST stay a literal 'double-float: the
-  ;; compiled backends pick the double[] / float[] representation from a
-  ;; compile-time literal, so a runtime-computed element-type could not select
-  ;; the packed representation (see .todo/95). init is coerced to double.
-  (make-array dims :element-type 'double-float :initial-element init))
+  ;; A LITERAL element-type of 'single-float builds a packed single-float array
+  ;; (#f); anything else (the nil default) a packed double-float array (#d). Both
+  ;; make-array calls take a literal :element-type, so every backend --
+  ;; interpreter, JVM AND wasm-GC -- picks the double[]/float[] (TYPE_F64ARR/
+  ;; F32ARR) representation statically; a runtime-computed element-type could not
+  ;; (see .todo/95, .todo/97). init is coerced to the element width.
+  (if (eq element-type 'single-float)
+      (make-array dims :element-type 'single-float :initial-element init)
+      (make-array dims :element-type 'double-float :initial-element init)))
+
+(defun linalg::%la-etype (a)
+  ;; The literal element-type symbol matching a's packed width -- 'single-float
+  ;; for a #f array, else 'double-float -- so a transform that threads it into
+  ;; %la-make PRESERVES the input width (a #f stays #f, a #d stays #d). This is
+  ;; what makes the element-wise / product ops width-polymorphic. A general
+  ;; (boxed) array reads back as element-type t, so it maps to 'double-float --
+  ;; matching linalg's double default.
+  (if (eq (array-element-type a) 'single-float) 'single-float 'double-float))
 
 (defun linalg::%la-like (a)
-  ;; A fresh zero-filled packed double-float array with the same shape as a.
-  (linalg::%la-make (array-dimensions a) 0.0))
+  ;; A fresh zero-filled packed array with the same shape AND width as a.
+  (linalg::%la-make (array-dimensions a) 0.0 (linalg::%la-etype a)))
 
 (defun linalg::%la-bcast (%la-op %la-x %la-y)
   ;; Applies the binary function %la-op elementwise, broadcasting a scalar
@@ -126,7 +144,7 @@
          (m (car (cdr d))))
     (unless (= m (length v))
       (error "linalg: dot dimension mismatch"))
-    (let ((out (linalg::%la-make n 0.0)))
+    (let ((out (linalg::%la-make n 0.0 (linalg::%la-etype a))))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (let ((acc 0))
@@ -142,7 +160,7 @@
          (m (car (cdr d))))
     (unless (= n (length v))
       (error "linalg: dot dimension mismatch"))
-    (let ((out (linalg::%la-make m 0.0)))
+    (let ((out (linalg::%la-make m 0.0 (linalg::%la-etype v))))
       (do ((j 0 (+ j 1)))
           ((>= j m) out)
         (let ((acc 0))
@@ -160,7 +178,7 @@
          (p (car (cdr db))))
     (unless (= m (car db))
       (error "linalg: matmul inner dimensions differ"))
-    (let ((out (linalg::%la-make (list n p) 0.0)))
+    (let ((out (linalg::%la-make (list n p) 0.0 (linalg::%la-etype a))))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (do ((j 0 (+ j 1)))
@@ -173,43 +191,51 @@
 
 ;; --- constructors ------------------------------------------------------------
 
-(defun linalg:zeros (shape)
-  ;; A zero-filled vector (integer shape) or matrix (list shape).
-  (linalg::%la-make shape 0.0))
+(defun linalg:zeros (shape &optional element-type)
+  ;; A zero-filled vector (integer shape) or matrix (list shape). Double-float by
+  ;; default; pass 'single-float to build a packed single-float (#f) result.
+  (linalg::%la-make shape 0.0 element-type))
 
-(defun linalg:ones (shape)
-  ;; A one-filled vector or matrix.
-  (linalg::%la-make shape 1.0))
+(defun linalg:ones (shape &optional element-type)
+  ;; A one-filled vector or matrix (double by default; 'single-float for #f).
+  (linalg::%la-make shape 1.0 element-type))
 
-(defun linalg:full (shape value)
-  ;; A vector or matrix with every element set to value (coerced to double).
-  (linalg::%la-make shape value))
+(defun linalg:full (shape value &optional element-type)
+  ;; A vector or matrix with every element set to value (double by default;
+  ;; 'single-float for #f).
+  (linalg::%la-make shape value element-type))
 
-(defun linalg:eye (n)
-  ;; The n-by-n identity matrix.
-  (let ((m (linalg::%la-make (list n n) 0.0)))
+(defun linalg:eye (n &optional element-type)
+  ;; The n-by-n identity matrix (double by default; 'single-float for #f).
+  (let ((m (linalg::%la-make (list n n) 0.0 element-type)))
     (do ((i 0 (+ i 1)))
         ((>= i n) m)
       (setf (aref m i i) 1))))
 
-(defun linalg:arange (a &optional b step)
-  ;; (arange stop), (arange start stop), or (arange start stop step): the
-  ;; vector of numbers from start (default 0) up to but excluding stop,
-  ;; advancing by step (default 1; may be negative).
-  (let* ((start (if b a 0))
+(defun linalg:arange (a &optional b step element-type)
+  ;; (arange stop), (arange start stop), or (arange start stop step): the vector
+  ;; of numbers from start (default 0) up to but excluding stop, advancing by step
+  ;; (default 1; may be negative). Double-float by default; pass 'single-float for
+  ;; a packed single-float (#f) result. step is always a number and an element-type
+  ;; a (non-nil) symbol, so (arange 0 10 'single-float) reads the symbol as the
+  ;; element-type (step defaulting to 1) and (arange 0 10 2 'single-float) keeps both.
+  (let* ((et (if (and (symbolp step) step) step element-type))
+         (stp (if (and (symbolp step) step) nil step))
+         (start (if b a 0))
          (stop (if b b a))
-         (d (if step step 1))
+         (d (if stp stp 1))
          (count (ceiling (/ (- stop start) d)))
          (n (max 0 count))
-         (out (linalg::%la-make n 0.0)))
+         (out (linalg::%la-make n 0.0 et)))
     (do ((i 0 (+ i 1))
          (x start (+ x d)))
         ((>= i n) out)
       (setf (aref out i) x))))
 
-(defun linalg:linspace (start stop n)
-  ;; The vector of n evenly spaced numbers from start to stop inclusive.
-  (let ((out (linalg::%la-make n 0.0)))
+(defun linalg:linspace (start stop n &optional element-type)
+  ;; The vector of n evenly spaced numbers from start to stop inclusive (double by
+  ;; default; pass 'single-float for a packed single-float (#f) result).
+  (let ((out (linalg::%la-make n 0.0 element-type)))
     (if (= n 1)
         (progn (setf (aref out 0) start) out)
         (let ((step (/ (- stop start) (- n 1))))
@@ -217,12 +243,13 @@
               ((>= i n) out)
             (setf (aref out i) (+ start (* step i))))))))
 
-(defun linalg:from-list (lst)
-  ;; A vector from a flat list, or a matrix from a list of equal-length rows.
+(defun linalg:from-list (lst &optional element-type)
+  ;; A vector from a flat list, or a matrix from a list of equal-length rows
+  ;; (double by default; pass 'single-float for a packed single-float (#f) result).
   (if (consp (car lst))
       (let* ((r (length lst))
              (c (length (car lst)))
-             (m (linalg::%la-make (list r c) 0.0)))
+             (m (linalg::%la-make (list r c) 0.0 element-type)))
         (do ((rows lst (cdr rows))
              (i 0 (+ i 1)))
             ((null rows) m)
@@ -231,7 +258,7 @@
               ((null cells))
             (setf (aref m i j) (car cells)))))
       (let* ((n (length lst))
-             (v (linalg::%la-make n 0.0)))
+             (v (linalg::%la-make n 0.0 element-type)))
         (do ((cells lst (cdr cells))
              (i 0 (+ i 1)))
             ((null cells) v)
@@ -263,8 +290,9 @@
   (array-total-size a))
 
 (defun linalg:reshape (a shape)
-  ;; A fresh array with the given shape and the same row-major elements.
-  (let* ((out (linalg::%la-make shape 0.0))
+  ;; A fresh array with the given shape and the same row-major elements (same
+  ;; width as a: a #f reshapes to #f, a #d to #d).
+  (let* ((out (linalg::%la-make shape 0.0 (linalg::%la-etype a)))
          (n (array-total-size a)))
     (unless (= n (array-total-size out))
       (error "linalg: reshape size mismatch"))
@@ -282,7 +310,7 @@
     (if (cdr d)
         (let* ((r (car d))
                (c (car (cdr d)))
-               (m (linalg::%la-make (list c r) 0.0)))
+               (m (linalg::%la-make (list c r) 0.0 (linalg::%la-etype a))))
           (do ((i 0 (+ i 1)))
               ((>= i r) m)
             (do ((j 0 (+ j 1)))
@@ -342,7 +370,7 @@
          (vf (linalg:flatten v))
          (n (length uf))
          (m (length vf))
-         (out (linalg::%la-make (list n m) 0.0)))
+         (out (linalg::%la-make (list n m) 0.0 (linalg::%la-etype uf))))
     (do ((i 0 (+ i 1)))
         ((>= i n) out)
       (do ((j 0 (+ j 1)))
@@ -445,7 +473,8 @@
   ;; singular matrix.
   (let* ((n (linalg::%la-square-size a))
          (w (* 2 n))
-         (m (linalg::%la-make (list n w) 0.0)))
+         (et (linalg::%la-etype a))
+         (m (linalg::%la-make (list n w) 0.0 et)))
     (do ((i 0 (+ i 1)))
         ((>= i n))
       (do ((j 0 (+ j 1)))
@@ -473,7 +502,7 @@
               (do ((j col (+ j 1)))
                   ((>= j w))
                 (setf (aref m i j) (- (aref m i j) (* f (aref m col j))))))))))
-    (let ((out (linalg::%la-make (list n n) 0.0)))
+    (let ((out (linalg::%la-make (list n n) 0.0 et)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (do ((j 0 (+ j 1)))

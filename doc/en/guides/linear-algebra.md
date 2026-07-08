@@ -8,7 +8,7 @@ Like the JSON library, `linalg` is implemented once in Lisp source (`linalg.lisp
 
 linalg constructors build [packed float arrays](../reference/data-types.md): unboxed `(array double-float)` values, the same representation as an `#d(...)` literal. A vector is a rank-1 array, printed `#d(1.0 2.0 ...)`, and a matrix is a rank-2 array, printed with the nested `#d((...) ...)` form -- the `#d` marks the unboxed packed representation, so the printed form reads back as a packed array. Individual elements are read and written with `aref`, and any array built elsewhere -- packed or a general boxed array -- can be handed to a linalg function. Arrays of higher rank work too: the elementwise operations, the reductions, `reshape`/`flatten` and `array-equal` walk the elements in flat row-major order and accept any rank, while `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for vectors and matrices (rank <= 2), like numpy's specialized routines. [`linalg:from-list`](../reference/functions/linalg-from-list.md) / [`linalg:to-list`](../reference/functions/linalg-to-list.md) convert between arrays and lists.
 
-linalg computes in floating point, prioritizing speed: every constructor and array-building operation returns a packed double-float array, and [`linalg:det`](../reference/functions/linalg-det.md), [`linalg:inv`](../reference/functions/linalg-inv.md) and [`linalg:solve`](../reference/functions/linalg-solve.md) run in floating point (like numpy), so a general inverse carries the usual rounding and a nearly singular determinant can be a small epsilon rather than exactly `0`. A reduction follows the element type numpy-style: a reduction over a packed or float array is a double, while a reduction over a plain integer array (a bare `#(1 2 3)` literal) stays an integer or exact ratio; [`linalg:norm`](../reference/functions/linalg-norm.md) is always a float because `sqrt` is. One cross-backend caveat: the WASM backends print a non-terminating float at fewer significant digits than the interpreter and JVM, so a rounded inverse or an irrational norm can look different across backends even though the underlying `double` is identical.
+linalg computes in floating point, prioritizing speed: every constructor and array-building operation returns a packed double-float array by default (single-float is available too -- see [Single-float precision](#single-float-precision)), and [`linalg:det`](../reference/functions/linalg-det.md), [`linalg:inv`](../reference/functions/linalg-inv.md) and [`linalg:solve`](../reference/functions/linalg-solve.md) run in floating point (like numpy), so a general inverse carries the usual rounding and a nearly singular determinant can be a small epsilon rather than exactly `0`. A reduction follows the element type numpy-style: a reduction over a packed or float array is a double, while a reduction over a plain integer array (a bare `#(1 2 3)` literal) stays an integer or exact ratio; [`linalg:norm`](../reference/functions/linalg-norm.md) is always a float because `sqrt` is. One cross-backend caveat: the WASM backends print a non-terminating float at fewer significant digits than the interpreter and JVM, so a rounded inverse or an irrational norm can look different across backends even though the underlying `double` is identical.
 
 ## A worked example
 
@@ -33,6 +33,18 @@ The `inv` and `solve` matrices above are chosen so their float results are exact
 (linalg:add #(1 2 3) 10)        ; => #d(11.0 12.0 13.0)
 (linalg:mul 2 #2A((1 2) (3 4))) ; => #d((2.0 4.0) (6.0 8.0))
 (linalg:div #(1 2 3) 2)         ; => #d(0.5 1.0 1.5)
+```
+
+## Single-float precision
+
+linalg computes in `double-float` by default, but it is **width-polymorphic**: it accepts and preserves packed **single-float** (`#f`) arrays, which use half the memory and twice the SIMD lane count. Every constructor takes an optional trailing `element-type` (the default is `'double-float`; pass `'single-float` for a `#f` result), and every transform -- `add`/`sub`/`mul`/`div`/`emap`, `transpose`/`reshape`, `dot`/`matmul`/`outer`, `inv`/`solve` -- preserves its input's width. A single-float value therefore stays single-float all the way through: a functional weight update `(linalg:sub W grad)` keeps `W`'s width rather than silently widening it back to double (which, on the JVM [`--simd`](simd-acceleration.md) path, would force a mixed-width error on the following `vec:matvec`). Reach for single-float when you want the speed and memory of `f32` and can accept its lower precision, and keep the double-float default for precision-critical work such as `det`/`inv`/`solve`.
+
+```lisp
+(linalg:zeros 3 'single-float)                   ; => #f(0.0 0.0 0.0)
+(linalg:from-list '((1 2) (3 4)) 'single-float)  ; => #f((1.0 2.0) (3.0 4.0))
+(linalg:add (linalg:from-list '(1 2 3) 'single-float) 10) ; => #f(11.0 12.0 13.0)
+(array-element-type
+  (linalg:transpose (linalg:eye 2 'single-float)))        ; => single-float
 ```
 
 ## First-class functions

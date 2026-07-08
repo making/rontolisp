@@ -361,6 +361,21 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void linalgSingleFloatCompilesInEveryMode() {
+		// todo-97: single-float (#f) linalg output compiles in Preview 1 and component
+		// modes. Both linalg::%la-make branches take a literal :element-type, so the
+		// wasm-GC backend picks the TYPE_F32ARR/F64ARR repr statically (no reader
+		// conditional needed -- unlike the earlier vec::%make-like assumption, wasm-GC
+		// produces #f directly).
+		String source = "(print (linalg:sub (linalg:ones '(2 2) 'single-float) "
+				+ "(linalg:full '(2 2) 0.5 'single-float)))";
+		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
+			.process(LispReader.readAllFromString(source));
+		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+	}
+
+	@Test
 	void urlOpsCompileInEveryMode() {
 		// The spliced URL library compiles in Preview 1 and component modes (it is
 		// plain Lisp source, so no backend-specific lowering is involved).
