@@ -27,6 +27,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SimdLibrary;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
@@ -91,7 +92,7 @@ public final class RontoLispCli {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
-					options.contains("--no-gc"));
+					options.contains("--no-gc"), options.contains("--simd"));
 		}
 		else {
 			interpret(source, baseDir, systemPath);
@@ -184,7 +185,7 @@ public final class RontoLispCli {
 	}
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
-			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc) {
+			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd) {
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -206,6 +207,14 @@ public final class RontoLispCli {
 		List<LispVal> program = LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary
 			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
 					SourceLoader.fileSystem(), baseDir, systemPath, features))))));
+		// Splice the Lisp-source simd library (the scalar reference over the packed
+		// double-float array type) when the program references the simd package. The
+		// --no-gc scalar WASM backend is the exception: it has no general array type and
+		// lowers the whole simd: surface to native fixed-width WASM SIMD itself
+		// (ScalarWasmCompiler), so it must NOT get the splice.
+		if (!(outputFile.endsWith(".wasm") && noGc)) {
+			program = SimdLibrary.process(program);
+		}
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {
@@ -235,7 +244,8 @@ public final class RontoLispCli {
 			// rontolisp:tls-listen-pem to embed the compile-time-parsed PKCS12 keystore
 			// (WASM keeps tls-listen-pem, which its compiler rejects outright).
 			String className = outputFile.replace(".class", "");
-			bytes = new JvmLispCompiler(className, dynamic, optimize).compile(TlsPemInliner.inline(program, baseDir));
+			bytes = new JvmLispCompiler(className, dynamic, optimize, simd)
+				.compile(TlsPemInliner.inline(program, baseDir));
 		}
 		try {
 			Files.write(Path.of(outputFile), bytes);

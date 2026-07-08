@@ -487,6 +487,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			return typeOf(expanded, env, tc);
 		}
 
+		if (isSimdCall(name)) {
+			return typeOfSimd(name, args, env, tc);
+		}
+
 		switch (name) {
 			case LispNames.IF -> {
 				typeOf(args.get(1), env, tc);
@@ -787,14 +791,17 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Whether a body allocates a packed f64 vector (a #f literal or a make-array call).
+	 * Whether a body touches a packed f64 vector (a {@code #f} literal, a
+	 * {@code make-array} call, or any {@code simd:} kernel), all of which read or
+	 * bump-allocate the vector in linear memory and so require the memory section even in
+	 * an otherwise pure-numeric program.
 	 */
 	private static boolean usesFloatArray(LispVal v) {
 		if (v instanceof LispFloatArray) {
 			return true;
 		}
 		if (v instanceof LispCons c) {
-			if (c.car() instanceof LispSymbol s && LispNames.MAKE_ARRAY.equals(s.name())) {
+			if (c.car() instanceof LispSymbol s && (LispNames.MAKE_ARRAY.equals(s.name()) || isSimdCall(s.name()))) {
 				return true;
 			}
 			return usesFloatArray(c.car()) || usesFloatArray(c.cdr());
@@ -1208,7 +1215,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		Ty bodyTy = compileExpr(progn(defun.body()), fn);
 		coerce(w, bodyTy, returnTy(name, types));
 		w.write(Instruction.END);
-		return withLocals(bodyStream.toByteArray(), fn.extraLocalTypes);
+		return withLocalsRaw(bodyStream.toByteArray(), fn.extraLocalTypes);
 	}
 
 	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {
@@ -1375,12 +1382,22 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// its own run (count 1) so the declaration order matches the allocation order
 	// regardless of the i64/f64 mix.
 	private static byte[] withLocals(byte[] code, List<Ty> extraLocals) {
+		List<Integer> raw = new ArrayList<>(extraLocals.size());
+		for (Ty ty : extraLocals) {
+			raw.add(ty.valType());
+		}
+		return withLocalsRaw(code, raw);
+	}
+
+	// The raw-wasm-type-byte variant (a defun body may hold a v128 local, which has no Ty
+	// value-model kind), taking the already-lowered value-type bytes directly.
+	private static byte[] withLocalsRaw(byte[] code, List<Integer> extraLocals) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.writeUnsignedLeb128(extraLocals.size());
-		for (Ty ty : extraLocals) {
+		for (int t : extraLocals) {
 			w.write(1);
-			w.write(ty.valType());
+			w.write(t);
 		}
 		w.write((Object) code);
 		return out.toByteArray();
@@ -1488,6 +1505,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		LispVal expanded = expandMacro(name, cons, args.size() - 1);
 		if (expanded != null) {
 			return compileExpr(expanded, fn);
+		}
+
+		if (isSimdCall(name)) {
+			return compileSimd(name, args, fn);
 		}
 
 		return switch (name) {
@@ -2258,6 +2279,494 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return false;
 	}
 
+	// --- simd: package (native WASM SIMD over the packed f64 vector)
+	// --------------------
+	//
+	// On this backend a simd vector is the same packed [count:i32][count f64] block that
+	// a
+	// #f(...) literal and (make-array :element-type 'double-float) produce. The simd:
+	// kernels are lowered here to real fixed-width SIMD: the element-wise ops walk the
+	// block
+	// two lanes at a time with v128 / f64x2.* and a scalar tail, and the reductions
+	// accumulate in a v128 lane pair then fold horizontally. The scalar simd.lisp
+	// reference
+	// is NOT spliced on --no-gc (it needs a general array type); every simd: member is
+	// intercepted here instead. Construction / access verbs delegate to the shared packed
+	// helpers (allocVec / emitElementAddr / compileAref / compileAset / compileLength).
+
+	// The simd: members this backend lowers natively.
+	private static final Set<String> SIMD_MEMBERS = Set.of(LispNames.SIMD_ZEROS, LispNames.SIMD_ONES,
+			LispNames.SIMD_ARANGE, LispNames.SIMD_AREF, LispNames.SIMD_ASET, LispNames.SIMD_LENGTH, LispNames.SIMD_ADD,
+			LispNames.SIMD_SUB, LispNames.SIMD_MUL, LispNames.SIMD_SCALE, LispNames.SIMD_SUM, LispNames.SIMD_MEAN,
+			LispNames.SIMD_DOT, LispNames.SIMD_NORM);
+
+	// simd members that exist in the package but need cons lists (which --no-gc lacks),
+	// so
+	// they run only on the portable backends via simd.lisp.
+	private static final Set<String> SIMD_PORTABLE_ONLY = Set.of(LispNames.SIMD_FROM_LIST, LispNames.SIMD_TO_LIST);
+
+	// Whether a (resolved) symbol name is a simd: package member, e.g. "simd:dot". simd:
+	// names are always qualified with the package prefix, so a prefix test suffices.
+	private static boolean isSimdCall(String name) {
+		return name.startsWith(LispNames.SIMD_PKG + ":");
+	}
+
+	// The member part of a simd: qualified name ("simd:dot" -> "dot").
+	private static String simdMember(String name) {
+		return name.substring(name.lastIndexOf(':') + 1);
+	}
+
+	private void requireKnownSimd(String name, String fnName) {
+		String member = simdMember(name);
+		if (SIMD_MEMBERS.contains(member)) {
+			return;
+		}
+		if (SIMD_PORTABLE_ONLY.contains(member)) {
+			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
+					+ "' needs Lisp lists and runs on the portable backends only, not --no-gc");
+		}
+		throw new UnsupportedOperationException(
+				"--no-gc: unknown simd operation '" + name + "' in function '" + fnName + "'");
+	}
+
+	// The inferred result type of a simd kernel: the constructors and element-wise
+	// kernels
+	// yield a vector, length an integer, and element access / reductions a float. The
+	// argument expressions are still walked so their call sites and local mutations are
+	// recorded during inference.
+	private Ty typeOfSimd(String name, List<LispVal> args, Map<String, Ty> env, TC tc) {
+		for (int i = 1; i < args.size(); i++) {
+			typeOf(args.get(i), env, tc);
+		}
+		return switch (simdMember(name)) {
+			case LispNames.SIMD_ZEROS, LispNames.SIMD_ONES, LispNames.SIMD_ARANGE, LispNames.SIMD_ADD,
+					LispNames.SIMD_SUB, LispNames.SIMD_MUL, LispNames.SIMD_SCALE ->
+				Ty.F64VEC;
+			case LispNames.SIMD_LENGTH -> Ty.INT;
+			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
+		};
+	}
+
+	// Fill modes for the vector constructors.
+	private static final int FILL_ZERO = 0;
+
+	private static final int FILL_ONE = 1;
+
+	private static final int FILL_ARANGE = 2;
+
+	private Ty compileSimd(String name, List<LispVal> args, Fn fn) {
+		return switch (simdMember(name)) {
+			case LispNames.SIMD_ZEROS -> compileSimdConstruct(args, fn, FILL_ZERO);
+			case LispNames.SIMD_ONES -> compileSimdConstruct(args, fn, FILL_ONE);
+			case LispNames.SIMD_ARANGE -> compileSimdConstruct(args, fn, FILL_ARANGE);
+			// aref / aset / length are the generic packed ops over the same block.
+			case LispNames.SIMD_LENGTH -> compileLength(args, fn);
+			case LispNames.SIMD_AREF -> compileAref(name, args, fn);
+			case LispNames.SIMD_ASET -> compileAset(name, args, fn);
+			case LispNames.SIMD_ADD -> compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD);
+			case LispNames.SIMD_SUB -> compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB);
+			case LispNames.SIMD_MUL -> compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL);
+			case LispNames.SIMD_SCALE -> compileSimdScale(args, fn);
+			case LispNames.SIMD_SUM -> compileSimdSum(args, fn);
+			case LispNames.SIMD_DOT -> compileSimdDot(args, fn);
+			// mean and norm are composites over sum/dot/length -- expand and recompile so
+			// there is one definition (also matching what the portable simd.lisp does).
+			case LispNames.SIMD_MEAN -> compileExpr(simdMeanExpansion(args, fn), fn);
+			case LispNames.SIMD_NORM -> compileExpr(simdNormExpansion(args, fn), fn);
+			default -> throw new UnsupportedOperationException(
+					"--no-gc: unknown simd operation '" + name + "' in '" + fn.fnName + "'");
+		};
+	}
+
+	// The synthetic local name the mean/norm expansions bind the argument to (a
+	// %-prefixed
+	// internal name, so it never collides with a user local; nested uses shadow
+	// correctly).
+	private static final String SIMD_REDUCE_TMP = "%simd-reduce-arg";
+
+	// (simd:mean v) => (let ((%v v)) (/ (simd:sum %v) (simd:length %v)))
+	private LispVal simdMeanExpansion(List<LispVal> args, Fn fn) {
+		requireArgc(args, 2, "simd:mean", fn);
+		LispVal body = list(sym(LispNames.DIV), list(simdSym(LispNames.SIMD_SUM), sym(SIMD_REDUCE_TMP)),
+				list(simdSym(LispNames.SIMD_LENGTH), sym(SIMD_REDUCE_TMP)));
+		return simdLetOverArg(args.get(1), body);
+	}
+
+	// (simd:norm v) => (let ((%v v)) (sqrt (simd:dot %v %v)))
+	private LispVal simdNormExpansion(List<LispVal> args, Fn fn) {
+		requireArgc(args, 2, "simd:norm", fn);
+		LispVal body = list(sym(LispNames.SQRT),
+				list(simdSym(LispNames.SIMD_DOT), sym(SIMD_REDUCE_TMP), sym(SIMD_REDUCE_TMP)));
+		return simdLetOverArg(args.get(1), body);
+	}
+
+	private static LispVal simdLetOverArg(LispVal arg, LispVal body) {
+		LispVal bindings = list(list(sym(SIMD_REDUCE_TMP), arg));
+		return list(sym(LispNames.LET), bindings, body);
+	}
+
+	private static LispSymbol sym(String name) {
+		return new LispSymbol(name);
+	}
+
+	private static LispSymbol simdSym(String member) {
+		return new LispSymbol(LispNames.SIMD_PKG + ":" + member);
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			tail = new LispCons(items[i], tail);
+		}
+		return tail;
+	}
+
+	// Emits the SIMD prefix (0xFD) then the u32-LEB sub-opcode. Sub-opcodes above 127
+	// (e.g.
+	// f64x2.add = 0xF0) MUST use the LEB path, so this never uses the single-byte writer.
+	private static void simd(WasmWriter w, int subOpcode) {
+		w.write(Instruction.SIMD_PREFIX);
+		w.writeUnsignedLeb128(subOpcode);
+	}
+
+	// v128.load / v128.store with a byte-aligned memarg (align 0, offset 0). Byte
+	// alignment
+	// is always valid, so correctness never depends on the block's actual alignment.
+	private static void simdLoad(WasmWriter w) {
+		simd(w, Instruction.V128_LOAD);
+		w.write(0x00, 0x00);
+	}
+
+	private static void simdStore(WasmWriter w) {
+		simd(w, Instruction.V128_STORE);
+		w.write(0x00, 0x00);
+	}
+
+	// out = base + 4 (skip the count header to reach the packed f64 data).
+	private static void dataPtr(WasmWriter w, int baseLocal, int outLocal) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(baseLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(outLocal);
+	}
+
+	// ptr += bytes.
+	private static void advancePtr(WasmWriter w, int ptrLocal, int bytes) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ptrLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(bytes);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ptrLocal);
+	}
+
+	// count = i32.wrap(the length argument) into a fresh i32 local.
+	private int compileCountArg(LispVal arg, Fn fn) {
+		WasmWriter w = fn.writer;
+		int count = fn.allocLocal(Ty.F64VEC);
+		compileCoerced(arg, fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		return count;
+	}
+
+	private static String fillModeName(int fillMode) {
+		return switch (fillMode) {
+			case FILL_ONE -> LispNames.SIMD_ONES;
+			case FILL_ARANGE -> LispNames.SIMD_ARANGE;
+			default -> LispNames.SIMD_ZEROS;
+		};
+	}
+
+	// (simd:zeros n) / (simd:ones n) -> a fresh constant-filled vector;
+	// (simd:arange n) -> [0.0, 1.0, ..., n-1].
+	private Ty compileSimdConstruct(List<LispVal> args, Fn fn, int fillMode) {
+		requireArgc(args, 2, "simd:" + fillModeName(fillMode), fn);
+		WasmWriter w = fn.writer;
+		int count = compileCountArg(args.get(1), fn);
+		int dst = allocVec(fn, count);
+		// for (i = 0; i < count; i++) mem[dst+4+8*i] = <fill>
+		int i = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// addr = dst + 4 + (i << 3)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		if (fillMode == FILL_ARANGE) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+			w.write(Instruction.F64_CONVERT_S_I32);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(fillMode == FILL_ONE ? 1.0 : 0.0);
+		}
+		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F64VEC;
+	}
+
+	// Opens the `pairs = count >> 1` SIMD loop header: block/loop, break when pairs == 0.
+	// Leaves the block+loop open (the caller emits the body then closeSimdLoop).
+	private void openSimdLoop(Fn fn, int countLocal, int remLocal) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+	}
+
+	// Closes the SIMD loop: rem--, branch back, end loop, end block.
+	private void closeSimdLoop(Fn fn, int remLocal) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	// (simd:add a b) / (simd:sub a b) / (simd:mul a b): element-wise into a fresh vector.
+	// Two f64 lanes per iteration via v128.load + f64x2.<op> + v128.store, then a
+	// one-element scalar tail when the length is odd.
+	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
+		requireArgc(args, 3, "a simd element-wise kernel", fn);
+		WasmWriter w = fn.writer;
+		int aL = fn.allocLocal(Ty.F64VEC);
+		int bL = fn.allocLocal(Ty.F64VEC);
+		compileCoerced(args.get(1), fn, Ty.F64VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		compileCoerced(args.get(2), fn, Ty.F64VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count);
+		int ap = fn.allocLocal(Ty.F64VEC);
+		int bp = fn.allocLocal(Ty.F64VEC);
+		int dp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem);
+		// mem[dp] = f64x2.<op>(v128.load ap, v128.load bp)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		simdLoad(w);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		simdLoad(w);
+		simd(w, simdOp);
+		simdStore(w);
+		advancePtr(w, ap, 16);
+		advancePtr(w, bp, 16);
+		advancePtr(w, dp, 16);
+		closeSimdLoop(fn, rem);
+		// scalar tail: if (count & 1) mem[dp] = f64.<op>(f64.load ap, f64.load bp)
+		emitOddTailGuard(w, count);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		w.write(Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		w.write(Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(scalarOp);
+		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		w.write(Instruction.END); // if
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F64VEC;
+	}
+
+	// (simd:scale v s): v * s (scalar broadcast) into a fresh vector. The scalar is
+	// splatted
+	// into both lanes with f64x2.splat, so the multiply is a single f64x2.mul per pair.
+	private Ty compileSimdScale(List<LispVal> args, Fn fn) {
+		requireArgc(args, 3, "simd:scale", fn);
+		WasmWriter w = fn.writer;
+		int vL = fn.allocLocal(Ty.F64VEC);
+		int s = fn.allocLocal(Ty.FLOAT);
+		compileCoerced(args.get(1), fn, Ty.F64VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count);
+		int vp = fn.allocLocal(Ty.F64VEC);
+		int dp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, vL, vp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem);
+		// mem[dp] = f64x2.mul(v128.load vp, f64x2.splat s)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		simdLoad(w);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		simd(w, Instruction.F64X2_SPLAT);
+		simd(w, Instruction.F64X2_MUL);
+		simdStore(w);
+		advancePtr(w, vp, 16);
+		advancePtr(w, dp, 16);
+		closeSimdLoop(fn, rem);
+		// scalar tail: if (count & 1) mem[dp] = f64.load vp * s
+		emitOddTailGuard(w, count);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		w.write(Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		w.write(Instruction.END); // if
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F64VEC;
+	}
+
+	// (simd:sum v) -> horizontal sum. Accumulates two lane sums in a v128, folds them
+	// with
+	// f64x2.extract_lane, and adds the odd tail element.
+	private Ty compileSimdSum(List<LispVal> args, Fn fn) {
+		requireArgc(args, 2, "simd:sum", fn);
+		WasmWriter w = fn.writer;
+		int vL = fn.allocLocal(Ty.F64VEC);
+		compileCoerced(args.get(1), fn, Ty.F64VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int acc = fn.allocV128Local();
+		emitSplatZero(w, acc);
+		int vp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, vL, vp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem);
+		// acc = f64x2.add(acc, v128.load vp)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		simdLoad(w);
+		simd(w, Instruction.F64X2_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		advancePtr(w, vp, 16);
+		closeSimdLoop(fn, rem);
+		int sum = fn.allocLocal(Ty.FLOAT);
+		emitHorizontalAdd(w, acc, sum);
+		// tail: if (count & 1) sum += f64.load vp
+		emitOddTailGuard(w, count);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		w.write(Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.END); // if
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		return Ty.FLOAT;
+	}
+
+	// (simd:dot a b) -> sum of a_i*b_i. Lane-wise multiply-accumulate into a v128, folded
+	// horizontally, plus the odd tail product.
+	private Ty compileSimdDot(List<LispVal> args, Fn fn) {
+		requireArgc(args, 3, "simd:dot", fn);
+		WasmWriter w = fn.writer;
+		int aL = fn.allocLocal(Ty.F64VEC);
+		int bL = fn.allocLocal(Ty.F64VEC);
+		compileCoerced(args.get(1), fn, Ty.F64VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		compileCoerced(args.get(2), fn, Ty.F64VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int acc = fn.allocV128Local();
+		emitSplatZero(w, acc);
+		int ap = fn.allocLocal(Ty.F64VEC);
+		int bp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem);
+		// acc = f64x2.add(acc, f64x2.mul(v128.load ap, v128.load bp))
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		simdLoad(w);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		simdLoad(w);
+		simd(w, Instruction.F64X2_MUL);
+		simd(w, Instruction.F64X2_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		advancePtr(w, ap, 16);
+		advancePtr(w, bp, 16);
+		closeSimdLoop(fn, rem);
+		int sum = fn.allocLocal(Ty.FLOAT);
+		emitHorizontalAdd(w, acc, sum);
+		// tail: if (count & 1) sum += f64.load ap * f64.load bp
+		emitOddTailGuard(w, count);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		w.write(Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		w.write(Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.END); // if
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		return Ty.FLOAT;
+	}
+
+	// accLocal(v128) = f64x2.splat(0.0)
+	private static void emitSplatZero(WasmWriter w, int accLocal) {
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		simd(w, Instruction.F64X2_SPLAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(accLocal);
+	}
+
+	// sumLocal(f64) = lane0(acc) + lane1(acc)
+	private static void emitHorizontalAdd(WasmWriter w, int accLocal, int sumLocal) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
+		simd(w, Instruction.F64X2_EXTRACT_LANE);
+		w.write(0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
+		simd(w, Instruction.F64X2_EXTRACT_LANE);
+		w.write(0x01);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sumLocal);
+	}
+
+	// Opens `if (count & 1) { ...tail... }` (void blocktype); the caller emits the body
+	// and
+	// the matching `end`. Handles the last element when the length is odd.
+	private static void emitOddTailGuard(WasmWriter w, int countLocal) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+	}
+
 	// (char s i): the byte at content offset i, as its code point (a character IS its
 	// code here). No bounds check, like the rest of the backend's lean lowering.
 	private Ty compileCharAt(List<LispVal> args, Fn fn) {
@@ -2575,6 +3084,16 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			collectMakeArray(args, bound, defuns, callees, fnName);
 			return;
 		}
+		if (isSimdCall(name)) {
+			// A simd: kernel is lowered inline (no callee edge); validate the member is
+			// one
+			// this backend supports, then walk the argument expressions.
+			requireKnownSimd(name, fnName);
+			for (int i = 1; i < args.size(); i++) {
+				collectCalls(args.get(i), bound, defuns, callees, fnName);
+			}
+			return;
+		}
 		if (LispNames.IF.equals(name) || LispNames.PROGN.equals(name) || LispNames.WHILE.equals(name)
 				|| LispNames.BLOCK_INTERNAL.equals(name) || LispNames.RETURN.equals(name) || BUILTINS.contains(name)
 				|| ARRAY_OPS.contains(name)) {
@@ -2827,7 +3346,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 		final Map<String, Ty> localTypes = new HashMap<>();
 
-		final List<Ty> extraLocalTypes = new ArrayList<>();
+		// The declared type of each allocated body local, in allocation order. Held as
+		// raw
+		// wasm value-type bytes (not Ty) because the simd reductions allocate a v128
+		// accumulator, which has no Ty value-model kind (a v128 is a transient lowering
+		// detail, never a rontolisp value).
+		final List<Integer> extraLocalTypes = new ArrayList<>();
 
 		// The wasm control depth (each enclosing if = +1, each while = +2, each %block =
 		// +1) and the stack of %block boundaries: blockMarkers holds the control depth at
@@ -2867,7 +3391,15 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 
 		int allocLocal(Ty ty) {
-			this.extraLocalTypes.add(ty);
+			this.extraLocalTypes.add(ty.valType());
+			return this.nextLocal++;
+		}
+
+		// Allocates a v128 (0x7B) local -- used by the simd reductions to carry the
+		// two-lane accumulator across the loop. Has no Ty (v128 is not a rontolisp
+		// value).
+		int allocV128Local() {
+			this.extraLocalTypes.add(Type.V128.code());
 			return this.nextLocal++;
 		}
 

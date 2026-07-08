@@ -197,6 +197,15 @@ public final class Version {
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<version>3.15.0</version>
+				<configuration>
+					<!-- JvmSimdVectorTemplate uses the incubator Vector API (embedded as a
+					     resource for the simd JVM acceleration bridge; never loaded as a
+					     class by the compiler itself). javac needs the module made visible. -->
+					<compilerArgs>
+						<arg>--add-modules</arg>
+						<arg>jdk.incubator.vector</arg>
+					</compilerArgs>
+				</configuration>
 			</plugin>
 			<plugin>
 				<groupId>am.ik.maven</groupId>
@@ -219,6 +228,12 @@ public final class Version {
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.5.6</version>
+				<configuration>
+					<!-- The JVM simd acceleration test defines the embedded Vector API
+					     bridge (Lookup.defineClass) and invokes it in-process, so the test
+					     JVM must have jdk.incubator.vector in its module graph. -->
+					<argLine>--add-modules jdk.incubator.vector</argLine>
+				</configuration>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>

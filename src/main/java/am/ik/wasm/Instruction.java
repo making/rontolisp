@@ -596,4 +596,46 @@ public interface Instruction {
 	/** {@code I31_GET_U} (0x1E). */
 	int I31_GET_U = 0x1E;
 
+	// Fixed-width SIMD prefix (0xFD)
+	/**
+	 * {@code SIMD_PREFIX} (0xFD): the fixed-width SIMD instruction prefix. Every SIMD
+	 * instruction is this byte followed by a {@code u32} LEB128 sub-opcode (and, for the
+	 * memory / lane forms, the usual immediates). Many sub-opcodes exceed 127 (e.g.
+	 * {@code f64x2.add} = {@code 0xF0}), so the sub-opcode must be written with the
+	 * unsigned-LEB128 encoder, never the single-byte path.
+	 */
+	int SIMD_PREFIX = 0xFD;
+
+	// SIMD sub-opcodes (follow SIMD_PREFIX). These share the numeric space with the GC
+	// sub-opcodes above but are only ever used after 0xFD, so there is no ambiguity.
+	/** {@code v128.load} (0xFD 0x00): load a 128-bit vector (memarg). */
+	int V128_LOAD = 0x00;
+
+	/** {@code v128.store} (0xFD 0x0B): store a 128-bit vector (memarg). */
+	int V128_STORE = 0x0B;
+
+	/** {@code f64x2.splat} (0xFD 0x14): broadcast one {@code f64} into both lanes. */
+	int F64X2_SPLAT = 0x14;
+
+	/** {@code f64x2.extract_lane} (0xFD 0x21 lane): read one {@code f64} lane. */
+	int F64X2_EXTRACT_LANE = 0x21;
+
+	/** {@code f64x2.add} (0xFD 0xF0): lane-wise addition. */
+	int F64X2_ADD = 0xF0;
+
+	/** {@code f64x2.sub} (0xFD 0xF1): lane-wise subtraction. */
+	int F64X2_SUB = 0xF1;
+
+	/** {@code f64x2.mul} (0xFD 0xF2): lane-wise multiplication. */
+	int F64X2_MUL = 0xF2;
+
+	/** {@code f64x2.div} (0xFD 0xF3): lane-wise division. */
+	int F64X2_DIV = 0xF3;
+
+	/** {@code f64x2.min} (0xFD 0xF4): lane-wise minimum. */
+	int F64X2_MIN = 0xF4;
+
+	/** {@code f64x2.max} (0xFD 0xF5): lane-wise maximum. */
+	int F64X2_MAX = 0xF5;
+
 }

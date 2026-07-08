@@ -165,6 +165,15 @@ final class JvmExprCompiler {
 				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			// --simd: route the six vectorizable simd: kernels to the embedded Vector API
+			// bridge instead of the scalar simd.lisp defun. Only when the runtime was
+			// emitted (ctx.simdOps != null); otherwise this falls through to the ordinary
+			// qualified-call path and runs the spliced scalar reference.
+			if (qn != null && LispNames.SIMD_PKG.equals(qn.pkg()) && ctx.simdOps != null
+					&& JvmSimdCompiler.handles(qn.member())) {
+				JvmSimdCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
 			switch (sym.name()) {
 				case LispNames.ADD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);

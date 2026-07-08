@@ -373,37 +373,70 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
     correct (`#f`+aref=30, length=4, dot-product loop=32, make-array+setf=15, make-array+
     :initial-element+sum=10/15). Pure-numeric `--no-gc` still emits NO memory section (regression
     guard green). No general array type here, so no fallback — every path is packed-or-error.
-  - **Phase 4B (with Phase 5): `simd:` kernel interception + native `v128`.** Port 5b1b065's
-    `compileSimd` + `SIMD_MEMBERS` + the `f64x2.*` `compileSimdElementwise`/`Dot`/`Scale`/`Sum` +
-    `openSimdLoop`/`closeSimdLoop` over the F64VEC block. Needs `simd.lisp` (Phase 5) to define/produce
-    the `simd:*` calls to intercept, so it is verifiable only paired with the library. This is where
-    the native-SIMD win lives.
-- **Phase 5 (libraries)** — `simd.lisp`/`linalg.lisp` `make-array ... :element-type 'double-float`
-  so they PRODUCE packed arrays; wire the JVM `--simd` interception + `SimdLibrary`/`RontoLispCli`
-  gates. NOTE: `linalg.lisp` uses `:initial-element 0` (INTEGER) today → packing changes linalg
-  output int→double; reconcile existing linalg doc/tests carefully.
-- **Phase 6 (verify)** — ci-spec MATRIX case + native `CiSpecE2eTest` (all 4 backends byte-identical),
-  chained + matmul benchmark, docs (`data-types.md` — `#f` is `double-float`, non-real store errors;
-  `.kb/simd.md` rewrite to the packed design), `-Pweb compile`, javadoc. Also finish the interpreter
-  full-pipeline gaps (`coerce`/`map`/`typep` over packed).
+  - **Phase 4B DONE (2026-07-08) — `--no-gc` `simd:` kernel interception + native `v128`.** Ported
+    5b1b065's `compileSimd` + `SIMD_MEMBERS`/`SIMD_PORTABLE_ONLY` + the `f64x2.*`
+    `compileSimdElementwise`/`Scale`/`Sum`/`Dot` + `openSimdLoop`/`closeSimdLoop`/`emitSplatZero`/
+    `emitHorizontalAdd`/`emitOddTailGuard` + `simd`/`simdLoad`/`simdStore`/`dataPtr`/`advancePtr` +
+    `compileSimdConstruct` (zeros/ones/arange) + the mean/norm expansions into `ScalarWasmCompiler`,
+    REUSING Phase 4A's `allocVec`/`emitElementAddr`/`requireArgc`/`compileAref`/`compileAset`/
+    `compileLength` (aref/aset/length delegate; NOT re-ported). `isSimdCall` (a `"simd:"` prefix
+    test) wired into all three passes (`collectCalls`→`requireKnownSimd`+walk, `typeOf`→`typeOfSimd`,
+    `compileCall`→`compileSimd`); `usesFloatArray` now also true for any `simd:` call (so the memory
+    section is emitted). **v128 locals:** `Fn.extraLocalTypes` changed `List<Ty>`→`List<Integer>`
+    (raw wasm value-type bytes) so `allocV128Local()` can add `Type.V128` (0x7B, no `Ty` kind); body
+    emitted via new `withLocalsRaw`. Added the SIMD instruction constants (`SIMD_PREFIX`,
+    `V128_LOAD/STORE`, `F64X2_*`) to `am.ik.wasm.Instruction`. `--no-gc` is gated OFF the simd.lisp
+    splice (it has no general array type). **Verified** on wasmtime `--invoke` (sum256=32640,
+    dot256=5559680, scale, odd-tail element, mean); +3 `ScalarWasmCompilerTest` (0xFD opcode presence,
+    scalar-module shape, from-list = portable-only compile error). No scalar fallback on `--no-gc`, so
+    a correct result IS the proof the v128 path ran.
+- **Phase 5 (libraries) — simd DONE, linalg PENDING.** `simd.lisp` re-added at
+  `src/main/resources/am/ik/rontolisp/eval/simd.lisp` with `make-array ... :element-type 'double-float`
+  (so it PRODUCES packed arrays); `SimdLibrary` re-added (json/linalg pattern) + `LispNames.SIMD_*` /
+  `PackageRegistry.SIMD_FUNCTIONS`/`simdFunctionNames()` + `LispMacroExpander` `simd:aref` setf place.
+  Wired the splice into `RontoLispCli` (gated off `--no-gc`), `RontoPlayground`, `JvmClassShakerCorpusTest`,
+  `WasmTreeShakerCorpusTest`; interpreter lazy-load in `LispEvaluator`. **linalg.lisp still builds general
+  arrays** (`:initial-element 0`); migrating it to packed changes its output int→double and needs a
+  linalg-kernel interceptor + doc/test reconciliation — a DISTINCT follow-up (Phase 5b), NOT required for
+  the simd deliverable.
+  - **Phase 2C DONE (2026-07-08) — JVM `--simd` accel over the packed `double[]`.** New
+    `JvmSimdVectorTemplate` (rewritten for Option X: unbox = cast `(double[])` + `off = 1 + (int)a[0]`,
+    zero-copy `DoubleVector.fromArray`; result a fresh packed `[1.0, n, ...]`; NO shadow), `JvmSimdCompiler`
+    (call-site interception), `JvmSimdRuntimeBuilder` (embeds the bridge, `_simdInit`). Wired into
+    `JvmLispCompiler` (`simdAccel` 4-arg ctor, `usesSimd`/`simdRuntime`/`Ctx.simdOps`, field+method
+    emission, `programUsesAnyAcceleratedSimdOp`) + `JvmExprCompiler` (call-site dispatch) + `RontoLispCli`
+    (`--simd` threaded). pom adds `--add-modules jdk.incubator.vector` (compiler + surefire). **Verified**
+    byte-identical to scalar (256-elem Vector loop) + **dead-flag proof** (running `--simd` class without
+    `--add-modules` throws `NoClassDefFoundError` at `_simdInit`'s `defineClass`); +7 `JvmSimdAccelCompilerTest`.
+    `JvmArrayRuntimeBuilder`/`_fv*` UNCHANGED.
+- **Phase 6 (verify) — simd part DONE, rest PENDING.** DONE: ci-spec `simd-kernels-cross-backend` case
+  (4 backends byte-identical) + native `CiSpecE2eTest` **724** green; `.kb/simd.md` (agent-facing) written
+  + `.kb/README.md` index; `resource-config.json` (simd.lisp + JvmSimdVectorTemplate.class); `-Pweb compile`
+  green; javadoc 0-warn (Version excepted); full suite **2904** green. PENDING: user-facing bilingual docs
+  (`doc/{en,ja}/**`: `#f` is `double-float`/non-real store errors, a `simd:` reference page, the Arrays/
+  data-types note — none written yet for the WHOLE packed feature), a chained/matmul timing benchmark, and
+  the interpreter full-pipeline `map`/`typep`-over-packed niceties (pre-existing, out of scope).
 
 ### Resumption facts (post-compaction)
 
 - **Branch `feat/packed-float-array` off `develop` (440056c). Phase 1+2+3 COMMITTED at `f3d5ccd`**
-  (branch's first commit) + doc follow-up `48066c0`. **Phase 4A COMMITTED at `b7e20d7`**
-  (`ScalarWasmCompiler.java` + `ScalarWasmCompilerTest.java` + this `.todo`); working tree clean.
-  Full suite green: **2894**, skip 2 (WASM Docker). Phase 4B+ starts on top of `b7e20d7`.
-- **Done:** Phase 0 (CliOptions `--simd` + `CliOptionsTest`), Phase 1 (frontend + interpreter REAL
-  rank-n packed: `LispFloatArray`, reader `#f`, Environment dispatch, `LispNames.DOUBLE_FLOAT`;
-  `LispFloatArrayTest` 13), **Phase 2 (JVM real rank-n packed `double[]`, Option X; `JvmFloatArrayTest`
-  16; interp==JVM byte-identical), Phase 3 (wasm-GC `TYPE_FARRAY` struct; all 4 backends
-  byte-identical; ci-spec case), Phase 4A (`--no-gc` `F64VEC` repr + generic aref/%aset/length/
-  make-array; +6 `ScalarWasmCompilerTest`; wasmtime end-to-end verified — see "Phase 4A DONE"
-  above).** Remaining: Phase 4B (--no-gc `simd:` v128 kernels), Phase 5 (libs produce packed),
-  Phase 2C (JVM `--simd` accel), Phase 6 (verify/docs/benchmark). **NEXT UP: the accel push — 4B +
-  2C + 5 together** (v128 + JVM Vector-API interception both need `simd.lisp`/`linalg.lisp` to PRODUCE
-  packed arrays, so port `simd.lisp` from `git show 21fb03e:...simd.lisp`, make its `make-array`
-  calls `:element-type 'double-float`, then wire both interceptors + reconcile linalg int→double).
+  (branch's first commit) + doc follow-up `48066c0`. **Phase 4A COMMITTED at `b7e20d7`** + doc `ed715a7`.
+  **The accel push (Phase 2C + 4B + 5a-simd + 6-simd) is DONE + verified but UNCOMMITTED** (working tree
+  dirty — awaiting the user's commit request). Full suite green **2904**, skip 2 (WASM Docker); native
+  `CiSpecE2eTest` **724** green.
+- **Done:** Phase 0, Phase 1 (interpreter), Phase 2 (JVM packed), Phase 3 (wasm-GC), Phase 4A (`--no-gc`
+  F64VEC), **Phase 2C (JVM `--simd` Vector-API bridge over packed `double[]`; dead-flag-proven; +7 tests),
+  Phase 4B (`--no-gc` native `v128`/`f64x2.*`; wasmtime-verified; +3 tests), Phase 5a (simd.lisp +
+  SimdLibrary + names/registry + splice wiring; 4-backend scalar byte-identical), Phase 6-simd (ci-spec
+  `simd-kernels-cross-backend` case + native E2E 724 + `.kb/simd.md` + resource-config + `-Pweb` +
+  javadoc).** See the Phase 2C/4B/5/6 bullets above for the mechanics.
+- **NEXT UP (remaining):** (1) **Phase 5b — linalg → packed** (DISTINCT, breaking: `linalg.lisp`
+  `:initial-element 0`→`0.0`+`:element-type 'double-float` changes linalg output int→double, needs a
+  linalg-kernel interceptor + linalg doc/test/ci-spec reconciliation; get user sign-off first — it is an
+  enhancement, not required for the simd deliverable). (2) **User-facing bilingual docs** for the WHOLE
+  packed feature (`doc/{en,ja}/**`: `#f` is `double-float`/non-real store errors; a `simd:` reference page;
+  the Arrays/data-types note) — none written yet. (3) A chained/matmul **benchmark**. Reuse refs:
+  `git show 5b1b065:<path>` (JvmSimd*, ScalarWasmCompiler), `git show 21fb03e:<path>` (simd.lisp, .kb/simd.md).
 - **New files:** `LispFloatArray.java`, `codegen/jvm/JvmFloatArrayRuntimeBuilder.java`, tests
   `CliOptionsTest`/`LispFloatArrayTest`/`JvmFloatArrayTest`, this `.todo/94`. **Modified:**
   `LispNames`, `LispVal` (seal += LispFloatArray), `CliOptions`, `reader/{Token,LispLexer,LispReader}`,

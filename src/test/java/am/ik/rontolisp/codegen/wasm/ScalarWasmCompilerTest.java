@@ -401,6 +401,21 @@ class ScalarWasmCompilerTest {
 
 	// --- minimal binary parsing helpers ------------------------------------------------
 
+	// Whether the byte array contains the given (unsigned) byte sequence anywhere. Used
+	// to
+	// confirm a specific SIMD opcode (SIMD_PREFIX 0xFD + a sub-opcode) is emitted.
+	private static boolean containsSequence(byte[] haystack, int... needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if ((haystack[i + j] & 0xFF) != (needle[j] & 0xFF)) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
 	// Splits a module into a map of section id -> section payload bytes (skipping the
 	// 8-byte header). Assumes at most one of each non-custom section, which holds here.
 	private static Map<Integer, byte[]> sections(byte[] module) {
@@ -623,6 +638,59 @@ class ScalarWasmCompilerTest {
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining(":fill-pointer / :adjustable / :displaced-to");
+	}
+
+	@Test
+	void simdReductionKernelsEmitRealV128Instructions() {
+		// simd:dot lowers to native fixed-width SIMD over the packed vector: the code
+		// section carries the SIMD prefix (0xFD) with the f64x2 reduction ops (splat + a
+		// horizontal extract_lane fold), not a plain scalar loop. The module stays a
+		// plain
+		// MVP module: a memory section, scalar-only func types, no wasm-GC and no
+		// imports.
+		byte[] module = compile("""
+				(defun dot (n) (let ((v (simd:arange n))) (simd:dot v v)))
+				(rontolisp:wasm-export 'dot :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("dot");
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD, 0x14)).as("f64x2.splat (0xFD 0x14)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0x21)).as("f64x2.extract_lane (0xFD 0x21)").isTrue();
+	}
+
+	@Test
+	void simdElementwiseAndConstructorKernelsCompileToAScalarModule() {
+		// zeros/ones/arange/add/scale/sum/mean/norm all lower to the packed vector + SIMD
+		// and stay a plain MVP module (no wasm-GC types, no imports). The element-wise
+		// kernels' lane loop emits v128.store (0xFD 0x0B).
+		byte[] module = compile("""
+				(defun go (n)
+				  (let* ((a (simd:arange n))
+				         (b (simd:scale (simd:ones n) 2.0))
+				         (c (simd:add a b)))
+				    (+ (simd:sum c) (simd:mean a) (simd:norm b))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("go");
+		assertThat(containsSequence(Objects.requireNonNull(sections.get(10)), 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)")
+			.isTrue();
+	}
+
+	@Test
+	void simdFromListIsAClearCompileError() {
+		// simd:from-list / to-list need Lisp cons lists, which the scalar backend lacks,
+		// so
+		// they run only on the portable backends via simd.lisp.
+		assertThatThrownBy(() -> compile("""
+				(defun f () (simd:sum (simd:from-list '(1.0 2.0 3.0))))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("portable backends only");
 	}
 
 }

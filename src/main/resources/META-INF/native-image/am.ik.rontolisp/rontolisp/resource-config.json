@@ -21,9 +21,21 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmSimdRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmSimdVectorTemplate\\.class"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.JsonLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/json\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SimdLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/simd\\.lisp"
       },
       {
         "condition": {

@@ -56,6 +56,8 @@ public final class LispEvaluator {
 
 	private boolean linalgLibraryLoaded = false;
 
+	private boolean simdLibraryLoaded = false;
+
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
 	private boolean urlLibraryLoaded = false;
@@ -1764,6 +1766,19 @@ public final class LispEvaluator {
 		if (!this.linalgLibraryLoaded && LinalgLibrary.isLinalgQualified(name)) {
 			this.linalgLibraryLoaded = true;
 			for (LispVal form : LinalgLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
+		// The simd package is a Lisp-source library (simd.lisp), the scalar reference
+		// over the packed double-float array type: load it the same way on the first
+		// resolution of a simd:-qualified function.
+		if (!this.simdLibraryLoaded && SimdLibrary.isSimdQualified(name)) {
+			this.simdLibraryLoaded = true;
+			for (LispVal form : SimdLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

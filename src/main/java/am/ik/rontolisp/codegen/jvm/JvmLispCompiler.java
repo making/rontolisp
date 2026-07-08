@@ -54,6 +54,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean optimize;
 
+	private final boolean simdAccel;
+
 	/**
 	 * Create a new JVM compiler targeting the given class name.
 	 * @param className the fully qualified class name for the generated class
@@ -86,9 +88,29 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * only they reference) are dropped and the constant pool is compacted
 	 */
 	public JvmLispCompiler(String className, boolean dynamic, boolean optimize) {
+		this(className, dynamic, optimize, false);
+	}
+
+	/**
+	 * Create a new JVM compiler targeting the given class name.
+	 * @param className the fully qualified class name for the generated class
+	 * @param dynamic when {@code true}, unresolved function calls and variable references
+	 * are resolved at runtime against the embedded {@code eval} global environment (late
+	 * binding); see {@link #JvmLispCompiler(String, boolean)}
+	 * @param optimize when {@code true}, dead-code-eliminate the finished class with
+	 * {@link JvmClassShaker}; see {@link #JvmLispCompiler(String, boolean, boolean)}
+	 * @param simdAccel when {@code true} ({@code --simd}), the six vectorizable
+	 * {@code simd:} kernels
+	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/ {@code sum}) are
+	 * lowered at their call sites to an embedded {@code jdk.incubator.vector} bridge
+	 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code simd.lisp} reference.
+	 * Running such a class requires {@code java --add-modules jdk.incubator.vector}.
+	 */
+	public JvmLispCompiler(String className, boolean dynamic, boolean optimize, boolean simdAccel) {
 		this.className = className;
 		this.dynamic = dynamic;
 		this.optimize = optimize;
+		this.simdAccel = simdAccel;
 	}
 
 	@Override
@@ -526,6 +548,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// ArrayList are both handled; when false the default build is byte-identical.
 		boolean usesFloatArray = programUsesFloatArray(program);
 
+		// --simd: emit the Vector API acceleration bridge only when the program actually
+		// references one of the six accelerated simd: kernels (directly or via a spliced
+		// mean/norm body). Off by default, so the ordinary scalar simd.lisp is used. The
+		// bridge is a self-contained embedded class (like the java: interop bridge); the
+		// packed float-array _fv* helpers still render/index its double[] results.
+		boolean usesSimd = this.simdAccel && programUsesAnyAcceleratedSimdOp(program);
+		final JvmSimdRuntimeBuilder.@Nullable SimdRuntime simdRuntime = usesSimd
+				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat) : null;
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.cp(cp)
@@ -581,6 +612,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.usesFloatArray(usesFloatArray)
+			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.globals(globals)
@@ -1035,6 +1067,12 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(javaRuntime.initedFieldDesc())
 						.writeU2(0));
 				}
+				if (simdRuntime != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(simdRuntime.initedFieldName())
+						.writeU2(simdRuntime.initedFieldDesc())
+						.writeU2(0));
+				}
 				if (usesEval) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(genvName)
@@ -1161,6 +1199,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(javaRuntime.maxStack())
 									.writeU2(javaRuntime.maxLocals())
 									.writeCode((Object[]) javaRuntime.initCode().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (simdRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.initName(),
+							simdRuntime.initDesc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(simdRuntime.maxStack())
+									.writeU2(simdRuntime.maxLocals())
+									.writeCode((Object[]) simdRuntime.initCode().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -1424,6 +1473,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
 				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY)) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the program references any of the six vectorizable {@code simd:} kernels
+	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}), so
+	 * that {@code --simd} actually emits the Vector API bridge. {@code mean}/{@code norm}
+	 * are intercepted transitively via their spliced {@code sum}/{@code dot} calls, so
+	 * they need not be listed here.
+	 */
+	private static boolean programUsesAnyAcceleratedSimdOp(List<LispVal> program) {
+		for (String member : List.of(LispNames.SIMD_ADD, LispNames.SIMD_SUB, LispNames.SIMD_MUL, LispNames.SIMD_SCALE,
+				LispNames.SIMD_DOT, LispNames.SIMD_SUM)) {
+			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.SIMD_PKG, member))) {
 				return true;
 			}
 		}
@@ -1817,6 +1883,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final @Nullable Map<String, MethodrefConstant> javaOps;
 
+		/**
+		 * The accelerated {@code simd:} bridge references ({@code init} plus one per
+		 * vectorizable kernel member name -- {@code add}/{@code sub}/{@code mul}/
+		 * {@code scale}/{@code dot}/{@code sum}); null unless {@code --simd} emitted the
+		 * acceleration runtime for a program that uses a vectorizable {@code simd:}
+		 * kernel.
+		 */
+		final @Nullable Map<String, MethodrefConstant> simdOps;
+
 		Map<String, MethodrefConstant> numOps = Map.of();
 
 		Map<String, MethodrefConstant> mathOps = Map.of();
@@ -1983,6 +2058,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tlsListenP12Helper = builder.tlsListenP12Helper;
 			this.httpHandlerRuntime = builder.httpHandlerRuntime;
 			this.javaOps = builder.javaOps;
+			this.simdOps = builder.simdOps;
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
@@ -2085,6 +2161,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
+
+			private @Nullable Map<String, MethodrefConstant> simdOps;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -2335,6 +2413,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder javaOps(@Nullable Map<String, MethodrefConstant> javaOps) {
 				this.javaOps = javaOps;
+				return this;
+			}
+
+			Builder simdOps(@Nullable Map<String, MethodrefConstant> simdOps) {
+				this.simdOps = simdOps;
 				return this;
 			}
 

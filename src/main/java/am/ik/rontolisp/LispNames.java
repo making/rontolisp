@@ -2091,6 +2091,93 @@ public final class LispNames {
 	public static final String LINALG_PKG = "linalg";
 
 	/**
+	 * The {@code simd} package name: portable packed-{@code f64} vector kernels over the
+	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself
+	 * ({@code simd.lisp}, see {@code SimdLibrary}) as the scalar reference /
+	 * cross-backend oracle, spliced/loaded on demand exactly like {@code linalg}: the
+	 * interpreter, the JVM compiler and the wasm-GC compiler run those {@code defun}s
+	 * over the packed representation. Two backends add an acceleration layer that
+	 * intercepts the vectorizable kernels at their call sites: the JVM {@code --simd}
+	 * flag lowers them to {@code jdk.incubator.vector} lane loops, and the
+	 * {@code --no-gc} scalar WASM backend lowers them to real fixed-width WASM SIMD
+	 * ({@code v128} / {@code f64x2.*}) over its packed {@code [len][f64...]}
+	 * linear-memory block.
+	 */
+	public static final String SIMD_PKG = "simd";
+
+	/** {@code simd:zeros}: a fresh length-n vector of {@code 0.0}. */
+	public static final String SIMD_ZEROS = "zeros";
+
+	/** {@code simd:ones}: a fresh length-n vector of {@code 1.0}. */
+	public static final String SIMD_ONES = "ones";
+
+	/**
+	 * {@code simd:arange}: a fresh vector {@code [0.0, 1.0, ..., n-1]} (numpy name, as in
+	 * {@code linalg}).
+	 */
+	public static final String SIMD_ARANGE = "arange";
+
+	/**
+	 * {@code simd:from-list}: a fresh vector from a Lisp list of numbers (portable
+	 * backends only).
+	 */
+	public static final String SIMD_FROM_LIST = "from-list";
+
+	/**
+	 * {@code simd:to-list}: a Lisp list of a vector's elements (portable backends only).
+	 */
+	public static final String SIMD_TO_LIST = "to-list";
+
+	/**
+	 * {@code simd:aref}: read one element of a vector; a setf place via
+	 * {@code simd:aset}.
+	 */
+	public static final String SIMD_AREF = "aref";
+
+	/**
+	 * {@code simd:aset}: write one element of a vector, returning the stored value (the
+	 * {@code setf} writer).
+	 */
+	public static final String SIMD_ASET = "aset";
+
+	/** {@code simd:length}: the element count of a vector. */
+	public static final String SIMD_LENGTH = "length";
+
+	/** {@code simd:add}: element-wise {@code a + b} into a fresh vector. */
+	public static final String SIMD_ADD = "add";
+
+	/** {@code simd:sub}: element-wise {@code a - b} into a fresh vector. */
+	public static final String SIMD_SUB = "sub";
+
+	/** {@code simd:mul}: element-wise (Hadamard) {@code a * b} into a fresh vector. */
+	public static final String SIMD_MUL = "mul";
+
+	/** {@code simd:scale}: {@code v * s} (scalar broadcast) into a fresh vector. */
+	public static final String SIMD_SCALE = "scale";
+
+	/** {@code simd:sum}: horizontal sum of a vector, a scalar. */
+	public static final String SIMD_SUM = "sum";
+
+	/** {@code simd:mean}: arithmetic mean of a vector, a scalar. */
+	public static final String SIMD_MEAN = "mean";
+
+	/** {@code simd:dot}: dot product of two vectors, a scalar. */
+	public static final String SIMD_DOT = "dot";
+
+	/** {@code simd:norm}: Euclidean norm {@code sqrt(dot(v, v))}, a scalar. */
+	public static final String SIMD_NORM = "norm";
+
+	/**
+	 * {@code simd:aref} fully qualified: a {@code setf} place (writer {@code simd:aset}).
+	 */
+	public static final String SIMD_QUALIFIED_AREF = SIMD_PKG + ":" + SIMD_AREF;
+
+	/**
+	 * {@code simd:aset} fully qualified: the {@code setf} writer for {@code simd:aref}.
+	 */
+	public static final String SIMD_QUALIFIED_ASET = SIMD_PKG + ":" + SIMD_ASET;
+
+	/**
 	 * The {@code wasm-export} directive provided by the {@code rontolisp} package. Used
 	 * as {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)} to mark a
 	 * function for direct WASM export. A no-op on the interpreter and the JVM backend.

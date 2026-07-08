@@ -2241,6 +2241,45 @@ cases:
       (1.0 2.0 3.0)
       arr
 
+  # The simd: package (.todo/94): portable packed-f64 vector kernels over the packed
+  # double-float array type, implemented once in simd.lisp as the scalar reference and run
+  # by the interpreter / JVM / wasm-GC / component over the packed representation (the JVM
+  # --simd flag and the --no-gc scalar backend additionally lower the vectorizable kernels
+  # to jdk.incubator.vector / native v128, verified separately). Element-wise kernels return
+  # a fresh packed vector, reductions a scalar; every value prints byte-for-byte across the
+  # four backends (f64-exact inputs, so mean/norm land on exact doubles too).
+  - name: simd-kernels-cross-backend
+    source: |
+      (defun ci-simd ()
+        (let ((a #f(1.0 2.0 3.0))
+              (b #f(4.0 5.0 6.0)))
+          (print (simd:add a b))
+          (print (simd:sub b a))
+          (print (simd:mul a b))
+          (print (simd:scale a 2))
+          (print (simd:dot a b))
+          (print (simd:sum a)))
+        (print (simd:aref (simd:add #f(10.0 20.0) #f(1.0 2.0)) 1))
+        (print (simd:length (simd:arange 5)))
+        (print (simd:to-list (simd:arange 4)))
+        (print (simd:mean #f(2.0 4.0 6.0)))
+        (print (simd:norm #f(3.0 4.0)))
+        (print (simd:sum (simd:from-list '(1 2 3 4)))))
+      (ci-simd)
+    expected: |
+      #(5.0 7.0 9.0)
+      #(3.0 3.0 3.0)
+      #(4.0 10.0 18.0)
+      #(2.0 4.0 6.0)
+      32.0
+      6.0
+      22.0
+      5
+      (0.0 1.0 2.0 3.0)
+      4.0
+      5.0
+      10.0
+
   # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline
