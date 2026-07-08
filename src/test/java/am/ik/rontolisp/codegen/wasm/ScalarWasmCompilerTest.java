@@ -568,12 +568,12 @@ class ScalarWasmCompilerTest {
 
 	@Test
 	void packedFloatVectorUsesLinearMemoryWithScalarTypesOnly() {
-		// A #f(...) literal + aref: the vector lives in linear memory (a memory section
+		// A #d(...) literal + aref: the vector lives in linear memory (a memory section
 		// is
 		// present, id 5) but every type is still a plain scalar func type -- no wasm-GC
 		// struct/array/i31/eqref and no imports.
 		byte[] module = compile("""
-				(defun third (i) (aref #f(10.0 20.0 30.0 40.0) i))
+				(defun third (i) (aref #d(10.0 20.0 30.0 40.0) i))
 				(rontolisp:wasm-export 'third :params '(:int) :returns :float)
 				""");
 		Map<Integer, byte[]> sections = sections(module);
@@ -602,10 +602,10 @@ class ScalarWasmCompilerTest {
 	@Test
 	void rank2FloatLiteralIsAClearCompileError() {
 		assertThatThrownBy(() -> compile("""
-				(defun f () (aref #f((1.0 2.0) (3.0 4.0)) 0))
+				(defun f () (aref #d((1.0 2.0) (3.0 4.0)) 0))
 				(rontolisp:wasm-export 'f :params '() :returns :float)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("multi-dimensional #f(...) literal (rank 2)")
+			.hasMessageContaining("multi-dimensional #d(...) literal (rank 2)")
 			.hasMessageContaining("only a rank-1");
 	}
 

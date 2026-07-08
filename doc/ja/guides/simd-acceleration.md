@@ -6,13 +6,13 @@ JSON や `linalg` ライブラリと同様、`simd` は Lisp ソース(`simd.lis
 
 ## データ表現
 
-simd ベクトルは階数 1 の[パックド浮動小数点配列](../reference/data-types.md)です。すなわち `#f(...)` や `(make-array n :element-type 'double-float)` が生成する、`double-float` 型でアンボックスな配列です。組み込みの `aref` / `length` はこれと相互運用でき、別の場所で構築したパックドベクトルも simd 関数に渡せます。要素ごとのカーネルは新しいベクトルを返し、リダクションはスカラーの `double` を返します。
+simd ベクトルは階数 1 の[パックド浮動小数点配列](../reference/data-types.md)です。すなわち `#d(...)` や `(make-array n :element-type 'double-float)` が生成する、`double-float` 型でアンボックスな配列です。組み込みの `aref` / `length` はこれと相互運用でき、別の場所で構築したパックドベクトルも simd 関数に渡せます。要素ごとのカーネルは新しいベクトルを返し、リダクションはスカラーの `double` を返します。
 
 ```lisp
-(simd:arange 5)                         ; => #f(0.0 1.0 2.0 3.0 4.0)
-(simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => #f(5.0 7.0 9.0)
-(simd:dot #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => 32.0
-(simd:scale #f(1.0 2.0 3.0) 10)         ; => #f(10.0 20.0 30.0)
+(simd:arange 5)                         ; => #d(0.0 1.0 2.0 3.0 4.0)
+(simd:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) ; => #d(5.0 7.0 9.0)
+(simd:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) ; => 32.0
+(simd:scale #d(1.0 2.0 3.0) 10)         ; => #d(10.0 20.0 30.0)
 ```
 
 ## API
@@ -27,9 +27,9 @@ simd ベクトルは階数 1 の[パックド浮動小数点配列](../reference
 
 ```lisp
 (simd:sum (simd:arange 5))              ; => 10.0
-(simd:mean #f(2.0 4.0 6.0))             ; => 4.0
-(simd:norm #f(3.0 4.0))                 ; => 5.0
-(simd:to-list (simd:mul #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))) ; => (4.0 10.0 18.0)
+(simd:mean #d(2.0 4.0 6.0))             ; => 4.0
+(simd:norm #d(3.0 4.0))                 ; => 5.0
+(simd:to-list (simd:mul #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))) ; => (4.0 10.0 18.0)
 ```
 
 ## ハードウェアアクセラレーション(任意)

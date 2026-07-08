@@ -36,7 +36,7 @@ final class WasmQuoteCompiler {
 	}
 
 	/**
-	 * Emits a packed float-array literal ({@code #f(...)}) as a {@code TYPE_FARRAY}
+	 * Emits a packed float-array literal ({@code #d(...)}) as a {@code TYPE_FARRAY}
 	 * struct {@code (dims . data)}: {@code dims} a {@code TYPE_HASH_BUCKETS} of i31
 	 * dimension sizes (as for a general array), {@code data} a {@code TYPE_F64ARR} of the
 	 * unboxed row-major {@code f64} elements. This is the native packed representation,
@@ -45,7 +45,7 @@ final class WasmQuoteCompiler {
 	 * @param fa the packed literal
 	 * @param ctx the compilation context
 	 */
-	static void compilePackedLiteral(am.ik.rontolisp.LispFloatArray fa, WasmLispCompiler.Ctx ctx) {
+	static void compilePackedLiteral(am.ik.rontolisp.LispDoubleFloatArray fa, WasmLispCompiler.Ctx ctx) {
 		double[] data = fa.data();
 		int[] dims = fa.dims();
 		// data: array.new TYPE_F64ARR (0.0, data.length), then array.set each element.
@@ -116,7 +116,9 @@ final class WasmQuoteCompiler {
 			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx);
 			case LispArray array -> compileQuotedArray(array, ctx);
-			case am.ik.rontolisp.LispFloatArray fa -> compilePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
+					"single-float packed arrays (#f) are not yet supported on the WASM backend; use #d for double-float");
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}

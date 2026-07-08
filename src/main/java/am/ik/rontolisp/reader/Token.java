@@ -47,11 +47,15 @@ public sealed interface Token {
 	}
 
 	/**
-	 * Packed-double array literal open ({@code #f(}) token; closed by the
+	 * Packed float-array literal open token: {@code #f(} for the single-float width
+	 * ({@code single}) and {@code #d(} for the double-float width; closed by the
 	 * {@link RightParen} matching the opening parenthesis. The rank is inferred from the
 	 * nesting depth of the contents at read time.
+	 *
+	 * @param single {@code true} for {@code #f(} (single-float), {@code false} for
+	 * {@code #d(} (double-float)
 	 */
-	record FloatArrayOpen() implements Token {
+	record FloatArrayOpen(boolean single) implements Token {
 	}
 
 	/**

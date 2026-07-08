@@ -10,11 +10,12 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
-import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -110,7 +111,7 @@ public final class LispReader {
 			case Token.LeftParen ignored -> readList();
 			case Token.VectorOpen ignored -> readVector();
 			case Token.ArrayOpen array -> readArray(array.rank());
-			case Token.FloatArrayOpen ignored -> readFloatArray();
+			case Token.FloatArrayOpen open -> readFloatArray(open.single());
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
@@ -227,24 +228,34 @@ public final class LispReader {
 		return new LispArray(dims, flat.toArray(new LispVal[0]));
 	}
 
-	// Reads a #f(...) packed-double array literal into a self-evaluating LispFloatArray
-	// (element-type double-float). Every leaf is coerced to a double, and the rank is
-	// inferred from the nesting depth (numpy style): #f(1.0 2.0) is rank-1,
-	// #f((1.0 2.0) (3.0 4.0)) is rank-2, and so on. Leaves must be real numbers and every
-	// level must be uniformly shaped (ragged or mixed number/list contents are a read
-	// error), reusing the #nA validation. #f = "float"; free in CL, not Scheme's
-	// #f=false.
-	private LispVal readFloatArray() {
+	// Reads a #f(...) / #d(...) packed float-array literal into a self-evaluating packed
+	// array: #f( yields a single-float (LispSingleFloatArray, f32 backing) and #d( a
+	// double-float (LispDoubleFloatArray, f64 backing). Every leaf is coerced to a double
+	// (narrowed to a float for #f), and the rank is inferred from the nesting depth
+	// (numpy
+	// style): #f(1.0 2.0) is rank-1, #f((1.0 2.0) (3.0 4.0)) is rank-2, and so on. Leaves
+	// must be real numbers and every level must be uniformly shaped (ragged or mixed
+	// number/list contents are a read error), reusing the #nA validation. #f = "float"
+	// (single), #d = "double"; free in CL, not Scheme's #f=false.
+	private LispVal readFloatArray(boolean single) {
+		String label = single ? "#f" : "#d";
 		List<LispVal> rows = readGroupedElements();
 		int rank = inferFloatArrayRank(rows);
-		int[] dims = arrayDimensions(rows, rank, "#f");
+		int[] dims = arrayDimensions(rows, rank, label);
 		List<LispVal> flat = new ArrayList<>();
-		flattenArrayContents(rows, 0, dims, "#f", flat);
+		flattenArrayContents(rows, 0, dims, label, flat);
+		if (single) {
+			float[] data = new float[flat.size()];
+			for (int i = 0; i < data.length; i++) {
+				data[i] = (float) coerceFloatLeaf(flat.get(i));
+			}
+			return new LispSingleFloatArray(data, dims);
+		}
 		double[] data = new double[flat.size()];
 		for (int i = 0; i < data.length; i++) {
 			data[i] = coerceFloatLeaf(flat.get(i));
 		}
-		return new LispFloatArray(data, dims);
+		return new LispDoubleFloatArray(data, dims);
 	}
 
 	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.
@@ -293,14 +304,14 @@ public final class LispReader {
 		return rank;
 	}
 
-	// Coerces a #f leaf to a double, or a read error when it is not a real number.
+	// Coerces a #f/#d leaf to a double, or a read error when it is not a real number.
 	private static double coerceFloatLeaf(LispVal leaf) {
 		return switch (leaf) {
 			case LispDouble d -> d.value();
 			case LispInteger i -> (double) i.value();
 			case LispBigInteger b -> b.value().doubleValue();
 			case LispRatio r -> r.doubleValue();
-			default -> throw new LispReadException("#f: expected a number, got " + leaf.print());
+			default -> throw new LispReadException("packed float array: expected a number, got " + leaf.print());
 		};
 	}
 

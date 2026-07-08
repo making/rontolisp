@@ -542,7 +542,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass);
 
-		// Whether the program can produce a packed float array (a #f(...) literal or
+		// Whether the program can produce a packed float array (a #d(...) literal or
 		// make-array :element-type 'double-float). When true, the array op compilers
 		// route through the _fv* dispatch helpers so a packed double[] and a general
 		// ArrayList are both handled; when false the default build is byte-identical.
@@ -896,7 +896,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		// The packed-array print branch: _lispToString/_lispToDisplayString render a
 		// double[] by converting it to a general array (_fvToGeneral) and reusing
-		// _arrayToString, then rewriting the leading #/#nA prefix to #f (via
+		// _arrayToString, then rewriting the leading #/#nA prefix to #d (via
 		// String.replaceFirst) so the printed form round-trips to a packed array; the
 		// PackedPrint bundle is non-null only when the program uses packed float arrays.
 		JvmRuntimeBuilder.@Nullable PackedPrint packedPrint = null;
@@ -908,7 +908,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.addMethodref(stringClass,
 							cp.addNameAndType(cp.addUtf8("replaceFirst"),
 									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
-					cp.addString("^#\\d*A?\\("), cp.addString("#f("));
+					cp.addString("^#\\d*A?\\("), cp.addString("#d("));
 		}
 		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
 		MethodrefConstant arrayToStringMethod = usesArrays
@@ -1556,7 +1556,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean containsArrayLiteral(LispVal val) {
-		// A packed #f(...) literal lowers to a general array here, so it counts as an
+		// A packed #d(...) literal lowers to a general array here, so it counts as an
 		// array
 		// literal for the runtime/print gate exactly like #(...)/#nA.
 		if (val instanceof am.ik.rontolisp.LispArray || val instanceof am.ik.rontolisp.LispFloatArray) {
@@ -1568,7 +1568,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// True when the program can produce a packed float array: a #f(...) literal
+	// True when the program can produce a packed float array: a #d(...) literal
 	// (LispFloatArray) or a (make-array ... :element-type 'double-float ...) form. Gates
 	// the _fv* dispatch helpers and their routing; when false the array op compilers call
 	// the general _array* helpers directly, keeping the default build byte-identical.
@@ -1932,7 +1932,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		/**
-		 * True when the program can produce a packed float array (a {@code #f(...)}
+		 * True when the program can produce a packed float array (a {@code #d(...)}
 		 * literal or {@code make-array :element-type 'double-float}). When set, the array
 		 * op compilers route through the {@code _fv*} dispatch helpers (which handle both
 		 * the packed {@code double[]} and the general {@code ArrayList} representation)

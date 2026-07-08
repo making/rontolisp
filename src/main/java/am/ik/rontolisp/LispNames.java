@@ -1770,10 +1770,19 @@ public final class LispNames {
 
 	/**
 	 * The {@code double-float} type specifier symbol. As the {@code :element-type} of
-	 * {@code make-array} (and the element type of a {@code #f(...)} literal) it selects
-	 * the packed {@link am.ik.rontolisp.LispFloatArray} representation.
+	 * {@code make-array} (and the element type of a {@code #d(...)} literal) it selects
+	 * the packed {@link am.ik.rontolisp.LispDoubleFloatArray} representation.
 	 */
 	public static final String DOUBLE_FLOAT = "double-float";
+
+	/**
+	 * The {@code single-float} type specifier symbol. As the {@code :element-type} of
+	 * {@code make-array} (and the element type of a {@code #f(...)} literal) it selects
+	 * the packed {@link am.ik.rontolisp.LispSingleFloatArray} representation (f32
+	 * backing; scalars still read/write as {@code double}, widening on read and narrowing
+	 * on write).
+	 */
+	public static final String SINGLE_FLOAT = "single-float";
 
 	/** The {@code read-byte} built-in function (binary streams only). */
 	public static final String READ_BYTE = "read-byte";

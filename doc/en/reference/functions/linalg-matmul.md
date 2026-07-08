@@ -6,5 +6,5 @@ The matrix product of `a` and `b` (also matrix . vector). It behaves like [`lina
 
 ```lisp
 (linalg:matmul #2A((1 2) (3 4))
-               #2A((5 6) (7 8))) ; => #f((19.0 22.0) (43.0 50.0))
+               #2A((5 6) (7 8))) ; => #d((19.0 22.0) (43.0 50.0))
 ```

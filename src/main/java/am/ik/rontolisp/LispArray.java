@@ -345,26 +345,29 @@ public final class LispArray implements LispVal {
 
 	// Renders the array data with a caller-supplied opening prefix (up to and including
 	// the outermost '('). A packed {@link LispFloatArray} renders through the shared
-	// {@link #renderArrayData} with the "#f(" prefix so it round-trips to a packed array;
-	// the data part after the '(' is identical to the general-array syntax at every rank
-	// (rank is inferred from nesting).
+	// {@link #renderArrayData} with its width-specific prefix ("#d(" for double, "#f("
+	// for
+	// single) so it round-trips to a packed array of the same width; the data part after
+	// the '(' is identical to the general-array syntax at every rank (rank is inferred
+	// from
+	// nesting).
 	String render(java.util.function.Function<LispVal, String> renderElement, String openPrefix) {
 		return renderArrayData(this.dimensions, effectiveLength(), openPrefix,
 				k -> renderElement.apply(elementOrNil(k)));
 	}
 
 	/**
-	 * Renders the {@code #(...)}/{@code #nA(...)}/{@code #f(...)} array syntax from
-	 * dimensions and a per-flat-index element renderer, without materializing a boxed
-	 * array. A nested group paren opens where the flat index is a multiple of that
-	 * dimension's stride and closes where the next index is. Shared by the general
+	 * Renders the {@code #(...)}/{@code #nA(...)}/{@code #d(...)}/{@code #f(...)} array
+	 * syntax from dimensions and a per-flat-index element renderer, without materializing
+	 * a boxed array. A nested group paren opens where the flat index is a multiple of
+	 * that dimension's stride and closes where the next index is. Shared by the general
 	 * {@link LispArray} and the packed {@link LispFloatArray} so the (subtle) paren
-	 * layout lives in one place; the packed array renders its {@code double[]} directly,
+	 * layout lives in one place; the packed array renders its primitive backing directly,
 	 * boxing only the transient {@link LispDouble} each element's string needs.
 	 * @param dims the dimension sizes (length = rank)
 	 * @param count the number of leading elements to render (the effective length)
 	 * @param openPrefix the opening text through the outermost {@code (} (e.g.
-	 * {@code "#("}, {@code "#2A("} or {@code "#f("})
+	 * {@code "#("}, {@code "#2A("}, {@code "#d("} or {@code "#f("})
 	 * @param renderElementAt renders the element at a given flat row-major index
 	 * @return the readable array syntax
 	 */

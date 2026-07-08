@@ -70,7 +70,9 @@ final class WasmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx);
 			case am.ik.rontolisp.LispArray array -> WasmQuoteCompiler.compileLiteralArray(array, ctx);
-			case am.ik.rontolisp.LispFloatArray fa -> WasmQuoteCompiler.compilePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispDoubleFloatArray fa -> WasmQuoteCompiler.compilePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
+					"single-float packed arrays (#f) are not yet supported on the WASM backend; use #d for double-float");
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}

@@ -186,31 +186,39 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
 ```
 
-### パックド浮動小数点配列(`#f`)
+### パックド浮動小数点配列(`#d` / `#f`)
 
-`#f(...)` は**パックド浮動小数点配列**を表します。これは要素をアンボックスで
-格納する `double-float` 型の配列です。`#(...)` と同じ記法で読み込まれますが、
-各要素は `double-float` に強制変換されるため、`#f(1 2 3)` と `#f(1.0 2.0 3.0)`
-は同じベクトルであり、`(array-element-type #f(1.0))` は `double-float` になりま
-す。高階のリテラルはネストしたリストで書き(`#f((1.0 2.0) (3.0 4.0))` は行列)、
-実行時には `(make-array n :element-type 'double-float)` で構築できます。パックド
-配列に非実数を格納すると型エラーです(一般配列は任意の値を保持します)。それ以外
-のすべての操作 -- `aref`・`(setf (aref ...))`・`length`・`row-major-aref`・
-`array-rank`・`array-dimensions`・`coerce` -- は同じ double 値の一般配列と同じよう
-に機能しますが、印字だけは独自の `#f(...)` リーダ構文を用いるため、その印字結果を
-読み戻すと(アンボックス表現を保ったまま)パックド配列になり、一般配列に劣化しませ
-ん。数値カーネルが用いる、アンボックスで `double-float`
-に特化した表現に過ぎないため、フィルポインタ・可変長(adjustable)・ずらし配列
-(displaced)は利用できません(それらには一般配列が必要です)。パックド配列上の
-高速なベクトルカーネル(および任意のハードウェアアクセラレーション)については
-[`simd` パッケージ](../guides/simd-acceleration.md)を参照してください。
+`#d(...)` と `#f(...)` は**パックド浮動小数点配列**を表します。これは要素をアン
+ボックスで格納する浮動小数点型の配列です。`#d(...)` は `double-float`(f64)、
+`#f(...)` は `single-float`(f32 -- メモリは半分、SIMD レーン数は 2 倍)です。
+`#(...)` と同じ記法で読み込まれますが、各要素は配列の浮動小数点型に強制変換される
+ため、`#d(1 2 3)` と `#d(1.0 2.0 3.0)` は同じベクトルであり、
+`(array-element-type #d(1.0))` は `double-float`(`#f` なら `single-float`)になり
+ます。高階のリテラルはネストしたリストで書き(`#d((1.0 2.0) (3.0 4.0))` は行列)、
+実行時には `(make-array n :element-type 'double-float)`(または `'single-float`)
+で構築できます。
+
+スカラは `double` のままです。要素を読むと `double` に拡張され(single-float 要素は
+f32 -> f64 に拡張)、格納するときは配列の幅に丸められます(single-float 配列では
+f64 -> f32)。非実数を格納すると型エラーです(一般配列は任意の値を保持します)。
+それ以外のすべての操作 -- `aref`・`(setf (aref ...))`・`length`・`row-major-aref`・
+`array-rank`・`array-dimensions`・`coerce` -- は同じ数値の一般配列と同じように機能し
+ますが、印字だけは独自の `#d(...)` / `#f(...)` リーダ構文を用いるため、その印字結果を
+読み戻すと(アンボックス表現を保ったまま)同じ幅のパックド配列になり、一般配列に劣化
+しません。数値カーネルが用いる、アンボックスで浮動小数点に特化した表現に過ぎないため、
+フィルポインタ・可変長(adjustable)・ずらし配列(displaced)は利用できません(それ
+らには一般配列が必要です)。`double-float` の幅が既定で、`linalg` が生成するのもこの
+幅です。パックド配列上の高速なベクトルカーネル(および任意のハードウェアアクセラレー
+ション)については [`simd` パッケージ](../guides/simd-acceleration.md)を参照してくだ
+さい。
 
 ```lisp
-(aref #f(1.0 2.0 3.0) 1)                   ; => 2.0
-(array-element-type #f(1 2 3))             ; => double-float
-(print #f((1.0 2.0) (3.0 4.0)))            ; #f((1.0 2.0) (3.0 4.0))
-(coerce #f(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
-(let ((v (make-array 3 :element-type 'double-float :initial-element 0.0)))
+(aref #d(1.0 2.0 3.0) 1)                   ; => 2.0
+(array-element-type #d(1 2 3))             ; => double-float
+(array-element-type #f(1.0 2.0))           ; => single-float
+(print #d((1.0 2.0) (3.0 4.0)))            ; #d((1.0 2.0) (3.0 4.0))
+(coerce #d(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
+(let ((v (make-array 3 :element-type 'single-float :initial-element 0.0)))
   (setf (aref v 0) 5)
   v)                                        ; => #f(5.0 0.0 0.0)
 ```

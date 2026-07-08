@@ -73,11 +73,11 @@ class JvmSimdAccelCompilerTest {
 		// Small arrays (n < THRESHOLD) exercise the scalar tail of each kernel; the
 		// accelerated output must be identical to the spliced simd.lisp reference,
 		// including the packed-array print format.
-		for (String expr : List.of("(print (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
-				"(print (simd:sub #f(10.0 20.0 30.0) #f(1.0 2.0 3.0)))",
-				"(print (simd:mul #f(2.0 3.0 4.0) #f(5.0 6.0 7.0)))", "(print (simd:scale #f(1.0 2.0 3.0) 10.0))",
-				"(print (simd:dot #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))", "(print (simd:sum #f(1.0 2.0 3.0 4.0 5.0)))",
-				"(print (simd:mean #f(2.0 4.0 6.0)))", "(print (simd:norm #f(3.0 4.0)))")) {
+		for (String expr : List.of("(print (simd:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))",
+				"(print (simd:sub #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))",
+				"(print (simd:mul #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))", "(print (simd:scale #d(1.0 2.0 3.0) 10.0))",
+				"(print (simd:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))", "(print (simd:sum #d(1.0 2.0 3.0 4.0 5.0)))",
+				"(print (simd:mean #d(2.0 4.0 6.0)))", "(print (simd:norm #d(3.0 4.0)))")) {
 			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
 		}
 	}
@@ -87,10 +87,10 @@ class JvmSimdAccelCompilerTest {
 		// A bridge result is a plain rank-1 packed double[]: simd:aref / simd:length and
 		// the
 		// downstream simd: kernels consume it identically to a make-array double-float.
-		assertThat(accel("(print (simd:aref (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) 1))")).isEqualTo("7.0");
-		assertThat(accel("(print (simd:length (simd:mul #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))))")).isEqualTo("3");
-		assertThat(accel("(print (simd:sum (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))))")).isEqualTo("21.0");
-		assertThat(accel("(print (aref (simd:scale #f(2.0 4.0) 3.0) 1))")).isEqualTo("12.0");
+		assertThat(accel("(print (simd:aref (simd:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) 1))")).isEqualTo("7.0");
+		assertThat(accel("(print (simd:length (simd:mul #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))))")).isEqualTo("3");
+		assertThat(accel("(print (simd:sum (simd:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))))")).isEqualTo("21.0");
+		assertThat(accel("(print (aref (simd:scale #d(2.0 4.0) 3.0) 1))")).isEqualTo("12.0");
 	}
 
 	@Test
@@ -127,14 +127,14 @@ class JvmSimdAccelCompilerTest {
 		// accelerated build routes through the bridge.
 		for (String expr : List.of(
 				// mutate a kernel result through simd:aref, then read it back and reduce
-				"(let ((v (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))) (setf (simd:aref v 0) 99.0)"
+				"(let ((v (simd:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))) (setf (simd:aref v 0) 99.0)"
 						+ " (print v) (print (simd:aref v 0)) (print (simd:sum v)))",
 				// arange/from-list build via make-array double-float + aset
 				"(print (simd:to-list (simd:scale (simd:arange 5) 2.0)))",
 				"(print (simd:sum (simd:from-list '(1.0 2.0 3.0 4.0 5.0))))",
 				"(print (simd:mean (simd:from-list '(2.0 4.0 6.0 8.0))))",
 				// length/aref on a bare #f literal
-				"(print (length #f(1.0 2.0 3.0 4.0))) (print (aref #f(5.0 6.0 7.0) 2))",
+				"(print (length #d(1.0 2.0 3.0 4.0))) (print (aref #d(5.0 6.0 7.0) 2))",
 				// a large (vector-loop) array, mutated then reduced
 				"(let ((v (simd:arange 1000))) (setf (simd:aref v 0) 5.0) (print (simd:sum v)))")) {
 			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
@@ -147,9 +147,9 @@ class JvmSimdAccelCompilerTest {
 		// still accepts heterogeneous stores and prints identically under --simd. The
 		// leading simd kernel turns the bridge on without touching the general array.
 		for (String expr : List.of(
-				"(simd:sum #f(1.0)) (let ((v (make-array 3 :initial-element 0)))"
+				"(simd:sum #d(1.0)) (let ((v (make-array 3 :initial-element 0)))"
 						+ " (setf (aref v 1) \"x\") (print v) (print (aref v 1)))",
-				"(simd:sum #f(1.0)) (let ((v (make-array 3 :initial-element 0)))"
+				"(simd:sum #d(1.0)) (let ((v (make-array 3 :initial-element 0)))"
 						+ " (setf (aref v 0) 42) (print v))")) {
 			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
 		}
@@ -162,10 +162,10 @@ class JvmSimdAccelCompilerTest {
 		// under
 		// --simd, for a program that uses the simd package at all (the always-spliced
 		// mean/norm bodies call sum/dot, so any simd usage pulls it in).
-		assertThat(embedsBridge(compile("(print (simd:sum #f(1.0 2.0 3.0)))", true))).isTrue();
-		assertThat(embedsBridge(compile("(print (simd:length #f(1.0 2.0 3.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (simd:sum #d(1.0 2.0 3.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (simd:length #d(1.0 2.0 3.0)))", true))).isTrue();
 		// Default (no --simd): never embedded, even with an accelerated kernel.
-		assertThat(embedsBridge(compile("(print (simd:sum #f(1.0 2.0 3.0)))", false))).isFalse();
+		assertThat(embedsBridge(compile("(print (simd:sum #d(1.0 2.0 3.0)))", false))).isFalse();
 		// A non-simd program: no bridge even under --simd (nothing to accelerate).
 		assertThat(embedsBridge(compile("(print (+ 1 2))", true))).isFalse();
 	}

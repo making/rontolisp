@@ -40,7 +40,7 @@ import am.ik.wasm.Type;
  * semantics, enforced at compile time because make-array keywords are literal).
  *
  * <p>
- * A packed float array ({@code #f(...)} or {@code make-array :element-type 'double-float}
+ * A packed float array ({@code #d(...)} or {@code make-array :element-type 'double-float}
  * without a fill pointer / adjustable / displacement) is a distinct {@code TYPE_FARRAY}
  * struct {@code (dims . data)} holding unboxed {@code f64} elements (see
  * {@link WasmQuoteCompiler#compilePackedLiteral}) -- disjoint from the general array's
@@ -71,6 +71,14 @@ final class WasmArrayCompiler {
 		}
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
+		}
+		if (isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
+			// :element-type 'single-float packs to an f32 array which the WASM backend
+			// does
+			// not support yet (todo 95 Phase 4); reject it clearly rather than silently
+			// degrade to a general boxed array.
+			throw new UnsupportedOperationException(
+					"make-array :element-type 'single-float is not yet supported on the WASM backend; use 'double-float");
 		}
 		boolean doubleFloat = isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
@@ -1201,6 +1209,20 @@ final class WasmArrayCompiler {
 	// unwrapped and the symbol name matched (ignoring any package qualifier). Mirrors the
 	// JVM JvmArrayCompiler.isDoubleFloatElementType.
 	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
+		return LispNames.DOUBLE_FLOAT.equals(elementTypeLocalName(elementType));
+	}
+
+	// Whether a make-array :element-type value designates single-float (packs to an f32
+	// array, not yet supported on the WASM backend -- todo 95 Phase 4). Mirrors the JVM
+	// JvmArrayCompiler.isSingleFloatElementType.
+	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
+		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
+	}
+
+	// The local (package-qualifier-stripped) symbol name of a literal quoted
+	// :element-type
+	// value, or null when it is not a quoted symbol.
+	private static @Nullable String elementTypeLocalName(@Nullable LispVal elementType) {
 		LispVal sym = elementType;
 		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
@@ -1209,9 +1231,9 @@ final class WasmArrayCompiler {
 		if (sym instanceof LispSymbol s) {
 			String name = s.name();
 			int colon = name.lastIndexOf(':');
-			return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+			return colon >= 0 ? name.substring(colon + 1) : name;
 		}
-		return false;
+		return null;
 	}
 
 	// --- helpers -------------------------------------------------------------

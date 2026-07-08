@@ -42,7 +42,7 @@ final class JvmQuoteCompiler {
 	}
 
 	/**
-	 * Emits a packed float-array literal ({@code #f(...)}) as a bare {@code double[]}
+	 * Emits a packed float-array literal ({@code #d(...)}) as a bare {@code double[]}
 	 * with an embedded dimension header: {@code [rank, dim_0, ..., dim_{rank-1}, e_0,
 	 * ..., e_{total-1}]} (rank and dims stored as doubles, exact for realistic sizes).
 	 * The data offset is {@code 1 + rank}. This is the native packed representation used
@@ -54,7 +54,7 @@ final class JvmQuoteCompiler {
 	 * @param fa the packed literal
 	 * @param ctx the compilation context
 	 */
-	static void compilePackedLiteral(am.ik.rontolisp.LispFloatArray fa, JvmLispCompiler.Ctx ctx) {
+	static void compilePackedLiteral(am.ik.rontolisp.LispDoubleFloatArray fa, JvmLispCompiler.Ctx ctx) {
 		double[] data = fa.data();
 		int[] dims = fa.dims();
 		int rank = dims.length;
@@ -110,9 +110,14 @@ final class JvmQuoteCompiler {
 			case LispSymbol sym -> JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx, className);
 			case LispArray array -> compileQuotedArray(array, ctx, className);
-			// A packed #f(...) literal compiles to a native double[] with a dimension
-			// header (the packed representation), disjoint from the general array.
-			case am.ik.rontolisp.LispFloatArray fa -> compilePackedLiteral(fa, ctx);
+			// A packed #d(...) double-float literal compiles to a native double[] with a
+			// dimension header (the packed representation), disjoint from the general
+			// array.
+			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
+			// #f(...) single-float packed arrays are not yet supported on the JVM backend
+			// (todo 95 Phase 2); use #d for double-float.
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
+					"single-float packed arrays (#f) are not yet supported on the JVM backend; use #d for double-float");
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}

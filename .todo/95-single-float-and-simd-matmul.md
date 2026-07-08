@@ -119,11 +119,34 @@ kernels alongside `f64x2`.
 
 Phases mirror `.todo/94`'s order:
 
-1. **Frontend:** umbrella `LispFloatArray` IF + rename `LispDoubleFloatArray` + new
-   `LispSingleFloatArray`; reader `#f`→single / `#d`→double; printer; `equal`; resolver.
-   Interpreter `aref`/`aset` (widen/narrow) / `length` / `make-array :element-type
-   'single-float` / `array-element-type` / print. Introduce `linalg::%la-make` (still
-   double). Green `LispEvaluatorTest` + `LispFloatArrayTest` (double + single).
+1. **[DONE 2026-07-08]** **Frontend:** umbrella `LispFloatArray` IF + rename
+   `LispDoubleFloatArray` + new `LispSingleFloatArray`; reader `#f`→single / `#d`→double;
+   printer; `equal`; resolver. Interpreter `aref`/`aset` (widen/narrow) / `length` /
+   `make-array :element-type 'single-float` / `array-element-type` / print. Introduce
+   `linalg::%la-make` (still double). Green `LispEvaluatorTest` (711) + `LispFloatArrayTest`
+   (21, double + single).
+   - Sealed hierarchy: `LispVal` → `LispFloatArray` (sealed IF, `dims`/`elementType`/
+     `elementAt` widen / `setElement` narrow / `openPrefix` / `toGeneralArray` + default
+     `rank`/`totalSize`/`readFlat`/`aref`/`aset`/`flatIndex`/`print`/`display`) →
+     `LispDoubleFloatArray(double[])` / `LispSingleFloatArray(float[])`.
+   - Reader: `Token.FloatArrayOpen(boolean single)`; lexer `#f(`→single, `#d(`→double
+     (no `#d` collision); `LispReader.readFloatArray(single)` narrows leaves to f32 for
+     `#f`. Leaf-error message de-hardcoded to "packed float array: expected a number".
+   - Codegen kept COMPILING (double path renamed to `LispDoubleFloatArray`); a
+     `LispSingleFloatArray` literal or `make-array :element-type 'single-float` throws a
+     clear compile error on JVM/WASM/`--no-gc` (no todo ref in the message). Umbrella
+     `instanceof LispFloatArray` gates unchanged.
+   - **`#f`→`#d` reconciliation PULLED FORWARD** (Phase 6's mechanical core; user chose
+     "green the build now"): the 48 initially-red tests were all *double* tests still
+     written with `#f`. Rewrote `#f(`→`#d(` in the 5 compiler test files + `ci-spec.yaml`
+     (which the two shaker corpus tests read) + all docs; flipped the compiled-backend
+     print prefix (`JvmLispCompiler` PackedPrint regex-replacement + `WasmLispCompiler`
+     `StringTable.fPrefix` + the `--no-gc` rank-2 error message) from `#f(` to `#d(`;
+     rewrote `data-types.md` (en+ja) prose to define `#d`=double / `#f`=single. **Full
+     `./mvnw test` GREEN (2913, 0 fail), web-profile compile GREEN, javadoc clean (only the
+     sanctioned Version error), native `CiSpecE2eTest` GREEN (724).** Remaining for Phase 6:
+     add single-float cross-backend `ci-spec` cases + single-float doc examples once the
+     backends support single (Phases 2-5).
 2. **JVM:** `float[]` repr + `_sfv*` dispatch; `make-array` single-float; print `#f`/`#d`.
    Green `JvmLispCompilerTest` + `JvmFloatArrayTest`.
 3. **JVM SIMD polymorphism:** `FloatVector` kernels in `JvmSimdVectorTemplate`; call-site

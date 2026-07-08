@@ -751,7 +751,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
-		// A #f(...) literal or (make-array ... :element-type 'double-float) materializes
+		// A #d(...) literal or (make-array ... :element-type 'double-float) materializes
 		// a
 		// packed f64 vector in linear memory via the bump allocator, so it also flags the
 		// memory as used even in an otherwise pure-numeric program.
@@ -791,7 +791,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Whether a body touches a packed f64 vector (a {@code #f} literal, a
+	 * Whether a body touches a packed f64 vector (a {@code #d} literal, a
 	 * {@code make-array} call, or any {@code simd:} kernel), all of which read or
 	 * bump-allocate the vector in linear memory and so require the memory section even in
 	 * an otherwise pure-numeric program.
@@ -2058,7 +2058,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// --- packed double-float vectors (F64VEC) ------------------------------------------
 	//
 	// A F64VEC is an i32 pointer to a linear-memory header [count:i32 LE][count f64 LE].
-	// #f(...) literals and (make-array n :element-type 'double-float) materialize one;
+	// #d(...) literals and (make-array n :element-type 'double-float) materialize one;
 	// the
 	// generic aref/%aset/length operate on it. Only rank-1 is supported (a rank>=2 array
 	// has no packed layout on the scalar backend, so it is a clear compile error). The
@@ -2104,19 +2104,25 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_ADD);
 	}
 
-	// A #f(...) double-float literal -> a fresh packed vector materialized in linear
+	// A #d(...) double-float literal -> a fresh packed vector materialized in linear
 	// memory. Only a rank-1 literal packs to a f64 vector; a rank>=2 literal has no
 	// packed
 	// rank-n layout on the scalar backend, so it is a clear compile error. The count is
 	// known at read time, so each constant is stored with a straight-line f64.store.
 	private Ty compileFloatArrayLiteral(LispFloatArray fa, Fn fn) {
+		if (!(fa instanceof am.ik.rontolisp.LispDoubleFloatArray dfa)) {
+			// #f(...) single-float packed arrays are not supported on the --no-gc scalar
+			// backend yet (todo 95 Phase 5); only the #d(...) double (f64) width packs.
+			throw new UnsupportedOperationException("--no-gc: single-float packed arrays (#f) in function '" + fn.fnName
+					+ "' are not supported; use #d for double-float");
+		}
 		if (fa.rank() != 1) {
 			throw new UnsupportedOperationException(
-					"--no-gc: a multi-dimensional #f(...) literal (rank " + fa.rank() + ") in function '" + fn.fnName
-							+ "' is not supported; only a rank-1 #f(...) packs to a f64 vector");
+					"--no-gc: a multi-dimensional #d(...) literal (rank " + fa.rank() + ") in function '" + fn.fnName
+							+ "' is not supported; only a rank-1 #d(...) packs to a f64 vector");
 		}
 		WasmWriter w = fn.writer;
-		double[] data = fa.data();
+		double[] data = dfa.data();
 		int n = data.length;
 		int count = fn.allocLocal(Ty.F64VEC); // i32 scratch
 		w.write(Instruction.I32_CONST).writeSignedLeb128(n);
@@ -2284,7 +2290,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	//
 	// On this backend a simd vector is the same packed [count:i32][count f64] block that
 	// a
-	// #f(...) literal and (make-array :element-type 'double-float) produce. The simd:
+	// #d(...) literal and (make-array :element-type 'double-float) produce. The simd:
 	// kernels are lowered here to real fixed-width SIMD: the element-wise ops walk the
 	// block
 	// two lanes at a time with v128 / f64x2.* and a scalar tail, and the reductions

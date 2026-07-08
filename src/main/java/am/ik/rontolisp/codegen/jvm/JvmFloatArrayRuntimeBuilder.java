@@ -20,7 +20,7 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  *
  * <p>
  * These helpers are emitted only when the program can produce a packed float array (a
- * {@code #f(...)} literal or {@code make-array :element-type 'double-float}; see
+ * {@code #d(...)} literal or {@code make-array :element-type 'double-float}; see
  * {@code JvmLispCompiler.Ctx#usesFloatArray}). Each accessor dispatches on
  * {@code instanceof double[]}: a packed array is handled natively (header-aware), any
  * other array shape delegates to the matching general {@code _array*} helper, so a value

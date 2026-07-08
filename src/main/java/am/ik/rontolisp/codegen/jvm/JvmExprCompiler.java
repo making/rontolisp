@@ -47,9 +47,14 @@ final class JvmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx, className);
 			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
-			// A packed #f(...) literal compiles to a native double[] with a dimension
-			// header (the packed representation), disjoint from the general array.
-			case am.ik.rontolisp.LispFloatArray fa -> JvmQuoteCompiler.compilePackedLiteral(fa, ctx);
+			// A packed #d(...) double-float literal compiles to a native double[] with a
+			// dimension header (the packed representation), disjoint from the general
+			// array.
+			case am.ik.rontolisp.LispDoubleFloatArray fa -> JvmQuoteCompiler.compilePackedLiteral(fa, ctx);
+			// #f(...) single-float packed arrays are not yet supported on the JVM backend
+			// (todo 95 Phase 2); use #d for double-float.
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
+					"single-float packed arrays (#f) are not yet supported on the JVM backend; use #d for double-float");
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}

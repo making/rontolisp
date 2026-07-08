@@ -7,9 +7,11 @@
 ;; Portability constraints honored here (like json.lisp, see .kb/json.md):
 ;; - do loops always declare at least one variable; parameters are never
 ;;   assigned with setq (let-rebound instead).
-;; - Arrays are packed double-float: every constructor builds an unboxed
-;;   (array double-float) via make-array :element-type 'double-float, and
-;;   element reads coerce to double. linalg is speed-oriented, not exact --
+;; - Arrays are packed double-float: every constructor allocates through the one
+;;   linalg::%la-make funnel (an unboxed (array double-float) via make-array
+;;   :element-type 'double-float), and element reads coerce to double. Routing
+;;   all allocation through a single helper is a forward-compat seam for a later
+;;   single-float production mode. linalg is speed-oriented, not exact --
 ;;   integer/ratio inputs become doubles (numpy's model), so det/inv/solve
 ;;   compute in floating point (a singular integer matrix's determinant may be
 ;;   a tiny epsilon rather than exactly 0).
@@ -21,9 +23,20 @@
 
 ;; --- internal helpers --------------------------------------------------------
 
+(defun linalg::%la-make (dims init)
+  ;; The single funnel through which EVERY linalg result-array allocation flows.
+  ;; Today it always builds a packed double-float array; it exists as a
+  ;; forward-compat seam so that a later "produce single-float too" change is a
+  ;; one-touch add here (branch on a literal :element-type) instead of editing
+  ;; every constructor. The :element-type MUST stay a literal 'double-float: the
+  ;; compiled backends pick the double[] / float[] representation from a
+  ;; compile-time literal, so a runtime-computed element-type could not select
+  ;; the packed representation (see .todo/95). init is coerced to double.
+  (make-array dims :element-type 'double-float :initial-element init))
+
 (defun linalg::%la-like (a)
   ;; A fresh zero-filled packed double-float array with the same shape as a.
-  (make-array (array-dimensions a) :element-type 'double-float :initial-element 0.0))
+  (linalg::%la-make (array-dimensions a) 0.0))
 
 (defun linalg::%la-bcast (%la-op %la-x %la-y)
   ;; Applies the binary function %la-op elementwise, broadcasting a scalar
@@ -113,7 +126,7 @@
          (m (car (cdr d))))
     (unless (= m (length v))
       (error "linalg: dot dimension mismatch"))
-    (let ((out (make-array n :element-type 'double-float :initial-element 0.0)))
+    (let ((out (linalg::%la-make n 0.0)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (let ((acc 0))
@@ -129,7 +142,7 @@
          (m (car (cdr d))))
     (unless (= n (length v))
       (error "linalg: dot dimension mismatch"))
-    (let ((out (make-array m :element-type 'double-float :initial-element 0.0)))
+    (let ((out (linalg::%la-make m 0.0)))
       (do ((j 0 (+ j 1)))
           ((>= j m) out)
         (let ((acc 0))
@@ -147,7 +160,7 @@
          (p (car (cdr db))))
     (unless (= m (car db))
       (error "linalg: matmul inner dimensions differ"))
-    (let ((out (make-array (list n p) :element-type 'double-float :initial-element 0.0)))
+    (let ((out (linalg::%la-make (list n p) 0.0)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (do ((j 0 (+ j 1)))
@@ -162,19 +175,19 @@
 
 (defun linalg:zeros (shape)
   ;; A zero-filled vector (integer shape) or matrix (list shape).
-  (make-array shape :element-type 'double-float :initial-element 0.0))
+  (linalg::%la-make shape 0.0))
 
 (defun linalg:ones (shape)
   ;; A one-filled vector or matrix.
-  (make-array shape :element-type 'double-float :initial-element 1.0))
+  (linalg::%la-make shape 1.0))
 
 (defun linalg:full (shape value)
   ;; A vector or matrix with every element set to value (coerced to double).
-  (make-array shape :element-type 'double-float :initial-element value))
+  (linalg::%la-make shape value))
 
 (defun linalg:eye (n)
   ;; The n-by-n identity matrix.
-  (let ((m (make-array (list n n) :element-type 'double-float :initial-element 0.0)))
+  (let ((m (linalg::%la-make (list n n) 0.0)))
     (do ((i 0 (+ i 1)))
         ((>= i n) m)
       (setf (aref m i i) 1))))
@@ -188,7 +201,7 @@
          (d (if step step 1))
          (count (ceiling (/ (- stop start) d)))
          (n (max 0 count))
-         (out (make-array n :element-type 'double-float :initial-element 0.0)))
+         (out (linalg::%la-make n 0.0)))
     (do ((i 0 (+ i 1))
          (x start (+ x d)))
         ((>= i n) out)
@@ -196,7 +209,7 @@
 
 (defun linalg:linspace (start stop n)
   ;; The vector of n evenly spaced numbers from start to stop inclusive.
-  (let ((out (make-array n :element-type 'double-float :initial-element 0.0)))
+  (let ((out (linalg::%la-make n 0.0)))
     (if (= n 1)
         (progn (setf (aref out 0) start) out)
         (let ((step (/ (- stop start) (- n 1))))
@@ -209,7 +222,7 @@
   (if (consp (car lst))
       (let* ((r (length lst))
              (c (length (car lst)))
-             (m (make-array (list r c) :element-type 'double-float :initial-element 0.0)))
+             (m (linalg::%la-make (list r c) 0.0)))
         (do ((rows lst (cdr rows))
              (i 0 (+ i 1)))
             ((null rows) m)
@@ -218,7 +231,7 @@
               ((null cells))
             (setf (aref m i j) (car cells)))))
       (let* ((n (length lst))
-             (v (make-array n :element-type 'double-float :initial-element 0.0)))
+             (v (linalg::%la-make n 0.0)))
         (do ((cells lst (cdr cells))
              (i 0 (+ i 1)))
             ((null cells) v)
@@ -251,7 +264,7 @@
 
 (defun linalg:reshape (a shape)
   ;; A fresh array with the given shape and the same row-major elements.
-  (let* ((out (make-array shape :element-type 'double-float :initial-element 0.0))
+  (let* ((out (linalg::%la-make shape 0.0))
          (n (array-total-size a)))
     (unless (= n (array-total-size out))
       (error "linalg: reshape size mismatch"))
@@ -269,7 +282,7 @@
     (if (cdr d)
         (let* ((r (car d))
                (c (car (cdr d)))
-               (m (make-array (list c r) :element-type 'double-float :initial-element 0.0)))
+               (m (linalg::%la-make (list c r) 0.0)))
           (do ((i 0 (+ i 1)))
               ((>= i r) m)
             (do ((j 0 (+ j 1)))
@@ -329,7 +342,7 @@
          (vf (linalg:flatten v))
          (n (length uf))
          (m (length vf))
-         (out (make-array (list n m) :element-type 'double-float :initial-element 0.0)))
+         (out (linalg::%la-make (list n m) 0.0)))
     (do ((i 0 (+ i 1)))
         ((>= i n) out)
       (do ((j 0 (+ j 1)))
@@ -432,7 +445,7 @@
   ;; singular matrix.
   (let* ((n (linalg::%la-square-size a))
          (w (* 2 n))
-         (m (make-array (list n w) :element-type 'double-float :initial-element 0.0)))
+         (m (linalg::%la-make (list n w) 0.0)))
     (do ((i 0 (+ i 1)))
         ((>= i n))
       (do ((j 0 (+ j 1)))
@@ -460,7 +473,7 @@
               (do ((j col (+ j 1)))
                   ((>= j w))
                 (setf (aref m i j) (- (aref m i j) (* f (aref m col j))))))))))
-    (let ((out (make-array (list n n) :element-type 'double-float :initial-element 0.0)))
+    (let ((out (linalg::%la-make (list n n) 0.0)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (do ((j 0 (+ j 1)))

@@ -30,7 +30,9 @@ import java.util.Set;
 import java.util.function.DoubleUnaryOperator;
 
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -353,18 +355,28 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + ": :displaced-index-offset requires :displaced-to");
 			}
 			boolean hasFillPointer = fillPointerArg != null && !(fillPointerArg instanceof LispNil);
-			if (isDoubleFloatType(elementTypeArg) && !hasFillPointer && !adjustable) {
-				// :element-type 'double-float with no fill pointer / adjustability /
-				// displacement selects the packed LispFloatArray representation (unboxed
-				// double[]). The initial element coerces to a double; a non-real is a
+			String packedType = packedFloatElementType(elementTypeArg);
+			if (packedType != null && !hasFillPointer && !adjustable) {
+				// :element-type 'double-float / 'single-float with no fill pointer /
+				// adjustability / displacement selects the packed float-array
+				// representation (unboxed double[] / float[]). The initial element
+				// coerces
+				// to a double (narrowed to a float for single-float); a non-real is a
 				// type
 				// error (there is no degrade path).
 				double fill = initGiven ? asDouble(init) : 0.0;
+				if (packedType.equals(LispNames.SINGLE_FLOAT)) {
+					float[] sdata = new float[total];
+					if (fill != 0.0) {
+						java.util.Arrays.fill(sdata, (float) fill);
+					}
+					return new LispSingleFloatArray(sdata, dims);
+				}
 				double[] fdata = new double[total];
 				if (fill != 0.0) {
 					java.util.Arrays.fill(fdata, fill);
 				}
-				return new LispFloatArray(fdata, dims);
+				return new LispDoubleFloatArray(fdata, dims);
 			}
 			LispVal[] data = new LispVal[total];
 			for (int i = 0; i < total; i++) {
@@ -417,11 +429,13 @@ public final class Environment implements Scope {
 				subs[i - 1] = (int) asLong(args.get(i));
 			}
 			if (args.get(0) instanceof LispFloatArray fa) {
-				// Coerce to a double (a non-real is a type error) and return the stored
-				// double, so the effective element value is consistent across backends.
-				double stored = asDouble(value);
-				fa.aset(stored, subs);
-				return new LispDouble(stored);
+				// Coerce to a double (a non-real is a type error), narrow-store it (f32
+				// for
+				// single-float), and return the value AS STORED (read back widened), so
+				// the
+				// effective element value is consistent across backends and widths.
+				fa.aset(asDouble(value), subs);
+				return fa.aref(subs);
 			}
 			LispArray array = requireArray(LispNames.ASET, args.get(0));
 			array.aset(value, subs);
@@ -440,9 +454,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ROW_MAJOR_ASET, args, 3);
 			LispVal value = args.get(2);
 			if (args.get(0) instanceof LispFloatArray fa) {
-				double stored = asDouble(value);
-				fa.writeFlat(rowMajorIndex(LispNames.ROW_MAJOR_ASET, fa.totalSize(), args.get(1)), stored);
-				return new LispDouble(stored);
+				int flat = rowMajorIndex(LispNames.ROW_MAJOR_ASET, fa.totalSize(), args.get(1));
+				// Narrow-store (f32 for single-float) then read back widened, so the
+				// returned value matches what is stored across widths and backends.
+				fa.setElement(flat, asDouble(value));
+				return fa.readFlat(flat);
 			}
 			LispArray array = requireArray(LispNames.ROW_MAJOR_ASET, args.get(0));
 			array.writeFlat(rowMajorIndex(LispNames.ROW_MAJOR_ASET, array.totalSize(), args.get(1)), value);
@@ -482,8 +498,8 @@ public final class Environment implements Scope {
 				}));
 		env.defineFunction(LispNames.ARRAY_ELEMENT_TYPE, new LispFunction(LispNames.ARRAY_ELEMENT_TYPE, args -> {
 			requireArgCount(LispNames.ARRAY_ELEMENT_TYPE, args, 1);
-			if (args.get(0) instanceof LispFloatArray) {
-				return new LispSymbol(LispNames.DOUBLE_FLOAT);
+			if (args.get(0) instanceof LispFloatArray fa) {
+				return new LispSymbol(fa.elementType());
 			}
 			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
 			return new LispSymbol("t");
@@ -687,21 +703,27 @@ public final class Environment implements Scope {
 	// so those operations never apply to a packed array (it is always a simple array).
 	private static LispArray requireGeneralArray(String fn, LispVal val) {
 		if (val instanceof LispFloatArray) {
-			throw new LispEvalException(fn + ": not applicable to a double-float (packed) array");
+			throw new LispEvalException(fn + ": not applicable to a packed float array");
 		}
 		return requireArray(fn, val);
 	}
 
-	// Whether a make-array :element-type argument designates double-float (selecting the
-	// packed representation). The symbol name is matched ignoring any package qualifier.
-	private static boolean isDoubleFloatType(@Nullable LispVal elementType) {
+	// The packed float-array element type a make-array :element-type argument designates:
+	// "double-float" or "single-float" (selecting the packed representation), or null for
+	// anything else. The symbol name is matched ignoring any package qualifier.
+	@Nullable private static String packedFloatElementType(@Nullable LispVal elementType) {
 		if (elementType instanceof LispSymbol sym) {
 			String name = sym.name();
 			int colon = name.lastIndexOf(':');
 			String local = colon >= 0 ? name.substring(colon + 1) : name;
-			return local.equals(LispNames.DOUBLE_FLOAT);
+			if (local.equals(LispNames.DOUBLE_FLOAT)) {
+				return LispNames.DOUBLE_FLOAT;
+			}
+			if (local.equals(LispNames.SINGLE_FLOAT)) {
+				return LispNames.SINGLE_FLOAT;
+			}
 		}
-		return false;
+		return null;
 	}
 
 	private static LispHashTable requireHashTable(String fn, LispVal val) {

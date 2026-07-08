@@ -304,27 +304,27 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 
 | Function | Example | Result |
 |----------|---------|--------|
-| `linalg:zeros` | `(linalg:zeros 3)`, `(linalg:zeros '(2 2))` | `#f(0.0 0.0 0.0)`、`#f((0.0 0.0) (0.0 0.0))`(shapeは整数または `(rows cols)` のリスト) |
-| `linalg:ones` | `(linalg:ones '(2 2))` | `#f((1.0 1.0) (1.0 1.0))` |
-| `linalg:full` | `(linalg:full '(2 2) 7)` | `#f((7.0 7.0) (7.0 7.0))` |
-| `linalg:eye` | `(linalg:eye 2)` | `#f((1.0 0.0) (0.0 1.0))`(単位行列) |
-| `linalg:arange` | `(linalg:arange 5)`, `(linalg:arange 2 10 2)` | `#f(0.0 1.0 2.0 3.0 4.0)`、`#f(2.0 4.0 6.0 8.0)`(stopは含まない。stepは負も可) |
-| `linalg:linspace` | `(linalg:linspace 0 1 5)` | `#f(0.0 0.25 0.5 0.75 1.0)`(両端を含むn等分の値) |
-| `linalg:from-list` | `(linalg:from-list '((1 2) (3 4)))` | `#f((1.0 2.0) (3.0 4.0))`(フラットなリストからはベクタ) |
+| `linalg:zeros` | `(linalg:zeros 3)`, `(linalg:zeros '(2 2))` | `#d(0.0 0.0 0.0)`、`#d((0.0 0.0) (0.0 0.0))`(shapeは整数または `(rows cols)` のリスト) |
+| `linalg:ones` | `(linalg:ones '(2 2))` | `#d((1.0 1.0) (1.0 1.0))` |
+| `linalg:full` | `(linalg:full '(2 2) 7)` | `#d((7.0 7.0) (7.0 7.0))` |
+| `linalg:eye` | `(linalg:eye 2)` | `#d((1.0 0.0) (0.0 1.0))`(単位行列) |
+| `linalg:arange` | `(linalg:arange 5)`, `(linalg:arange 2 10 2)` | `#d(0.0 1.0 2.0 3.0 4.0)`、`#d(2.0 4.0 6.0 8.0)`(stopは含まない。stepは負も可) |
+| `linalg:linspace` | `(linalg:linspace 0 1 5)` | `#d(0.0 0.25 0.5 0.75 1.0)`(両端を含むn等分の値) |
+| `linalg:from-list` | `(linalg:from-list '((1 2) (3 4)))` | `#d((1.0 2.0) (3.0 4.0))`(フラットなリストからはベクタ) |
 | `linalg:to-list` | `(linalg:to-list (linalg:eye 2))` | `((1.0 0.0) (0.0 1.0))` |
 | `linalg:shape` | `(linalg:shape #2A((1 2 3) (4 5 6)))` | `(2 3)` |
 | `linalg:size` | `(linalg:size (linalg:eye 3))` | `9`(要素の総数) |
-| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#f((0.0 1.0 2.0) (3.0 4.0 5.0))`(行優先。サイズは一致が必要) |
-| `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#f(1.0 0.0 0.0 1.0)` |
-| `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#f((1.0 4.0) (2.0 5.0) (3.0 6.0))`(ベクタはそのまま返します) |
-| `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#f(11.0 12.0 13.0)`(要素ごと。スカラーのオペランドはブロードキャスト) |
-| `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#f(4.0 4.0)` |
+| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#d((0.0 1.0 2.0) (3.0 4.0 5.0))`(行優先。サイズは一致が必要) |
+| `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#d(1.0 0.0 0.0 1.0)` |
+| `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#d((1.0 4.0) (2.0 5.0) (3.0 6.0))`(ベクタはそのまま返します) |
+| `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#d(11.0 12.0 13.0)`(要素ごと。スカラーのオペランドはブロードキャスト) |
+| `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#d(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | アダマール積(要素ごとの積)。行列積ではありません |
-| `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#f(0.5 1.0 1.5)`(packed double-float 配列) |
-| `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#f(0.0 1.0 4.0 9.0)`(全要素に関数を適用) |
+| `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#d(0.5 1.0 1.5)`(packed double-float 配列) |
+| `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#d(0.0 1.0 4.0 9.0)`(全要素に関数を適用) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
-| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#f((19.0 22.0) (43.0 50.0))`(行列積) |
-| `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#f((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |
+| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積) |
+| `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |
 | `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。packed 配列なら double) |
 | `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。packed 配列なら double) |
 | `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9`(最大の要素) |
@@ -334,7 +334,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:norm` | `(linalg:norm #(3 4))` | `5.0`(ユークリッド / フロベニウスノルム) |
 | `linalg:trace` | `(linalg:trace #2A((1 2) (3 4)))` | `5`(正方行列のみ) |
 | `linalg:det` | `(linalg:det #2A((1 2) (3 4)))` | `-2.0`(浮動小数点。特異行列は微小値になることがある) |
-| `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#f((0.25 0.0) (-0.125 0.25))`(特異行列ではエラーを通知します) |
+| `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#d((0.25 0.0) (-0.125 0.25))`(特異行列ではエラーを通知します) |
 | `linalg:solve` | `(linalg:solve a b)` | `a . x = b` の解(`b` はベクタまたは行列) |
 | `linalg:array-equal` | `(linalg:array-equal (linalg:eye 2) #2A((1 0) (0 1)))` | `t`(同じ形状かつ数値的に等しい要素。配列自体は `eq` でしか比較できません) |
 

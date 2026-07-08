@@ -64,6 +64,15 @@ final class JvmArrayCompiler {
 		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		if (isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
+			// :element-type 'single-float packs to a float[] which the JVM backend does
+			// not
+			// support yet (todo 95 Phase 2); reject it clearly rather than silently
+			// degrade
+			// to a general boxed array.
+			throw new UnsupportedOperationException(
+					"make-array :element-type 'single-float is not yet supported on the JVM backend; use 'double-float");
+		}
 		if (ctx.usesFloatArray && isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
 				&& fillPointer == null && adjustable == null) {
 			// A plain :element-type 'double-float array (no fill pointer / adjustable /
@@ -317,6 +326,20 @@ final class JvmArrayCompiler {
 	// is
 	// unwrapped and the symbol name matched (ignoring any package qualifier).
 	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
+		return LispNames.DOUBLE_FLOAT.equals(elementTypeLocalName(elementType));
+	}
+
+	// Whether a make-array :element-type value designates single-float (packs to a
+	// float[], not yet supported on the JVM backend -- todo 95 Phase 2). Same literal
+	// quoted-symbol unwrap as isDoubleFloatElementType.
+	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
+		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
+	}
+
+	// The local (package-qualifier-stripped) symbol name of a literal quoted
+	// :element-type
+	// value, or null when it is not a quoted symbol.
+	private static @Nullable String elementTypeLocalName(@Nullable LispVal elementType) {
 		LispVal sym = elementType;
 		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
@@ -325,9 +348,9 @@ final class JvmArrayCompiler {
 		if (sym instanceof LispSymbol s) {
 			String name = s.name();
 			int colon = name.lastIndexOf(':');
-			return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+			return colon >= 0 ? name.substring(colon + 1) : name;
 		}
-		return false;
+		return null;
 	}
 
 	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {

@@ -1672,7 +1672,7 @@ final class WasmRuntimeBuilder {
 		// 5-11 = i32 array index/length/rank/dimension/stride/scratch/displacement-base,
 		// slot 12 = i32 packed-array flag (set when the value was a TYPE_FARRAY,
 		// selecting
-		// the "#f(" prefix) -- all used by the array printer.
+		// the "#d(" prefix) -- all used by the array printer.
 		w.write(4);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1902,7 +1902,7 @@ final class WasmRuntimeBuilder {
 		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
 		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-12 = i32 (array
 		// index/length/rank/dimension/stride/scratch/displacement-base), slot 13 = i32
-		// packed-array flag (set when the value was a TYPE_FARRAY, selecting the "#f("
+		// packed-array flag (set when the value was a TYPE_FARRAY, selecting the "#d("
 		// prefix).
 		w.write(5);
 		w.write(1);
@@ -2294,7 +2294,7 @@ final class WasmRuntimeBuilder {
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
 			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot,
 			int packedSlot) {
-		// packedSlot = 0 (a general array prints "#("/"#nA(", a packed float array "#f(")
+		// packedSlot = 0 (a general array prints "#("/"#nA(", a packed float array "#d(")
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		setLocal(w, packedSlot);
@@ -2308,12 +2308,12 @@ final class WasmRuntimeBuilder {
 		// function
 		// index (the fixed FUNC_* indices the component blobs depend on stay put). The
 		// dims/data/idx/len slots used here are all re-set by the general logic
-		// afterwards; packedSlot is set so the prefix below becomes "#f(".
+		// afterwards; packedSlot is set so the prefix below becomes "#d(".
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
 		w.write(Instruction.IF, 0x40);
-		// remember this was a packed array so the prefix becomes "#f("
+		// remember this was a packed array so the prefix becomes "#d("
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		setLocal(w, packedSlot);
@@ -2530,7 +2530,7 @@ final class WasmRuntimeBuilder {
 		innerConsGet(w, dataSlot, 1);
 		setLocal(w, dataSlot);
 
-		// prefix: "#f(" for a packed float array; else "#(" for rank 1, "#" + rank + "A("
+		// prefix: "#d(" for a packed float array; else "#(" for rank 1, "#" + rank + "A("
 		// for rank n
 		getLocal(w, packedSlot);
 		w.write(Instruction.IF, 0x40);

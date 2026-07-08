@@ -131,7 +131,17 @@ public final class LispLexer {
 				// at
 				// read time. #f not followed by '(' falls through to symbol reading
 				// below.
-				tokens.add(new Token.FloatArrayOpen());
+				tokens.add(new Token.FloatArrayOpen(true));
+				this.pos += 3;
+			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'd' || this.input.charAt(this.pos + 1) == 'D')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #d( opens a packed double-float array literal (e.g., #d(1.0 2.0 3.0));
+				// same nested-list contents and inferred rank as #f(, but the wider
+				// (f64) backing. #d not followed by '(' falls through to symbol reading
+				// below.
+				tokens.add(new Token.FloatArrayOpen(false));
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {

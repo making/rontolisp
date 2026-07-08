@@ -6,13 +6,13 @@ Like the JSON and `linalg` libraries, `simd` is implemented once in Lisp source 
 
 ## Data representation
 
-A simd vector is a rank-1 [packed float array](../reference/data-types.md): the `double-float`-typed, unboxed array that `#f(...)` and `(make-array n :element-type 'double-float)` produce. The built-in `aref` / `length` interoperate with it, and any packed vector built elsewhere can be handed to a simd function. Element-wise kernels return a fresh vector; reductions return a scalar `double`.
+A simd vector is a rank-1 [packed float array](../reference/data-types.md): the `double-float`-typed, unboxed array that `#d(...)` and `(make-array n :element-type 'double-float)` produce. The built-in `aref` / `length` interoperate with it, and any packed vector built elsewhere can be handed to a simd function. Element-wise kernels return a fresh vector; reductions return a scalar `double`.
 
 ```lisp
-(simd:arange 5)                         ; => #f(0.0 1.0 2.0 3.0 4.0)
-(simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => #f(5.0 7.0 9.0)
-(simd:dot #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => 32.0
-(simd:scale #f(1.0 2.0 3.0) 10)         ; => #f(10.0 20.0 30.0)
+(simd:arange 5)                         ; => #d(0.0 1.0 2.0 3.0 4.0)
+(simd:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) ; => #d(5.0 7.0 9.0)
+(simd:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) ; => 32.0
+(simd:scale #d(1.0 2.0 3.0) 10)         ; => #d(10.0 20.0 30.0)
 ```
 
 ## The API
@@ -27,9 +27,9 @@ Reductions (a scalar): `simd:sum`, `simd:dot`, `simd:mean` and `simd:norm` (the 
 
 ```lisp
 (simd:sum (simd:arange 5))              ; => 10.0
-(simd:mean #f(2.0 4.0 6.0))             ; => 4.0
-(simd:norm #f(3.0 4.0))                 ; => 5.0
-(simd:to-list (simd:mul #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))) ; => (4.0 10.0 18.0)
+(simd:mean #d(2.0 4.0 6.0))             ; => 4.0
+(simd:norm #d(3.0 4.0))                 ; => 5.0
+(simd:to-list (simd:mul #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))) ; => (4.0 10.0 18.0)
 ```
 
 ## Hardware acceleration (optional)

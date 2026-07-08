@@ -204,7 +204,7 @@ final class JvmRuntimeBuilder {
 		// program can create promises)
 		emitPromiseBranch(code, promisePrint);
 		// if (val instanceof double[]) return
-		// _arrayToString(_fvToGeneral(val)).replaceFirst(...#f...); and
+		// _arrayToString(_fvToGeneral(val)).replaceFirst(...#d...); and
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
 		// used)
 		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint);
@@ -514,7 +514,7 @@ final class JvmRuntimeBuilder {
 		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (promises only)
 		emitPromiseBranch(code, promisePrint);
 		// if (val instanceof double[]) return
-		// _arrayToDisplayString(_fvToGeneral(val)).replaceFirst(...#f...); and
+		// _arrayToDisplayString(_fvToGeneral(val)).replaceFirst(...#d...); and
 		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
 		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint);
 		code.add(Opcode.ALOAD_0);
@@ -787,14 +787,15 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for printing a packed float array (a {@code double[]} at
-	 * runtime) through the {@code #f(...)} reader syntax, so its printed form round-trips
-	 * to a packed array. The element data is rendered by boxing to a general array
-	 * ({@code fvToGeneralMethod}) and reusing the ordinary array renderer, then the
-	 * leading {@code #}/{@code #nA} prefix is rewritten to {@code #f} with
-	 * {@code String.replaceFirst(prefixRegex, prefixRepl)} (regex {@code ^#\d*A?\(},
-	 * replacement {@code #f(}). Threaded into the two lisp-to-string builders only when
-	 * the program uses packed float arrays.
+	 * Constant-pool references for printing a packed double-float array (a
+	 * {@code double[]} at runtime) through the {@code #d(...)} reader syntax, so its
+	 * printed form round-trips to a packed array. The element data is rendered by boxing
+	 * to a general array ({@code fvToGeneralMethod}) and reusing the ordinary array
+	 * renderer, then the leading {@code #}/{@code #nA} prefix is rewritten to {@code #d}
+	 * with {@code String.replaceFirst(prefixRegex, prefixRepl)} (regex {@code ^#\d*A?\(},
+	 * replacement {@code #d(}). Threaded into the two lisp-to-string builders only when
+	 * the program uses packed float arrays. (Single-float {@code #f} is not yet emitted
+	 * by this backend; the compiled packed array is always double.)
 	 */
 	record PackedPrint(ClassConstant doubleArrayClass, MethodrefConstant fvToGeneralMethod,
 			MethodrefConstant stringReplaceFirst, ConstantPool.StringConstant prefixRegex,
@@ -878,12 +879,12 @@ final class JvmRuntimeBuilder {
 	// position, used by both the prin1 and princ string builders. A no-op when arrays are
 	// not used (both args null), keeping the branch out of array-free programs. When the
 	// program uses packed float arrays a preceding "if (val instanceof double[]) return
-	// arrayToString(_fvToGeneral(val)).replaceFirst("^#\\d*A?\\(", "#f(");" branch
+	// arrayToString(_fvToGeneral(val)).replaceFirst("^#\\d*A?\\(", "#d(");" branch
 	// renders a
-	// packed double[] through the #f(...) syntax (so it round-trips to a packed array):
+	// packed double[] through the #d(...) syntax (so it round-trips to a packed array):
 	// the
 	// element data is rendered exactly as the general counterpart, then the leading
-	// #/#nA prefix is rewritten to #f.
+	// #/#nA prefix is rewritten to #d.
 	private static void emitArrayBranch(List<Integer> code,
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,

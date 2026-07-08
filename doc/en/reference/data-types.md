@@ -214,32 +214,40 @@ quoting string elements and `princ` not:
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
 ```
 
-### Packed float arrays (`#f`)
+### Packed float arrays (`#d` / `#f`)
 
-`#f(...)` denotes a **packed float array**: a `double-float`-typed array whose
-elements are stored unboxed. It reads like `#(...)`, but every element is coerced
-to a `double-float`, so `#f(1 2 3)` and `#f(1.0 2.0 3.0)` are the same vector and
-`(array-element-type #f(1.0))` is `double-float`. Higher-rank literals use nested
-lists -- `#f((1.0 2.0) (3.0 4.0))` is a matrix -- and
-`(make-array n :element-type 'double-float)` builds one at runtime. Storing a
-non-real into a packed array is a type error (a general array holds any value).
-Otherwise a packed array behaves like a general array of the same doubles for
-every operation -- `aref`, `(setf (aref ...))`, `length`, `row-major-aref`,
-`array-rank`, `array-dimensions` and `coerce` all work on it -- except that it
-prints with its own `#f(...)` reader syntax, so its printed form reads back as a
-packed array (preserving the unboxed representation) rather than degrading to a
-general one. It is simply the unboxed, `double-float`-specialized representation the numeric
-kernels use, so fill pointers, adjustable and displaced arrays are not available
-on it (those need a general array). For fast vectorized kernels over packed
-arrays -- and their optional hardware acceleration -- see the
+`#d(...)` and `#f(...)` denote a **packed float array**: a float-typed array whose
+elements are stored unboxed. `#d(...)` is `double-float` (f64) and `#f(...)` is
+`single-float` (f32 -- half the memory, double the SIMD lane count). They read like
+`#(...)`, but every element is coerced to the array's float type, so `#d(1 2 3)` and
+`#d(1.0 2.0 3.0)` are the same vector and `(array-element-type #d(1.0))` is
+`double-float` (`single-float` for `#f`). Higher-rank literals use nested lists --
+`#d((1.0 2.0) (3.0 4.0))` is a matrix -- and
+`(make-array n :element-type 'double-float)` (or `'single-float`) builds one at
+runtime.
+
+Scalars stay `double`: reading an element widens it to a `double` (a single-float
+element is widened f32 -> f64), and storing one narrows it to the array's width
+(f64 -> f32 for a single-float array). Storing a non-real is a type error (a general
+array holds any value). Otherwise a packed array behaves like a general array of the
+same numbers for every operation -- `aref`, `(setf (aref ...))`, `length`,
+`row-major-aref`, `array-rank`, `array-dimensions` and `coerce` all work on it --
+except that it prints with its own `#d(...)` / `#f(...)` reader syntax, so its printed
+form reads back as a packed array of the same width (preserving the unboxed
+representation) rather than degrading to a general one. It is simply the unboxed,
+float-specialized representation the numeric kernels use, so fill pointers, adjustable
+and displaced arrays are not available on it (those need a general array). The
+double-float width is the default and what `linalg` produces. For fast vectorized
+kernels over packed arrays -- and their optional hardware acceleration -- see the
 [`simd` package](../guides/simd-acceleration.md).
 
 ```lisp
-(aref #f(1.0 2.0 3.0) 1)                   ; => 2.0
-(array-element-type #f(1 2 3))             ; => double-float
-(print #f((1.0 2.0) (3.0 4.0)))            ; #f((1.0 2.0) (3.0 4.0))
-(coerce #f(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
-(let ((v (make-array 3 :element-type 'double-float :initial-element 0.0)))
+(aref #d(1.0 2.0 3.0) 1)                   ; => 2.0
+(array-element-type #d(1 2 3))             ; => double-float
+(array-element-type #f(1.0 2.0))           ; => single-float
+(print #d((1.0 2.0) (3.0 4.0)))            ; #d((1.0 2.0) (3.0 4.0))
+(coerce #d(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
+(let ((v (make-array 3 :element-type 'single-float :initial-element 0.0)))
   (setf (aref v 0) 5)
   v)                                        ; => #f(5.0 0.0 0.0)
 ```
