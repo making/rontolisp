@@ -17,6 +17,7 @@ import java.util.Set;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -93,34 +94,48 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		 * A string: an {@code i32} pointer to a linear-memory header
 		 * {@code [len:i32 little-endian][len UTF-8 bytes]}.
 		 */
-		STRING;
+		STRING,
+		/**
+		 * A packed {@code f64} vector (the {@code double-float} array element type): an
+		 * {@code i32} pointer to a linear-memory header {@code [count:i32 little-endian]
+		 * [count f64 little-endian]}. A distinct reference kind from {@code STRING} even
+		 * though both are {@code i32} pointers -- types are static, so no runtime
+		 * discriminator is needed. Only rank-1 packs here (a rank>=2 array is a clear
+		 * compile error on the scalar backend, which has no rank-n packed layout yet).
+		 */
+		F64VEC;
 
 		/**
-		 * The result type when this and another type are combined. Within the numeric
-		 * sublattice float wins over int. {@code STRING} is a separate kind: it joins
-		 * only with itself or with {@code INT} (which doubles as the inference bottom, so
-		 * a not-yet-seen slot yields to a string), while joining a {@code STRING} with a
-		 * {@code FLOAT} is a genuine type error (a slot cannot be both a string and a
-		 * float).
+		 * The result type when this and another type are combined. {@code INT} doubles as
+		 * the inference bottom, so a not-yet-seen slot yields to whatever concrete kind
+		 * it first meets. {@code FLOAT}, {@code STRING} and {@code F64VEC} are mutually
+		 * incompatible (a value cannot be more than one of number / string /
+		 * float-vector), which is a genuine type error.
 		 */
 		Ty join(Ty other) {
-			if (this == STRING || other == STRING) {
-				if (this == FLOAT || other == FLOAT) {
-					throw new UnsupportedOperationException("--no-gc: a value cannot be both a string and a number");
-				}
-				return STRING;
+			if (this == other) {
+				return this;
 			}
-			return (this == FLOAT || other == FLOAT) ? FLOAT : INT;
+			if (this == INT) {
+				return other;
+			}
+			if (other == INT) {
+				return this;
+			}
+			throw new UnsupportedOperationException("--no-gc: incompatible types " + this + " and " + other
+					+ " (a value cannot be more than one of number / string / float-vector)");
 		}
 
 		/**
 		 * The wasm value type byte (also the {@code if}/{@code block} result blocktype).
+		 * Both reference kinds ({@code STRING}, {@code F64VEC}) are linear-memory
+		 * pointers, so both are {@code i32}.
 		 */
 		int valType() {
 			return switch (this) {
 				case INT -> Type.I64.code();
 				case FLOAT -> Type.F64.code();
-				case STRING -> Type.I32.code();
+				case STRING, F64VEC -> Type.I32.code();
 			};
 		}
 
@@ -140,6 +155,14 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE, LispNames.LENGTH,
 			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
 			LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING);
+
+	/**
+	 * The packed double-float array operators (F64VEC). Like {@link #BUILTINS} they
+	 * evaluate all their arguments, but they operate on / produce a linear-memory vector
+	 * rather than a scalar; kept separate only for readability.
+	 */
+	private static final Set<String> ARRAY_OPS = Set.of(LispNames.AREF, LispNames.ROW_MAJOR_AREF, LispNames.ASET,
+			LispNames.ROW_MAJOR_ASET);
 
 	private final boolean optimize;
 
@@ -444,6 +467,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispInteger ignored -> Ty.INT;
 			case LispDouble ignored -> Ty.FLOAT;
 			case LispString ignored -> Ty.STRING;
+			case LispFloatArray ignored -> Ty.F64VEC;
 			case LispChar ignored -> Ty.INT;
 			case LispTrue ignored -> Ty.INT;
 			case LispNil ignored -> Ty.INT;
@@ -532,6 +556,30 @@ public final class ScalarWasmCompiler implements LispCompiler {
 					typeOf(args.get(i), env, tc);
 				}
 				return Ty.STRING;
+			}
+			// A quoted datum (e.g. a make-array dimension list '(2 3) or an :element-type
+			// 'double-float designator) is not a runtime value on the scalar backend, so
+			// it
+			// carries no meaningful type; return the INT bottom WITHOUT recursing into
+			// the
+			// quoted structure (walking '(2 3) as a call would treat 2 as an operator).
+			case LispNames.QUOTE -> {
+				return Ty.INT;
+			}
+			// A packed double-float array literal or (make-array ... :element-type
+			// 'double-float) is a F64VEC. aref / row-major-aref read a f64 element;
+			// %aset / %row-major-aset return the (coerced) f64 value they stored.
+			case LispNames.MAKE_ARRAY -> {
+				for (int i = 1; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.F64VEC;
+			}
+			case LispNames.AREF, LispNames.ROW_MAJOR_AREF, LispNames.ASET, LispNames.ROW_MAJOR_ASET -> {
+				for (int i = 1; i < args.size(); i++) {
+					typeOf(args.get(i), env, tc);
+				}
+				return Ty.FLOAT;
 			}
 			// Comparisons, predicates, not, the bitwise operators and the string/char
 			// accessors (a character is its code point) yield an integer.
@@ -699,7 +747,18 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
-		boolean used = !literals.isEmpty() || boundaryString || stringOp;
+		// A #f(...) literal or (make-array ... :element-type 'double-float) materializes
+		// a
+		// packed f64 vector in linear memory via the bump allocator, so it also flags the
+		// memory as used even in an otherwise pure-numeric program.
+		boolean floatVec = false;
+		for (String name : reachable) {
+			if (usesFloatArray(progn(Objects.requireNonNull(defuns.get(name)).body()))) {
+				floatVec = true;
+				break;
+			}
+		}
+		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
 		int allocIndex = internalCount + exportDecls.size();
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
@@ -723,6 +782,22 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				return true;
 			}
 			return usesStringOp(c.car()) || usesStringOp(c.cdr());
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a body allocates a packed f64 vector (a #f literal or a make-array call).
+	 */
+	private static boolean usesFloatArray(LispVal v) {
+		if (v instanceof LispFloatArray) {
+			return true;
+		}
+		if (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s && LispNames.MAKE_ARRAY.equals(s.name())) {
+				return true;
+			}
+			return usesFloatArray(c.car()) || usesFloatArray(c.cdr());
 		}
 		return false;
 	}
@@ -1109,7 +1184,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return switch (ty) {
 			case INT -> Type.I64;
 			case FLOAT -> Type.F64;
-			case STRING -> Type.I32;
+			case STRING, F64VEC -> Type.I32;
 		};
 	}
 
@@ -1335,6 +1410,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 				fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(off);
 				return Ty.STRING;
 			}
+			case LispFloatArray fa -> {
+				return compileFloatArrayLiteral(fa, fn);
+			}
 			case LispChar c -> {
 				// A character is its code point (see the BUILTINS note).
 				i64Const(fn.writer, c.codePoint());
@@ -1373,7 +1451,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		// yields "" rather than a string/number type clash. This is what makes the
 		// cond-with-a-`t`-clause expansion (which threads an explicit nil else)
 		// type-check.
-		if (target == Ty.STRING && expr instanceof LispNil) {
+		if ((target == Ty.STRING || target == Ty.F64VEC) && expr instanceof LispNil) {
 			fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(0);
 			return;
 		}
@@ -1384,9 +1462,12 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (from == to) {
 			return;
 		}
-		if (from == Ty.STRING || to == Ty.STRING) {
-			throw new UnsupportedOperationException(
-					"--no-gc: cannot use a string where a number is expected (or vice versa)");
+		// STRING and F64VEC are reference kinds; the only valid non-identity coercions
+		// are
+		// between the two numeric kinds (INT <-> FLOAT).
+		if (from == Ty.STRING || to == Ty.STRING || from == Ty.F64VEC || to == Ty.F64VEC) {
+			throw new UnsupportedOperationException("--no-gc: incompatible types " + from + " and " + to
+					+ " (a value cannot be more than one of number / string / float-vector)");
 		}
 		if (from == Ty.INT) {
 			w.write(Instruction.F64_CONVERT_S_I64); // i64 -> f64
@@ -1430,6 +1511,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.SQRT -> compileSqrt(args, fn);
 			case LispNames.CONCATENATE -> compileConcatenate(args, fn);
 			case LispNames.LENGTH -> compileLength(args, fn);
+			case LispNames.MAKE_ARRAY -> compileMakeArray(args, fn);
+			case LispNames.AREF, LispNames.ROW_MAJOR_AREF -> compileAref(name, args, fn);
+			case LispNames.ASET, LispNames.ROW_MAJOR_ASET -> compileAset(name, args, fn);
 			case LispNames.SUBSEQ -> compileSubseq(args, fn);
 			case LispNames.STRING_EQ -> compileStringEq(args, fn);
 			case LispNames.CHAR -> compileCharAt(args, fn);
@@ -1928,15 +2012,250 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.STRING;
 	}
 
-	// (length s): the stored i32 length header, widened to the i64 integer type.
+	// (length s): the stored i32 count header, widened to the i64 integer type. A string
+	// [len:i32][bytes] and a float-vector [count:i32][f64...] both keep their element
+	// count as the leading i32 word, so length reads either identically.
 	private Ty compileLength(List<LispVal> args, Fn fn) {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("--no-gc: length takes one argument in '" + fn.fnName + "'");
 		}
-		compileCoerced(args.get(1), fn, Ty.STRING);
+		if (args.get(1) instanceof LispNil) {
+			// (length nil) == 0.
+			i64Const(fn.writer, 0);
+			return Ty.INT;
+		}
+		Ty t = compileExpr(args.get(1), fn);
+		if (t != Ty.STRING && t != Ty.F64VEC) {
+			throw new UnsupportedOperationException(
+					"--no-gc: length expects a string or a float-vector in '" + fn.fnName + "'");
+		}
 		fn.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
 		fn.writer.write(Instruction.I64_EXTEND_U_I32);
 		return Ty.INT;
+	}
+
+	// --- packed double-float vectors (F64VEC) ------------------------------------------
+	//
+	// A F64VEC is an i32 pointer to a linear-memory header [count:i32 LE][count f64 LE].
+	// #f(...) literals and (make-array n :element-type 'double-float) materialize one;
+	// the
+	// generic aref/%aset/length operate on it. Only rank-1 is supported (a rank>=2 array
+	// has no packed layout on the scalar backend, so it is a clear compile error). The
+	// vectorizable simd: kernels (v128) build on this layer -- see .todo/94 Phase 4B.
+
+	private static void requireArgc(List<LispVal> args, int expected, String op, Fn fn) {
+		if (args.size() != expected) {
+			throw new UnsupportedOperationException(
+					"--no-gc: " + op + " takes " + (expected - 1) + " argument(s) in '" + fn.fnName + "'");
+		}
+	}
+
+	// dst = __alloc(4 + 8*count); mem[dst] = count (the element-count header). Returns
+	// the
+	// i32 base-pointer local; count is read from countLocal.
+	private int allocVec(Fn fn, int countLocal) {
+		WasmWriter w = fn.writer;
+		int dst = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_SHL); // 8*count
+		w.write(Instruction.I32_ADD); // 4 + 8*count
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		return dst;
+	}
+
+	// Emits base + 4 + (i << 3): the i32 address of element i, given the vector arg and
+	// the index arg.
+	private void emitElementAddr(LispVal vec, LispVal idx, Fn fn) {
+		WasmWriter w = fn.writer;
+		compileCoerced(vec, fn, Ty.F64VEC);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		compileCoerced(idx, fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+	}
+
+	// A #f(...) double-float literal -> a fresh packed vector materialized in linear
+	// memory. Only a rank-1 literal packs to a f64 vector; a rank>=2 literal has no
+	// packed
+	// rank-n layout on the scalar backend, so it is a clear compile error. The count is
+	// known at read time, so each constant is stored with a straight-line f64.store.
+	private Ty compileFloatArrayLiteral(LispFloatArray fa, Fn fn) {
+		if (fa.rank() != 1) {
+			throw new UnsupportedOperationException(
+					"--no-gc: a multi-dimensional #f(...) literal (rank " + fa.rank() + ") in function '" + fn.fnName
+							+ "' is not supported; only a rank-1 #f(...) packs to a f64 vector");
+		}
+		WasmWriter w = fn.writer;
+		double[] data = fa.data();
+		int n = data.length;
+		int count = fn.allocLocal(Ty.F64VEC); // i32 scratch
+		w.write(Instruction.I32_CONST).writeSignedLeb128(n);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count);
+		for (int i = 0; i < n; i++) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(4 + 8 * i);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.F64_CONST).writeF64(data[i]);
+			w.write(Instruction.F64_STORE, 0x00, 0x00);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F64VEC;
+	}
+
+	// (aref v i) / (row-major-aref v i) -> the i-th f64 element (no bounds check, like
+	// the
+	// rest of the backend). Rank-1 only, so exactly one subscript is allowed; more
+	// subscripts imply a rank>=2 array, which the requireArgc(3) check rejects.
+	private Ty compileAref(String name, List<LispVal> args, Fn fn) {
+		requireArgc(args, 3, name, fn);
+		emitElementAddr(args.get(1), args.get(2), fn);
+		fn.writer.write(Instruction.F64_LOAD, 0x00, 0x00);
+		return Ty.FLOAT;
+	}
+
+	// (%aset v i x) / (%row-major-aset v i x) -> store x (coerced to f64) at element i,
+	// returning the stored value so a setf place reads back the assigned value.
+	private Ty compileAset(String name, List<LispVal> args, Fn fn) {
+		requireArgc(args, 4, name, fn);
+		WasmWriter w = fn.writer;
+		int addr = fn.allocLocal(Ty.F64VEC); // i32 element address
+		int val = fn.allocLocal(Ty.FLOAT);
+		emitElementAddr(args.get(1), args.get(2), fn);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(addr);
+		compileCoerced(args.get(3), fn, Ty.FLOAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(val);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(addr);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+		return Ty.FLOAT;
+	}
+
+	// (make-array n :element-type 'double-float [:initial-element x]) -> a fresh packed
+	// vector of n elements, filled with x (default 0.0). Rank-1 only; :element-type
+	// 'double-float is required (the scalar backend has no general array type); the
+	// fill-pointer/adjustable/displaced options a packed vector cannot represent are hard
+	// errors.
+	private Ty compileMakeArray(List<LispVal> args, Fn fn) {
+		if (args.size() < 2) {
+			throw new UnsupportedOperationException("--no-gc: make-array needs a dimension in '" + fn.fnName + "'");
+		}
+		if (!isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
+			throw new UnsupportedOperationException("--no-gc: make-array is only supported with :element-type "
+					+ "'double-float in '" + fn.fnName + "' (the scalar backend has no general array type)");
+		}
+		if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
+				|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
+				|| findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD) != null) {
+			throw new UnsupportedOperationException("--no-gc: make-array :fill-pointer / :adjustable / :displaced-to "
+					+ "is not supported on a packed float-vector in '" + fn.fnName + "'");
+		}
+		LispVal lengthExpr = requireRank1Dims(args.get(1), fn);
+		WasmWriter w = fn.writer;
+		int count = fn.allocLocal(Ty.F64VEC); // i32 element count
+		compileCoerced(lengthExpr, fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count);
+		// Evaluate the fill value once into a f64 local (:initial-element, default 0.0).
+		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		int fill = fn.allocLocal(Ty.FLOAT);
+		if (init == null) {
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+		}
+		else {
+			compileCoerced(init, fn, Ty.FLOAT);
+		}
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(fill);
+		// for (i = 0; i < count; i++) mem[dst + 4 + (i << 3)] = fill
+		int i = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fill);
+		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F64VEC;
+	}
+
+	// A make-array dimension spec must denote a rank-1 length. Accept an integer /
+	// runtime
+	// expression (the length directly) or a quoted single-element list '(n); a longer
+	// literal list is a rank>=2 array, which has no packed layout on this backend.
+	private LispVal requireRank1Dims(LispVal dimsArg, Fn fn) {
+		LispVal spec = dimsArg;
+		if (spec instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& c.cdr() instanceof LispCons rest) {
+			spec = rest.car();
+		}
+		if (spec instanceof LispCons list) {
+			List<LispVal> dims = list.toList();
+			if (dims.size() != 1) {
+				throw new UnsupportedOperationException("--no-gc: a rank-" + dims.size() + " make-array in '"
+						+ fn.fnName + "' is not supported; only a rank-1 double-float array packs to a f64 vector");
+			}
+			return dims.get(0);
+		}
+		return dimsArg;
+	}
+
+	// The value following a :keyword in a flat argument list (scanning the keyword pairs
+	// after the single positional dimension), or null if absent. Mirrors the wasm-GC/JVM
+	// WasmArrayCompiler.findKeywordValue.
+	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {
+		for (int i = 2; i + 1 < args.size(); i += 2) {
+			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return args.get(i + 1);
+			}
+		}
+		return null;
+	}
+
+	// Whether an :element-type value designates double-float (the only packed element
+	// type
+	// on this backend), unwrapping a (quote double-float) and ignoring any package
+	// qualifier. Mirrors WasmArrayCompiler.isDoubleFloatElementType.
+	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
+		LispVal sym = elementType;
+		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			sym = rest.car();
+		}
+		if (sym instanceof LispSymbol s) {
+			String name = s.name();
+			int colon = name.lastIndexOf(':');
+			return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+		}
+		return false;
 	}
 
 	// (char s i): the byte at content offset i, as its code point (a character IS its
@@ -2207,6 +2526,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			}
 			case LispString ignored -> {
 			}
+			case LispFloatArray ignored -> {
+			}
 			case LispChar ignored -> {
 			}
 			case LispTrue ignored -> {
@@ -2250,8 +2571,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			collectConcatenate(args, bound, defuns, callees, fnName);
 			return;
 		}
+		if (LispNames.MAKE_ARRAY.equals(name)) {
+			collectMakeArray(args, bound, defuns, callees, fnName);
+			return;
+		}
 		if (LispNames.IF.equals(name) || LispNames.PROGN.equals(name) || LispNames.WHILE.equals(name)
-				|| LispNames.BLOCK_INTERNAL.equals(name) || LispNames.RETURN.equals(name) || BUILTINS.contains(name)) {
+				|| LispNames.BLOCK_INTERNAL.equals(name) || LispNames.RETURN.equals(name) || BUILTINS.contains(name)
+				|| ARRAY_OPS.contains(name)) {
 			for (int i = 1; i < args.size(); i++) {
 				collectCalls(args.get(i), bound, defuns, callees, fnName);
 			}
@@ -2307,6 +2633,25 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 	}
 
+	// make-array's argument list mixes a dimension expression with :keyword literals (the
+	// :element-type quote, keyword symbols), so only the runtime sub-expressions are
+	// collected: the dimension (unless it is a quoted '(n) literal) and the
+	// :initial-element
+	// value. The other keywords are validated later in compileMakeArray.
+	private void collectMakeArray(List<LispVal> args, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
+			String fnName) {
+		if (args.size() >= 2) {
+			LispVal dims = args.get(1);
+			if (!(dims instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name()))) {
+				collectCalls(dims, bound, defuns, callees, fnName);
+			}
+		}
+		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		if (init != null) {
+			collectCalls(init, bound, defuns, callees, fnName);
+		}
+	}
+
 	// Whether value is (quote name) or the bare symbol name.
 	private static boolean isQuotedSymbol(LispVal value, String name) {
 		if (value instanceof LispSymbol s) {
@@ -2357,6 +2702,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.WHEN -> LispMacroExpander.expandWhen(cons);
 			case LispNames.UNLESS -> LispMacroExpander.expandUnless(cons);
 			case LispNames.LET_STAR -> LispMacroExpander.expandLetStar(cons);
+			// setf of a variable -> setq; setf of an (aref v i) place -> %aset. The
+			// scalar
+			// backend has no structs/CLOS, so the no-registry expansion is exactly right.
+			case LispNames.SETF -> LispMacroExpander.expandSetf(cons);
 			case LispNames.ONE_PLUS -> LispMacroExpander.expandOnePlus(cons);
 			case LispNames.ONE_MINUS -> LispMacroExpander.expandOneMinus(cons);
 			case LispNames.ZEROP -> LispMacroExpander.expandZerop(cons);

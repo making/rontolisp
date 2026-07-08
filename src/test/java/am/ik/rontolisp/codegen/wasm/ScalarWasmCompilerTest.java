@@ -549,4 +549,80 @@ class ScalarWasmCompilerTest {
 		return result;
 	}
 
+	// --- packed double-float vectors (F64VEC) ------------------------------------------
+
+	@Test
+	void packedFloatVectorUsesLinearMemoryWithScalarTypesOnly() {
+		// A #f(...) literal + aref: the vector lives in linear memory (a memory section
+		// is
+		// present, id 5) but every type is still a plain scalar func type -- no wasm-GC
+		// struct/array/i31/eqref and no imports.
+		byte[] module = compile("""
+				(defun third (i) (aref #f(10.0 20.0 30.0 40.0) i))
+				(rontolisp:wasm-export 'third :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("third");
+	}
+
+	@Test
+	void makeArrayDoubleFloatAndSetfArefCompileToAScalarModule() {
+		// make-array :element-type 'double-float + (setf (aref ...)) + length: still a
+		// plain MVP module with a memory section and scalar-only func types.
+		byte[] module = compile("""
+				(defun build (n x)
+				  (let ((v (make-array n :element-type 'double-float :initial-element 0.0)))
+				    (setf (aref v 0) x)
+				    (+ (aref v 0) (length v))))
+				(rontolisp:wasm-export 'build :params '(:int :float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("build");
+	}
+
+	@Test
+	void rank2FloatLiteralIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f () (aref #f((1.0 2.0) (3.0 4.0)) 0))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("multi-dimensional #f(...) literal (rank 2)")
+			.hasMessageContaining("only a rank-1");
+	}
+
+	@Test
+	void rank2MakeArrayIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f () (aref (make-array '(2 3) :element-type 'double-float) 0))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rank-2 make-array")
+			.hasMessageContaining("only a rank-1");
+	}
+
+	@Test
+	void makeArrayWithoutDoubleFloatElementTypeIsAClearCompileError() {
+		// The scalar backend has no general (boxed) array type, so a make-array without
+		// :element-type 'double-float cannot be represented.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (make-array n) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("only supported with :element-type")
+			.hasMessageContaining("double-float");
+	}
+
+	@Test
+	void makeArrayWithFillPointerOrAdjustableIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (make-array n :element-type 'double-float :adjustable t) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":fill-pointer / :adjustable / :displaced-to");
+	}
+
 }

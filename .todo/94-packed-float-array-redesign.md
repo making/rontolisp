@@ -346,10 +346,38 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
     - `programContainsArrayLiteral` (:2231) gates only fill-pointer wrapper defuns; a `#f`-only program
       calling aref works WITHOUT a gate change (inline ops; farray types + print unconditional). Verify
       `vectorp`/`svref` (expand via `%arrayp`) on a `#f`-only program still emit what they need.
-- **Phase 4 (`--no-gc`) — real `F64VEC` + native `v128`.** No general array type here, so there
-  is no fallback anyway. Port `ScalarWasmCompiler` F64VEC (`git show 5b1b065`, ~857-line diff):
-  rank-1 first (design: "essentially done"); rank-n = a CLEAR COMPILE ERROR initially (an explicit
-  error, NOT a silent fallback). This is where the native-SIMD win lives.
+- **Phase 4 (`--no-gc`) — split into 4A (repr+ops) and 4B (v128), forced by dependency order.**
+  - **Phase 4A DONE (2026-07-08) — `F64VEC` repr + generic `aref`/`%aset`/`length`/`make-array`.**
+    `ScalarWasmCompiler` gained `Ty.F64VEC` (a 4th kind, i32 pointer to `[count:i32][count f64]`
+    linear-memory block, mutually-incompatible reference kind like STRING; `join` rewritten to the
+    INT-as-bottom form, `valType`/`wasmType` add `case STRING, F64VEC -> i32`). `#f(...)` rank-1
+    literal (`compileFloatArrayLiteral`, straight-line f64.store from `LispFloatArray.data()`) and
+    `(make-array n :element-type 'double-float [:initial-element x])` rank-1 (`compileMakeArray`, fill
+    loop) build F64VECs; **generic** `aref`/`row-major-aref` (`compileAref` → `f64.load`), `%aset`/
+    `%row-major-aset` (`compileAset`, coerce→f64, returns the stored value), `length` (reads the
+    leading i32 count, shared with strings) dispatch to them — NOT via `simd:` names (5b1b065 used
+    `simd:aref`; the new design routes through the real array ops since `#f` is a genuine
+    `(array double-float)`). Helpers `allocVec`/`emitElementAddr`/`requireArgc`/`requireRank1Dims`/
+    `findKeywordValue`/`isDoubleFloatElementType` (last two mirror `WasmArrayCompiler`). Wired into
+    ALL THREE operator-enumerating passes: `collectCalls` (eligibility: `LispFloatArray` atom no-op +
+    `ARRAY_OPS` set for aref/aset walk + dedicated `collectMakeArray` that skips keyword/quote args) +
+    `typeOf`/`typeOfCall` (F64VEC atom, aref/aset→FLOAT, make-array→F64VEC, **new `QUOTE`→INT case
+    that does NOT recurse — else `typeOf` walks `'(2 3)` and casts `2` to LispSymbol → CCE**) +
+    `compileCall` codegen. `setf` added to `expandMacro` (no-registry `expandSetf`, was never needed
+    on `--no-gc` before). Memory flag: `usesFloatArray` (a `#f` literal or `make-array`) unions into
+    `mem.used()`. rank>1 `#f`/`make-array '(2 3)`, `make-array` without `:element-type 'double-float`,
+    and `:fill-pointer`/`:adjustable`/`:displaced-to` = CLEAR compile errors. `array-dimensions`/
+    `array-element-type` NOT supported (no list/symbol runtime type on `--no-gc`). **Verified:** full
+    suite **2894** green (+6 new `ScalarWasmCompilerTest` F64VEC tests: 2 structural asserting a
+    memory section + scalar-only func types, 4 error-message); wasmtime `--invoke` end-to-end all
+    correct (`#f`+aref=30, length=4, dot-product loop=32, make-array+setf=15, make-array+
+    :initial-element+sum=10/15). Pure-numeric `--no-gc` still emits NO memory section (regression
+    guard green). No general array type here, so no fallback — every path is packed-or-error.
+  - **Phase 4B (with Phase 5): `simd:` kernel interception + native `v128`.** Port 5b1b065's
+    `compileSimd` + `SIMD_MEMBERS` + the `f64x2.*` `compileSimdElementwise`/`Dot`/`Scale`/`Sum` +
+    `openSimdLoop`/`closeSimdLoop` over the F64VEC block. Needs `simd.lisp` (Phase 5) to define/produce
+    the `simd:*` calls to intercept, so it is verifiable only paired with the library. This is where
+    the native-SIMD win lives.
 - **Phase 5 (libraries)** — `simd.lisp`/`linalg.lisp` `make-array ... :element-type 'double-float`
   so they PRODUCE packed arrays; wire the JVM `--simd` interception + `SimdLibrary`/`RontoLispCli`
   gates. NOTE: `linalg.lisp` uses `:initial-element 0` (INTEGER) today → packing changes linalg
@@ -362,15 +390,20 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
 ### Resumption facts (post-compaction)
 
 - **Branch `feat/packed-float-array` off `develop` (440056c). Phase 1+2+3 COMMITTED at `f3d5ccd`**
-  (the branch's first commit; working tree clean afterwards). Full suite green: 2879, skip 2 (WASM
-  Docker). Phase 4+ work starts fresh on top of `f3d5ccd`.
+  (branch's first commit) + doc follow-up `48066c0`. **Phase 4A is DONE but UNCOMMITTED** (working
+  tree dirty: `ScalarWasmCompiler.java` + `ScalarWasmCompilerTest.java` + this `.todo`). Full suite
+  green: **2894**, skip 2 (WASM Docker). Phase 4B+ starts on top of the Phase 4A commit.
 - **Done:** Phase 0 (CliOptions `--simd` + `CliOptionsTest`), Phase 1 (frontend + interpreter REAL
   rank-n packed: `LispFloatArray`, reader `#f`, Environment dispatch, `LispNames.DOUBLE_FLOAT`;
-  `LispFloatArrayTest` 13), **Phase 2 (JVM real rank-n packed `double[]`, Option X — see "Phase 2
-  DONE" above; `JvmFloatArrayTest` 16; CLI-verified interp==JVM byte-identical).** Remaining:
-  Phase 3 (wasm-GC), Phase 4 (--no-gc), Phase 5 (libs), Phase 2C (`--simd` accel, with Phase 5),
-  Phase 6 (verify). NEXT UP: Phase 3 (wasm-GC packed struct) — advances the core cross-backend
-  deliverable; `--simd` (2C) deferred to pair with Phase 5.
+  `LispFloatArrayTest` 13), **Phase 2 (JVM real rank-n packed `double[]`, Option X; `JvmFloatArrayTest`
+  16; interp==JVM byte-identical), Phase 3 (wasm-GC `TYPE_FARRAY` struct; all 4 backends
+  byte-identical; ci-spec case), Phase 4A (`--no-gc` `F64VEC` repr + generic aref/%aset/length/
+  make-array; +6 `ScalarWasmCompilerTest`; wasmtime end-to-end verified — see "Phase 4A DONE"
+  above).** Remaining: Phase 4B (--no-gc `simd:` v128 kernels), Phase 5 (libs produce packed),
+  Phase 2C (JVM `--simd` accel), Phase 6 (verify/docs/benchmark). **NEXT UP: the accel push — 4B +
+  2C + 5 together** (v128 + JVM Vector-API interception both need `simd.lisp`/`linalg.lisp` to PRODUCE
+  packed arrays, so port `simd.lisp` from `git show 21fb03e:...simd.lisp`, make its `make-array`
+  calls `:element-type 'double-float`, then wire both interceptors + reconcile linalg int→double).
 - **New files:** `LispFloatArray.java`, `codegen/jvm/JvmFloatArrayRuntimeBuilder.java`, tests
   `CliOptionsTest`/`LispFloatArrayTest`/`JvmFloatArrayTest`, this `.todo/94`. **Modified:**
   `LispNames`, `LispVal` (seal += LispFloatArray), `CliOptions`, `reader/{Token,LispLexer,LispReader}`,
