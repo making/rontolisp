@@ -422,10 +422,39 @@ Phases mirror `.todo/94`'s order:
    via an int-returning wrapper or the unit test's structural checks). Keep the F64VEC path
    BYTE-IDENTICAL (the f64x2 branch untouched) — dead-flag/byte-identical proof like the JVM
    `--simd`. Ordering: do 5a (storage) fully + green first, then 5b (kernels).
-6. **Reconcile the `#f`→`#d` print flip** across tests/docs/examples/ci-spec (the todo-94
-   Option B / Phase 5b playbook — same `#(`/`#nA(`→prefix churn, now double RESULTS print
-   `#d`; add single-float cases). `data-types.md` `#f`/`#d` doc (en+ja). Native
-   `CiSpecE2eTest` + all-4-backend verify.
+6. **Cross-backend single-float ci-spec + docs (close out Part 1). [PLAN — grounded in the
+   post-Phase-5 state, 2026-07-08.]** Most of the `#f`→`#d` reconciliation was PULLED FORWARD
+   into Phase 1 (all test files / docs / the compiled-print prefix already flipped; `mvn test`
+   + native `CiSpecE2eTest` were green then). What actually REMAINS:
+   - **`data-types.md` (en+ja): ALREADY DONE in Phase 1** — the `#d`(double)/`#f`(single)
+     prose + `(array-element-type #f(1.0 2.0)) ; => single-float` example are present. Only
+     add 1-2 more `#f` example lines IF a runnable single-float example adds value (verify via
+     `DocExamplesTest`; keep en+ja byte-identical fences). Likely a no-op.
+   - **Add ONE `#f` cross-backend `ci-spec.yaml` case** (`packed-single-float-cross-backend`,
+     mirror `packed-double`/`vector-literals-cross-backend`). ci-spec runs interpreter / JVM /
+     WASM-P1 / WASM-component (NOT `--no-gc` — that's covered by the new
+     `WasmLispCompilerIntegrationTest` invoke E2E). **TWO hard cross-backend constraints the
+     case MUST respect (both already learned, do NOT relitigate):**
+     1. **f32 print divergence** — the WASM double-printer renders a non-terminating decimal
+        differently (`0.10000000149011612` → `0.1`). So only ever PRINT f32-exact values
+        (integers, 0.5, 0.25, …), the `single-float` symbol, and vectors of exact values; for
+        any NON-exact narrowing proof use a BOOLEAN `(= (aref v i) 0.1)` → `nil` (identical on
+        all 4 backends: each stores f32(0.1) and widens-compares to f64 0.1).
+     2. **`vec:` element-wise/constructor RESULTS on `#f` diverge in WIDTH on wasm-GC** — the
+        `#+rontolisp-wasm` double-only `%make-like` makes `(vec:add #f.. #f..)` print `#d(...)`
+        on wasm-GC but `#f(...)` on interp/JVM (KNOWN, documented Phase 4). So the ci-spec case
+        must NOT print a `vec:` element-wise/constructor result on `#f`. `vec:` REDUCTIONS
+        (`sum`/`dot`/`mean`/`norm`) are SAFE — they return an f64 scalar computed identically
+        on all backends (`(vec:dot #f(1 2 3) #f(1 2 3))` → `14.0` everywhere).
+     - Safe case content: `aref`/`(setf aref)`/`array-element-type`/`length`/print an
+       exact-valued `#f` vector/`coerce … 'list`/a `(= …)` narrowing boolean/a `vec:dot` or
+       `vec:sum` scalar. (Essentially the interpreter+JVM+WASM `#f` unit tests already GREEN in
+       `WasmLispCompilerIntegrationTest` lines ~5030-5106, lifted into one ci-spec program.)
+   - **Native `CiSpecE2eTest` all-4-backend verify** (REQUIRED once `ci-spec.yaml` changes):
+     `./mvnw -Pnative clean package -DskipTests` then
+     `./mvnw -Dtest=CiSpecE2eTest -Drontolisp.binary="$PWD/target/rontolisp" test`. A failure
+     names `[case '<name>' on <BACKEND>`.
+   - Optional: a small `examples/` single-float snippet if useful for the site.
 
 **Done-line:** f32 & f64 packed arrays run byte-identical across backends; `#f`/`#d`
 round-trip; simd ops width-polymorphic; linalg behavior unchanged (prints `#d`).
