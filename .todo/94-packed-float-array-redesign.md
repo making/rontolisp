@@ -497,3 +497,57 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
   `_arrayToString` — reuses the renderer instead of re-implementing `#(…)`/`#nA` formatting). Find
   the dispatch near `arrayToStringMethod`/`arrayToDisplayStringMethod` refs in `JvmLispCompiler`
   (~line 853) and `JvmPrintCompiler`.
+
+### Phase 5b handoff — linalg → packed (READ FIRST; needs a design decision)
+
+The accel push (simd) is DONE + committed (`ebe6bac`) and its docs (`4e7a97f`); working tree
+clean. Phase 5b is the LAST planned piece: make `linalg` ride the packed float-array type
+(decision #2, and `.todo/93` linalg acceleration). It is DISTINCT and NOT required for the
+simd deliverable. Start on top of `4e7a97f`.
+
+**THE #1 GOTCHA — a full migration is WRONG (verified 2026-07-08).** `linalg` is documented
+(and tested) as **exact**: integer inputs stay integers, ratios stay ratios, never degrading
+to floats (this is a selling point in `guides/linear-algebra.md`). Confirmed on the interpreter:
+`(linalg:eye 3)` -> `#2A((1 0 0) ...)` (ints), `(linalg:inv #2A((1 2) (3 4)))` -> `#2A((-2 1)
+(3/2 -1/2))` (ratios), `(linalg:solve #2A((2 1) (1 3)) #(3 5))` -> `#(4/5 7/5)`, `(linalg:det
+#2A((1 2) (3 4)))` -> `-2`. Simply adding `:element-type 'double-float` to `linalg.lisp`'s
+`make-array` (the naive reading of "Phase 5: linalg produces packed") would turn ALL of that
+into doubles (`3/2`->`1.5`, `-2`->`-2.0`) and DESTROY the exactness feature + break its whole
+doc/test surface. **Do NOT do the wholesale migration.**
+
+**What ALREADY works (verified):** a packed `#f(...)` interoperates with linalg as an INPUT
+today — `(linalg:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))` -> `#(5.0 7.0 9.0)`, `(linalg:dot ...)`,
+`(linalg:matmul #f((1.0 2.0)(3.0 4.0)) #f(...))` all work (linalg's aref-based kernels read a
+packed array transparently and return a GENERAL array of doubles). So the "linalg matrices share
+the representation" interop is already satisfied at the input level; what's missing is packed
+OUTPUTS + acceleration.
+
+**Also:** `--no-gc` has no general array type, so `linalg` (reshape->lists, exact ratios, etc.)
+is already unsupported there — a `--no-gc` linalg accel would be limited to the pure float-vector
+kernels at most, or out of scope entirely.
+
+**The real Phase 5b is a scoped decision — pick with the user before coding:**
+- (A) **Interop-only, no code change** — declare Phase 5b done: packed arrays already feed linalg;
+  document that. Cheapest; loses no exactness. Possibly the right call.
+- (B) **Float-kernel acceleration (the `.todo/93` intent)** — intercept ONLY the vectorizable
+  linalg kernels (`add`/`sub`/`mul`/`div`/`emap`/`dot`/`matmul`/`outer`/`sum`/`mean`/`norm`/
+  `amax`/`amin`) *when the inputs are packed float arrays*, routing them to the same JVM
+  `--simd` bridge / `--no-gc` v128 kernels the simd package uses; keep the exact/structural ops
+  (`eye`/`det`/`inv`/`solve`/`reshape`/`transpose`/int `arange`) on general arrays. This needs a
+  dispatch that checks "is this a packed float array?" at the linalg call site (or inside the
+  linalg defuns) — more design than the simd interception, because linalg funcs are generic over
+  element type. `matmul`/`outer` are rank-2, not in the current simd kernel set (would need new
+  f64x2 rank-2 kernels).
+- (C) **A parallel `double-float` linalg surface** (e.g. constructors gain an opt-in float mode)
+  — largest; probably overkill.
+
+**Recommendation:** default to (A)/(B). Confirm with the user which of exactness-preservation vs
+float-acceleration they want before touching `linalg.lisp`. If (B): the simd interception is the
+template — `JvmSimdCompiler`/`JvmSimdRuntimeBuilder`/`JvmSimdVectorTemplate` (JVM) and
+`ScalarWasmCompiler.compileSimd`+kernels (`--no-gc`), plus a packed-input guard; reconcile every
+`linalg-*` doc detail page + the `linalg` ci-spec/DocExamples expectations for any output that
+changes int/ratio->double (there should be NONE if you keep exact ops general).
+
+**Refs:** `LinalgLibrary` + `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`; `.kb/linalg.md`
+(API + semantics); `guides/linear-algebra.md` (the exactness contract); `.todo/93` (linalg accel);
+the simd interception just committed (`.kb/simd.md`, `JvmSimd*`, `ScalarWasmCompiler` simd section).
