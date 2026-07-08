@@ -390,9 +390,9 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
 ### Resumption facts (post-compaction)
 
 - **Branch `feat/packed-float-array` off `develop` (440056c). Phase 1+2+3 COMMITTED at `f3d5ccd`**
-  (branch's first commit) + doc follow-up `48066c0`. **Phase 4A is DONE but UNCOMMITTED** (working
-  tree dirty: `ScalarWasmCompiler.java` + `ScalarWasmCompilerTest.java` + this `.todo`). Full suite
-  green: **2894**, skip 2 (WASM Docker). Phase 4B+ starts on top of the Phase 4A commit.
+  (branch's first commit) + doc follow-up `48066c0`. **Phase 4A COMMITTED at `b7e20d7`**
+  (`ScalarWasmCompiler.java` + `ScalarWasmCompilerTest.java` + this `.todo`); working tree clean.
+  Full suite green: **2894**, skip 2 (WASM Docker). Phase 4B+ starts on top of `b7e20d7`.
 - **Done:** Phase 0 (CliOptions `--simd` + `CliOptionsTest`), Phase 1 (frontend + interpreter REAL
   rank-n packed: `LispFloatArray`, reader `#f`, Environment dispatch, `LispNames.DOUBLE_FLOAT`;
   `LispFloatArrayTest` 13), **Phase 2 (JVM real rank-n packed `double[]`, Option X; `JvmFloatArrayTest`
