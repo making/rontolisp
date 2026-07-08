@@ -213,7 +213,7 @@ public final class RontoLispCli {
 		// lowers the whole simd: surface to native fixed-width WASM SIMD itself
 		// (ScalarWasmCompiler), so it must NOT get the splice.
 		if (!(outputFile.endsWith(".wasm") && noGc)) {
-			program = SimdLibrary.process(program);
+			program = SimdLibrary.process(program, features);
 		}
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {

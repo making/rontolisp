@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -39,13 +40,16 @@ public final class SimdLibrary {
 
 	@Nullable private static volatile List<LispVal> forms;
 
+	@Nullable private static volatile List<LispVal> formsWasm;
+
 	private SimdLibrary() {
 	}
 
 	/**
 	 * Returns the parsed library definitions (the {@code simd:} defuns and their
-	 * {@code simd::%} helpers). Written in canonical shape (external single-colon public
-	 * names, internal double-colon helpers, bare {@code cl} names), so it needs no
+	 * {@code simd::%} helpers) in the non-WASM (single-float-capable) shape, for the
+	 * interpreter and the JVM compiler. Written in canonical shape (external single-colon
+	 * public names, internal double-colon helpers, bare {@code cl} names), so it needs no
 	 * package resolution. Parsed once and cached.
 	 * @return the library forms
 	 */
@@ -55,8 +59,37 @@ public final class SimdLibrary {
 			synchronized (SimdLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readSource());
+					cached = LispReader.readAllFromString(readSource(), Features.INTERPRETER);
 					forms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/**
+	 * Returns the library definitions parsed for the given backend's feature set. The
+	 * width-preserving {@code simd::%make-like} allocator (used by the element-wise
+	 * kernels so a {@code #f} input yields a {@code #f} result) has a
+	 * {@code single-float} {@code make-array} branch that only the interpreter and JVM
+	 * compile; on WASM a {@code #+rontolisp-wasm} reader conditional selects the
+	 * double-only definition instead (WASM has no single-float packed array yet, and a
+	 * {@code #f} literal is a compile error there, so every WASM simd vector is
+	 * double-float). The two variants are parsed and cached separately.
+	 * @param features the target backend's reader feature set
+	 * @return the library forms for that backend
+	 */
+	public static List<LispVal> forms(Features features) {
+		if (!features.contains("rontolisp-wasm")) {
+			return forms();
+		}
+		List<LispVal> cached = formsWasm;
+		if (cached == null) {
+			synchronized (SimdLibrary.class) {
+				cached = formsWasm;
+				if (cached == null) {
+					cached = LispReader.readAllFromString(readSource(), Features.WASM);
+					formsWasm = cached;
 				}
 			}
 		}
@@ -95,6 +128,19 @@ public final class SimdLibrary {
 	 * @return the program with the simd library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, Features.INTERPRETER);
+	}
+
+	/**
+	 * The compile-path pre-pass, splicing the library variant parsed for the target
+	 * backend (see {@link #forms(Features)}). WASM callers must pass
+	 * {@link Features#WASM} so the double-only {@code simd::%make-like} is spliced (the
+	 * single-float branch does not compile there).
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param features the target backend's reader feature set
+	 * @return the program with the simd library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program, Features features) {
 		Walker walker = new Walker();
 		for (LispVal form : program) {
 			walker.trackTopLevelInPackage(form);
@@ -103,7 +149,7 @@ public final class SimdLibrary {
 		if (!walker.found) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
+		List<LispVal> out = new ArrayList<>(forms(features));
 		out.addAll(program);
 		return out;
 	}

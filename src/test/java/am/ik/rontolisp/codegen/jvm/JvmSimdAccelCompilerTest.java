@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The {@code --simd} JVM acceleration path: the six vectorizable {@code simd:} kernels
@@ -168,6 +169,98 @@ class JvmSimdAccelCompilerTest {
 		assertThat(embedsBridge(compile("(print (simd:sum #d(1.0 2.0 3.0)))", false))).isFalse();
 		// A non-simd program: no bridge even under --simd (nothing to accelerate).
 		assertThat(embedsBridge(compile("(print (+ 1 2))", true))).isFalse();
+	}
+
+	// --- single-float (#f) width-polymorphism (todo 95 Part 1 Phase 3) ---------------
+
+	@Test
+	void acceleratedSingleFloatKernelsMatchTheScalarReferenceByteForByte() throws Exception {
+		// #f (single-float, float[]) inputs run the FloatVector kernels; the accelerated
+		// output must be byte-identical to the width-preserving scalar simd.lisp
+		// reference.
+		// Element-wise ops keep the #f width; reductions fold to an f64 scalar. Integer
+		// f32
+		// values are exact, so the vector and scalar paths agree.
+		for (String expr : List.of("(print (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+				"(print (simd:sub #f(10.0 20.0 30.0) #f(1.0 2.0 3.0)))",
+				"(print (simd:mul #f(2.0 3.0 4.0) #f(5.0 6.0 7.0)))", "(print (simd:scale #f(1.0 2.0 3.0) 10.0))",
+				"(print (simd:dot #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))", "(print (simd:sum #f(1.0 2.0 3.0 4.0 5.0)))",
+				"(print (simd:mean #f(2.0 4.0 6.0)))", "(print (simd:norm #f(3.0 4.0)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedSingleFloatElementWiseKernelsPreserveTheSingleFloatWidth() throws Exception {
+		// Width preservation (result = input width): a #f element-wise result prints with
+		// the #f prefix on BOTH the accelerated and the scalar path -- it never widens to
+		// #d. This is what makes --simd a pure acceleration of the scalar reference here.
+		for (String expr : List.of("(print (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+				"(print (simd:sub #f(9.0 8.0 7.0) #f(1.0 2.0 3.0)))", "(print (simd:mul #f(2.0 3.0) #f(4.0 5.0)))",
+				"(print (simd:scale #f(2.0 4.0) 3.0))")) {
+			assertThat(accel(expr)).as(expr).startsWith("#f(").isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedSingleFloatResultsInteroperateWithThePackedArraySurface() throws Exception {
+		// A #f bridge result is a plain rank-1 packed float[]: simd:aref / simd:length /
+		// aref and the downstream kernels consume it, widening on read to an f64 scalar.
+		assertThat(accel("(print (simd:aref (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) 1))")).isEqualTo("7.0");
+		assertThat(accel("(print (simd:length (simd:mul #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))))")).isEqualTo("3");
+		assertThat(accel("(print (simd:sum (simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))))")).isEqualTo("21.0");
+		assertThat(accel("(print (aref (simd:scale #f(2.0 4.0) 3.0) 1))")).isEqualTo("12.0");
+	}
+
+	@Test
+	void acceleratedSingleFloatLargeArraysMatchTheScalarReferenceOverTheVectorLoop() throws Exception {
+		// n >= THRESHOLD drives the real FloatVector loop (element-wise) and the
+		// F2D-widen
+		// f64 accumulation (reductions). Integer values 0..199 stay f64-exact, so the
+		// vector
+		// and scalar paths are byte-identical.
+		String build = "(let ((a (make-array 200 :element-type 'single-float :initial-element 0.0)))"
+				+ " (dotimes (i 200) (setf (aref a i) (float i))) ";
+		for (String tail : List.of("(print (simd:sum a)))", "(print (simd:dot a a)))",
+				"(print (simd:sum (simd:add a a))))", "(print (simd:sum (simd:scale a 2.0))))",
+				"(print (simd:aref (simd:mul a a) 199)))")) {
+			String expr = build + tail;
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedSingleFloatReductionsComputeTheExpectedValues() throws Exception {
+		// sum(0..199) = 199*200/2 = 19900; dot(a,a) = sum of i^2 = 199*200*399/6 =
+		// 2646700
+		// (both f64-exact).
+		String build = "(let ((a (make-array 200 :element-type 'single-float :initial-element 0.0)))"
+				+ " (dotimes (i 200) (setf (aref a i) (float i))) ";
+		assertThat(accel(build + "(print (simd:sum a)))")).isEqualTo("19900.0");
+		assertThat(accel(build + "(print (simd:dot a a)))")).isEqualTo("2646700.0");
+	}
+
+	@Test
+	void mixedWidthOperandsAreAHardErrorUnderTheSimdFlag() {
+		// simd is the fixed-contract, no-fallback package: mixing #d and #f operands in
+		// one
+		// accelerated kernel is a hard error. (The scalar reference would silently
+		// promote
+		// to double, so this divergence is by design and is not compared against scalar.)
+		assertThatThrownBy(() -> accel("(print (simd:add #d(1.0 2.0) #f(3.0 4.0)))"))
+			.hasStackTraceContaining("share an element type");
+		assertThatThrownBy(() -> accel("(print (simd:dot #f(1.0 2.0) #d(3.0 4.0)))"))
+			.hasStackTraceContaining("share an element type");
+	}
+
+	@Test
+	void theSingleFloatBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// The dead-flag proof, extended to #f: a single-float simd program embeds the
+		// bridge
+		// under --simd and never without it, independent of runtime output parity.
+		assertThat(embedsBridge(compile("(print (simd:sum #f(1.0 2.0 3.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (simd:add #f(1.0 2.0) #f(3.0 4.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (simd:sum #f(1.0 2.0 3.0)))", false))).isFalse();
 	}
 
 	private static boolean embedsBridge(byte[] classBytes) {

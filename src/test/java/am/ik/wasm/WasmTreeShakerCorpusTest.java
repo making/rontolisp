@@ -68,10 +68,12 @@ class WasmTreeShakerCorpusTest {
 		// Mirror the CLI compile path: user macros (defmacro) are expanded and the
 		// JSON, linalg, URL and prelude (equalp/string<) libraries are spliced by the
 		// pre-passes before the compiler ever sees the program.
-		List<LispVal> program = am.ik.rontolisp.eval.SimdLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
-				.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
-					.expand(LispReader.readAllFromString(corpusSource())))))));
+		List<LispVal> program = am.ik.rontolisp.eval.SimdLibrary.process(
+				am.ik.rontolisp.eval.LispPreludeLibrary
+					.process(am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
+						.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
+							.expand(LispReader.readAllFromString(corpusSource())))))),
+				am.ik.rontolisp.reader.Features.WASM);
 
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.

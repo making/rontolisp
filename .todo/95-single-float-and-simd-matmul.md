@@ -1,10 +1,18 @@
-# 95 — single-float (f32) support + `simd:matmul` (GEMV)
+# 95 — single-float (f32) support + `vec:matvec` (GEMV)
 
-Goal: implement a llama2.c-style transformer in rontolisp + simd (à la kishida's
-[Llama.java](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)). That needs
-(1) **f32 packed arrays** (memory ½, SIMD lanes 2×) and (2) a **matmul/GEMV SIMD kernel**.
-This doc covers BOTH, as two sequenced Parts. Builds on `.todo/94` (the packed *double*
-float-array type, DONE + committed on `feat/packed-float-array`).
+Goal: implement a llama2.c-style transformer in rontolisp + the packed-vector package (à la
+kishida's [Llama.java](https://gist.github.com/kishida/05656bfcbe840f269784f7dbbee5928e)).
+That needs (1) **f32 packed arrays** (memory ½, SIMD lanes 2×) and (2) a **matvec/GEMV SIMD
+kernel**. This doc covers BOTH, as two sequenced Parts. Builds on `.todo/94` (the packed
+*double* float-array type, DONE + committed on `feat/packed-float-array`).
+
+> **NAMING (decided 2026-07-08, see `.todo/96`):** the `simd:` package is being renamed
+> **`vec:`** (name the abstraction, not the optional impl -- Java Vector API / numpy
+> precedent), and the Part 2 op is **`vec:matvec`** (GEMV), NOT `simd:matmul`. The `--simd`
+> flag STAYS (it names the real SIMD acceleration), and the `JvmSimd*` / `ScalarWasmCompiler`
+> `v128` SIMD internals KEEP their `Simd` names. **Do the `.todo/96` rename BEFORE Phase 4**
+> (cheapest before more `simd:` refs land). The already-DONE Phase 1-3 notes below still say
+> `simd:` (historical); read them as `vec:`.
 
 ## Approved decisions (2026-07-08, user sign-off — do NOT re-litigate)
 
@@ -24,9 +32,23 @@ float-array type, DONE + committed on `feat/packed-float-array`).
 3. **Two packed array element-types, typed by CL `element-type`:** `single-float` /
    `double-float`. Primary API = `(make-array dims :element-type 'single-float | 'double-float)`
    (no new reader syntax needed; the `#f`/`#d` literals are shorthand).
-4. **simd = width-polymorphic** (works on both; result = input width; mixed operands =
-   error). **linalg = accepts single inputs (free, via aref-widening) but ALWAYS produces
-   double** — with a forward-compat funnel so single-production is a one-touch add later.
+4. **simd (→ `vec:`) = width-polymorphic** (works on both; result = input width; mixed
+   operands = error). **linalg = accepts single inputs (free, via aref-widening) but ALWAYS
+   produces double** — with a forward-compat funnel so single-production is a one-touch add
+   later.
+5. **Package `simd:` → `vec:` (rename; full task in `.todo/96`, do it BEFORE Phase 4).** The
+   package is a portable packed *vector* abstraction, SIMD-accelerated only under `--simd` /
+   `--no-gc` (scalar elsewhere), so it is named for the abstraction; `--simd` stays as the
+   acceleration flag and the `JvmSimd*` / `ScalarWasmCompiler` SIMD internals keep their
+   names. **`vec:` membership rule** = the RESULT is a vector or scalar: `add`/`sub`/`mul`/
+   `scale` → vector, `dot`/`sum`/`mean`/`norm` → scalar, **`matvec` (GEMV) → vector**.
+   Matrix-PRODUCING ops (`matmul`/GEMM, `outer`, `transpose`, `reshape`) stay in `linalg:`;
+   the Part 2 op is **`vec:matvec`** (matrix×vector→vector), NOT `matmul`. **linalg is a
+   future accel *client*, not part of this rename:** it stays rank-n / always-double /
+   currently-scalar, but can LATER be sped up by the SAME `--simd`/`--no-gc` switch if its
+   inner loops route through `vec:` kernels (the `linalg::%la-make` funnel is the seam; GEMM
+   needs a transpose that GEMV avoids, and is best routed through a batched `vec:` kernel to
+   amortize bridge entry).
 
 ## Why f32 (the llama2 driver)
 
@@ -183,8 +205,50 @@ Phases mirror `.todo/94`'s order:
      clean compile errors (Phases 4/5). Native `CiSpecE2eTest` NOT re-run: `ci-spec.yaml`
      untouched + no cross-backend output change (single-float is JVM-only new capability,
      not in ci-spec; double output byte-identical).
-3. **JVM SIMD polymorphism:** `FloatVector` kernels in `JvmSimdVectorTemplate`; call-site
-   dispatch on repr. `simd:dot`/`add`/... work in f32. Retain the dead-flag proof.
+3. **[DONE 2026-07-08]** **JVM SIMD polymorphism:** `FloatVector` kernels in
+   `JvmSimdVectorTemplate`; call-site dispatch on repr. `simd:dot`/`add`/... work in f32.
+   Retain the dead-flag proof.
+   - **Bridge (`JvmSimdVectorTemplate`) is width-polymorphic:** each kernel dispatches on
+     the runtime backing type -- `a instanceof float[]` runs the `FloatVector` path, a
+     `double[]` the original `DoubleVector` path (kept BYTE-IDENTICAL; the float check is a
+     guard prepended above the untouched double body). Element-wise (`add`/`sub`/`mul`) on
+     `float[]` -> a fresh `float[]` (width preserved); reductions (`sum`/`dot`) -> the usual
+     f64 scalar. **Mixed single/double operands = a hard `IllegalArgumentException`** (simd
+     is the fixed-contract, no-fallback package; message has no todo ref).
+   - **Precision (matches the `#f`/`#d` model, scalars stay f64):** `add`/`sub`/`mul` run in
+     NATIVE f32 -- bit-identical to the scalar reference's widen-to-f64/compute/narrow
+     because a single `+`/`-`/`*` of two floats has no double-rounding. `scale` multiplies by
+     the genuine f64 scalar in f64 then narrows (a scalar loop; native-f32 would diverge for
+     a non-f32-exact scalar). `sum`/`dot` accumulate in f64: each f32 lane is widened via
+     `FloatVector.convert(F2D, 0/1)` into a `DoubleVector` accumulator (a preferred float
+     vector holds 2x the lanes of a preferred double vector), matching the scalar oracle;
+     only reduction associativity differs, so tests use f64-exact integer inputs.
+   - **`simd.lisp` made width-preserving** so the scalar reference (and hence `--simd`)
+     stays byte-identical: new `simd::%make-like` allocates a fresh vector whose element
+     type matches the prototype (`(if (eq (array-element-type p) 'single-float) (make-array
+     ... 'single-float) (make-array ... 'double-float))` -- both branches literal so the
+     repr is picked statically); `%map2` (add/sub/mul) + `scale` route through it. Reductions
+     / constructors unchanged (constructors still default double).
+   - **WASM ordering gotcha + fix:** WASM-GC can't compile the `'single-float` make-array
+     (Phase 4 pending) yet splices `simd.lisp`; `--no-gc` doesn't splice it at all. The
+     shared `SimdLibrary.forms()` is cached once with INTERPRETER features, so a bare
+     `#+`/`#-` reader conditional could NOT distinguish the target. Fixed by making
+     `SimdLibrary.forms(Features)` / `process(program, Features)` read `simd.lisp` with the
+     TARGET's feature set (cached per wasm-or-not); `simd::%make-like` then has a
+     `#-rontolisp-wasm` width-preserving variant and a `#+rontolisp-wasm` double-only
+     variant. Only the WASM callers pass `Features.WASM` (`RontoLispCli`, `RontoPlayground`
+     `compileWasm`, `WasmTreeShakerCorpusTest`); the no-arg `process`/`forms` stay the
+     non-wasm (width-preserving) default for interpreter + JVM. Deliberately did NOT let WASM
+     `make-array 'single-float` degrade to double (that would silently diverge cross-backend
+     for direct user use; the clean "not supported" error is kept).
+   - **Verified:** `./mvnw test` GREEN (2937, 0 fail; +7 float simd parity/dead-flag tests in
+     `JvmSimdAccelCompilerTest`, now 14), web-profile compile SUCCESS, javadoc clean (only
+     Version). 4-backend CLI: interpreter + JVM(scalar) + JVM(`--simd`) BYTE-IDENTICAL for
+     `#f` (`#f(4.0 6.0)` width-preserved, `sum`/`dot` f64 scalars, `mean`/`norm`); WASM-GC
+     double simd runs under wasmtime (`#d(4.0 6.0)`, regression-free after the `%make-like`
+     change) and `#f` is a clean compile error; `--no-gc` `#f` a clean error. Native
+     `CiSpecE2eTest` NOT re-run (ci-spec untouched, no cross-backend output change; float
+     simd is interpreter/JVM-only new).
 4. **wasm-GC:** `TYPE_SFARRAY`/`TYPE_F32ARR` + dispatch. wasmtime integration.
 5. **`--no-gc`:** `F32VEC` + `f32x4` simd kernels. wasmtime `--invoke`.
 6. **Reconcile the `#f`→`#d` print flip** across tests/docs/examples/ci-spec (the todo-94
@@ -195,26 +259,32 @@ Phases mirror `.todo/94`'s order:
 **Done-line:** f32 & f64 packed arrays run byte-identical across backends; `#f`/`#d`
 round-trip; simd ops width-polymorphic; linalg behavior unchanged (prints `#d`).
 
-## Part 2 — `simd:matmul` (GEMV) (the llama2 payoff; depends on Part 1's f32 path)
+## Part 2 — `vec:matvec` (GEMV) (the llama2 payoff; depends on Part 1's f32 path)
 
-- Add `simd:matmul` — really **GEMV** (matrix `W(d,n)` × vector `x(n,)` → `xout(d,)`), which
-  is llama2's actual op (every projection/FFN/classifier). GEMV is the **CLEAN** case: `W`
-  rows are contiguous, `x` is contiguous → **no transpose**; the inner loop is a vectorized
-  dot (FMA-accumulate + `reduceLanes`) = `JvmSimdVectorTemplate.dot` run `d` times in ONE
-  bridge call (amortizes bridge entry over the whole matrix vs a `d`-times `simd:dot` loop).
+(Named `vec:matvec` per decision #5 / `.todo/96` -- do the `simd:`→`vec:` rename first, then
+build this under the new name. It is matrix×vector→**vector** (GEMV), which is why it belongs
+in `vec:`; general matrix×matrix `matmul` stays in `linalg:`.)
+
+- Add `vec:matvec` — **GEMV** (matrix `W(d,n)` × vector `x(n,)` → `xout(d,)`), which is
+  llama2's actual op (every projection/FFN/classifier): `y[i] = dot(row_i of W, x)`. GEMV is
+  the **CLEAN** case: `W` rows are contiguous, `x` is contiguous → **no transpose**; the inner
+  loop is a vectorized dot (FMA-accumulate + `reduceLanes`) = `JvmSimdVectorTemplate.dot` run
+  `d` times in ONE bridge call (amortizes bridge entry over the whole matrix vs a `d`-times
+  `vec:dot` loop).
 - **Both widths:** f32 (`FloatVector`, llama2) + f64 (`DoubleVector`). The f64 GEMV can land
   first (independent of Part 1); the f32 GEMV needs Part 1.
 - mat×vec is all llama2's single-token decode needs; full mat×mat **GEMM** (strided `B`
-  column → transpose-`B`) is NOT required — defer/skip unless prefill batching is wanted.
-- Gate on `--simd` + `programUsesAnyAcceleratedSimdOp` (add `matmul` to the walk).
-  Byte-identical vs the scalar `simd.lisp` fallback (`JvmSimdAccelCompilerTest`-style) +
+  column → transpose-`B`) is NOT required — defer/skip unless prefill batching is wanted, and
+  if ever added it goes to `linalg:` (matrix-producing), not `vec:`.
+- Gate on `--simd` + `programUsesAnyAcceleratedSimdOp` (add `matvec` to the walk).
+  Byte-identical vs the scalar `vec.lisp` fallback (`JvmSimdAccelCompilerTest`-style) +
   dead-flag proof. Determinism: SIMD reduction associativity → last-ULP; for ci-spec /
   cross-backend use inputs whose float results are exact (power-of-two / integer-valued).
-- **Files:** extend `JvmSimdVectorTemplate` (matmul f32+f64), `JvmSimd{Compiler,
-  RuntimeBuilder}`, `LispNames`/`PackageRegistry.SIMD_FUNCTIONS` (`simd:matmul`), `simd.lisp`
+- **Files:** extend `JvmSimdVectorTemplate` (matvec f32+f64), `JvmSimd{Compiler,
+  RuntimeBuilder}`, `LispNames`/`PackageRegistry` vec-functions (`vec:matvec`), `vec.lisp`
   scalar fallback; `ScalarWasmCompiler` `f32x4` GEMV on `--no-gc` optional.
 
-**Done-line:** `simd:matmul` accelerated f32+f64, byte-identical, dead-flag-proven; a
+**Done-line:** `vec:matvec` accelerated f32+f64, byte-identical, dead-flag-proven; a
 stories15M-scale llama2 demo runs.
 
 ## Risks / must-verify

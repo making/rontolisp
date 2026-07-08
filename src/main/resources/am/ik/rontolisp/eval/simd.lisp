@@ -1,10 +1,13 @@
-;; The simd package: portable packed-f64 vector kernels (see .kb/simd.md).
+;; The simd package: portable packed-float vector kernels (see .kb/simd.md).
 ;;
-;; A simd vector is a rank-1 packed (array double-float) -- the dedicated
-;; unboxed float-array type, produced by (make-array n :element-type 'double-float).
-;; The built-in aref / aset / length / make-array interoperate with it on every
-;; backend, so simd:aref / simd:aset / simd:length are thin wrappers over the
-;; generic ops. THIS scalar definition is the implementation and the cross-backend
+;; A simd vector is a rank-1 packed unboxed float array -- either double-float
+;; (#d / make-array :element-type 'double-float) or, on the interpreter and JVM,
+;; single-float (#f / 'single-float). The kernels are width-polymorphic: the
+;; element-wise ops (add/sub/mul/scale) preserve the input width via simd::%make-like,
+;; while the reductions (sum/dot) always fold to an f64 scalar (a single-float lane
+;; is widened on read). The built-in aref / aset / length / make-array interoperate
+;; with either width on every backend, so simd:aref / simd:aset / simd:length are
+;; thin wrappers over the generic ops. THIS scalar definition is the implementation and the cross-backend
 ;; correctness oracle on the interpreter, the JVM compiler and the wasm-GC compiler;
 ;; the JVM --simd flag intercepts the vectorizable kernels (add/sub/mul/scale/dot/sum)
 ;; and lowers them to jdk.incubator.vector lane loops, and the --no-gc scalar WASM
@@ -55,11 +58,31 @@
 
 ;; --- element-wise kernels (return a fresh vector) ----------------------------
 
+;; A fresh zero-filled rank-1 packed vector of length %simd-n whose element type
+;; matches the prototype vector, so the element-wise kernels PRESERVE single/double
+;; width (a #f input yields a #f result, a #d input a #d result -- matching the
+;; --simd bridge). Both make-array calls take a literal :element-type so the
+;; compiled backends can pick the double[]/float[] repr statically.
+;;
+;; The single-float branch is compiled only where single-float packed arrays exist
+;; (interpreter + JVM). On the WASM backends every packed vector is double-float
+;; (a #f literal is a compile error there), so the reader skips the single-float
+;; make-array entirely and the double-only definition suffices.
+#-rontolisp-wasm
+(defun simd::%make-like (%simd-proto %simd-n)
+  (if (eq (array-element-type %simd-proto) 'single-float)
+      (make-array %simd-n :element-type 'single-float :initial-element 0.0)
+      (make-array %simd-n :element-type 'double-float :initial-element 0.0)))
+
+#+rontolisp-wasm
+(defun simd::%make-like (%simd-proto %simd-n)
+  (make-array %simd-n :element-type 'double-float :initial-element 0.0))
+
 (defun simd::%map2 (%simd-op %simd-a %simd-b)
   ;; %simd-op applied element-wise over two equal-length vectors -> a fresh vector.
   ;; The %simd- parameter names avoid a compiled-backend clash with a same-named
   ;; user global (the linalg.lisp %la- convention).
-  (let ((out (make-array (length %simd-a) :element-type 'double-float :initial-element 0.0)))
+  (let ((out (simd::%make-like %simd-a (length %simd-a))))
     (dotimes (i (length %simd-a) out)
       (setf (aref out i) (funcall %simd-op (aref %simd-a i) (aref %simd-b i))))))
 
@@ -73,7 +96,7 @@
   (simd::%map2 #'* a b))
 
 (defun simd:scale (v s)
-  (let ((out (make-array (length v) :element-type 'double-float :initial-element 0.0)))
+  (let ((out (simd::%make-like v (length v))))
     (dotimes (i (length v) out)
       (setf (aref out i) (* (aref v i) s)))))
 
