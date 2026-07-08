@@ -409,13 +409,15 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
     byte-identical to scalar (256-elem Vector loop) + **dead-flag proof** (running `--simd` class without
     `--add-modules` throws `NoClassDefFoundError` at `_simdInit`'s `defineClass`); +7 `JvmSimdAccelCompilerTest`.
     `JvmArrayRuntimeBuilder`/`_fv*` UNCHANGED.
-- **Phase 6 (verify) — simd part DONE, rest PENDING.** DONE: ci-spec `simd-kernels-cross-backend` case
+- **Phase 6 (verify) — DONE except the benchmark.** DONE: ci-spec `simd-kernels-cross-backend` case
   (4 backends byte-identical) + native `CiSpecE2eTest` **724** green; `.kb/simd.md` (agent-facing) written
   + `.kb/README.md` index; `resource-config.json` (simd.lisp + JvmSimdVectorTemplate.class); `-Pweb compile`
-  green; javadoc 0-warn (Version excepted); full suite **2904** green. PENDING: user-facing bilingual docs
-  (`doc/{en,ja}/**`: `#f` is `double-float`/non-real store errors, a `simd:` reference page, the Arrays/
-  data-types note — none written yet for the WHOLE packed feature), a chained/matmul timing benchmark, and
-  the interpreter full-pipeline `map`/`typep`-over-packed niceties (pre-existing, out of scope).
+  green; javadoc 0-warn (Version excepted); full suite **2904** green. **User-facing bilingual docs DONE:**
+  `data-types.md` (en+ja) gained a "Packed float arrays (`#f`)" subsection (`#f` is `double-float`, non-real
+  store errors, packed-vs-general) and a new guide `guides/simd-acceleration.md` (en+ja) covers the whole
+  `simd:` API + the `--simd`/`--no-gc` acceleration, registered in `nav.yaml` (en+ja); DocExamplesTest
+  **415** green, docgen + docs-tool `DocGenTest` **12** green. PENDING: only a chained/matmul timing
+  benchmark (nice-to-have) + the interpreter `map`/`typep`-over-packed niceties (pre-existing, out of scope).
 
 ### Resumption facts (post-compaction)
 
@@ -432,10 +434,10 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
 - **NEXT UP (remaining):** (1) **Phase 5b — linalg → packed** (DISTINCT, breaking: `linalg.lisp`
   `:initial-element 0`→`0.0`+`:element-type 'double-float` changes linalg output int→double, needs a
   linalg-kernel interceptor + linalg doc/test/ci-spec reconciliation; get user sign-off first — it is an
-  enhancement, not required for the simd deliverable). (2) **User-facing bilingual docs** for the WHOLE
-  packed feature (`doc/{en,ja}/**`: `#f` is `double-float`/non-real store errors; a `simd:` reference page;
-  the Arrays/data-types note) — none written yet. (3) A chained/matmul **benchmark**. Reuse refs:
-  `git show 5b1b065:<path>` (JvmSimd*, ScalarWasmCompiler), `git show 21fb03e:<path>` (simd.lisp, .kb/simd.md).
+  enhancement, not required for the simd deliverable). (2) A chained/matmul **benchmark** (nice-to-have).
+  User-facing bilingual docs are DONE (data-types `#f` subsection + `guides/simd-acceleration.md`, en+ja).
+  Reuse refs: `git show 5b1b065:<path>` (JvmSimd*, ScalarWasmCompiler), `git show 21fb03e:<path>`
+  (simd.lisp, .kb/simd.md).
 - **New files:** `LispFloatArray.java`, `codegen/jvm/JvmFloatArrayRuntimeBuilder.java`, tests
   `CliOptionsTest`/`LispFloatArrayTest`/`JvmFloatArrayTest`, this `.todo/94`. **Modified:**
   `LispNames`, `LispVal` (seal += LispFloatArray), `CliOptions`, `reader/{Token,LispLexer,LispReader}`,

@@ -186,6 +186,33 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
 ```
 
+### パックド浮動小数点配列(`#f`)
+
+`#f(...)` は**パックド浮動小数点配列**を表します。これは要素をアンボックスで
+格納する `double-float` 型の配列です。`#(...)` と同じ記法で読み込まれますが、
+各要素は `double-float` に強制変換されるため、`#f(1 2 3)` と `#f(1.0 2.0 3.0)`
+は同じベクトルであり、`(array-element-type #f(1.0))` は `double-float` になりま
+す。高階のリテラルはネストしたリストで書き(`#f((1.0 2.0) (3.0 4.0))` は行列)、
+実行時には `(make-array n :element-type 'double-float)` で構築できます。パックド
+配列に非実数を格納すると型エラーです(一般配列は任意の値を保持します)。それ以外
+は同じ double 値の一般配列とまったく同じように振る舞い、印字も同一で、`aref`・
+`(setf (aref ...))`・`length`・`row-major-aref`・`array-rank`・`array-dimensions`・
+`coerce` はすべて機能します。数値カーネルが用いる、アンボックスで `double-float`
+に特化した表現に過ぎないため、フィルポインタ・可変長(adjustable)・ずらし配列
+(displaced)は利用できません(それらには一般配列が必要です)。パックド配列上の
+高速なベクトルカーネル(および任意のハードウェアアクセラレーション)については
+[`simd` パッケージ](../guides/simd-acceleration.md)を参照してください。
+
+```lisp
+(aref #f(1.0 2.0 3.0) 1)                   ; => 2.0
+(array-element-type #f(1 2 3))             ; => double-float
+(print #f((1.0 2.0) (3.0 4.0)))            ; #2A((1.0 2.0) (3.0 4.0))
+(coerce #f(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
+(let ((v (make-array 3 :element-type 'double-float :initial-element 0.0)))
+  (setf (aref v 0) 5)
+  v)                                        ; => #(5.0 0.0 0.0)
+```
+
 ## ハッシュテーブル
 
 `make-hash-table`、`gethash`、`(setf (gethash ...))`、`remhash`、`clrhash`、`hash-table-count`、`hash-table-p`、`maphash`

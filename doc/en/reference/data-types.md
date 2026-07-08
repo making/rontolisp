@@ -214,6 +214,34 @@ quoting string elements and `princ` not:
 (make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
 ```
 
+### Packed float arrays (`#f`)
+
+`#f(...)` denotes a **packed float array**: a `double-float`-typed array whose
+elements are stored unboxed. It reads like `#(...)`, but every element is coerced
+to a `double-float`, so `#f(1 2 3)` and `#f(1.0 2.0 3.0)` are the same vector and
+`(array-element-type #f(1.0))` is `double-float`. Higher-rank literals use nested
+lists -- `#f((1.0 2.0) (3.0 4.0))` is a matrix -- and
+`(make-array n :element-type 'double-float)` builds one at runtime. Storing a
+non-real into a packed array is a type error (a general array holds any value).
+Otherwise a packed array behaves exactly like a general array of the same
+doubles: it prints identically and `aref`, `(setf (aref ...))`, `length`,
+`row-major-aref`, `array-rank`, `array-dimensions` and `coerce` all work on it.
+It is simply the unboxed, `double-float`-specialized representation the numeric
+kernels use, so fill pointers, adjustable and displaced arrays are not available
+on it (those need a general array). For fast vectorized kernels over packed
+arrays -- and their optional hardware acceleration -- see the
+[`simd` package](../guides/simd-acceleration.md).
+
+```lisp
+(aref #f(1.0 2.0 3.0) 1)                   ; => 2.0
+(array-element-type #f(1 2 3))             ; => double-float
+(print #f((1.0 2.0) (3.0 4.0)))            ; #2A((1.0 2.0) (3.0 4.0))
+(coerce #f(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
+(let ((v (make-array 3 :element-type 'double-float :initial-element 0.0)))
+  (setf (aref v 0) 5)
+  v)                                        ; => #(5.0 0.0 0.0)
+```
+
 ## Hash tables
 
 `make-hash-table`, `gethash`, `(setf (gethash ...))`, `remhash`, `clrhash`,
