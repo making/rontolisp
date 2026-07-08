@@ -1488,15 +1488,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Whether the program references any of the six vectorizable {@code vec:} kernels
-	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}), so
-	 * that {@code --simd} actually emits the Vector API bridge. {@code mean}/{@code norm}
-	 * are intercepted transitively via their spliced {@code sum}/{@code dot} calls, so
-	 * they need not be listed here.
+	 * Whether the program references any of the seven vectorizable {@code vec:} kernels
+	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}/
+	 * {@code matvec}), so that {@code --simd} actually emits the Vector API bridge.
+	 * {@code mean}/{@code norm} are intercepted transitively via their spliced
+	 * {@code sum}/{@code dot} calls, so they need not be listed here.
 	 */
 	private static boolean programUsesAnyAcceleratedSimdOp(List<LispVal> program) {
 		for (String member : List.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE,
-				LispNames.VEC_DOT, LispNames.VEC_SUM)) {
+				LispNames.VEC_DOT, LispNames.VEC_SUM, LispNames.VEC_MATVEC)) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.VEC_PKG, member))) {
 				return true;
 			}

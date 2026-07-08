@@ -2266,7 +2266,13 @@ cases:
         (print (vec:to-list (vec:arange 4)))
         (print (vec:mean #d(2.0 4.0 6.0)))
         (print (vec:norm #d(3.0 4.0)))
-        (print (vec:sum (vec:from-list '(1 2 3 4)))))
+        (print (vec:sum (vec:from-list '(1 2 3 4))))
+        ;; GEMV (matvec): y[i] = dot(row_i of W, x). A rank-2 packed matrix times a
+        ;; rank-1 vector -> a fresh rank-1 vector; #d inputs stay double on every backend
+        ;; (the result width is a constructor result, so #f would diverge on wasm-GC, but
+        ;; #d does not). Square (2x2) and non-square (2x3) rows, exact integer values.
+        (print (vec:matvec #d((1 2) (3 4)) #d(5 6)))
+        (print (vec:matvec #d((1 2 3) (4 5 6)) #d(1 2 3))))
       (ci-vec)
     expected: |
       #d(5.0 7.0 9.0)
@@ -2281,6 +2287,8 @@ cases:
       4.0
       5.0
       10.0
+      #d(17.0 39.0)
+      #d(14.0 32.0)
 
   # Packed single-float arrays (.todo/95): the #f(...) / :element-type 'single-float
   # counterpart of packed-float-arrays-cross-backend, storing elements unboxed as f32

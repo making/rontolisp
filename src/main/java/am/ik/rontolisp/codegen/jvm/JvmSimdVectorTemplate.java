@@ -9,13 +9,15 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The {@code vec:} acceleration runtime injected into a compiled {@code .class} when the
- * {@code --simd} flag is passed. It reimplements the six vectorizable {@code vec:}
- * kernels ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum})
- * against the compiled packed float-array representation using
+ * {@code --simd} flag is passed. It reimplements the seven vectorizable {@code vec:}
+ * kernels ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}/
+ * {@code matvec}) against the compiled packed float-array representation using
  * {@code jdk.incubator.vector} so the JIT/native compiler can intrinsify the lane loop,
- * replacing the scalar {@code vec.lisp} reference at those call sites.
- * {@code mean}/{@code norm} are transitively accelerated because their spliced bodies
- * call {@code sum}/{@code dot}, whose call sites are also intercepted.
+ * replacing the scalar {@code vec.lisp} reference at those call sites. {@code matvec} is
+ * GEMV (matrix-by-vector): the vectorized dot product run once per row of a rank-2
+ * matrix, amortizing the bridge entry over the whole matrix. {@code mean}/{@code norm}
+ * are transitively accelerated because their spliced bodies call {@code sum}/{@code dot},
+ * whose call sites are also intercepted.
  *
  * <p>
  * A simd vector is the ordinary rank-1 packed float array of the compiled runtime. It is
@@ -250,6 +252,52 @@ final class JvmSimdVectorTemplate {
 		return acc;
 	}
 
+	/**
+	 * {@code matvec(W, x)} -- GEMV: {@code W} is a rank-2 packed matrix
+	 * {@code (d rows, n cols)} whose header is {@code [2, d, n, e_00, ..., e_{d-1,n-1}]}
+	 * (row-major, elements at offset {@code 3}); {@code x} is a rank-1 vector of length
+	 * {@code n}. The result is a fresh rank-1 vector of length {@code d} with
+	 * {@code r[i] = dot(row_i of W, x)}, each dot computed by the same vectorized lane
+	 * loop as {@link #simdDot} (two-rounding mul-then-add; only the reduction
+	 * associativity differs from the scalar reference, so f64-exact inputs stay
+	 * byte-identical). One bridge call covers the whole matrix, amortizing the entry cost
+	 * over {@code d} rows.
+	 */
+	static @Nullable Object simdMatvec(@Nullable Object w, @Nullable Object x) {
+		if (w instanceof float[] fw) {
+			return matvecF(fw, asFloat(x));
+		}
+		if (x instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] W = (double[]) java.util.Objects.requireNonNull(w);
+		double[] X = (double[]) java.util.Objects.requireNonNull(x);
+		int ow = 1 + (int) W[0]; // rank-2 matrix header -> elements start at 3
+		int d = (int) W[1]; // rows
+		int n = (int) W[2]; // columns = length of x
+		int ox = 1 + (int) X[0];
+		double[] r = newVec(d);
+		for (int row = 0; row < d; row++) {
+			int base = ow + row * n;
+			int i = 0;
+			double acc = 0.0;
+			if (n >= THRESHOLD) {
+				DoubleVector vacc = DoubleVector.zero(SPECIES);
+				int bound = SPECIES.loopBound(n);
+				for (; i < bound; i += SPECIES.length()) {
+					vacc = vacc.add(DoubleVector.fromArray(SPECIES, W, base + i)
+						.mul(DoubleVector.fromArray(SPECIES, X, ox + i)));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < n; i++) {
+				acc += W[base + i] * X[ox + i];
+			}
+			r[2 + row] = acc;
+		}
+		return r;
+	}
+
 	// --- single-float (f32) kernels ----------------------------------------------
 	// A float[] operand runs these instead of the double[] path above; the result
 	// keeps the input width (element-wise) or is the usual f64 scalar (reductions).
@@ -393,6 +441,46 @@ final class JvmSimdVectorTemplate {
 			acc += (double) x[ox + i] * (double) y[oy + i];
 		}
 		return acc;
+	}
+
+	/**
+	 * {@code matvec(W, x)} for a f32 matrix and vector: each output element {@code r[i]}
+	 * is the f64-accumulated dot of row {@code i} of {@code W} with {@code x} (per-lane
+	 * {@code F2D} widening, matching {@link #dotF}), narrowed back to f32 on store so the
+	 * result keeps the single-float width -- bit-identical to the scalar {@code vec.lisp}
+	 * reference (which widens on read, accumulates in f64, narrows on store) for
+	 * f64-exact inputs.
+	 */
+	private static float[] matvecF(float[] w, float[] x) {
+		int ow = 1 + (int) w[0]; // rank-2 matrix header -> elements start at 3
+		int d = (int) w[1];
+		int n = (int) w[2];
+		int ox = 1 + (int) x[0];
+		float[] r = newVecF(d);
+		for (int row = 0; row < d; row++) {
+			int base = ow + row * n;
+			int i = 0;
+			double acc = 0.0;
+			if (n >= THRESHOLD) {
+				DoubleVector vacc = DoubleVector.zero(SPECIES);
+				int bound = FSPECIES.loopBound(n);
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector fw = FloatVector.fromArray(FSPECIES, w, base + i);
+					FloatVector fx = FloatVector.fromArray(FSPECIES, x, ox + i);
+					DoubleVector w0 = (DoubleVector) fw.convert(VectorOperators.F2D, 0);
+					DoubleVector w1 = (DoubleVector) fw.convert(VectorOperators.F2D, 1);
+					DoubleVector x0 = (DoubleVector) fx.convert(VectorOperators.F2D, 0);
+					DoubleVector x1 = (DoubleVector) fx.convert(VectorOperators.F2D, 1);
+					vacc = vacc.add(w0.mul(x0)).add(w1.mul(x1));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < n; i++) {
+				acc += (double) w[base + i] * (double) x[ox + i];
+			}
+			r[2 + row] = (float) acc;
+		}
+		return r;
 	}
 
 	// --- packed float-array construction -----------------------------------------

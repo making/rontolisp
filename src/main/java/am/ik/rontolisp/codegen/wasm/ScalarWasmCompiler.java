@@ -2426,6 +2426,13 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// they run only on the portable backends via vec.lisp.
 	private static final Set<String> SIMD_PORTABLE_ONLY = Set.of(LispNames.VEC_FROM_LIST, LispNames.VEC_TO_LIST);
 
+	// simd members that are genuinely unsupported on --no-gc (a clear error, not a typo):
+	// matvec is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1
+	// [count][f...] linear blocks only -- there is no rank-2 layout to read rows from.
+	// Use the JVM --simd backend (or the interpreter / JVM / wasm-GC scalar path)
+	// instead.
+	private static final Set<String> SIMD_UNSUPPORTED_NO_GC = Set.of(LispNames.VEC_MATVEC);
+
 	// Whether a (resolved) symbol name is a vec: package member, e.g. "vec:dot". vec:
 	// names are always qualified with the package prefix, so a prefix test suffices.
 	private static boolean isSimdCall(String name) {
@@ -2445,6 +2452,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (SIMD_PORTABLE_ONLY.contains(member)) {
 			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
 					+ "' needs Lisp lists and runs on the portable backends only, not --no-gc");
+		}
+		if (SIMD_UNSUPPORTED_NO_GC.contains(member)) {
+			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
+					+ "' is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1 only;"
+					+ " use the JVM --simd backend or the interpreter / JVM / wasm-GC scalar path");
 		}
 		throw new UnsupportedOperationException(
 				"--no-gc: unknown simd operation '" + name + "' in function '" + fnName + "'");

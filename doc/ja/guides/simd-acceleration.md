@@ -8,6 +8,8 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 ベクトルは階数 1 の[パックド浮動小数点配列](../reference/data-types.md)です。すなわち `#d(...)` や `(make-array n :element-type 'double-float)` が生成する、`double-float` 型でアンボックスな配列です。組み込みの `aref` / `length` はこれと相互運用でき、別の場所で構築したパックドベクトルも `vec` 関数に渡せます。要素ごとのカーネルは新しいベクトルを返し、リダクションはスカラーの `double` を返します。
 
+カーネルは幅多相です。単精度ベクトル(`#f(...)` / `:element-type 'single-float`。要素を `f32` として格納し、メモリ半分・SIMD レーン 2 倍)も受け付けます。要素ごとのカーネルはインタプリタと JVM では入力の幅を保ち(`#f` を入れると `#f` が出る)、リダクションは常にスカラーの `double` に畳み込みます。
+
 ```lisp
 (vec:arange 5)                         ; => #d(0.0 1.0 2.0 3.0 4.0)
 (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) ; => #d(5.0 7.0 9.0)
@@ -32,12 +34,20 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 (vec:to-list (vec:mul #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))) ; => (4.0 10.0 18.0)
 ```
 
+行列×ベクトル(新しいベクトル): `vec:matvec` は GEMV です。階数 2 のパックド行列 `W`(形状 *d* x *n*)と長さ *n* の階数 1 ベクトル `x` の積で、*i* 番目の要素が `W` の第 *i* 行と `x` の内積になる長さ *d* のベクトルを返します(転置なし)。ニューラルネットワークの順伝播の主役であり(すべての射影・フィードフォワード・分類層が `vec:matvec` です)、要素ごとではなく行列の行ごとに 1 回実行される唯一のカーネルです。結果は入力の幅に従います。
+
+```lisp
+(vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)) ; => #d(17.0 39.0)
+```
+
+[`ml/nn-vec.lisp` の例](https://github.com/making/rontolisp/blob/main/examples/ml/nn-vec.lisp)は、単精度の順伝播を `vec:matvec` で組み立てた小さな XOR ネットワークです。
+
 ## ハードウェアアクセラレーション(任意)
 
-スカラーの `vec.lisp` 基準はどこでも正しく、2 つのバックエンドではベクトル化可能なカーネル(`add` / `sub` / `mul` / `scale` / `dot` / `sum`、および波及的に `mean` / `norm`)を実際の SIMD ハードウェアにロワリングできます。これはオプトインで、結果は何も変えません。アクセラレートされた出力はスカラー基準とバイト単位で同一です。
+スカラーの `vec.lisp` 基準はどこでも正しく、2 つのバックエンドではベクトル化可能なカーネル(`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`、および波及的に `mean` / `norm`)を実際の SIMD ハードウェアにロワリングできます。これはオプトインで、結果は何も変えません。アクセラレートされた出力はスカラー基準とバイト単位で同一です。
 
-- **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` はカーネルを、JIT が CPU のベクトル命令にイントリンシファイする埋め込みの `jdk.incubator.vector` ブリッジに振り向けます。そのクラスの実行には JVM にインキュベータモジュールが必要です: `java --add-modules jdk.incubator.vector Prog`。`--simd` なしのクラスは任意の JVM でスカラー基準を実行します。
-- **`--no-gc` ネイティブ `v128`**: 非 GC のスカラー WASM バックエンド(`rontolisp prog.lisp -o prog.wasm --no-gc`)では、`vec:` カーネルはパックドな線形メモリブロック上の WebAssembly 固定幅 SIMD(`f64x2.*`)にロワリングされます。アクセラレーションフラグは不要で、これがこのバックエンドのネイティブ実装です。`vec:from-list` / `vec:to-list` は Lisp リストを必要とするため、ここでは利用できません。
+- **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` はカーネルを、JIT が CPU のベクトル命令にイントリンシファイする埋め込みの `jdk.incubator.vector` ブリッジに振り向けます(`#d` には `DoubleVector`、`#f` には `FloatVector`。`vec:matvec` はそのベクトル化された内積を行列の行ごとに 1 回実行します)。そのクラスの実行には JVM にインキュベータモジュールが必要です: `java --add-modules jdk.incubator.vector Prog`。`--simd` なしのクラスは任意の JVM でスカラー基準を実行します。
+- **`--no-gc` ネイティブ `v128`**: 非 GC のスカラー WASM バックエンド(`rontolisp prog.lisp -o prog.wasm --no-gc`)では、`vec:` カーネルはパックドな線形メモリブロック上の WebAssembly 固定幅 SIMD(`f64x2.*`、単精度では `f32x4.*`)にロワリングされます。アクセラレーションフラグは不要で、これがこのバックエンドのネイティブ実装です。`vec:from-list` / `vec:to-list`(Lisp リストが必要)と `vec:matvec`(階数 2 の行列が必要)はここでは利用できません。
 
 リダクションは SIMD 下では異なる順序で加算するため、非正確な入力に対するリダクションは左から右へのスカラー基準と最終 ULP で異なることがあります。テストで典型的な正確な double に対しては結果は完全に一致します。要素ごとのカーネルは常にビット単位で同一です。
 

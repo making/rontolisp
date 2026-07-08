@@ -2176,6 +2176,13 @@ public final class LispNames {
 	public static final String VEC_NORM = "norm";
 
 	/**
+	 * {@code vec:matvec}: GEMV -- a rank-2 matrix {@code W(d, n)} times a rank-1 vector
+	 * {@code x(n)}, yielding a rank-1 vector {@code y(d)} with
+	 * {@code y[i] = dot(row_i, x)}.
+	 */
+	public static final String VEC_MATVEC = "matvec";
+
+	/**
 	 * {@code vec:aref} fully qualified: a {@code setf} place (writer {@code vec:aset}).
 	 */
 	public static final String VEC_QUALIFIED_AREF = VEC_PKG + ":" + VEC_AREF;

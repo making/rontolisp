@@ -53,7 +53,8 @@ final class JvmSimdRuntimeBuilder {
 	 * The ready-to-emit {@code _simdInit} method, its guard field, and the constant-pool
 	 * references the accelerated {@code vec:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, plus one per kernel member name --
-	 * {@code add}/{@code sub}/{@code mul}/ {@code scale}/{@code dot}/{@code sum}).
+	 * {@code add}/{@code sub}/{@code mul}/ {@code scale}/{@code dot}/{@code sum}/
+	 * {@code matvec}).
 	 */
 	record SimdRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc,
@@ -110,6 +111,8 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScale"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_DOT,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdDot"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_MATVEC,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvec"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_SUM,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSum"), cp.addUtf8(unaryDesc))));
 

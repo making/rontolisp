@@ -117,3 +117,24 @@
 
 (defun vec:norm (v)
   (sqrt (vec:dot v v)))
+
+;; --- matrix x vector (GEMV) --------------------------------------------------
+
+;; y = W x, where W is a rank-2 packed matrix (d rows, n columns) and x is a
+;; rank-1 packed vector of length n; the result is a fresh rank-1 packed vector
+;; of length d with y[i] = dot(row i of W, x). The result width follows x (via
+;; vec::%make-like), so a #d matrix/vector yields #d and, on the interpreter and
+;; JVM, a #f pair yields #f. This is the scalar reference and the byte-identical
+;; oracle for the JVM --simd bridge (which runs the same dot per row over
+;; jdk.incubator.vector). The reads widen f32 -> f64 and the store narrows back,
+;; exactly as the accelerated kernel does.
+(defun vec:matvec (w x)
+  (let* ((dims (array-dimensions w))
+         (d (car dims))
+         (n (cadr dims))
+         (out (vec::%make-like x d)))
+    (dotimes (i d out)
+      (let ((acc 0.0))
+        (dotimes (j n)
+          (setq acc (+ acc (* (aref w i j) (aref x j)))))
+        (setf (aref out i) acc)))))

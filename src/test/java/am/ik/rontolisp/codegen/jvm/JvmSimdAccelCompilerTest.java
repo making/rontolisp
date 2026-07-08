@@ -262,6 +262,98 @@ class JvmSimdAccelCompilerTest {
 		assertThat(embedsBridge(compile("(print (vec:sum #f(1.0 2.0 3.0)))", false))).isFalse();
 	}
 
+	// --- matvec (GEMV) f64 + f32 (todo 95 Part 2) ------------------------------------
+
+	@Test
+	void acceleratedMatvecMatchesTheScalarReferenceByteForByte() throws Exception {
+		// Small matrices (n < THRESHOLD) exercise the scalar tail; the accelerated GEMV
+		// (one vectorized dot per row) must be byte-identical to the spliced vec.lisp
+		// reference, for both widths, including the packed-array print format. The last
+		// case is a non-square 3x4 matrix, catching a row-stride bug the square cases
+		// miss.
+		for (String expr : List.of("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))",
+				"(print (vec:matvec #d((1 2 3) (4 5 6)) #d(1 2 3)))", "(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))",
+				"(print (vec:matvec #f((1 2 3) (4 5 6)) #f(1 2 3)))",
+				"(print (vec:matvec #d((1 2 3 4) (5 6 7 8) (9 10 11 12)) #d(1 1 1 1)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedMatvecComputesTheExpectedValues() throws Exception {
+		// GEMV: y[i] = dot(row_i, x). #d((1 2)(3 4)) . #d(5 6) = (1*5+2*6, 3*5+4*6) =
+		// (17, 39); the #f pair yields the same values at single-float width.
+		assertThat(accel("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))")).isEqualTo("#d(17.0 39.0)");
+		assertThat(accel("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))")).isEqualTo("#f(17.0 39.0)");
+	}
+
+	@Test
+	void acceleratedMatvecPreservesTheSingleFloatWidth() throws Exception {
+		// A #f matrix/vector yields a #f result on both the accelerated and the scalar
+		// path -- GEMV is width-preserving via vec::%make-like, so --simd is a pure
+		// acceleration of the scalar reference (never a silent widen to #d).
+		String expr = "(print (vec:matvec #f((1 2 3) (4 5 6)) #f(1 2 3)))";
+		assertThat(accel(expr)).startsWith("#f(").isEqualTo(scalar(expr));
+	}
+
+	@Test
+	void acceleratedMatvecLargeMatricesMatchTheScalarReferenceOverTheVectorLoop() throws Exception {
+		// n >= THRESHOLD (200-column rows) drives the real SPECIES/FSPECIES lane loop;
+		// the
+		// per-row dot stays byte-identical to the left-to-right scalar reference on the
+		// f64-exact integer inputs. Row i sums to 19900 + 40000*i (sum(0..199) +
+		// 200*i*200)
+		// against an all-ones x, for both widths.
+		for (String et : List.of("'double-float", "'single-float")) {
+			String expr = "(let ((w (make-array (list 3 200) :element-type " + et + " :initial-element 0.0))"
+					+ " (x (make-array 200 :element-type " + et + " :initial-element 1.0)))"
+					+ " (dotimes (i 3) (dotimes (j 200) (setf (aref w i j) (+ j (* i 200)))))"
+					+ " (print (vec:matvec w x)))";
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedMatvecLargeMatrixComputesTheExpectedValues() throws Exception {
+		// The concrete large-matrix result: row0 = sum(0..199) = 19900, row1 =
+		// 19900+40000
+		// = 59900, row2 = 19900+80000 = 99900 (all f64-exact, so the vector loop
+		// matches).
+		String expr = "(let ((w (make-array (list 3 200) :element-type 'double-float :initial-element 0.0))"
+				+ " (x (make-array 200 :element-type 'double-float :initial-element 1.0)))"
+				+ " (dotimes (i 3) (dotimes (j 200) (setf (aref w i j) (+ j (* i 200)))))"
+				+ " (print (vec:matvec w x)))";
+		assertThat(accel(expr)).isEqualTo("#d(19900.0 59900.0 99900.0)");
+	}
+
+	@Test
+	void acceleratedMatvecResultInteroperatesWithThePackedArraySurface() throws Exception {
+		// A GEMV result is a plain rank-1 packed vector: aref / length / downstream vec:
+		// kernels consume it identically to a make-array vector.
+		assertThat(accel("(print (aref (vec:matvec #d((1 2) (3 4)) #d(5 6)) 1))")).isEqualTo("39.0");
+		assertThat(accel("(print (length (vec:matvec #d((1 2) (3 4) (5 6)) #d(1 1))))")).isEqualTo("3");
+		assertThat(accel("(print (vec:sum (vec:matvec #d((1 2) (3 4)) #d(5 6))))")).isEqualTo("56.0");
+	}
+
+	@Test
+	void mixedWidthMatvecOperandsAreAHardErrorUnderTheSimdFlag() {
+		// Mixing a #d matrix with a #f vector (or vice versa) is a hard error, like the
+		// other kernels -- the fixed-contract package never silently promotes.
+		assertThatThrownBy(() -> accel("(print (vec:matvec #d((1 2) (3 4)) #f(5 6)))"))
+			.hasStackTraceContaining("share an element type");
+		assertThatThrownBy(() -> accel("(print (vec:matvec #f((1 2) (3 4)) #d(5 6)))"))
+			.hasStackTraceContaining("share an element type");
+	}
+
+	@Test
+	void theMatvecBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// Dead-flag proof for matvec: the bridge is embedded under --simd and never
+		// without it, for both widths, independent of runtime output.
+		assertThat(embedsBridge(compile("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))", false))).isFalse();
+	}
+
 	private static boolean embedsBridge(byte[] classBytes) {
 		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.BRIDGE_NAME);
 	}

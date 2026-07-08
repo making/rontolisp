@@ -13,9 +13,10 @@ A vector is a rank-1 packed `(array double-float)` — the same unboxed-double a
 that `#d(...)` and `(make-array n :element-type 'double-float)` produce, so the generic
 `aref` / `(setf aref)` / `length` / `make-array` interoperate on every backend. Element
 type is `double-float`: storing a non-real is a type error, and there is no boxed/general
-fallback for a packed array (the todo-92 shadow/degrade path is gone). (The single-float
-sibling `#f(...)` / `:element-type 'single-float` is a *different* width — todo-95; `vec:`
-is currently double-only and does not ride on it.)
+fallback for a packed array (the todo-92 shadow/degrade path is gone). The single-float
+sibling `#f(...)` / `:element-type 'single-float` is a *different* width (todo-95); `vec:`
+is **width-polymorphic** and rides on both — the element-wise kernels preserve the input
+width on the interpreter/JVM (`vec::%make-like`), and the reductions fold to an f64 scalar.
 
 Per-backend repr: interpreter `record LispDoubleFloatArray(double[] data, int[] dims)`
 (one width of the sealed `LispFloatArray` umbrella, `LispSingleFloatArray(float[])` being
@@ -45,15 +46,19 @@ accelerated backends. `VecLibrary` splices/loads it exactly like `LinalgLibrary`
 
 Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction), `aref`/`aset`/
 `length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), `sum`/
-`dot`/`mean`/`norm` (reductions, scalar). `from-list`/`to-list` need cons lists, so they are
-portable-backends-only (a `--no-gc` compile error). `(setf (vec:aref v i) x)` →
+`dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
+vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
+`(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
+lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` needs a
+rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 
 ## Acceleration layer 1 — JVM `--simd` (jdk.incubator.vector)
 
-`--simd` routes the **six vectorizable kernels** (`add`/`sub`/`mul`/`scale`/`dot`/`sum`) at
-their call sites to an embedded `jdk.incubator.vector` bridge, replacing the scalar defun.
-`mean`/`norm` are accelerated transitively (their spliced bodies call `sum`/`dot`).
+`--simd` routes the **seven vectorizable kernels** (`add`/`sub`/`mul`/`scale`/`dot`/`sum`/
+`matvec`) at their call sites to an embedded `jdk.incubator.vector` bridge, replacing the
+scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies call
+`sum`/`dot`).
 
 - `JvmSimdVectorTemplate` — the Vector-API kernels (plain Java, compiled by the project;
   the pom adds `--add-modules jdk.incubator.vector` to javac + surefire). Unbox is
@@ -62,6 +67,15 @@ their call sites to an embedded `jdk.incubator.vector` bridge, replacing the sca
   fresh packed `double[]` (`[1.0, n, ...]`). No shadow logic. `THRESHOLD = 128` gates the
   lane loop vs a scalar loop; the dot two-rounding mul-then-add (not fma) keeps the only
   scalar-vs-vector divergence to reduction associativity.
+- **Width-polymorphic bridge:** each kernel dispatches on the runtime backing — a `double[]`
+  runs the `DoubleVector` path, a `float[]` the sibling `FloatVector` kernel (element-wise
+  → a fresh `float[]`, width preserved; `sum`/`dot` → an f64 scalar accumulated via per-lane
+  `F2D` widening). Mixed single/double operands are a hard `IllegalArgumentException`.
+- **`simdMatvec` (GEMV, todo-95 Part 2):** the `simdDot` lane loop run once per row of a
+  rank-2 matrix `W` — header `[2, d, n, ...]` so `ow = 1 + (int)W[0] = 3`, `d = (int)W[1]`
+  rows, `n = (int)W[2]` cols; `r[2 + row] = dot(W row, x)` into a fresh length-`d` vector.
+  ONE bridge call covers the whole matrix (amortizing entry over `d` rows). Width-polymorphic
+  like the rest (`matvecF` mirrors `dotF`, narrowing each row's f64 acc to f32 on store).
 - `JvmSimdRuntimeBuilder` — reads the template `.class` from the classpath, renames it into
   the default package (`RontoLispSimdBridge`), base64-embeds it, and emits `_simdInit`
   (a `Lookup.defineClass` guarded by `_simdInited`), exactly like the `java:` interop bridge.
@@ -90,7 +104,10 @@ implementation of `vec:`, since vec.lisp is not spliced there). `isSimdCall(name
 element-wise/`scale` → the operand width, `length` → `INT`, else `FLOAT`), and
 `compileCall`/`compileSimd`. Each kernel branches on the operand's inferred width
 (`packedVecType`): `F64VEC` → the byte-identical `f64x2` path, `F32VEC` → the `f32x4`
-sibling.
+sibling. **`matvec` (GEMV) is the one `vec:` member `--no-gc` rejects** — a `--no-gc`
+packed vector is a rank-1 `[count][f...]` linear block with no rank-2 layout to read rows
+from, so `requireKnownSimd` throws via `SIMD_UNSUPPORTED_NO_GC` with a clear error pointing
+to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 - **`F64VEC` (double, `f64x2` = 2 lanes/16 bytes):** element-wise (`add`/`sub`/`mul`) two
   f64 lanes per iteration via `v128.load` + `f64x2.<op>` + `v128.store`
@@ -132,7 +149,9 @@ sibling.
 ## Verification
 
 - Unit: `JvmSimdAccelCompilerTest` (JVM `--simd`: byte-identical to scalar over small
-  scalar-tail + large vector-loop arrays, packed-surface interop, bridge-embedded gating);
+  scalar-tail + large vector-loop arrays, packed-surface interop, bridge-embedded gating; the
+  `matvec` GEMV set adds byte-identical scalar-tail + n≥128 vector-loop + concrete-value +
+  width-preservation + mixed-width-error + dead-flag cases for both widths);
   `ScalarWasmCompilerTest` (`--no-gc` v128: `0xFD` opcode presence for both `f64x2` and
   `f32x4` kernels, `#f`/single-float storage narrow/widen opcodes, scalar-module shape,
   mixed-width + from-list compile errors). Interpreter/JVM-scalar via the general suites.
@@ -147,14 +166,16 @@ sibling.
   tree-shaker had no case for the `0xFD` SIMD prefix (`skipSimd` added), so `--no-gc
   --optimize` on ANY vec program (f64 or f32) previously threw "unhandled opcode 0xFD".
 - Cross-backend: `ci-spec.yaml` `vec-kernels-cross-backend` (interpreter / JVM / WASM P1 /
-  component byte-identical; f64-exact inputs so `mean`/`norm` land on exact doubles). Run the
-  native `CiSpecE2eTest` after editing it.
+  component byte-identical; f64-exact inputs so `mean`/`norm` land on exact doubles, plus two
+  `vec:matvec` lines — a square + a non-square `#d` matrix → `#d(17.0 39.0)` / `#d(14.0 32.0)`).
+  The `ml/nn-vec.lisp` example (single-float XOR net, `vec:matvec` forward pass) runs on
+  interpreter/JVM/wasm via `ExamplesE2eTest`. Run the native `CiSpecE2eTest` after editing it.
 - Manual `--no-gc`: `wasmtime run --invoke <fn> module.wasm <args>` (result on stderr; filter
   `^warning:`).
 
 ## Names / registration
 
-`LispNames.VEC_PKG` + `VEC_ZEROS`..`VEC_NORM` (+ `VEC_QUALIFIED_AREF`/`_ASET`);
+`LispNames.VEC_PKG` + `VEC_ZEROS`..`VEC_NORM`/`VEC_MATVEC` (+ `VEC_QUALIFIED_AREF`/`_ASET`);
 `PackageRegistry.VEC_FUNCTIONS` (external, no `cl` use) + `vecFunctionNames()`. Native
 image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 `JvmSimdVectorTemplate.class` (JvmSimdRuntimeBuilder).
@@ -164,6 +185,10 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 - `linalg:` acceleration (`.todo/93`): linalg.lisp still builds general arrays
   (`:initial-element 0`); migrating it to packed changes its output int→double and needs
   the linalg doc/test reconciliation + a linalg-kernel interceptor. A distinct step.
-- User-facing docs (`doc/{en,ja}/**`): `#f` is now `double-float`-typed (non-real store
-  errors); a `vec:` reference page + the Arrays/data-types note are still to be written.
-- A chained/matmul timing benchmark.
+- Full matrix×matrix **GEMM** (`matmul`): NOT `vec:` (it produces a matrix) — it belongs in
+  `linalg:` and needs a transpose that GEMV avoids. `vec:matvec` (GEMV) is the mat×vec case
+  llama2's single-token decode needs; GEMM is deferred (prefill batching only).
+- `--no-gc` native `f32x4` GEMV: `matvec` is a `--no-gc` compile error today (no rank-2
+  block layout); a native kernel would need explicit dims or a rank-2 `--no-gc` layout.
+- A chained/GEMV timing benchmark + a stories15M-scale llama2 demo (the `ml/nn-vec.lisp`
+  XOR net is the small-scale `vec:matvec` example; a real transformer is the payoff).

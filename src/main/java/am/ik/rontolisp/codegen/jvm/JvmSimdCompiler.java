@@ -13,7 +13,7 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles the accelerated {@code vec:} kernels ({@code add}/{@code sub}/{@code mul}/
- * {@code scale}/{@code dot}/{@code sum}) to calls into the embedded
+ * {@code scale}/{@code dot}/{@code sum}/{@code matvec}) to calls into the embedded
  * {@link JvmSimdVectorTemplate bridge}, replacing the scalar {@code vec.lisp} reference
  * at those call sites. Only wired in when the {@code --simd} flag emitted the runtime
  * (i.e. {@link JvmLispCompiler.Ctx#simdOps} is non-null); otherwise the qualified call
@@ -29,13 +29,13 @@ final class JvmSimdCompiler {
 	}
 
 	/**
-	 * Returns whether the given {@code simd} package member is one of the six
+	 * Returns whether the given {@code simd} package member is one of the seven
 	 * vectorizable kernels this compiler accelerates.
 	 */
 	static boolean handles(String member) {
 		return LispNames.VEC_ADD.equals(member) || LispNames.VEC_SUB.equals(member) || LispNames.VEC_MUL.equals(member)
 				|| LispNames.VEC_SCALE.equals(member) || LispNames.VEC_DOT.equals(member)
-				|| LispNames.VEC_SUM.equals(member);
+				|| LispNames.VEC_SUM.equals(member) || LispNames.VEC_MATVEC.equals(member);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
