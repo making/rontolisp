@@ -602,9 +602,10 @@ is the key to the doc churn.
 ### Step 3 (linalg SIMD-lane acceleration) — APPROVED (user, 2026-07-08); IMPLEMENT after compaction
 
 **User chose "step 3 も実装する" then asked to compact first.** Steps 1+2 are DONE + verified +
-benchmarked (see "Phase 5b DONE" above) and UNCOMMITTED on `feat/packed-float-array` (do NOT commit
-without an explicit request). Resume Step 3 from the "Implementation plan" block at the end of this
-section. Context on WHY it is harder than the simd package (keep in mind while designing):
+benchmarked (see "Phase 5b DONE" above) and COMMITTED at `4f3c896` on `feat/packed-float-array`
+(`feat(linalg): migrate to packed double-float for speed`); tree clean, Step 3 starts fresh. Resume
+Step 3 from the "Implementation plan" block at the end of this section. Context on WHY it is harder
+than the simd package (keep in mind while designing):
 
 Step-1 packed already delivers 2-3.6x with zero flags on every backend linalg runs on. A further
 `--simd`/`v128` lane layer for linalg is **materially harder than the simd package's** and its payoff
@@ -671,8 +672,8 @@ loop, --no-gc N/A):**
   interp/wasm-GC impl); the JVM `--simd` path just intercepts the accelerated call sites. `.todo/93`
   (linalg accel) folds in here.
 
-**Resumption facts:** branch `feat/packed-float-array`, steps 1+2 UNCOMMITTED, all green (suite 2905,
-native CiSpecE2eTest 724, DocExamplesTest 415, -Pweb, javadoc 0-warn). A/B benchmark jars +
+**Resumption facts:** branch `feat/packed-float-array`, steps 1+2 COMMITTED at `4f3c896`, all green
+(suite 2905, native CiSpecE2eTest 724, DocExamplesTest 415, -Pweb, javadoc 0-warn). A/B benchmark jars +
 `bench.lisp` were in the scratchpad (rebuild with `git show develop:.../linalg.lisp` for the baseline).
 Reuse refs: `git show ebe6bac` (or the current tree) for `JvmSimd{Compiler,RuntimeBuilder,VectorTemplate}`
 and the `JvmLispCompiler`/`JvmExprCompiler` simd wiring; `.kb/simd.md` documents the mechanics.
