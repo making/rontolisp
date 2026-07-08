@@ -295,7 +295,76 @@ Phases mirror `.todo/94`'s order:
      + an arithmetic (`= ...`) narrowing proof. Native `CiSpecE2eTest` NOT re-run
      (`ci-spec.yaml` untouched; single-float wasm is new capability, not in ci-spec — its
      cross-backend cases land in Phase 6). `--no-gc`/`#f` = clean compile error (Phase 5).
-5. **`--no-gc`:** `F32VEC` + `f32x4` simd kernels. wasmtime `--invoke`.
+5. **`--no-gc`:** `F32VEC` + `f32x4` simd kernels. wasmtime `--invoke`. **[PLAN — grounded
+   in a full `ScalarWasmCompiler` map, 2026-07-08; line numbers are from `29dcbc6`.]**
+   All edits are in `ScalarWasmCompiler.java` unless noted. F32VEC = an i32 pointer to
+   linear memory `[count:i32 LE][count f32 LE]` (4-byte stride, half of F64VEC's 8-byte).
+   Scalars stay f64 — reads widen `f64.promote_f32`, writes narrow `f32.demote_f64`.
+   **Scope = PARITY with F64VEC, not more:** `array-element-type`/`array-dimensions` do NOT
+   exist on `--no-gc` for EITHER width (they hit the unsupported-op throw ~line 3118), and
+   packed-vector `wasm-export` marshaling does NOT exist for F64VEC either (only `:string`
+   is a reference designator) — so both stay unsupported for F32VEC too (no regression, no
+   new surface). `usesFloatArray` (799, umbrella-based) + `withLocals`/v128 locals need NO
+   change. On `--no-gc` `vec.lisp` is NOT spliced (vec: is intercepted natively by
+   `compileSimd`), so the wasm-GC `%make-like` entanglement does NOT apply here.
+
+   **Prereq — add `F32X4_*` opcodes to `am/ik/wasm/Instruction.java`** (only `F64X2_*`
+   exist today, ~lines 607-639): `F32X4_SPLAT=0x13`, `F32X4_EXTRACT_LANE=0x1B`,
+   `F32X4_ADD=0xE4`, `F32X4_SUB=0xE5`, `F32X4_MUL=0xE6` (+ `DIV=0xE7`/`MIN=0xE8`/`MAX=0xE9`
+   if used). `F64_PROMOTE_F32=0xBB`, `F32_DEMOTE_F64=0xB6`, `Type.F32=0x7D`, `Type.V128=0x7B`
+   already exist. **Verify `WasmWriter.writeF32` exists** — if not, emit each f32 const as
+   the widening `F64_CONST` + `F32_DEMOTE_F64` (the same trick used in Phase 4's
+   `WasmQuoteCompiler`/`WasmArrayCompiler`).
+
+   **5a — F32VEC storage (foundational; the `--no-gc` analog of Phase 4):**
+   - `Ty` enum (~line 90): add `F32VEC`; add it to the `case STRING, F64VEC -> I32` arm of
+     `valType()` (~138) AND the separate `wasmType(Ty)` switch (~1194). `join` needs no edit
+     (auto mutually-exclusive).
+   - `typeOf` line 470 `case LispFloatArray -> F64VEC` **is the bug**: split into
+     `LispDoubleFloatArray -> F64VEC`, `LispSingleFloatArray -> F32VEC`.
+   - `typeOfCall` MAKE_ARRAY (~576-581): inspect `:element-type` → F64VEC/F32VEC (single
+     via an `isSingleFloatElementType` mirroring `isDoubleFloatElementType` ~2274). AREF/
+     ASET result stays `FLOAT` (scalars are f64) — no change.
+   - `compileFloatArrayLiteral` (2112): remove the `#f` throw (2113-2118); branch on
+     `LispSingleFloatArray` → `float[] data()`, offset `4 + 4*i`, `F32_CONST`(or demote
+     trick)+`F32_STORE`. `compileMakeArray` (2176): remove the single-float rejection
+     (2180-2183); branch stride `<<3`→`<<2`, `F32_CONST 0.0` default, `F32_DEMOTE_F64` the
+     `:initial-element` before `F32_STORE`.
+   - `allocVec` (2077): stride `<<3`(const 3)→`<<2`(const 2). `emitElementAddr` (2095): same.
+     BOTH must become width-aware (take the element width, or add `allocVecF32`/
+     `emitElementAddrF32`).
+   - `compileAref` (2146): F32VEC → `F32_LOAD` + `F64_PROMOTE_F32`. `compileAset` (2155):
+     F32VEC → `F32_DEMOTE_F64` + `F32_STORE`, return the round-tripped f64 (match interp/JVM
+     aset return). **Both must branch on the operand's inferred `Ty`** (they hardcode f64
+     today — thread the width from `typeOf(vec)`). `compileLength` guard (~2049): add
+     `F32VEC` (layout-agnostic, just the type guard).
+
+   **5b — f32x4 `vec:` kernels (the SIMD payoff; branch each kernel on operand `Ty`):**
+   - Shared helpers to parameterize by width: `openSimdLoop` (2531) `rem = count>>1`→`>>2`;
+     `emitSplatZero` (2748) `F64X2_SPLAT`→`F32X4_SPLAT`; `emitHorizontalAdd` (2755) 2-lane→
+     **4-lane fold** (extract lanes 0-3, three `F32_ADD`); `emitOddTailGuard` (2769)
+     `count&1` single `if` → **`count&3` scalar remainder LOOP** (biggest divergence).
+     `simd`/`simdLoad`/`simdStore`/`dataPtr`/`advancePtr(...,16)` are width-agnostic (a v128
+     is 16 bytes either way — f32x4 just covers 4 lanes not 2), reuse as-is.
+   - Kernels (all ~2487-2745, currently hardcoded f64x2): `compileSimdConstruct`,
+     `compileSimdElementwise(F32X4_op, F32_op)`, `compileSimdScale` (`F32X4_SPLAT` needs the
+     scalar demoted to f32 first), `compileSimdSum`, `compileSimdDot`. Each branches on the
+     operand's `Ty` (F64VEC→existing f64x2 path unchanged/byte-identical, F32VEC→new f32x4
+     path). Accumulator stays `allocV128Local()` (v128, same for both). mean/norm are Lisp
+     expansions (2394-2407) — width-agnostic, work once the kernels do.
+   - `typeOfSimd` (2343): elementwise/constructors return F64VEC today. A single-float vec:
+     op is reached only via an `#f`/`make-array 'single-float` OPERAND (there is no
+     `vec:zeros`-single constructor — no width param), so make elementwise result-type =
+     the operand width (inspect arg types), constructors stay F64VEC. This is the
+     llama2-relevant path: `(vec:dot #f(..) #f(..))`.
+
+   **Verify:** `ScalarWasmCompilerTest` asserts on bytecode structure (type bytes 0x7D=f32,
+   section shape) — add single-float parity cases mirroring the F64VEC ones; `mvn test`
+   GREEN; `wasmtime --invoke` end-to-end (`--no-gc` module is plain MVP + v128, needs NO
+   `-W gc`; note wasmtime 46 `--invoke` may not print an f64/f32 return to stdout, so assert
+   via an int-returning wrapper or the unit test's structural checks). Keep the F64VEC path
+   BYTE-IDENTICAL (the f64x2 branch untouched) — dead-flag/byte-identical proof like the JVM
+   `--simd`. Ordering: do 5a (storage) fully + green first, then 5b (kernels).
 6. **Reconcile the `#f`→`#d` print flip** across tests/docs/examples/ci-spec (the todo-94
    Option B / Phase 5b playbook — same `#(`/`#nA(`→prefix churn, now double RESULTS print
    `#d`; add single-float cases). `data-types.md` `#f`/`#d` doc (en+ja). Native
