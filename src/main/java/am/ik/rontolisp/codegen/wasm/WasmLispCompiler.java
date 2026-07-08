@@ -564,14 +564,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	// of a packed float array. Appended after TYPE_WRITE_STR_GC.
 	static final int TYPE_F64ARR = TYPE_WRITE_STR_GC + 1; // 39
 
-	// Packed float array: struct {(ref null eq) dims, (ref null eq) data} -- the rank-n
-	// double-float array as a distinct first-class type (disjoint from TYPE_CELL, so
+	// Packed float array: struct {(ref null eq) dims, (ref null eq) data} -- a rank-n
+	// packed float array as a distinct first-class type (disjoint from TYPE_CELL, so
 	// arrayp/print/length discriminate it with a plain ref.test). `dims` is a
 	// TYPE_HASH_BUCKETS of i31 dimension sizes (as for a general array), `data` a
-	// TYPE_F64ARR of the row-major elements. No fill pointer / adjustable / displacement
-	// (a packed array is a pure compute buffer). Appended after TYPE_F64ARR; the
-	// export/import wrapper type indices below shift past it.
+	// TYPE_F64ARR (double-float) or TYPE_F32ARR (single-float) of the row-major elements
+	// -- the SAME struct serves both widths, distinguished by ref.test-ing the data field
+	// (see WasmArrayCompiler; mirrors the JVM `double[]`/`float[]` inline dispatch). No
+	// fill pointer / adjustable / displacement (a packed array is a pure compute buffer).
+	// Appended after TYPE_F64ARR; the export/import wrapper type indices below shift past
+	// it and TYPE_F32ARR.
 	static final int TYPE_FARRAY = TYPE_F64ARR + 1; // 40
+
+	// Packed single-float array data storage: array (mut f32). A bare array comptype
+	// (implicitly sub final), a subtype of eq -- it stores in TYPE_FARRAY's (ref null eq)
+	// data field alongside TYPE_F64ARR and readers pick the width with ref.test $f32arr
+	// before array.get / array.set. The unboxed f32 storage of a single-float packed
+	// array (#f(...) / make-array :element-type 'single-float). Reads widen f32->f64,
+	// writes narrow f64->f32; scalars stay f64 (no single-float scalar type). Appended
+	// after TYPE_FARRAY (last fixed type before the export/import wrapper signatures).
+	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 41
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -1190,7 +1202,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if ((!this.component || this.serve) && !exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
-			int wrapperTypeIndex = TYPE_FARRAY + 1;
+			int wrapperTypeIndex = TYPE_F32ARR + 1;
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
 						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
@@ -1238,7 +1250,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// types; the WasmImportInjector post-pass prepends the matching import entries
 		// and resolves the placeholder call indices after the module is assembled.
 		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
-		int importTypeIndex = TYPE_FARRAY + 1 + exportPlans.size();
+		int importTypeIndex = TYPE_F32ARR + 1 + exportPlans.size();
 		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
@@ -1646,9 +1658,19 @@ public final class WasmLispCompiler implements LispCompiler {
 					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 				}));
+				// type 41 (TYPE_F32ARR): array (mut f32) -- packed single-float array
+				// data
+				// storage. A bare array comptype (implicitly sub final), a subtype of eq;
+				// stored in TYPE_FARRAY's data field alongside TYPE_F64ARR (the width is
+				// told apart by ref.test $f32arr).
+				types.add(w -> {
+					w.write(Type.ARRAY_TYPE);
+					w.write(Type.F32);
+					w.write(am.ik.wasm.Mutability.VAR);
+				});
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed
-				// type (TYPE_FARRAY). One per (rontolisp:wasm-export ...)
+				// type (TYPE_F32ARR). One per (rontolisp:wasm-export ...)
 				// directive.
 				for (ExportPlan p : exportPlans) {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
@@ -2629,11 +2651,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		final StringEntry promiseStr;
 
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
-		// prints "#", the rank as an integer, then "A(". A packed double-float array
-		// (TYPE_FARRAY) prints the "#d(" prefix at every rank instead, so its printed
-		// form
-		// round-trips to a packed array. (Single-float #f is not yet emitted by this
-		// backend; the compiled packed array is always double.)
+		// prints "#", the rank as an integer, then "A(". A packed float array
+		// (TYPE_FARRAY) prints "#d(" (double) or "#f(" (single) at every rank instead, so
+		// its printed form round-trips to a packed array of the same width -- the printer
+		// picks fPrefix / sfPrefix by ref.test-ing the data array's width.
 		final StringEntry vecPrefix;
 
 		final StringEntry hashPrefix;
@@ -2641,6 +2662,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		final StringEntry rankAOpen;
 
 		final StringEntry fPrefix;
+
+		final StringEntry sfPrefix;
 
 		final StringEntry minus;
 
@@ -2682,6 +2705,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.hashPrefix = addString("#");
 			this.rankAOpen = addString("A(");
 			this.fPrefix = addString("#d(");
+			this.sfPrefix = addString("#f(");
 			this.minus = addString("-");
 			this.period = addString(".");
 			this.slash = addString("/");

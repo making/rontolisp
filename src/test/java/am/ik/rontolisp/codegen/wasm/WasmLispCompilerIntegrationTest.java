@@ -5027,6 +5027,103 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (coerce #d(1 2 3) 'list))")).isEqualTo("(1.0 2.0 3.0)");
 	}
 
+	// --- packed single-float arrays (#f / :element-type 'single-float) -------
+	// The same TYPE_FARRAY struct as #d, distinguished by a TYPE_F32ARR data array;
+	// reads widen f32->f64, writes narrow. Cross-backend assertions use exact
+	// (power-of-two / integer-valued) f32 values so the printed form is byte-identical
+	// (a non-terminating f32 decimal renders differently under the WASM float printer;
+	// lossy narrowing is asserted arithmetically below and byte-exactly in
+	// JvmFloatArrayTest).
+
+	@Test
+	void compilePackedSingleFloatVectorLiteralArefAndPrint() throws Exception {
+		assertThat(compileAndRun("(print (aref #f(1.0 2.5 3.0) 1))")).isEqualTo("2.5");
+		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#f(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void compilePackedSingleFloatMatrixLiteralIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((m #f((1 2 3) (4 5 6))))
+				  (print (list (array-rank m) (array-dimensions m) (aref m 1 2))))
+				""")).isEqualTo("(2 (2 3) 6.0)");
+		assertThat(compileAndRun("(print #f((1 2) (3 4)))")).isEqualTo("#f((1.0 2.0) (3.0 4.0))");
+	}
+
+	@Test
+	void compilePackedSingleFloatArefSetReturnsStoredValue() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((v #f(1.0 2.0 3.0)))
+				  (print (setf (aref v 1) 42))
+				  (print v))
+				""")).isEqualTo("42.0\n#f(1.0 42.0 3.0)");
+	}
+
+	@Test
+	void compileMakeArraySingleFloatIsPacked() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((a (make-array 3 :element-type 'single-float :initial-element 2.5)))
+				  (setf (aref a 0) 9)
+				  (print (list a (length a) (array-element-type a))))
+				""")).isEqualTo("(#f(9.0 2.5 2.5) 3 single-float)");
+	}
+
+	@Test
+	void compileMakeArraySingleFloatRankTwo() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((m (make-array (list 2 2) :element-type 'single-float)))
+				  (dotimes (i 2) (dotimes (j 2) (setf (aref m i j) (+ (* i 10) j))))
+				  (print m))
+				""")).isEqualTo("#f((0.0 1.0) (10.0 11.0))");
+	}
+
+	@Test
+	void compilePackedSingleFloatRowMajorArefAndElementType() throws Exception {
+		assertThat(compileAndRun("(print (row-major-aref #f((1 2) (3 4)) 3))")).isEqualTo("4.0");
+		assertThat(compileAndRun("(print (array-element-type #f(1 2 3)))")).isEqualTo("single-float");
+	}
+
+	@Test
+	void compilePackedSingleFloatIsAnArrayAndVector() throws Exception {
+		assertThat(compileAndRun("(print (typecase #f(1 2 3) (array 'arr) (t 'no)))")).isEqualTo("arr");
+		assertThat(compileAndRun("(print (typecase #f(1 2 3) (vector 'vec) (t 'no)))")).isEqualTo("vec");
+	}
+
+	@Test
+	void compilePackedSingleFloatDotProductLoop() throws Exception {
+		assertThat(compileAndRun("""
+				(defun dot (a b n)
+				  (let ((s 0.0) (i 0))
+				    (loop while (< i n) do
+				      (setf s (+ s (* (aref a i) (aref b i)))) (setf i (+ i 1)))
+				    s))
+				(print (dot #f(1 2 3) #f(4 5 6) 3))
+				""")).isEqualTo("32.0");
+	}
+
+	@Test
+	void compilePackedSingleFloatCoerceToList() throws Exception {
+		assertThat(compileAndRun("(print (coerce #f(1 2 3) 'list))")).isEqualTo("(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void compileSingleFloatStorageNarrowsToF32() throws Exception {
+		// f32(0.1) widened != f64 0.1, so a single-float element differs from the double
+		// (proving the store really narrows to f32); the double width keeps the value.
+		// The boolean result is byte-identical across every backend (unlike the printed
+		// decimal, which the WASM float printer renders differently).
+		assertThat(compileAndRun("""
+				(let ((a (make-array 1 :element-type 'single-float)))
+				  (setf (aref a 0) 0.1)
+				  (print (= (aref a 0) 0.1)))
+				""")).isEqualTo("nil");
+		assertThat(compileAndRun("""
+				(let ((b (make-array 1 :element-type 'double-float)))
+				  (setf (aref b 0) 0.1)
+				  (print (= (aref b 0) 0.1)))
+				""")).isEqualTo("t");
+	}
+
 	@Test
 	void compileLengthOfVectorReturnsElementCount() throws Exception {
 		assertThat(compileAndRun("(print (length (make-array 5 :initial-element 0)))")).isEqualTo("5");

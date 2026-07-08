@@ -1670,9 +1670,8 @@ final class WasmRuntimeBuilder {
 		// Locals: slot 1 = (ref null eq) cons cursor, slot 2 = i32 cons first-flag (both
 		// used by the list printer); slots 3-4 = (ref null eq) array dims/data, slots
 		// 5-11 = i32 array index/length/rank/dimension/stride/scratch/displacement-base,
-		// slot 12 = i32 packed-array flag (set when the value was a TYPE_FARRAY,
-		// selecting
-		// the "#d(" prefix) -- all used by the array printer.
+		// slot 12 = i32 packed-array flag (0 general / 1 double "#d(" / 2 single "#f("),
+		// slot 13 = i32 single-float-width flag -- all used by the array printer.
 		w.write(4);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1682,7 +1681,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(8);
+		w.write(9);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1793,7 +1792,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1902,8 +1901,8 @@ final class WasmRuntimeBuilder {
 		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
 		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-12 = i32 (array
 		// index/length/rank/dimension/stride/scratch/displacement-base), slot 13 = i32
-		// packed-array flag (set when the value was a TYPE_FARRAY, selecting the "#d("
-		// prefix).
+		// packed-array flag (0 general / 1 double "#d(" / 2 single "#f("), slot 14 = i32
+		// single-float-width flag.
 		w.write(5);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1915,7 +1914,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(8);
+		w.write(9);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -2059,7 +2058,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -2238,17 +2237,44 @@ final class WasmRuntimeBuilder {
 		castBuckets(w);
 	}
 
-	// Pushes the f64 data array (field 1) of the TYPE_FARRAY held in slot, cast to
-	// TYPE_F64ARR.
-	private static void farrayData(WasmWriter w, int slot) {
+	// Pushes the data array (field 1) of the TYPE_FARRAY held in slot as an eqref,
+	// without
+	// a width cast -- the caller picks TYPE_F64ARR / TYPE_F32ARR (or the abstract array)
+	// itself.
+	private static void farrayDataRaw(WasmWriter w, int slot) {
 		getLocal(w, slot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 		w.writeSignedLeb128(1);
+	}
+
+	// Pushes the f64 data array (field 1) of the TYPE_FARRAY held in slot, cast to
+	// TYPE_F64ARR (double-float width).
+	private static void farrayData(WasmWriter w, int slot) {
+		farrayDataRaw(w, slot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// Pushes the f32 data array (field 1) of the TYPE_FARRAY held in slot, cast to
+	// TYPE_F32ARR (single-float width).
+	private static void farrayDataF32(WasmWriter w, int slot) {
+		farrayDataRaw(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	// Pushes array.len of the TYPE_FARRAY data array in slot, width-agnostically: the
+	// data
+	// field is cast to the abstract array type (a supertype of both TYPE_F64ARR and
+	// TYPE_F32ARR) so array.len works for either width.
+	private static void farrayDataLen(WasmWriter w, int slot) {
+		farrayDataRaw(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.ARRAY_HT.code());
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 	}
 
 	// Pushes the dims buckets (field 0, a TYPE_HASH_BUCKETS held as eq) of the
@@ -2293,8 +2319,9 @@ final class WasmRuntimeBuilder {
 	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
 			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot,
-			int packedSlot) {
-		// packedSlot = 0 (a general array prints "#("/"#nA(", a packed float array "#d(")
+			int packedSlot, int singleSlot) {
+		// packedSlot = 0 (a general array prints "#("/"#nA("); 1 = a packed double array
+		// ("#d("); 2 = a packed single array ("#f(")
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		setLocal(w, packedSlot);
@@ -2308,20 +2335,28 @@ final class WasmRuntimeBuilder {
 		// function
 		// index (the fixed FUNC_* indices the component blobs depend on stay put). The
 		// dims/data/idx/len slots used here are all re-set by the general logic
-		// afterwards; packedSlot is set so the prefix below becomes "#d(".
+		// afterwards; packedSlot is set so the prefix below becomes "#d(" / "#f(".
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
 		w.write(Instruction.IF, 0x40);
-		// remember this was a packed array so the prefix becomes "#d("
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		setLocal(w, packedSlot);
-		// dataSlot = the farray; lenSlot = array.len(farray.data)
+		// dataSlot = the farray
 		getLocal(w, 0);
 		setLocal(w, dataSlot);
-		farrayData(w, dataSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		// singleSlot = 1 when the data array is a TYPE_F32ARR (single-float), else 0
+		farrayDataRaw(w, dataSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		setLocal(w, singleSlot);
+		// packedSlot = 1 (double -> "#d(") or 2 (single -> "#f(") so the prefix picks
+		// fPrefix / sfPrefix below
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		getLocal(w, singleSlot);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, packedSlot);
+		// lenSlot = array.len(farray.data) -- width-agnostic (abstract-array cast)
+		farrayDataLen(w, dataSlot);
 		setLocal(w, lenSlot);
 		// dimsSlot = newBuckets = array.new $hash_buckets (null, len)
 		w.write(Instruction.REF_NULL);
@@ -2342,10 +2377,20 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.BR_IF, 1);
 		getBucketsLocal(w, dimsSlot);
 		getLocal(w, idxSlot);
+		// element as f64 (widen f32 -> f64 for a single-float array), then box it
+		getLocal(w, singleSlot);
+		w.write(Instruction.IF, Type.F64.code());
+		farrayDataF32(w, dataSlot);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		w.write(Instruction.F64_PROMOTE_F32);
+		w.write(Instruction.ELSE);
 		farrayData(w, dataSlot);
 		getLocal(w, idxSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		w.write(Instruction.END);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
@@ -2530,11 +2575,19 @@ final class WasmRuntimeBuilder {
 		innerConsGet(w, dataSlot, 1);
 		setLocal(w, dataSlot);
 
-		// prefix: "#d(" for a packed float array; else "#(" for rank 1, "#" + rank + "A("
-		// for rank n
+		// prefix: a packed float array prints "#f(" (single, packedSlot==2) or "#d("
+		// (double, packedSlot==1); else "#(" for rank 1, "#" + rank + "A(" for rank n
 		getLocal(w, packedSlot);
 		w.write(Instruction.IF, 0x40);
+		getLocal(w, packedSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		writeStr(w, st.sfPrefix);
+		w.write(Instruction.ELSE);
 		writeStr(w, st.fPrefix);
+		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
 		getLocal(w, rankSlot);
 		w.write(Instruction.I32_CONST);

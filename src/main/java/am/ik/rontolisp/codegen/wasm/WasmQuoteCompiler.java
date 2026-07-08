@@ -80,6 +80,53 @@ final class WasmQuoteCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
+	/**
+	 * Emits a packed single-float array literal ({@code #f(...)}) as a
+	 * {@code TYPE_FARRAY} struct {@code (dims . data)} whose {@code data} is a
+	 * {@code TYPE_F32ARR} ({@code array (mut f32)}) of the unboxed row-major {@code f32}
+	 * elements -- the same struct type as the double width, distinguished at read time by
+	 * {@code ref.test $f32arr}. Each element is emitted as its widening {@code f64}
+	 * constant narrowed with {@code f32.demote_f64} (an exact round-trip), so no f32
+	 * immediate encoding is needed (mirrors the JVM {@code d2f} literal trick). Shared by
+	 * the {@code quote} path and the bare-literal path in {@link WasmExprCompiler}.
+	 * @param fa the packed single-float literal
+	 * @param ctx the compilation context
+	 */
+	static void compileSinglePackedLiteral(am.ik.rontolisp.LispSingleFloatArray fa, WasmLispCompiler.Ctx ctx) {
+		float[] data = fa.data();
+		int[] dims = fa.dims();
+		// data: array.new TYPE_F32ARR (0.0, data.length), then array.set each element.
+		f32Const(ctx, 0.0f);
+		i32Const(ctx, data.length);
+		f32ArrayNew(ctx);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		for (int i = 0; i < data.length; i++) {
+			getF32Arr(ctx, dataSlot);
+			i32Const(ctx, i);
+			f32Const(ctx, data[i]);
+			f32ArraySet(ctx);
+		}
+		// dims: array.new TYPE_HASH_BUCKETS (null, dims.length), filled with i31 sizes.
+		refNull(ctx);
+		i32Const(ctx, dims.length);
+		arrayNew(ctx);
+		int dimsSlot = ctx.allocTemp();
+		setLocal(ctx, dimsSlot);
+		for (int d = 0; d < dims.length; d++) {
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, d);
+			i32Const(ctx, dims[d]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			arraySet(ctx);
+		}
+		// struct.new TYPE_FARRAY (dims, data)
+		getLocal(ctx, dimsSlot);
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
 	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
 		switch (val) {
 			case LispInteger i -> {
@@ -117,8 +164,7 @@ final class WasmQuoteCompiler {
 			case LispCons cons -> compileQuotedCons(cons, ctx);
 			case LispArray array -> compileQuotedArray(array, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
-			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
-					"single-float packed arrays (#f) are not yet supported on the WASM backend; use #d for double-float");
+			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}
@@ -228,6 +274,32 @@ final class WasmQuoteCompiler {
 	private static void f64ArraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// Pushes the f32 array stored in slot, cast to TYPE_F32ARR.
+	private static void getF32Arr(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	private static void f32ArrayNew(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	private static void f32ArraySet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	// Pushes an f32 constant: emitted as its widening f64 constant narrowed with
+	// f32.demote_f64 (an exact round-trip), so no f32 immediate encoding is needed.
+	private static void f32Const(WasmLispCompiler.Ctx ctx, float value) {
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(value);
+		ctx.writer.write(Instruction.F32_DEMOTE_F64);
 	}
 
 	// Pushes the bucket array stored in slot, cast to TYPE_HASH_BUCKETS.

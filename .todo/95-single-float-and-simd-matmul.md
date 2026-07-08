@@ -249,7 +249,52 @@ Phases mirror `.todo/94`'s order:
      change) and `#f` is a clean compile error; `--no-gc` `#f` a clean error. Native
      `CiSpecE2eTest` NOT re-run (ci-spec untouched, no cross-backend output change; float
      simd is interpreter/JVM-only new).
-4. **wasm-GC:** `TYPE_SFARRAY`/`TYPE_F32ARR` + dispatch. wasmtime integration.
+4. **[DONE 2026-07-08]** **wasm-GC:** single-float packed arrays. wasmtime integration.
+   - **Repr decision (deviates from the `TYPE_SFARRAY` sketch above, mirroring the JVM
+     Phase-2 "one struct, dispatch on backing" lesson):** keep the SINGLE `TYPE_FARRAY`
+     struct (`{(ref null eq) dims, (ref null eq) data}`, unchanged) and add only ONE new
+     type `TYPE_F32ARR = array (mut f32)` (index 41, right after `TYPE_FARRAY`); the data
+     field holds a `TYPE_F64ARR` (double) OR a `TYPE_F32ARR` (single), told apart by
+     `ref.test $f32arr`. **Why not a second struct:** two structurally-identical
+     singleton-struct rec groups would *canonicalize to the same type* under wasm-GC
+     iso-recursive typing, so `ref.test` could not discriminate them; a distinct
+     `array (mut f32)` element type is the clean discriminator. **Bonus:** the
+     width-agnostic ops (`arrayp` / `length` / `array-dimensions`, which test `$farray`
+     and read the `dims` field) need ZERO change — strictly fewer touch points than the
+     two-struct sketch. Wrapper/import type indices shifted `TYPE_FARRAY + 1` ->
+     `TYPE_F32ARR + 1` (`WasmLispCompiler`).
+   - **Width-specific points (all in `WasmArrayCompiler` + `WasmQuoteCompiler` +
+     `WasmRuntimeBuilder` print):** `#f` literal (`compileSinglePackedLiteral`: each f32 =
+     its widening `f64.const` narrowed by `f32.demote_f64`, the exact-round-trip JVM `d2f`
+     trick, so no f32 immediate encoding); `make-array :element-type 'single-float`
+     (`compilePackedMake(single=true)`, allocs `TYPE_F32ARR`); `aref`/`row-major-aref`
+     (`emitPackedReadF64`: `ref.test $f32arr` -> `array.get $f32arr` + `f64.promote_f32`,
+     else f64); `%aset`/`%row-major-aset` (`emitPackedWriteF64`: narrow `f32.demote_f64`
+     for single, and RETURN the value AS STORED read-back-widened — matching the
+     interpreter/JVM aset return across widths); `array-element-type` (single-float vs
+     double-float by data width); print (`_print_val`/`_princ_val` gained a `singleSlot`
+     i32 local; `packedSlot` is now tri-state 0/1/2 selecting `#(` / `#d(` / `#f(`; the
+     per-element boxing loop widens f32; length via an abstract-`array` cast so it is
+     width-agnostic).
+   - **Deliberately NOT changed:** `--no-gc` (`ScalarWasmCompiler`) still cleanly rejects
+     single-float (its Phase-5 error) — verified. `vec.lisp` `#+rontolisp-wasm`
+     double-only `%make-like` stays: `Features.WASM` is shared by wasm-GC AND `--no-gc`
+     (no feature distinguishes them), so removing it would break `--no-gc` vec programs
+     (the width-preserving variant statically compiles a `make-array 'single-float`
+     branch `--no-gc` cannot). So `vec:` ops on `#f` inputs still produce double on
+     wasm-GC (graceful; a narrow edge, revisit if a wasm-GC-only feature is ever added).
+   - **Verified:** `./mvnw test` GREEN (2937/0, unchanged baseline — no regression) +
+     10 NEW `WasmLispCompilerIntegrationTest` single-float cases (literal rank-1/2, aref
+     widen, aset return, make-array 1-d/2-d, element-type, row-major, typecase array/
+     vector, dot-product loop, coerce->list, arithmetic narrowing proof) GREEN; web-profile
+     compile OK; javadoc clean (only Version). **All 4 backends BYTE-IDENTICAL** for exact
+     (power-of-two / integer-valued) `#f` values (interp / JVM / WASM P1 / WASM component);
+     the only cross-backend text diff is the PRE-EXISTING WASM double-printer rendering of
+     non-terminating decimals (`(print 0.10000000149011612)` -> `0.1` on WASM even with no
+     single-float involved), which is exactly why cross-backend `#f` tests use exact values
+     + an arithmetic (`= ...`) narrowing proof. Native `CiSpecE2eTest` NOT re-run
+     (`ci-spec.yaml` untouched; single-float wasm is new capability, not in ci-spec — its
+     cross-backend cases land in Phase 6). `--no-gc`/`#f` = clean compile error (Phase 5).
 5. **`--no-gc`:** `F32VEC` + `f32x4` simd kernels. wasmtime `--invoke`.
 6. **Reconcile the `#f`→`#d` print flip** across tests/docs/examples/ci-spec (the todo-94
    Option B / Phase 5b playbook — same `#(`/`#nA(`→prefix churn, now double RESULTS print

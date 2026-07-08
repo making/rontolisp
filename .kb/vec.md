@@ -10,15 +10,22 @@ acceleration layers; the packed representation itself lives in `LispFloatArray`,
 ## The type it rides on
 
 A vector is a rank-1 packed `(array double-float)` — the same unboxed-double array
-that `#f(...)` and `(make-array n :element-type 'double-float)` produce, so the generic
+that `#d(...)` and `(make-array n :element-type 'double-float)` produce, so the generic
 `aref` / `(setf aref)` / `length` / `make-array` interoperate on every backend. Element
 type is `double-float`: storing a non-real is a type error, and there is no boxed/general
-fallback for a packed array (the todo-92 shadow/degrade path is gone).
+fallback for a packed array (the todo-92 shadow/degrade path is gone). (The single-float
+sibling `#f(...)` / `:element-type 'single-float` is a *different* width — todo-95; `vec:`
+is currently double-only and does not ride on it.)
 
-Per-backend repr: interpreter `record LispFloatArray(double[] data, int[] dims)`; JVM a
-bare `double[]` with an embedded `[rank, dim..., data...]` header (data offset `1 + rank`,
-so a rank-1 vector is `[1.0, n, e0..]`); wasm-GC a distinct `TYPE_FARRAY` struct over an
-`(array (mut f64))`; `--no-gc` a `[count:i32][count f64]` linear-memory block (`Ty.F64VEC`).
+Per-backend repr: interpreter `record LispDoubleFloatArray(double[] data, int[] dims)`
+(one width of the sealed `LispFloatArray` umbrella, `LispSingleFloatArray(float[])` being
+the other); JVM a bare `double[]` with an embedded `[rank, dim..., data...]` header (data
+offset `1 + rank`, so a rank-1 vector is `[1.0, n, e0..]`; single-float is a bare
+`float[]` with the same header); wasm-GC a distinct `TYPE_FARRAY` struct whose data field
+holds a `TYPE_F64ARR = (array (mut f64))` (double) or, for `#f` single-float, a
+`TYPE_F32ARR = (array (mut f32))` — the same struct, width told apart by
+`ref.test $f32arr` (todo-95 Phase 4); `--no-gc` a `[count:i32][count f64]` linear-memory
+block (`Ty.F64VEC`; single-float unsupported on `--no-gc`).
 
 ## vec.lisp = the scalar reference / cross-backend oracle
 
