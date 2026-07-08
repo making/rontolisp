@@ -2282,6 +2282,56 @@ cases:
       5.0
       10.0
 
+  # Packed single-float arrays (.todo/95): the #f(...) / :element-type 'single-float
+  # counterpart of packed-float-arrays-cross-backend, storing elements unboxed as f32
+  # (half the memory, 2x the SIMD lanes) on every backend (interpreter float[]/int[];
+  # JVM a bare float[] with a dims header; wasm-GC the shared TYPE_FARRAY struct whose data
+  # is a distinct (array (mut f32)) told apart by ref.test; the component path reuses the
+  # same core module). Reads widen f32 -> double, writes narrow double -> f32. Two
+  # cross-backend constraints keep this byte-identical: (1) only f32-EXACT values are printed
+  # (integers / 0.5 / 2.5) because the WASM float printer renders a non-terminating f32
+  # decimal differently -- the non-exact narrowing is instead proven by the boolean
+  # (= (aref w 0) 0.1) => nil (f32(0.1) widened differs from double 0.1 identically on every
+  # backend); (2) only vec: REDUCTIONS (dot/sum -> an f64 scalar) appear, never a vec:
+  # element-wise/constructor result, whose width the wasm-GC double-only %make-like renders
+  # as #d(...) rather than #f(...).
+  - name: packed-single-float-cross-backend
+    source: |
+      (defun ci-packed-single-float ()
+        (let ((m #f((1 2 3) (4 5 6))))
+          (print (list (array-rank m) (array-dimensions m) (aref m 1 2)))
+          (print m))
+        (let ((v #f(1.0 2.0 3.0)))
+          (setf (aref v 1) 42)
+          (print v))
+        (let ((a (make-array 3 :element-type 'single-float :initial-element 2.5)))
+          (setf (aref a 0) 9)
+          (print (list a (length a) (array-element-type a))))
+        (let ((mm (make-array (list 2 2) :element-type 'single-float)))
+          (dotimes (i 2) (dotimes (j 2) (setf (aref mm i j) (+ (* i 10) j))))
+          (print mm))
+        (print (row-major-aref #f((1 2) (3 4)) 3))
+        (print (coerce #f(1 2 3) 'list))
+        (print (typecase #f(1 2 3) (array 'arr) (t 'no)))
+        (let ((w (make-array 1 :element-type 'single-float)))
+          (setf (aref w 0) 0.1)
+          (print (= (aref w 0) 0.1)))
+        (print (vec:dot #f(1 2 3) #f(1 2 3)))
+        (print (vec:sum #f(2 4 6))))
+      (ci-packed-single-float)
+    expected: |
+      (2 (2 3) 6.0)
+      #f((1.0 2.0 3.0) (4.0 5.0 6.0))
+      #f(1.0 42.0 3.0)
+      (#f(9.0 2.5 2.5) 3 single-float)
+      #f((0.0 1.0) (10.0 11.0))
+      4.0
+      (1.0 2.0 3.0)
+      arr
+      nil
+      14.0
+      12.0
+
   # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline

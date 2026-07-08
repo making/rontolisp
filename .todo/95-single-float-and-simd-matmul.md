@@ -422,10 +422,40 @@ Phases mirror `.todo/94`'s order:
    via an int-returning wrapper or the unit test's structural checks). Keep the F64VEC path
    BYTE-IDENTICAL (the f64x2 branch untouched) — dead-flag/byte-identical proof like the JVM
    `--simd`. Ordering: do 5a (storage) fully + green first, then 5b (kernels).
-6. **Cross-backend single-float ci-spec + docs (close out Part 1). [PLAN — grounded in the
-   post-Phase-5 state, 2026-07-08.]** Most of the `#f`→`#d` reconciliation was PULLED FORWARD
+6. **[DONE 2026-07-08]** **Cross-backend single-float ci-spec + docs (close out Part 1).**
+   Most of the `#f`→`#d` reconciliation was PULLED FORWARD into Phase 1 (all test files /
+   docs / the compiled-print prefix already flipped). What Phase 6 actually did:
+   - **Added ONE ci-spec case `packed-single-float-cross-backend`** (right after the two `#d`
+     cases `packed-float-arrays-cross-backend` / `vec-kernels-cross-backend`) — the `#f` /
+     `:element-type 'single-float` mirror: rank-2 `#f` literal + `array-rank`/`-dimensions`/
+     `aref` (widen), rank-1 `(setf aref)` narrow-store (integer 42), `make-array 'single-float`
+     + `:initial-element 2.5` + `length` + `array-element-type` (→ `single-float`), rank-2
+     `make-array` fill loop, `row-major-aref`, `coerce → 'list`, `typecase` array, the
+     **narrowing boolean** `(= (aref w 0) 0.1)` → `nil`, and the two SAFE reductions
+     `(vec:dot #f(1 2 3) #f(1 2 3))` → `14.0` / `(vec:sum #f(2 4 6))` → `12.0`. 11 printed
+     lines. Both documented constraints respected (only f32-exact printed values + a `(= …)`
+     boolean for the non-exact narrowing; only `vec:` REDUCTIONS, never an element-wise result
+     whose width diverges on wasm-GC).
+   - **`data-types.md` (en+ja): confirmed already complete** (the `#d`/`#f` prose + runnable
+     `(array-element-type #f(1.0 2.0)) ; => single-float` + `make-array … 'single-float`
+     examples are present from Phase 1). NO-OP — no doc edit needed.
+   - **examples/ snippet: deliberately SKIPPED** (the plan's optional item). The ci-spec case
+     + `data-types.md` already cover the cross-backend single-float guarantee, and a standalone
+     f32 example would carry the same f32-print-divergence constraint without new verification
+     value — the compelling single-float *example* is the Part 2 llama2 demo.
+   - **Verification:** pre-checked the exact 11-line output BYTE-IDENTICAL on all four ci-spec
+     backends via the jar (interpreter / JVM / WASM-P1 `-W gc` / WASM-component) BEFORE the
+     native run; `JvmClassShakerCorpusTest` + `WasmTreeShakerCorpusTest` GREEN (the new case
+     compiles + tree-shakes with `--optimize` on JVM and wasm-GC, no decoder gap); **native
+     `CiSpecE2eTest` GREEN (728/0)** — the required all-4-backend gate. **Part 1 DONE-line
+     reached:** f32 & f64 packed arrays run byte-identical across backends; `#f`/`#d`
+     round-trip; `vec:` ops width-polymorphic; linalg behavior unchanged.
+
+   Original plan (as executed) below.
+
+   - Most of the `#f`→`#d` reconciliation was PULLED FORWARD
    into Phase 1 (all test files / docs / the compiled-print prefix already flipped; `mvn test`
-   + native `CiSpecE2eTest` were green then). What actually REMAINS:
+   + native `CiSpecE2eTest` were green then). What actually REMAINED:
    - **`data-types.md` (en+ja): ALREADY DONE in Phase 1** — the `#d`(double)/`#f`(single)
      prose + `(array-element-type #f(1.0 2.0)) ; => single-float` example are present. Only
      add 1-2 more `#f` example lines IF a runnable single-float example adds value (verify via
