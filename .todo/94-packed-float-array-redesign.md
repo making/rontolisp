@@ -633,8 +633,9 @@ prefix differs.
   runtime `read` never parsed vector literals (`#(...)` returns a String and crashes on `aref`,
   before AND after) — a pre-existing gap, not a regression; the REPL/recompile path (frontend
   reader) is the one that matters and it round-trips packed→packed.
-- **NOT committed yet** (awaiting user's go). Then Step 3 below (its tests should be written
-  against the `#f(...)` print form).
+- **COMMITTED at `fb870a7`** (`feat(float-array): print packed arrays as #f(...) so the printed
+  form round-trips to packed`; 64 files, tree clean). Then Step 3 below (its tests should be
+  written against the `#f(...)` print form).
 
 ### Step 3 (linalg SIMD-lane acceleration) — APPROVED (user, 2026-07-08); IMPLEMENT after compaction
 
