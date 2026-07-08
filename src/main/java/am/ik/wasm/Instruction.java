@@ -614,8 +614,19 @@ public interface Instruction {
 	/** {@code v128.store} (0xFD 0x0B): store a 128-bit vector (memarg). */
 	int V128_STORE = 0x0B;
 
+	/** {@code f32x4.splat} (0xFD 0x13): broadcast one {@code f32} into all four lanes. */
+	int F32X4_SPLAT = 0x13;
+
 	/** {@code f64x2.splat} (0xFD 0x14): broadcast one {@code f64} into both lanes. */
 	int F64X2_SPLAT = 0x14;
+
+	/**
+	 * {@code f32x4.extract_lane} (0xFD 0x1F lane): read one {@code f32} lane. (Note the
+	 * lane-access opcodes are packed by element type: {@code i32x4.extract_lane} is 0x1B,
+	 * {@code f32x4.extract_lane} 0x1F, {@code f64x2.extract_lane} 0x21 -- so f32x4 is
+	 * 0x1F, not 0x1B.)
+	 */
+	int F32X4_EXTRACT_LANE = 0x1F;
 
 	/** {@code f64x2.extract_lane} (0xFD 0x21 lane): read one {@code f64} lane. */
 	int F64X2_EXTRACT_LANE = 0x21;
@@ -637,5 +648,16 @@ public interface Instruction {
 
 	/** {@code f64x2.max} (0xFD 0xF5): lane-wise maximum. */
 	int F64X2_MAX = 0xF5;
+
+	/** {@code f32x4.add} (0xFD 0xE4): lane-wise addition (four {@code f32} lanes). */
+	int F32X4_ADD = 0xE4;
+
+	/** {@code f32x4.sub} (0xFD 0xE5): lane-wise subtraction (four {@code f32} lanes). */
+	int F32X4_SUB = 0xE5;
+
+	/**
+	 * {@code f32x4.mul} (0xFD 0xE6): lane-wise multiplication (four {@code f32} lanes).
+	 */
+	int F32X4_MUL = 0xE6;
 
 }

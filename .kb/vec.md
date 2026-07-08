@@ -24,8 +24,9 @@ offset `1 + rank`, so a rank-1 vector is `[1.0, n, e0..]`; single-float is a bar
 `float[]` with the same header); wasm-GC a distinct `TYPE_FARRAY` struct whose data field
 holds a `TYPE_F64ARR = (array (mut f64))` (double) or, for `#f` single-float, a
 `TYPE_F32ARR = (array (mut f32))` — the same struct, width told apart by
-`ref.test $f32arr` (todo-95 Phase 4); `--no-gc` a `[count:i32][count f64]` linear-memory
-block (`Ty.F64VEC`; single-float unsupported on `--no-gc`).
+`ref.test $f32arr` (todo-95 Phase 4); `--no-gc` a `[count:i32][count f64]` (`Ty.F64VEC`,
+8-byte stride) or `[count:i32][count f32]` (`Ty.F32VEC`, 4-byte stride) linear-memory
+block, keyed off the `#d`/`#f` literal or the `:element-type` (todo-95 Phase 5).
 
 ## vec.lisp = the scalar reference / cross-backend oracle
 
@@ -79,31 +80,51 @@ their call sites to an embedded `jdk.incubator.vector` bridge, replacing the sca
 - Because the spliced `mean`/`norm` bodies always call `sum`/`dot`, ANY `--simd` program
   using the vec package at all embeds the bridge (the dead defuns are shaken by `--optimize`).
 
-## Acceleration layer 2 — `--no-gc` native v128 (`f64x2.*`)
+## Acceleration layer 2 — `--no-gc` native v128 (`f64x2.*` / `f32x4.*`)
 
 `ScalarWasmCompiler` lowers the whole `vec:` surface to real fixed-width WASM SIMD over the
-`F64VEC` block — always on (not gated on `--simd`; it IS the `--no-gc` implementation of
-`vec:`, since vec.lisp is not spliced there). `isSimdCall(name)` (a `"vec:"` prefix test)
-dispatches in all three passes: `collectCalls` (eligibility: `requireKnownSimd` +
-walk-args), `typeOf`/`typeOfSimd` (constructors/element-wise → `F64VEC`, `length` → `INT`,
-else `FLOAT`), and `compileCall`/`compileSimd`.
+`F64VEC`/`F32VEC` block — always on (not gated on `--simd`; it IS the `--no-gc`
+implementation of `vec:`, since vec.lisp is not spliced there). `isSimdCall(name)` (a
+`"vec:"` prefix test) dispatches in all three passes: `collectCalls` (eligibility:
+`requireKnownSimd` + walk-args), `typeOf`/`typeOfSimd` (constructors → `F64VEC`,
+element-wise/`scale` → the operand width, `length` → `INT`, else `FLOAT`), and
+`compileCall`/`compileSimd`. Each kernel branches on the operand's inferred width
+(`packedVecType`): `F64VEC` → the byte-identical `f64x2` path, `F32VEC` → the `f32x4`
+sibling.
 
-- Element-wise (`add`/`sub`/`mul`): two f64 lanes per iteration via `v128.load` +
-  `f64x2.<op>` + `v128.store` (`openSimdLoop`/`closeSimdLoop` over `pairs = count >> 1`),
-  plus a one-element scalar tail when the length is odd (`emitOddTailGuard`).
-- `scale`: `f64x2.splat` the scalar, one `f64x2.mul` per pair + scalar tail.
-- `sum`/`dot`: accumulate in a **v128 lane pair** (`fn.allocV128Local()`), fold with
-  `f64x2.extract_lane` 0/1 (`emitHorizontalAdd`), plus the odd tail.
-- `zeros`/`ones`/`arange`: scalar fill loops building the block (no SIMD).
+- **`F64VEC` (double, `f64x2` = 2 lanes/16 bytes):** element-wise (`add`/`sub`/`mul`) two
+  f64 lanes per iteration via `v128.load` + `f64x2.<op>` + `v128.store`
+  (`openSimdLoop`/`closeSimdLoop` over `pairs = count >> 1`), plus a one-element scalar tail
+  when the length is odd (`emitOddTailGuard`). `scale`: `f64x2.splat` the scalar, one
+  `f64x2.mul` per pair + tail. `sum`/`dot`: accumulate in a **v128 lane pair**
+  (`fn.allocV128Local()`), fold with `f64x2.extract_lane` 0/1 (`emitHorizontalAdd`), plus
+  the odd tail. Computes entirely in f64 (its native width).
+- **`F32VEC` (single, `f32x4` = 4 lanes/16 bytes; todo-95 Phase 5):** the same shape at
+  half the stride — FOUR f32 lanes per iteration (`openSimdLoop(..., laneShift=2)` over
+  `quads = count >> 2`), and a scalar **remainder LOOP** over the last `count & 3` elements
+  (`openScalarTailLoop`, 0..3 leftover) instead of the single odd-element guard. Scalars stay
+  f64 at the value boundary (a read `f64.promote_f32`, a write/return `f32.demote_f64`), but
+  every kernel computes **entirely in f32** — native `f32x4` arithmetic + an `f32` scalar tail
+  (`fn.allocF32Local()`), the final reduction promoted to f64 on return. This matches
+  llama2.c / a `FloatVector`'s f32-throughout semantics; it diverges from the f64 vec.lisp
+  oracle only for non-f32-exact operands (the same class as SIMD reduction associativity), so
+  tests use f32-exact (integer / power-of-two) inputs. The `f64x2` path is left
+  byte-identical — only an `#f` / single-float operand reaches the f32 branch.
+- `zeros`/`ones`/`arange`: scalar fill loops building the block (no SIMD), always `F64VEC`
+  (no element-type param).
 - `aref`/`aset`/`length`: delegate to the shared packed helpers (`compileAref`/`compileAset`/
-  `compileLength`). `mean`/`norm`: expand to `(/ (sum) (length))` / `(sqrt (dot v v))` and
-  recompile.
+  `compileLength`), width-aware via `elemShift(vecTy)` (f64 `<<3`, f32 `<<2`) and the
+  load/store opcode (`f64.load`/`f64.store` vs `f32.load`+promote / demote+`f32.store`).
+  `mean`/`norm`: expand to `(/ (sum) (length))` / `(sqrt (dot v v))` and recompile
+  (width-agnostic).
 - Locals: `Fn.extraLocalTypes` is a `List<Integer>` of raw wasm value-type bytes (not `Ty`)
-  so `allocV128Local()` can add `Type.V128` (0x7B), which has no `Ty` value-model kind; the
-  body is emitted with `withLocalsRaw`. Instruction constants (`SIMD_PREFIX` 0xFD,
-  `V128_LOAD`/`STORE`, `F64X2_*`) live in `am.ik.wasm.Instruction`; sub-opcodes above 127
-  (e.g. `f64x2.add` = 0xF0) use the u32-LEB writer. A simd program flags the memory section
-  via `usesFloatArray` (which now also returns true for any `vec:` call).
+  so `allocV128Local()` can add `Type.V128` (0x7B) and `allocF32Local()` a bare `Type.F32`
+  (0x7D), neither of which has a `Ty` value-model kind; the body is emitted with
+  `withLocalsRaw`. Instruction constants (`SIMD_PREFIX` 0xFD, `V128_LOAD`/`STORE`, `F64X2_*`,
+  `F32X4_*` — note `f32x4.extract_lane` is 0x1F, NOT 0x1B which is `i32x4.extract_lane`) live
+  in `am.ik.wasm.Instruction`; sub-opcodes above 127 (e.g. `f64x2.add` = 0xF0, `f32x4.add` =
+  0xE4) use the u32-LEB writer. A simd program flags the memory section via `usesFloatArray`
+  (umbrella-based: any `LispFloatArray` literal, `make-array`, or `vec:` call).
 - wasmtime enables the SIMD proposal by default, so `--no-gc` simd runs with a plain
   `wasmtime run` (no `-W gc`). There is no scalar fallback on `--no-gc`, so a correct result
   IS the proof the v128 path ran.
@@ -112,8 +133,19 @@ else `FLOAT`), and `compileCall`/`compileSimd`.
 
 - Unit: `JvmSimdAccelCompilerTest` (JVM `--simd`: byte-identical to scalar over small
   scalar-tail + large vector-loop arrays, packed-surface interop, bridge-embedded gating);
-  `ScalarWasmCompilerTest` (`--no-gc` v128: `0xFD` opcode presence, scalar-module shape,
-  from-list compile error). Interpreter/JVM-scalar via the general suites.
+  `ScalarWasmCompilerTest` (`--no-gc` v128: `0xFD` opcode presence for both `f64x2` and
+  `f32x4` kernels, `#f`/single-float storage narrow/widen opcodes, scalar-module shape,
+  mixed-width + from-list compile errors). Interpreter/JVM-scalar via the general suites.
+- `--no-gc` end-to-end (automated, Docker+wasmtime): `WasmLispCompilerIntegrationTest`
+  `noGcRunsDoubleFloatVecKernelsWithF64x2Simd` / `noGcRunsSingleFloatVecKernelsWithF32x4Simd`
+  compile with `--no-gc` and `wasmtime run --invoke` int-returning `truncate` wrappers (no
+  `-W gc`): `vec:dot`/`sum`/`scale`/`add` + `make-array` + `setf aref` correct across every
+  tail config (0 / 1 / 3 leftover elements) and matching the interpreter f64 oracle for
+  integer-valued inputs, for BOTH widths (the f32 test also runs `--optimize`). This is the
+  first automated wasmtime run of the `--no-gc` vec kernels (they were structural-only
+  before); it surfaced + fixed a pre-existing `WasmTreeShaker` gap — the `--optimize`
+  tree-shaker had no case for the `0xFD` SIMD prefix (`skipSimd` added), so `--no-gc
+  --optimize` on ANY vec program (f64 or f32) previously threw "unhandled opcode 0xFD".
 - Cross-backend: `ci-spec.yaml` `vec-kernels-cross-backend` (interpreter / JVM / WASM P1 /
   component byte-identical; f64-exact inputs so `mean`/`norm` land on exact doubles). Run the
   native `CiSpecE2eTest` after editing it.

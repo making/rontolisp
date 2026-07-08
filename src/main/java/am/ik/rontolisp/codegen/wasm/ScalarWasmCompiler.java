@@ -103,7 +103,19 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		 * discriminator is needed. Only rank-1 packs here (a rank>=2 array is a clear
 		 * compile error on the scalar backend, which has no rank-n packed layout yet).
 		 */
-		F64VEC;
+		F64VEC,
+		/**
+		 * A packed {@code f32} vector (the {@code single-float} array element type): an
+		 * {@code i32} pointer to a linear-memory header {@code [count:i32 little-endian]
+		 * [count f32 little-endian]}. Same shape as {@link #F64VEC} but a 4-byte element
+		 * stride (half the width), so half the memory and twice the SIMD lanes
+		 * ({@code f32x4} vs {@code f64x2}). Scalars stay {@code f64}: a read widens
+		 * {@code f32 -> f64} ({@code f64.promote_f32}), a write narrows
+		 * {@code f64 -> f32} ({@code f32.demote_f64}). A distinct kind from
+		 * {@code F64VEC} -- a value cannot be both widths -- so mixing the two is a type
+		 * error (like the other reference kinds).
+		 */
+		F32VEC;
 
 		/**
 		 * The result type when this and another type are combined. {@code INT} doubles as
@@ -135,7 +147,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			return switch (this) {
 				case INT -> Type.I64.code();
 				case FLOAT -> Type.F64.code();
-				case STRING, F64VEC -> Type.I32.code();
+				case STRING, F64VEC, F32VEC -> Type.I32.code();
 			};
 		}
 
@@ -467,6 +479,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispInteger ignored -> Ty.INT;
 			case LispDouble ignored -> Ty.FLOAT;
 			case LispString ignored -> Ty.STRING;
+			case am.ik.rontolisp.LispSingleFloatArray ignored -> Ty.F32VEC;
 			case LispFloatArray ignored -> Ty.F64VEC;
 			case LispChar ignored -> Ty.INT;
 			case LispTrue ignored -> Ty.INT;
@@ -570,14 +583,18 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			case LispNames.QUOTE -> {
 				return Ty.INT;
 			}
-			// A packed double-float array literal or (make-array ... :element-type
-			// 'double-float) is a F64VEC. aref / row-major-aref read a f64 element;
-			// %aset / %row-major-aset return the (coerced) f64 value they stored.
+			// A packed float array literal or (make-array ... :element-type ...) is a
+			// F64VEC (double-float) or F32VEC (single-float), keyed off the :element-type
+			// designator. aref / row-major-aref read a f64 element (a f32 element is
+			// widened
+			// on read); %aset / %row-major-aset return the (coerced) f64 value they
+			// stored.
 			case LispNames.MAKE_ARRAY -> {
 				for (int i = 1; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
-				return Ty.F64VEC;
+				return isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD)) ? Ty.F32VEC
+						: Ty.F64VEC;
 			}
 			case LispNames.AREF, LispNames.ROW_MAJOR_AREF, LispNames.ASET, LispNames.ROW_MAJOR_ASET -> {
 				for (int i = 1; i < args.size(); i++) {
@@ -1191,7 +1208,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return switch (ty) {
 			case INT -> Type.I64;
 			case FLOAT -> Type.F64;
-			case STRING, F64VEC -> Type.I32;
+			case STRING, F64VEC, F32VEC -> Type.I32;
 		};
 	}
 
@@ -1468,7 +1485,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		// yields "" rather than a string/number type clash. This is what makes the
 		// cond-with-a-`t`-clause expansion (which threads an explicit nil else)
 		// type-check.
-		if ((target == Ty.STRING || target == Ty.F64VEC) && expr instanceof LispNil) {
+		if ((target == Ty.STRING || target == Ty.F64VEC || target == Ty.F32VEC) && expr instanceof LispNil) {
 			fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(0);
 			return;
 		}
@@ -1479,10 +1496,14 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (from == to) {
 			return;
 		}
-		// STRING and F64VEC are reference kinds; the only valid non-identity coercions
-		// are
-		// between the two numeric kinds (INT <-> FLOAT).
-		if (from == Ty.STRING || to == Ty.STRING || from == Ty.F64VEC || to == Ty.F64VEC) {
+		// STRING, F64VEC and F32VEC are reference kinds; the only valid non-identity
+		// coercions are between the two numeric kinds (INT <-> FLOAT). A reference kind
+		// can
+		// only coerce to itself (that identity case already returned above), so any
+		// reference kind reaching here -- including a f64-vector / f32-vector mismatch --
+		// is
+		// a genuine type error.
+		if (isRefKind(from) || isRefKind(to)) {
 			throw new UnsupportedOperationException("--no-gc: incompatible types " + from + " and " + to
 					+ " (a value cannot be more than one of number / string / float-vector)");
 		}
@@ -1492,6 +1513,20 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		else {
 			w.write(Instruction.I64_TRUNC_S_F64); // f64 -> i64 (truncate toward zero)
 		}
+	}
+
+	// A reference kind is an i32 pointer into linear memory (a string or a packed float
+	// vector), never an immediate scalar. It can only coerce to itself, so any mismatch
+	// involving one is a type error.
+	private static boolean isRefKind(Ty ty) {
+		return ty == Ty.STRING || ty == Ty.F64VEC || ty == Ty.F32VEC;
+	}
+
+	// The element byte-shift for a packed float vector: f64 = 3 (8-byte stride), f32 = 2
+	// (4-byte stride). Used everywhere the packed layout is indexed (allocVec /
+	// emitElementAddr / literals / make-array).
+	private static int elemShift(Ty vecTy) {
+		return vecTy == Ty.F32VEC ? 2 : 3;
 	}
 
 	private Ty compileCall(LispCons cons, Fn fn) {
@@ -2046,7 +2081,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			return Ty.INT;
 		}
 		Ty t = compileExpr(args.get(1), fn);
-		if (t != Ty.STRING && t != Ty.F64VEC) {
+		if (t != Ty.STRING && t != Ty.F64VEC && t != Ty.F32VEC) {
 			throw new UnsupportedOperationException(
 					"--no-gc: length expects a string or a float-vector in '" + fn.fnName + "'");
 		}
@@ -2071,17 +2106,23 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 	}
 
-	// dst = __alloc(4 + 8*count); mem[dst] = count (the element-count header). Returns
-	// the
-	// i32 base-pointer local; count is read from countLocal.
+	// dst = __alloc(4 + width*count); mem[dst] = count (the element-count header).
+	// Returns
+	// the i32 base-pointer local; count is read from countLocal. The default width is f64
+	// (the F64VEC layout); allocVec(fn, count, vecTy) picks the stride from the element
+	// width (f32 = 4-byte, f64 = 8-byte).
 	private int allocVec(Fn fn, int countLocal) {
+		return allocVec(fn, countLocal, Ty.F64VEC);
+	}
+
+	private int allocVec(Fn fn, int countLocal, Ty vecTy) {
 		WasmWriter w = fn.writer;
-		int dst = fn.allocLocal(Ty.F64VEC);
+		int dst = fn.allocLocal(vecTy);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
-		w.write(Instruction.I32_SHL); // 8*count
-		w.write(Instruction.I32_ADD); // 4 + 8*count
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
+		w.write(Instruction.I32_SHL); // width*count
+		w.write(Instruction.I32_ADD); // 4 + width*count
 		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
@@ -2090,96 +2131,148 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return dst;
 	}
 
-	// Emits base + 4 + (i << 3): the i32 address of element i, given the vector arg and
-	// the index arg.
-	private void emitElementAddr(LispVal vec, LispVal idx, Fn fn) {
+	// Emits base + 4 + (i << shift): the i32 address of element i, given the vector arg,
+	// the index arg and the vector's element width (f64 = <<3, f32 = <<2).
+	private void emitElementAddr(LispVal vec, LispVal idx, Fn fn, Ty vecTy) {
 		WasmWriter w = fn.writer;
-		compileCoerced(vec, fn, Ty.F64VEC);
+		compileCoerced(vec, fn, vecTy);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
 		compileCoerced(idx, fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
 	}
 
-	// A #d(...) double-float literal -> a fresh packed vector materialized in linear
-	// memory. Only a rank-1 literal packs to a f64 vector; a rank>=2 literal has no
-	// packed
-	// rank-n layout on the scalar backend, so it is a clear compile error. The count is
-	// known at read time, so each constant is stored with a straight-line f64.store.
+	// A #d(...)/#f(...) packed float literal -> a fresh packed vector materialized in
+	// linear memory. Only a rank-1 literal packs to a vector; a rank>=2 literal has no
+	// packed rank-n layout on the scalar backend, so it is a clear compile error. The
+	// count is known at read time, so each constant is stored with a straight-line store
+	// (f64.store for #d, f32.store for #f). A #f element is emitted with the widening
+	// f64.const + f32.demote_f64 trick (WasmWriter has no writeF32, and the demote is an
+	// exact round-trip of the stored float).
 	private Ty compileFloatArrayLiteral(LispFloatArray fa, Fn fn) {
-		if (!(fa instanceof am.ik.rontolisp.LispDoubleFloatArray dfa)) {
-			// #f(...) single-float packed arrays are not supported on the --no-gc scalar
-			// backend yet (todo 95 Phase 5); only the #d(...) double (f64) width packs.
-			throw new UnsupportedOperationException("--no-gc: single-float packed arrays (#f) in function '" + fn.fnName
-					+ "' are not supported; use #d for double-float");
-		}
+		boolean single = fa instanceof am.ik.rontolisp.LispSingleFloatArray;
 		if (fa.rank() != 1) {
-			throw new UnsupportedOperationException(
-					"--no-gc: a multi-dimensional #d(...) literal (rank " + fa.rank() + ") in function '" + fn.fnName
-							+ "' is not supported; only a rank-1 #d(...) packs to a f64 vector");
+			throw new UnsupportedOperationException("--no-gc: a multi-dimensional " + (single ? "#f" : "#d")
+					+ "(...) literal (rank " + fa.rank() + ") in function '" + fn.fnName
+					+ "' is not supported; only a rank-1 literal packs to a float vector");
 		}
+		Ty vecTy = single ? Ty.F32VEC : Ty.F64VEC;
+		int width = single ? 4 : 8;
 		WasmWriter w = fn.writer;
-		double[] data = dfa.data();
-		int n = data.length;
+		int n = fa.totalSize();
 		int count = fn.allocLocal(Ty.F64VEC); // i32 scratch
 		w.write(Instruction.I32_CONST).writeSignedLeb128(n);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count);
+		int dst = allocVec(fn, count, vecTy);
 		for (int i = 0; i < n; i++) {
 			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-			w.write(Instruction.I32_CONST).writeSignedLeb128(4 + 8 * i);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(4 + width * i);
 			w.write(Instruction.I32_ADD);
-			w.write(Instruction.F64_CONST).writeF64(data[i]);
-			w.write(Instruction.F64_STORE, 0x00, 0x00);
+			if (single) {
+				f32Const(w, (float) fa.elementAt(i));
+				w.write(Instruction.F32_STORE, 0x00, 0x00);
+			}
+			else {
+				w.write(Instruction.F64_CONST).writeF64(fa.elementAt(i));
+				w.write(Instruction.F64_STORE, 0x00, 0x00);
+			}
 		}
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		return Ty.F64VEC;
+		return vecTy;
 	}
 
-	// (aref v i) / (row-major-aref v i) -> the i-th f64 element (no bounds check, like
+	// Pushes an f32 constant via the widening f64.const + f32.demote_f64 trick
+	// (WasmWriter
+	// has no writeF32). (double) value is the exact widening and demote narrows back to
 	// the
-	// rest of the backend). Rank-1 only, so exactly one subscript is allowed; more
-	// subscripts imply a rank>=2 array, which the requireArgc(3) check rejects.
+	// same f32 bits, so the round-trip is lossless.
+	private static void f32Const(WasmWriter w, float value) {
+		w.write(Instruction.F64_CONST).writeF64((double) value);
+		w.write(Instruction.F32_DEMOTE_F64);
+	}
+
+	// The packed width of a vector operand at code-gen time: F32VEC if it statically
+	// infers
+	// to a single-float vector, else F64VEC. Defaulting the bottom/unknown case to F64VEC
+	// keeps every existing double-only program byte-identical (only a genuine #f /
+	// single-float operand takes the f32 path).
+	private Ty packedVecType(LispVal vec, Fn fn) {
+		return staticType(vec, fn) == Ty.F32VEC ? Ty.F32VEC : Ty.F64VEC;
+	}
+
+	// (aref v i) / (row-major-aref v i) -> the i-th element as a scalar f64 (a f32
+	// element
+	// is widened on read). No bounds check, like the rest of the backend. Rank-1 only, so
+	// exactly one subscript is allowed; more subscripts imply a rank>=2 array, which the
+	// requireArgc(3) check rejects.
 	private Ty compileAref(String name, List<LispVal> args, Fn fn) {
 		requireArgc(args, 3, name, fn);
-		emitElementAddr(args.get(1), args.get(2), fn);
-		fn.writer.write(Instruction.F64_LOAD, 0x00, 0x00);
+		Ty vecTy = packedVecType(args.get(1), fn);
+		emitElementAddr(args.get(1), args.get(2), fn, vecTy);
+		if (vecTy == Ty.F32VEC) {
+			fn.writer.write(Instruction.F32_LOAD, 0x00, 0x00);
+			fn.writer.write(Instruction.F64_PROMOTE_F32);
+		}
+		else {
+			fn.writer.write(Instruction.F64_LOAD, 0x00, 0x00);
+		}
 		return Ty.FLOAT;
 	}
 
-	// (%aset v i x) / (%row-major-aset v i x) -> store x (coerced to f64) at element i,
-	// returning the stored value so a setf place reads back the assigned value.
+	// (%aset v i x) / (%row-major-aset v i x) -> store x at element i, returning the
+	// stored
+	// value so a setf place reads back the assigned value. On a f32 vector the value is
+	// narrowed (f32.demote_f64) before the store, and the returned value is the same
+	// f32-round-tripped double (promote(demote(x))) so the read-back matches the other
+	// backends' aset return across widths.
 	private Ty compileAset(String name, List<LispVal> args, Fn fn) {
 		requireArgc(args, 4, name, fn);
 		WasmWriter w = fn.writer;
+		Ty vecTy = packedVecType(args.get(1), fn);
 		int addr = fn.allocLocal(Ty.F64VEC); // i32 element address
 		int val = fn.allocLocal(Ty.FLOAT);
-		emitElementAddr(args.get(1), args.get(2), fn);
+		emitElementAddr(args.get(1), args.get(2), fn, vecTy);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(addr);
 		compileCoerced(args.get(3), fn, Ty.FLOAT);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(val);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(addr);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
-		w.write(Instruction.F64_STORE, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+		if (vecTy == Ty.F32VEC) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.F32_STORE, 0x00, 0x00);
+			// return promote(demote(val)) -- the value as actually stored (f32-rounded).
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.F64_PROMOTE_F32);
+		}
+		else {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.F64_STORE, 0x00, 0x00);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+		}
 		return Ty.FLOAT;
 	}
 
-	// (make-array n :element-type 'double-float [:initial-element x]) -> a fresh packed
-	// vector of n elements, filled with x (default 0.0). Rank-1 only; :element-type
-	// 'double-float is required (the scalar backend has no general array type); the
+	// (make-array n :element-type 'double-float | 'single-float [:initial-element x]) ->
+	// a
+	// fresh packed vector of n elements, filled with x (default 0.0). Rank-1 only; an
+	// :element-type is required (the scalar backend has no general array type); the
 	// fill-pointer/adjustable/displaced options a packed vector cannot represent are hard
-	// errors.
+	// errors. A single-float array uses a 4-byte f32 stride and narrows the fill on
+	// store.
 	private Ty compileMakeArray(List<LispVal> args, Fn fn) {
 		if (args.size() < 2) {
 			throw new UnsupportedOperationException("--no-gc: make-array needs a dimension in '" + fn.fnName + "'");
 		}
-		if (!isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
-			throw new UnsupportedOperationException("--no-gc: make-array is only supported with :element-type "
-					+ "'double-float in '" + fn.fnName + "' (the scalar backend has no general array type)");
+		LispVal elementType = findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD);
+		boolean single = isSingleFloatElementType(elementType);
+		if (!single && !isDoubleFloatElementType(elementType)) {
+			throw new UnsupportedOperationException(
+					"--no-gc: make-array is only supported with :element-type " + "'double-float or 'single-float in '"
+							+ fn.fnName + "' (the scalar backend has no general array " + "type)");
 		}
 		if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
 				|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
@@ -2187,13 +2280,14 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: make-array :fill-pointer / :adjustable / :displaced-to "
 					+ "is not supported on a packed float-vector in '" + fn.fnName + "'");
 		}
+		Ty vecTy = single ? Ty.F32VEC : Ty.F64VEC;
 		LispVal lengthExpr = requireRank1Dims(args.get(1), fn);
 		WasmWriter w = fn.writer;
 		int count = fn.allocLocal(Ty.F64VEC); // i32 element count
 		compileCoerced(lengthExpr, fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count);
+		int dst = allocVec(fn, count, vecTy);
 		// Evaluate the fill value once into a f64 local (:initial-element, default 0.0).
 		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
 		int fill = fn.allocLocal(Ty.FLOAT);
@@ -2204,7 +2298,8 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			compileCoerced(init, fn, Ty.FLOAT);
 		}
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(fill);
-		// for (i = 0; i < count; i++) mem[dst + 4 + (i << 3)] = fill
+		// for (i = 0; i < count; i++) mem[dst + 4 + (i << shift)] = fill (narrowed for
+		// f32)
 		int i = fn.allocLocal(Ty.F64VEC);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
@@ -2218,11 +2313,17 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fill);
-		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		if (single) {
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.F32_STORE, 0x00, 0x00);
+		}
+		else {
+			w.write(Instruction.F64_STORE, 0x00, 0x00);
+		}
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
@@ -2231,7 +2332,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		return Ty.F64VEC;
+		return vecTy;
 	}
 
 	// A make-array dimension spec must denote a rank-1 length. Accept an integer /
@@ -2272,6 +2373,20 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// on this backend), unwrapping a (quote double-float) and ignoring any package
 	// qualifier. Mirrors WasmArrayCompiler.isDoubleFloatElementType.
 	private static boolean isDoubleFloatElementType(@Nullable LispVal elementType) {
+		return elementTypeNameIs(elementType, LispNames.DOUBLE_FLOAT);
+	}
+
+	// Whether an :element-type value designates single-float (the f32 packed width),
+	// unwrapping a (quote single-float) and ignoring any package qualifier. Mirrors
+	// isDoubleFloatElementType / WasmArrayCompiler.isSingleFloatElementType.
+	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
+		return elementTypeNameIs(elementType, LispNames.SINGLE_FLOAT);
+	}
+
+	// Shared unwrap for an :element-type designator: strips a (quote <sym>) wrapper and
+	// any
+	// package qualifier, then compares the bare name.
+	private static boolean elementTypeNameIs(@Nullable LispVal elementType, String expected) {
 		LispVal sym = elementType;
 		if (sym instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
@@ -2280,7 +2395,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		if (sym instanceof LispSymbol s) {
 			String name = s.name();
 			int colon = name.lastIndexOf(':');
-			return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+			return (colon >= 0 ? name.substring(colon + 1) : name).equals(expected);
 		}
 		return false;
 	}
@@ -2341,13 +2456,22 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// argument expressions are still walked so their call sites and local mutations are
 	// recorded during inference.
 	private Ty typeOfSimd(String name, List<LispVal> args, Map<String, Ty> env, TC tc) {
+		// Walk the argument expressions (recording call sites / local mutations) and note
+		// the width of the first vector operand -- an element-wise / scale result
+		// preserves
+		// the operand width (a f32 vector in yields a f32 vector out), while the
+		// constructors take no element-type and always build double.
+		Ty firstVecWidth = null;
 		for (int i = 1; i < args.size(); i++) {
-			typeOf(args.get(i), env, tc);
+			Ty t = typeOf(args.get(i), env, tc);
+			if (firstVecWidth == null && (t == Ty.F64VEC || t == Ty.F32VEC)) {
+				firstVecWidth = t;
+			}
 		}
+		Ty operandWidth = firstVecWidth == null ? Ty.F64VEC : firstVecWidth;
 		return switch (simdMember(name)) {
-			case LispNames.VEC_ZEROS, LispNames.VEC_ONES, LispNames.VEC_ARANGE, LispNames.VEC_ADD, LispNames.VEC_SUB,
-					LispNames.VEC_MUL, LispNames.VEC_SCALE ->
-				Ty.F64VEC;
+			case LispNames.VEC_ZEROS, LispNames.VEC_ONES, LispNames.VEC_ARANGE -> Ty.F64VEC;
+			case LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE -> operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
 		};
@@ -2526,12 +2650,19 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.F64VEC;
 	}
 
-	// Opens the `pairs = count >> 1` SIMD loop header: block/loop, break when pairs == 0.
-	// Leaves the block+loop open (the caller emits the body then closeSimdLoop).
+	// Opens the SIMD loop header over `count >> laneShift` vector groups (laneShift 1 =
+	// f64x2 pairs, 2 = f32x4 quads): block/loop, break when the group count == 0. Leaves
+	// the block+loop open (the caller emits the body then closeSimdLoop). The 3-arg form
+	// is
+	// the f64x2 default (laneShift 1), kept so its byte output is unchanged.
 	private void openSimdLoop(Fn fn, int countLocal, int remLocal) {
+		openSimdLoop(fn, countLocal, remLocal, 1);
+	}
+
+	private void openSimdLoop(Fn fn, int countLocal, int remLocal, int laneShift) {
 		WasmWriter w = fn.writer;
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(laneShift);
 		w.write(Instruction.I32_SHR_U);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
 		w.write(Instruction.BLOCK, 0x40);
@@ -2558,6 +2689,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// one-element scalar tail when the length is odd.
 	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
 		requireArgc(args, 3, "a simd element-wise kernel", fn);
+		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
+			return compileSimdElementwiseF32(args, fn, f32x4Of(simdOp), f32ScalarOf(scalarOp));
+		}
 		WasmWriter w = fn.writer;
 		int aL = fn.allocLocal(Ty.F64VEC);
 		int bL = fn.allocLocal(Ty.F64VEC);
@@ -2609,6 +2743,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// into both lanes with f64x2.splat, so the multiply is a single f64x2.mul per pair.
 	private Ty compileSimdScale(List<LispVal> args, Fn fn) {
 		requireArgc(args, 3, "vec:scale", fn);
+		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
+			return compileSimdScaleF32(args, fn);
+		}
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(Ty.F64VEC);
 		int s = fn.allocLocal(Ty.FLOAT);
@@ -2656,6 +2793,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// f64x2.extract_lane, and adds the odd tail element.
 	private Ty compileSimdSum(List<LispVal> args, Fn fn) {
 		requireArgc(args, 2, "vec:sum", fn);
+		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
+			return compileSimdSumF32(args, fn);
+		}
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(Ty.F64VEC);
 		compileCoerced(args.get(1), fn, Ty.F64VEC);
@@ -2696,6 +2836,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// horizontally, plus the odd tail product.
 	private Ty compileSimdDot(List<LispVal> args, Fn fn) {
 		requireArgc(args, 3, "vec:dot", fn);
+		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
+			return compileSimdDotF32(args, fn);
+		}
 		WasmWriter w = fn.writer;
 		int aL = fn.allocLocal(Ty.F64VEC);
 		int bL = fn.allocLocal(Ty.F64VEC);
@@ -2742,6 +2885,298 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // if
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
 		return Ty.FLOAT;
+	}
+
+	// --- f32x4 (single-float) SIMD kernels ---------------------------------------------
+	//
+	// The single-float analog of the f64x2 kernels above. Same 16-byte v128 SIMD word,
+	// but
+	// FOUR f32 lanes per iteration (count >> 2 quads) instead of two f64 lanes, and a
+	// scalar remainder LOOP over the last (count & 3) elements (0..3 leftover) instead of
+	// a
+	// single odd-element guard. The value boundary stays f64 (a scalar in/out is f64),
+	// but
+	// the vector DATA is f32 and every kernel computes ENTIRELY in f32 -- native f32x4
+	// arithmetic + an f32 scalar tail, the final reduction promoted to f64 on return.
+	// This
+	// matches llama2.c / a FloatVector's f32-throughout semantics (each --no-gc width
+	// computes in its own native precision, exactly as the f64x2 path computes in f64);
+	// it
+	// diverges from the interpreter/JVM-scalar vec.lisp oracle (which widens to f64) only
+	// for non-f32-exact operands, the same class of divergence as SIMD reduction
+	// associativity -- so cross-backend / --no-gc tests use f32-exact (integer /
+	// power-of-two) inputs. The f64x2 kernels above are left byte-identical; only an #f /
+	// single-float operand reaches here.
+
+	// Maps a f64x2 lane op to its f32x4 sibling (the element-wise kernels are dispatched
+	// by
+	// the f64 op, so the f32 branch translates once).
+	private static int f32x4Of(int f64x2Op) {
+		return switch (f64x2Op) {
+			case Instruction.F64X2_ADD -> Instruction.F32X4_ADD;
+			case Instruction.F64X2_SUB -> Instruction.F32X4_SUB;
+			case Instruction.F64X2_MUL -> Instruction.F32X4_MUL;
+			default ->
+				throw new IllegalArgumentException("no f32x4 sibling for f64x2 op 0x" + Integer.toHexString(f64x2Op));
+		};
+	}
+
+	private static int f32ScalarOf(int f64Op) {
+		return switch (f64Op) {
+			case Instruction.F64_ADD -> Instruction.F32_ADD;
+			case Instruction.F64_SUB -> Instruction.F32_SUB;
+			case Instruction.F64_MUL -> Instruction.F32_MUL;
+			default -> throw new IllegalArgumentException("no f32 sibling for f64 op 0x" + Integer.toHexString(f64Op));
+		};
+	}
+
+	// (vec:add a b) / (vec:sub a b) / (vec:mul a b) on f32 vectors: element-wise into a
+	// fresh f32 vector. Four f32 lanes per iteration via v128.load + f32x4.<op> +
+	// v128.store, then a scalar remainder loop over the last count & 3 elements.
+	private Ty compileSimdElementwiseF32(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
+		WasmWriter w = fn.writer;
+		int aL = fn.allocLocal(Ty.F32VEC);
+		int bL = fn.allocLocal(Ty.F32VEC);
+		compileCoerced(args.get(1), fn, Ty.F32VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		compileCoerced(args.get(2), fn, Ty.F32VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count, Ty.F32VEC);
+		int ap = fn.allocLocal(Ty.F32VEC);
+		int bp = fn.allocLocal(Ty.F32VEC);
+		int dp = fn.allocLocal(Ty.F32VEC);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem, 2);
+		// mem[dp] = f32x4.<op>(v128.load ap, v128.load bp)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		simdLoad(w);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		simdLoad(w);
+		simd(w, simdOp);
+		simdStore(w);
+		advancePtr(w, ap, 16);
+		advancePtr(w, bp, 16);
+		advancePtr(w, dp, 16);
+		closeSimdLoop(fn, rem);
+		// scalar remainder: for each of the last count & 3 elements,
+		// mem[dp] = f32.<op>(f32.load ap, f32.load bp)
+		int trem = fn.allocLocal(Ty.F64VEC);
+		openScalarTailLoop(fn, count, trem, 3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(scalarOp);
+		w.write(Instruction.F32_STORE, 0x00, 0x00);
+		advancePtr(w, ap, 4);
+		advancePtr(w, bp, 4);
+		advancePtr(w, dp, 4);
+		closeSimdLoop(fn, trem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F32VEC;
+	}
+
+	// (vec:scale v s) on a f32 vector: v * s into a fresh f32 vector, computed in f32
+	// (the
+	// scalar s is narrowed to f32 and broadcast with f32x4.splat, matching the f32
+	// lanes).
+	private Ty compileSimdScaleF32(List<LispVal> args, Fn fn) {
+		WasmWriter w = fn.writer;
+		int vL = fn.allocLocal(Ty.F32VEC);
+		int s = fn.allocLocal(Ty.FLOAT);
+		compileCoerced(args.get(1), fn, Ty.F32VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count, Ty.F32VEC);
+		int vp = fn.allocLocal(Ty.F32VEC);
+		int dp = fn.allocLocal(Ty.F32VEC);
+		dataPtr(w, vL, vp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem, 2);
+		// mem[dp] = f32x4.mul(v128.load vp, f32x4.splat (demote s))
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		simdLoad(w);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.F32_DEMOTE_F64);
+		simd(w, Instruction.F32X4_SPLAT);
+		simd(w, Instruction.F32X4_MUL);
+		simdStore(w);
+		advancePtr(w, vp, 16);
+		advancePtr(w, dp, 16);
+		closeSimdLoop(fn, rem);
+		// scalar remainder: mem[dp] = f32.load vp * (demote s)
+		int trem = fn.allocLocal(Ty.F64VEC);
+		openScalarTailLoop(fn, count, trem, 3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.F32_DEMOTE_F64);
+		w.write(Instruction.F32_MUL);
+		w.write(Instruction.F32_STORE, 0x00, 0x00);
+		advancePtr(w, vp, 4);
+		advancePtr(w, dp, 4);
+		closeSimdLoop(fn, trem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return Ty.F32VEC;
+	}
+
+	// (vec:sum v) on a f32 vector -> horizontal sum. Accumulates four lane sums in a
+	// v128,
+	// folds them (four f32 lanes), adds the count & 3 tail elements, then promotes to
+	// f64.
+	private Ty compileSimdSumF32(List<LispVal> args, Fn fn) {
+		WasmWriter w = fn.writer;
+		int vL = fn.allocLocal(Ty.F32VEC);
+		compileCoerced(args.get(1), fn, Ty.F32VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int acc = fn.allocV128Local();
+		emitSplatZeroF32(w, acc);
+		int vp = fn.allocLocal(Ty.F32VEC);
+		dataPtr(w, vL, vp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem, 2);
+		// acc = f32x4.add(acc, v128.load vp)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		simdLoad(w);
+		simd(w, Instruction.F32X4_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		advancePtr(w, vp, 16);
+		closeSimdLoop(fn, rem);
+		int sum = fn.allocF32Local();
+		emitHorizontalAddF32(w, acc, sum);
+		// tail: for each of the last count & 3 elements, sum += f32.load vp
+		int trem = fn.allocLocal(Ty.F64VEC);
+		openScalarTailLoop(fn, count, trem, 3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(Instruction.F32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
+		advancePtr(w, vp, 4);
+		closeSimdLoop(fn, trem);
+		// promote the f32 running sum to the f64 scalar boundary.
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.F64_PROMOTE_F32);
+		return Ty.FLOAT;
+	}
+
+	// (vec:dot a b) on f32 vectors -> sum of a_i*b_i. Lane-wise multiply-accumulate in a
+	// v128 (four f32 lanes), folded horizontally, plus the count & 3 tail products, then
+	// promoted to f64.
+	private Ty compileSimdDotF32(List<LispVal> args, Fn fn) {
+		WasmWriter w = fn.writer;
+		int aL = fn.allocLocal(Ty.F32VEC);
+		int bL = fn.allocLocal(Ty.F32VEC);
+		compileCoerced(args.get(1), fn, Ty.F32VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		compileCoerced(args.get(2), fn, Ty.F32VEC);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int acc = fn.allocV128Local();
+		emitSplatZeroF32(w, acc);
+		int ap = fn.allocLocal(Ty.F32VEC);
+		int bp = fn.allocLocal(Ty.F32VEC);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openSimdLoop(fn, count, rem, 2);
+		// acc = f32x4.add(acc, f32x4.mul(v128.load ap, v128.load bp))
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		simdLoad(w);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		simdLoad(w);
+		simd(w, Instruction.F32X4_MUL);
+		simd(w, Instruction.F32X4_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		advancePtr(w, ap, 16);
+		advancePtr(w, bp, 16);
+		closeSimdLoop(fn, rem);
+		int sum = fn.allocF32Local();
+		emitHorizontalAddF32(w, acc, sum);
+		// tail: for each of the last count & 3 elements, sum += f32.load ap * f32.load bp
+		int trem = fn.allocLocal(Ty.F64VEC);
+		openScalarTailLoop(fn, count, trem, 3);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		w.write(Instruction.F32_LOAD, 0x00, 0x00);
+		w.write(Instruction.F32_MUL);
+		w.write(Instruction.F32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
+		advancePtr(w, ap, 4);
+		advancePtr(w, bp, 4);
+		closeSimdLoop(fn, trem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.F64_PROMOTE_F32);
+		return Ty.FLOAT;
+	}
+
+	// accLocal(v128) = f32x4.splat(0.0f)
+	private static void emitSplatZeroF32(WasmWriter w, int accLocal) {
+		f32Const(w, 0.0f);
+		simd(w, Instruction.F32X4_SPLAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(accLocal);
+	}
+
+	// sumLocal(f32) = lane0 + lane1 + lane2 + lane3 of acc.
+	private static void emitHorizontalAddF32(WasmWriter w, int accLocal, int sumLocal) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
+		simd(w, Instruction.F32X4_EXTRACT_LANE);
+		w.write(0x00);
+		for (int lane = 1; lane < 4; lane++) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
+			simd(w, Instruction.F32X4_EXTRACT_LANE);
+			w.write(lane);
+			w.write(Instruction.F32_ADD);
+		}
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sumLocal);
+	}
+
+	// Opens a scalar remainder loop over the last (count & mask) elements: rem = count &
+	// mask; block; loop; break when rem == 0. The caller emits the per-element body
+	// (which
+	// must advance the data pointers) then closeSimdLoop (identical shape: rem--, br,
+	// end,
+	// end). Used for the f32x4 tail (mask 3, up to 3 leftover), where the f64x2 single
+	// odd-element guard does not suffice.
+	private void openScalarTailLoop(Fn fn, int countLocal, int remLocal, int mask) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mask);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
 	}
 
 	// accLocal(v128) = f64x2.splat(0.0)
@@ -3406,6 +3841,16 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		// value).
 		int allocV128Local() {
 			this.extraLocalTypes.add(Type.V128.code());
+			return this.nextLocal++;
+		}
+
+		// Allocates a raw f32 (0x7D) local -- used by the f32 simd reductions to carry
+		// the
+		// running scalar sum (an f32 running value) across the horizontal fold and the
+		// scalar tail before it is promoted to the f64 boundary. Has no Ty (a bare f32 is
+		// not a rontolisp value; scalars are f64).
+		int allocF32Local() {
+			this.extraLocalTypes.add(Type.F32.code());
 			return this.nextLocal++;
 		}
 

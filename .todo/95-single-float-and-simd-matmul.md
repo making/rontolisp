@@ -295,7 +295,64 @@ Phases mirror `.todo/94`'s order:
      + an arithmetic (`= ...`) narrowing proof. Native `CiSpecE2eTest` NOT re-run
      (`ci-spec.yaml` untouched; single-float wasm is new capability, not in ci-spec — its
      cross-backend cases land in Phase 6). `--no-gc`/`#f` = clean compile error (Phase 5).
-5. **`--no-gc`:** `F32VEC` + `f32x4` simd kernels. wasmtime `--invoke`. **[PLAN — grounded
+5. **[DONE 2026-07-08]** **`--no-gc`:** `F32VEC` + `f32x4` simd kernels. wasmtime `--invoke`.
+   - **Prereq DONE:** added `F32X4_SPLAT=0x13`, `F32X4_ADD=0xE4`/`SUB=0xE5`/`MUL=0xE6` to
+     `am/ik/wasm/Instruction.java`. **CORRECTED the plan's `F32X4_EXTRACT_LANE`: it is
+     `0x1F`, NOT `0x1B` (0x1B is `i32x4.extract_lane`; the existing `F64X2_EXTRACT_LANE=0x21`
+     anchors the packed-by-element-type lane-op table).** No `writeF32` in `WasmWriter`, so
+     every f32 const uses the `F64_CONST value; F32_DEMOTE_F64` exact-round-trip trick
+     (`f32Const`).
+   - **5a storage DONE:** `Ty.F32VEC` added (i32 ref kind in `valType`/`wasmType`/`coerce`
+     via a new `isRefKind`; a f64-vector/f32-vector mismatch is a type error). `typeOf`
+     splits `LispSingleFloatArray -> F32VEC` (before the umbrella `LispFloatArray -> F64VEC`
+     case). `MAKE_ARRAY` `typeOf` + `compileMakeArray` key off `:element-type` via a new
+     `isSingleFloatElementType`. `allocVec`/`emitElementAddr`/`compileFloatArrayLiteral`/
+     `compileMakeArray` are width-parameterized through `elemShift(vecTy)` (f64 `<<3`, f32
+     `<<2`); the F64VEC calls stay BYTE-IDENTICAL (2-arg `allocVec` delegates to F64VEC,
+     shift const still 3). `compileAref`/`compileAset` pick the width with `packedVecType`
+     (anything not statically F32VEC stays F64VEC, so every existing program is unchanged):
+     f32 aref = `f32.load` + `f64.promote_f32`, f32 aset = `f32.demote_f64` + `f32.store`
+     returning `promote(demote(x))`. `compileLength` guard accepts F32VEC.
+   - **5b kernels DONE:** `typeOfSimd` returns the operand width for element-wise/`scale`
+     (constructors stay F64VEC). Each of `compileSimdElementwise`/`Scale`/`Sum`/`Dot`
+     early-branches `if (packedVecType(arg1)==F32VEC) return …F32(...)` so the f64x2 bodies
+     are untouched/byte-identical. The f32 kernels (`compileSimd*F32`) use
+     `openSimdLoop(…, laneShift=2)` (quads), `f32x4.*` ops (`f32x4Of`/`f32ScalarOf` map the
+     dispatched f64 op), an `openScalarTailLoop(count & 3)` **remainder loop** (vs the f64
+     single-if), `emitSplatZeroF32`/`emitHorizontalAddF32` (4-lane fold), and an f32 running
+     sum in a raw `allocF32Local()` promoted to f64 on return. **Decision:** f32 kernels
+     compute ENTIRELY in f32 (matches llama2.c / FloatVector; each `--no-gc` width computes
+     in its own native precision), diverging from the f64 vec.lisp oracle only for
+     non-f32-exact operands — so tests use exact values.
+   - **Scope confirmed (parity, not more):** `array-element-type`/`array-dimensions` and
+     packed-vector `wasm-export` marshaling still don't exist on `--no-gc` for EITHER width
+     (no regression, no new surface). `vec.lisp` is not spliced on `--no-gc`, so the wasm-GC
+     `%make-like` entanglement doesn't apply.
+   - **WasmTreeShaker `0xFD` fix (pre-existing gap, surfaced by the new `--optimize` E2E):**
+     the `--optimize` tree-shaker's `scanInstr` had no case for the `0xFD` SIMD prefix, so
+     `--no-gc --optimize` on ANY `vec:` program (f64 OR f32) threw "unhandled opcode 0xFD".
+     Added `skipSimd` (mirrors `skipGc`): reads the u32-LEB sub-opcode, skips a memarg for
+     `v128.load`/`store` (0x00/0x0B), one lane byte for `f32x4`/`f64x2.extract_lane`
+     (0x1F/0x21), nothing for splat + lane-wise arithmetic, throws on any other SIMD
+     sub-opcode. (`v128`/`f32` value-type bytes 0x7B/0x7D were already handled by
+     `skipValType`.)
+   - **Verified:** `./mvnw test` GREEN (**2956/0**, +7 `ScalarWasmCompilerTest` single-float
+     cases: `#f` literal storage narrow/widen opcodes, make-array 'single-float, rank-2 `#f`
+     error, both-width make-array error, f32x4 reduction opcodes `0xFD 0x13`/`0x1F`/`0xE6`,
+     f32x4 element-wise `0xFD 0x0B`/`0xE4`, mixed-width type error; +2 automated Docker
+     wasmtime E2E). web compile untouched (`--no-gc` is not in `src/web/java`); javadoc clean
+     (Version only). **Automated wasmtime E2E** (`WasmLispCompilerIntegrationTest`
+     `noGcRuns{Double,Single}FloatVecKernelsWith{F64x2,F32x4}Simd`, `wasmtime run --invoke`,
+     no `-W gc`, int-returning `truncate` wrappers): f32 `vec:dot`=55, `vec:sum`=280 (count 7
+     = 1 quad + 3-elem remainder loop), `vec:add`+aref=33/11 (count 3 = pure tail, 0 quads),
+     `vec:scale`+sum=45, make-array 'single-float + setf aref buildsum(5)=30/(8)=140, +
+     `--optimize` re-run — ALL correct, matching the interpreter f64 oracle; the F64VEC `#d`
+     path verified in the sibling test (same shapes, first automated wasmtime run of the
+     `--no-gc` vec kernels — they were structural-only before). Native `CiSpecE2eTest` NOT
+     re-run (`ci-spec.yaml` untouched; `--no-gc` is not a ci-spec backend and single-float
+     `--no-gc` is new capability — Phase 6 adds any cross-backend `#f` cases).
+
+   Original plan (as executed) below. **[PLAN — grounded
    in a full `ScalarWasmCompiler` map, 2026-07-08; line numbers are from `29dcbc6`.]**
    All edits are in `ScalarWasmCompiler.java` unless noted. F32VEC = an i32 pointer to
    linear memory `[count:i32 LE][count f32 LE]` (4-byte stride, half of F64VEC's 8-byte).

@@ -435,6 +435,7 @@ public final class WasmTreeShaker {
 			case 0x43 -> p[0] += 4; // f32.const
 			case 0x44 -> p[0] += 8; // f64.const
 			case 0xFB -> skipGc(buf, p); // wasm-GC prefix
+			case 0xFD -> skipSimd(buf, p); // fixed-width SIMD prefix
 			default -> throw new IllegalStateException(String.format("WasmTreeShaker: unhandled opcode 0x%02X", op));
 		}
 	}
@@ -461,6 +462,32 @@ public final class WasmTreeShaker {
 			}
 			default ->
 				throw new IllegalStateException(String.format("WasmTreeShaker: unhandled GC opcode 0xFB 0x%02X", sub));
+		}
+	}
+
+	// Skips a fixed-width SIMD instruction (after the 0xFD prefix) by its u32-LEB
+	// sub-opcode. SIMD instructions carry no function references, so this only advances
+	// p.
+	// Only the sub-opcodes the compilers emit (the packed-float-vector kernels:
+	// ScalarWasmCompiler f64x2 / f32x4) are handled; an unknown one throws so a
+	// newly-emitted SIMD op with different immediates is caught rather than silently
+	// mis-skipped (mirroring skipGc).
+	private static void skipSimd(byte[] buf, int[] p) {
+		int sub = readU(buf, p);
+		switch (sub) {
+			// v128.load / v128.store: a memarg (align + offset).
+			case 0x00, 0x0B -> {
+				skipLeb(buf, p);
+				skipLeb(buf, p);
+			}
+			// f32x4 / f64x2 extract_lane: one lane-index byte.
+			case 0x1F, 0x21 -> p[0]++;
+			// splat + lane-wise arithmetic (f32x4 / f64x2 add/sub/mul/div/min/max): no
+			// immediate.
+			case 0x13, 0x14, 0xE4, 0xE5, 0xE6, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5 -> {
+			}
+			default ->
+				throw new IllegalStateException(String.format("WasmTreeShaker: unhandled SIMD opcode 0xFD 0x%X", sub));
 		}
 	}
 

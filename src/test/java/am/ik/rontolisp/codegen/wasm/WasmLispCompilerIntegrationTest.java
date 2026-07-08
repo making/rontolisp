@@ -573,6 +573,80 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(false, noLiteral, "width", "100")).isEqualTo("5");
 	}
 
+	@Test
+	void noGcRunsDoubleFloatVecKernelsWithF64x2Simd() throws Exception {
+		// The packed double-float (F64VEC) vec: kernels lower to native f64x2 v128 SIMD
+		// and
+		// run on a plain MVP runtime (no `-W gc`). Results are wrapped in truncate so the
+		// host boundary is a deterministic :int (independent of wasmtime's float
+		// printing).
+		// vec:dot #d(1..5) with itself = 1+4+9+16+25 = 55 (count 5 = one f64x2 pair + odd
+		// tail); vec:sum over 7 elements = 280; vec:scale x3 then sum = 45; make-array
+		// 'double-float + setf aref building i*i sums to 30 (n=5) / 140 (n=8).
+		String program = """
+				(defun dot55 (i) (let ((v #d(1.0 2.0 3.0 4.0 5.0))) (truncate (vec:dot v v))))
+				(defun sum280 (i) (truncate (vec:sum #d(10.0 20.0 30.0 40.0 50.0 60.0 70.0))))
+				(defun scalesum (i) (truncate (vec:sum (vec:scale #d(1.0 2.0 3.0 4.0 5.0) 3.0))))
+				(defun buildsum (n)
+				  (let ((v (make-array n :element-type 'double-float :initial-element 0.0)) (acc 0))
+				    (dotimes (i n) (setf (aref v i) (float (* i i))))
+				    (dotimes (i n) (setq acc (+ acc (truncate (aref v i)))))
+				    acc))
+				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'scalesum :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'buildsum :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(false, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(false, program, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "8")).isEqualTo("140");
+	}
+
+	@Test
+	void noGcRunsSingleFloatVecKernelsWithF32x4Simd() throws Exception {
+		// The packed single-float (F32VEC) vec: kernels lower to native f32x4 v128 SIMD
+		// (four lanes per iteration) and run on a plain MVP runtime (no `-W gc`). Inputs
+		// are
+		// f32-exact (integer-valued) so the f32-throughout computation matches the exact
+		// result. Covers every scalar-tail configuration of the count & 3 remainder loop:
+		// dot55 #f(1..5) . itself = 55 (count 5 = one f32x4 quad + 1 tail element)
+		// sum280 over 7 elements = 280 (one quad + a 3-element remainder loop)
+		// addref #f(1 2 3)+#f(10 20 30) = #f(11 22 33); aref = 11 / 33 (count 3 = pure
+		// 3-element tail, ZERO quads -- proves the tail loop runs with no SIMD pass)
+		// scalesum #f(1..5)*3 then sum = 45
+		// buildsum make-array 'single-float + setf aref, i*i sums to 30 (n=5) / 140 (n=8)
+		String program = """
+				(defun dot55 (i) (let ((v #f(1.0 2.0 3.0 4.0 5.0))) (truncate (vec:dot v v))))
+				(defun sum280 (i) (truncate (vec:sum #f(10.0 20.0 30.0 40.0 50.0 60.0 70.0))))
+				(defun addref (i)
+				  (let* ((a #f(1.0 2.0 3.0)) (b #f(10.0 20.0 30.0)) (c (vec:add a b)))
+				    (truncate (aref c i))))
+				(defun scalesum (i) (truncate (vec:sum (vec:scale #f(1.0 2.0 3.0 4.0 5.0) 3.0))))
+				(defun buildsum (n)
+				  (let ((v (make-array n :element-type 'single-float :initial-element 0.0)) (acc 0))
+				    (dotimes (i n) (setf (aref v i) (float (* i i))))
+				    (dotimes (i n) (setq acc (+ acc (truncate (aref v i)))))
+				    acc))
+				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'addref :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'scalesum :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'buildsum :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(false, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(false, program, "addref", "0")).isEqualTo("11");
+		assertThat(compileNoGcAndInvoke(false, program, "addref", "2")).isEqualTo("33");
+		assertThat(compileNoGcAndInvoke(false, program, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "8")).isEqualTo("140");
+		// --optimize (tree-shaken module) still runs the f32x4 kernels identically.
+		assertThat(compileNoGcAndInvoke(true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(true, program, "sum280", "0")).isEqualTo("280");
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,

@@ -693,4 +693,130 @@ class ScalarWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("portable backends only");
 	}
 
+	// --- packed single-float vectors (F32VEC, todo-95 Phase 5) -------------------------
+
+	@Test
+	void packedSingleFloatVectorUsesLinearMemoryWithScalarTypesOnly() {
+		// A #f(...) single-float literal + aref: the vector lives in linear memory
+		// (memory
+		// section id 5) with a 4-byte f32 stride, but every boundary type is still a
+		// plain
+		// scalar func type -- no wasm-GC and no imports. aref reads via f32.load (0x2A)
+		// then
+		// widens with f64.promote_f32 (0xBB); the literal narrows each constant with
+		// f32.demote_f64 (0xB6) and stores via f32.store (0x38).
+		byte[] module = compile("""
+				(defun third (i) (aref #f(10.0 20.0 30.0 40.0) i))
+				(rontolisp:wasm-export 'third :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("third");
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xB6)).as("f32.demote_f64 (0xB6) narrows the literal").isTrue();
+		assertThat(containsSequence(code, 0x2A, 0x00, 0x00)).as("f32.load (0x2A) reads an element").isTrue();
+		assertThat(containsSequence(code, 0xBB)).as("f64.promote_f32 (0xBB) widens the read").isTrue();
+	}
+
+	@Test
+	void makeArraySingleFloatAndSetfArefCompileToAScalarModule() {
+		// make-array :element-type 'single-float + (setf (aref ...)) + length: a plain
+		// MVP
+		// module with a memory section and scalar-only func types. The store narrows with
+		// f32.demote_f64 (0xB6) into an f32.store (0x38).
+		byte[] module = compile("""
+				(defun build (n x)
+				  (let ((v (make-array n :element-type 'single-float :initial-element 0.0)))
+				    (setf (aref v 0) x)
+				    (+ (aref v 0) (length v))))
+				(rontolisp:wasm-export 'build :params '(:int :float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("build");
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xB6)).as("f32.demote_f64 (0xB6) narrows the store").isTrue();
+		assertThat(containsSequence(code, 0x38, 0x00, 0x00)).as("f32.store (0x38) writes an element").isTrue();
+	}
+
+	@Test
+	void rank2SingleFloatLiteralIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f () (aref #f((1.0 2.0) (3.0 4.0)) 0))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("multi-dimensional #f(...) literal (rank 2)")
+			.hasMessageContaining("only a rank-1");
+	}
+
+	@Test
+	void makeArraySingleFloatErrorMessageMentionsBothWidths() {
+		// A make-array without a packed element-type still errors, now naming both
+		// widths.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (make-array n) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("only supported with :element-type")
+			.hasMessageContaining("single-float");
+	}
+
+	@Test
+	void simdSingleFloatReductionKernelsEmitF32x4Instructions() {
+		// vec:dot over #f single-float operands lowers to native f32x4 SIMD: the code
+		// section carries the SIMD prefix (0xFD) with the f32x4 reduction ops -- splat
+		// (0xFD 0x13) and a four-lane extract_lane fold (0xFD 0x1F) -- NOT the f64x2 pair
+		// (0xFD 0x14 / 0xFD 0x21). Still a plain MVP module: memory section, scalar-only
+		// func types, no wasm-GC and no imports.
+		byte[] module = compile("""
+				(defun dot (i)
+				  (let ((v #f(1.0 2.0 3.0 4.0 5.0)))
+				    (vec:dot v v)))
+				(rontolisp:wasm-export 'dot :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD, 0x13)).as("f32x4.splat (0xFD 0x13)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0x1F)).as("f32x4.extract_lane (0xFD 0x1F)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0xE6, 0x01)).as("f32x4.mul (0xFD 0xE6)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0x14)).as("no f64x2.splat leaked into the f32 path").isFalse();
+	}
+
+	@Test
+	void simdSingleFloatElementwiseEmitsF32x4StoreKernel() {
+		// vec:add / vec:scale over #f operands emit the f32x4 element-wise lane loop
+		// (v128.store 0xFD 0x0B + f32x4.add 0xFD 0xE4 / f32x4.mul 0xFD 0xE6) and stay a
+		// plain MVP module. The result width is preserved (a f32 vector out).
+		byte[] module = compile("""
+				(defun go (i)
+				  (let* ((a #f(1.0 2.0 3.0))
+				         (b (vec:scale a 2.0))
+				         (c (vec:add a b)))
+				    (aref c 0)))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0xE4, 0x01)).as("f32x4.add (0xFD 0xE4)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0xE6, 0x01)).as("f32x4.mul (0xFD 0xE6) from scale").isTrue();
+	}
+
+	@Test
+	void mixedWidthSimdOperandsAreAClearCompileError() {
+		// vec: is the fixed-contract package: a single-float and a double-float operand
+		// in
+		// the same kernel is a genuine type error, not a silent widen.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (vec:add #f(1.0 2.0 3.0) (vec:zeros n)) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("incompatible types");
+	}
+
 }
