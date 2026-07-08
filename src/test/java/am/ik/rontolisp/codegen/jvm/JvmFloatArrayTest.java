@@ -22,12 +22,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@code make-array :element-type 'double-float}) compiles to a native unboxed
  * {@code double[]} carrying a dimension header {@code [rank, dim..., data...]}; every
  * array op routes through the {@code _fv*} dispatch helpers, which handle both the packed
- * {@code double[]} and a general {@code ArrayList} at runtime. Printing is byte-identical
- * to a general double array (rendered via {@code _fvToGeneral} + {@code _arrayToString}),
- * while the packed-specific semantics are pinned too: an element stores as a
- * {@code double} (a non-real store is a type error), and {@code array-element-type}
- * reports {@code double-float}. {@code --simd} acceleration over the same
- * {@code double[]} is a follow-up (see {@code .todo/94}).
+ * {@code double[]} and a general {@code ArrayList} at runtime. Printing uses the
+ * {@code #f(...)} reader syntax (rendered via {@code _fvToGeneral} +
+ * {@code _arrayToString} then rewriting the {@code #}/{@code #nA} prefix to {@code #f})
+ * so it round-trips to a packed array, while the packed-specific semantics are pinned
+ * too: an element stores as a {@code double} (a non-real store is a type error), and
+ * {@code array-element-type} reports {@code double-float}. {@code --simd} acceleration
+ * over the same {@code double[]} is a follow-up (see {@code .todo/94}).
  */
 class JvmFloatArrayTest {
 
@@ -58,17 +59,17 @@ class JvmFloatArrayTest {
 
 	@Test
 	void rank1LiteralPrintsAsADoubleVector() throws Exception {
-		assertThat(compileAndRun("(print #f(1.0 2.0 3.0))")).isEqualTo("#(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print #f(1.0 2.0 3.0))")).isEqualTo("#f(1.0 2.0 3.0)");
 	}
 
 	@Test
 	void integerLeavesCoerceToDoubleAtReadTime() throws Exception {
-		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#f(1.0 2.0 3.0)");
 	}
 
 	@Test
 	void rank2LiteralPrintsAsAMatrix() throws Exception {
-		assertThat(compileAndRun("(print #f((1.0 2.0) (3.0 4.0)))")).isEqualTo("#2A((1.0 2.0) (3.0 4.0))");
+		assertThat(compileAndRun("(print #f((1.0 2.0) (3.0 4.0)))")).isEqualTo("#f((1.0 2.0) (3.0 4.0))");
 	}
 
 	@Test
@@ -87,7 +88,7 @@ class JvmFloatArrayTest {
 	@Test
 	void setfArefWithADoubleMutatesInPlace() throws Exception {
 		assertThat(compileAndRun("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 1) 9.0) (print v))"))
-			.isEqualTo("#(1.0 9.0 3.0)");
+			.isEqualTo("#f(1.0 9.0 3.0)");
 	}
 
 	@Test
@@ -95,13 +96,13 @@ class JvmFloatArrayTest {
 		// The double-float default element is 0.0, matching the interpreter's packed
 		// array
 		// (a general array otherwise defaults to nil).
-		assertThat(compileAndRun("(print (make-array 3 :element-type 'double-float))")).isEqualTo("#(0.0 0.0 0.0)");
+		assertThat(compileAndRun("(print (make-array 3 :element-type 'double-float))")).isEqualTo("#f(0.0 0.0 0.0)");
 	}
 
 	@Test
 	void makeArrayDoubleFloatWithInitialElement() throws Exception {
 		assertThat(compileAndRun("(print (make-array 3 :element-type 'double-float :initial-element 2.0))"))
-			.isEqualTo("#(2.0 2.0 2.0)");
+			.isEqualTo("#f(2.0 2.0 2.0)");
 	}
 
 	@Test
@@ -115,7 +116,7 @@ class JvmFloatArrayTest {
 	@Test
 	void quotedPackedLiteral() throws Exception {
 		// A #f literal inside a quote builds the same packed double[].
-		assertThat(compileAndRun("(print (quote #f(1.0 2.0 3.0)))")).isEqualTo("#(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print (quote #f(1.0 2.0 3.0)))")).isEqualTo("#f(1.0 2.0 3.0)");
 	}
 
 	@Test
@@ -130,7 +131,7 @@ class JvmFloatArrayTest {
 		// Storing an integer into a packed array coerces it to a double (the element type
 		// is always double-float), so the array reads back as 9.0, not 9.
 		assertThat(compileAndRun("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 0) 9) (print v))"))
-			.isEqualTo("#(9.0 2.0 3.0)");
+			.isEqualTo("#f(9.0 2.0 3.0)");
 	}
 
 	@Test
@@ -143,7 +144,7 @@ class JvmFloatArrayTest {
 	@Test
 	void rank2SetfMutatesInPlace() throws Exception {
 		assertThat(compileAndRun("(let ((m #f((1.0 2.0) (3.0 4.0)))) (setf (aref m 1 0) 9.0) (print m))"))
-			.isEqualTo("#2A((1.0 2.0) (9.0 4.0))");
+			.isEqualTo("#f((1.0 2.0) (9.0 4.0))");
 	}
 
 	@Test

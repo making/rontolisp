@@ -18,8 +18,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The packed {@link LispFloatArray} representation on the interpreter: the
  * {@code #f(...)} literal, {@code make-array :element-type 'double-float}, the
- * array-dispatch built-ins, double coercion, the type-error on a non-real store, and
- * byte-identical printing to a general double array.
+ * array-dispatch built-ins, double coercion, the type-error on a non-real store, and the
+ * {@code #f(...)} print form that round-trips to a packed array (rather than degrading to
+ * a general boxed array).
  */
 class LispFloatArrayTest {
 
@@ -45,25 +46,29 @@ class LispFloatArrayTest {
 	}
 
 	@Test
-	void rank1LiteralPrintsIdenticallyToAGeneralDoubleArray() {
-		// A packed array must be byte-identical to #( ... ) of the same doubles.
-		assertThat(print("#f(1.0 2.0 3.0)")).isEqualTo("#(1.0 2.0 3.0)");
-		assertThat(print("#f(1.0 2.0 3.0)")).isEqualTo(print("#(1.0 2.0 3.0)"));
+	void rank1LiteralPrintsWithFSyntaxAndRoundTripsToPacked() {
+		// A packed array prints with the #f(...) reader syntax, so its printed form reads
+		// back as a packed array (preserving the unboxed representation) rather than as a
+		// general boxed array -- it is deliberately NOT the same as #(1.0 2.0 3.0).
+		assertThat(print("#f(1.0 2.0 3.0)")).isEqualTo("#f(1.0 2.0 3.0)");
+		assertThat(print("#f(1.0 2.0 3.0)")).isNotEqualTo(print("#(1.0 2.0 3.0)"));
+		assertThat(eval(print("#f(1.0 2.0 3.0)"))).isInstanceOf(LispFloatArray.class);
 	}
 
 	@Test
-	void rank2LiteralIsAMatrixThatPrintsAsGeneral() {
+	void rank2LiteralIsAMatrixThatPrintsWithFSyntax() {
 		LispVal v = eval("#f((1.0 2.0) (3.0 4.0))");
 		assertThat(v).isInstanceOf(LispFloatArray.class);
 		assertThat(((LispFloatArray) v).dims()).containsExactly(2, 2);
-		assertThat(v.print()).isEqualTo("#2A((1.0 2.0) (3.0 4.0))");
-		assertThat(v.print()).isEqualTo(print("#2A((1.0 2.0) (3.0 4.0))"));
+		assertThat(v.print()).isEqualTo("#f((1.0 2.0) (3.0 4.0))");
+		// the rank-n nested form round-trips to a packed array too
+		assertThat(eval(v.print())).isInstanceOf(LispFloatArray.class);
 	}
 
 	@Test
 	void integerAndRatioLeavesCoerceToDouble() {
-		assertThat(print("#f(1 2 3)")).isEqualTo("#(1.0 2.0 3.0)");
-		assertThat(print("#f(1/2 3/4)")).isEqualTo("#(0.5 0.75)");
+		assertThat(print("#f(1 2 3)")).isEqualTo("#f(1.0 2.0 3.0)");
+		assertThat(print("#f(1/2 3/4)")).isEqualTo("#f(0.5 0.75)");
 	}
 
 	@Test
@@ -80,7 +85,7 @@ class LispFloatArrayTest {
 
 	@Test
 	void setfArefCoercesAndMutatesInPlace() {
-		assertThat(print("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 1) 9.0) v)")).isEqualTo("#(1.0 9.0 3.0)");
+		assertThat(print("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 1) 9.0) v)")).isEqualTo("#f(1.0 9.0 3.0)");
 		// An integer store coerces to a double.
 		assertThat(eval("(let ((v #f(1.0 2.0))) (setf (aref v 0) 5) (aref v 0))")).isEqualTo(new LispDouble(5.0));
 	}
@@ -114,10 +119,10 @@ class LispFloatArrayTest {
 	void makeArrayWithDoubleFloatElementTypeIsPacked() {
 		LispVal v = eval("(make-array 3 :element-type 'double-float)");
 		assertThat(v).isInstanceOf(LispFloatArray.class);
-		assertThat(v.print()).isEqualTo("#(0.0 0.0 0.0)");
+		assertThat(v.print()).isEqualTo("#f(0.0 0.0 0.0)");
 		assertThat(print("(make-array 3 :element-type 'double-float :initial-element 2.0)"))
-			.isEqualTo("#(2.0 2.0 2.0)");
-		assertThat(print("(make-array '(2 2) :element-type 'double-float)")).isEqualTo("#2A((0.0 0.0) (0.0 0.0))");
+			.isEqualTo("#f(2.0 2.0 2.0)");
+		assertThat(print("(make-array '(2 2) :element-type 'double-float)")).isEqualTo("#f((0.0 0.0) (0.0 0.0))");
 	}
 
 	@Test

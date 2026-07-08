@@ -16,10 +16,13 @@ package am.ik.rontolisp;
  *
  * <p>
  * Packed arrays are pure compute buffers: they never carry a fill pointer, adjustability
- * or displacement. Printing is defined by the dimensions and elements exactly as for a
- * general array of the same doubles, so a packed array prints byte-for-byte identically
- * to its boxed counterpart (rank 1 as {@code #(...)}, rank n as {@code #nA(...)}); the
- * rendering is delegated to {@link LispArray} to keep the two in lock-step.
+ * or displacement. Printing uses the {@code #f(...)} reader syntax at every rank (rank 1
+ * as {@code #f(e1 e2 ...)}, rank n as the numpy-style nested {@code #f((...) ...)}), so a
+ * packed array round-trips to a packed array -- reading its printed form back preserves
+ * the unboxed representation (and its performance) rather than degrading to a general
+ * boxed array. The data part after the opening {@code (} is rendered by the shared
+ * {@link LispArray#renderArrayData} algorithm, so it stays byte-for-byte identical to the
+ * general-array data syntax; only the {@code #f} prefix distinguishes the two.
  *
  * <p>
  * Like every array, packed arrays are compared by identity ({@code eq}): two distinct
@@ -104,21 +107,21 @@ public record LispFloatArray(double[] data, int[] dims) implements LispVal {
 
 	@Override
 	public String print() {
-		return toGeneralArray().print();
+		return LispArray.renderArrayData(this.dims, this.data.length, "#f(", k -> new LispDouble(this.data[k]).print());
 	}
 
 	@Override
 	public String display() {
-		return toGeneralArray().display();
+		return LispArray.renderArrayData(this.dims, this.data.length, "#f(",
+				k -> new LispDouble(this.data[k]).display());
 	}
 
 	/**
 	 * Returns an equivalent general (boxed) {@link LispArray} of the same dimensions
-	 * whose elements are {@link LispDouble}s. Used to render the readable {@code #(...)}/
-	 * {@code #nA(...)} syntax through exactly one code path (so a packed array prints
-	 * byte-for-byte identically to a general double array), and by the compile backends
-	 * that lower a packed literal to a general array where a native packed representation
-	 * is not yet available.
+	 * whose elements are {@link LispDouble}s. Used by the compile backends that lower a
+	 * packed literal to a general array where a native packed representation is not yet
+	 * available. (Printing does not go through here -- {@link #print}/{@link #display}
+	 * render the {@code double[]} directly via {@link LispArray#renderArrayData}.)
 	 * @return a boxed general-array view of this packed array
 	 */
 	public LispArray toGeneralArray() {

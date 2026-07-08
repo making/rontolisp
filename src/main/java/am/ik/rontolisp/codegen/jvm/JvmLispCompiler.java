@@ -896,12 +896,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		// The packed-array print branch: _lispToString/_lispToDisplayString render a
 		// double[] by converting it to a general array (_fvToGeneral) and reusing
-		// _arrayToString; non-null only when the program uses packed float arrays.
-		ClassConstant doubleArrayClassForPrint = usesFloatArray ? cp.addClass(cp.addUtf8("[D")) : null;
-		MethodrefConstant fvToGeneralMethod = usesFloatArray
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL),
-						cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC)))
-				: null;
+		// _arrayToString, then rewriting the leading #/#nA prefix to #f (via
+		// String.replaceFirst) so the printed form round-trips to a packed array; the
+		// PackedPrint bundle is non-null only when the program uses packed float arrays.
+		JvmRuntimeBuilder.@Nullable PackedPrint packedPrint = null;
+		if (usesFloatArray) {
+			packedPrint = new JvmRuntimeBuilder.PackedPrint(cp.addClass(cp.addUtf8("[D")),
+					cp.addMethodref(thisClass,
+							cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL),
+									cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC))),
+					cp.addMethodref(stringClass,
+							cp.addNameAndType(cp.addUtf8("replaceFirst"),
+									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
+					cp.addString("^#\\d*A?\\("), cp.addString("#f("));
+		}
 		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
 		MethodrefConstant arrayToStringMethod = usesArrays
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING),
@@ -939,8 +947,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, javaPrint, promisePrint, doubleArrayClassForPrint,
-				fvToGeneralMethod);
+				arrayListClassForPrint, arrayToStringMethod, javaPrint, promisePrint, packedPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -948,7 +955,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
-				javaPrint, promisePrint, doubleArrayClassForPrint, fvToGeneralMethod);
+				javaPrint, promisePrint, packedPrint);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,

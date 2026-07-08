@@ -4820,7 +4820,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (linalg:add *c* 10))
 				(print (linalg:sum *c*))
 				(print (linalg:array-equal (linalg:flatten *c*) (linalg:arange 8)))
-				""")).isEqualTo("#3A(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))\n28.0\nt");
+				""")).isEqualTo("#f(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))\n28.0\nt");
 	}
 
 	@Test
@@ -4959,7 +4959,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compilePackedFloatVectorLiteralArefAndPrint() throws Exception {
 		assertThat(compileAndRun("(print (aref #f(1.0 2.5 3.0) 1))")).isEqualTo("2.5");
-		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#(1.0 2.0 3.0)");
+		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#f(1.0 2.0 3.0)");
 	}
 
 	@Test
@@ -4968,7 +4968,7 @@ class WasmLispCompilerIntegrationTest {
 				(let ((m #f((1 2 3) (4 5 6))))
 				  (print (list (array-rank m) (array-dimensions m) (aref m 1 2))))
 				""")).isEqualTo("(2 (2 3) 6.0)");
-		assertThat(compileAndRun("(print #f((1 2) (3 4)))")).isEqualTo("#2A((1.0 2.0) (3.0 4.0))");
+		assertThat(compileAndRun("(print #f((1 2) (3 4)))")).isEqualTo("#f((1.0 2.0) (3.0 4.0))");
 	}
 
 	@Test
@@ -4977,7 +4977,7 @@ class WasmLispCompilerIntegrationTest {
 				(let ((v #f(1.0 2.0 3.0)))
 				  (setf (aref v 1) 42)
 				  (print v))
-				""")).isEqualTo("#(1.0 42.0 3.0)");
+				""")).isEqualTo("#f(1.0 42.0 3.0)");
 	}
 
 	@Test
@@ -4986,7 +4986,7 @@ class WasmLispCompilerIntegrationTest {
 				(let ((a (make-array 3 :element-type 'double-float :initial-element 2.5)))
 				  (setf (aref a 0) 9)
 				  (print (list a (length a) (array-element-type a))))
-				""")).isEqualTo("(#(9.0 2.5 2.5) 3 double-float)");
+				""")).isEqualTo("(#f(9.0 2.5 2.5) 3 double-float)");
 	}
 
 	@Test
@@ -4995,7 +4995,7 @@ class WasmLispCompilerIntegrationTest {
 				(let ((m (make-array (list 2 2) :element-type 'double-float)))
 				  (dotimes (i 2) (dotimes (j 2) (setf (aref m i j) (+ (* i 10) j))))
 				  (print m))
-				""")).isEqualTo("#2A((0.0 1.0) (10.0 11.0))");
+				""")).isEqualTo("#f((0.0 1.0) (10.0 11.0))");
 	}
 
 	@Test
@@ -5261,9 +5261,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (linalg:inv (linalg:from-list '((4 0) (2 4)))))
 				(print (linalg:solve (linalg:from-list '((4 0) (2 4))) (linalg:from-list '(8 8))))
 				(print (funcall #'linalg:argmax (linalg:from-list '(1 9 3))))
-				""")).isEqualTo("#2A((1.0 0.0) (0.0 1.0))\n#(2.0 4.0 6.0 8.0)\n#2A((0.0 1.0 2.0) (3.0 4.0 5.0))\n"
-				+ "#(11.0 12.0 13.0)\n32.0\n#2A((19.0 22.0) (43.0 50.0))\n2.5\n5.0\n-2.0\n"
-				+ "#2A((0.25 0.0) (-0.125 0.25))\n#(2.0 1.0)\n1");
+				""")).isEqualTo("#f((1.0 0.0) (0.0 1.0))\n#f(2.0 4.0 6.0 8.0)\n#f((0.0 1.0 2.0) (3.0 4.0 5.0))\n"
+				+ "#f(11.0 12.0 13.0)\n32.0\n#f((19.0 22.0) (43.0 50.0))\n2.5\n5.0\n-2.0\n"
+				+ "#f((0.25 0.0) (-0.125 0.25))\n#f(2.0 1.0)\n1");
 	}
 
 	@Test

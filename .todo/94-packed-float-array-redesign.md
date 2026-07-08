@@ -599,6 +599,43 @@ is the key to the doc churn.
   interpreter / JVM / wasm-GC alike (linalg does not run on `--no-gc`: its kernels use
   `array-dimensions`/`array-total-size`, unsupported there).
 
+### Option B DONE (2026-07-08) — packed arrays print as `#f(...)` (round-trip-preserving)
+
+**User request after the benchmark discussion:** a packed array previously printed as
+`#(...)`/`#nA(...)` (byte-identical to a general boxed array), so re-reading its printed
+form degraded it to a *general* array — losing the unboxed performance. Fixed: a
+`LispFloatArray` now prints with the **`#f(...)`** reader syntax at every rank (`#f(1.0 ...)`
+rank-1, nested `#f((...) ...)` rank-n), so the printed form round-trips to a packed array.
+The data part after the opening `(` is byte-identical to the general syntax; only the `#f`
+prefix differs.
+
+- **Print paths (all backends that print packed):** interpreter (`LispFloatArray.print/display`
+  renders its `double[]` directly via the new shared static `LispArray.renderArrayData`,
+  dropping the old `toGeneralArray()` boxing — user-requested cleanup); JVM runtime
+  (`JvmRuntimeBuilder.emitArrayBranch` rewrites the general render with
+  `String.replaceFirst("^#\\d*A?\\(", "#f(")` via a new `PackedPrint` constant bundle,
+  gated on `usesFloatArray`); wasm-GC runtime (`emitPrintArray` sets a `packedSlot` i32 flag
+  in the TYPE_FARRAY branch and emits the `st.fPrefix` `#f(` prefix). `--no-gc` has no float
+  printer at all, so nothing to change there.
+- **Reconciliation (same playbook as Phase 5b, `#(`/`#nA(` → `#f(` for FLOAT-content arrays
+  only; integer general arrays untouched):** unit tests (`LispFloatArrayTest`,
+  `JvmFloatArrayTest`, `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`
+  — incl. flipping the two "prints identically to a general array" tests to assert round-trip
+  + a `.isNotEqualTo(general)` pin); ci-spec `linalg-package-cross-backend`,
+  `packed-float-arrays-cross-backend`, `simd-kernels-cross-backend`; docs (linalg-*.md en+ja,
+  guides/linear-algebra + simd, data-types `#f` prose, functions table, `.kb/linalg.md`);
+  example goldens `heat3d.txt` + `linear-regression.txt`. `JvmSimdAccelCompilerTest` needed NO
+  change (its array asserts compare accel-vs-scalar, both `#f` now).
+- **Verified:** full suite **2905** green; native `CiSpecE2eTest` **724** green (4 backends);
+  `ExamplesE2eTest` **80** green (4 backends); `DocExamplesTest` **415** green; `-Pweb` compile;
+  javadoc 0-warn (Version excepted). Round-trip demo: interpreter `read-from-string` of
+  `#f(1.0 2.0 3.0)` → `array-element-type` `double-float` (packed preserved). NOTE the compiled
+  runtime `read` never parsed vector literals (`#(...)` returns a String and crashes on `aref`,
+  before AND after) — a pre-existing gap, not a regression; the REPL/recompile path (frontend
+  reader) is the one that matters and it round-trips packed→packed.
+- **NOT committed yet** (awaiting user's go). Then Step 3 below (its tests should be written
+  against the `#f(...)` print form).
+
 ### Step 3 (linalg SIMD-lane acceleration) — APPROVED (user, 2026-07-08); IMPLEMENT after compaction
 
 **User chose "step 3 も実装する" then asked to compact first.** Steps 1+2 are DONE + verified +

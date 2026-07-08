@@ -223,10 +223,12 @@ to a `double-float`, so `#f(1 2 3)` and `#f(1.0 2.0 3.0)` are the same vector an
 lists -- `#f((1.0 2.0) (3.0 4.0))` is a matrix -- and
 `(make-array n :element-type 'double-float)` builds one at runtime. Storing a
 non-real into a packed array is a type error (a general array holds any value).
-Otherwise a packed array behaves exactly like a general array of the same
-doubles: it prints identically and `aref`, `(setf (aref ...))`, `length`,
-`row-major-aref`, `array-rank`, `array-dimensions` and `coerce` all work on it.
-It is simply the unboxed, `double-float`-specialized representation the numeric
+Otherwise a packed array behaves like a general array of the same doubles for
+every operation -- `aref`, `(setf (aref ...))`, `length`, `row-major-aref`,
+`array-rank`, `array-dimensions` and `coerce` all work on it -- except that it
+prints with its own `#f(...)` reader syntax, so its printed form reads back as a
+packed array (preserving the unboxed representation) rather than degrading to a
+general one. It is simply the unboxed, `double-float`-specialized representation the numeric
 kernels use, so fill pointers, adjustable and displaced arrays are not available
 on it (those need a general array). For fast vectorized kernels over packed
 arrays -- and their optional hardware acceleration -- see the
@@ -235,11 +237,11 @@ arrays -- and their optional hardware acceleration -- see the
 ```lisp
 (aref #f(1.0 2.0 3.0) 1)                   ; => 2.0
 (array-element-type #f(1 2 3))             ; => double-float
-(print #f((1.0 2.0) (3.0 4.0)))            ; #2A((1.0 2.0) (3.0 4.0))
+(print #f((1.0 2.0) (3.0 4.0)))            ; #f((1.0 2.0) (3.0 4.0))
 (coerce #f(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
 (let ((v (make-array 3 :element-type 'double-float :initial-element 0.0)))
   (setf (aref v 0) 5)
-  v)                                        ; => #(5.0 0.0 0.0)
+  v)                                        ; => #f(5.0 0.0 0.0)
 ```
 
 ## Hash tables

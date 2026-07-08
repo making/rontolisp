@@ -2629,12 +2629,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		final StringEntry promiseStr;
 
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
-		// prints "#", the rank as an integer, then "A(".
+		// prints "#", the rank as an integer, then "A(". A packed float array
+		// (TYPE_FARRAY) prints the "#f(" prefix at every rank instead, so its printed
+		// form
+		// round-trips to a packed array.
 		final StringEntry vecPrefix;
 
 		final StringEntry hashPrefix;
 
 		final StringEntry rankAOpen;
+
+		final StringEntry fPrefix;
 
 		final StringEntry minus;
 
@@ -2675,6 +2680,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.vecPrefix = addString("#(");
 			this.hashPrefix = addString("#");
 			this.rankAOpen = addString("A(");
+			this.fPrefix = addString("#f(");
 			this.minus = addString("-");
 			this.period = addString(".");
 			this.slash = addString("/");

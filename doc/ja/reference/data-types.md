@@ -195,9 +195,11 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 す。高階のリテラルはネストしたリストで書き(`#f((1.0 2.0) (3.0 4.0))` は行列)、
 実行時には `(make-array n :element-type 'double-float)` で構築できます。パックド
 配列に非実数を格納すると型エラーです(一般配列は任意の値を保持します)。それ以外
-は同じ double 値の一般配列とまったく同じように振る舞い、印字も同一で、`aref`・
-`(setf (aref ...))`・`length`・`row-major-aref`・`array-rank`・`array-dimensions`・
-`coerce` はすべて機能します。数値カーネルが用いる、アンボックスで `double-float`
+のすべての操作 -- `aref`・`(setf (aref ...))`・`length`・`row-major-aref`・
+`array-rank`・`array-dimensions`・`coerce` -- は同じ double 値の一般配列と同じよう
+に機能しますが、印字だけは独自の `#f(...)` リーダ構文を用いるため、その印字結果を
+読み戻すと(アンボックス表現を保ったまま)パックド配列になり、一般配列に劣化しませ
+ん。数値カーネルが用いる、アンボックスで `double-float`
 に特化した表現に過ぎないため、フィルポインタ・可変長(adjustable)・ずらし配列
 (displaced)は利用できません(それらには一般配列が必要です)。パックド配列上の
 高速なベクトルカーネル(および任意のハードウェアアクセラレーション)については
@@ -206,11 +208,11 @@ ratioの結果は常に正規化されます。gcdで約分され符号は分子
 ```lisp
 (aref #f(1.0 2.0 3.0) 1)                   ; => 2.0
 (array-element-type #f(1 2 3))             ; => double-float
-(print #f((1.0 2.0) (3.0 4.0)))            ; #2A((1.0 2.0) (3.0 4.0))
+(print #f((1.0 2.0) (3.0 4.0)))            ; #f((1.0 2.0) (3.0 4.0))
 (coerce #f(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
 (let ((v (make-array 3 :element-type 'double-float :initial-element 0.0)))
   (setf (aref v 0) 5)
-  v)                                        ; => #(5.0 0.0 0.0)
+  v)                                        ; => #f(5.0 0.0 0.0)
 ```
 
 ## ハッシュテーブル

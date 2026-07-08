@@ -340,21 +340,51 @@ public final class LispArray implements LispVal {
 	// index is.
 	private String render(java.util.function.Function<LispVal, String> renderElement) {
 		int rank = this.dimensions.length;
-		int count = effectiveLength();
+		return render(renderElement, rank == 1 ? "#(" : "#" + rank + "A(");
+	}
+
+	// Renders the array data with a caller-supplied opening prefix (up to and including
+	// the outermost '('). A packed {@link LispFloatArray} renders through the shared
+	// {@link #renderArrayData} with the "#f(" prefix so it round-trips to a packed array;
+	// the data part after the '(' is identical to the general-array syntax at every rank
+	// (rank is inferred from nesting).
+	String render(java.util.function.Function<LispVal, String> renderElement, String openPrefix) {
+		return renderArrayData(this.dimensions, effectiveLength(), openPrefix,
+				k -> renderElement.apply(elementOrNil(k)));
+	}
+
+	/**
+	 * Renders the {@code #(...)}/{@code #nA(...)}/{@code #f(...)} array syntax from
+	 * dimensions and a per-flat-index element renderer, without materializing a boxed
+	 * array. A nested group paren opens where the flat index is a multiple of that
+	 * dimension's stride and closes where the next index is. Shared by the general
+	 * {@link LispArray} and the packed {@link LispFloatArray} so the (subtle) paren
+	 * layout lives in one place; the packed array renders its {@code double[]} directly,
+	 * boxing only the transient {@link LispDouble} each element's string needs.
+	 * @param dims the dimension sizes (length = rank)
+	 * @param count the number of leading elements to render (the effective length)
+	 * @param openPrefix the opening text through the outermost {@code (} (e.g.
+	 * {@code "#("}, {@code "#2A("} or {@code "#f("})
+	 * @param renderElementAt renders the element at a given flat row-major index
+	 * @return the readable array syntax
+	 */
+	static String renderArrayData(int[] dims, int count, String openPrefix,
+			java.util.function.IntFunction<String> renderElementAt) {
+		int rank = dims.length;
 		StringBuilder sb = new StringBuilder();
-		sb.append(rank == 1 ? "#(" : "#" + rank + "A(");
+		sb.append(openPrefix);
 		for (int k = 0; k < count; k++) {
 			if (k > 0) {
 				sb.append(' ');
 			}
 			for (int j = 1; j < rank; j++) {
-				if (k % stride(j) == 0) {
+				if (k % strideOf(dims, j) == 0) {
 					sb.append('(');
 				}
 			}
-			sb.append(renderElement.apply(elementOrNil(k)));
+			sb.append(renderElementAt.apply(k));
 			for (int j = rank - 1; j >= 1; j--) {
-				if ((k + 1) % stride(j) == 0) {
+				if ((k + 1) % strideOf(dims, j) == 0) {
 					sb.append(')');
 				}
 			}
@@ -364,10 +394,10 @@ public final class LispArray implements LispVal {
 
 	// The flat-index span of one step of dimension j-1: the product of the dimension
 	// sizes from j to the last.
-	private int stride(int j) {
+	private static int strideOf(int[] dims, int j) {
 		int s = 1;
-		for (int m = j; m < this.dimensions.length; m++) {
-			s *= this.dimensions[m];
+		for (int m = j; m < dims.length; m++) {
+			s *= dims[m];
 		}
 		return s;
 	}

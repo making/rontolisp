@@ -14,12 +14,16 @@ walk elements via `row-major-aref`, so they work for any rank; `dot`/`matmul`/
 
 ## API quick reference (enough to write linalg programs)
 
-Values are the ordinary built-in arrays: a vector is a rank-1 array `#(...)`,
+Inputs are the ordinary built-in arrays: a vector is a rank-1 array `#(...)`,
 a matrix rank-2 `#2A(...)` (higher ranks `#nA(...)`); both are readable literal
 syntax as well as print syntax (the reader parses `#nA(...)` via
 `Token.ArrayOpen`), so examples should prefer `#(1 2 3)` / `#2A((1 2) (3 4))`
-over `from-list`; read/write elements
-with `aref` / `(setf (aref ...))`.
+over `from-list`. linalg RESULTS, however, are packed double-float arrays
+(`LispFloatArray`) and print with the **`#f(...)`** reader syntax at every rank
+(`#f(1.0 2.0 ...)` for a vector, nested `#f((...) ...)` for a matrix), so the
+printed form round-trips to a packed array rather than degrading to a general
+one -- an example that pins linalg output must expect `#f(...)`, not `#(...)`.
+Read/write elements with `aref` / `(setf (aref ...))`.
 `shape` below means an integer `n` (vector) or a list of dimension sizes.
 Stay in `cl-user` and call qualified names (the package does not use `cl`).
 `#'linalg:name` works (they are plain defuns). Errors signal via `error`.

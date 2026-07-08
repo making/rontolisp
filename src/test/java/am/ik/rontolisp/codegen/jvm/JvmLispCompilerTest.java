@@ -4844,8 +4844,8 @@ class JvmLispCompilerTest {
 				(print (linalg:reshape (linalg:arange 6) '(2 3)))
 				(print (linalg:transpose (linalg:from-list '((1 2 3) (4 5 6)))))
 				"""))
-			.isEqualTo("#(0.0 0.0 0.0)\n#2A((1.0 0.0) (0.0 1.0))\n#(2.0 4.0 6.0 8.0)\n#(0.0 0.25 0.5 0.75 1.0)\n"
-					+ "#2A((1.0 2.0) (3.0 4.0))\n(2 3)\n#2A((0.0 1.0 2.0) (3.0 4.0 5.0))\n#2A((1.0 4.0) (2.0 5.0) (3.0 6.0))");
+			.isEqualTo("#f(0.0 0.0 0.0)\n#f((1.0 0.0) (0.0 1.0))\n#f(2.0 4.0 6.0 8.0)\n#f(0.0 0.25 0.5 0.75 1.0)\n"
+					+ "#f((1.0 2.0) (3.0 4.0))\n(2 3)\n#f((0.0 1.0 2.0) (3.0 4.0 5.0))\n#f((1.0 4.0) (2.0 5.0) (3.0 6.0))");
 	}
 
 	@Test
@@ -4860,8 +4860,8 @@ class JvmLispCompilerTest {
 				(print (linalg:mean (linalg:from-list '(1 2 3 4))))
 				(print (linalg:argmax (linalg:from-list '(1 9 3))))
 				(print (linalg:norm (linalg:from-list '(3 4))))
-				""")).isEqualTo("#(11.0 12.0 13.0)\n#2A((5.0 12.0) (21.0 32.0))\n#(0.0 1.0 4.0 9.0)\n32.0\n"
-				+ "#2A((19.0 22.0) (43.0 50.0))\n10.0\n2.5\n1\n5.0");
+				""")).isEqualTo("#f(11.0 12.0 13.0)\n#f((5.0 12.0) (21.0 32.0))\n#f(0.0 1.0 4.0 9.0)\n32.0\n"
+				+ "#f((19.0 22.0) (43.0 50.0))\n10.0\n2.5\n1\n5.0");
 	}
 
 	@Test
@@ -4877,7 +4877,7 @@ class JvmLispCompilerTest {
 				(print (linalg:array-equal (linalg:matmul (linalg:from-list '((4 0) (2 4)))
 				                                          (linalg:inv (linalg:from-list '((4 0) (2 4)))))
 				                           (linalg:eye 2)))
-				""")).isEqualTo("-2.0\n#2A((0.25 0.0) (-0.125 0.25))\n#(2.0 1.0)\nt");
+				""")).isEqualTo("-2.0\n#f((0.25 0.0) (-0.125 0.25))\n#f(2.0 1.0)\nt");
 	}
 
 	@Test
@@ -4891,10 +4891,10 @@ class JvmLispCompilerTest {
 				(print (linalg:amax *c*))
 				(print (linalg:array-equal (linalg:flatten *c*) (linalg:arange 8)))
 				(print (linalg:zeros '(2 2 2)))
-				""")).isEqualTo("#3A(((0.0 1.0) (2.0 3.0)) ((4.0 5.0) (6.0 7.0)))\n"
-				+ "#3A(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))\n"
-				+ "#3A(((0.0 1.0) (4.0 9.0)) ((16.0 25.0) (36.0 49.0)))\n28.0\n7.0\nt\n"
-				+ "#3A(((0.0 0.0) (0.0 0.0)) ((0.0 0.0) (0.0 0.0)))");
+				""")).isEqualTo("#f(((0.0 1.0) (2.0 3.0)) ((4.0 5.0) (6.0 7.0)))\n"
+				+ "#f(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))\n"
+				+ "#f(((0.0 1.0) (4.0 9.0)) ((16.0 25.0) (36.0 49.0)))\n28.0\n7.0\nt\n"
+				+ "#f(((0.0 0.0) (0.0 0.0)) ((0.0 0.0) (0.0 0.0)))");
 	}
 
 	@Test

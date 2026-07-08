@@ -188,8 +188,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable PromisePrint promisePrint,
-			@org.jspecify.annotations.Nullable ClassConstant doubleArrayClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant fvToGeneralMethod) {
+			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -204,10 +203,11 @@ final class JvmRuntimeBuilder {
 		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (only when the
 		// program can create promises)
 		emitPromiseBranch(code, promisePrint);
-		// if (val instanceof double[]) return _arrayToString(_fvToGeneral(val)); and
+		// if (val instanceof double[]) return
+		// _arrayToString(_fvToGeneral(val)).replaceFirst(...#f...); and
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
 		// used)
-		emitArrayBranch(code, arrayListClass, arrayToStringMethod, doubleArrayClass, fvToGeneralMethod);
+		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -499,8 +499,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable PromisePrint promisePrint,
-			@org.jspecify.annotations.Nullable ClassConstant doubleArrayClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant fvToGeneralMethod) {
+			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -514,10 +513,10 @@ final class JvmRuntimeBuilder {
 		patchBranch(code, ifNonnullPos, code.size());
 		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (promises only)
 		emitPromiseBranch(code, promisePrint);
-		// if (val instanceof double[]) return _arrayToDisplayString(_fvToGeneral(val));
-		// and
+		// if (val instanceof double[]) return
+		// _arrayToDisplayString(_fvToGeneral(val)).replaceFirst(...#f...); and
 		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
-		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, doubleArrayClass, fvToGeneralMethod);
+		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -787,6 +786,21 @@ final class JvmRuntimeBuilder {
 	record PromisePrint(ClassConstant futureClass, ConstantPool.StringConstant promiseStr) {
 	}
 
+	/**
+	 * Constant-pool references for printing a packed float array (a {@code double[]} at
+	 * runtime) through the {@code #f(...)} reader syntax, so its printed form round-trips
+	 * to a packed array. The element data is rendered by boxing to a general array
+	 * ({@code fvToGeneralMethod}) and reusing the ordinary array renderer, then the
+	 * leading {@code #}/{@code #nA} prefix is rewritten to {@code #f} with
+	 * {@code String.replaceFirst(prefixRegex, prefixRepl)} (regex {@code ^#\d*A?\(},
+	 * replacement {@code #f(}). Threaded into the two lisp-to-string builders only when
+	 * the program uses packed float arrays.
+	 */
+	record PackedPrint(ClassConstant doubleArrayClass, MethodrefConstant fvToGeneralMethod,
+			MethodrefConstant stringReplaceFirst, ConstantPool.StringConstant prefixRegex,
+			ConstantPool.StringConstant prefixRepl) {
+	}
+
 	// Emits "if (val instanceof CompletableFuture) return "#<PROMISE>";" at the current
 	// position. A no-op when the program cannot create promises, keeping the branch out
 	// of promise-free programs.
@@ -864,28 +878,35 @@ final class JvmRuntimeBuilder {
 	// position, used by both the prin1 and princ string builders. A no-op when arrays are
 	// not used (both args null), keeping the branch out of array-free programs. When the
 	// program uses packed float arrays a preceding "if (val instanceof double[]) return
-	// arrayToString(_fvToGeneral(val));" branch renders a packed double[] identically to
-	// its general counterpart.
+	// arrayToString(_fvToGeneral(val)).replaceFirst("^#\\d*A?\\(", "#f(");" branch
+	// renders a
+	// packed double[] through the #f(...) syntax (so it round-trips to a packed array):
+	// the
+	// element data is rendered exactly as the general counterpart, then the leading
+	// #/#nA prefix is rewritten to #f.
 	private static void emitArrayBranch(List<Integer> code,
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
-			@org.jspecify.annotations.Nullable ClassConstant doubleArrayClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant fvToGeneralMethod) {
+			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
 		}
-		if (doubleArrayClass != null && fvToGeneralMethod != null) {
+		if (packedPrint != null) {
 			code.add(Opcode.ALOAD_0);
 			code.add(Opcode.INSTANCEOF);
-			emitU2(code, doubleArrayClass.index());
+			emitU2(code, packedPrint.doubleArrayClass().index());
 			int ifNotPackedPos = code.size();
 			code.add(Opcode.IFEQ);
 			emitU2(code, 0);
 			code.add(Opcode.ALOAD_0);
 			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, fvToGeneralMethod.index());
+			emitU2(code, packedPrint.fvToGeneralMethod().index());
 			code.add(Opcode.INVOKESTATIC);
 			emitU2(code, arrayToStringMethod.index());
+			emitLdc(code, packedPrint.prefixRegex().index());
+			emitLdc(code, packedPrint.prefixRepl().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, packedPrint.stringReplaceFirst().index());
 			code.add(Opcode.ARETURN);
 			patchBranch(code, ifNotPackedPos, code.size());
 		}

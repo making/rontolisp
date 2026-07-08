@@ -9,10 +9,10 @@ Like the JSON and `linalg` libraries, `simd` is implemented once in Lisp source 
 A simd vector is a rank-1 [packed float array](../reference/data-types.md): the `double-float`-typed, unboxed array that `#f(...)` and `(make-array n :element-type 'double-float)` produce. The built-in `aref` / `length` interoperate with it, and any packed vector built elsewhere can be handed to a simd function. Element-wise kernels return a fresh vector; reductions return a scalar `double`.
 
 ```lisp
-(simd:arange 5)                         ; => #(0.0 1.0 2.0 3.0 4.0)
-(simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => #(5.0 7.0 9.0)
+(simd:arange 5)                         ; => #f(0.0 1.0 2.0 3.0 4.0)
+(simd:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => #f(5.0 7.0 9.0)
 (simd:dot #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) ; => 32.0
-(simd:scale #f(1.0 2.0 3.0) 10)         ; => #(10.0 20.0 30.0)
+(simd:scale #f(1.0 2.0 3.0) 10)         ; => #f(10.0 20.0 30.0)
 ```
 
 ## The API

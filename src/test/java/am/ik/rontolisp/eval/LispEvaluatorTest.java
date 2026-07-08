@@ -5274,15 +5274,15 @@ class LispEvaluatorTest {
 	@Test
 	void linalgFunctionsLoadLazilyOnFirstUse() {
 		assertThat(eval("(linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8))))").print())
-			.isEqualTo("#2A((19.0 22.0) (43.0 50.0))");
+			.isEqualTo("#f((19.0 22.0) (43.0 50.0))");
 		assertThat(eval("(linalg:det (linalg:from-list '((1 2) (3 4))))").print()).isEqualTo("-2.0");
 		// linalg is packed double-float; a power-of-two matrix inverts without roundoff.
 		assertThat(eval("(linalg:inv (linalg:from-list '((4 0) (2 4))))").print())
-			.isEqualTo("#2A((0.25 0.0) (-0.125 0.25))");
+			.isEqualTo("#f((0.25 0.0) (-0.125 0.25))");
 		assertThat(eval("(linalg:solve (linalg:from-list '((4 0) (2 4))) (linalg:from-list '(8 8)))").print())
-			.isEqualTo("#(2.0 1.0)");
+			.isEqualTo("#f(2.0 1.0)");
 		assertThat(eval("(linalg:dot (linalg:arange 3) (linalg:from-list '(4 5 6)))").print()).isEqualTo("17.0");
-		assertThat(eval("(linalg:add 10 (linalg:from-list '(1 2)))").print()).isEqualTo("#(11.0 12.0)");
+		assertThat(eval("(linalg:add 10 (linalg:from-list '(1 2)))").print()).isEqualTo("#f(11.0 12.0)");
 		assertThat(eval("(linalg:argmax (linalg:from-list '(1 9 3)))").print()).isEqualTo("1");
 		// #'linalg:norm resolves through the same lazy load.
 		assertThat(eval("(funcall #'linalg:norm (linalg:from-list '(3 4)))").print()).isEqualTo("5.0");
