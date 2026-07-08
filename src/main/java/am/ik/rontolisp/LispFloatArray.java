@@ -25,6 +25,9 @@ package am.ik.rontolisp;
  * Like every array, packed arrays are compared by identity ({@code eq}): two distinct
  * packed arrays are never {@code equal} even with the same contents, matching Common
  * Lisp.
+ *
+ * @param data the flat row-major elements, unboxed (each stored as a {@code double})
+ * @param dims the dimension sizes; the rank is {@code dims.length}
  */
 public record LispFloatArray(double[] data, int[] dims) implements LispVal {
 

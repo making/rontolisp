@@ -316,44 +316,44 @@ rank). It is **not part of Common Lisp**;
 reference its functions with the `linalg:` qualifier (the package does not use
 `cl`, so most programs stay in `cl-user` and call the qualified names). The
 package is implemented once in Lisp source and behaves identically on every
-backend, and its arithmetic is exact for integer and rational inputs -- `det`,
-`inv` and `solve` of an integer matrix return exact ratios. Each name below
+backend, and its constructors build packed double-float arrays, so it computes
+in floating point (`det`, `inv` and `solve` run like numpy's). Each name below
 links to its own page; the [Vectors & Matrices
 guide](../guides/linear-algebra.md) gives an overview and worked examples.
 
 | Function | Example | Result |
 |----------|---------|--------|
-| `linalg:zeros` | `(linalg:zeros 3)`, `(linalg:zeros '(2 2))` | `#(0 0 0)`, `#2A((0 0) (0 0))` (shape: integer or `(rows cols)` list) |
-| `linalg:ones` | `(linalg:ones '(2 2))` | `#2A((1 1) (1 1))` |
-| `linalg:full` | `(linalg:full '(2 2) 7)` | `#2A((7 7) (7 7))` |
-| `linalg:eye` | `(linalg:eye 2)` | `#2A((1 0) (0 1))` (the identity matrix) |
-| `linalg:arange` | `(linalg:arange 5)`, `(linalg:arange 2 10 2)` | `#(0 1 2 3 4)`, `#(2 4 6 8)` (stop exclusive; step may be negative) |
-| `linalg:linspace` | `(linalg:linspace 0 1 5)` | `#(0 1/4 1/2 3/4 1)` (n evenly spaced values, inclusive) |
-| `linalg:from-list` | `(linalg:from-list '((1 2) (3 4)))` | `#2A((1 2) (3 4))` (a flat list gives a vector) |
-| `linalg:to-list` | `(linalg:to-list (linalg:eye 2))` | `((1 0) (0 1))` |
+| `linalg:zeros` | `(linalg:zeros 3)`, `(linalg:zeros '(2 2))` | `#(0.0 0.0 0.0)`, `#2A((0.0 0.0) (0.0 0.0))` (shape: integer or `(rows cols)` list) |
+| `linalg:ones` | `(linalg:ones '(2 2))` | `#2A((1.0 1.0) (1.0 1.0))` |
+| `linalg:full` | `(linalg:full '(2 2) 7)` | `#2A((7.0 7.0) (7.0 7.0))` |
+| `linalg:eye` | `(linalg:eye 2)` | `#2A((1.0 0.0) (0.0 1.0))` (the identity matrix) |
+| `linalg:arange` | `(linalg:arange 5)`, `(linalg:arange 2 10 2)` | `#(0.0 1.0 2.0 3.0 4.0)`, `#(2.0 4.0 6.0 8.0)` (stop exclusive; step may be negative) |
+| `linalg:linspace` | `(linalg:linspace 0 1 5)` | `#(0.0 0.25 0.5 0.75 1.0)` (n evenly spaced values, inclusive) |
+| `linalg:from-list` | `(linalg:from-list '((1 2) (3 4)))` | `#2A((1.0 2.0) (3.0 4.0))` (a flat list gives a vector) |
+| `linalg:to-list` | `(linalg:to-list (linalg:eye 2))` | `((1.0 0.0) (0.0 1.0))` |
 | `linalg:shape` | `(linalg:shape #2A((1 2 3) (4 5 6)))` | `(2 3)` |
 | `linalg:size` | `(linalg:size (linalg:eye 3))` | `9` (the total element count) |
-| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#2A((0 1 2) (3 4 5))` (row-major; the sizes must match) |
-| `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#(1 0 0 1)` |
-| `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#2A((1 4) (2 5) (3 6))` (a vector is returned unchanged) |
-| `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#(11 12 13)` (elementwise; a scalar operand broadcasts) |
-| `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#(4 4)` |
+| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#2A((0.0 1.0 2.0) (3.0 4.0 5.0))` (row-major; the sizes must match) |
+| `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#(1.0 0.0 0.0 1.0)` |
+| `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#2A((1.0 4.0) (2.0 5.0) (3.0 6.0))` (a vector is returned unchanged) |
+| `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#(11.0 12.0 13.0)` (elementwise; a scalar operand broadcasts) |
+| `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | The Hadamard (elementwise) product -- not the matrix product |
-| `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#(1/2 1 3/2)` (integer division gives exact ratios) |
-| `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#(0 1 4 9)` (apply a function to every element) |
+| `linalg:div` | `(linalg:div #(1 2 3) 2)` | `#(0.5 1.0 1.5)` (a packed double-float array) |
+| `linalg:emap` | `(linalg:emap (lambda (x) (* x x)) (linalg:arange 4))` | `#(0.0 1.0 4.0 9.0)` (apply a function to every element) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpy-style dispatch: vec.vec scalar, mat.vec / vec.mat vector, mat.mat matrix product |
-| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#2A((19 22) (43 50))` (the matrix product) |
-| `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#2A((3 4 5) (6 8 10))` (the outer product) |
-| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10` |
-| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (exact for integer inputs) |
+| `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#2A((19.0 22.0) (43.0 50.0))` (the matrix product) |
+| `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#2A((3.0 4.0 5.0) (6.0 8.0 10.0))` (the outer product) |
+| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10` (a reduction follows the element type; a packed array gives a double) |
+| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2` (a reduction follows the element type; a packed array gives a double) |
 | `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9` (the largest element) |
 | `linalg:amin` | `(linalg:amin #(5 2 8))` | `2` (the smallest element) |
 | `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1` (vectors only; first index on ties) |
 | `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` |
 | `linalg:norm` | `(linalg:norm #(3 4))` | `5.0` (the Euclidean / Frobenius norm) |
 | `linalg:trace` | `(linalg:trace #2A((1 2) (3 4)))` | `5` (square matrices only) |
-| `linalg:det` | `(linalg:det #2A((1 2) (3 4)))` | `-2` (exact for integer/rational inputs) |
-| `linalg:inv` | `(linalg:inv #2A((1 2) (3 4)))` | `#2A((-2 1) (3/2 -1/2))` (signals an error for a singular matrix) |
+| `linalg:det` | `(linalg:det #2A((1 2) (3 4)))` | `-2.0` (floating point; a singular matrix may give a small epsilon) |
+| `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#2A((0.25 0.0) (-0.125 0.25))` (signals an error for a singular matrix) |
 | `linalg:solve` | `(linalg:solve a b)` | The solution of `a . x = b` (`b` a vector or matrix) |
 | `linalg:array-equal` | `(linalg:array-equal (linalg:eye 2) #2A((1 0) (0 1)))` | `t` (same shape and numerically equal elements; arrays themselves are only `eq`-comparable) |
 

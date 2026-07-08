@@ -6,6 +6,6 @@ The numpy-style dot product, dispatching on the operand ranks: vector . vector g
 
 ```lisp
 (linalg:dot #(1 2 3) #(4 5 6))       ; => 32
-(linalg:dot #2A((1 2) (3 4)) #(1 1)) ; => #(3 7)
-(linalg:dot #(1 1) #2A((1 2) (3 4))) ; => #(4 6)
+(linalg:dot #2A((1 2) (3 4)) #(1 1)) ; => #(3.0 7.0)
+(linalg:dot #(1 1) #2A((1 2) (3 4))) ; => #(4.0 6.0)
 ```

@@ -727,7 +727,6 @@ public final class LispMacroExpander {
 	 * </ul>
 	 *
 	 * <p>
-	 * <p>
 	 * The {@code for v being {the|each} {symbols|present-symbols|external-symbols}
 	 * {of|in} PACKAGE} clause is accepted but <em>lite</em>: rontolisp has no runtime
 	 * intern table, so it iterates the empty sequence (the loop body never runs and
@@ -2150,6 +2149,14 @@ public final class LispMacroExpander {
 		return expandStableSort((LispCons) listToCons(stableParts));
 	}
 
+	/**
+	 * Expands {@code (stable-sort sequence predicate [:key fn])} into a
+	 * decorate-sort-undecorate over the sequence indices, so equal elements keep their
+	 * original order (a stable sort) and an optional {@code :key} is applied once per
+	 * element.
+	 * @param cons the {@code stable-sort} expression
+	 * @return the decorate-sort-undecorate expansion
+	 */
 	public static LispVal expandStableSort(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {

@@ -7,8 +7,12 @@
 ;; Portability constraints honored here (like json.lisp, see .kb/json.md):
 ;; - do loops always declare at least one variable; parameters are never
 ;;   assigned with setq (let-rebound instead).
-;; - Arithmetic is generic: integer inputs stay exact (ratios, bignums), so
-;;   det/inv/solve of an integer matrix are exact; double inputs propagate.
+;; - Arrays are packed double-float: every constructor builds an unboxed
+;;   (array double-float) via make-array :element-type 'double-float, and
+;;   element reads coerce to double. linalg is speed-oriented, not exact --
+;;   integer/ratio inputs become doubles (numpy's model), so det/inv/solve
+;;   compute in floating point (a singular integer matrix's determinant may be
+;;   a tiny epsilon rather than exactly 0).
 ;;
 ;; Internal helpers use the linalg::%la- prefix. An array is walked with a
 ;; flat row-major index k via row-major-aref, so the elementwise operations
@@ -18,8 +22,8 @@
 ;; --- internal helpers --------------------------------------------------------
 
 (defun linalg::%la-like (a)
-  ;; A fresh zero-filled array with the same shape as a.
-  (make-array (array-dimensions a) :initial-element 0))
+  ;; A fresh zero-filled packed double-float array with the same shape as a.
+  (make-array (array-dimensions a) :element-type 'double-float :initial-element 0.0))
 
 (defun linalg::%la-bcast (%la-op %la-x %la-y)
   ;; Applies the binary function %la-op elementwise, broadcasting a scalar
@@ -109,7 +113,7 @@
          (m (car (cdr d))))
     (unless (= m (length v))
       (error "linalg: dot dimension mismatch"))
-    (let ((out (make-array n :initial-element 0)))
+    (let ((out (make-array n :element-type 'double-float :initial-element 0.0)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (let ((acc 0))
@@ -125,7 +129,7 @@
          (m (car (cdr d))))
     (unless (= n (length v))
       (error "linalg: dot dimension mismatch"))
-    (let ((out (make-array m :initial-element 0)))
+    (let ((out (make-array m :element-type 'double-float :initial-element 0.0)))
       (do ((j 0 (+ j 1)))
           ((>= j m) out)
         (let ((acc 0))
@@ -143,7 +147,7 @@
          (p (car (cdr db))))
     (unless (= m (car db))
       (error "linalg: matmul inner dimensions differ"))
-    (let ((out (make-array (list n p) :initial-element 0)))
+    (let ((out (make-array (list n p) :element-type 'double-float :initial-element 0.0)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (do ((j 0 (+ j 1)))
@@ -158,19 +162,19 @@
 
 (defun linalg:zeros (shape)
   ;; A zero-filled vector (integer shape) or matrix (list shape).
-  (make-array shape :initial-element 0))
+  (make-array shape :element-type 'double-float :initial-element 0.0))
 
 (defun linalg:ones (shape)
   ;; A one-filled vector or matrix.
-  (make-array shape :initial-element 1))
+  (make-array shape :element-type 'double-float :initial-element 1.0))
 
 (defun linalg:full (shape value)
-  ;; A vector or matrix with every element set to value.
-  (make-array shape :initial-element value))
+  ;; A vector or matrix with every element set to value (coerced to double).
+  (make-array shape :element-type 'double-float :initial-element value))
 
 (defun linalg:eye (n)
   ;; The n-by-n identity matrix.
-  (let ((m (make-array (list n n) :initial-element 0)))
+  (let ((m (make-array (list n n) :element-type 'double-float :initial-element 0.0)))
     (do ((i 0 (+ i 1)))
         ((>= i n) m)
       (setf (aref m i i) 1))))
@@ -184,7 +188,7 @@
          (d (if step step 1))
          (count (ceiling (/ (- stop start) d)))
          (n (max 0 count))
-         (out (make-array n :initial-element 0)))
+         (out (make-array n :element-type 'double-float :initial-element 0.0)))
     (do ((i 0 (+ i 1))
          (x start (+ x d)))
         ((>= i n) out)
@@ -192,8 +196,7 @@
 
 (defun linalg:linspace (start stop n)
   ;; The vector of n evenly spaced numbers from start to stop inclusive.
-  ;; Integer endpoints produce exact rationals.
-  (let ((out (make-array n :initial-element 0)))
+  (let ((out (make-array n :element-type 'double-float :initial-element 0.0)))
     (if (= n 1)
         (progn (setf (aref out 0) start) out)
         (let ((step (/ (- stop start) (- n 1))))
@@ -206,7 +209,7 @@
   (if (consp (car lst))
       (let* ((r (length lst))
              (c (length (car lst)))
-             (m (make-array (list r c) :initial-element 0)))
+             (m (make-array (list r c) :element-type 'double-float :initial-element 0.0)))
         (do ((rows lst (cdr rows))
              (i 0 (+ i 1)))
             ((null rows) m)
@@ -214,7 +217,12 @@
                (j 0 (+ j 1)))
               ((null cells))
             (setf (aref m i j) (car cells)))))
-      (coerce lst 'vector)))
+      (let* ((n (length lst))
+             (v (make-array n :element-type 'double-float :initial-element 0.0)))
+        (do ((cells lst (cdr cells))
+             (i 0 (+ i 1)))
+            ((null cells) v)
+          (setf (aref v i) (car cells))))))
 
 (defun linalg:to-list (a)
   ;; The inverse of from-list: a flat list for a vector, a list of row lists
@@ -243,7 +251,7 @@
 
 (defun linalg:reshape (a shape)
   ;; A fresh array with the given shape and the same row-major elements.
-  (let* ((out (make-array shape :initial-element 0))
+  (let* ((out (make-array shape :element-type 'double-float :initial-element 0.0))
          (n (array-total-size a)))
     (unless (= n (array-total-size out))
       (error "linalg: reshape size mismatch"))
@@ -261,7 +269,7 @@
     (if (cdr d)
         (let* ((r (car d))
                (c (car (cdr d)))
-               (m (make-array (list c r) :initial-element 0)))
+               (m (make-array (list c r) :element-type 'double-float :initial-element 0.0)))
           (do ((i 0 (+ i 1)))
               ((>= i r) m)
             (do ((j 0 (+ j 1)))
@@ -284,8 +292,7 @@
   (linalg::%la-bcast #'* a b))
 
 (defun linalg:div (a b)
-  ;; Elementwise a / b; either operand may be a scalar. Integer division
-  ;; produces exact ratios.
+  ;; Elementwise a / b; either operand may be a scalar.
   (linalg::%la-bcast #'/ a b))
 
 (defun linalg:emap (f a)
@@ -322,7 +329,7 @@
          (vf (linalg:flatten v))
          (n (length uf))
          (m (length vf))
-         (out (make-array (list n m) :initial-element 0)))
+         (out (make-array (list n m) :element-type 'double-float :initial-element 0.0)))
     (do ((i 0 (+ i 1)))
         ((>= i n) out)
       (do ((j 0 (+ j 1)))
@@ -336,7 +343,7 @@
   (linalg::%la-reduce #'+ a 0))
 
 (defun linalg:mean (a)
-  ;; The arithmetic mean of every element (exact for integer inputs).
+  ;; The arithmetic mean of every element.
   (/ (linalg:sum a) (linalg:size a)))
 
 (defun linalg:amax (a)
@@ -402,8 +409,8 @@
 ;; --- linear algebra ----------------------------------------------------------
 
 (defun linalg:det (a)
-  ;; The determinant, by Gaussian elimination with partial pivoting. Exact for
-  ;; integer/rational inputs.
+  ;; The determinant, by Gaussian elimination with partial pivoting (in
+  ;; floating point).
   (let ((n (linalg::%la-square-size a)))
     (let ((m (linalg::%la-copy a))
           (det 1))
@@ -411,7 +418,7 @@
           ((or (>= col n) (= det 0)) det)
         (let ((p (linalg::%la-pivot m col n)))
           (if (null p)
-              (setq det 0)
+              (setq det 0.0)
               (progn
                 (unless (= p col)
                   (linalg::%la-swap-rows m p col n)
@@ -421,11 +428,11 @@
 
 (defun linalg:inv (a)
   ;; The inverse of a square matrix, by Gauss-Jordan elimination on the
-  ;; augmented matrix [a | I]. Exact for integer/rational inputs; signals an
-  ;; error for a singular matrix.
+  ;; augmented matrix [a | I] (in floating point); signals an error for a
+  ;; singular matrix.
   (let* ((n (linalg::%la-square-size a))
          (w (* 2 n))
-         (m (make-array (list n w) :initial-element 0)))
+         (m (make-array (list n w) :element-type 'double-float :initial-element 0.0)))
     (do ((i 0 (+ i 1)))
         ((>= i n))
       (do ((j 0 (+ j 1)))
@@ -453,7 +460,7 @@
               (do ((j col (+ j 1)))
                   ((>= j w))
                 (setf (aref m i j) (- (aref m i j) (* f (aref m col j))))))))))
-    (let ((out (make-array (list n n) :initial-element 0)))
+    (let ((out (make-array (list n n) :element-type 'double-float :initial-element 0.0)))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
         (do ((j 0 (+ j 1)))
@@ -461,8 +468,8 @@
           (setf (aref out i j) (aref m i (+ n j))))))))
 
 (defun linalg:solve (a b)
-  ;; Solves a . x = b for x, where b is a vector or a matrix. Exact for
-  ;; integer/rational inputs.
+  ;; Solves a . x = b for x, where b is a vector or a matrix (in floating
+  ;; point).
   (linalg:dot (linalg:inv a) b))
 
 ;; --- comparison --------------------------------------------------------------

@@ -1,7 +1,7 @@
-tensor:      #3A(((0 1) (2 3)) ((4 5) (6 7)))
+tensor:      #3A(((0.0 1.0) (2.0 3.0)) ((4.0 5.0) (6.0 7.0)))
 rank/dims:   3 (2 2 2) (8 elements)
-add 10:      #3A(((10 11) (12 13)) ((14 15) (16 17)))
-flat [1 0 1]: index 5 value 5
+add 10:      #3A(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))
+flat [1 0 1]: index 5 value 5.0
 round trip:  t
 
 step 0: total 1000, centre 1000, hottest (2 2 2)

@@ -5,8 +5,10 @@ following the `json.lisp` pattern (see `json.md`) so a single implementation
 runs identically on all backends. 33 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
 `add`/`sub`/`mul`/`div`/`emap`, products `dot`/`matmul`/`outer`, reductions,
-and exact Gaussian-elimination `det`/`inv`/`solve`) over the built-in
-arrays. Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
+and floating-point Gaussian-elimination `det`/`inv`/`solve`) over the built-in
+arrays. The library computes in packed double-float (speed over exactness), so
+constructors and array-building ops produce packed double-float arrays.
+Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
 walk elements via `row-major-aref`, so they work for any rank; `dot`/`matmul`/
 `outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for rank <= 2.
 
@@ -27,37 +29,37 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:zeros shape)` / `(linalg:ones shape)` / `(linalg:full shape v)` | new array filled with 0 / 1 / v |
 | `(linalg:eye n)` | n x n identity matrix |
 | `(linalg:arange stop)` / `(arange start stop)` / `(arange start stop step)` | vector, stop exclusive, step may be negative |
-| `(linalg:linspace start stop n)` | n evenly spaced values inclusive; integer endpoints give exact ratios |
+| `(linalg:linspace start stop n)` | n evenly spaced values inclusive (packed double-float) |
 | `(linalg:from-list lst)` | flat list -> vector; list of equal-length rows -> matrix |
 | `(linalg:to-list a)` | inverse of from-list |
 | `(linalg:shape a)` / `(linalg:size a)` | dims list `(n)` or `(rows cols)` / total element count |
 | `(linalg:reshape a shape)` | row-major copy; error if sizes differ |
 | `(linalg:flatten a)` | rank-1 row-major copy |
 | `(linalg:transpose a)` | matrix transpose; a vector is returned unchanged |
-| `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise; a scalar operand on either side broadcasts; two arrays must have equal shapes; `mul` is Hadamard (NOT matrix product); integer `div` gives ratios |
+| `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise; a scalar operand on either side broadcasts; two arrays must have equal shapes; `mul` is Hadamard (NOT matrix product); results are packed double-float arrays |
 | `(linalg:emap f a)` | fresh array with f applied to every element |
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
 | `(linalg:matmul a b)` | matrix product (also mat.vec); rejects scalar operands |
 | `(linalg:outer u v)` | outer product (inputs flattened first) |
-| `(linalg:sum a)` / `(linalg:mean a)` | sum / mean over all elements (mean of ints is an exact ratio) |
+| `(linalg:sum a)` / `(linalg:mean a)` | sum / mean over all elements (a reduction follows the element type: a packed/float array reduces to a double, a plain integer array to an integer/ratio) |
 | `(linalg:amax a)` / `(linalg:amin a)` | largest / smallest element; error on empty |
 | `(linalg:argmax v)` / `(linalg:argmin v)` | index in a VECTOR (first on ties) |
 | `(linalg:norm a)` | Euclidean / Frobenius norm (a float, via sqrt) |
 | `(linalg:trace a)` | main-diagonal sum; square matrices only |
-| `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting; EXACT (ratios) for integer/rational inputs; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
+| `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
 
 Gotchas when writing programs: no numpy-style row/column broadcasting (scalar
 only); `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` are
 rank <= 2 only (everything else is rank-generic); results are fresh arrays
 (inputs are never mutated);
-`norm`/non-terminating floats print differently on WASM, so deterministic
-cross-backend output should print exact ratios or scaled integers (see
-`examples/ml/linear-regression.lisp` and `examples/ml/deep-digits.lisp` for the
-idioms, incl. an i31-safe fixed-seed LCG and matrix backpropagation;
-`examples/ml/heat3d.lisp` covers the rank-3 idioms and shows that repeated exact
-ratio arithmetic must keep intermediates inside the WASM i31 fixnum range --
-its denominators grow 8^step, so it stops after 4 steps).
+because linalg now computes in double-float, non-terminating results print at
+fewer significant digits on WASM than on the JVM, so cross-backend-deterministic
+linalg output should stick to integer-valued or short-terminating-decimal
+results (e.g. power-of-two matrices for `inv`/`solve`, whose inverses are exact
+short decimals). See `examples/ml/linear-regression.lisp`,
+`examples/ml/deep-digits.lisp` and `examples/ml/heat3d.lisp` for worked idioms
+(incl. an i31-safe fixed-seed LCG, matrix backpropagation and the rank-3 idioms).
 
 ## Wiring
 
@@ -96,9 +98,10 @@ its denominators grow 8^step, so it stops after 4 steps).
   first (fixed 2026-07-03 in `Jvm/WasmLambdaCompiler`; the ci-spec
   `dynamic-function-selection` case defines a global `f` and broke `linalg:add`
   before the rename — the rename stays because it is harmless).
-- Arithmetic is generic: integer inputs stay exact (ratios), so
-  `det`/`inv`/`solve`/`linspace`/`mean` of integer inputs are deterministic
-  across backends (pinned by the `linalg-package-cross-backend` ci-spec case).
+- Arithmetic runs in packed double-float (speed over exactness); the
+  `linalg-package-cross-backend` ci-spec case uses power-of-two matrices for
+  `det`/`inv`/`solve` so their float results are exact and print identically on
+  every backend.
 - Flat iteration uses `row-major-aref` / `(setf (row-major-aref ...))`
   directly (the former `%la-cols`/`%la-fref`/`%la-fset` cols-encoding helpers
   were deleted when rank-n arrays landed), which is what makes the elementwise

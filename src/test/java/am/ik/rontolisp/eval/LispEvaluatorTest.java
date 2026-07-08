@@ -4842,7 +4842,7 @@ class LispEvaluatorTest {
 				(list (linalg:sum *c*) (linalg:amax *c*)
 				      (linalg:array-equal (linalg:add *c* 10) (linalg:reshape (linalg:arange 10 18) '(2 2 2))))
 				""");
-		assertThat(result.print()).isEqualTo("(28 7 t)");
+		assertThat(result.print()).isEqualTo("(28.0 7.0 t)");
 	}
 
 	@Test
@@ -5274,13 +5274,15 @@ class LispEvaluatorTest {
 	@Test
 	void linalgFunctionsLoadLazilyOnFirstUse() {
 		assertThat(eval("(linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8))))").print())
-			.isEqualTo("#2A((19 22) (43 50))");
-		assertThat(eval("(linalg:det (linalg:from-list '((1 2) (3 4))))").print()).isEqualTo("-2");
-		assertThat(eval("(linalg:inv (linalg:from-list '((1 2) (3 4))))").print()).isEqualTo("#2A((-2 1) (3/2 -1/2))");
-		assertThat(eval("(linalg:solve (linalg:from-list '((2 1) (1 3))) (linalg:from-list '(3 5)))").print())
-			.isEqualTo("#(4/5 7/5)");
-		assertThat(eval("(linalg:dot (linalg:arange 3) (linalg:from-list '(4 5 6)))").print()).isEqualTo("17");
-		assertThat(eval("(linalg:add 10 (linalg:from-list '(1 2)))").print()).isEqualTo("#(11 12)");
+			.isEqualTo("#2A((19.0 22.0) (43.0 50.0))");
+		assertThat(eval("(linalg:det (linalg:from-list '((1 2) (3 4))))").print()).isEqualTo("-2.0");
+		// linalg is packed double-float; a power-of-two matrix inverts without roundoff.
+		assertThat(eval("(linalg:inv (linalg:from-list '((4 0) (2 4))))").print())
+			.isEqualTo("#2A((0.25 0.0) (-0.125 0.25))");
+		assertThat(eval("(linalg:solve (linalg:from-list '((4 0) (2 4))) (linalg:from-list '(8 8)))").print())
+			.isEqualTo("#(2.0 1.0)");
+		assertThat(eval("(linalg:dot (linalg:arange 3) (linalg:from-list '(4 5 6)))").print()).isEqualTo("17.0");
+		assertThat(eval("(linalg:add 10 (linalg:from-list '(1 2)))").print()).isEqualTo("#(11.0 12.0)");
 		assertThat(eval("(linalg:argmax (linalg:from-list '(1 9 3)))").print()).isEqualTo("1");
 		// #'linalg:norm resolves through the same lazy load.
 		assertThat(eval("(funcall #'linalg:norm (linalg:from-list '(3 4)))").print()).isEqualTo("5.0");

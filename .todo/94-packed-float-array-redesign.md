@@ -557,3 +557,122 @@ rank-1 float-vector ops at most; matrices are JVM/interp/wasm-GC only. Do not ch
 `guides/linear-algebra.md`; `.todo/93` (linalg accel); the simd interception just committed
 (`.kb/simd.md`, `JvmSimd*`, `ScalarWasmCompiler` simd section). The `-Drontolisp.doc.fix=true` helper
 is the key to the doc churn.
+
+### Phase 5b DONE (steps 1+2) — linalg is packed double-float; verified + benchmarked (2026-07-08)
+
+- **Step 1 (linalg.lisp -> packed double).** Every constructor / result `make-array` is now
+  `:element-type 'double-float :initial-element 0.0`; `from-list`'s vector case builds a packed
+  vector; the singular-`det` branch returns `0.0` (was integer `0`) so all `det` results are
+  doubles. NUANCE discovered + documented: linalg output type is numpy-style **input-dependent** --
+  constructors + array-building ops (add/sub/mul/div/emap/matmul/dot-building/outer/transpose/
+  reshape/flatten/inv/solve) return packed doubles, but scalar REDUCTIONS (sum/mean/amax/amin/
+  trace/dot-vv) FOLLOW the element type: a packed/float array reduces to a double, a bare integer
+  array (`#(1 2 3)`) reduces to an integer/ratio. So `(linalg:mean #(1 2 3 4))` is still `5/2`,
+  `(linalg:mean (linalg:arange 5))` is `2.0`. `argmax/argmin/shape/size` stay integer (indices/dims).
+- **WASM float-print caveat (the reconciliation driver).** WASM prints non-terminating floats at
+  ~6-7 sig digits vs the interp/JVM full round-trip (`0.333333` vs `0.3333333333333333`). Exact-ratio
+  linalg used to hide this; float linalg exposes it, so any op with roundoff (a general `inv`/`solve`,
+  `norm` of a non-square, `mean` with a non-terminating quotient) DIVERGES across backends. Fix idiom:
+  cross-backend-deterministic tests/docs/examples use **power-of-two matrices** for `inv`/`solve`
+  (exact short decimals: `(linalg:inv #2A((4 0) (2 4)))` -> `#2A((0.25 0.0) (-0.125 0.25))`) or
+  **scaled integers** (`(round (* x 1000))`). Integer-valued doubles (`19.0`, `-2.0`, `0.25`) print
+  identically everywhere.
+- **Step 2 (reconciliation) DONE across the full surface:** `LispEvaluatorTest` (2 methods),
+  `JvmLispCompilerTest` (4 methods; `...LinearAlgebraIsExact` renamed, inv/solve -> power-of-two),
+  `WasmLispCompilerIntegrationTest` (2 methods), `ci-spec.yaml` `linalg-package-cross-backend`
+  (inv/solve -> power-of-two, all-doubles expected), the 33 `linalg-*.md` detail pages (en+ja: the
+  `-Drontolisp.doc.fix=true` fixer only rewrites the FINAL form per page, so the ~9 stale INTERMEDIATE
+  `; =>` values were fixed by hand + a fence-sync script mirrored en->ja), `guides/linear-algebra.md`
+  (en+ja), `reference/functions.md` linalg table + intro prose (en+ja), `.kb/linalg.md`, and the
+  example goldens. **Example goldens:** `heat3d` regenerated (only the linalg tensor-demo lines became
+  doubles; the diffusion grid is a plain `make-array` general array so its exact-ratio centres are
+  UNCHANGED); `deep-digits` UNCHANGED (already float, integer-scaled output); `linear-regression`
+  REWRITTEN (user-approved) from an exact-rational showcase to floating-point least-squares with
+  scaled-integer output (`coefficients x1000: (1057 -2200 1571)`) + a tolerance solution check --
+  raw-float printing diverged on WASM AND `array-equal` broke the `exact solution check` (t->nil).
+- **Verified:** full suite **2905** green (skip 2 = WASM Docker); native `CiSpecE2eTest` **724** green
+  (all 4 backends); `DocExamplesTest` **415** green; the 3 ml examples byte-identical on all 4 backends;
+  `-Pweb compile` SUCCESS.
+- **Benchmark (step-1 win, JVM compiled, packed vs the develop general-array baseline, same codebase):**
+  `matmul-64` **~2.0x** (250->125), `chain-200k` (add+mul) **~2.6x** (985->375), `dot-200k` **~3.6x**
+  (950->266). The unboxed packed `double[]` is the whole win and it needs no flag -- it applies on
+  interpreter / JVM / wasm-GC alike (linalg does not run on `--no-gc`: its kernels use
+  `array-dimensions`/`array-total-size`, unsupported there).
+
+### Step 3 (linalg SIMD-lane acceleration) — APPROVED (user, 2026-07-08); IMPLEMENT after compaction
+
+**User chose "step 3 も実装する" then asked to compact first.** Steps 1+2 are DONE + verified +
+benchmarked (see "Phase 5b DONE" above) and UNCOMMITTED on `feat/packed-float-array` (do NOT commit
+without an explicit request). Resume Step 3 from the "Implementation plan" block at the end of this
+section. Context on WHY it is harder than the simd package (keep in mind while designing):
+
+Step-1 packed already delivers 2-3.6x with zero flags on every backend linalg runs on. A further
+`--simd`/`v128` lane layer for linalg is **materially harder than the simd package's** and its payoff
+is JVM-only + concentrated in matmul:
+- simd's interception is trivial because its 6 kernels are fixed-arity, same-length-packed, no
+  broadcasting, no fallback (`JvmSimdCompiler` just emits `bridge.add(evalA, evalB)`). linalg's kernels
+  go through `%la-bcast` (scalar broadcasting), accept any rank, and must FALL BACK to the scalar
+  linalg defun when inputs are non-conforming -- a broadcasting-aware bridge + a bridge->compiled-defun
+  fallback path, none of which simd needs.
+- JVM-only: linalg does not run on `--no-gc` (array-dimensions), and wasm-GC has no v128-over-GC-array
+  path (its packed loop is already scalar-unboxed).
+- The expensive op (`matmul`, O(n^3)) is rank-2 and NOT in the simd kernel set -- it needs a NEW f64x2
+  rank-2 kernel; the cheap rank-1 kernels that COULD reuse the simd bridge are already fast post-unbox.
+- Users who need raw SIMD vector speed already have the `simd:` package for the hot rank-1 loops.
+
+**Implementation plan (resume here — JVM `--simd` only; interp/wasm-GC keep the scalar-over-packed
+loop, --no-gc N/A):**
+
+- **Template = the simd package's interception, already committed:** `JvmSimdCompiler` (call-site
+  dispatch: emit `_simdInit` then `bridge.<kernel>(evalArgs)`), `JvmSimdRuntimeBuilder` (embeds the
+  bridge class + `_simdInit`), `JvmSimdVectorTemplate` (the Vector-API kernels, base64-embedded,
+  defined via `Lookup.defineClass`). Wiring: `JvmLispCompiler` has `simdAccel` (from `--simd`),
+  `usesSimd`/`simdRuntime`/`Ctx.simdOps`, `programUsesAnyAcceleratedSimdOp`; `JvmExprCompiler` has the
+  `SIMD_PKG` dispatch after java-interop. `--simd` is ALREADY threaded through `RontoLispCli` and the
+  `CliOptions.noValueKeys` fix is in. Mirror ALL of this for `LINALG_PKG`.
+
+- **The hard part = linalg is not simd.** simd kernels are fixed-arity, same-length-packed, no
+  broadcast, no fallback. linalg `add/sub/mul/div` go through `%la-bcast` (a scalar operand broadcasts;
+  two arrays must be equal-shape), accept ANY rank, and `dot` rank-dispatches (vv->scalar, mv/vm->vec,
+  mm->matmul). So the bridge cannot just assume rank-1 packed. **Recommended design: the bridge
+  REIMPLEMENTS each accelerated kernel fully in Java** — a fast path (rank-1 packed same-shape ->
+  `DoubleVector` loop; scalar operand -> splat) and a slow path (any-rank / general-array / mismatched
+  -> plain scalar Java loop that matches the Lisp semantics byte-for-byte, incl. the shape-mismatch
+  `error`). Then the call site ALWAYS calls the bridge (no bridge->Lisp-defun callback needed — that
+  callback is the thing that makes a "guard + fallback to the spliced defun" design ugly). The bridge
+  reads the packed `double[]` at Option-X offset `1 + (int)a[0]` (header `[rank, dims..., data...]`),
+  same as `JvmSimdVectorTemplate`. Result = a fresh packed `double[]` with the header written.
+
+- **Kernels to intercept (rank-1 elementwise + reductions first; matmul is the real prize):**
+  `linalg:add/sub/mul` can literally delegate to the existing `JvmSimdVectorTemplate` add/sub/mul for
+  the rank-1-same-length case; `linalg:div` needs a new `f64x2` div kernel (simd has no div — add
+  `DoubleVector.div`); `linalg:dot` vv-case -> simd dot; `linalg:sum` -> simd sum; `mean`/`norm`
+  accelerate transitively (their spliced bodies call sum/dot). **`linalg:matmul` (rank-2, O(n^3)) is
+  where the win is** (benchmark: matmul is the heavy op) and it is NOT in the simd set — add a new
+  `matmul` bridge kernel whose inner loop is a vectorized dot-product (`DoubleVector.fromArray` over a
+  row of A and a column of B... note B's column is strided; either transpose B once or gather).
+  `outer` (rank-2) optional.
+
+- **Gate + correctness:** gate on `--simd` + a new `programUsesAnyAcceleratedLinalgOp` (AST walk for
+  `linalg:add/sub/mul/div/dot/sum/matmul` calls). MUST verify byte-identical to the scalar linalg
+  defun (the `simd:` package's pinning pattern — a `JvmLinalgAccelCompilerTest` mirroring
+  `JvmSimdAccelCompilerTest`, + the dead-flag proof: a `--simd` linalg class run without
+  `--add-modules jdk.incubator.vector` throws `NoClassDefFoundError` at `_simdInit`). Determinism:
+  reduction associativity differs under SIMD (last-ULP) — keep the same caveat; for the ci-spec /
+  cross-backend cases use inputs whose float results are exact (power-of-two / integer-valued) so
+  `--simd` and scalar agree exactly. Add a `linalg-simd` scenario only if it stays exact; otherwise
+  keep the accel test JVM-unit-only.
+
+- **Files to add (mirror the simd set):** `JvmLinalgCompiler`, `JvmLinalgRuntimeBuilder`,
+  `JvmLinalgVectorTemplate` (or EXTEND `JvmSimdVectorTemplate` with div + matmul and reuse one bridge
+  — weigh a shared bridge vs a second one; a shared bridge avoids embedding two classes). Wire into
+  `JvmLispCompiler` (`Ctx.linalgOps` or reuse `simdOps`) + `JvmExprCompiler` (`LINALG_PKG` dispatch).
+  `LinalgLibrary.process` still splices the scalar defuns (they are the fallback semantics + the
+  interp/wasm-GC impl); the JVM `--simd` path just intercepts the accelerated call sites. `.todo/93`
+  (linalg accel) folds in here.
+
+**Resumption facts:** branch `feat/packed-float-array`, steps 1+2 UNCOMMITTED, all green (suite 2905,
+native CiSpecE2eTest 724, DocExamplesTest 415, -Pweb, javadoc 0-warn). A/B benchmark jars +
+`bench.lisp` were in the scratchpad (rebuild with `git show develop:.../linalg.lisp` for the baseline).
+Reuse refs: `git show ebe6bac` (or the current tree) for `JvmSimd{Compiler,RuntimeBuilder,VectorTemplate}`
+and the `JvmLispCompiler`/`JvmExprCompiler` simd wiring; `.kb/simd.md` documents the mechanics.
