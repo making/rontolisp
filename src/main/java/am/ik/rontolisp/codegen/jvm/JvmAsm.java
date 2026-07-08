@@ -240,6 +240,38 @@ final class JvmAsm {
 		this.code.add(Opcode.D2I);
 	}
 
+	// --- float / float[] support (used by the packed single-float array runtime) ---
+
+	/** The {@code newarray float} instruction (atype 6 = {@code T_FLOAT}). */
+	void newarrayFloat() {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(6);
+	}
+
+	void faload() {
+		this.code.add(Opcode.FALOAD);
+	}
+
+	void fastore() {
+		this.code.add(Opcode.FASTORE);
+	}
+
+	void f2d() {
+		this.code.add(Opcode.F2D);
+	}
+
+	void d2f() {
+		this.code.add(Opcode.D2F);
+	}
+
+	void f2i() {
+		this.code.add(Opcode.F2I);
+	}
+
+	void i2f() {
+		this.code.add(Opcode.I2F);
+	}
+
 	void l2d() {
 		this.code.add(Opcode.L2D);
 	}

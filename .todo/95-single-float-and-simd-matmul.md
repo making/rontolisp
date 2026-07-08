@@ -147,8 +147,42 @@ Phases mirror `.todo/94`'s order:
      sanctioned Version error), native `CiSpecE2eTest` GREEN (724).** Remaining for Phase 6:
      add single-float cross-backend `ci-spec` cases + single-float doc examples once the
      backends support single (Phases 2-5).
-2. **JVM:** `float[]` repr + `_sfv*` dispatch; `make-array` single-float; print `#f`/`#d`.
-   Green `JvmLispCompilerTest` + `JvmFloatArrayTest`.
+2. **[DONE 2026-07-08]** **JVM:** `float[]` repr + `_sfv*` dispatch; `make-array`
+   single-float; print `#f`/`#d`. Green `JvmLispCompilerTest` + `JvmFloatArrayTest`.
+   - **Repr:** a bare `float[]` with the SAME header layout as the packed `double[]`
+     (`[rank, dims..., data...]`, rank/dims stored as f32, exact for realistic dims); a
+     `float[]` is disjoint from `Object[]`/`ArrayList`/`double[]`, so no discriminator
+     churn.
+   - **Accessors handle BOTH widths inline, not separate `_sfv*` accessors** (the design
+     doc's `_sfv*` was a sketch): a call site like `(aref x i)` emits ONE helper call and
+     can't know the width statically, so each `_fv*` accessor (`_fvAref1/2/N`,
+     `_fvAset1/2/N`, `_fvDims`, `_fvLength`, `_fvToGeneral`, `_fvElementType`) now
+     dispatches `instanceof double[]` -> `instanceof float[]` -> general-delegate. Reads
+     widen f32->f64 (`faload;f2d`), writes narrow (`d2f;fastore`), aset returns the
+     read-back narrowed value (`d2f;f2d`). Factored via width helpers
+     (`loadElem`/`loadHeaderInt`/`storeElem`/`storeHeaderInt`/`newBacking`) so the double
+     branch stays byte-identical.
+   - **Allocation IS width-specific** (compile-time literal element-type picks it):
+     `_fvMake` (double) + new `_sfvMake` (float), one `buildMake(single)` parameterized.
+     `JvmArrayCompiler` routes `:element-type 'single-float` -> `_sfvMake`.
+   - **Literal:** `JvmQuoteCompiler.compileSinglePackedLiteral` emits a `float[]`; each
+     element float is stored as its widening `double` constant narrowed with `d2f` (exact
+     round-trip) so NO float constant-pool entry is needed. Wired in `JvmExprCompiler` +
+     `JvmQuoteCompiler` (both throws removed).
+   - **Print:** `PackedPrint` record + `emitArrayBranch` gained a `float[]` branch (`#f(`
+     prefix) alongside `double[]` (`#d(`), both via the shared `_fvToGeneral` (widens);
+     factored into `emitPackedPrintBranch`. `usesFloatArray` gate + `makeArrayIsPackedFloat`
+     now also detect `:element-type 'single-float`. `JvmAsm` gained
+     `newarrayFloat`/`faload`/`fastore`/`f2d`/`d2f`/`f2i`/`i2f`. `JvmArraypCompiler` tests
+     `float[]` too.
+   - **Verified:** `./mvnw test` GREEN (2930, 0 fail), `JvmFloatArrayTest` 33 (12 new
+     single-float parity tests), web-profile compile SUCCESS, javadoc clean (only Version
+     exception). 4-backend CLI check: interpreter + JVM BYTE-IDENTICAL for `#f`
+     (round-trip, widen-on-read `2.5`, narrow-on-write `0.10000000149011612`,
+     `array-element-type` -> `single-float`, `#d` unchanged); WASM P1 + `--no-gc` still
+     clean compile errors (Phases 4/5). Native `CiSpecE2eTest` NOT re-run: `ci-spec.yaml`
+     untouched + no cross-backend output change (single-float is JVM-only new capability,
+     not in ci-spec; double output byte-identical).
 3. **JVM SIMD polymorphism:** `FloatVector` kernels in `JvmSimdVectorTemplate`; call-site
    dispatch on repr. `simd:dot`/`add`/... work in f32. Retain the dead-flag proof.
 4. **wasm-GC:** `TYPE_SFARRAY`/`TYPE_F32ARR` + dispatch. wasmtime integration.

@@ -787,19 +787,22 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for printing a packed double-float array (a
-	 * {@code double[]} at runtime) through the {@code #d(...)} reader syntax, so its
-	 * printed form round-trips to a packed array. The element data is rendered by boxing
-	 * to a general array ({@code fvToGeneralMethod}) and reusing the ordinary array
-	 * renderer, then the leading {@code #}/{@code #nA} prefix is rewritten to {@code #d}
-	 * with {@code String.replaceFirst(prefixRegex, prefixRepl)} (regex {@code ^#\d*A?\(},
-	 * replacement {@code #d(}). Threaded into the two lisp-to-string builders only when
-	 * the program uses packed float arrays. (Single-float {@code #f} is not yet emitted
-	 * by this backend; the compiled packed array is always double.)
+	 * Constant-pool references for printing a packed float array through the
+	 * {@code #d(...)} / {@code #f(...)} reader syntax, so its printed form round-trips to
+	 * a packed array. A double-float array is a {@code double[]} at runtime, a
+	 * single-float array a {@code float[]}. The element data is rendered by boxing to a
+	 * general array ({@code fvToGeneralMethod}, which handles both widths -- single
+	 * widens f32-&gt;f64) and reusing the ordinary array renderer, then the leading
+	 * {@code #}/{@code #nA} prefix is rewritten with
+	 * {@code String.replaceFirst(prefixRegex, ...)} (regex {@code ^#\d*A?\(}) to
+	 * {@code #d(} for a {@code double[]} or {@code #f(} for a {@code float[]}. Threaded
+	 * into the two lisp-to-string builders only when the program uses packed float
+	 * arrays.
 	 */
-	record PackedPrint(ClassConstant doubleArrayClass, MethodrefConstant fvToGeneralMethod,
-			MethodrefConstant stringReplaceFirst, ConstantPool.StringConstant prefixRegex,
-			ConstantPool.StringConstant prefixRepl) {
+	record PackedPrint(ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
+			MethodrefConstant fvToGeneralMethod, MethodrefConstant stringReplaceFirst,
+			ConstantPool.StringConstant prefixRegex, ConstantPool.StringConstant prefixRepl,
+			ConstantPool.StringConstant prefixReplSingle) {
 	}
 
 	// Emits "if (val instanceof CompletableFuture) return "#<PROMISE>";" at the current
@@ -875,6 +878,34 @@ final class JvmRuntimeBuilder {
 		code.add((int) bytes[1]);
 	}
 
+	// Emits one packed-array print branch: "if (val instanceof <arrayClass>) return
+	// arrayToString(_fvToGeneral(val)).replaceFirst("^#\\d*A?\\(", <prefixRepl>);". The
+	// element data is rendered exactly as the general array counterpart (single-float
+	// widens
+	// f32->f64 inside _fvToGeneral), then the leading #/#nA prefix is rewritten to #d( /
+	// #f(
+	// so the printed form round-trips to a packed array.
+	private static void emitPackedPrintBranch(List<Integer> code, ClassConstant arrayClass,
+			MethodrefConstant arrayToStringMethod, PackedPrint packedPrint, ConstantPool.StringConstant prefixRepl) {
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, arrayClass.index());
+		int ifNotPackedPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, packedPrint.fvToGeneralMethod().index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, arrayToStringMethod.index());
+		emitLdc(code, packedPrint.prefixRegex().index());
+		emitLdc(code, prefixRepl.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, packedPrint.stringReplaceFirst().index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifNotPackedPos, code.size());
+	}
+
 	// Emits "if (val instanceof ArrayList) return arrayToString(val);" at the current
 	// position, used by both the prin1 and princ string builders. A no-op when arrays are
 	// not used (both args null), keeping the branch out of array-free programs. When the
@@ -893,23 +924,12 @@ final class JvmRuntimeBuilder {
 			return;
 		}
 		if (packedPrint != null) {
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, packedPrint.doubleArrayClass().index());
-			int ifNotPackedPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, packedPrint.fvToGeneralMethod().index());
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, arrayToStringMethod.index());
-			emitLdc(code, packedPrint.prefixRegex().index());
-			emitLdc(code, packedPrint.prefixRepl().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, packedPrint.stringReplaceFirst().index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotPackedPos, code.size());
+			// if (val instanceof double[]) -> #d(...); if (val instanceof float[]) ->
+			// #f(...)
+			emitPackedPrintBranch(code, packedPrint.doubleArrayClass(), arrayToStringMethod, packedPrint,
+					packedPrint.prefixRepl());
+			emitPackedPrintBranch(code, packedPrint.floatArrayClass(), arrayToStringMethod, packedPrint,
+					packedPrint.prefixReplSingle());
 		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);

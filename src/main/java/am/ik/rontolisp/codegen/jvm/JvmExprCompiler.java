@@ -51,10 +51,11 @@ final class JvmExprCompiler {
 			// dimension header (the packed representation), disjoint from the general
 			// array.
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> JvmQuoteCompiler.compilePackedLiteral(fa, ctx);
-			// #f(...) single-float packed arrays are not yet supported on the JVM backend
-			// (todo 95 Phase 2); use #d for double-float.
-			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
-					"single-float packed arrays (#f) are not yet supported on the JVM backend; use #d for double-float");
+			// A packed #f(...) single-float literal compiles to a native float[] with a
+			// dimension header (the single-float packed representation), disjoint from
+			// the
+			// general array and from the double[] packed representation.
+			case am.ik.rontolisp.LispSingleFloatArray fa -> JvmQuoteCompiler.compileSinglePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}

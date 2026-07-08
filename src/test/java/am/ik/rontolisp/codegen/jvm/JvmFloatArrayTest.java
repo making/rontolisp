@@ -18,17 +18,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The {@code #d(...)} packed-float type on the JVM backend. A packed literal (and
- * {@code make-array :element-type 'double-float}) compiles to a native unboxed
- * {@code double[]} carrying a dimension header {@code [rank, dim..., data...]}; every
- * array op routes through the {@code _fv*} dispatch helpers, which handle both the packed
- * {@code double[]} and a general {@code ArrayList} at runtime. Printing uses the
- * {@code #d(...)} reader syntax (rendered via {@code _fvToGeneral} +
- * {@code _arrayToString} then rewriting the {@code #}/{@code #nA} prefix to {@code #f})
- * so it round-trips to a packed array, while the packed-specific semantics are pinned
- * too: an element stores as a {@code double} (a non-real store is a type error), and
- * {@code array-element-type} reports {@code double-float}. {@code --simd} acceleration
- * over the same {@code double[]} is a follow-up (see {@code .todo/94}).
+ * The packed-float types on the JVM backend: {@code #d(...)} (double-float) compiles to a
+ * native unboxed {@code double[]}, {@code #f(...)} (single-float) to a {@code float[]},
+ * both carrying a dimension header {@code [rank, dim..., data...]}. A packed literal (and
+ * {@code make-array :element-type 'double-float|'single-float}) allocates the native
+ * array; every array op routes through the {@code _fv*} dispatch helpers, which handle
+ * the packed {@code double[]}/{@code float[]} and a general {@code ArrayList} at runtime.
+ * Printing uses the {@code #d(...)}/{@code #f(...)} reader syntax (rendered via
+ * {@code _fvToGeneral} + {@code _arrayToString} then rewriting the {@code #}/{@code #nA}
+ * prefix) so it round-trips to a packed array, while the packed-specific semantics are
+ * pinned too: a {@code double[]} element stores as a {@code double} (a non-real store is
+ * a type error), a {@code float[]} element widens f32-&gt;f64 on read and narrows
+ * f64-&gt;f32 on write, and {@code array-element-type} reports
+ * {@code double-float}/{@code
+ * single-float}. {@code --simd} acceleration over the same backing arrays is a follow-up
+ * (see {@code .todo/95}).
  */
 class JvmFloatArrayTest {
 
@@ -158,6 +162,119 @@ class JvmFloatArrayTest {
 	void nonRealStoreIsATypeError() throws Exception {
 		// Storing a non-real (a string) into a packed array is a type error at runtime.
 		assertThatThrownBy(() -> compileAndRun("(let ((v #d(1.0 2.0 3.0))) (setf (aref v 0) \"x\") (print v))"))
+			.hasRootCauseInstanceOf(ClassCastException.class);
+	}
+
+	// --- single-float (#f) parity: a native float[] with the same header layout ---
+
+	@Test
+	void singleRank1LiteralPrintsAsASingleVector() throws Exception {
+		assertThat(compileAndRun("(print #f(1.0 2.0 3.0))")).isEqualTo("#f(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void singleIntegerLeavesCoerceToSingleAtReadTime() throws Exception {
+		assertThat(compileAndRun("(print #f(1 2 3))")).isEqualTo("#f(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void singleRank2LiteralPrintsAsAMatrix() throws Exception {
+		assertThat(compileAndRun("(print #f((1.0 2.0) (3.0 4.0)))")).isEqualTo("#f((1.0 2.0) (3.0 4.0))");
+	}
+
+	@Test
+	void singleArefWidensToDouble() throws Exception {
+		// A half-integer is exact in f32, so the widened read is exact.
+		assertThat(compileAndRun("(print (aref #f(1.5 2.5 3.5) 1))")).isEqualTo("2.5");
+		assertThat(compileAndRun("(print (aref #f((1.0 2.0) (3.0 4.0)) 1 0))")).isEqualTo("3.0");
+		assertThat(compileAndRun("(print (row-major-aref #f((1.0 2.0) (3.0 4.0)) 2))")).isEqualTo("3.0");
+	}
+
+	@Test
+	void singleLengthAndDimensions() throws Exception {
+		assertThat(compileAndRun("(print (length #f(1.0 2.0 3.0)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (array-dimensions #f((1.0 2.0) (3.0 4.0))))")).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void singleSetfArefMutatesInPlace() throws Exception {
+		// 9.0 is exact in f32, so the in-place mutation reads back exactly.
+		assertThat(compileAndRun("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 1) 9.0) (print v))"))
+			.isEqualTo("#f(1.0 9.0 3.0)");
+	}
+
+	@Test
+	void singleSetfArefNarrowsToSingle() throws Exception {
+		// Storing 0.1 (not representable in f32) narrows to the nearest float, so the
+		// array
+		// reads back the widened f32 value 0.10000000149011612, NOT 0.1 (the #d
+		// contrast).
+		assertThat(compileAndRun("(print (let ((v #f(1.0 2.0 3.0))) (setf (aref v 0) 0.1) (aref v 0)))"))
+			.isEqualTo("0.10000000149011612");
+	}
+
+	@Test
+	void singleSetfArefReturnsTheNarrowedValue() throws Exception {
+		// setf on a packed single element returns the coerced-and-narrowed value
+		// (matching
+		// the interpreter), so a stored integer 9 yields 9.0.
+		assertThat(compileAndRun("(print (let ((v #f(1.0 2.0 3.0))) (setf (aref v 0) 9)))")).isEqualTo("9.0");
+	}
+
+	@Test
+	void singleRank2SetfMutatesInPlace() throws Exception {
+		assertThat(compileAndRun("(let ((m #f((1.0 2.0) (3.0 4.0)))) (setf (aref m 1 0) 9.0) (print m))"))
+			.isEqualTo("#f((1.0 2.0) (9.0 4.0))");
+	}
+
+	@Test
+	void singleRank3ArefUsesTheGenericHelper() throws Exception {
+		assertThat(compileAndRun("(print (aref #f(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) 1 0 1))"))
+			.isEqualTo("6.0");
+	}
+
+	@Test
+	void makeArraySingleFloatDefaultsToZeroFill() throws Exception {
+		assertThat(compileAndRun("(print (make-array 3 :element-type 'single-float))")).isEqualTo("#f(0.0 0.0 0.0)");
+	}
+
+	@Test
+	void makeArraySingleFloatWithInitialElement() throws Exception {
+		assertThat(compileAndRun("(print (make-array 3 :element-type 'single-float :initial-element 2.0))"))
+			.isEqualTo("#f(2.0 2.0 2.0)");
+	}
+
+	@Test
+	void singleArraypAndVectorp() throws Exception {
+		assertThat(compileAndRun("(print (if (%arrayp #f(1.0 2.0)) 'yes 'no))")).isEqualTo("yes");
+		assertThat(compileAndRun("(print (if (vectorp #f(1.0 2.0)) 'yes 'no))")).isEqualTo("yes");
+	}
+
+	@Test
+	void singleQuotedPackedLiteral() throws Exception {
+		assertThat(compileAndRun("(print (quote #f(1.0 2.0 3.0)))")).isEqualTo("#f(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void arrayElementTypeIsSingleFloat() throws Exception {
+		assertThat(compileAndRun("(print (array-element-type #f(1.0 2.0)))")).isEqualTo("single-float");
+		assertThat(compileAndRun("(print (array-element-type (make-array 3 :element-type 'single-float)))"))
+			.isEqualTo("single-float");
+	}
+
+	@Test
+	void singleAndDoubleCoexistWithDistinctPrintPrefixes() throws Exception {
+		// Both widths in one program: the print branch dispatches on double[] vs float[]
+		// and
+		// picks the matching #d(/#f( prefix, and array-element-type distinguishes them.
+		assertThat(compileAndRun(
+				"(progn (print #d(1.0 2.0)) (print #f(3.0 4.0)) (print (array-element-type #d(1.0))) (print (array-element-type #f(1.0))))"))
+			.isEqualTo("#d(1.0 2.0)\n#f(3.0 4.0)\ndouble-float\nsingle-float");
+	}
+
+	@Test
+	void singleNonRealStoreIsATypeError() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 0) \"x\") (print v))"))
 			.hasRootCauseInstanceOf(ClassCastException.class);
 	}
 

@@ -20,21 +20,36 @@ final class JvmArraypCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		// When the program uses packed float arrays, a packed double[] is also an array:
-		// if (v instanceof double[]) return t; else the general ArrayList check below.
+		// When the program uses packed float arrays, a packed double[]/float[] is also an
+		// array: if (v instanceof double[] || v instanceof float[]) return t; else the
+		// general ArrayList check below.
 		if (ctx.usesFloatArray) {
+			// if (v instanceof double[]) { pop; return t; }
 			ctx.emit(Opcode.DUP);
 			ctx.emit(Opcode.INSTANCEOF);
 			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("[D")).index());
-			int ifNotPackedPos = ctx.code.size();
+			int ifNotDoublePos = ctx.code.size();
 			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
 			ctx.emit(Opcode.POP);
 			JvmEmitHelper.compileTrue(ctx);
-			int gotoEndPacked = ctx.code.size();
+			int gotoEndDouble = ctx.code.size();
 			ctx.emit(Opcode.GOTO);
 			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotPackedPos, ctx.code.size());
+			JvmEmitHelper.patchBranch(ctx, ifNotDoublePos, ctx.code.size());
+			// if (v instanceof float[]) { pop; return t; }
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("[F")).index());
+			int ifNotFloatPos = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.POP);
+			JvmEmitHelper.compileTrue(ctx);
+			int gotoEndFloat = ctx.code.size();
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, ifNotFloatPos, ctx.code.size());
 			// fall through with the value still on the stack for the ArrayList check
 			ctx.emit(Opcode.INSTANCEOF);
 			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
@@ -47,7 +62,8 @@ final class JvmArraypCompiler {
 			ctx.emitU2(0);
 			JvmEmitHelper.patchBranch(ctx, ifNotListPos, ctx.code.size());
 			ctx.emit(Opcode.ACONST_NULL);
-			JvmEmitHelper.patchBranch(ctx, gotoEndPacked, ctx.code.size());
+			JvmEmitHelper.patchBranch(ctx, gotoEndDouble, ctx.code.size());
+			JvmEmitHelper.patchBranch(ctx, gotoEndFloat, ctx.code.size());
 			JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
 			return;
 		}

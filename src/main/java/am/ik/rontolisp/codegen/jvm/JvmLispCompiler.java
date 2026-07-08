@@ -902,13 +902,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		JvmRuntimeBuilder.@Nullable PackedPrint packedPrint = null;
 		if (usesFloatArray) {
 			packedPrint = new JvmRuntimeBuilder.PackedPrint(cp.addClass(cp.addUtf8("[D")),
+					cp.addClass(cp.addUtf8("[F")),
 					cp.addMethodref(thisClass,
 							cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL),
 									cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC))),
 					cp.addMethodref(stringClass,
 							cp.addNameAndType(cp.addUtf8("replaceFirst"),
 									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
-					cp.addString("^#\\d*A?\\("), cp.addString("#d("));
+					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("));
 		}
 		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
 		MethodrefConstant arrayToStringMethod = usesArrays
@@ -1587,7 +1588,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (val instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
-					&& makeArrayIsDoubleFloat(cons)) {
+					&& makeArrayIsPackedFloat(cons)) {
 				return true;
 			}
 			return usesFloatArray(cons.car()) || usesFloatArray(cons.cdr());
@@ -1595,9 +1596,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// Whether a (make-array ...) call carries :element-type 'double-float (a literal
-	// quoted symbol at the call site, package qualifier ignored).
-	private static boolean makeArrayIsDoubleFloat(LispCons makeArray) {
+	// Whether a (make-array ...) call carries :element-type 'double-float or
+	// 'single-float (a literal quoted symbol at the call site, package qualifier ignored)
+	// --
+	// either produces a packed float array.
+	private static boolean makeArrayIsPackedFloat(LispCons makeArray) {
 		List<LispVal> args = makeArray.toList();
 		for (int i = 2; i + 1 < args.size(); i++) {
 			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
@@ -1606,7 +1609,8 @@ public final class JvmLispCompiler implements LispCompiler {
 						&& q.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ts) {
 					String name = ts.name();
 					int colon = name.lastIndexOf(':');
-					return (colon >= 0 ? name.substring(colon + 1) : name).equals(LispNames.DOUBLE_FLOAT);
+					String local = colon >= 0 ? name.substring(colon + 1) : name;
+					return local.equals(LispNames.DOUBLE_FLOAT) || local.equals(LispNames.SINGLE_FLOAT);
 				}
 			}
 		}

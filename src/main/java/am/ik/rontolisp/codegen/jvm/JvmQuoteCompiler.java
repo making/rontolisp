@@ -81,6 +81,60 @@ final class JvmQuoteCompiler {
 		ctx.emit(Opcode.DASTORE);
 	}
 
+	/**
+	 * Emits a packed single-float array literal ({@code #f(...)}) as a bare
+	 * {@code float[]} with an embedded dimension header: {@code [rank, dim_0, ...,
+	 * dim_{rank-1}, e_0, ..., e_{total-1}]} (rank and dims stored as floats, exact for
+	 * realistic sizes). The data offset is {@code 1 + rank}. This is the native
+	 * single-float packed representation (a {@code float[]} is disjoint from the {@code
+	 * Object[]}/{@code ArrayList}/{@code double[]} shapes, so no discriminator changes
+	 * are needed). Each element float is emitted as its widening {@code double} constant
+	 * then narrowed with {@code d2f} at load time (an exact round-trip), so no float
+	 * constant pool entry is needed.
+	 * @param fa the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compileSinglePackedLiteral(am.ik.rontolisp.LispSingleFloatArray fa, JvmLispCompiler.Ctx ctx) {
+		float[] data = fa.data();
+		int[] dims = fa.dims();
+		int rank = dims.length;
+		int off = 1 + rank;
+		int len = off + data.length;
+		JvmEmitHelper.emitIntConst(ctx, len);
+		ctx.emit(Opcode.NEWARRAY);
+		ctx.emit(6); // T_FLOAT
+		emitRawFloatHeaderStore(ctx, 0, rank);
+		for (int d = 0; d < rank; d++) {
+			emitRawFloatHeaderStore(ctx, 1 + d, dims[d]);
+		}
+		for (int f = 0; f < data.length; f++) {
+			emitRawFloatDataStore(ctx, off + f, data[f]);
+		}
+	}
+
+	// Stores an int header value (rank/dim) as a float at index into the float[] on top
+	// of
+	// the stack (DUP; index; int; I2F; FASTORE), leaving the array on the stack.
+	private static void emitRawFloatHeaderStore(JvmLispCompiler.Ctx ctx, int index, int value) {
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitIntConst(ctx, index);
+		JvmEmitHelper.emitIntConst(ctx, value);
+		ctx.emit(Opcode.I2F);
+		ctx.emit(Opcode.FASTORE);
+	}
+
+	// Stores a float data value at index into the float[] on top of the stack, emitting
+	// the
+	// value as its widening double constant narrowed back with D2F (exact) so no float
+	// constant pool entry is needed (DUP; index; double; D2F; FASTORE).
+	private static void emitRawFloatDataStore(JvmLispCompiler.Ctx ctx, int index, float value) {
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitIntConst(ctx, index);
+		emitRawDouble(ctx, value);
+		ctx.emit(Opcode.D2F);
+		ctx.emit(Opcode.FASTORE);
+	}
+
 	// Pushes an unboxed double constant (no Double.valueOf), the raw value to store into
 	// a double[].
 	private static void emitRawDouble(JvmLispCompiler.Ctx ctx, double value) {
@@ -114,10 +168,11 @@ final class JvmQuoteCompiler {
 			// dimension header (the packed representation), disjoint from the general
 			// array.
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
-			// #f(...) single-float packed arrays are not yet supported on the JVM backend
-			// (todo 95 Phase 2); use #d for double-float.
-			case am.ik.rontolisp.LispSingleFloatArray ignored -> throw new UnsupportedOperationException(
-					"single-float packed arrays (#f) are not yet supported on the JVM backend; use #d for double-float");
+			// A packed #f(...) single-float literal compiles to a native float[] with a
+			// dimension header (the single-float packed representation), disjoint from
+			// the
+			// general array and from the double[] packed representation.
+			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}

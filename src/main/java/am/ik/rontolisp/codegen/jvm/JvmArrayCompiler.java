@@ -64,14 +64,17 @@ final class JvmArrayCompiler {
 		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
-		if (isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
-			// :element-type 'single-float packs to a float[] which the JVM backend does
-			// not
-			// support yet (todo 95 Phase 2); reject it clearly rather than silently
-			// degrade
-			// to a general boxed array.
-			throw new UnsupportedOperationException(
-					"make-array :element-type 'single-float is not yet supported on the JVM backend; use 'double-float");
+		if (ctx.usesFloatArray && isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
+				&& fillPointer == null && adjustable == null) {
+			// A plain :element-type 'single-float array (no fill pointer / adjustable /
+			// displacement) is a packed float[]: _sfvMake(dims, init) allocates it and
+			// fills with the coerced (narrowed to f32) init (default 0.0 inside the
+			// helper).
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue, ctx, className);
+			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.SINGLE_MAKE,
+					JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+			return;
 		}
 		if (ctx.usesFloatArray && isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
 				&& fillPointer == null && adjustable == null) {
@@ -84,9 +87,11 @@ final class JvmArrayCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		if (initValue == null && isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
-			// An :element-type 'double-float array with a fill pointer / adjustable falls
-			// back to a general array; default its elements to 0.0, not nil.
+		if (initValue == null && (isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
+				|| isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD)))) {
+			// An :element-type 'double-float / 'single-float array with a fill pointer /
+			// adjustable falls back to a general array; default its elements to 0.0, not
+			// nil.
 			initValue = new LispDouble(0.0);
 		}
 		compileKeywordValueOrNull(initValue, ctx, className);
@@ -330,8 +335,7 @@ final class JvmArrayCompiler {
 	}
 
 	// Whether a make-array :element-type value designates single-float (packs to a
-	// float[], not yet supported on the JVM backend -- todo 95 Phase 2). Same literal
-	// quoted-symbol unwrap as isDoubleFloatElementType.
+	// float[]). Same literal quoted-symbol unwrap as isDoubleFloatElementType.
 	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
 		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
 	}
