@@ -2243,31 +2243,31 @@ cases:
       (1.0 2.0 3.0)
       arr
 
-  # The simd: package (.todo/94): portable packed-f64 vector kernels over the packed
-  # double-float array type, implemented once in simd.lisp as the scalar reference and run
+  # The vec: package (.todo/94): portable packed-f64 vector kernels over the packed
+  # double-float array type, implemented once in vec.lisp as the scalar reference and run
   # by the interpreter / JVM / wasm-GC / component over the packed representation (the JVM
   # --simd flag and the --no-gc scalar backend additionally lower the vectorizable kernels
   # to jdk.incubator.vector / native v128, verified separately). Element-wise kernels return
   # a fresh packed vector, reductions a scalar; every value prints byte-for-byte across the
   # four backends (f64-exact inputs, so mean/norm land on exact doubles too).
-  - name: simd-kernels-cross-backend
+  - name: vec-kernels-cross-backend
     source: |
-      (defun ci-simd ()
+      (defun ci-vec ()
         (let ((a #d(1.0 2.0 3.0))
               (b #d(4.0 5.0 6.0)))
-          (print (simd:add a b))
-          (print (simd:sub b a))
-          (print (simd:mul a b))
-          (print (simd:scale a 2))
-          (print (simd:dot a b))
-          (print (simd:sum a)))
-        (print (simd:aref (simd:add #d(10.0 20.0) #d(1.0 2.0)) 1))
-        (print (simd:length (simd:arange 5)))
-        (print (simd:to-list (simd:arange 4)))
-        (print (simd:mean #d(2.0 4.0 6.0)))
-        (print (simd:norm #d(3.0 4.0)))
-        (print (simd:sum (simd:from-list '(1 2 3 4)))))
-      (ci-simd)
+          (print (vec:add a b))
+          (print (vec:sub b a))
+          (print (vec:mul a b))
+          (print (vec:scale a 2))
+          (print (vec:dot a b))
+          (print (vec:sum a)))
+        (print (vec:aref (vec:add #d(10.0 20.0) #d(1.0 2.0)) 1))
+        (print (vec:length (vec:arange 5)))
+        (print (vec:to-list (vec:arange 4)))
+        (print (vec:mean #d(2.0 4.0 6.0)))
+        (print (vec:norm #d(3.0 4.0)))
+        (print (vec:sum (vec:from-list '(1 2 3 4)))))
+      (ci-vec)
     expected: |
       #d(5.0 7.0 9.0)
       #d(3.0 3.0 3.0)

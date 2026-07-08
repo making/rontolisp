@@ -33,9 +33,9 @@
       },
       {
         "condition": {
-          "typeReachable": "am.ik.rontolisp.eval.SimdLibrary"
+          "typeReachable": "am.ik.rontolisp.eval.VecLibrary"
         },
-        "pattern": "am/ik/rontolisp/eval/simd\\.lisp"
+        "pattern": "am/ik/rontolisp/eval/vec\\.lisp"
       },
       {
         "condition": {

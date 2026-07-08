@@ -21,7 +21,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
-import am.ik.rontolisp.eval.SimdLibrary;
+import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -101,7 +101,7 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a JVM class, returned as Base64. */
 	static String compileJvm(String source, String className) {
 		try {
-			List<LispVal> program = SimdLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary
+			List<LispVal> program = VecLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary
 				.process(JsonLibrary.process(LispReader.readAllFromString(source, Features.JVM))))));
 			String name = (className == null || className.isBlank()) ? "Main" : className;
 			byte[] bytes = new JvmLispCompiler(name).compile(program);
@@ -115,7 +115,7 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a WebAssembly module, returned as Base64. */
 	static String compileWasm(String source) {
 		try {
-			List<LispVal> program = SimdLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary
+			List<LispVal> program = VecLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary
 				.process(JsonLibrary.process(LispReader.readAllFromString(source, Features.WASM))))), Features.WASM);
 			byte[] bytes = new WasmLispCompiler().compile(program);
 			return Base64.getEncoder().encodeToString(bytes);

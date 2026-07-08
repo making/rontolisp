@@ -2527,13 +2527,13 @@ public final class LispMacroExpander {
 					// val).
 					listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), placeParts.get(1), placeParts.get(2),
 							value));
-				case LispNames.SIMD_QUALIFIED_AREF ->
-					// (setf (simd:aref v i) val) -> (simd:aset v i val). simd:aset
+				case LispNames.VEC_QUALIFIED_AREF ->
+					// (setf (vec:aref v i) val) -> (vec:aset v i val). vec:aset
 					// returns
 					// the stored value, so it already satisfies setf's value semantics
 					// (as
 					// %aset does for aref).
-					listToCons(List.of(new LispSymbol(LispNames.SIMD_QUALIFIED_ASET), placeParts.get(1),
+					listToCons(List.of(new LispSymbol(LispNames.VEC_QUALIFIED_ASET), placeParts.get(1),
 							placeParts.get(2), value));
 				case LispNames.ELT -> {
 					// (setf (elt seq i) val): elt reads from lists and arrays, so the

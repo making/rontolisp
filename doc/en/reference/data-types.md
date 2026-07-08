@@ -239,7 +239,7 @@ float-specialized representation the numeric kernels use, so fill pointers, adju
 and displaced arrays are not available on it (those need a general array). The
 double-float width is the default and what `linalg` produces. For fast vectorized
 kernels over packed arrays -- and their optional hardware acceleration -- see the
-[`simd` package](../guides/simd-acceleration.md).
+[`vec` package](../guides/simd-acceleration.md).
 
 ```lisp
 (aref #d(1.0 2.0 3.0) 1)                   ; => 2.0

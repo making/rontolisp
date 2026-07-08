@@ -642,14 +642,14 @@ class ScalarWasmCompilerTest {
 
 	@Test
 	void simdReductionKernelsEmitRealV128Instructions() {
-		// simd:dot lowers to native fixed-width SIMD over the packed vector: the code
+		// vec:dot lowers to native fixed-width SIMD over the packed vector: the code
 		// section carries the SIMD prefix (0xFD) with the f64x2 reduction ops (splat + a
 		// horizontal extract_lane fold), not a plain scalar loop. The module stays a
 		// plain
 		// MVP module: a memory section, scalar-only func types, no wasm-GC and no
 		// imports.
 		byte[] module = compile("""
-				(defun dot (n) (let ((v (simd:arange n))) (simd:dot v v)))
+				(defun dot (n) (let ((v (vec:arange n))) (vec:dot v v)))
 				(rontolisp:wasm-export 'dot :params '(:int) :returns :float)
 				""");
 		Map<Integer, byte[]> sections = sections(module);
@@ -668,10 +668,10 @@ class ScalarWasmCompilerTest {
 		// kernels' lane loop emits v128.store (0xFD 0x0B).
 		byte[] module = compile("""
 				(defun go (n)
-				  (let* ((a (simd:arange n))
-				         (b (simd:scale (simd:ones n) 2.0))
-				         (c (simd:add a b)))
-				    (+ (simd:sum c) (simd:mean a) (simd:norm b))))
+				  (let* ((a (vec:arange n))
+				         (b (vec:scale (vec:ones n) 2.0))
+				         (c (vec:add a b)))
+				    (+ (vec:sum c) (vec:mean a) (vec:norm b))))
 				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
 				""");
 		Map<Integer, byte[]> sections = sections(module);
@@ -684,11 +684,11 @@ class ScalarWasmCompilerTest {
 
 	@Test
 	void simdFromListIsAClearCompileError() {
-		// simd:from-list / to-list need Lisp cons lists, which the scalar backend lacks,
+		// vec:from-list / to-list need Lisp cons lists, which the scalar backend lacks,
 		// so
-		// they run only on the portable backends via simd.lisp.
+		// they run only on the portable backends via vec.lisp.
 		assertThatThrownBy(() -> compile("""
-				(defun f () (simd:sum (simd:from-list '(1.0 2.0 3.0))))
+				(defun f () (vec:sum (vec:from-list '(1.0 2.0 3.0))))
 				(rontolisp:wasm-export 'f :params '() :returns :float)
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("portable backends only");
 	}

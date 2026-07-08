@@ -792,7 +792,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	/**
 	 * Whether a body touches a packed f64 vector (a {@code #d} literal, a
-	 * {@code make-array} call, or any {@code simd:} kernel), all of which read or
+	 * {@code make-array} call, or any {@code vec:} kernel), all of which read or
 	 * bump-allocate the vector in linear memory and so require the memory section even in
 	 * an otherwise pure-numeric program.
 	 */
@@ -2062,7 +2062,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// the
 	// generic aref/%aset/length operate on it. Only rank-1 is supported (a rank>=2 array
 	// has no packed layout on the scalar backend, so it is a clear compile error). The
-	// vectorizable simd: kernels (v128) build on this layer -- see .todo/94 Phase 4B.
+	// vectorizable vec: kernels (v128) build on this layer -- see .todo/94 Phase 4B.
 
 	private static void requireArgc(List<LispVal> args, int expected, String op, Fn fn) {
 		if (args.size() != expected) {
@@ -2285,39 +2285,39 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return false;
 	}
 
-	// --- simd: package (native WASM SIMD over the packed f64 vector)
+	// --- vec: package (native WASM SIMD over the packed f64 vector)
 	// --------------------
 	//
 	// On this backend a simd vector is the same packed [count:i32][count f64] block that
 	// a
-	// #d(...) literal and (make-array :element-type 'double-float) produce. The simd:
+	// #d(...) literal and (make-array :element-type 'double-float) produce. The vec:
 	// kernels are lowered here to real fixed-width SIMD: the element-wise ops walk the
 	// block
 	// two lanes at a time with v128 / f64x2.* and a scalar tail, and the reductions
-	// accumulate in a v128 lane pair then fold horizontally. The scalar simd.lisp
+	// accumulate in a v128 lane pair then fold horizontally. The scalar vec.lisp
 	// reference
-	// is NOT spliced on --no-gc (it needs a general array type); every simd: member is
+	// is NOT spliced on --no-gc (it needs a general array type); every vec: member is
 	// intercepted here instead. Construction / access verbs delegate to the shared packed
 	// helpers (allocVec / emitElementAddr / compileAref / compileAset / compileLength).
 
-	// The simd: members this backend lowers natively.
-	private static final Set<String> SIMD_MEMBERS = Set.of(LispNames.SIMD_ZEROS, LispNames.SIMD_ONES,
-			LispNames.SIMD_ARANGE, LispNames.SIMD_AREF, LispNames.SIMD_ASET, LispNames.SIMD_LENGTH, LispNames.SIMD_ADD,
-			LispNames.SIMD_SUB, LispNames.SIMD_MUL, LispNames.SIMD_SCALE, LispNames.SIMD_SUM, LispNames.SIMD_MEAN,
-			LispNames.SIMD_DOT, LispNames.SIMD_NORM);
+	// The vec: members this backend lowers natively.
+	private static final Set<String> SIMD_MEMBERS = Set.of(LispNames.VEC_ZEROS, LispNames.VEC_ONES,
+			LispNames.VEC_ARANGE, LispNames.VEC_AREF, LispNames.VEC_ASET, LispNames.VEC_LENGTH, LispNames.VEC_ADD,
+			LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN,
+			LispNames.VEC_DOT, LispNames.VEC_NORM);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
-	// they run only on the portable backends via simd.lisp.
-	private static final Set<String> SIMD_PORTABLE_ONLY = Set.of(LispNames.SIMD_FROM_LIST, LispNames.SIMD_TO_LIST);
+	// they run only on the portable backends via vec.lisp.
+	private static final Set<String> SIMD_PORTABLE_ONLY = Set.of(LispNames.VEC_FROM_LIST, LispNames.VEC_TO_LIST);
 
-	// Whether a (resolved) symbol name is a simd: package member, e.g. "simd:dot". simd:
+	// Whether a (resolved) symbol name is a vec: package member, e.g. "vec:dot". vec:
 	// names are always qualified with the package prefix, so a prefix test suffices.
 	private static boolean isSimdCall(String name) {
-		return name.startsWith(LispNames.SIMD_PKG + ":");
+		return name.startsWith(LispNames.VEC_PKG + ":");
 	}
 
-	// The member part of a simd: qualified name ("simd:dot" -> "dot").
+	// The member part of a vec: qualified name ("vec:dot" -> "dot").
 	private static String simdMember(String name) {
 		return name.substring(name.lastIndexOf(':') + 1);
 	}
@@ -2345,10 +2345,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			typeOf(args.get(i), env, tc);
 		}
 		return switch (simdMember(name)) {
-			case LispNames.SIMD_ZEROS, LispNames.SIMD_ONES, LispNames.SIMD_ARANGE, LispNames.SIMD_ADD,
-					LispNames.SIMD_SUB, LispNames.SIMD_MUL, LispNames.SIMD_SCALE ->
+			case LispNames.VEC_ZEROS, LispNames.VEC_ONES, LispNames.VEC_ARANGE, LispNames.VEC_ADD, LispNames.VEC_SUB,
+					LispNames.VEC_MUL, LispNames.VEC_SCALE ->
 				Ty.F64VEC;
-			case LispNames.SIMD_LENGTH -> Ty.INT;
+			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
 		};
 	}
@@ -2362,23 +2362,23 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	private Ty compileSimd(String name, List<LispVal> args, Fn fn) {
 		return switch (simdMember(name)) {
-			case LispNames.SIMD_ZEROS -> compileSimdConstruct(args, fn, FILL_ZERO);
-			case LispNames.SIMD_ONES -> compileSimdConstruct(args, fn, FILL_ONE);
-			case LispNames.SIMD_ARANGE -> compileSimdConstruct(args, fn, FILL_ARANGE);
+			case LispNames.VEC_ZEROS -> compileSimdConstruct(args, fn, FILL_ZERO);
+			case LispNames.VEC_ONES -> compileSimdConstruct(args, fn, FILL_ONE);
+			case LispNames.VEC_ARANGE -> compileSimdConstruct(args, fn, FILL_ARANGE);
 			// aref / aset / length are the generic packed ops over the same block.
-			case LispNames.SIMD_LENGTH -> compileLength(args, fn);
-			case LispNames.SIMD_AREF -> compileAref(name, args, fn);
-			case LispNames.SIMD_ASET -> compileAset(name, args, fn);
-			case LispNames.SIMD_ADD -> compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD);
-			case LispNames.SIMD_SUB -> compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB);
-			case LispNames.SIMD_MUL -> compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL);
-			case LispNames.SIMD_SCALE -> compileSimdScale(args, fn);
-			case LispNames.SIMD_SUM -> compileSimdSum(args, fn);
-			case LispNames.SIMD_DOT -> compileSimdDot(args, fn);
+			case LispNames.VEC_LENGTH -> compileLength(args, fn);
+			case LispNames.VEC_AREF -> compileAref(name, args, fn);
+			case LispNames.VEC_ASET -> compileAset(name, args, fn);
+			case LispNames.VEC_ADD -> compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD);
+			case LispNames.VEC_SUB -> compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB);
+			case LispNames.VEC_MUL -> compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL);
+			case LispNames.VEC_SCALE -> compileSimdScale(args, fn);
+			case LispNames.VEC_SUM -> compileSimdSum(args, fn);
+			case LispNames.VEC_DOT -> compileSimdDot(args, fn);
 			// mean and norm are composites over sum/dot/length -- expand and recompile so
-			// there is one definition (also matching what the portable simd.lisp does).
-			case LispNames.SIMD_MEAN -> compileExpr(simdMeanExpansion(args, fn), fn);
-			case LispNames.SIMD_NORM -> compileExpr(simdNormExpansion(args, fn), fn);
+			// there is one definition (also matching what the portable vec.lisp does).
+			case LispNames.VEC_MEAN -> compileExpr(simdMeanExpansion(args, fn), fn);
+			case LispNames.VEC_NORM -> compileExpr(simdNormExpansion(args, fn), fn);
 			default -> throw new UnsupportedOperationException(
 					"--no-gc: unknown simd operation '" + name + "' in '" + fn.fnName + "'");
 		};
@@ -2390,19 +2390,19 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// correctly).
 	private static final String SIMD_REDUCE_TMP = "%simd-reduce-arg";
 
-	// (simd:mean v) => (let ((%v v)) (/ (simd:sum %v) (simd:length %v)))
+	// (vec:mean v) => (let ((%v v)) (/ (vec:sum %v) (vec:length %v)))
 	private LispVal simdMeanExpansion(List<LispVal> args, Fn fn) {
-		requireArgc(args, 2, "simd:mean", fn);
-		LispVal body = list(sym(LispNames.DIV), list(simdSym(LispNames.SIMD_SUM), sym(SIMD_REDUCE_TMP)),
-				list(simdSym(LispNames.SIMD_LENGTH), sym(SIMD_REDUCE_TMP)));
+		requireArgc(args, 2, "vec:mean", fn);
+		LispVal body = list(sym(LispNames.DIV), list(simdSym(LispNames.VEC_SUM), sym(SIMD_REDUCE_TMP)),
+				list(simdSym(LispNames.VEC_LENGTH), sym(SIMD_REDUCE_TMP)));
 		return simdLetOverArg(args.get(1), body);
 	}
 
-	// (simd:norm v) => (let ((%v v)) (sqrt (simd:dot %v %v)))
+	// (vec:norm v) => (let ((%v v)) (sqrt (vec:dot %v %v)))
 	private LispVal simdNormExpansion(List<LispVal> args, Fn fn) {
-		requireArgc(args, 2, "simd:norm", fn);
+		requireArgc(args, 2, "vec:norm", fn);
 		LispVal body = list(sym(LispNames.SQRT),
-				list(simdSym(LispNames.SIMD_DOT), sym(SIMD_REDUCE_TMP), sym(SIMD_REDUCE_TMP)));
+				list(simdSym(LispNames.VEC_DOT), sym(SIMD_REDUCE_TMP), sym(SIMD_REDUCE_TMP)));
 		return simdLetOverArg(args.get(1), body);
 	}
 
@@ -2416,7 +2416,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	}
 
 	private static LispSymbol simdSym(String member) {
-		return new LispSymbol(LispNames.SIMD_PKG + ":" + member);
+		return new LispSymbol(LispNames.VEC_PKG + ":" + member);
 	}
 
 	private static LispVal list(LispVal... items) {
@@ -2476,16 +2476,16 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	private static String fillModeName(int fillMode) {
 		return switch (fillMode) {
-			case FILL_ONE -> LispNames.SIMD_ONES;
-			case FILL_ARANGE -> LispNames.SIMD_ARANGE;
-			default -> LispNames.SIMD_ZEROS;
+			case FILL_ONE -> LispNames.VEC_ONES;
+			case FILL_ARANGE -> LispNames.VEC_ARANGE;
+			default -> LispNames.VEC_ZEROS;
 		};
 	}
 
-	// (simd:zeros n) / (simd:ones n) -> a fresh constant-filled vector;
-	// (simd:arange n) -> [0.0, 1.0, ..., n-1].
+	// (vec:zeros n) / (vec:ones n) -> a fresh constant-filled vector;
+	// (vec:arange n) -> [0.0, 1.0, ..., n-1].
 	private Ty compileSimdConstruct(List<LispVal> args, Fn fn, int fillMode) {
-		requireArgc(args, 2, "simd:" + fillModeName(fillMode), fn);
+		requireArgc(args, 2, "vec:" + fillModeName(fillMode), fn);
 		WasmWriter w = fn.writer;
 		int count = compileCountArg(args.get(1), fn);
 		int dst = allocVec(fn, count);
@@ -2553,7 +2553,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // block
 	}
 
-	// (simd:add a b) / (simd:sub a b) / (simd:mul a b): element-wise into a fresh vector.
+	// (vec:add a b) / (vec:sub a b) / (vec:mul a b): element-wise into a fresh vector.
 	// Two f64 lanes per iteration via v128.load + f64x2.<op> + v128.store, then a
 	// one-element scalar tail when the length is odd.
 	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
@@ -2604,11 +2604,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.F64VEC;
 	}
 
-	// (simd:scale v s): v * s (scalar broadcast) into a fresh vector. The scalar is
+	// (vec:scale v s): v * s (scalar broadcast) into a fresh vector. The scalar is
 	// splatted
 	// into both lanes with f64x2.splat, so the multiply is a single f64x2.mul per pair.
 	private Ty compileSimdScale(List<LispVal> args, Fn fn) {
-		requireArgc(args, 3, "simd:scale", fn);
+		requireArgc(args, 3, "vec:scale", fn);
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(Ty.F64VEC);
 		int s = fn.allocLocal(Ty.FLOAT);
@@ -2651,11 +2651,11 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.F64VEC;
 	}
 
-	// (simd:sum v) -> horizontal sum. Accumulates two lane sums in a v128, folds them
+	// (vec:sum v) -> horizontal sum. Accumulates two lane sums in a v128, folds them
 	// with
 	// f64x2.extract_lane, and adds the odd tail element.
 	private Ty compileSimdSum(List<LispVal> args, Fn fn) {
-		requireArgc(args, 2, "simd:sum", fn);
+		requireArgc(args, 2, "vec:sum", fn);
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(Ty.F64VEC);
 		compileCoerced(args.get(1), fn, Ty.F64VEC);
@@ -2692,10 +2692,10 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		return Ty.FLOAT;
 	}
 
-	// (simd:dot a b) -> sum of a_i*b_i. Lane-wise multiply-accumulate into a v128, folded
+	// (vec:dot a b) -> sum of a_i*b_i. Lane-wise multiply-accumulate into a v128, folded
 	// horizontally, plus the odd tail product.
 	private Ty compileSimdDot(List<LispVal> args, Fn fn) {
-		requireArgc(args, 3, "simd:dot", fn);
+		requireArgc(args, 3, "vec:dot", fn);
 		WasmWriter w = fn.writer;
 		int aL = fn.allocLocal(Ty.F64VEC);
 		int bL = fn.allocLocal(Ty.F64VEC);
@@ -3091,7 +3091,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			return;
 		}
 		if (isSimdCall(name)) {
-			// A simd: kernel is lowered inline (no callee edge); validate the member is
+			// A vec: kernel is lowered inline (no callee edge); validate the member is
 			// one
 			// this backend supports, then walk the argument expressions.
 			requireKnownSimd(name, fnName);

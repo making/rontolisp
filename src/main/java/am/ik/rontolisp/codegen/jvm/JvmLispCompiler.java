@@ -100,10 +100,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param optimize when {@code true}, dead-code-eliminate the finished class with
 	 * {@link JvmClassShaker}; see {@link #JvmLispCompiler(String, boolean, boolean)}
 	 * @param simdAccel when {@code true} ({@code --simd}), the six vectorizable
-	 * {@code simd:} kernels
+	 * {@code vec:} kernels
 	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/ {@code sum}) are
 	 * lowered at their call sites to an embedded {@code jdk.incubator.vector} bridge
-	 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code simd.lisp} reference.
+	 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code vec.lisp} reference.
 	 * Running such a class requires {@code java --add-modules jdk.incubator.vector}.
 	 */
 	public JvmLispCompiler(String className, boolean dynamic, boolean optimize, boolean simdAccel) {
@@ -548,9 +548,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// ArrayList are both handled; when false the default build is byte-identical.
 		boolean usesFloatArray = programUsesFloatArray(program);
 
-		// --simd: emit the Vector API acceleration bridge only when the program actually
-		// references one of the six accelerated simd: kernels (directly or via a spliced
-		// mean/norm body). Off by default, so the ordinary scalar simd.lisp is used. The
+		// --vec: emit the Vector API acceleration bridge only when the program actually
+		// references one of the six accelerated vec: kernels (directly or via a spliced
+		// mean/norm body). Off by default, so the ordinary scalar vec.lisp is used. The
 		// bridge is a self-contained embedded class (like the java: interop bridge); the
 		// packed float-array _fv* helpers still render/index its double[] results.
 		boolean usesSimd = this.simdAccel && programUsesAnyAcceleratedSimdOp(program);
@@ -1488,16 +1488,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Whether the program references any of the six vectorizable {@code simd:} kernels
+	 * Whether the program references any of the six vectorizable {@code vec:} kernels
 	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}), so
 	 * that {@code --simd} actually emits the Vector API bridge. {@code mean}/{@code norm}
 	 * are intercepted transitively via their spliced {@code sum}/{@code dot} calls, so
 	 * they need not be listed here.
 	 */
 	private static boolean programUsesAnyAcceleratedSimdOp(List<LispVal> program) {
-		for (String member : List.of(LispNames.SIMD_ADD, LispNames.SIMD_SUB, LispNames.SIMD_MUL, LispNames.SIMD_SCALE,
-				LispNames.SIMD_DOT, LispNames.SIMD_SUM)) {
-			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.SIMD_PKG, member))) {
+		for (String member : List.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE,
+				LispNames.VEC_DOT, LispNames.VEC_SUM)) {
+			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.VEC_PKG, member))) {
 				return true;
 			}
 		}
@@ -1895,10 +1895,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		final @Nullable Map<String, MethodrefConstant> javaOps;
 
 		/**
-		 * The accelerated {@code simd:} bridge references ({@code init} plus one per
+		 * The accelerated {@code vec:} bridge references ({@code init} plus one per
 		 * vectorizable kernel member name -- {@code add}/{@code sub}/{@code mul}/
 		 * {@code scale}/{@code dot}/{@code sum}); null unless {@code --simd} emitted the
-		 * acceleration runtime for a program that uses a vectorizable {@code simd:}
+		 * acceleration runtime for a program that uses a vectorizable {@code vec:}
 		 * kernel.
 		 */
 		final @Nullable Map<String, MethodrefConstant> simdOps;

@@ -159,19 +159,19 @@ public final class PackageRegistry {
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 
 	/**
-	 * The functions exported by the {@code simd} package (portable packed-{@code f64}
+	 * The functions exported by the {@code vec} package (portable packed-{@code f64}
 	 * vector kernels over the packed {@code double-float} array type). Implemented once
-	 * in rontolisp itself ({@code simd.lisp}, see {@code SimdLibrary}) as the scalar
+	 * in rontolisp itself ({@code vec.lisp}, see {@code VecLibrary}) as the scalar
 	 * reference, exactly like {@code linalg}; the JVM {@code --simd} flag and the
 	 * {@code --no-gc} scalar backend additionally intercept the vectorizable kernels for
 	 * acceleration.
 	 */
-	private static final Set<String> SIMD_FUNCTIONS = Set.of(LispNames.SIMD_ZEROS, LispNames.SIMD_ONES,
-			LispNames.SIMD_ARANGE, LispNames.SIMD_FROM_LIST, LispNames.SIMD_TO_LIST, LispNames.SIMD_AREF,
-			LispNames.SIMD_ASET, LispNames.SIMD_LENGTH, LispNames.SIMD_ADD, LispNames.SIMD_SUB, LispNames.SIMD_MUL,
-			LispNames.SIMD_SCALE, LispNames.SIMD_SUM, LispNames.SIMD_MEAN, LispNames.SIMD_DOT, LispNames.SIMD_NORM);
+	private static final Set<String> VEC_FUNCTIONS = Set.of(LispNames.VEC_ZEROS, LispNames.VEC_ONES,
+			LispNames.VEC_ARANGE, LispNames.VEC_FROM_LIST, LispNames.VEC_TO_LIST, LispNames.VEC_AREF,
+			LispNames.VEC_ASET, LispNames.VEC_LENGTH, LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL,
+			LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN, LispNames.VEC_DOT, LispNames.VEC_NORM);
 
-	private static final List<String> SIMD_FUNCTION_NAMES = sorted(SIMD_FUNCTIONS);
+	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 
 	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
 
@@ -214,13 +214,13 @@ public final class PackageRegistry {
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external.
 		define(new LispPackage(LispNames.LINALG_PKG, List.of(), new HashSet<>(LINALG_FUNCTIONS)));
-		// Portable packed-f64 vector kernels, implemented once in simd.lisp (SimdLibrary)
+		// Portable packed-f64 vector kernels, implemented once in vec.lisp (VecLibrary)
 		// as the scalar reference and spliced/loaded on demand like linalg. The JVM
 		// --simd
 		// flag and the --no-gc scalar backend accelerate the vectorizable kernels. Does
 		// not
 		// use cl; every function is external.
-		define(new LispPackage(LispNames.SIMD_PKG, List.of(), new HashSet<>(SIMD_FUNCTIONS)));
+		define(new LispPackage(LispNames.VEC_PKG, List.of(), new HashSet<>(VEC_FUNCTIONS)));
 		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
 		// run on the JVM interpreter only -- the compilers cannot lower them.
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
@@ -282,12 +282,12 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Returns the names of the functions exported by the {@code simd} package, sorted
+	 * Returns the names of the functions exported by the {@code vec} package, sorted
 	 * alphabetically.
 	 * @return the sorted function names
 	 */
-	public static List<String> simdFunctionNames() {
-		return SIMD_FUNCTION_NAMES;
+	public static List<String> vecFunctionNames() {
+		return VEC_FUNCTION_NAMES;
 	}
 
 	@SafeVarargs

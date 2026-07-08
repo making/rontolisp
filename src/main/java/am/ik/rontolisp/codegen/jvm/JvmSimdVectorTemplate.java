@@ -8,12 +8,12 @@ import jdk.incubator.vector.VectorSpecies;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code simd:} acceleration runtime injected into a compiled {@code .class} when the
- * {@code --simd} flag is passed. It reimplements the six vectorizable {@code simd:}
+ * The {@code vec:} acceleration runtime injected into a compiled {@code .class} when the
+ * {@code --simd} flag is passed. It reimplements the six vectorizable {@code vec:}
  * kernels ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum})
  * against the compiled packed float-array representation using
  * {@code jdk.incubator.vector} so the JIT/native compiler can intrinsify the lane loop,
- * replacing the scalar {@code simd.lisp} reference at those call sites.
+ * replacing the scalar {@code vec.lisp} reference at those call sites.
  * {@code mean}/{@code norm} are transitively accelerated because their spliced bodies
  * call {@code sum}/{@code dot}, whose call sites are also intercepted.
  *
@@ -46,9 +46,9 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Unboxing is zero-copy: each kernel reads directly from the backing array at the
  * header-shifted offset and writes the result straight into a fresh packed array (its own
- * {@code [1, n, ...]} header). A chained pipeline ({@code (simd:sum (simd:add a b))})
- * never copies an input or an intermediate. Downstream {@code simd:aref}/{@code length}/
- * print read the same packed shape through the header-aware {@code _fv*} helpers, so the
+ * {@code [1, n, ...]} header). A chained pipeline ({@code (vec:sum (vec:add a b))}) never
+ * copies an input or an intermediate. Downstream {@code vec:aref}/{@code length}/ print
+ * read the same packed shape through the header-aware {@code _fv*} helpers, so the
  * accelerated result is observationally identical to the scalar reference.
  *
  * <p>
@@ -433,7 +433,7 @@ final class JvmSimdVectorTemplate {
 	/** The error for mixing single-float and double-float operands in one simd op. */
 	private static RuntimeException mixedWidth() {
 		return new IllegalArgumentException(
-				"simd: operands must share an element type (mixed single-float and double-float)");
+				"vec: operands must share an element type (mixed single-float and double-float)");
 	}
 
 }

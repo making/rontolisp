@@ -40,7 +40,7 @@ sections:
       - file: guides/linear-algebra.md
         title: Vectors & Matrices (linalg)
       - file: guides/simd-acceleration.md
-        title: SIMD Vector Kernels (simd)
+        title: Vector Kernels (vec)
       - file: guides/java-interop.md
         title: Java Interop
       - file: guides/http-fetch.md

@@ -27,7 +27,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
-import am.ik.rontolisp.eval.SimdLibrary;
+import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
@@ -207,13 +207,13 @@ public final class RontoLispCli {
 		List<LispVal> program = LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary
 			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
 					SourceLoader.fileSystem(), baseDir, systemPath, features))))));
-		// Splice the Lisp-source simd library (the scalar reference over the packed
-		// double-float array type) when the program references the simd package. The
+		// Splice the Lisp-source vec library (the scalar reference over the packed
+		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and
-		// lowers the whole simd: surface to native fixed-width WASM SIMD itself
+		// lowers the whole vec: surface to native fixed-width WASM SIMD itself
 		// (ScalarWasmCompiler), so it must NOT get the splice.
 		if (!(outputFile.endsWith(".wasm") && noGc)) {
-			program = SimdLibrary.process(program, features);
+			program = VecLibrary.process(program, features);
 		}
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {

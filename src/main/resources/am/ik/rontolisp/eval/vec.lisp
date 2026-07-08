@@ -1,17 +1,17 @@
-;; The simd package: portable packed-float vector kernels (see .kb/simd.md).
+;; The vec package: portable packed-float vector kernels (see .kb/vec.md).
 ;;
-;; A simd vector is a rank-1 packed unboxed float array -- either double-float
+;; A vec vector is a rank-1 packed unboxed float array -- either double-float
 ;; (#d / make-array :element-type 'double-float) or, on the interpreter and JVM,
 ;; single-float (#f / 'single-float). The kernels are width-polymorphic: the
-;; element-wise ops (add/sub/mul/scale) preserve the input width via simd::%make-like,
+;; element-wise ops (add/sub/mul/scale) preserve the input width via vec::%make-like,
 ;; while the reductions (sum/dot) always fold to an f64 scalar (a single-float lane
 ;; is widened on read). The built-in aref / aset / length / make-array interoperate
-;; with either width on every backend, so simd:aref / simd:aset / simd:length are
+;; with either width on every backend, so vec:aref / vec:aset / vec:length are
 ;; thin wrappers over the generic ops. THIS scalar definition is the implementation and the cross-backend
 ;; correctness oracle on the interpreter, the JVM compiler and the wasm-GC compiler;
 ;; the JVM --simd flag intercepts the vectorizable kernels (add/sub/mul/scale/dot/sum)
 ;; and lowers them to jdk.incubator.vector lane loops, and the --no-gc scalar WASM
-;; backend lowers the whole simd: surface to real fixed-width WASM SIMD (v128 /
+;; backend lowers the whole vec: surface to real fixed-width WASM SIMD (v128 /
 ;; f64x2.*) over a packed [len][f64...] linear-memory block.
 ;;
 ;; Portability constraints honored here (like linalg.lisp / json.lisp): do loops
@@ -21,44 +21,44 @@
 
 ;; --- construction ------------------------------------------------------------
 
-(defun simd:zeros (n)
+(defun vec:zeros (n)
   (make-array n :element-type 'double-float :initial-element 0.0))
 
-(defun simd:ones (n)
+(defun vec:ones (n)
   (make-array n :element-type 'double-float :initial-element 1.0))
 
-(defun simd:arange (n)
+(defun vec:arange (n)
   (let ((v (make-array n :element-type 'double-float :initial-element 0.0)))
     (dotimes (i n v)
       (setf (aref v i) (float i)))))
 
-(defun simd:from-list (xs)
+(defun vec:from-list (xs)
   (let ((v (make-array (length xs) :element-type 'double-float :initial-element 0.0))
         (i 0))
     (dolist (x xs v)
       (setf (aref v i) (float x))
       (setq i (+ i 1)))))
 
-(defun simd:to-list (v)
+(defun vec:to-list (v)
   (let ((acc nil)
         (n (length v)))
     (dotimes (i n acc)
       (setq acc (cons (aref v (- n 1 i)) acc)))))
 
-;; --- element access (thin wrappers so simd:aref / simd:length resolve) --------
+;; --- element access (thin wrappers so vec:aref / vec:length resolve) --------
 
-(defun simd:aref (v i)
+(defun vec:aref (v i)
   (aref v i))
 
-(defun simd:aset (v i x)
+(defun vec:aset (v i x)
   (setf (aref v i) (float x)))
 
-(defun simd:length (v)
+(defun vec:length (v)
   (length v))
 
 ;; --- element-wise kernels (return a fresh vector) ----------------------------
 
-;; A fresh zero-filled rank-1 packed vector of length %simd-n whose element type
+;; A fresh zero-filled rank-1 packed vector of length %vec-n whose element type
 ;; matches the prototype vector, so the element-wise kernels PRESERVE single/double
 ;; width (a #f input yields a #f result, a #d input a #d result -- matching the
 ;; --simd bridge). Both make-array calls take a literal :element-type so the
@@ -69,51 +69,51 @@
 ;; (a #f literal is a compile error there), so the reader skips the single-float
 ;; make-array entirely and the double-only definition suffices.
 #-rontolisp-wasm
-(defun simd::%make-like (%simd-proto %simd-n)
-  (if (eq (array-element-type %simd-proto) 'single-float)
-      (make-array %simd-n :element-type 'single-float :initial-element 0.0)
-      (make-array %simd-n :element-type 'double-float :initial-element 0.0)))
+(defun vec::%make-like (%vec-proto %vec-n)
+  (if (eq (array-element-type %vec-proto) 'single-float)
+      (make-array %vec-n :element-type 'single-float :initial-element 0.0)
+      (make-array %vec-n :element-type 'double-float :initial-element 0.0)))
 
 #+rontolisp-wasm
-(defun simd::%make-like (%simd-proto %simd-n)
-  (make-array %simd-n :element-type 'double-float :initial-element 0.0))
+(defun vec::%make-like (%vec-proto %vec-n)
+  (make-array %vec-n :element-type 'double-float :initial-element 0.0))
 
-(defun simd::%map2 (%simd-op %simd-a %simd-b)
-  ;; %simd-op applied element-wise over two equal-length vectors -> a fresh vector.
-  ;; The %simd- parameter names avoid a compiled-backend clash with a same-named
+(defun vec::%map2 (%vec-op %vec-a %vec-b)
+  ;; %vec-op applied element-wise over two equal-length vectors -> a fresh vector.
+  ;; The %vec- parameter names avoid a compiled-backend clash with a same-named
   ;; user global (the linalg.lisp %la- convention).
-  (let ((out (simd::%make-like %simd-a (length %simd-a))))
-    (dotimes (i (length %simd-a) out)
-      (setf (aref out i) (funcall %simd-op (aref %simd-a i) (aref %simd-b i))))))
+  (let ((out (vec::%make-like %vec-a (length %vec-a))))
+    (dotimes (i (length %vec-a) out)
+      (setf (aref out i) (funcall %vec-op (aref %vec-a i) (aref %vec-b i))))))
 
-(defun simd:add (a b)
-  (simd::%map2 #'+ a b))
+(defun vec:add (a b)
+  (vec::%map2 #'+ a b))
 
-(defun simd:sub (a b)
-  (simd::%map2 #'- a b))
+(defun vec:sub (a b)
+  (vec::%map2 #'- a b))
 
-(defun simd:mul (a b)
-  (simd::%map2 #'* a b))
+(defun vec:mul (a b)
+  (vec::%map2 #'* a b))
 
-(defun simd:scale (v s)
-  (let ((out (simd::%make-like v (length v))))
+(defun vec:scale (v s)
+  (let ((out (vec::%make-like v (length v))))
     (dotimes (i (length v) out)
       (setf (aref out i) (* (aref v i) s)))))
 
 ;; --- reductions (return a scalar) --------------------------------------------
 
-(defun simd:sum (v)
+(defun vec:sum (v)
   (let ((acc 0.0))
     (dotimes (i (length v) acc)
       (setq acc (+ acc (aref v i))))))
 
-(defun simd:dot (a b)
+(defun vec:dot (a b)
   (let ((acc 0.0))
     (dotimes (i (length a) acc)
       (setq acc (+ acc (* (aref a i) (aref b i)))))))
 
-(defun simd:mean (v)
-  (/ (simd:sum v) (length v)))
+(defun vec:mean (v)
+  (/ (vec:sum v) (length v)))
 
-(defun simd:norm (v)
-  (sqrt (simd:dot v v)))
+(defun vec:norm (v)
+  (sqrt (vec:dot v v)))

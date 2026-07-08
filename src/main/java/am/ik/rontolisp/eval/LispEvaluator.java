@@ -56,7 +56,7 @@ public final class LispEvaluator {
 
 	private boolean linalgLibraryLoaded = false;
 
-	private boolean simdLibraryLoaded = false;
+	private boolean vecLibraryLoaded = false;
 
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
@@ -1773,12 +1773,12 @@ public final class LispEvaluator {
 				return loaded;
 			}
 		}
-		// The simd package is a Lisp-source library (simd.lisp), the scalar reference
+		// The vec package is a Lisp-source library (vec.lisp), the scalar reference
 		// over the packed double-float array type: load it the same way on the first
-		// resolution of a simd:-qualified function.
-		if (!this.simdLibraryLoaded && SimdLibrary.isSimdQualified(name)) {
-			this.simdLibraryLoaded = true;
-			for (LispVal form : SimdLibrary.forms()) {
+		// resolution of a vec:-qualified function.
+		if (!this.vecLibraryLoaded && VecLibrary.isVecQualified(name)) {
+			this.vecLibraryLoaded = true;
+			for (LispVal form : VecLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
