@@ -2300,9 +2300,11 @@ cases:
   # (integers / 0.5 / 2.5) because the WASM float printer renders a non-terminating f32
   # decimal differently -- the non-exact narrowing is instead proven by the boolean
   # (= (aref w 0) 0.1) => nil (f32(0.1) widened differs from double 0.1 identically on every
-  # backend); (2) only vec: REDUCTIONS (dot/sum -> an f64 scalar) appear, never a vec:
-  # element-wise/constructor result, whose width the wasm-GC double-only %make-like renders
-  # as #d(...) rather than #f(...).
+  # backend). Since todo-97 made vec::%make-like unconditional (width-following on EVERY
+  # backend -- the old wasm-GC double-only branch was vestigial once wasm-GC gained
+  # TYPE_F32ARR), a vec: element-wise result also prints #f on every backend, so the
+  # (vec:add #f #f) line below is a cross-backend regression guard alongside the two
+  # reductions (dot/sum -> an f64 scalar).
   - name: packed-single-float-cross-backend
     source: |
       (defun ci-packed-single-float ()
@@ -2324,6 +2326,7 @@ cases:
         (let ((w (make-array 1 :element-type 'single-float)))
           (setf (aref w 0) 0.1)
           (print (= (aref w 0) 0.1)))
+        (print (vec:add #f(1 2 3) #f(4 5 6)))
         (print (vec:dot #f(1 2 3) #f(1 2 3)))
         (print (vec:sum #f(2 4 6))))
       (ci-packed-single-float)
@@ -2337,6 +2340,7 @@ cases:
       (1.0 2.0 3.0)
       arr
       nil
+      #f(5.0 7.0 9.0)
       14.0
       12.0
 

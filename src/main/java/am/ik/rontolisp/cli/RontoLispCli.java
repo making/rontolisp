@@ -213,7 +213,7 @@ public final class RontoLispCli {
 		// lowers the whole vec: surface to native fixed-width WASM SIMD itself
 		// (ScalarWasmCompiler), so it must NOT get the splice.
 		if (!(outputFile.endsWith(".wasm") && noGc)) {
-			program = VecLibrary.process(program, features);
+			program = VecLibrary.process(program);
 		}
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {

@@ -1,8 +1,8 @@
 ;; The vec package: portable packed-float vector kernels (see .kb/vec.md).
 ;;
 ;; A vec vector is a rank-1 packed unboxed float array -- either double-float
-;; (#d / make-array :element-type 'double-float) or, on the interpreter and JVM,
-;; single-float (#f / 'single-float). The kernels are width-polymorphic: the
+;; (#d / make-array :element-type 'double-float) or single-float (#f /
+;; 'single-float), on every backend. The kernels are width-polymorphic: the
 ;; element-wise ops (add/sub/mul/scale) preserve the input width via vec::%make-like,
 ;; while the reductions (sum/dot) always fold to an f64 scalar (a single-float lane
 ;; is widened on read). The built-in aref / aset / length / make-array interoperate
@@ -61,22 +61,17 @@
 ;; A fresh zero-filled rank-1 packed vector of length %vec-n whose element type
 ;; matches the prototype vector, so the element-wise kernels PRESERVE single/double
 ;; width (a #f input yields a #f result, a #d input a #d result -- matching the
-;; --simd bridge). Both make-array calls take a literal :element-type so the
-;; compiled backends can pick the double[]/float[] repr statically.
-;;
-;; The single-float branch is compiled only where single-float packed arrays exist
-;; (interpreter + JVM). On the WASM backends every packed vector is double-float
-;; (a #f literal is a compile error there), so the reader skips the single-float
-;; make-array entirely and the double-only definition suffices.
-#-rontolisp-wasm
+;; --simd bridge). Both make-array calls take a literal :element-type, so every
+;; backend -- interpreter, JVM AND wasm-GC -- picks the double[]/float[]
+;; (TYPE_F64ARR/TYPE_F32ARR) repr statically and produces #f directly; a
+;; runtime-computed element-type could not. No #+/#-rontolisp-wasm reader
+;; conditional is needed (an earlier split forced double on wasm-GC, from before
+;; wasm-GC had TYPE_F32ARR); the --no-gc backend lowers vec: to native SIMD itself
+;; and never splices this defun, so it is unaffected. Mirrors linalg::%la-make.
 (defun vec::%make-like (%vec-proto %vec-n)
   (if (eq (array-element-type %vec-proto) 'single-float)
       (make-array %vec-n :element-type 'single-float :initial-element 0.0)
       (make-array %vec-n :element-type 'double-float :initial-element 0.0)))
-
-#+rontolisp-wasm
-(defun vec::%make-like (%vec-proto %vec-n)
-  (make-array %vec-n :element-type 'double-float :initial-element 0.0))
 
 (defun vec::%map2 (%vec-op %vec-a %vec-b)
   ;; %vec-op applied element-wise over two equal-length vectors -> a fresh vector.

@@ -116,7 +116,7 @@ public final class RontoPlayground {
 	static String compileWasm(String source) {
 		try {
 			List<LispVal> program = VecLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary
-				.process(JsonLibrary.process(LispReader.readAllFromString(source, Features.WASM))))), Features.WASM);
+				.process(JsonLibrary.process(LispReader.readAllFromString(source, Features.WASM))))));
 			byte[] bytes = new WasmLispCompiler().compile(program);
 			return Base64.getEncoder().encodeToString(bytes);
 		}
