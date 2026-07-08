@@ -44,7 +44,10 @@ accelerated backends. `VecLibrary` splices/loads it exactly like `LinalgLibrary`
 - **`--no-gc` is gated OFF** the splice (`RontoLispCli`: `!(outputFile.endsWith(".wasm") &&
   noGc)`): it has no general array type and intercepts the whole `vec:` surface natively.
 
-Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction), `aref`/`aset`/
+Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction; `zeros`/`ones`/
+`arange` take an optional trailing `element-type` — a literal `'single-float` builds `#f`,
+else the double default — through the `vec::%make` funnel, mirroring the linalg constructors),
+`aref`/`aset`/
 `length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), `sum`/
 `dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
@@ -127,8 +130,10 @@ to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
   oracle only for non-f32-exact operands (the same class as SIMD reduction associativity), so
   tests use f32-exact (integer / power-of-two) inputs. The `f64x2` path is left
   byte-identical — only an `#f` / single-float operand reaches the f32 branch.
-- `zeros`/`ones`/`arange`: scalar fill loops building the block (no SIMD), always `F64VEC`
-  (no element-type param).
+- `zeros`/`ones`/`arange`: scalar fill loops building the block (no SIMD); a literal
+  `'single-float` second argument builds an `F32VEC` (f32 stride + a narrowing store,
+  `constructorVecType`), else `F64VEC` (the double default, byte-identical to before). The
+  `collectCalls` arg-walk skips the quoted element-type designator, like `collectMakeArray`.
 - `aref`/`aset`/`length`: delegate to the shared packed helpers (`compileAref`/`compileAset`/
   `compileLength`), width-aware via `elemShift(vecTy)` (f64 `<<3`, f32 `<<2`) and the
   load/store opcode (`f64.load`/`f64.store` vs `f32.load`+promote / demote+`f32.store`).

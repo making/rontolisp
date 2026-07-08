@@ -592,16 +592,24 @@ class WasmLispCompilerIntegrationTest {
 				    (dotimes (i n) (setf (aref v i) (float (* i i))))
 				    (dotimes (i n) (setq acc (+ acc (truncate (aref v i)))))
 				    acc))
+				(defun consd (i) (truncate (vec:sum (vec:ones 5))))
+				(defun arand (i) (truncate (vec:sum (vec:arange 4))))
 				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'scalesum :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'buildsum :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'consd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'arand :params '(:int) :returns :int)
 				""";
 		assertThat(compileNoGcAndInvoke(false, program, "dot55", "0")).isEqualTo("55");
 		assertThat(compileNoGcAndInvoke(false, program, "sum280", "0")).isEqualTo("280");
 		assertThat(compileNoGcAndInvoke(false, program, "scalesum", "0")).isEqualTo("45");
 		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "5")).isEqualTo("30");
 		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "8")).isEqualTo("140");
+		// vec:ones / vec:arange with no element-type build the default F64VEC (the
+		// double path is byte-identical to before the todo-97 constructor change).
+		assertThat(compileNoGcAndInvoke(false, program, "consd", "0")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(false, program, "arand", "0")).isEqualTo("6");
 	}
 
 	@Test
@@ -629,11 +637,15 @@ class WasmLispCompilerIntegrationTest {
 				    (dotimes (i n) (setf (aref v i) (float (* i i))))
 				    (dotimes (i n) (setq acc (+ acc (truncate (aref v i)))))
 				    acc))
+				(defun consf (i) (truncate (vec:sum (vec:ones 5 'single-float))))
+				(defun aranf (i) (truncate (vec:sum (vec:arange 4 'single-float))))
 				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'addref :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'scalesum :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'buildsum :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'consf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'aranf :params '(:int) :returns :int)
 				""";
 		assertThat(compileNoGcAndInvoke(false, program, "dot55", "0")).isEqualTo("55");
 		assertThat(compileNoGcAndInvoke(false, program, "sum280", "0")).isEqualTo("280");
@@ -642,6 +654,10 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(false, program, "scalesum", "0")).isEqualTo("45");
 		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "5")).isEqualTo("30");
 		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "8")).isEqualTo("140");
+		// vec:ones / vec:arange with a literal 'single-float construct an F32VEC natively
+		// (todo-97 follow-on): sum(ones 5) = 5, sum(arange 4) = 0+1+2+3 = 6.
+		assertThat(compileNoGcAndInvoke(false, program, "consf", "0")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(false, program, "aranf", "0")).isEqualTo("6");
 		// --optimize (tree-shaken module) still runs the f32x4 kernels identically.
 		assertThat(compileNoGcAndInvoke(true, program, "dot55", "0")).isEqualTo("55");
 		assertThat(compileNoGcAndInvoke(true, program, "sum280", "0")).isEqualTo("280");

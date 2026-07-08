@@ -21,14 +21,27 @@
 
 ;; --- construction ------------------------------------------------------------
 
-(defun vec:zeros (n)
-  (make-array n :element-type 'double-float :initial-element 0.0))
+;; A fresh length-n packed vector filled with init, double by default; a LITERAL
+;; 'single-float element-type builds #f. Both make-array calls take a literal
+;; :element-type so every backend picks the double[]/float[] (TYPE_F64ARR/F32ARR)
+;; repr statically -- the count-based constructor counterpart of vec::%make-like
+;; (which follows a prototype's width) and the mirror of linalg::%la-make. On the
+;; --no-gc scalar backend these constructors are intercepted natively by
+;; ScalarWasmCompiler (which reads the same literal element-type -> F32VEC/F64VEC),
+;; so this defun is only the interpreter / JVM / wasm-GC implementation.
+(defun vec::%make (n init &optional element-type)
+  (if (eq element-type 'single-float)
+      (make-array n :element-type 'single-float :initial-element init)
+      (make-array n :element-type 'double-float :initial-element init)))
 
-(defun vec:ones (n)
-  (make-array n :element-type 'double-float :initial-element 1.0))
+(defun vec:zeros (n &optional element-type)
+  (vec::%make n 0.0 element-type))
 
-(defun vec:arange (n)
-  (let ((v (make-array n :element-type 'double-float :initial-element 0.0)))
+(defun vec:ones (n &optional element-type)
+  (vec::%make n 1.0 element-type))
+
+(defun vec:arange (n &optional element-type)
+  (let ((v (vec::%make n 0.0 element-type)))
     (dotimes (i n v)
       (setf (aref v i) (float i)))))
 

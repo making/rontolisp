@@ -2471,8 +2471,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		// Walk the argument expressions (recording call sites / local mutations) and note
 		// the width of the first vector operand -- an element-wise / scale result
 		// preserves
-		// the operand width (a f32 vector in yields a f32 vector out), while the
-		// constructors take no element-type and always build double.
+		// the operand width (a f32 vector in yields a f32 vector out), while a
+		// constructor's width comes from its optional literal element-type
+		// (constructorVecType: 'single-float -> F32VEC, else F64VEC).
 		Ty firstVecWidth = null;
 		for (int i = 1; i < args.size(); i++) {
 			Ty t = typeOf(args.get(i), env, tc);
@@ -2482,7 +2483,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		}
 		Ty operandWidth = firstVecWidth == null ? Ty.F64VEC : firstVecWidth;
 		return switch (simdMember(name)) {
-			case LispNames.VEC_ZEROS, LispNames.VEC_ONES, LispNames.VEC_ARANGE -> Ty.F64VEC;
+			case LispNames.VEC_ZEROS, LispNames.VEC_ONES, LispNames.VEC_ARANGE -> constructorVecType(args);
 			case LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE -> operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
@@ -2618,14 +2619,28 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		};
 	}
 
-	// (vec:zeros n) / (vec:ones n) -> a fresh constant-filled vector;
-	// (vec:arange n) -> [0.0, 1.0, ..., n-1].
+	// The width a vec:zeros/ones/arange call constructs: F32VEC when a literal
+	// 'single-float is passed as the optional second argument, else F64VEC (the double
+	// default). Mirrors make-array's :element-type keying and vec::%make in vec.lisp.
+	private static Ty constructorVecType(List<LispVal> args) {
+		return args.size() >= 3 && isSingleFloatElementType(args.get(2)) ? Ty.F32VEC : Ty.F64VEC;
+	}
+
+	// (vec:zeros n [et]) / (vec:ones n [et]) -> a fresh constant-filled vector;
+	// (vec:arange n [et]) -> [0.0, 1.0, ..., n-1]. A literal 'single-float second
+	// argument builds an F32VEC (f32 stride + a narrowing store); the default F64VEC path
+	// is byte-identical to before.
 	private Ty compileSimdConstruct(List<LispVal> args, Fn fn, int fillMode) {
-		requireArgc(args, 2, "vec:" + fillModeName(fillMode), fn);
+		if (args.size() != 2 && args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"--no-gc: vec:" + fillModeName(fillMode) + " takes 1 or 2 arguments in '" + fn.fnName + "'");
+		}
+		Ty vecTy = constructorVecType(args);
+		boolean single = vecTy == Ty.F32VEC;
 		WasmWriter w = fn.writer;
 		int count = compileCountArg(args.get(1), fn);
-		int dst = allocVec(fn, count);
-		// for (i = 0; i < count; i++) mem[dst+4+8*i] = <fill>
+		int dst = allocVec(fn, count, vecTy);
+		// for (i = 0; i < count; i++) mem[dst+4+width*i] = <fill>
 		int i = fn.allocLocal(Ty.F64VEC);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
@@ -2635,22 +2650,28 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(count);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		// addr = dst + 4 + (i << 3)
+		// addr = dst + 4 + (i << shift)
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
 		if (fillMode == FILL_ARANGE) {
 			w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
 			w.write(Instruction.F64_CONVERT_S_I32);
+			if (single) {
+				w.write(Instruction.F32_DEMOTE_F64);
+			}
+		}
+		else if (single) {
+			f32Const(w, fillMode == FILL_ONE ? 1.0f : 0.0f);
 		}
 		else {
 			w.write(Instruction.F64_CONST).writeF64(fillMode == FILL_ONE ? 1.0 : 0.0);
 		}
-		w.write(Instruction.F64_STORE, 0x00, 0x00);
+		w.write(single ? Instruction.F32_STORE : Instruction.F64_STORE, 0x00, 0x00);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
@@ -2659,7 +2680,7 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		return Ty.F64VEC;
+		return vecTy;
 	}
 
 	// Opens the SIMD loop header over `count >> laneShift` vector groups (laneShift 1 =
@@ -3542,8 +3563,15 @@ public final class ScalarWasmCompiler implements LispCompiler {
 			// one
 			// this backend supports, then walk the argument expressions.
 			requireKnownSimd(name, fnName);
+			// A vec constructor's optional element-type is a literal quoted symbol
+			// ('single-float / 'double-float) -- a compile-time designator, not a runtime
+			// value -- so skip a quote form, as collectMakeArray does for :element-type.
 			for (int i = 1; i < args.size(); i++) {
-				collectCalls(args.get(i), bound, defuns, callees, fnName);
+				LispVal a = args.get(i);
+				if (a instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())) {
+					continue;
+				}
+				collectCalls(a, bound, defuns, callees, fnName);
 			}
 			return;
 		}
