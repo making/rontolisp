@@ -517,6 +517,78 @@ in `vec:`; general matrix×matrix `matmul` stays in `linalg:`.)
 **Done-line:** `vec:matvec` accelerated f32+f64, byte-identical, dead-flag-proven; a
 stories15M-scale llama2 demo runs.
 
+### Grounded execution plan (Part 2) [PLAN — line-anchored recon 2026-07-08, post-Phase-6 `819e6ef`]
+
+**Representation decision (made now):** `(vec:matvec W x)` — `W` is a **rank-2 packed array**
+(`#f((..)(..))` / `#d((..)(..))` or `(make-array (list d n) :element-type ...)`) whose header
+already carries `d,n`; `x` is a rank-1 packed vector. This keeps the bridge method BINARY (reuses
+the existing `binaryDesc` `(Object,Object)Object`), and the scalar fallback reads `(aref w i j)`
+over `array-dimensions`. Result = a fresh rank-1 packed vector of length `d`, width = the operand
+width (via `vec::%make-like`). Rank-2 packed arrays already run on interpreter/JVM/wasm-GC (the
+Phase-6 ci-spec case exercises `#f((1 2 3)(4 5 6))` + `(aref m 1 2)` + `array-dimensions`). NOT
+`(vec:matvec W x d n)` — the rank-2 header removes the need for explicit dims.
+
+**Phase 1 — f64+f32 JVM accel + scalar fallback + wasm-GC/interpreter (ONE landing).** Both widths
+land together: `simdMatvec` dispatches on backing width exactly like `simdDot`, and the f32 path
+(`matvecF`) is trivial once the f64 body exists (Part 1 DONE). The 7-touch-point change-set (line
+#s from `819e6ef`; RE-VERIFY each before editing):
+1. `codegen/jvm/JvmSimdVectorTemplate.java` — add `static @Nullable Object simdMatvec(Object w,
+   Object x)` AFTER `simdDot` (~L251, before the `// --- single-float kernels ---` header ~L253) +
+   private `matvecF(float[] w, float[] x)` AFTER `dotF` (~L396). Mirror `simdDot` (L221-251): f64
+   body reads `ow = 1 + (int)W[0]` (rank-2 → ow=3), `d=(int)W[1]`, `n=(int)W[2]`, `ox=1+(int)X[0]`;
+   `newVec(d)` (L406); loop `row` 0..d, run the `simdDot` lane-loop over `(W, ow+row*n)` and
+   `(X, ox)` width `n` (SPECIES vector loop ≥THRESHOLD 128 + scalar tail; `.mul` not `.fma`,
+   two-rounding on purpose), `r[2+row]=acc`. `matvecF` mirrors `dotF` (L372-396, `F2D` half-lane
+   widening into a DoubleVector accum). Mixed width → `mixedWidth()` (L434).
+2. `codegen/jvm/JvmSimdCompiler.java` — add `|| LispNames.VEC_MATVEC.equals(member)` to `handles()`
+   (L35-39). `compile()` (L41-62) needs NO change (binary → falls through the `args.size()==3`
+   binary branch L54-59).
+3. `codegen/jvm/JvmSimdRuntimeBuilder.java` — REQUIRED: `ops.put(LispNames.VEC_MATVEC,
+   cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvec"), cp.addUtf8(binaryDesc))));`
+   AFTER L112 (the `simdDot` entry). Update the `SimdRuntime` op-key Javadoc (L54-60).
+4. `LispNames.java` — `public static final String VEC_MATVEC = "matvec";` after `VEC_NORM` (~L2176).
+5. `PackageRegistry.java` — add `LispNames.VEC_MATVEC` to the `VEC_FUNCTIONS` `Set.of(...)`
+   (L169-172); propagates to `vecFunctionNames()`, the `vec` package externals (L223), `VecLibrary`
+   splice detection. NO `CL_SYMBOLS` change (vec: is a separate package, doesn't `:use cl`).
+6. `resources/am/ik/rontolisp/eval/vec.lisp` — add scalar `(defun vec:matvec (w x) ...)` after
+   `vec:norm` (~L119): `(let* ((dims (array-dimensions w)) (d (car dims)) (n (cadr dims))
+   (out (vec::%make-like x d))) (dotimes (i d out) (let ((acc 0.0)) (dotimes (j n) (setq acc
+   (+ acc (* (aref w i j) (aref x j))))) (setf (aref out i) acc))))`. Honor the file-header
+   portability rules (L17-20: every `dotimes` declares a var; never `setq` a parameter — use the
+   `let`-bound `acc`/`out`). This defun is the interpreter + JVM-scalar + **wasm-GC** path AND the
+   byte-identical oracle for `--simd`.
+7. `codegen/jvm/JvmLispCompiler.java` — add `LispNames.VEC_MATVEC` to the
+   `programUsesAnyAcceleratedSimdOp` `List.of(...)` (L1498-1499) — the `--simd` gate (consulted
+   L556, drives `Ctx.simdOps` L615). `matvec` is a DIRECT accel op (unlike transitive mean/norm).
+   NO change: `BuiltinFunctionWrappers` (vec: `#'` comes from the spliced defun), `WasmExprCompiler`
+   (wasm-GC runs the scalar splice — `VecLibrary.process` at `RontoLispCli` L216, gated off only for
+   `.wasm && noGc` L215), native-image `resource-config.json` (class + vec.lisp already registered).
+
+**Phase 2 — `--no-gc`: clean compile error (defer native f32x4 GEMV).** REAL BLOCKER: `--no-gc`
+`vec:` vectors are rank-1 `[count][f64/f32]` linear blocks ONLY — no rank-2 layout, no
+`array-dimensions`. Minimal correct move: leave `matvec` OUT of `ScalarWasmCompiler.SIMD_MEMBERS`
+(L2419-2422) so `requireKnownSimd` (L2440-2451) throws a clear "unsupported on --no-gc" error
+(mirror `simdFromListIsAClearCompileError`); optionally list it in `SIMD_PORTABLE_ONLY` (L2427). A
+native `--no-gc` f32x4 GEMV (mirroring `compileSimdDotF32` ~L3088) is DEFERRED — needs explicit
+`(vec:matvec W x d n)` dims or a new rank-2 `--no-gc` block layout; not worth it for the llama2 demo
+(which targets JVM `--simd`). Document the skip.
+
+**Phase 3 — verify.** (a) `JvmSimdAccelCompilerTest` (`819e6ef`): add byte-identical scalar-tail
+(n<128), byte-identical vector-loop (n≥128, large `W`), concrete-expected (power-of-two/integer
+inputs so reduction associativity is exact), and dead-flag (`embedsBridge` true under `--simd`,
+false without) cases for BOTH widths (mirror L72-84 / 97-108 / 110-117 / 159-172 + the f32
+L176-191 / 255-263). (b) `ci-spec.yaml` `vec-kernels-cross-backend` (L2253-2283): add ONE `matvec`
+line with exact integer-valued output (e.g. `(vec:matvec #d((1 2) (3 4)) #d(5 6))` → `#d(17.0 39.0)`)
+— runs interpreter/JVM/WASM-P1/component; then native `CiSpecE2eTest` (REQUIRED after a ci-spec
+edit) + the two corpus shakers. (c) `./mvnw test` + web compile + javadoc. (d) llama2 demo
+(`examples/ml/llama2*.lisp`, stories15M) once the kernel is proven — the natural home for the
+"compelling single-float example" deferred in Phase 6. (e) docs: a `vec:matvec` reference page +
+`_catalog.yaml` entry + the `vec:` guide/`.kb/vec.md` update.
+
+**Done-line (restated):** `vec:matvec` accelerated f32+f64 on JVM `--simd`, byte-identical vs the
+scalar `vec.lisp` fallback, dead-flag-proven; interpreter/JVM/wasm-GC run the scalar defun;
+`--no-gc` is a clean compile error; a stories15M llama2 demo runs.
+
 ## Risks / must-verify
 
 - **Precision regression AVOIDED by construction** — scalars stay f64; only array *storage*
