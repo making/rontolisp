@@ -1,116 +1,143 @@
-# 105 — packed float arrays as `(array (mut v128))`: a GC-managed alternative to the `--simd` linear arena
+# 105 — packed float arrays as `(array (mut v128))`: make wasm-GC `--simd` garbage-collected again
 
-**Status 2026-07-09: NOT started. Raised after `.todo/101` shipped, and it invalidates 101's
-stated premise.** Decide before `.todo/104` (`with-arena`) — if this lands, 104 has almost
-nothing left to reclaim.
+**Replaces the linear-memory arena `.todo/101` shipped.** Same v128 kernels, same speedup, but
+the storage becomes a GC object, so `_vec_alloc` / `VEC_HEAP_PTR_ADDR` / `memory.grow` and the
+whole "you must watch memory growth" caveat go away on wasm-GC.
 
-## The premise 101 inherited, and why it was too narrow
+**Decision made 2026-07-09** (user): a garbage-collected backend should not ask the user to think
+about memory. If the ~20% kernel-loop cost matters, use `--no-gc`, which stays linear-memory and
+byte-identical. Do this.
 
-`.todo/101` opened with: *"WASM `v128.load`/`store` address linear memory. wasm-GC packed
-float arrays are GC objects ... with no linear-memory address — so there is no `v128.load`
-from them."* True, and it led straight to the linear-memory arena that 101 shipped.
+**Status: NOT started. The design below is settled — every open question was measured, not guessed.
+Sequence BEFORE `.todo/104` (`with-arena`), which loses its packed-array half once this lands.**
 
-But `v128.load` is not the only way to get a `v128` onto the stack. In the GC proposal
-`fieldtype ::= storagetype ::= valtype | packedtype`, and `valtype` includes
-`vectype = v128`. So **`(array (mut v128))` is a legal type**, and `array.get` on it yields
-a `v128` — a 16-byte lane group, straight out of a garbage-collected object.
+## Why 101's premise was wrong
 
-Verified 2026-07-09 (`.wat` in the scratchpad, reproduced below in words):
+`.todo/101` opened with *"v128 addresses linear memory ... there is no `v128.load` from [a GC
+array]"*. True of `v128.load`, but the GC proposal's `fieldtype ::= storagetype ::= valtype |
+packedtype` and `valtype` includes `vectype = v128`. So **`(array (mut v128))` is a legal type and
+`array.get` on it yields a `v128`** — a lane group straight out of a collected object.
 
-- `wasm-tools validate --features=gc,simd` — **valid**.
-- `wasmtime run -W gc` — **runs**, correct result.
-- Node 22 / V8 (`WebAssembly.validate` + instantiate) — **valid, runs**. So the jco and
-  browser paths would be fine too.
+## Measured, on `wasmtime run -W gc` (M4, startup+fill subtracted)
 
-So a packed `#d` vector of length *n* could be an `(array (mut v128))` of `ceil(n/2)` lane
-groups (`ceil(n/4)` for `#f`), the kernels could run `f64x2.*` over `array.get`/`array.set`,
-and **the engine's collector would reclaim it**. No `_vec_alloc`, no `VEC_HEAP_PTR_ADDR`, no
-`memory.grow`, no arena to pop — the exact problem `.todo/104` exists to solve, gone for
-packed arrays. That is a strictly better memory story than what 101 shipped, and 101 never
-evaluated it.
+All four numbers were needed to decide; none was assumed.
 
-## What it costs (measured / spec-grounded, not guessed)
+| what | today (`--simd`, linear) | proposed (GC `(array (mut v128))`) | today (default, `(array (mut f64))`) |
+|---|---|---|---|
+| kernel loop (dot, 8192 f64 x 20000) | 43 ms | **51 ms** (+19%) | — (scalar defun, ~200x slower) |
+| scalar element READ (163.8M) | 83 ms | **106 ms** | 103 ms |
+| scalar element WRITE (163.8M) | — | **195 ms** | 106 ms |
 
-Not a free win. Three real costs, one of which is structural.
+Read: the immediate-lane branch is **+3% over the default backend's `array.get $f64arr`** —
+effectively free. Write: the group read-modify-write is **1.85x** the default backend's
+`array.set`. Both are wrapped in i31 unboxing + a `TYPE_FLOAT` `struct.new` at every rontolisp call
+site, so the end-to-end impact on `linalg:` (which is nothing but `aref`/`%row-major-aset` loops) is
+a fraction of that. Kernel loop: the +19% is presumably the per-`array.get` null + bounds check.
 
-### 1. Kernel loops get ~20% slower (measured, one shape)
+## The three things that make it work (all verified on wasmtime AND V8/Node 22)
 
-Dot over 8192 f64, 20000 iterations, `wasmtime run -W gc`, startup+fill subtracted:
+1. **`(array (mut v128))` validates and runs.** `wasm-tools validate --features=gc,simd` accepts it;
+   `wasmtime run -W gc` and V8 (`WebAssembly.validate` + instantiate) both run it. So the jco /
+   wasmCloud / browser paths are fine.
+2. **`array.new_default` zero-initializes the v128 elements** (verified: summing a fresh array gives
+   0). So the tail lanes of the last group are zero and STAY zero under `add`/`sub`/`mul`/`scale`/
+   `sum`/`dot` — **every kernel loses its scalar tail loop**. The lowering gets *simpler* than 101's.
+   (Only edge case: `vec:scale v s` with `s` infinite makes the padding NaN; but then the real
+   elements are already +-inf and any reduction is NaN regardless. Note it, don't code for it.)
+3. **A row that starts mid-group is readable with two `array.get`s and one `i8x16.shuffle`.**
+   Verified end to end (a 2-lane window across a group boundary returned the right two elements).
+   This is what dissolves 101's stated blocker #3 — **no padded row stride, no changed flat
+   row-major identity, `row-major-aref` / `linalg:` / the printer all stay as they are.**
 
-| storage | loop |
-|---|---|
-| `(array (mut v128))` + `array.get` | 51 ms |
-| linear memory + `v128.load` | 43 ms |
+Also verified: **declaring `(array (mut v128))` at all requires the SIMD proposal** (`wasmtime
+--wasm simd=n` fails to parse the module). So the type must be emitted ONLY under `--simd` — which
+is what we want anyway: the default module keeps running on a SIMD-less runtime, and the
+`simd=n` dead-flag guard in `WasmLispCompilerIntegrationTest` keeps working unchanged.
 
-Both are ~200x faster than the scalar `vec.lisp` defun, so this delta does not change the
-headline. The gap is presumably the per-`array.get` null + bounds check. Unmeasured on V8.
+## The design
 
-### 2. Scalar element access becomes a lane branch (and a read-modify-write on store)
+### Types (emitted only under `--simd`, appended after `TYPE_F32ARR`)
 
-`f64x2.extract_lane` / `replace_lane` take an **immediate** lane index — confirmed: wasmtime
-rejects a runtime `local.get` there ("expected a lane index"). So:
+```
+TYPE_V128ARR = (array (mut v128))
+TYPE_VBLOCK  = struct { i32 count, i32 kind, (ref null eq) groups }
+```
 
-- `(aref v i)` = `array.get (i >> 1)` then `if (i & 1) extract_lane 1 else extract_lane 0`.
-- `(setf (aref v i) x)` = `array.get` → `replace_lane` (branch) → `array.set`. A RMW.
-- `#f` (4 lanes) needs a 4-way branch, so a `br_table`.
+`TYPE_FARRAY = struct {(ref null eq) dims, (ref null eq) data}` is **unchanged**: `data` holds the
+`$vblock` (it is `eq`-typed, as it was for 101's `i31ref` pointer). `kind` 0 = f64 (2 lanes),
+1 = f32 (4 lanes) — the runtime width tag that replaces `ref.test $f32arr`, since both widths share
+one `(array (mut v128))` type. `count` is the logical element count.
+`wrapperTypeIndex = TYPE_F32ARR + 1 + (simd ? 2 : 0)` — the same conditional-index trick
+`userFuncBase()` already uses.
 
-This hits `aref` / `%aset` / `row-major-aref` / `%row-major-aset`, the printer, `vec:aref` /
-`aset` / `to-list` / `from-list`, and **all of `linalg:`**, which is nothing but scalar
-`aref` over packed arrays. Mitigating context: every one of those already pays i31 unboxing
-and a `TYPE_FLOAT` `struct.new` per element, so the added ~10 wasm instructions are a
-fraction of the existing cost, not a multiple of it. Needs measuring, not assuming.
+`groups` length = `ceil(count / lanes) + 1`. **The `+1` is a zero sentinel group** so a shuffle
+window at the last group can always `array.get g+1` without a bounds trap. 16 bytes per array.
 
-### 3. The structural one: group-granular indexing breaks unaligned rank-2 rows
+### Runtime helpers (replace `_vec_alloc` at `FUNC_VEC_BASE`)
 
-`v128.load` takes a **byte** address, and misalignment is legal (the memarg alignment is a
-hint, never a trap). So `vec:matvec` today walks `wrow += n << shift` and reads row *r* of a
-*d x n* matrix with plain `v128.load`s even when *n* is odd — row 1 of a 2x3 matrix starts
-8 bytes in, mid-group, and it just works (`ci-spec` and the integration test both cover the
-odd-*n* case).
+- `_v_new(count i32, kind i32) -> (ref null eq)` — a `$vblock` over `array.new_default $v128arr`.
+- `_v_get(arr eq, idx i32) -> f64` — `array.get` group `idx >> laneShift`, then the immediate-lane
+  branch (2-way for f64, a `br_table` for f32's 4). Widen f32.
+- `_v_set(arr eq, idx i32, v f64)` — `array.get` the group, `replace_lane` (branch), `array.set`.
 
-`(array (mut v128))` can only be indexed by whole **group**. A row starting at an odd flat
-element index cannot be read as groups at all. The fixes, none free:
+Centralizing the lane branch in three helpers is what keeps `WasmArrayCompiler` /
+`WasmQuoteCompiler` / `WasmRuntimeBuilder` small: their `*Linear` variants become one `call` each.
 
-- **Pad the row stride** to a multiple of the lane count. Then flat row-major indexing is no
-  longer the identity, and `row-major-aref` / `array-total-size` / `array-row-major-index` /
-  the printer / `copy-array` / every `linalg:` transform must all learn the padded stride.
-  That is a far larger blast radius than the five sites 101 touched.
-- **Fall back to scalar for `n % lanes != 0`.** Honest, and cheap to implement, but it makes
-  GEMV performance depend on a matrix dimension's parity — a nasty surprise.
-- Store matrices transposed. Changes the `linalg:` contract.
+### Kernels
 
-### 4. The `--no-gc` seam splits
+Same twelve, same `WasmVecSimdRuntimeBuilder` shape, but they walk **group indices** instead of byte
+pointers, and **have no tail** (point 2 above). `WasmVecLoops` keeps its linear bodies for `--no-gc`
+and gains GC-array bodies; factor the shared skeleton behind a small "load group i / store group i"
+emitter interface rather than copying the loops.
 
-`WasmVecLoops` currently holds one set of loop bodies for both `--no-gc` and wasm-GC
-`--simd`, because both walk raw i32 pointers into linear memory. `--no-gc` has no GC types,
-so it must keep the `v128.load` bodies; wasm-GC would need `array.get` bodies. Two
-implementations of each kernel instead of one.
+`matvec`: `x` is rank-1, so its groups start at element 0. Row *r* of a *d x n* matrix starts at
+flat `r*n`, i.e. lane offset `off = (r*n) & (lanes-1)`, which is loop-invariant per row. Branch once
+per row:
 
-## Recommendation
+- `off == 0` — plain `array.get` per group.
+- `off == k` — window group *g* and *g+1* with `i8x16.shuffle`, immediate =
+  bytes `[k*elemBytes .. 15]` of the first operand followed by `[0 .. k*elemBytes-1]` of the second
+  (for f64, `k=1`: `8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23`). One shuffle per group; the
+  sentinel group makes the final `g+1` safe.
 
-Worth a real prototype, because cost 1 is small, cost 2 is probably smaller than it looks,
-and the payoff — deleting an entire manual-memory subsystem from a garbage-collected
-backend — is large. Cost 3 is the decider: measure how much the padded row stride actually
-infects the generic array surface before committing.
+f64 needs 2 row-loop variants, f32 needs 4.
 
-Suggested order:
+### Deletions
 
-1. Spike `vec:dot` / `vec:sum` / `vec:add` on `(array (mut v128))` behind a second flag, and
-   measure against the current `--simd` on `wasmtime` **and** on `jco`/Node. Confirm the ~20%
-   figure holds at other sizes and for `f32x4`.
-2. Spike `aref`/`aset` with the lane branch and measure `linalg:add` / a `linalg` transform
-   against the current `--simd`. This is the number that decides whether `linalg:` regresses.
-3. Only then decide rank-2: padded stride vs parity fallback.
-4. If it lands: delete `_vec_alloc`, `VEC_HEAP_PTR_ADDR`, the `memory.grow` path, and the
-   packed-array half of `.todo/104`; the `-into` kernels stay, demoted to an
-   allocation-rate optimization exactly as on the JVM and the interpreter.
+`_vec_alloc`, `VEC_HEAP_PTR_ADDR` (memory word 160), the `memory.grow` path,
+`WasmArrayCompiler`'s `emitVecAlloc`/`emitStoreBlockHeader`/`emitElementAddr`,
+`WasmQuoteCompiler.compileLinearBlock`. `-into` stays but is demoted on wasm-GC to what it already
+is on the JVM and the interpreter: an allocation-rate optimization, not a memory-safety requirement.
+
+## Docs / kb to revert or amend
+
+- `doc/{en,ja}/guides/simd-acceleration.md` — the memory table's `wasm-GC --simd` row goes back to
+  "the WebAssembly GC heap | yes, by the engine's collector"; the "two SIMD-emitting WASM targets"
+  prose collapses back to `--no-gc` alone; the `-into` paragraph's wasm-GC measurement goes away.
+- `.kb/vec.md` acceleration layer 3, `.kb/wasm-gc-strings.md`'s new `--simd` arena section,
+  `CLAUDE.md`'s `--simd`-on-wasm-GC bullet and the `-into` bullet's "two v128-emitting WASM targets".
+- `.todo/104` — its wasm-GC half evaporates; the string/intern heap (`HEAP_PTR_ADDR = 84`) remains a
+  separate question.
+- `WasmLispCompilerTest.simdKeepsTheTypeSectionIdenticalAndAddsExactlyTheVecBlock` — the type section
+  no longer stays identical (it gains two types). Assert the two new type entries instead, and keep
+  the `+13 -> +N` function-count delta.
+
+## Verification (unchanged bar)
+
+`wasmGcSimdIsByteIdenticalToTheScalarPathOverTheWholeVecSurface` is the contract: both widths, every
+former tail configuration (n = 1,2,3,4,5,7,8 — now exercising the zero padding instead of a tail
+loop), `-into`, GEMV with **odd** *n* (the shuffle path), the generic packed accessors,
+`make-array`, `#d`/`#f` literals, `linalg:`. Plus `--optimize`, `--component`, the `simd=n`
+dead-flag guard, and the native `CiSpecE2eTest`. `--no-gc` output must stay byte-identical.
+
+Drop `wasmGcSimdGrowsItsArenaForVectorsLargerThanTheInitialMemory`; replace it with a flatness test
+(allocating `vec:add` in a loop keeps a flat RSS, as it does on the scalar wasm-GC path today).
 
 ## Pointers
 
-- What 101 built (and what this would replace): `.kb/vec.md` "Acceleration layer 3",
-  `WasmVecSimdRuntimeBuilder`, `WasmVecLoops`, `WasmArrayCompiler`'s `*Linear` helpers,
-  `WasmQuoteCompiler.compileLinearBlock`, `WasmRuntimeBuilder.emitPrintArray`.
-- The odd-*n* GEMV that motivates cost 3: `WasmVecSimdRuntimeBuilder.emitMatvecRows`.
-- `.todo/104` (`with-arena`) — mostly obsoleted for packed arrays if this lands; the
-  string/intern heap (`HEAP_PTR_ADDR = 84`) is a separate question either way.
+- What this replaces: `.kb/vec.md` "Acceleration layer 3", `WasmVecSimdRuntimeBuilder`,
+  `WasmVecLoops`, `WasmArrayCompiler`'s `*Linear` helpers, `WasmQuoteCompiler.compileLinearBlock`,
+  `WasmRuntimeBuilder.emitPrintArray`'s `ptrSlot` branch.
+- The odd-*n* GEMV that drove the shuffle design: `WasmVecSimdRuntimeBuilder.emitMatvecRows`, and the
+  `#d((1.0 2.0 3.0) (4.0 5.0 6.0))` case in the integration test + `ci-spec.yaml`.
 - `.todo/99` (`--no-gc` rank-2 GEMV) — unaffected; `--no-gc` keeps linear memory regardless.
