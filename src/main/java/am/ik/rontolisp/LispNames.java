@@ -2099,6 +2099,65 @@ public final class LispNames {
 	 */
 	public static final String LINALG_PKG = "linalg";
 
+	// The linalg members an --simd build intercepts (see .kb/linalg-simd.md). The other
+	// exported names exist only as linalg.lisp defuns, so PackageRegistry keeps them as
+	// bare strings; these fifteen are dispatched on by name in three interceptors
+	// (eval.LinalgSimd, codegen.jvm.JvmLinalgSimdCompiler,
+	// codegen.wasm.WasmLinalgSimdCompiler) and so need constants.
+
+	/** {@code linalg:add}: element-wise {@code a + b}; either operand may be a scalar. */
+	public static final String LINALG_ADD = "add";
+
+	/** {@code linalg:sub}: element-wise {@code a - b}; either operand may be a scalar. */
+	public static final String LINALG_SUB = "sub";
+
+	/**
+	 * {@code linalg:mul}: element-wise (Hadamard) {@code a * b}, NOT a matrix product;
+	 * either operand may be a scalar.
+	 */
+	public static final String LINALG_MUL = "mul";
+
+	/** {@code linalg:div}: element-wise {@code a / b}; either operand may be a scalar. */
+	public static final String LINALG_DIV = "div";
+
+	/** {@code linalg:sum}: the sum of every element, at any rank. */
+	public static final String LINALG_SUM = "sum";
+
+	/** {@code linalg:amax}: the largest element, at any rank. */
+	public static final String LINALG_AMAX = "amax";
+
+	/** {@code linalg:amin}: the smallest element, at any rank. */
+	public static final String LINALG_AMIN = "amin";
+
+	/** {@code linalg:norm}: the Euclidean (L2 / Frobenius) norm. */
+	public static final String LINALG_NORM = "norm";
+
+	/**
+	 * {@code linalg:dot}: the numpy dispatch -- vector.vector to a scalar, matrix.vector
+	 * and vector.matrix to a vector, matrix.matrix to a matrix.
+	 */
+	public static final String LINALG_DOT = "dot";
+
+	/**
+	 * {@code linalg:outer}: the outer product of two vectors (inputs flattened first).
+	 */
+	public static final String LINALG_OUTER = "outer";
+
+	/** {@code linalg:transpose}: a matrix transpose; a vector is returned unchanged. */
+	public static final String LINALG_TRANSPOSE = "transpose";
+
+	/** {@code linalg:trace}: the main-diagonal sum of a square matrix. */
+	public static final String LINALG_TRACE = "trace";
+
+	/** {@code linalg:argmax}: the index of the largest element of a vector. */
+	public static final String LINALG_ARGMAX = "argmax";
+
+	/** {@code linalg:argmin}: the index of the smallest element of a vector. */
+	public static final String LINALG_ARGMIN = "argmin";
+
+	/** {@code linalg:reshape}: a fresh array of the given shape, row-major elements. */
+	public static final String LINALG_RESHAPE = "reshape";
+
 	/**
 	 * The {@code vec} package name: portable packed-{@code f64} vector kernels over the
 	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself

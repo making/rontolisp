@@ -6132,4 +6132,163 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("#d(17.0 39.0)");
 	}
 
+	// --- linalg: kernel interception under --simd (todo-107) ------------------------
+
+	/**
+	 * Asserts the accelerated wasm-GC module prints exactly what the scalar one prints.
+	 * Both go through {@code LinalgLibrary.process}, so the only difference is the flag.
+	 */
+	private void assertLinalgMatchesTheScalarPath(String lispCode) throws Exception {
+		assertThat(compileAndRunVec(lispCode, true)).as(lispCode).isEqualTo(compileAndRunVec(lispCode, false));
+	}
+
+	@Test
+	void wasmGcSimdLinalgElementWiseAndShapeKernelsAreByteIdenticalToTheScalarPath() throws Exception {
+		// The regression fix (todo-107): before it, --simd switched the packed repr to a
+		// vblock and every linalg row-major-aref paid _v_get/_v_set for no v128 in
+		// return.
+		// Both widths, rank 1 and rank 2 (the case vec: never had), the scalar broadcast
+		// on
+		// either side, and above/below any lane-group boundary.
+		for (String op : List.of("add", "sub", "mul", "div")) {
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(1.0 2.0 3.0) #d(4.0 5.0 8.0)))".formatted(op));
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 2.0 3.0) #f(4.0 5.0 8.0)))".formatted(op));
+			assertLinalgMatchesTheScalarPath(
+					"(print (linalg:%s #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))".formatted(op));
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(1.0 2.0 4.0) 2.0))".formatted(op));
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s 2.0 #d(1.0 2.0 4.0)))".formatted(op));
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 2.0 4.0) 2))".formatted(op));
+			// A single-float array against a scalar that is not representable in f32: the
+			// kernel must widen, compute in f64 and narrow, exactly as emap does.
+			// Splatting
+			// (f32) 0.1 into f32 lanes would print different numbers here.
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 3.0 7.0) 0.1))".formatted(op));
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s 0.1 #f(1.0 3.0 7.0)))".formatted(op));
+			// 5 elements: a partial last lane group at both widths, whose zero padding
+			// must
+			// not leak into the result (0 - s = -s, s / 0 = inf).
+			assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:%s (linalg:ones 5) 3.0)))".formatted(op));
+			assertLinalgMatchesTheScalarPath(
+					"(print (linalg:sum (linalg:%s 3.0 (linalg:ones 5 'single-float))))".formatted(op));
+		}
+		assertLinalgMatchesTheScalarPath("(print (linalg:transpose #d((1.0 2.0 3.0) (4.0 5.0 6.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:transpose #f((1.0 2.0) (3.0 4.0))))");
+		assertLinalgMatchesTheScalarPath("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(3 4)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(2 3 2)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
+	}
+
+	@Test
+	void wasmGcSimdLinalgReductionsAndProductsAreByteIdenticalToTheScalarPath() throws Exception {
+		for (String member : List.of("sum", "mean", "amax", "amin", "norm", "argmax", "argmin")) {
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(3.0 1.0 4.0 1.0 5.0)))".formatted(member));
+			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(3.0 1.0 4.0 1.0 5.0)))".formatted(member));
+		}
+		// An all-negative array is the trap a lane MAX reduce over the zero-padded last
+		// group would fall into; these walk elements instead.
+		assertThat(compileAndRunVec("(print (linalg:amax #d(-3.0 -1.0 -4.0 -1.0 -5.0)))", true)).isEqualTo("-1.0");
+		assertThat(compileAndRunVec("(print (linalg:amin #f(-3.0 -1.0 -4.0)))", true)).isEqualTo("-4.0");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum #d((1.0 2.0) (3.0 4.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:trace #d((1.0 2.0) (3.0 4.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:trace (linalg:eye 5 'single-float)))");
+		// dot's four rank combinations, plus matmul and outer.
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d(1.0 2.0) #d(3.0 4.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d(1.0 1.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d(1.0 1.0) #d((1.0 2.0) (3.0 4.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #f((1.0 2.0)) #f((1.0) (2.0))))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:matmul (linalg:eye 3) (linalg:reshape (linalg:arange 9) " + "'(3 3))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d(1.0 2.0) 3.0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:outer #d(1.0 2.0) #d(3.0 4.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:outer #f(1.0 2.0 3.0) #f(3.0 4.0)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:outer (linalg:reshape (linalg:arange 6) '(2 3)) #d(1.0 2.0)))");
+		// Gaussian elimination is never intercepted, but it calls the intercepted dot.
+		assertLinalgMatchesTheScalarPath("(print (linalg:inv #d((2.0 0.0) (0.0 4.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:solve #d((2.0 0.0) (0.0 4.0)) #d(2.0 4.0)))");
+	}
+
+	@Test
+	void wasmGcSimdLinalgDeclinedInputsRunTheScalarDefun() throws Exception {
+		// Each kernel returns a null reference for an input it cannot read; the call site
+		// then invokes the defun. So general (boxed) arrays, mixed widths and plain
+		// numbers
+		// keep working, and the library's own error still reaches the user.
+		assertThat(compileAndRunVec("(print (linalg:add #(1 2 3) #(10 20 30)))", true)).isEqualTo("#d(11.0 22.0 33.0)");
+		assertThat(compileAndRunVec("(print (linalg:sum #(1 2 3)))", true)).isEqualTo("6");
+		assertThat(compileAndRunVec("(print (linalg:add #d(1.0 2.0) #f(10.0 20.0)))", true)).isEqualTo("#d(11.0 22.0)");
+		assertThat(compileAndRunVec("(print (linalg:add #f(1.0 2.0) #d(10.0 20.0)))", true)).isEqualTo("#f(11.0 22.0)");
+		assertThat(compileAndRunVec("(print (linalg:add 2 3))", true)).isEqualTo("5");
+		assertThat(compileAndRunVec("(print (linalg:dot #d(1.0 2.0) #f(3.0 4.0)))", true)).isEqualTo("11.0");
+		assertLinalgMatchesTheScalarPath("(print (linalg:dot #2A((1 2) (3 4)) #(1 1)))");
+		// An argument form is evaluated exactly once even when the kernel declines: the
+		// fallback reloads the locals rather than recompiling the forms.
+		assertThat(compileAndRunVec("""
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) #(1 2 3))
+				(linalg:add (bump) #(1 1 1))
+				(print *n*)
+				""", true)).isEqualTo("1");
+	}
+
+	@Test
+	void wasmGcSimdLinalgSingleFloatReductionsAccumulateInSinglePrecision() throws Exception {
+		// The linalg leg of the todo-106 precision contract, and the only test here that
+		// proves the KERNEL ran rather than the defun -- a dead interception would print
+		// the scalar 16778239. The same numbers as eval/LinalgSimdTest and
+		// JvmLinalgSimdAccelCompilerTest, so the three --simd backends pin each other.
+		String dot = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+				+ " (print (round (linalg:dot v v))))";
+		assertThat(compileAndRunVec(dot, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(dot, false)).isEqualTo("16778239");
+		String sum = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 16777216.0)"
+				+ " (print (round (linalg:sum v))))";
+		assertThat(compileAndRunVec(sum, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(sum, false)).isEqualTo("16778239");
+		// mean rides on sum, matrix . vector on the vec: GEMV kernel (a dot per row).
+		String mean = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 16777216.0)"
+				+ " (print (round (* 1024 (linalg:mean v)))))";
+		assertThat(compileAndRunVec(mean, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(mean, false)).isEqualTo("16778239");
+		String gemv = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+				+ " (print (round (aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0))))";
+		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
+		// The MATRIX PRODUCT is exempt: its lanes run across the output row, not along
+		// the
+		// summation axis, so its accumulator stays f64 and it matches the oracle exactly.
+		String vm = "(let ((v (linalg:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+				+ " (print (round (aref (linalg:dot v (linalg:reshape v '(1024 1))) 0))))";
+		assertThat(compileAndRunVec(vm, true)).isEqualTo("16778240");
+		assertThat(compileAndRunVec(vm, false)).isEqualTo("16778240");
+		// The #d control: double-float reductions are exact on both paths here.
+		String d = "(let ((v (linalg:ones 1024))) (setf (aref v 0) 4096.0) (print (round (linalg:dot v v))))";
+		assertThat(compileAndRunVec(d, true)).isEqualTo("16778239");
+		assertThat(compileAndRunVec(d, false)).isEqualTo("16778239");
+	}
+
+	@Test
+	void wasmGcSimdLinalgComposesWithOptimize() throws Exception {
+		// --optimize decodes the 0xFD prefix (skipSimd, which now also has to know
+		// f32x4.div) and must keep BOTH the kernel and the scalar defun a declined call
+		// falls back to -- the call site has a `call` edge to each.
+		String source = "(print (linalg:sum (linalg:add (linalg:arange 200) (linalg:arange 200))))"
+				+ "(print (linalg:add #(1 2) #(3 4)))";
+		assertThat(compileAndRunLinalgSimdOptimized(source)).isEqualTo(compileAndRunVec(source, false));
+	}
+
+	/** {@code --simd --optimize} over the linalg library, run under wasm-GC. */
+	private static String compileAndRunLinalgSimdOptimized(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
+			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 }

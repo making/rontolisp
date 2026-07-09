@@ -433,9 +433,15 @@ Mechanics:
   is the deliberate price of letting the collector own the vectors; `--no-gc --simd` is the
   escape hatch and its output is byte-identical to before.
 - The scalar element helpers cost more in isolation (`_v_set`'s group read-modify-write is
-  ~1.85x an `array.set`) but are invisible end to end: 163.8M `(setf (aref a i) 1.0)` plus
-  163.8M `(aref a i)` run in 12.9 s on BOTH paths, because the boxed `dotimes`/`+` around them
-  dominates.
+  ~1.85x an `array.set`). They are invisible behind a BOXED loop: 163.8M `(setf (aref a i) 1.0)` plus
+  163.8M `(aref a i)` run in 12.9 s on BOTH paths, because the `dotimes`/`+` around them dominates.
+  **They are NOT invisible behind a bare element loop** (corrected 2026-07-09): before todo-107,
+  `linalg:add` — a flat `row-major-aref` loop that `--simd` did not intercept — went from 205 ms to
+  230 ms on wasm-GC when `--simd` switched the repr to a vblock (9 samples each, non-overlapping),
+  i.e. `--simd` was a 12% PESSIMIZATION for a linalg-only program there. **Fixed by `.todo/107`**
+  (2026-07-10): the fifteen accelerated `linalg:` members are intercepted too, and `linalg:add` /
+  `linalg:dot` now land on 1 ms, exactly where `vec:add` / `vec:dot` are. The cost is still real for
+  what stays un-intercepted (`emap`, `inv`, `transpose` on wasm-GC): see `.kb/linalg-simd.md`.
 - Composes with `--optimize` (the shaker's `skipSimd` decodes 0xFD; todo-105 added
   `v128.const`/`i8x16.shuffle`'s 16 immediate bytes and `f32x4`/`f64x2.replace_lane`'s lane
   byte) and `--component` (verified end to end under
@@ -584,13 +590,17 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 - `linalg:` is now packed-float and **width-polymorphic** (`.todo/97`): double by default,
   `#f` opt-in via a trailing constructor `element-type`, and every transform preserves the
   input width (so a `#f` from `vec:` is never force-widened to `#d`). See `.kb/linalg.md`.
-- `linalg:` acceleration (`.todo/93`): a linalg-kernel `--simd`/`v128` interceptor (like the
-  `vec:` bridge) is still a distinct step -- linalg runs the scalar packed defuns everywhere
-  (under wasm-GC `--simd` it does so over the linear repr, so it pays the arena cost without
-  the v128 win until intercepted).
-- Full matrix×matrix **GEMM** (`matmul`): NOT `vec:` (it produces a matrix) — it belongs in
-  `linalg:` and needs a transpose that GEMV avoids. `vec:matvec` (GEMV) is the mat×vec case
-  llama2's single-token decode needs; GEMM is deferred (prefill batching only).
+- `linalg:` acceleration is **DONE** (`.todo/107`, 2026-07-10): fifteen `linalg:` members are
+  intercepted on the interpreter, the JVM and wasm-GC, reusing these lane loops. It is a separate
+  layer with one structural difference -- a linalg kernel is PARTIAL (it declines general arrays,
+  mixed widths, plain numbers and shape errors by returning null, and the call site then runs the
+  scalar defun), because unlike `vec:` the linalg defuns accept all of those. Full mechanics,
+  precision contract and benchmarks: **`.kb/linalg-simd.md`**.
+- Full matrix×matrix **GEMM** (`matmul`): NOT `vec:` (it produces a matrix) — it lives in
+  `linalg:`, where todo-107 accelerated it. It needs no transpose after all: rewriting the oracle's
+  `ijk` triple loop as **`ikj`** makes `b`'s rows contiguous AND preserves the summation order, so
+  the result is bit-identical rather than merely close. See `.kb/linalg-simd.md`. `vec:matvec`
+  (GEMV) is still the mat×vec case llama2's single-token decode needs.
 - `--no-gc` native `f32x4` GEMV: `matvec` is a `--no-gc` compile error today (no rank-2
   block layout); a native kernel would need explicit dims or a rank-2 `--no-gc` layout.
   wasm-GC `--simd` already ships GEMV (its `$farray` carries dims), and `.todo/99` should

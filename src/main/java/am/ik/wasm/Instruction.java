@@ -679,4 +679,7 @@ public interface Instruction {
 	 */
 	int F32X4_MUL = 0xE6;
 
+	/** {@code f32x4.div} (0xFD 0xE7): lane-wise division (four {@code f32} lanes). */
+	int F32X4_DIV = 0xE7;
+
 }

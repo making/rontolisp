@@ -79,7 +79,7 @@ public final class RontoLispCli {
 
 		if (!options.containsNoKey()) {
 			if (options.contains("--simd")) {
-				warn("--simd has no effect in the REPL; pass a source file to accelerate its vec: kernels.");
+				warn("--simd has no effect in the REPL; pass a source file to accelerate its vec:/linalg: kernels.");
 			}
 			repl(systemPath);
 			return;
@@ -182,15 +182,17 @@ public final class RontoLispCli {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
-		// --simd on the interpreter routes the vec: kernels to jdk.incubator.vector. The
-		// native binary bakes the module in; a plain `java -jar` does not, so probe and
-		// fall back to the scalar reference with a note instead of failing.
+		// --simd on the interpreter routes the vec: and linalg: kernels to
+		// jdk.incubator.vector. The native binary bakes the module in; a plain
+		// `java -jar` does not, so probe and fall back to the scalar reference with a
+		// note instead of failing. One probe covers both: the two kernel classes live in
+		// the same incubator module.
 		if (simd) {
 			if (VecSimd.available()) {
 				evaluator.setSimd(true);
 			}
 			else {
-				warn("--simd: jdk.incubator.vector is unavailable, running the scalar vec: kernels; "
+				warn("--simd: jdk.incubator.vector is unavailable, running the scalar vec:/linalg: kernels; "
 						+ "re-run with `java --add-modules jdk.incubator.vector -jar ...`, or use the native binary.");
 			}
 		}
@@ -315,7 +317,7 @@ public final class RontoLispCli {
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");
 		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
 		this.out.println("                     Scalar vec: loops by default; add --simd for native v128.");
-		this.out.println("  --simd             Accelerate the vec: kernels with hardware SIMD");
+		this.out.println("  --simd             Accelerate the vec: and linalg: kernels with hardware SIMD");
 		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
 		this.out.println("                     java --add-modules jdk.incubator.vector). WASM (.wasm, both");
 		this.out.println("                     wasm-GC and --no-gc): emit native v128 (f64x2/f32x4). On wasm-GC");

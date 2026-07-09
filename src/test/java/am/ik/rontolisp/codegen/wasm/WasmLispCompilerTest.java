@@ -410,9 +410,10 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void simdAppendsExactlyTheVecTypeBlockAndTheVecFunctionBlock() {
+	void simdAppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks() {
 		// --simd appends its four types AFTER the last fixed one (TYPE_F32ARR) and its
-		// fifteen functions after the last fixed one, so every fixed TYPE_*/FUNC_* index
+		// two function blocks after the last fixed function, so every fixed TYPE_*/FUNC_*
+		// index
 		// -- and with it the byte-identical component blobs -- keeps its value, and only
 		// the export/import wrapper bases and FUNC_USER_BASE shift. The default module's
 		// type section is a strict PREFIX of the --simd one: an (array (mut v128)) type
@@ -437,10 +438,21 @@ class WasmLispCompilerTest {
 				0x60, 0x02, 0x63, 0x6D, 0x7F, 0x01, 0x7C,
 				// TYPE_V_SET: (func (param (ref null eq) i32 f64) (result f64))
 				0x60, 0x03, 0x63, 0x6D, 0x7F, 0x7C, 0x01, 0x7C });
-		assertThat(functionCount(simd) - functionCount(scalar)).isEqualTo(WasmVecSimdRuntimeBuilder.FUNC_COUNT);
+		// --simd emits TWO function blocks: the vec: kernels, then the linalg: ones
+		// (todo-107). Both are absent from a default module -- this delta is the only
+		// structural guard that a build without the flag stays byte-identical to one that
+		// never knew about it, so it must count BOTH blocks rather than be relaxed.
+		assertThat(functionCount(simd) - functionCount(scalar)).as("the vec: block plus the linalg: block")
+			.isEqualTo(WasmVecSimdRuntimeBuilder.FUNC_COUNT + WasmLinalgSimdRuntimeBuilder.FUNC_COUNT);
+		// The linalg: block sits immediately after the vec: one, and the user defuns
+		// after
+		// both, so every fixed FUNC_* index below FUNC_USER_BASE keeps its value.
+		assertThat(WasmLispCompiler.linalgFuncBase())
+			.isEqualTo(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT);
 		assertThat(new WasmLispCompiler().userFuncBase()).isEqualTo(WasmLispCompiler.FUNC_USER_BASE);
 		assertThat(new WasmLispCompiler(false, false, false, false, false, true).userFuncBase())
-			.isEqualTo(WasmLispCompiler.FUNC_USER_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT);
+			.isEqualTo(WasmLispCompiler.FUNC_USER_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT
+					+ WasmLinalgSimdRuntimeBuilder.FUNC_COUNT);
 	}
 
 	@Test

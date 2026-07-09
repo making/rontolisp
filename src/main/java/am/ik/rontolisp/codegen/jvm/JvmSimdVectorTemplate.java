@@ -473,6 +473,793 @@ final class JvmSimdVectorTemplate {
 		return out;
 	}
 
+	// ================================================================================
+	// linalg: kernels
+	// ================================================================================
+	//
+	// The vec: kernels above are TOTAL: vec: accepts packed float arrays and nothing
+	// else, so they signal on anything they cannot read. The linalg: kernels below are
+	// PARTIAL. linalg.lisp also accepts general (boxed) arrays, mixed widths, a scalar
+	// operand on either side, plain numbers, and mismatched shapes (which it turns into a
+	// specific error), so every kernel here returns NULL for an input it does not handle,
+	// and the call site JvmLinalgSimdCompiler emitted then invokes the scalar defun. The
+	// library stays the single source of truth for every edge case, error messages
+	// included, and nothing is duplicated. Nil is ACONST_NULL in compiled code, but none
+	// of these fifteen ever returns nil, so null is an unambiguous "declined".
+	//
+	// Two differences from vec: drive the rest. (1) A result must keep the operand's
+	// rank-n dimension header -- every vec: kernel produces a rank-1 [1, n, ...] vector.
+	// (2) A packed argument is only USABLE when its partner has the same width; a mixed
+	// pair declines rather than signalling.
+	//
+	// Precision matches the interpreter's LinalgSimdKernels except in one place, and
+	// deliberately: amax/amin/argmax/argmin compare with the plain IEEE `>` here, because
+	// the JVM backend's `>` on two doubles is DCMPL (see JvmComparisonCompiler / the _cmp
+	// Double path), whereas the interpreter's is Double.compare. Each kernel reproduces
+	// ITS OWN backend's scalar defun; the two backends already disagree about
+	// (> 0.0 -0.0) without any of this.
+
+	private static final int OP_ADD = 0;
+
+	private static final int OP_SUB = 1;
+
+	private static final int OP_MUL = 2;
+
+	private static final int OP_DIV = 3;
+
+	static @Nullable Object laAdd(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_ADD, a, b);
+	}
+
+	static @Nullable Object laSub(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_SUB, a, b);
+	}
+
+	static @Nullable Object laMul(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_MUL, a, b);
+	}
+
+	static @Nullable Object laDiv(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_DIV, a, b);
+	}
+
+	/**
+	 * The three shapes {@code linalg::%la-bcast} distinguishes: array with array (equal
+	 * shapes), array with scalar, and scalar with array.
+	 */
+	private static @Nullable Object laElementwise(int op, @Nullable Object a, @Nullable Object b) {
+		if (a instanceof double[] x) {
+			if (b instanceof double[] y) {
+				return laSameDims(x, y) ? laEwDD(op, x, y) : null;
+			}
+			if (b instanceof float[]) {
+				return null;
+			}
+			Object s = laScalar(b);
+			return s == null ? null : laEwDS(op, x, (Double) s);
+		}
+		if (a instanceof float[] x) {
+			if (b instanceof float[] y) {
+				return laSameDims(x, y) ? laEwFF(op, x, y) : null;
+			}
+			if (b instanceof double[]) {
+				return null;
+			}
+			Object s = laScalar(b);
+			return s == null ? null : laEwFS(op, x, (Double) s);
+		}
+		Object s = laScalar(a);
+		if (s == null) {
+			return null;
+		}
+		// A commutative operator with the scalar on the left is the array-scalar kernel.
+		if (b instanceof double[] y) {
+			return (op == OP_ADD || op == OP_MUL) ? laEwDS(op, y, (Double) s) : laEwSD(op, (Double) s, y);
+		}
+		if (b instanceof float[] y) {
+			return (op == OP_ADD || op == OP_MUL) ? laEwFS(op, y, (Double) s) : laEwSF(op, (Double) s, y);
+		}
+		return null;
+	}
+
+	private static double[] laEwDD(int op, double[] x, double[] y) {
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = x.length - ox;
+		double[] r = laNewLike(x);
+		int or = ox;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			if (op == OP_ADD) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i)
+						.add(DoubleVector.fromArray(SPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+			else if (op == OP_SUB) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i)
+						.sub(DoubleVector.fromArray(SPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+			else if (op == OP_MUL) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i)
+						.mul(DoubleVector.fromArray(SPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+			else {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i)
+						.div(DoubleVector.fromArray(SPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = laApply(op, x[ox + i], y[oy + i]);
+		}
+		return r;
+	}
+
+	private static float[] laEwFF(int op, float[] x, float[] y) {
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = x.length - ox;
+		float[] r = laNewLikeF(x);
+		int or = ox;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			if (op == OP_ADD) {
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector.fromArray(FSPECIES, x, ox + i)
+						.add(FloatVector.fromArray(FSPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+			else if (op == OP_SUB) {
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector.fromArray(FSPECIES, x, ox + i)
+						.sub(FloatVector.fromArray(FSPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+			else if (op == OP_MUL) {
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector.fromArray(FSPECIES, x, ox + i)
+						.mul(FloatVector.fromArray(FSPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+			else {
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector.fromArray(FSPECIES, x, ox + i)
+						.div(FloatVector.fromArray(FSPECIES, y, oy + i))
+						.intoArray(r, or + i);
+				}
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = (float) laApply(op, x[ox + i], y[oy + i]);
+		}
+		return r;
+	}
+
+	private static double[] laEwDS(int op, double[] x, double s) {
+		int ox = 1 + (int) x[0];
+		int n = x.length - ox;
+		double[] r = laNewLike(x);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			if (op == OP_ADD) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i).add(s).intoArray(r, ox + i);
+				}
+			}
+			else if (op == OP_SUB) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i).sub(s).intoArray(r, ox + i);
+				}
+			}
+			else if (op == OP_MUL) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i).mul(s).intoArray(r, ox + i);
+				}
+			}
+			else {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, x, ox + i).div(s).intoArray(r, ox + i);
+				}
+			}
+		}
+		for (; i < n; i++) {
+			r[ox + i] = laApply(op, x[ox + i], s);
+		}
+		return r;
+	}
+
+	private static double[] laEwSD(int op, double s, double[] y) {
+		int oy = 1 + (int) y[0];
+		int n = y.length - oy;
+		double[] r = laNewLike(y);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			if (op == OP_SUB) {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.broadcast(SPECIES, s)
+						.sub(DoubleVector.fromArray(SPECIES, y, oy + i))
+						.intoArray(r, oy + i);
+				}
+			}
+			else {
+				for (; i < bound; i += SPECIES.length()) {
+					DoubleVector.broadcast(SPECIES, s)
+						.div(DoubleVector.fromArray(SPECIES, y, oy + i))
+						.intoArray(r, oy + i);
+				}
+			}
+		}
+		for (; i < n; i++) {
+			r[oy + i] = laApply(op, s, y[oy + i]);
+		}
+		return r;
+	}
+
+	/**
+	 * A single-float array against a genuine f64 scalar: the widen-compute-narrow round
+	 * trip is NOT innocuous here (the scalar carries more than 24 bits), so these stay
+	 * scalar loops computing in double, exactly like {@link #scaleF}. Splatting
+	 * {@code (float) s} into f32 lanes would diverge from the oracle -- and
+	 * {@code (linalg:mul grad 0.1)} over an {@code #f} gradient is the common shape.
+	 */
+	private static float[] laEwFS(int op, float[] x, double s) {
+		int ox = 1 + (int) x[0];
+		int n = x.length - ox;
+		float[] r = laNewLikeF(x);
+		for (int i = 0; i < n; i++) {
+			r[ox + i] = (float) laApply(op, x[ox + i], s);
+		}
+		return r;
+	}
+
+	private static float[] laEwSF(int op, double s, float[] y) {
+		int oy = 1 + (int) y[0];
+		int n = y.length - oy;
+		float[] r = laNewLikeF(y);
+		for (int i = 0; i < n; i++) {
+			r[oy + i] = (float) laApply(op, s, y[oy + i]);
+		}
+		return r;
+	}
+
+	private static double laApply(int op, double a, double b) {
+		if (op == OP_ADD) {
+			return a + b;
+		}
+		if (op == OP_SUB) {
+			return a - b;
+		}
+		if (op == OP_MUL) {
+			return a * b;
+		}
+		return a / b;
+	}
+
+	// --- reductions ------------------------------------------------------------------
+
+	static @Nullable Object laSum(@Nullable Object a) {
+		return laNonEmpty(a) ? simdSum(a) : null;
+	}
+
+	/** Fused: the oracle spells it {@code (sqrt (sum (emap square a)))} and allocates. */
+	static @Nullable Object laNorm(@Nullable Object a) {
+		return laNonEmpty(a) ? Math.sqrt((Double) java.util.Objects.requireNonNull(simdDot(a, a))) : null;
+	}
+
+	static @Nullable Object laAmax(@Nullable Object a) {
+		if (!laNonEmpty(a)) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			int ox = 1 + (int) x[0];
+			double best = x[ox];
+			for (int i = ox + 1; i < x.length; i++) {
+				if (x[i] > best) {
+					best = x[i];
+				}
+			}
+			return best;
+		}
+		double[] x = laDoubles(a);
+		int ox = 1 + (int) x[0];
+		double best = x[ox];
+		for (int i = ox + 1; i < x.length; i++) {
+			if (x[i] > best) {
+				best = x[i];
+			}
+		}
+		return best;
+	}
+
+	static @Nullable Object laAmin(@Nullable Object a) {
+		if (!laNonEmpty(a)) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			int ox = 1 + (int) x[0];
+			double best = x[ox];
+			for (int i = ox + 1; i < x.length; i++) {
+				if (x[i] < best) {
+					best = x[i];
+				}
+			}
+			return best;
+		}
+		double[] x = laDoubles(a);
+		int ox = 1 + (int) x[0];
+		double best = x[ox];
+		for (int i = ox + 1; i < x.length; i++) {
+			if (x[i] < best) {
+				best = x[i];
+			}
+		}
+		return best;
+	}
+
+	/** Vector-only in linalg.lisp (it uses {@code length}), so rank 1 is required. */
+	static @Nullable Object laArgmax(@Nullable Object a) {
+		if (!laNonEmpty(a) || laRank(a) != 1) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			float best = x[2];
+			int bi = 0;
+			for (int i = 1; i < x.length - 2; i++) {
+				if (x[2 + i] > best) {
+					best = x[2 + i];
+					bi = i;
+				}
+			}
+			return (long) bi;
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double best = x[2];
+		int bi = 0;
+		for (int i = 1; i < x.length - 2; i++) {
+			if (x[2 + i] > best) {
+				best = x[2 + i];
+				bi = i;
+			}
+		}
+		return (long) bi;
+	}
+
+	static @Nullable Object laArgmin(@Nullable Object a) {
+		if (!laNonEmpty(a) || laRank(a) != 1) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			float best = x[2];
+			int bi = 0;
+			for (int i = 1; i < x.length - 2; i++) {
+				if (x[2 + i] < best) {
+					best = x[2 + i];
+					bi = i;
+				}
+			}
+			return (long) bi;
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double best = x[2];
+		int bi = 0;
+		for (int i = 1; i < x.length - 2; i++) {
+			if (x[2 + i] < best) {
+				best = x[2 + i];
+				bi = i;
+			}
+		}
+		return (long) bi;
+	}
+
+	/**
+	 * The main-diagonal sum of a square matrix, accumulated in {@code double} at both
+	 * widths -- the oracle reads each element widened, so this is bit-identical.
+	 */
+	static @Nullable Object laTrace(@Nullable Object a) {
+		if (!laPacked(a) || laRank(a) != 2 || laDim(a, 0) != laDim(a, 1)) {
+			return null;
+		}
+		int n = laDim(a, 0);
+		double acc = 0.0;
+		if (a instanceof float[] x) {
+			for (int i = 0; i < n; i++) {
+				acc += x[3 + i * n + i];
+			}
+		}
+		else {
+			double[] x = (double[]) java.util.Objects.requireNonNull(a);
+			for (int i = 0; i < n; i++) {
+				acc += x[3 + i * n + i];
+			}
+		}
+		return acc;
+	}
+
+	// --- shape --------------------------------------------------------------------
+
+	static @Nullable Object laTranspose(@Nullable Object a) {
+		if (!laPacked(a) || laRank(a) > 2) {
+			return null;
+		}
+		if (laRank(a) == 1) {
+			// linalg.lisp returns a vector unchanged -- the same object, so eq holds.
+			return a;
+		}
+		int r = laDim(a, 0);
+		int c = laDim(a, 1);
+		if (a instanceof float[] x) {
+			float[] m = laNewMatF(c, r);
+			for (int i = 0; i < r; i++) {
+				for (int j = 0; j < c; j++) {
+					m[3 + j * r + i] = x[3 + i * c + j];
+				}
+			}
+			return m;
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] m = laNewMat(c, r);
+		for (int i = 0; i < r; i++) {
+			for (int j = 0; j < c; j++) {
+				m[3 + j * r + i] = x[3 + i * c + j];
+			}
+		}
+		return m;
+	}
+
+	/**
+	 * {@code (linalg:reshape a shape)} where {@code shape} is a Lisp integer (a
+	 * {@code Long}) or a proper list of them (a chain of two-element {@code Object[]}
+	 * cons cells ending in {@code null}). {@code linalg:flatten} rides on this.
+	 */
+	static @Nullable Object laReshape(@Nullable Object a, @Nullable Object shape) {
+		if (!laPacked(a)) {
+			return null;
+		}
+		long[] dims = laShape(shape);
+		if (dims == null) {
+			return null;
+		}
+		long total = 1;
+		for (long d : dims) {
+			total *= d;
+		}
+		int n = laTotal(a);
+		if (total != n) {
+			return null;
+		}
+		int head = 1 + dims.length;
+		if (a instanceof float[] x) {
+			float[] r = new float[head + n];
+			r[0] = dims.length;
+			for (int i = 0; i < dims.length; i++) {
+				r[1 + i] = dims[i];
+			}
+			System.arraycopy(x, 1 + (int) x[0], r, head, n);
+			return r;
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] r = new double[head + n];
+		r[0] = dims.length;
+		for (int i = 0; i < dims.length; i++) {
+			r[1 + i] = dims[i];
+		}
+		System.arraycopy(x, 1 + (int) x[0], r, head, n);
+		return r;
+	}
+
+	/** A shape designator: a {@code Long}, or a proper cons list of {@code Long}s. */
+	private static long @Nullable [] laShape(@Nullable Object shape) {
+		if (shape instanceof Long n) {
+			return n >= 0 ? new long[] { n } : null;
+		}
+		int count = 0;
+		Object cursor = shape;
+		while (cursor instanceof Object[] cell && cell.length == 2 && cell[0] instanceof Long) {
+			count++;
+			cursor = cell[1];
+		}
+		if (cursor != null || count == 0) {
+			return null;
+		}
+		long[] dims = new long[count];
+		Object walk = shape;
+		for (int i = 0; i < count; i++) {
+			// The chain was already validated above, so every cell up to `count` is a
+			// two-element cons whose car is a Long; only the last cdr is nil (null).
+			Object[] cell = (Object[]) java.util.Objects.requireNonNull(walk);
+			long d = (Long) java.util.Objects.requireNonNull(cell[0]);
+			if (d < 0) {
+				return null;
+			}
+			dims[i] = d;
+			walk = cell[1];
+		}
+		return dims;
+	}
+
+	// --- products ------------------------------------------------------------------
+
+	/**
+	 * The numpy dispatch of {@code linalg:dot}, for two packed operands of the same width
+	 * and rank {@code <= 2}: {@code v.v} to a scalar, {@code M.v} (GEMV) and {@code v.M}
+	 * to a vector, {@code M.M} to a matrix. A scalar operand declines -- the defun routes
+	 * that to {@code linalg:mul}, itself intercepted.
+	 */
+	static @Nullable Object laDot(@Nullable Object a, @Nullable Object b) {
+		if (!laPacked(a) || !laPacked(b) || laRank(a) > 2 || laRank(b) > 2) {
+			return null;
+		}
+		boolean single = a instanceof float[];
+		if (single != (b instanceof float[])) {
+			return null;
+		}
+		if (laRank(a) == 1 && laRank(b) == 1) {
+			return laDim(a, 0) == laDim(b, 0) ? simdDot(a, b) : null;
+		}
+		if (laRank(a) == 2 && laRank(b) == 1) {
+			return laDim(a, 1) == laDim(b, 0) ? simdMatvec(a, b) : null;
+		}
+		if (laRank(a) == 1 && laRank(b) == 2) {
+			// A row vector times a matrix is the n = 1 case of the matrix product; the
+			// result is rank 1, so the header is rewritten below.
+			int n = laDim(b, 0);
+			int p = laDim(b, 1);
+			if (laDim(a, 0) != n) {
+				return null;
+			}
+			if (single) {
+				float[] m = laMatmulF(laFloats(a), laFloats(b), 1, n, p);
+				float[] r = newVecF(p);
+				System.arraycopy(m, 3, r, 2, p);
+				return r;
+			}
+			double[] m = laMatmul(laDoubles(a), laDoubles(b), 1, n, p);
+			double[] r = newVec(p);
+			System.arraycopy(m, 3, r, 2, p);
+			return r;
+		}
+		int n = laDim(a, 0);
+		int m = laDim(a, 1);
+		int p = laDim(b, 1);
+		if (m != laDim(b, 0)) {
+			return null;
+		}
+		return single ? laMatmulF(laFloats(a), laFloats(b), n, m, p) : laMatmul(laDoubles(a), laDoubles(b), n, m, p);
+	}
+
+	/**
+	 * The {@code n x m} by {@code m x p} product in <strong>ikj</strong> order: for each
+	 * output row, accumulate {@code a[i][k] * b[k][*]} over {@code k}, where
+	 * {@code b[k][*]} is a CONTIGUOUS row. The oracle's naive {@code ijk} form reads
+	 * {@code b[k][j]} with stride {@code p}, which no lane loop can follow, and a
+	 * transpose would need a scratch buffer.
+	 *
+	 * <p>
+	 * The rewrite is not merely faster, it is bit-identical: {@code ikj} visits {@code k}
+	 * in increasing order into the same accumulator cell, which is the oracle's own
+	 * summation order. See {@link #laMatmulF} for why the single-float sibling
+	 * accumulates in {@code double} rather than following the reduction contract.
+	 */
+	private static double[] laMatmul(double[] a, double[] b, int n, int m, int p) {
+		int oa = 1 + (int) a[0];
+		int ob = 1 + (int) b[0];
+		double[] r = laNewMat(n, p);
+		for (int i = 0; i < n; i++) {
+			int ro = 3 + i * p;
+			int ao = oa + i * m;
+			for (int k = 0; k < m; k++) {
+				double s = a[ao + k];
+				int bo = ob + k * p;
+				int j = 0;
+				if (p >= THRESHOLD) {
+					int bound = SPECIES.loopBound(p);
+					for (; j < bound; j += SPECIES.length()) {
+						DoubleVector.fromArray(SPECIES, r, ro + j)
+							.add(DoubleVector.fromArray(SPECIES, b, bo + j).mul(s))
+							.intoArray(r, ro + j);
+					}
+				}
+				for (; j < p; j++) {
+					r[ro + j] += b[bo + j] * s;
+				}
+			}
+		}
+		return r;
+	}
+
+	/**
+	 * The single-float matrix product, accumulated in {@code double} and narrowed once
+	 * per output element, so it is bit-identical to the oracle. The reduction contract
+	 * (an {@code #f} reduction accumulates in single precision) applies where the LANES
+	 * ARE the summation axis -- {@code dot}, {@code sum}, GEMV's per-row dot. Here the
+	 * lanes run across the output row, which carries no summation, so the accumulator's
+	 * width is free and the oracle's {@code double} costs nothing.
+	 */
+	private static float[] laMatmulF(float[] a, float[] b, int n, int m, int p) {
+		int oa = 1 + (int) a[0];
+		int ob = 1 + (int) b[0];
+		float[] r = laNewMatF(n, p);
+		double[] acc = new double[p];
+		for (int i = 0; i < n; i++) {
+			java.util.Arrays.fill(acc, 0.0);
+			int ao = oa + i * m;
+			for (int k = 0; k < m; k++) {
+				double s = a[ao + k];
+				int bo = ob + k * p;
+				for (int j = 0; j < p; j++) {
+					acc[j] += b[bo + j] * s;
+				}
+			}
+			int ro = 3 + i * p;
+			for (int j = 0; j < p; j++) {
+				r[ro + j] = (float) acc[j];
+			}
+		}
+		return r;
+	}
+
+	/** {@code out[i][j] = u[i] * v[j]}; the operands are flattened first, like numpy. */
+	static @Nullable Object laOuter(@Nullable Object u, @Nullable Object v) {
+		if (!laPacked(u) || !laPacked(v) || (u instanceof float[]) != (v instanceof float[])) {
+			return null;
+		}
+		int n = laTotal(u);
+		int m = laTotal(v);
+		if (u instanceof float[] uf) {
+			float[] vf = laFloats(v);
+			int ou = 1 + (int) uf[0];
+			int ov = 1 + (int) vf[0];
+			float[] r = laNewMatF(n, m);
+			for (int i = 0; i < n; i++) {
+				float s = uf[ou + i];
+				int ro = 3 + i * m;
+				int j = 0;
+				if (m >= THRESHOLD) {
+					int bound = FSPECIES.loopBound(m);
+					for (; j < bound; j += FSPECIES.length()) {
+						FloatVector.fromArray(FSPECIES, vf, ov + j).mul(s).intoArray(r, ro + j);
+					}
+				}
+				for (; j < m; j++) {
+					r[ro + j] = vf[ov + j] * s;
+				}
+			}
+			return r;
+		}
+		double[] ud = (double[]) java.util.Objects.requireNonNull(u);
+		double[] vd = (double[]) java.util.Objects.requireNonNull(v);
+		int ou = 1 + (int) ud[0];
+		int ov = 1 + (int) vd[0];
+		double[] r = laNewMat(n, m);
+		for (int i = 0; i < n; i++) {
+			double s = ud[ou + i];
+			int ro = 3 + i * m;
+			int j = 0;
+			if (m >= THRESHOLD) {
+				int bound = SPECIES.loopBound(m);
+				for (; j < bound; j += SPECIES.length()) {
+					DoubleVector.fromArray(SPECIES, vd, ov + j).mul(s).intoArray(r, ro + j);
+				}
+			}
+			for (; j < m; j++) {
+				r[ro + j] = vd[ov + j] * s;
+			}
+		}
+		return r;
+	}
+
+	// --- linalg marshalling helpers ---------------------------------------------------
+
+	private static double[] laDoubles(@Nullable Object o) {
+		return (double[]) java.util.Objects.requireNonNull(o);
+	}
+
+	private static float[] laFloats(@Nullable Object o) {
+		return (float[]) java.util.Objects.requireNonNull(o);
+	}
+
+	private static boolean laPacked(@Nullable Object o) {
+		return o instanceof double[] || o instanceof float[];
+	}
+
+	private static boolean laNonEmpty(@Nullable Object o) {
+		return laPacked(o) && laTotal(o) > 0;
+	}
+
+	private static int laRank(@Nullable Object o) {
+		return o instanceof float[] f ? (int) f[0] : (int) ((double[]) java.util.Objects.requireNonNull(o))[0];
+	}
+
+	private static int laDim(@Nullable Object o, int i) {
+		return o instanceof float[] f ? (int) f[1 + i] : (int) ((double[]) java.util.Objects.requireNonNull(o))[1 + i];
+	}
+
+	private static int laTotal(@Nullable Object o) {
+		return o instanceof float[] f ? f.length - 1 - (int) f[0]
+				: ((double[]) java.util.Objects.requireNonNull(o)).length - 1 - laRank(o);
+	}
+
+	private static boolean laSameDims(double[] a, double[] b) {
+		if (a[0] != b[0]) {
+			return false;
+		}
+		for (int i = 1; i <= (int) a[0]; i++) {
+			if (a[i] != b[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean laSameDims(float[] a, float[] b) {
+		if (a[0] != b[0]) {
+			return false;
+		}
+		for (int i = 1; i <= (int) a[0]; i++) {
+			if (a[i] != b[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** A Lisp number the kernels can broadcast, boxed as a {@code Double}, else null. */
+	private static @Nullable Object laScalar(@Nullable Object o) {
+		if (o instanceof Double d) {
+			return d;
+		}
+		if (o instanceof Long l) {
+			return (double) l;
+		}
+		return null;
+	}
+
+	/** A fresh packed array with the same rank-n header as {@code x}, zeroed data. */
+	private static double[] laNewLike(double[] x) {
+		double[] r = new double[x.length];
+		System.arraycopy(x, 0, r, 0, 1 + (int) x[0]);
+		return r;
+	}
+
+	private static float[] laNewLikeF(float[] x) {
+		float[] r = new float[x.length];
+		System.arraycopy(x, 0, r, 0, 1 + (int) x[0]);
+		return r;
+	}
+
+	private static double[] laNewMat(int rows, int cols) {
+		double[] m = new double[3 + rows * cols];
+		m[0] = 2.0;
+		m[1] = rows;
+		m[2] = cols;
+		return m;
+	}
+
+	private static float[] laNewMatF(int rows, int cols) {
+		float[] m = new float[3 + rows * cols];
+		m[0] = 2.0f;
+		m[1] = rows;
+		m[2] = cols;
+		return m;
+	}
+
 	/** Rejects a single-float operand paired with a double-float destination. */
 	private static void requireDouble(@Nullable Object a, @Nullable Object b) {
 		if (a instanceof float[] || b instanceof float[]) {

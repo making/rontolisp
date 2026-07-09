@@ -655,15 +655,14 @@ final class WasmVecSimdRuntimeBuilder {
 
 	// --- shared emit helpers --------------------------------------------------------
 
-	private static void i32Const(WasmWriter w, int value) {
+	static void i32Const(WasmWriter w, int value) {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(value);
 	}
 
 	// count/kind of the farray in argLocal, plus shift = kind + 1 and the REAL group
 	// count
 	// ng = ceil(count / lanes) -- never the trailing sentinel.
-	private static void loadHeader(WasmWriter w, int argLocal, int countLocal, int kindLocal, int shiftLocal,
-			int ngLocal) {
+	static void loadHeader(WasmWriter w, int argLocal, int countLocal, int kindLocal, int shiftLocal, int ngLocal) {
 		farrayCount(w, argLocal);
 		WasmVecLoops.set(w, countLocal);
 		farrayKind(w, argLocal);
@@ -676,7 +675,7 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	// outLocal = ceil(valueLocal / (1 << shiftLocal))
-	private static void ceilShift(WasmWriter w, int valueLocal, int shiftLocal, int outLocal) {
+	static void ceilShift(WasmWriter w, int valueLocal, int shiftLocal, int outLocal) {
 		WasmVecLoops.get(w, valueLocal);
 		i32Const(w, 1);
 		WasmVecLoops.get(w, shiftLocal);
@@ -719,7 +718,7 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	// Pushes field `field` of the $farray held (as eq) in argLocal.
-	private static void farrayField(WasmWriter w, int argLocal, int field) {
+	static void farrayField(WasmWriter w, int argLocal, int field) {
 		WasmVecLoops.get(w, argLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
@@ -729,7 +728,7 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	// Pushes field `field` of the $vblock held (as eq) in vbLocal.
-	private static void vblockField(WasmWriter w, int vbLocal, int field) {
+	static void vblockField(WasmWriter w, int vbLocal, int field) {
 		WasmVecLoops.get(w, vbLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
@@ -739,13 +738,13 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	// Pushes the element count of the farray in argLocal.
-	private static void farrayCount(WasmWriter w, int argLocal) {
+	static void farrayCount(WasmWriter w, int argLocal) {
 		farrayField(w, argLocal, 1);
 		castVblockField(w, 0);
 	}
 
 	// Pushes the width tag of the farray in argLocal (0 = double, 1 = single).
-	private static void farrayKind(WasmWriter w, int argLocal) {
+	static void farrayKind(WasmWriter w, int argLocal) {
 		farrayField(w, argLocal, 1);
 		castVblockField(w, 1);
 	}
@@ -760,13 +759,13 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	// outLocal((ref null $v128arr)) = the group array of the farray in argLocal.
-	private static void farrayGroups(WasmWriter w, int argLocal, int outLocal) {
+	static void farrayGroups(WasmWriter w, int argLocal, int outLocal) {
 		farrayField(w, argLocal, 1);
 		castGroups(w, outLocal);
 	}
 
 	// outLocal((ref null $v128arr)) = the group array of the $vblock (as eq) in vbLocal.
-	private static void vblockGroups(WasmWriter w, int vbLocal, int outLocal) {
+	static void vblockGroups(WasmWriter w, int vbLocal, int outLocal) {
 		WasmVecLoops.get(w, vbLocal);
 		castGroups(w, outLocal);
 	}
@@ -810,13 +809,13 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.arraySet(w);
 	}
 
-	private static void castBuckets(WasmWriter w) {
+	static void castBuckets(WasmWriter w) {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	// outLocal(i32) = i31.get_s(buckets[index]) -- a dimension size.
-	private static void bucketI32(WasmWriter w, int bucketsLocal, int index, int outLocal) {
+	static void bucketI32(WasmWriter w, int bucketsLocal, int index, int outLocal) {
 		WasmVecLoops.get(w, bucketsLocal);
 		castBuckets(w);
 		i32Const(w, index);
@@ -856,7 +855,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// rank-1 packed array over the given block. (The vec: kernels are rank-1 producers;
 	// matvec's result is rank-1 too. This matches the JVM bridge, whose result header is
 	// always [1.0, n, ...].)
-	private static void makeFarray(WasmWriter w, int countLocal, int vbLocal) {
+	static void makeFarray(WasmWriter w, int countLocal, int vbLocal) {
 		WasmVecLoops.get(w, countLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		i32Const(w, 1);
@@ -868,7 +867,7 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	// Boxes the f64 on the stack into a TYPE_FLOAT struct.
-	private static void boxFloat(WasmWriter w) {
+	static void boxFloat(WasmWriter w) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
@@ -876,7 +875,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// Converts the (ref null eq) on the stack to an f64, mirroring
 	// WasmEmitHelper.castFloatGetF64 (i31 integer / ratio / float struct). tmpLocal is a
 	// (ref null eq) scratch.
-	private static void unboxF64(WasmWriter w, int tmpLocal) {
+	static void unboxF64(WasmWriter w, int tmpLocal) {
 		WasmVecLoops.set(w, tmpLocal);
 		WasmVecLoops.get(w, tmpLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -912,7 +911,7 @@ final class WasmVecSimdRuntimeBuilder {
 
 	// Prepends the local declaration groups, in the fixed order the index arithmetic
 	// above assumes: i32, f64, f32, v128, (ref null eq), (ref null $v128arr).
-	private static byte[] withLocals(byte[] body, int i32Count, int f64Count, int f32Count, int v128Count, int eqCount,
+	static byte[] withLocals(byte[] body, int i32Count, int f64Count, int f32Count, int v128Count, int eqCount,
 			int groupsCount) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);

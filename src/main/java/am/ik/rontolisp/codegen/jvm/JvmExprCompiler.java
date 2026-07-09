@@ -180,6 +180,15 @@ final class JvmExprCompiler {
 				JvmSimdCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			// --simd: the fifteen accelerated linalg: kernels. Unlike vec:, each bridge
+			// call is guarded -- a kernel that declines the operands (a general array, a
+			// mixed width, a shape error) returns null and the emitted call site runs the
+			// scalar linalg.lisp defun over the same temps.
+			if (qn != null && LispNames.LINALG_PKG.equals(qn.pkg()) && ctx.simdOps != null
+					&& JvmLinalgSimdCompiler.handles(qn.member())) {
+				JvmLinalgSimdCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
 			switch (sym.name()) {
 				case LispNames.ADD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);

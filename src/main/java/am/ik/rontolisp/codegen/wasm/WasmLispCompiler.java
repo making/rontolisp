@@ -174,12 +174,22 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * The index of the first user defun: the fixed runtime helpers, plus -- under
-	 * {@code --simd} only -- the {@link WasmVecSimdRuntimeBuilder} block. Every fixed
-	 * {@code FUNC_*} constant below {@link #FUNC_USER_BASE} keeps its value in both
-	 * modes; only what follows shifts, and only when {@code simd} is set.
+	 * {@code --simd} only -- the {@link WasmVecSimdRuntimeBuilder} block and the
+	 * {@link WasmLinalgSimdRuntimeBuilder} one after it. Every fixed {@code FUNC_*}
+	 * constant below {@link #FUNC_USER_BASE} keeps its value in both modes; only what
+	 * follows shifts, and only when {@code simd} is set.
 	 */
 	int userFuncBase() {
-		return FUNC_USER_BASE + (this.simd ? WasmVecSimdRuntimeBuilder.FUNC_COUNT : 0);
+		return FUNC_USER_BASE
+				+ (this.simd ? WasmVecSimdRuntimeBuilder.FUNC_COUNT + WasmLinalgSimdRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of the first {@code linalg:} kernel: right after the {@code vec:} block.
+	 * Only meaningful under {@code --simd}.
+	 */
+	static int linalgFuncBase() {
+		return FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT;
 	}
 
 	/**
@@ -2033,6 +2043,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
 						fnDef.addFunction(WasmVecSimdRuntimeBuilder.typeIndexOf(i));
 					}
+					// linalg: SIMD block (--simd only): fifteen kernels, right after.
+					for (int i = 0; i < WasmLinalgSimdRuntimeBuilder.FUNC_COUNT; i++) {
+						fnDef.addFunction(WasmLinalgSimdRuntimeBuilder.typeIndexOf(i));
+					}
 				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
@@ -2271,6 +2285,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmVecSimdRuntimeBuilder.build(i, FUNC_VEC_BASE));
+					}
+					// linalg: SIMD block bodies, in linalgFuncBase() index order.
+					for (int i = 0; i < WasmLinalgSimdRuntimeBuilder.FUNC_COUNT; i++) {
+						code.addFunction(WasmLinalgSimdRuntimeBuilder.build(i, FUNC_VEC_BASE));
 					}
 				}
 				// User defun function bodies

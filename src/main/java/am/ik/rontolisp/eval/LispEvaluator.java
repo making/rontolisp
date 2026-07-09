@@ -1783,6 +1783,13 @@ public final class LispEvaluator {
 			for (LispVal form : LinalgLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
+			// Opt-in --simd: override the accelerated defuns just evaluated with the
+			// Vector API natives. Each native captures the defun it replaces and falls
+			// back to it for the inputs it does not handle (general arrays, mixed
+			// widths, shape errors), so linalg.lisp stays the single source of truth.
+			if (this.simd) {
+				LinalgSimd.install(this.globalEnv, this);
+			}
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 			if (loaded != null) {
 				return loaded;
@@ -2515,6 +2522,18 @@ public final class LispEvaluator {
 			}
 		}
 		return apply(resolveFunction(helperName), args, this.globalEnv);
+	}
+
+	/**
+	 * Applies a function value against the global environment. The seam
+	 * {@link LinalgSimd}'s natives use to fall back to the scalar {@code linalg.lisp}
+	 * defun they replaced, for an input their lane loops do not handle.
+	 * @param function the function value (a lambda, a native, or a symbol designator)
+	 * @param args the evaluated arguments
+	 * @return the function's result
+	 */
+	LispVal applyGlobal(LispVal function, List<LispVal> args) {
+		return apply(function, args, this.globalEnv);
 	}
 
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {

@@ -40,7 +40,7 @@ sections:
       - file: guides/linear-algebra.md
         title: ベクトルと行列（linalg）
       - file: guides/simd-acceleration.md
-        title: ベクトルカーネル（vec）
+        title: ベクトルカーネルと SIMD（vec, linalg）
       - file: guides/java-interop.md
         title: Java 連携
       - file: guides/http-fetch.md

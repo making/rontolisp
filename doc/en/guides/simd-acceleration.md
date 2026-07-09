@@ -1,6 +1,8 @@
-# Vector Kernels (vec)
+# Vector Kernels and SIMD Acceleration (vec, linalg)
 
 The `vec` package provides portable packed-`f64` vector kernels: constructors, element access, element-wise arithmetic and reductions over the [packed float array type](../reference/data-types.md). It is the go-to package for tight numeric loops over vectors of doubles, and it carries an optional hardware-acceleration (SIMD) layer on every backend. The package names the portable abstraction; the `--simd` flag names how it is accelerated.
+
+`--simd` is not a `vec`-only flag. It accelerates the [`linalg` package](linear-algebra.md) too, over the very same arrays. This guide covers `vec` first, then the flag, then what it does for `linalg`.
 
 Like the JSON and `linalg` libraries, `vec` is implemented once in Lisp source (`vec.lisp`): the interpreter loads the definitions lazily on the first use of a `vec:` function, and the compile path splices them into the program when it references the package. This scalar definition is the implementation on the interpreter, the JVM compiler and the WASM (wasm-GC) backends, and the correctness oracle for the accelerated paths, so every function behaves identically everywhere.
 
@@ -96,7 +98,7 @@ This is what makes `--no-gc` usable for real numeric loops (see the memory table
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec` and their `-into` siblings, plus `mean` / `norm` transitively) to real CPU vector instructions. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec` and their `-into` siblings, plus `mean` / `norm` transitively) to real CPU vector instructions. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 
@@ -110,7 +112,7 @@ Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wa
 - **Interpreter `--simd`**: `rontolisp prog.lisp --simd` runs the same seven kernels on `jdk.incubator.vector` instead of the scalar `vec.lisp` definitions -- no compilation step, and a large `vec:dot` gets several times faster. The native binary has the incubator module baked in and needs no runtime flag. On a plain `java -jar` the module is absent, so the flag falls back to the scalar reference and prints a note; re-run with `java --add-modules jdk.incubator.vector -jar rontolisp.jar prog.lisp --simd` to get the acceleration there. Without `--simd` the interpreter always runs the scalar reference -- it is the cross-backend oracle. The flag has no effect in the REPL.
 - **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` routes the kernels to an embedded `jdk.incubator.vector` bridge (a `DoubleVector` for `#d`, a `FloatVector` for `#f`; `vec:matvec` runs that vectorized dot once per matrix row). Running such a class requires the incubator module on the JVM: `java --add-modules jdk.incubator.vector Prog`. Without `--simd` the class runs the scalar reference on any JVM. **Whether the bridge becomes CPU vector instructions is up to the JVM that runs the class.** The Vector API is a normal library that a JVM may or may not compile down to vector instructions, operation by operation; where it does not, it falls back to emulating each lane, which is far slower than the plain scalar loop `--simd` replaced. So `--simd` is not automatically a win on the JVM backend, and the same class can behave very differently on two JVMs. Measure on the JVM you deploy on, with your own data.
 
-There is another reason the JVM backend is hard to predict, and it has nothing to do with SIMD. A compiled Lisp numeric loop boxes every intermediate value -- one `Double` per array element read, per product, per running sum, plus a `Long` per loop counter -- so a scalar `vec:` kernel is bound by allocation and dispatch rather than by arithmetic. How much of that boxing a given JIT eliminates (through escape analysis and inlining) varies enormously between JVMs, and on some of them the scalar path is already fast enough to beat the accelerated one. What `--simd` does here is sidestep the question: it replaces those kernels with primitive `double[]` / `float[]` loops that never box in the first place.
+There is another reason the JVM backend is hard to predict, and it has nothing to do with SIMD. A compiled Lisp numeric loop boxes every intermediate value -- one `Double` per array element read, per product, per running sum, plus a `Long` per loop counter -- so a scalar `vec:` kernel is bound by allocation and dispatch rather than by arithmetic. How much of that boxing a given JIT eliminates (through escape analysis and inlining) varies enormously between JVMs, so the very same scalar loop can be several times faster on one than on another. What `--simd` does here is sidestep the question: it replaces those kernels with primitive `double[]` / `float[]` loops that never box in the first place.
 - **wasm-GC `--simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float). A packed float array becomes an `(array (mut v128))` of lane groups -- still an ordinary GC object, still reclaimed by the engine's collector, so memory behaves exactly as it does on scalar wasm-GC. The whole `vec:` API (including `vec:matvec` and `vec:from-list` / `vec:to-list`) keeps working, and the results are unchanged. Composes with `--component` and `--optimize`. Run it with `wasmtime run -W gc` as usual -- wasmtime enables the SIMD proposal by default.
 - **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way.
 
@@ -121,6 +123,31 @@ Reading a lane group out of a GC array costs a bounds check that a `v128.load` f
 Because reductions sum in a different order under SIMD, a reduction over inexact inputs can differ from the left-to-right scalar reference in the last ULP; over the exact doubles typical of tests the results match exactly. The element-wise kernels are always bit-identical.
 
 Single-float reductions carry one more caveat. Under `--simd`, an `#f` reduction -- `vec:dot` / `vec:sum` / `vec:matvec` -- accumulates in single precision, in four lanes, on every backend, and widens only the final value. The scalar reference instead reads each element as a double and accumulates in double. So over data that a single-precision accumulator cannot hold, `--simd` can move an `#f` reduction by roughly the single-float epsilon rather than by the last ULP. Every `--simd` backend accumulates the same way, so they agree with one another, and the scalar reference remains the more accurate of the two. `#d` (`double-float`) reductions are unaffected. If a single-float reduction has to be as accurate as the scalar reference, use `#d` for it -- or leave `--simd` off for that computation.
+
+## Accelerating linalg
+
+The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes fifteen of its functions to the same kernels:
+
+- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`
+- **accelerated with them**: `mean`, `matmul`, `flatten` and `solve`, each of which is written in terms of the functions above
+- **never accelerated**: `emap` (it applies an arbitrary function to each element), `det`, `inv`, `array-equal` and the constructors
+
+There is no separate flag and nothing to opt into per function: compile or run with `--simd` and the calls are routed, exactly as they are for `vec`.
+
+```lisp
+(linalg:norm (linalg:sub #d(4.0 6.0) #d(1.0 2.0)))  ; => 5.0
+(linalg:emap #'sqrt #d(1.0 4.0 9.0))                ; => #d(1.0 2.0 3.0)
+```
+
+Where `vec` insists on packed arrays of one width, `linalg` accepts far more: general boxed arrays such as `#(1 2 3)`, two operands of different widths, plain numbers, and shapes that do not conform (which signal an error). A kernel handles only the packed, same-width, conforming case. **For everything else the portable `linalg.lisp` definition runs instead**, over the very same argument values -- same result, same error message, each argument form still evaluated exactly once. So `--simd` never changes what a linalg program accepts or rejects; it only makes the common case faster.
+
+The precision rules above carry over, with one exception in linalg's favor:
+
+- **Element-wise operations are bit-identical** to the portable definitions at both widths -- `add` / `sub` / `mul` / `div`, whether against another array or against a scalar -- and so are `transpose`, `reshape`, `outer`, `trace`, `amax`, `amin`, `argmax` and `argmin`.
+- **Reductions follow the `vec` rule**: `sum`, `mean`, `norm` and the vector and matrix-vector forms of `dot` sum in a different order, and over a single-float array they accumulate in single precision.
+- **The full matrix product is exempt.** `(linalg:dot A B)` and `linalg:matmul` over two matrices accumulate in double at both widths and stay bit-identical to the portable definition. The rule behind all three lines is the same one: an accumulator narrows to the lane element type only when the lanes *are* the axis being summed, and in a matrix product they run across the output row instead.
+
+`linalg` does not compile under `--no-gc` at all, with or without `--simd`. The `--no-gc` row of the target table above therefore concerns `vec` only.
 
 ## Runnable examples
 

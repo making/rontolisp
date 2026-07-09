@@ -16,6 +16,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
 
 /**
  * Builds the {@code vec:} acceleration runtime for the generated standalone
@@ -127,6 +128,16 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScaleInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_MATVEC_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvecInto"), cp.addUtf8(ternaryDesc))));
+
+		// The linalg: kernels share the one bridge class (and so the one _simdInit and
+		// the
+		// one resource-config entry). Their ops keys carry the package prefix because
+		// vec:add and linalg:add have the same member name.
+		for (String member : JvmLinalgSimdCompiler.members()) {
+			String desc = JvmLinalgSimdCompiler.arity(member) == 1 ? unaryDesc : binaryDesc;
+			ops.put(PackageRegistry.qualify(LispNames.LINALG_PKG, member), cp.addMethodref(bridgeClass,
+					cp.addNameAndType(cp.addUtf8(JvmLinalgSimdCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
+		}
 
 		// --- _simdInit body (self-contained: no bind callback) ---
 		List<Integer> code = new ArrayList<>();

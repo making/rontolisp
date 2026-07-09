@@ -113,6 +113,26 @@ prints differently on WASM, so a cross-backend `#f` pin must use f32-EXACT value
 (integers / halves) -- see the `linalg-single-float-cross-backend` ci-spec case,
 which is byte-identical on all four backends.
 
+## `--simd` acceleration (`.todo/107`)
+
+Fifteen members -- `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin`
+`trace` `transpose` `reshape` `dot` `outer` -- are intercepted under `--simd` on the
+interpreter, the JVM and wasm-GC, reusing the `vec:` lane loops. `mean`/`matmul`/`flatten`/
+`solve` ride along through the `sum`/`dot`/`reshape` their bodies call. `emap`, `det`,
+`inv` and `array-equal` are never intercepted.
+
+**linalg.lisp stays the oracle and is never rewritten to suit a kernel.** Each kernel is a
+PARTIAL function: it returns null for an input it does not handle -- a general (boxed)
+array, mixed widths, a plain number, a ratio scalar, a shape mismatch -- and the call site
+then runs the scalar defun, which supplies the exact behavior and the exact error message.
+So `(linalg:add #(1 2) #(3 4))` and `(linalg:add #d(1.0) #f(2.0))` keep working unchanged
+under `--simd`, just unaccelerated.
+
+Element-wise results are bit-identical to the oracle at both widths; only the reductions
+move (an `#f` reduction accumulates in single precision, the todo-106 contract). The matrix
+product is exempt and stays bit-identical. Full mechanics, the precision contract, the
+benchmarks and the `-0.0` cross-backend footgun: **`.kb/linalg-simd.md`**.
+
 ## Wiring
 
 - **Package**: `linalg` is a built-in package registered in the

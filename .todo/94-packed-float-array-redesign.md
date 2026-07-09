@@ -133,7 +133,7 @@ general boxed/heterogeneous array.
 - WIP reference: commit `5b1b065`, `.kb/simd.md` ("Unboxing mitigation"), the todo-92
   audit of the JVM array surface. Frontend: `LispArray`/`reader`. Backends:
   `JvmArrayRuntimeBuilder`, `WasmLispCompiler`, `NoGcWasmCompiler` (`F64VEC`), `LispEvaluator`.
-  Libraries: `SimdLibrary`/`simd.lisp`, `LinalgLibrary`/`linalg.lisp`. `.todo/93` (linalg
+  Libraries: `SimdLibrary`/`simd.lisp`, `LinalgLibrary`/`linalg.lisp`. `.todo/107` (linalg
   acceleration) folds into this — build linalg on the packed type directly.
 
 ## Progress log (branch feat/packed-float-array, off develop)
@@ -502,7 +502,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
 
 The accel push (simd) is DONE + committed (`ebe6bac`) and its docs (`4e7a97f`); working tree
 clean. Phase 5b is the LAST planned piece: make `linalg` ride the packed float-array type
-(decision #2, and `.todo/93` linalg acceleration). Start on top of `71bb79b`.
+(decision #2, and `.todo/107` linalg acceleration). Start on top of `71bb79b`.
 
 **DIRECTION (user, 2026-07-08 — supersedes the earlier "exactness" framing):** `linalg`'s
 integer/ratio **exactness is NOT a design goal** — it is an accidental byproduct of building on
@@ -540,7 +540,7 @@ the kernel acceleration.
      native `CiSpecE2eTest`.
    - `.kb/linalg.md`: update the "exact/generic arithmetic" semantics note to "float (packed
      double-float)".
-3. **Accelerate the vectorizable kernels (the speed win, the `.todo/93` intent).** Now that linalg
+3. **Accelerate the vectorizable kernels (the speed win, the `.todo/107` intent).** Now that linalg
    produces packed doubles, intercept `add`/`sub`/`mul`/`div`/`emap`/`dot`/`sum`/`mean`/`norm`/
    `amax`/`amin` (rank-1) and `matmul`/`outer` (rank-2) like the simd package does. The simd
    interception is the template — `JvmSimd{Compiler,RuntimeBuilder,VectorTemplate}` (JVM `--simd`)
@@ -554,7 +554,7 @@ rank-1 float-vector ops at most; matrices are JVM/interp/wasm-GC only. Do not ch
 `--no-gc`.
 
 **Refs:** `LinalgLibrary` + `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`; `.kb/linalg.md`;
-`guides/linear-algebra.md`; `.todo/93` (linalg accel); the simd interception just committed
+`guides/linear-algebra.md`; `.todo/107` (linalg accel); the simd interception just committed
 (`.kb/simd.md`, `JvmSimd*`, `NoGcWasmCompiler` simd section). The `-Drontolisp.doc.fix=true` helper
 is the key to the doc churn.
 
@@ -707,7 +707,7 @@ loop, --no-gc N/A):**
   — weigh a shared bridge vs a second one; a shared bridge avoids embedding two classes). Wire into
   `JvmLispCompiler` (`Ctx.linalgOps` or reuse `simdOps`) + `JvmExprCompiler` (`LINALG_PKG` dispatch).
   `LinalgLibrary.process` still splices the scalar defuns (they are the fallback semantics + the
-  interp/wasm-GC impl); the JVM `--simd` path just intercepts the accelerated call sites. `.todo/93`
+  interp/wasm-GC impl); the JVM `--simd` path just intercepts the accelerated call sites. `.todo/107`
   (linalg accel) folds in here.
 
 **Resumption facts:** branch `feat/packed-float-array`, steps 1+2 COMMITTED at `4f3c896`, all green

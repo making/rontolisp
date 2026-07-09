@@ -114,6 +114,7 @@ final class WasmVecLoops {
 			case Instruction.F64X2_ADD -> Instruction.F32X4_ADD;
 			case Instruction.F64X2_SUB -> Instruction.F32X4_SUB;
 			case Instruction.F64X2_MUL -> Instruction.F32X4_MUL;
+			case Instruction.F64X2_DIV -> Instruction.F32X4_DIV;
 			default ->
 				throw new IllegalArgumentException("no f32x4 sibling for f64x2 op 0x" + Integer.toHexString(f64x2Op));
 		};
@@ -638,6 +639,48 @@ final class WasmVecLoops {
 	// pre-op lanes). Both no-ops when count is a whole multiple of the lane count.
 
 	/** Saves {@code dst[ngroups-1]} into {@code oldLocal} when a partial group exists. */
+	/**
+	 * {@code dst[i] = op(v[i], s)} -- or {@code op(s, v[i])} when {@code reversed} --
+	 * over whole {@code f64x2} lane groups. The {@code linalg:} scalar-broadcast kernels
+	 * (todo-107); {@link #gcScale} is the {@code op = mul, reversed = false} special case
+	 * {@code vec:} already had.
+	 *
+	 * <p>
+	 * DOUBLE WIDTH ONLY. A single-float array broadcast against a genuine f64 scalar has
+	 * to widen each element, compute in f64 and narrow once -- {@code linalg::%la-bcast}
+	 * routes it through {@code emap}, whose element read widens and whose write narrows
+	 * -- and splatting {@code f32.demote_f64(s)} into f32 lanes would not do that. The
+	 * single-float kernels therefore walk elements through {@code _v_get} /
+	 * {@code _v_set}, which promote and demote for free.
+	 *
+	 * <p>
+	 * The save/restore bracket is not optional here as it is for {@link #gcMap2}: an
+	 * operation over the last group's zero padding does NOT map zero to zero
+	 * ({@code 0 - s = -s}, {@code s / 0 = inf}), so the destination's padding lanes must
+	 * be put back, or a later {@code sum} over the result would fold the garbage in.
+	 */
+	static void gcBroadcastF64(WasmWriter w, int gd, int gv, int ngroups, int g, int count, int rem, int old, int cur,
+			int sLocal, int f64x2Op, boolean reversed) {
+		gcSaveLastGroup(w, gd, ngroups, count, rem, old, false);
+		openGroupLoop(w, ngroups, g);
+		get(w, gd);
+		get(w, g);
+		if (reversed) {
+			get(w, sLocal);
+			simd(w, Instruction.F64X2_SPLAT);
+			groupGet(w, gv, g);
+		}
+		else {
+			groupGet(w, gv, g);
+			get(w, sLocal);
+			simd(w, Instruction.F64X2_SPLAT);
+		}
+		simd(w, f64x2Op);
+		arraySet(w);
+		closeGroupLoop(w, g);
+		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, false);
+	}
+
 	static void gcSaveLastGroup(WasmWriter w, int gd, int ngroups, int count, int rem, int old, boolean single) {
 		get(w, count);
 		i32Const(w, lanes(single) - 1);

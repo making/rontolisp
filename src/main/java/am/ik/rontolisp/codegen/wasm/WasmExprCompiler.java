@@ -132,6 +132,14 @@ final class WasmExprCompiler {
 				WasmVecSimdCompiler.compile(sym.name(), cons, ctx);
 				return;
 			}
+			// --simd: the fifteen accelerated linalg: kernels. Unlike vec:, each call is
+			// guarded -- a kernel that declines the operands (a general array, a mixed
+			// width, a shape error) returns null and the emitted call site runs the
+			// scalar linalg.lisp defun over the same locals.
+			if (ctx.simd && WasmLinalgSimdCompiler.handles(sym.name())) {
+				WasmLinalgSimdCompiler.compile(sym.name(), cons, ctx);
+				return;
+			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
 				if (LispNames.VERSION.equals(qn.member())) {
