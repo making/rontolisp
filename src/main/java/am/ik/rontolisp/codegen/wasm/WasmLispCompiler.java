@@ -151,14 +151,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param simd when {@code true} (the CLI's {@code --simd}), the vectorizable
 	 * {@code vec:} kernels are intercepted at their call sites and routed to emitted v128
 	 * runtime helpers ({@link WasmVecSimdRuntimeBuilder}) instead of the scalar
-	 * {@code vec.lisp} defuns. Because {@code v128.load}/{@code v128.store} address
-	 * LINEAR memory, this also switches the packed float-array representation: a
-	 * {@code TYPE_FARRAY}'s data field then holds an {@code i31ref} pointer into a
-	 * bump-allocated linear-memory block instead of a {@code TYPE_F64ARR}/
-	 * {@code TYPE_F32ARR} GC array. The type section is unchanged (the data field is
-	 * {@code (ref null eq)} either way); the representation is fixed at compile time, so
-	 * one module only ever holds one of the two. Without {@code simd} the output is
-	 * byte-identical to a build of this compiler that never knew about the flag.
+	 * {@code vec.lisp} defuns. This also switches the packed float-array representation:
+	 * a {@code TYPE_FARRAY}'s data field then holds a {@code TYPE_VBLOCK} over an
+	 * {@code (array (mut v128))} of lane groups instead of a {@code TYPE_F64ARR}/
+	 * {@code TYPE_F32ARR}. Both are ordinary GC objects the engine collects; the data
+	 * field is {@code (ref null eq)} either way, and the representation is fixed at
+	 * compile time, so one module only ever holds one of the two. Without {@code simd}
+	 * the output is byte-identical to a build of this compiler that never knew about the
+	 * flag.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve,
 			boolean simd) {
@@ -180,6 +180,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	int userFuncBase() {
 		return FUNC_USER_BASE + (this.simd ? WasmVecSimdRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The number of type entries this module emits before the export/import wrapper
+	 * signatures: the fixed types through {@code TYPE_F32ARR}, plus -- under
+	 * {@code --simd} only -- the {@link WasmVecSimdRuntimeBuilder} block's four. The same
+	 * conditional-index trick as {@link #userFuncBase()}: without {@code --simd} the
+	 * output is byte-identical to a build that never knew about the flag.
+	 * @return the index of the first export wrapper type
+	 */
+	private int fixedTypeCount() {
+		return TYPE_F32ARR + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	// Function indices (imports come first). Defined functions are indexed relative to
@@ -467,8 +479,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// of a string value straight from its GC array. See the type comment.
 	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
 
-	// The vec: SIMD block (_vec_alloc + the twelve v128 kernels), emitted ONLY under
-	// --simd. Fixed indices relative to FUNC_WRITE_STR_GC, so every constant above keeps
+	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
+	// under --simd. Fixed indices relative to FUNC_WRITE_STR_GC, so every constant above
+	// keeps
 	// its value; the user defuns below shift by WasmVecSimdRuntimeBuilder.FUNC_COUNT when
 	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
 	static final int FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1;
@@ -627,8 +640,42 @@ public final class WasmLispCompiler implements LispCompiler {
 	// before array.get / array.set. The unboxed f32 storage of a single-float packed
 	// array (#f(...) / make-array :element-type 'single-float). Reads widen f32->f64,
 	// writes narrow f64->f32; scalars stay f64 (no single-float scalar type). Appended
-	// after TYPE_FARRAY (last fixed type before the export/import wrapper signatures).
+	// after TYPE_FARRAY (last type of the DEFAULT module).
 	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 41
+
+	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
+	//
+	// Four types, emitted ONLY under --simd, appended after TYPE_F32ARR and before the
+	// export/import wrapper signatures (which shift past them via fixedTypeCount()).
+	// Declaring an (array (mut v128)) at all requires the SIMD proposal, so the default
+	// module keeps validating on a runtime that has it turned off -- which is exactly the
+	// dead-flag guard WasmLispCompilerIntegrationTest runs.
+
+	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
+	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
+	// zeroes every lane, which is what lets the kernels drop their scalar tails.
+	static final int TYPE_V128ARR = TYPE_F32ARR + 1; // 42
+
+	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
+	// the
+	// TYPE_F64ARR/TYPE_F32ARR data of a TYPE_FARRAY, stored in the SAME (ref null eq)
+	// data
+	// field. `count` is the logical element count, `kind` the width tag (0 =
+	// double-float,
+	// 1 = single-float) that replaces `ref.test $f32arr` now both widths share one
+	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
+	// a
+	// zero sentinel so matvec's shuffle window can always read one group past its last.
+	static final int TYPE_VBLOCK = TYPE_F32ARR + 2; // 43
+
+	// _v_get ((ref null eq) vblock, i32 index) -> f64
+	static final int TYPE_V_GET = TYPE_F32ARR + 3; // 44
+
+	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
+	static final int TYPE_V_SET = TYPE_F32ARR + 4; // 45
+
+	// How many type entries the --simd block appends.
+	static final int SIMD_TYPE_COUNT = 4;
 
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
@@ -716,15 +763,6 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bump scratch offset they were assembled at is reused (HEAP_PTR is a stack pointer
 	// -- see FUNC_STR_FRESH). This is what retires the linear string heap leak.
 	static final int STRING_ID_CTR_ADDR = 156;
-
-	// Bump pointer of the packed float-array arena (--simd only; see
-	// WasmVecSimdRuntimeBuilder). Zero-initialized linear memory means "not yet seeded":
-	// the first _vec_alloc starts the arena at the CURRENT memory size, i.e. above every
-	// page the module (or, in component mode, the shared mem module + its adapters)
-	// statically reserves, and grows the memory from there. That is why no fixed base
-	// address is baked in -- the arena is always the top of the address space, which is
-	// also why a mark/reset of this single word is a complete arena pop (.todo/104).
-	static final int VEC_HEAP_PTR_ADDR = 160;
 
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
@@ -1258,7 +1296,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if ((!this.component || this.serve) && !exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
-			int wrapperTypeIndex = TYPE_F32ARR + 1;
+			int wrapperTypeIndex = fixedTypeCount();
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
 						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
@@ -1306,7 +1344,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// types; the WasmImportInjector post-pass prepends the matching import entries
 		// and resolves the placeholder call indices after the module is assembled.
 		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
-		int importTypeIndex = TYPE_F32ARR + 1 + exportPlans.size();
+		int importTypeIndex = fixedTypeCount() + exportPlans.size();
 		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
@@ -1724,10 +1762,48 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.F32);
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
+				if (this.simd) {
+					// type 42 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
+					// of a packed float array. Declaring it at all requires the SIMD
+					// proposal, which is why it is gated on --simd.
+					types.add(w -> {
+						w.write(Type.ARRAY_TYPE);
+						w.write(Type.V128);
+						w.write(am.ik.wasm.Mutability.VAR);
+					});
+					// type 43 (TYPE_VBLOCK): struct {i32 count, i32 kind, (ref null eq)
+					// groups} -- what TYPE_FARRAY's data field holds under --simd. All
+					// fields immutable (an aset mutates a v128 group, not the struct).
+					types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+						fields.addField(false, w -> w.write(Type.I32));
+						fields.addField(false, w -> w.write(Type.I32));
+						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+					}));
+					// type 44 (TYPE_V_GET): _v_get ((ref null eq), i32) -> f64
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(2);
+						w.write(Type.REFNULL.code());
+						w.writeHeapType(Type.EQ.code());
+						w.write(Type.I32);
+						w.write(1);
+						w.write(Type.F64);
+					});
+					// type 45 (TYPE_V_SET): _v_set ((ref null eq), i32, f64) -> f64
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(3);
+						w.write(Type.REFNULL.code());
+						w.writeHeapType(Type.EQ.code());
+						w.write(Type.I32);
+						w.write(Type.F64);
+						w.write(1);
+						w.write(Type.F64);
+					});
+				}
 				// Export wrapper signatures (host-callable), appended after the last
-				// fixed
-				// type (TYPE_F32ARR). One per (rontolisp:wasm-export ...)
-				// directive.
+				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
+				// (rontolisp:wasm-export ...) directive.
 				for (ExportPlan p : exportPlans) {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
 							WasmExportCompiler.resultWasmTypes(p.decl()));
@@ -1951,7 +2027,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
-				// vec: SIMD block (--simd only): _vec_alloc + the twelve v128 kernels
+				// vec: SIMD block (--simd only): the three element helpers + twelve
+				// kernels
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
 						fnDef.addFunction(WasmVecSimdRuntimeBuilder.typeIndexOf(i));
@@ -2482,10 +2559,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * True under {@code --simd}: the vectorizable {@code vec:} kernels are routed to
 		 * the {@link WasmVecSimdRuntimeBuilder} v128 helpers at their call sites, and a
-		 * packed float array's {@code TYPE_FARRAY} data field holds an {@code i31ref}
-		 * pointer into the linear-memory arena rather than a {@code TYPE_F64ARR}/
-		 * {@code TYPE_F32ARR} GC array. One module only ever uses one representation, so
-		 * every packed reader/writer branches on this flag at COMPILE time.
+		 * packed float array's {@code TYPE_FARRAY} data field holds a {@code TYPE_VBLOCK}
+		 * over an {@code (array (mut v128))} of lane groups rather than a
+		 * {@code TYPE_F64ARR}/{@code TYPE_F32ARR}. One module only ever uses one
+		 * representation, so every packed reader/writer branches on this flag at COMPILE
+		 * time.
 		 */
 		boolean simd = false;
 

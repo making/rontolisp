@@ -2999,16 +2999,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// exact inputs). The module carries NO 0xFD SIMD opcode, so it runs on an MVP runtime
 	// that lacks the SIMD proposal -- a portability win over the always-v128 behavior.
 	//
-	// SEAM FOR .todo/101 (wasm-GC honoring --simd): each emitScalar*Loop below is
-	// expressed
-	// over a linear-memory block addressed by raw i32 locals (a data pointer past the
-	// [count] header + the element count + the element width) rather than the Lisp arg
-	// forms, so the GC backend can later drive the same loop over a linear-memory mirror
-	// of
-	// a packed GC array. The compileScalar* wrappers are the --no-gc-specific part (arg
+	// SHARED SEAM: each emitScalar*Loop below is expressed over a linear-memory block
+	// addressed by raw i32 locals (a data pointer past the [count] header + the element
+	// count + the element width) rather than the Lisp arg forms, and lives in
+	// WasmVecLoops. The compileScalar* wrappers are the --no-gc-specific part (arg
 	// evaluation + block allocation); the emitScalar*Loop helpers are the reusable core.
-	// Here "scalar" means non-SIMD (one element per iteration), distinct from the non-GC
-	// value model the compiler is named for.
+	// The wasm-GC --simd kernels sit alongside them in that class (over GC lane groups
+	// rather than a pointer), which is why this backend must allocate its locals in the
+	// original order: its output stays byte-identical to before the extraction. Here
+	// "scalar" means non-SIMD (one element per iteration), distinct from the non-GC value
+	// model the compiler is named for.
 
 	// (vec:add / vec:sub / vec:mul a b) without --simd: dst[i] = op(a[i], b[i]) over a
 	// plain

@@ -4,32 +4,48 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.WasmWriter;
 
 /**
- * The vectorizable {@code vec:} kernel loops, expressed once over a <em>linear-memory
- * block</em> addressed by raw i32 locals (a data pointer past the block header, an
- * element count and the element width) rather than over any one backend's Lisp forms.
+ * The vectorizable {@code vec:} kernel loops, expressed once over raw locals (pointers or
+ * array references, an element or group count and the element width) rather than over any
+ * one backend's Lisp forms.
  *
  * <p>
- * Two backends drive these loops over two different block layouts:
- * {@link NoGcWasmCompiler} inlines them into a defun body over its
- * {@code [count:i32][elements]} block, and {@link WasmVecSimdRuntimeBuilder} emits them
- * inside standalone runtime helper functions over the wasm-GC {@code --simd} block
- * ({@code [count:i32][kind:i32][pad][elements]}, reached through the {@code $farray}
- * struct's {@code i31ref} data field). Both layouts put the elements at a fixed offset,
- * so a data pointer plus a count is all a loop ever needs.
+ * Two backends drive these loops over two different element stores:
+ *
+ * <ul>
+ * <li>{@link NoGcWasmCompiler} inlines the <em>linear-memory</em> bodies ({@code simd*} /
+ * {@code scalar*}) into a defun body over its {@code [count:i32][elements]} block,
+ * addressing it with {@code v128.load} / {@code v128.store} through a raw i32 data
+ * pointer.</li>
+ * <li>{@link WasmVecSimdRuntimeBuilder} emits the <em>GC group</em> bodies ({@code gc*})
+ * inside standalone runtime helper functions over the wasm-GC {@code --simd} store: an
+ * {@code (array (mut v128))} of lane GROUPS reached through a {@code $vblock}
+ * struct.</li>
+ * </ul>
  *
  * <p>
  * Every emitter here takes locals that the CALLER has already materialized (the data
- * pointers, the element count, a splat-zeroed v128 accumulator, an f64 scalar) and emits
- * only the loop, its scalar tail, and -- for the reductions -- the folded result. That
- * split is deliberate: it lets each backend set its locals up in whatever order its own
- * local allocator demands while the loop bodies stay byte-identical between them.
+ * pointers or group arrays, the element/group count, a splat-zeroed v128 accumulator, an
+ * f64 scalar) and emits only the loop and -- for the reductions -- the folded result.
+ * That split is deliberate: it lets each backend set its locals up in whatever order its
+ * own local allocator demands while the loop bodies stay byte-identical between them.
  *
  * <p>
- * Widths: {@code single == false} is the {@code f64x2} path (two f64 lanes per iteration,
- * {@code count >> 1} pairs, a single odd-element tail guard); {@code single == true} is
- * the {@code f32x4} path (four f32 lanes, {@code count >> 2} quads, a scalar remainder
- * LOOP over the last {@code count & 3} elements). Each width computes entirely in its own
- * native precision; the reductions promote to f64 only at the value boundary.
+ * Widths: {@code single == false} is the {@code f64x2} path (two f64 lanes per
+ * iteration), {@code single == true} the {@code f32x4} path (four f32 lanes). Each width
+ * computes entirely in its own native precision; the reductions promote to f64 only at
+ * the value boundary.
+ *
+ * <p>
+ * <strong>Tails.</strong> The linear bodies own their scalar tail ({@code count >> shift}
+ * whole vectors, then the leftover elements one at a time), because the block ends at the
+ * last element. The GC group bodies have <em>no tail</em>: the last group's lanes past
+ * the element count are padding that {@code array.new_default} zeroed, so
+ * {@code add}/{@code sub}/{@code mul}/{@code scale} map zero to zero and
+ * {@code sum}/{@code dot} fold zero in. The <em>writing</em> kernels do pay for one
+ * thing: a whole-group store reaches up to {@code lanes - 1} elements past {@code count},
+ * so {@link #gcSaveLastGroup} / {@link #gcRestoreLastGroupTail} bracket the loop and
+ * restore those lanes from the destination's pre-loop value -- otherwise an {@code -into}
+ * destination longer than its operands would lose real elements.
  */
 final class WasmVecLoops {
 
@@ -509,6 +525,224 @@ final class WasmVecLoops {
 		if (single) {
 			w.write(Instruction.F64_PROMOTE_F32);
 		}
+	}
+
+	// --- wasm-GC group (v128 array) kernel bodies --------------------------------
+	//
+	// Preconditions for all four: the group locals hold (ref null $v128arr) group arrays,
+	// ngroupsLocal the REAL group count ceil(count / lanes) -- never the trailing zero
+	// sentinel group -- and gLocal is a free i32 the emitter uses as its group cursor.
+	// No scalar tail: see the class comment.
+
+	/** The number of lanes per group at this width: 2 f64 or 4 f32. */
+	static int lanes(boolean single) {
+		return single ? 4 : 2;
+	}
+
+	/** {@code log2(lanes)}: the shift from an element index to its group index. */
+	static int laneShift(boolean single) {
+		return single ? 2 : 1;
+	}
+
+	/** {@code array.get $v128arr (arr, idx)}: pushes one lane group. */
+	static void groupGet(WasmWriter w, int arrLocal, int idxLocal) {
+		get(w, arrLocal);
+		get(w, idxLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+	}
+
+	/**
+	 * Opens a loop over group indices {@code [0, ngroups)}, leaving the cursor in
+	 * {@code gLocal}. Pairs with {@link #closeGroupLoop}.
+	 */
+	static void openGroupLoop(WasmWriter w, int ngroupsLocal, int gLocal) {
+		i32Const(w, 0);
+		set(w, gLocal);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, gLocal);
+		get(w, ngroupsLocal);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+	}
+
+	/** Closes a group loop: {@code g++}, branch back, end loop, end block. */
+	static void closeGroupLoop(WasmWriter w, int gLocal) {
+		get(w, gLocal);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, gLocal);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	/** {@code dst[g] = op(a[g], b[g])} over whole lane groups. */
+	static void gcMap2(WasmWriter w, int gd, int ga, int gb, int ngroups, int g, int count, int rem, int old, int cur,
+			boolean single, int f64x2Op) {
+		int laneOp = single ? f32x4Of(f64x2Op) : f64x2Op;
+		gcSaveLastGroup(w, gd, ngroups, count, rem, old, single);
+		openGroupLoop(w, ngroups, g);
+		get(w, gd);
+		get(w, g);
+		groupGet(w, ga, g);
+		groupGet(w, gb, g);
+		simd(w, laneOp);
+		arraySet(w);
+		closeGroupLoop(w, g);
+		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, single);
+	}
+
+	/**
+	 * {@code dst[g] = v[g] * splat(s)} over whole lane groups. {@code sLocal} is an f64
+	 * local, narrowed per use on the f32 path so the product is computed in f32.
+	 */
+	static void gcScale(WasmWriter w, int gd, int gv, int ngroups, int g, int count, int rem, int old, int cur,
+			int sLocal, boolean single) {
+		gcSaveLastGroup(w, gd, ngroups, count, rem, old, single);
+		openGroupLoop(w, ngroups, g);
+		get(w, gd);
+		get(w, g);
+		groupGet(w, gv, g);
+		get(w, sLocal);
+		if (single) {
+			w.write(Instruction.F32_DEMOTE_F64);
+			simd(w, Instruction.F32X4_SPLAT);
+			simd(w, Instruction.F32X4_MUL);
+		}
+		else {
+			simd(w, Instruction.F64X2_SPLAT);
+			simd(w, Instruction.F64X2_MUL);
+		}
+		arraySet(w);
+		closeGroupLoop(w, g);
+		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, single);
+	}
+
+	// --- preserving the destination past the operand count ------------------------
+	//
+	// A group-at-a-time write covers ceil(count / lanes) * lanes elements, up to lanes-1
+	// MORE than the `count` the scalar vec.lisp defun writes. Those extra lanes are the
+	// destination's own zero padding when it is exactly `count` long (writing op(0,0) = 0
+	// there is a no-op), but a DESTINATION LONGER THAN THE OPERANDS -- which the -into
+	// contract explicitly allows -- has real elements in them. So the last written group
+	// is
+	// blended: lanes >= count % lanes keep their original destination value. This also
+	// makes `(vec:scale v s)` with a non-finite s leave the padding at zero instead of
+	// NaN.
+	//
+	// remLocal = count % lanes; oldLocal holds the destination's last group as it was
+	// BEFORE the loop (read before, so an `out` aliased with an operand still sees its
+	// own
+	// pre-op lanes). Both no-ops when count is a whole multiple of the lane count.
+
+	/** Saves {@code dst[ngroups-1]} into {@code oldLocal} when a partial group exists. */
+	static void gcSaveLastGroup(WasmWriter w, int gd, int ngroups, int count, int rem, int old, boolean single) {
+		get(w, count);
+		i32Const(w, lanes(single) - 1);
+		w.write(Instruction.I32_AND);
+		set(w, rem);
+		get(w, rem);
+		w.write(Instruction.IF, 0x40);
+		get(w, gd);
+		lastGroupIndex(w, ngroups);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		set(w, old);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Restores lanes {@code [rem, lanes)} of {@code dst[ngroups-1]} from
+	 * {@code oldLocal}, so the group loop's overhang cannot clobber the destination.
+	 */
+	static void gcRestoreLastGroupTail(WasmWriter w, int gd, int ngroups, int rem, int old, int cur, boolean single) {
+		int extract = single ? Instruction.F32X4_EXTRACT_LANE : Instruction.F64X2_EXTRACT_LANE;
+		int replace = single ? Instruction.F32X4_REPLACE_LANE : Instruction.F64X2_REPLACE_LANE;
+		get(w, rem);
+		w.write(Instruction.IF, 0x40);
+		get(w, gd);
+		lastGroupIndex(w, ngroups);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		set(w, cur);
+		// lane 0 is always a real element (rem >= 1 inside this guard)
+		for (int lane = 1; lane < lanes(single); lane++) {
+			i32Const(w, lane);
+			get(w, rem);
+			w.write(Instruction.I32_GE_U);
+			w.write(Instruction.IF, 0x40);
+			get(w, cur);
+			get(w, old);
+			simd(w, extract);
+			w.write(lane);
+			simd(w, replace);
+			w.write(lane);
+			set(w, cur);
+			w.write(Instruction.END);
+		}
+		get(w, gd);
+		lastGroupIndex(w, ngroups);
+		get(w, cur);
+		arraySet(w);
+		w.write(Instruction.END);
+	}
+
+	/** Pushes {@code ngroups - 1}, the index of the last written group. */
+	private static void lastGroupIndex(WasmWriter w, int ngroups) {
+		get(w, ngroups);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SUB);
+	}
+
+	/**
+	 * Horizontal sum over whole lane groups, leaving the total as an <strong>f64</strong>
+	 * on the stack. {@code accLocal} must already be splat-zeroed at this width.
+	 */
+	static void gcSum(WasmWriter w, int gv, int ngroups, int g, int accLocal, int sumLocal, boolean single) {
+		openGroupLoop(w, ngroups, g);
+		get(w, accLocal);
+		groupGet(w, gv, g);
+		simd(w, single ? Instruction.F32X4_ADD : Instruction.F64X2_ADD);
+		set(w, accLocal);
+		closeGroupLoop(w, g);
+		finishReduction(w, accLocal, sumLocal, single);
+	}
+
+	/**
+	 * Lane-wise multiply-accumulate over whole lane groups, leaving
+	 * {@code sum(a_i * b_i)} as an <strong>f64</strong> on the stack.
+	 */
+	static void gcDot(WasmWriter w, int ga, int gb, int ngroups, int g, int accLocal, int sumLocal, boolean single) {
+		openGroupLoop(w, ngroups, g);
+		get(w, accLocal);
+		groupGet(w, ga, g);
+		groupGet(w, gb, g);
+		simd(w, single ? Instruction.F32X4_MUL : Instruction.F64X2_MUL);
+		simd(w, single ? Instruction.F32X4_ADD : Instruction.F64X2_ADD);
+		set(w, accLocal);
+		closeGroupLoop(w, g);
+		finishReduction(w, accLocal, sumLocal, single);
+	}
+
+	/** Folds the accumulator's lanes and leaves the total as an f64 on the stack. */
+	static void finishReduction(WasmWriter w, int accLocal, int sumLocal, boolean single) {
+		if (single) {
+			horizontalAddF32(w, accLocal, sumLocal);
+			get(w, sumLocal);
+			w.write(Instruction.F64_PROMOTE_F32);
+		}
+		else {
+			horizontalAdd(w, accLocal, sumLocal);
+			get(w, sumLocal);
+		}
+	}
+
+	/** {@code array.set $v128arr}: consumes the array, the index and the lane group. */
+	static void arraySet(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 	}
 
 	// --- shared single-element bodies --------------------------------------------

@@ -614,6 +614,19 @@ public interface Instruction {
 	/** {@code v128.store} (0xFD 0x0B): store a 128-bit vector (memarg). */
 	int V128_STORE = 0x0B;
 
+	/**
+	 * {@code v128.const} (0xFD 0x0C b0..b15): push a 128-bit literal, given as sixteen
+	 * immediate bytes in little-endian lane order.
+	 */
+	int V128_CONST = 0x0C;
+
+	/**
+	 * {@code i8x16.shuffle} (0xFD 0x0D l0..l15): build a vector from sixteen immediate
+	 * byte-lane indices, {@code 0..15} selecting the first operand's bytes and
+	 * {@code 16..31} the second's.
+	 */
+	int I8X16_SHUFFLE = 0x0D;
+
 	/** {@code f32x4.splat} (0xFD 0x13): broadcast one {@code f32} into all four lanes. */
 	int F32X4_SPLAT = 0x13;
 
@@ -628,8 +641,14 @@ public interface Instruction {
 	 */
 	int F32X4_EXTRACT_LANE = 0x1F;
 
+	/** {@code f32x4.replace_lane} (0xFD 0x20 lane): write one {@code f32} lane. */
+	int F32X4_REPLACE_LANE = 0x20;
+
 	/** {@code f64x2.extract_lane} (0xFD 0x21 lane): read one {@code f64} lane. */
 	int F64X2_EXTRACT_LANE = 0x21;
+
+	/** {@code f64x2.replace_lane} (0xFD 0x22 lane): write one {@code f64} lane. */
+	int F64X2_REPLACE_LANE = 0x22;
 
 	/** {@code f64x2.add} (0xFD 0xF0): lane-wise addition. */
 	int F64X2_ADD = 0xF0;

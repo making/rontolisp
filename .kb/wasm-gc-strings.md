@@ -113,17 +113,16 @@ identical). See [[wasi-component]].
 wasm-GC host (wasmtime `-W gc`, Node/V8; NOT Chicory/Endive -- no wasm-GC): peak RSS is
 FLAT vs N (N=50000 -> ~94MB, N=200000 -> ~91MB). A leak would scale linearly (multi-GB).
 
-## The `--simd` packed-float arena shares this memory
+## `--simd` does NOT put anything in this memory
 
-Under `--simd` (todo-101, `.kb/vec.md` acceleration layer 3) packed float arrays move OFF
-the GC heap into the SAME linear memory, because `v128.load`/`store` cannot address a GC
-object. They do not touch `HEAP_PTR`: `_vec_alloc` bumps its own word
-(`VEC_HEAP_PTR_ADDR` = 160) and seeds it lazily with `memory.size() << 16`, so the packed
-arena begins above every statically reserved page (the string/intern heap included) and
-grows the memory from there. Strings therefore keep the property this file describes; what
-grows without bound in a `--simd` module is the packed arena, and the destination-passing
-`vec:` `-into` kernels (plus `.todo/104`'s `with-arena`) are its answer. Without `--simd`
-nothing changes -- the module is byte-identical.
+Under `--simd` (todo-105, `.kb/vec.md` acceleration layer 3) packed float arrays change
+representation -- a `TYPE_VBLOCK` over an `(array (mut v128))` of lane groups instead of a
+`TYPE_F64ARR`/`TYPE_F32ARR` -- but they stay GC objects and never touch linear memory. (An
+`(array (mut v128))` is a legal GC array; `array.get` yields a v128 without any
+`v128.load`.) `HEAP_PTR` and everything this file describes are untouched, and nothing in a
+`--simd` module grows without bound. todo-101 briefly did move them into a bump arena here
+(`VEC_HEAP_PTR_ADDR` = 160); todo-105 removed that word and its allocator. Without `--simd`
+the module is byte-identical either way.
 
 ## Related
 - [[27-wasm-gc-heap-never-grows]] -- the linear string heap this retires.

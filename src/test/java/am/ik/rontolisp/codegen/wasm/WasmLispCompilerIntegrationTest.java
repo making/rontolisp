@@ -5845,14 +5845,16 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("progv");
 	}
 
-	// --- wasm-GC --simd (todo-101) ---------------------------------------------------
+	// --- wasm-GC --simd (todo-105) ---------------------------------------------------
 
 	// Compiles a vec:-using program on the wasm-GC backend, with or without --simd, and
-	// runs it. Splices vec.lisp like RontoLispCli does (the scalar members -- zeros/ones/
-	// arange/aref/length/mean/norm/to-list -- keep running as defuns over the packed
-	// surface even under --simd; only the vectorizable kernels are intercepted).
+	// runs it. Splices linalg.lisp then vec.lisp in RontoLispCli's order (the scalar vec:
+	// members -- zeros/ones/arange/aref/length/mean/norm/to-list -- and the whole linalg:
+	// surface keep running as defuns over the packed representation even under --simd;
+	// only the vectorizable kernels are intercepted).
 	private static String compileAndRunVec(String lispCode, boolean simd, String... extraFlags) throws Exception {
-		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(lispCode));
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
+			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
 		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "--wasm", "gc"));
@@ -5864,8 +5866,10 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
-	// The whole vec: surface at both widths, at lengths covering every SIMD tail
-	// configuration: f64x2 needs even/odd, f32x4 needs 0/1/2/3 leftover elements.
+	// The whole vec: surface at both widths, at lengths covering every group-padding
+	// configuration: f64x2 needs even/odd, f32x4 needs 0/1/2/3 padding lanes. Under
+	// --simd these no longer drive a scalar tail loop -- they drive the ZERO PADDING the
+	// kernels rely on, so a padding lane that ever became non-zero shows up here.
 	private static final String VEC_SURFACE = """
 			(dolist (n '(1 2 3 4 5 7 8))
 			  (let ((a (vec:arange n)) (b (vec:ones n)))
@@ -5893,14 +5897,70 @@ class WasmLispCompilerIntegrationTest {
 			(print (make-array '(2 3) :element-type 'double-float :initial-element 2.0))
 			""";
 
+	// GEMV at every lane offset a row start can land on. Row r of a d x n matrix begins
+	// at
+	// lane (r*n) & (lanes-1), so cycling n over 1,2,3,5 hits all four f32x4 offsets and
+	// all
+	// two f64x2 offsets -- i.e. both the plain array.get row read and every i8x16.shuffle
+	// window immediate. The row sums of consecutive integers make a wrong window obvious.
+	private static final String GEMV_LANE_OFFSETS = """
+			(dolist (n '(1 2 3 5))
+			  (let* ((w (linalg:reshape (linalg:arange 0 (* 3 n) 'single-float) (list 3 n)))
+			         (x (vec:ones n 'single-float)))
+			    (print (list n (vec:matvec w x)))))
+			(dolist (n '(1 2 3 5 7))
+			  (let* ((w (linalg:reshape (linalg:arange 0 (* 4 n)) (list 4 n)))
+			         (x (vec:ones n)))
+			    (print (list n (vec:matvec w x)))))
+			""";
+
+	// The generic packed accessors at every immediate lane index of both widths, plus the
+	// make-array initial-element cases: absent and literal +0.0 skip the fill loop (a
+	// zeroed (array (mut v128)) already holds them), -0.0 and a computed value do not.
+	private static final String PACKED_ACCESSORS = """
+			(let ((d (make-array 5 :element-type 'double-float))
+			      (f (make-array 7 :element-type 'single-float)))
+			  (dotimes (i 5) (setf (aref d i) (* 1.5 (+ i 1))))
+			  (dotimes (i 7) (setf (row-major-aref f i) (* 0.25 (+ i 1))))
+			  (print (list d f (aref d 4) (row-major-aref f 6) (array-total-size f))))
+			(print (make-array 3 :element-type 'single-float :initial-element 1.25))
+			(print (make-array 3 :element-type 'double-float :initial-element -0.0))
+			(print (make-array 4 :element-type 'double-float :initial-element 0.0))
+			(print (let ((k 7.5)) (make-array 5 :element-type 'double-float :initial-element k)))
+			(print (list (vec:sum (vec:zeros 0)) (vec:add (vec:zeros 0) (vec:zeros 0))))
+			(print (linalg:matmul #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))
+			(print (linalg:transpose #f((1.0 2.0) (3.0 4.0))))
+			""";
+
 	@Test
 	void wasmGcSimdIsByteIdenticalToTheScalarPathOverTheWholeVecSurface() throws Exception {
-		// The correctness contract: --simd changes the packed representation (GC array ->
-		// linear-memory block) and the kernels (scalar defuns -> v128), and must produce
-		// exactly what the scalar wasm-GC path -- the cross-backend oracle -- produces.
-		// Covers both widths, every f64x2/f32x4 tail configuration, the -into kernels,
-		// GEMV, the generic packed accessors and make-array/#d/#f literals.
+		// The correctness contract: --simd changes the packed representation (a
+		// TYPE_F64ARR/TYPE_F32ARR GC array -> a TYPE_VBLOCK over an (array (mut v128)) of
+		// lane groups) and the kernels (scalar defuns -> v128), and must produce exactly
+		// what the scalar wasm-GC path -- the cross-backend oracle -- produces. Covers
+		// both
+		// widths, every group-padding configuration, the -into kernels, GEMV, the generic
+		// packed accessors and make-array/#d/#f literals.
 		assertThat(compileAndRunVec(VEC_SURFACE, true)).isEqualTo(compileAndRunVec(VEC_SURFACE, false));
+	}
+
+	@Test
+	void wasmGcSimdMatvecMatchesTheScalarPathAtEveryRowLaneOffset() throws Exception {
+		// The shuffle window: a row that starts mid-group is read as two array.gets and
+		// an
+		// i8x16.shuffle whose immediate depends on the offset, so each offset is a
+		// separate
+		// emitted loop. This runs all six (four f32x4, two f64x2).
+		assertThat(compileAndRunVec(GEMV_LANE_OFFSETS, true)).isEqualTo(compileAndRunVec(GEMV_LANE_OFFSETS, false));
+	}
+
+	@Test
+	void wasmGcSimdPackedAccessorsMatchTheScalarPathAtEveryLane() throws Exception {
+		// aref / row-major-aref / (setf aref) go through _v_get / _v_set, whose lane
+		// index
+		// is an instruction immediate and so a branch chain. A wrong arm shows up as a
+		// misplaced element.
+		assertThat(compileAndRunVec(PACKED_ACCESSORS, true)).isEqualTo(compileAndRunVec(PACKED_ACCESSORS, false));
 	}
 
 	@Test
@@ -5941,21 +6001,100 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void wasmGcSimdGrowsItsArenaForVectorsLargerThanTheInitialMemory() throws Exception {
-		// A packed float array lives in linear memory under --simd, and the arena starts
-		// above every statically reserved page -- so anything past the module's initial
-		// four pages exercises _vec_alloc's memory.grow. 65536 f64 elements = 512 KB per
-		// block, well past it. The -into accumulation also pins the destination-passing
-		// contract (the arena high-water stays at the live set instead of growing per
-		// iteration).
+	void wasmGcSimdPackedArraysAreCollectedRatherThanAccumulated() throws Exception {
+		// The point of todo-105. Each `vec:add` allocates a fresh 1048576-element packed
+		// array -- 8 MiB -- and drops the previous one; 700 of them is 5.6 GiB, MORE than
+		// the whole 4 GiB address space a wasm32 linear memory can ever reach. So this
+		// can
+		// only complete if the packed arrays are collected GC objects. todo-101's
+		// never-freed linear arena would trap on memory.grow long before the last
+		// iteration. (Peak RSS measured at ~83 MB, flat in the iteration count.)
+		String source = """
+				(let* ((n 1048576) (b (vec:ones n)) (o (vec:zeros n)))
+				  (dotimes (i 700) (setq o (vec:add o b)))
+				  (print (vec:aref o 0)))
+				""";
+		assertThat(compileAndRunVec(source, true)).isEqualTo("700.0");
+	}
+
+	@Test
+	void wasmGcSimdIntoKernelsReuseTheCallersDestination() throws Exception {
+		// -into is no longer a memory-safety requirement on wasm-GC (the collector
+		// handles
+		// that now), but it is still the allocation-rate optimization it is on the JVM
+		// and
+		// the interpreter: the destination is returned identically (eq), not copied.
 		String source = """
 				(let* ((n 65536) (a (vec:ones n)) (b (vec:ones n)) (o (vec:zeros n)))
 				  (print (vec:dot a b))
+				  (print (eq o (vec:add-into o o b)))
 				  (dotimes (i 100) (vec:add-into o o b))
 				  (print (vec:aref o 0))
 				  (print (vec:aref o 65535)))
 				""";
-		assertThat(compileAndRunVec(source, true)).isEqualTo("65536.0\n100.0\n100.0");
+		assertThat(compileAndRunVec(source, true)).isEqualTo("65536.0\nt\n101.0\n101.0");
+	}
+
+	// An -into destination LONGER than its operands, with a non-lane-multiple operand
+	// count. The kernels write whole lane groups, so the last store reaches up to lanes-1
+	// elements past the operand count -- real elements of `out`, which the scalar
+	// vec.lisp
+	// defun leaves alone. gcSaveLastGroup / gcRestoreLastGroupTail blend them back.
+	// Without
+	// that blend `o[3]` reads 0.0 instead of 9.0 in the first case (and `o[5..7]` in the
+	// second).
+	private static final String INTO_LONGER_DESTINATION = """
+			(let ((o (make-array 8 :element-type 'double-float :initial-element 9.0))
+			      (a (vec:ones 3)) (b (vec:ones 3)))
+			  (vec:add-into o a b)
+			  (print o))
+			(let ((o (make-array 8 :element-type 'single-float :initial-element 9.0))
+			      (a (vec:ones 5 'single-float)) (b (vec:ones 5 'single-float)))
+			  (vec:sub-into o a b)
+			  (print o))
+			(let ((o (make-array 6 :element-type 'double-float :initial-element 9.0))
+			      (v (vec:ones 3)))
+			  (vec:scale-into o v 2.0)
+			  (print o))
+			(let ((o (make-array 7 :element-type 'single-float :initial-element 9.0))
+			      (v (vec:ones 3 'single-float)))
+			  (vec:mul-into o v v)
+			  (print o))
+			""";
+
+	@Test
+	void wasmGcSimdIntoKernelsDoNotClobberADestinationLongerThanTheOperands() throws Exception {
+		assertThat(compileAndRunVec(INTO_LONGER_DESTINATION, true))
+			.isEqualTo(compileAndRunVec(INTO_LONGER_DESTINATION, false));
+	}
+
+	// Compiles and runs a vec: program without asserting success; returns the exit code.
+	private static int compileAndRunVecExitCode(String lispCode, boolean simd) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
+			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		return wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "/tmp/test.wasm").getExitCode();
+	}
+
+	@Test
+	void wasmGcSimdMatvecIntoRejectsADestinationAliasingEitherOperand() throws Exception {
+		// out[row] folds over ALL of x, and the row windows keep reading W while the rows
+		// already computed are written back -- so `out` may alias neither. vec.lisp,
+		// JvmSimdVectorTemplate and VecSimd all signal an error; the emitted kernel
+		// traps.
+		// The v128 kernel REPLACES the vec.lisp defun, so its own guard is the only one
+		// that runs. (The `out` aliases `w` half was missing until todo-105.)
+		String aliasesW = "(let ((m #d((1.0 2.0) (3.0 4.0)))) (print (vec:matvec-into m m #d(5.0 6.0))))";
+		String aliasesX = "(let ((v #d(5.0 6.0))) (print (vec:matvec-into v #d((1.0 2.0) (3.0 4.0)) v)))";
+		for (String source : List.of(aliasesW, aliasesX)) {
+			assertThat(compileAndRunVecExitCode(source, true)).as("--simd must trap: %s", source).isNotZero();
+			assertThat(compileAndRunVecExitCode(source, false)).as("scalar must trap too: %s", source).isNotZero();
+		}
+		// A non-aliasing destination of course still works.
+		assertThat(compileAndRunVec(
+				"(let ((o (vec:zeros 2))) (print (vec:matvec-into o #d((1.0 2.0) (3.0 4.0))" + " #d(5.0 6.0))))", true))
+			.isEqualTo("#d(17.0 39.0)");
 	}
 
 }

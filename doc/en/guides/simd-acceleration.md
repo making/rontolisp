@@ -44,31 +44,26 @@ The [`ml/nn-vec.lisp` example](https://github.com/making/rontolisp/blob/main/exa
 
 ## Memory: where vectors live, and what reclaims them
 
-A packed float array is an ordinary garbage-collected value on most targets, and a block of WebAssembly linear memory on the two that emit v128 instructions -- because WebAssembly SIMD can only address linear memory. Only those two ask you to think about memory growth.
+A packed float array is an ordinary garbage-collected value on three of the four targets, and a block of WebAssembly linear memory on the fourth. Only the last one asks you to think about memory growth.
 
 | target | packed arrays live in | reclaimed automatically? |
 |---|---|---|
 | interpreter (no `-o`) | the JVM heap | yes, by the JVM's collector |
 | JVM (`-o prog.class`) | the JVM heap | yes, by the JVM's collector |
 | wasm-GC (`-o prog.wasm`) | the WebAssembly GC heap | yes, by the engine's collector |
-| wasm-GC `--simd` (`-o prog.wasm --simd`) | linear memory, bump-allocated | **no -- nothing is ever freed, so you must watch memory growth** |
 | `--no-gc` (`-o prog.wasm --no-gc`) | linear memory, bump-allocated | **no -- nothing is ever freed, so you must watch memory growth** |
 
-On the garbage-collected targets, a loop that discards its intermediates keeps a flat footprint. Building a fresh 1024-element vector 200000 times on wasm-GC (`wasmtime run -W gc`) peaks at the same ~123 MB as doing it 50000 times, even though 1.5 GB passed through the allocator. `linalg` arrays are the same packed type and behave identically.
+On the three garbage-collected targets, a loop that discards its intermediates keeps a flat footprint. Building a fresh 1024-element vector 200000 times on wasm-GC (`wasmtime run -W gc`) peaks at the same ~123 MB as doing it 50000 times, even though 1.5 GB passed through the allocator. `linalg` arrays are the same packed type and behave identically.
 
-The two SIMD-emitting WASM targets are different by design. Their bump allocator has no free, so **every kernel that returns a vector permanently consumes memory** until the whole arena is discarded.
-
-On `--no-gc` the arena is discarded at an export-call boundary, which such a module always has (its top level is nothing but `defun`s and `rontolisp:wasm-export` directives -- there is no `_start`):
+`--no-gc` is different by design -- the name says it, there is no collector. `__ronto_alloc` is a bump allocator with no free, so **every kernel that returns a vector permanently consumes memory**. Reclamation happens only by discarding the whole arena at an export-call boundary, which a `--no-gc` module always has (its top level is nothing but `defun`s and `rontolisp:wasm-export` directives -- there is no `_start`):
 
 - an export whose return type is a non-memory scalar (`:int` / `:long` / `:float` / `:bool` / `:void`) resets the bump pointer automatically when it returns;
 - a resident host can bracket a call with the exported `__ronto_alloc_mark` / `__ronto_alloc_reset` pair;
 - **inside a single export call nothing is freed.** A loop of `(setq acc (vec:add acc d))` grows linear memory until `memory.grow` fails.
 
-On wasm-GC `--simd` there is no such boundary: a program is an ordinary `_start`, so the packed arena only ever grows within a run. Everything else in the module -- cons cells, strings, general arrays -- stays on the GC heap and is collected as usual; only packed float arrays move.
+That last point is what the destination-passing kernels below are for. Strings on `--no-gc` (`concatenate`, `subseq`, `princ-to-string`) bump-allocate the same way; `linalg` does not compile under `--no-gc` at all, so only `vec` is affected.
 
-That is what the destination-passing kernels below are for. Strings on `--no-gc` (`concatenate`, `subseq`, `princ-to-string`) bump-allocate the same way; `linalg` arrays are the same packed type, so under wasm-GC `--simd` they move into the arena too (`linalg` does not compile under `--no-gc` at all).
-
-Without `--simd`, wasm-GC's linear memory holds only interned symbol names and string-stream buffers -- runtime strings were moved onto the GC heap precisely so that it would stop growing.
+wasm-GC has a linear memory too, but packed arrays never touch it: it holds interned symbol names and string-stream buffers, and runtime strings were moved onto the GC heap precisely so that it would stop growing.
 
 ## Destination-passing kernels (allocation-free loops)
 
@@ -95,7 +90,7 @@ In the element-wise kernels the destination **may alias** an operand: element *i
 
 All operands must share an element type, and `out` must be at least as long as the inputs (its length is not checked, exactly as `vec:add` does not check its operands').
 
-This is what makes the two linear-memory targets usable for real numeric loops (see the memory table above): with `-into`, peak memory equals the vectors you actually keep alive. Measured on `--no-gc --simd`, accumulating a 65536-element vector 12000 times peaks at 13.7 MB with `vec:add-into`, against 4.31 GB -- and then a trap -- with `vec:add`. On wasm-GC `--simd`, 2000 accumulations of a 65536-element vector peak at 22 MB with `vec:add-into` against 1.16 GB with `vec:add`. On the garbage-collected targets `-into` changes nothing about correctness; there it is an allocation-rate optimization.
+This is what makes `--no-gc` usable for real numeric loops (see the memory table above): with `-into`, peak memory equals the vectors you actually keep alive. Measured on `--no-gc --simd`, accumulating a 65536-element vector 12000 times peaks at 13.7 MB with `vec:add-into`, against 4.31 GB -- and then a trap -- with `vec:add`. On the three garbage-collected targets `-into` changes nothing about correctness; there it is an allocation-rate optimization.
 
 `vec:matvec-into` is unavailable on `--no-gc`, like `vec:matvec`.
 
@@ -114,10 +109,12 @@ Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wa
 
 - **Interpreter `--simd`**: `rontolisp prog.lisp --simd` runs the same seven kernels on `jdk.incubator.vector` instead of the scalar `vec.lisp` definitions -- no compilation step, and a large `vec:dot` gets several times faster. The native binary has the incubator module baked in and needs no runtime flag. On a plain `java -jar` the module is absent, so the flag falls back to the scalar reference and prints a note; re-run with `java --add-modules jdk.incubator.vector -jar rontolisp.jar prog.lisp --simd` to get the acceleration there. Without `--simd` the interpreter always runs the scalar reference -- it is the cross-backend oracle. The flag has no effect in the REPL.
 - **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` routes the kernels to an embedded `jdk.incubator.vector` bridge that the JIT intrinsifies to CPU vector instructions (a `DoubleVector` for `#d`, a `FloatVector` for `#f`; `vec:matvec` runs that vectorized dot once per matrix row). Running such a class requires the incubator module on the JVM: `java --add-modules jdk.incubator.vector Prog`. Without `--simd` the class runs the scalar reference on any JVM.
-- **wasm-GC `--simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float). Because those instructions address linear memory, `--simd` also moves packed float arrays -- and only those -- off the GC heap into a bump-allocated linear arena; see the memory table above, and prefer the `-into` kernels in hot loops. Everything else stays garbage-collected, the whole `vec:` API (including `vec:matvec` and `vec:from-list` / `vec:to-list`) keeps working, and the results are unchanged. Composes with `--component` and `--optimize`. Run it with `wasmtime run -W gc` as usual -- wasmtime enables the SIMD proposal by default.
+- **wasm-GC `--simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float). A packed float array becomes an `(array (mut v128))` of lane groups -- still an ordinary GC object, still reclaimed by the engine's collector, so memory behaves exactly as it does on scalar wasm-GC. The whole `vec:` API (including `vec:matvec` and `vec:from-list` / `vec:to-list`) keeps working, and the results are unchanged. Composes with `--component` and `--optimize`. Run it with `wasmtime run -W gc` as usual -- wasmtime enables the SIMD proposal by default.
 - **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way.
 
-On wasm-GC the speedup is large because `--simd` replaces two things at once: the boxing-heavy scalar `vec.lisp` defun *and* the one-element-at-a-time loop. A `vec:dot` over an 8192-element vector, 20000 iterations, runs in ~10.2 s scalar and ~0.03 s with `--simd` under `wasmtime run -W gc`.
+On wasm-GC the speedup is large because `--simd` replaces two things at once: the boxing-heavy scalar `vec.lisp` defun *and* the one-element-at-a-time loop. A `vec:dot` over an 8192-element vector, 20000 iterations, runs in ~10.1 s scalar and ~0.10 s with `--simd` under `wasmtime run -W gc`.
+
+Reading a lane group out of a GC array costs a bounds check that a `v128.load` from linear memory does not, and no engine hoists it out of the loop, so the same kernel loop is about 1.9x slower on wasm-GC `--simd` than on `--no-gc --simd`. That is the price of letting the collector own your vectors. If a numeric inner loop is your bottleneck and you can live without a garbage collector, compile it with `--no-gc --simd`.
 
 Because reductions sum in a different order under SIMD, a reduction over inexact inputs can differ from the left-to-right scalar reference in the last ULP; over the exact doubles typical of tests the results match exactly. The element-wise kernels are always bit-identical.
 

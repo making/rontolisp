@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.util.Arrays;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
@@ -386,7 +387,7 @@ class WasmLispCompilerTest {
 		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
 	}
 
-	// --- --simd (todo-101): v128 kernels over linear-memory packed float arrays -------
+	// --- --simd (todo-105): v128 kernels over GC (array (mut v128)) packed arrays ------
 
 	private static byte[] compileVec(String source, boolean simd) {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
@@ -409,19 +410,33 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void simdKeepsTheTypeSectionIdenticalAndAddsExactlyTheVecBlock() {
-		// The representation change rides entirely inside TYPE_FARRAY's (ref null eq)
-		// data
-		// field -- an i31ref pointer instead of a TYPE_F64ARR/TYPE_F32ARR GC array -- so
-		// the type section (and with it the export/import wrapper type bases and the
-		// byte-identical component blobs) is untouched. What --simd does add is exactly
-		// the thirteen-function vec block, which is why FUNC_USER_BASE shifts by that
-		// much
-		// and by nothing else.
+	void simdAppendsExactlyTheVecTypeBlockAndTheVecFunctionBlock() {
+		// --simd appends its four types AFTER the last fixed one (TYPE_F32ARR) and its
+		// fifteen functions after the last fixed one, so every fixed TYPE_*/FUNC_* index
+		// -- and with it the byte-identical component blobs -- keeps its value, and only
+		// the export/import wrapper bases and FUNC_USER_BASE shift. The default module's
+		// type section is a strict PREFIX of the --simd one: an (array (mut v128)) type
+		// needs the SIMD proposal, so it must not appear unless --simd asked for it.
 		String source = "(print (aref #d(1.0 2.0 3.0) 1))";
 		byte[] scalar = compileVec(source, false);
 		byte[] simd = compileVec(source, true);
-		assertThat(section(simd, 1)).as("type section unchanged by --simd").isEqualTo(section(scalar, 1));
+		byte[] scalarTypes = typeSectionEntries(scalar);
+		byte[] simdTypes = typeSectionEntries(simd);
+		assertThat(typeSectionCount(simd) - typeSectionCount(scalar)).as("--simd appends four type entries")
+			.isEqualTo(WasmLispCompiler.SIMD_TYPE_COUNT);
+		assertThat(simdTypes).as("the default types are a prefix of the --simd types").startsWith(scalarTypes);
+		// The four appended entries, in TYPE_V128ARR .. TYPE_V_SET order.
+		byte[] appended = Arrays.copyOfRange(simdTypes, scalarTypes.length, simdTypes.length);
+		assertThat(appended).isEqualTo(new byte[] {
+				// TYPE_V128ARR: (array (mut v128)) -- the type that needs the SIMD
+				// proposal
+				0x5E, 0x7B, 0x01,
+				// TYPE_VBLOCK: rec { sub final struct {i32, i32, (ref null eq)} }
+				0x4E, 0x01, 0x50, 0x00, 0x5F, 0x03, 0x7F, 0x00, 0x7F, 0x00, 0x63, 0x6D, 0x00,
+				// TYPE_V_GET: (func (param (ref null eq) i32) (result f64))
+				0x60, 0x02, 0x63, 0x6D, 0x7F, 0x01, 0x7C,
+				// TYPE_V_SET: (func (param (ref null eq) i32 f64) (result f64))
+				0x60, 0x03, 0x63, 0x6D, 0x7F, 0x7C, 0x01, 0x7C });
 		assertThat(functionCount(simd) - functionCount(scalar)).isEqualTo(WasmVecSimdRuntimeBuilder.FUNC_COUNT);
 		assertThat(new WasmLispCompiler().userFuncBase()).isEqualTo(WasmLispCompiler.FUNC_USER_BASE);
 		assertThat(new WasmLispCompiler(false, false, false, false, false, true).userFuncBase())
@@ -430,9 +445,9 @@ class WasmLispCompilerTest {
 
 	@Test
 	void simdComposesWithComponentAndOptimize() {
-		// --simd is orthogonal to the output mode: the vec arena starts above every page
-		// the shared component memory statically reserves, so a component core can grow
-		// it, and the tree shaker decodes the 0xFD prefix.
+		// --simd is orthogonal to the output mode: the packed arrays are ordinary GC
+		// objects, so a component core needs no extra pages, and the tree shaker decodes
+		// the 0xFD prefix (including v128.const and i8x16.shuffle's 16 immediate bytes).
 		String source = "(print (vec:sum (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
 		assertThat(new WasmLispCompiler(false, true, false, false, false, true).compile(program)).isNotEmpty();
@@ -460,6 +475,21 @@ class WasmLispCompilerTest {
 	// The number of entries in the function section (id 3).
 	private static int functionCount(byte[] module) {
 		return readUleb(section(module, 3), new int[] { 0 });
+	}
+
+	// The number of entries in the type section (id 1). A rec group counts as one entry
+	// even when it declares several type indices.
+	private static int typeSectionCount(byte[] module) {
+		return readUleb(section(module, 1), new int[] { 0 });
+	}
+
+	// The type section (id 1) with its leading entry count stripped, so two sections can
+	// be compared for a common prefix.
+	private static byte[] typeSectionEntries(byte[] module) {
+		byte[] payload = section(module, 1);
+		int[] p = { 0 };
+		readUleb(payload, p);
+		return Arrays.copyOfRange(payload, p[0], payload.length);
 	}
 
 	// Whether any function body in the code section (id 10) declares a v128 local. The

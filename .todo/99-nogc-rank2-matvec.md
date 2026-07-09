@@ -12,11 +12,13 @@ Today it is a clean compile error: `NoGcWasmCompiler.SIMD_UNSUPPORTED_NO_GC = {V
 VEC_MATVEC_INTO}` throws "'matvec' is GEMV over a rank-2 matrix, but --no-gc packed vectors are
 rank-1 only".
 
-**Update 2026-07-09 (`.todo/101` landed).** wasm-GC `--simd` now ships GEMV, and the kernel work is
-already done and shared: `WasmVecLoops.simdDot` is the per-row loop, and
-`WasmVecSimdRuntimeBuilder.emitMatvecRows` is the row-cursor walk (reset `ap`/`bp`/`cnt` per row,
-advance `wrow` by `n << shift`, store `res` demoted for f32). Only the LAYOUT half of this todo is
-left on `--no-gc`: give it a rank-2 block and read `d`/`n` out of it, then call the shared emitters.
+**Update 2026-07-09 (wasm-GC `--simd` GEMV landed; todo-101, re-based on GC arrays by todo-105).**
+wasm-GC `--simd` now ships GEMV. Its row walk is `WasmVecSimdRuntimeBuilder.emitMatvecRows`, but it
+is no longer directly reusable: it walks GC lane-group indices and reads an unaligned row with
+`i8x16.shuffle`, where `--no-gc` walks a raw pointer and would keep its scalar tail. What transfers
+is the SHAPE (per-row dot, `res` demoted for f32) plus `WasmVecLoops.simdDot` as the per-row loop.
+The LAYOUT half of this todo is what is actually left on `--no-gc`: give it a rank-2 block and read
+`d`/`n` out of it, then drive `simdDot` once per row over the row pointer.
 wasm-GC gets away with rank-1-only blocks because the `$farray` struct carries `dims` on the GC
 heap; `--no-gc` has no struct, so the dims must go in the block header.
 

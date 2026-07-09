@@ -1,41 +1,36 @@
 # 104 — a way to FREE linear memory: `with-arena`, and `__ronto_alloc_mark`/`_reset` on wasm-GC
 
-**Goal:** give both WASM backends a real reclamation mechanism for the bump-allocated linear heap,
+**Goal:** give the WASM backends a real reclamation mechanism for the bump-allocated linear heap,
 usable from Lisp (not only from the host across an export boundary).
 
 Sequenced AFTER `.todo/103` (destination-passing kernels), which removes the *need* to free in the
 common case by making the bump high-water equal the live set. 104 handles what 103 cannot reach:
-`linalg:` transforms (fresh array every call), `vec:zeros`/`from-list` inside a loop, and any
-`--simd` wasm-GC program.
+`vec:zeros`/`from-list` inside a loop on `--no-gc`, and any `--no-gc` string building.
 
-## Status 2026-07-09: `.todo/101` HAS LANDED — a third arena now exists, and it is the urgent one
+## Status 2026-07-09: `.todo/105` REMOVED the packed-array half of this todo
 
-wasm-GC `--simd` puts packed float arrays in linear memory (`.kb/vec.md` acceleration layer 3).
-Its allocator is `WasmVecSimdRuntimeBuilder._vec_alloc` over a SINGLE word,
-`WasmLispCompiler.VEC_HEAP_PTR_ADDR = 160`, seeded lazily with `memory.size() << 16` and grown by
-whole pages. Measured: 2000 allocating `vec:add`s over a 65536-element vector reach 1.16 GB;
-`vec:add-into` stays at 22 MB. Two consequences for this todo:
+todo-101 had briefly moved wasm-GC `--simd` packed float arrays into a third linear arena
+(`VEC_HEAP_PTR_ADDR = 160`), and this file was rewritten around it as "the urgent one". todo-105
+undid that: a packed array under `--simd` is a `TYPE_VBLOCK` over an `(array (mut v128))`, an
+ordinary GC object the engine collects (`.kb/vec.md` acceleration layer 3). `VEC_HEAP_PTR_ADDR` and
+`_vec_alloc` no longer exist.
 
-1. **`with-arena` over the vec arena is trivially sound and is the single highest-value piece.**
-   Mark = `i32.load 160`, reset = `i32.store 160`. Nothing else lives in that arena (strings and the
-   intern table use `HEAP_PTR_ADDR = 84`; cons cells, closures and general arrays are GC objects),
-   so a reset can only invalidate packed-array data blocks. The escape hazard is narrow and easy to
-   state: a packed array allocated inside the arena scope must not be read after the reset — the same
-   contract `--no-gc`'s `__ronto_alloc_reset` already documents.
-2. **wasm-GC `--simd` has NO export boundary** (its top level is `_start`), so unlike `--no-gc` there
-   is no automatic pop at all. A long-running `--simd` program has today exactly one tool: `-into`.
+**What remains for this todo:**
 
-The `HEAP_PTR_ADDR` (string/intern) arena keeps every caveat below; the vec arena does not share
-them. Consider shipping `with-arena` for the vec arena FIRST, and treating the string heap as a
-separate, harder question.
+1. **`--no-gc` intra-call free.** Still the real gap: nothing is freed *within* one export call.
+2. **The wasm-GC string/intern heap** (`HEAP_PTR_ADDR = 84`). A separate, harder question — see the
+   stack-pointer discipline below. It does not grow with string building (todo-90 fixed that), so
+   this is no longer urgent either; what remains is the interned-symbol byte pool and string-stream
+   buffers.
+
+Neither is as valuable as the packed arena was, so **this todo is no longer sequenced ahead of
+anything.** Reassess whether it is worth doing at all.
 
 ## Where things stand
 
-Both WASM backends bump-allocate and never free:
-
-| | `--no-gc` | wasm-GC (strings/intern) | wasm-GC `--simd` (packed arrays) |
-|---|---|---|---|
-| heap pointer | wasm global 0 | linear memory cell `HEAP_PTR_ADDR = 84` | linear memory cell `VEC_HEAP_PTR_ADDR = 160` |
+| | `--no-gc` | wasm-GC (strings/intern) |
+|---|---|---|
+| heap pointer | wasm global 0 | linear memory cell `HEAP_PTR_ADDR = 84` |
 | bump allocator | `__alloc` (4-byte aligned) | `__ronto_alloc` (8-byte aligned) |
 | exported | when `mem.used()` | when a memory-typed export exists |
 | `__ronto_alloc_mark` / `__ronto_alloc_reset` | **yes** (todo-89) | **no** |
@@ -43,6 +38,7 @@ Both WASM backends bump-allocate and never free:
 
 `--no-gc` survives because it is *always* a reactor — top level is defuns + `wasm-export`
 directives, no `_start` — so "one export call = one arena" always holds and the boundary pops it.
+Packed float arrays and strings are the only things it puts there.
 
 ## What transfers to wasm-GC, and what does not
 
@@ -55,10 +51,8 @@ directives, no `_start` — so "one export call = one arena" always holds and th
 **Does NOT transfer: todo-88's automatic reset on a scalar return.** `--no-gc`'s `collectCalls`
 rejects cons, closures, hash tables, `eval` and global `setq` outright, so nothing allocated during
 an export call can outlive it except the returned pointer — the auto-reset is sound *by
-construction*. wasm-GC has all of those. A packed array stashed in a top-level global or a closure
-capture keeps its **GC struct handle** alive while the reset pops its **linear data block**; the
-block is still in-bounds, so there is no trap — just silently wrong floats. Either gate it behind a
-static "no packed array escapes an export call" analysis, or don't emit it.
+construction*. wasm-GC has all of those. (Packed arrays are no longer a hazard here — they are GC
+objects — but a string-stream buffer or a freshly interned symbol still is.)
 
 **`HEAP_PTR` on wasm-GC is not a pure bump.** Per `.kb/wasm-gc-strings.md` it is a *stack pointer*
 with two disciplines sharing it: a permanent low-water (the interned-symbol byte pool, which
@@ -82,47 +76,46 @@ reset on. The boundary has to come from the source:
 `with-arena` = `mark` on entry, `reset` on exit. Same primitive as the host-facing pair, exposed to
 the program. Consequences:
 
-- Works on **both** WASM backends, and therefore also closes `--no-gc`'s intra-call hole (the one
-  103 cannot reach).
-- On the interpreter, the JVM and default wasm-GC it expands to a plain `progn` — a real GC is
-  already doing this. Cross-backend semantics are uniform; only the reclamation is backend-specific.
+- Its value is on `--no-gc`, where it closes the intra-call hole (the one 103 cannot reach).
+- On the interpreter, the JVM and wasm-GC (with or without `--simd`) it expands to a plain `progn` —
+  a real GC is already doing this. Cross-backend semantics are uniform; only the reclamation is
+  backend-specific.
 - Escape contract, inherited from `__ronto_alloc_reset`'s existing one: **nothing allocated inside
-  the body may be reachable after it**, except the body's own value. A packed-array value must be
-  copied down to the mark before the pop (`dst < src`, so a single forward byte copy is a safe
-  memmove). Strings/conses/closures on wasm-GC are GC objects and are unaffected; only
-  linear-backed values (`--no-gc` strings and vectors; wasm-GC `--simd` packed arrays) participate.
-- Must be intern-count-guarded on wasm-GC (skip the pop if a new symbol was interned inside the
-  body), or `with-arena` must reject a body that can intern (`read`/`load`/`intern`/`gensym`).
+  the body may be reachable after it**, except the body's own value. A `--no-gc` packed-array or
+  string value must be copied down to the mark before the pop (`dst < src`, so a single forward byte
+  copy is a safe memmove). On wasm-GC everything a program allocates is a GC object.
+- On wasm-GC (were it ever wired to `HEAP_PTR`) it must be intern-count-guarded — skip the pop if a
+  new symbol was interned inside the body — or reject a body that can intern
+  (`read`/`load`/`intern`/`gensym`).
 
 Open question worth settling before implementing: whether `with-arena` should refuse to pop (and
 warn) rather than silently skip when the guard trips.
 
 ## Steps
 
-1. `__ronto_alloc_mark` / `__ronto_alloc_reset` on wasm-GC. Appended after the existing memory
-   helpers — but note the GC backend HAS a fixed-`FUNC_*`-index invariant and byte-identical
-   component blobs, unlike `--no-gc`, so check where new function indices may be inserted
-   (`.kb/wasi-component.md`) before choosing the position.
-2. `rontolisp:with-arena` as a `LispMacroExpander` lowering: `progn` on interpreter/JVM/default
-   wasm-GC; mark/body/reset on `--no-gc` and wasm-GC `--simd`.
-3. The copy-down of a packed-array result value.
-4. The intern-count guard.
-5. Decide on todo-88-equivalent auto-reset for wasm-GC reactor exports (probably: don't).
+1. `rontolisp:with-arena` as a `LispMacroExpander` lowering: `progn` everywhere except `--no-gc`,
+   where it is mark/body/reset over global 0.
+2. The copy-down of a `--no-gc` packed-array / string result value.
+3. Only if the wasm-GC string heap turns out to matter: `__ronto_alloc_mark` / `__ronto_alloc_reset`
+   on wasm-GC (note the GC backend HAS a fixed-`FUNC_*`-index invariant and byte-identical component
+   blobs, unlike `--no-gc`, so check where new function indices may be inserted —
+   `.kb/wasi-component.md`), plus the intern-count guard.
+4. Decide on todo-88-equivalent auto-reset for wasm-GC reactor exports (probably: don't).
 
 ## Verify
 
 - `--no-gc`: a loop of `(with-arena () (vec:zeros 1000))` leaves `memory.size` flat; without the
   arena it grows. Same shape as the `count-vowels` host-arena measurement in
   `.kb/no-gc-scalar-wasm.md` (100000 calls, 65536 → 65536 with the bracket).
-- wasm-GC `--simd` (after `.todo/101`): same, under `wasmtime run -W gc`.
-- Interpreter / JVM / default wasm-GC: `with-arena` is observationally a `progn` (same value, same
-  side effects, ci-spec cross-backend case).
+- Interpreter / JVM / wasm-GC (± `--simd`): `with-arena` is observationally a `progn` (same value,
+  same side effects, ci-spec cross-backend case).
 - A pinning test for the escape contract: a value allocated inside and stored to a global is
   documented-undefined; assert only that the guard cases (intern inside the body) do not corrupt.
 
 ## Related
 
-- `.todo/103` — destination-passing kernels (do first; makes the leak bounded).
-- `.todo/101` — wasm-GC linear-memory packed arrays for `--simd` (the consumer of this).
+- `.todo/103` — destination-passing kernels (done; makes the `--no-gc` leak bounded).
+- `.todo/105` — wasm-GC `--simd` packed arrays back on the GC heap (done; removed this todo's
+  highest-value piece).
 - `.kb/no-gc-scalar-wasm.md` (todo-88 / todo-89), `.kb/wasm-gc-strings.md` (HEAP_PTR discipline),
   `.kb/wasi-component.md` (fixed function indices).

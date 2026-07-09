@@ -7,96 +7,124 @@ import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 
 /**
- * The wasm-GC {@code --simd} vector runtime: a bump allocator for the packed float-array
- * arena plus twelve hand-assembled v128 kernels ({@code _vec_add} ..
+ * The wasm-GC {@code --simd} vector runtime: three element helpers over the packed
+ * float-array store plus twelve hand-assembled v128 kernels ({@code _vec_add} ..
  * {@code _vec_matvec_into}).
+ *
+ * <h2>The store: {@code (array (mut v128))}</h2>
+ *
+ * The GC proposal's {@code fieldtype} admits any {@code valtype}, and {@code v128} is one
+ * -- so {@code (array (mut v128))} is a legal GC array and {@code array.get} on it yields
+ * a lane group straight out of a <em>collected</em> object. Under {@code --simd} the
+ * {@code $farray} struct therefore keeps its {@code dims} bucket array as before while
+ * its {@code data} field -- {@code (ref null eq)} either way -- holds a {@code $vblock}
+ * instead of a {@code $f64arr} / {@code $f32arr}:
+ *
+ * <pre>
+ *   $vblock = struct { i32 count, i32 kind, (ref null eq) groups }
+ *   $v128arr = (array (mut v128))
+ * </pre>
+ *
+ * {@code count} is the logical element count, {@code kind} the width tag (0 =
+ * double-float / 2 lanes, 1 = single-float / 4 lanes) that replaces the
+ * {@code ref.test $f32arr} of the default backend, since both widths share the one
+ * {@code $v128arr} type. {@code groups} holds {@code ceil(count / lanes) + 1} lane
+ * groups; the {@code + 1} is a zero <strong>sentinel</strong> so a {@code matvec} shuffle
+ * window over the last group can always read {@code g + 1} without a bounds trap.
+ *
+ * <h2>Why there is no scalar tail</h2>
+ *
+ * {@code array.new_default} zero-initializes the v128 elements, and nothing ever writes
+ * past {@code count}, so the last group's padding lanes are zero. {@code add} /
+ * {@code sub} / {@code mul} / {@code scale} map zero to zero and {@code sum} /
+ * {@code dot} fold zero in: every kernel runs whole groups only.
+ *
+ * <p>
+ * The one place that is not free: a group-at-a-time WRITE covers up to {@code lanes - 1}
+ * elements past {@code count}. That is harmless when the destination is exactly
+ * {@code count} long (those are its own zero padding), but an {@code -into} destination
+ * LONGER than its operands has real elements there, which the scalar {@code vec.lisp}
+ * defun would leave alone. So {@link WasmVecLoops#gcSaveLastGroup} /
+ * {@link WasmVecLoops#gcRestoreLastGroupTail} blend the last written group, restoring
+ * lanes {@code >= count % lanes} from the destination's pre-loop value. That keeps the
+ * padding invariant airtight too: {@code (vec:scale v s)} with a non-finite {@code s}
+ * leaves zeros in the padding instead of NaN.
  *
  * <h2>Why standalone functions</h2>
  *
- * {@code v128.load} / {@code v128.store} address LINEAR memory, but a wasm-GC packed
- * float array is a GC object. Under {@code --simd} the {@code $farray} struct therefore
- * keeps its {@code dims} bucket array on the GC heap while its {@code data} field --
- * which is {@code (ref null eq)}, so the TYPE SECTION IS UNCHANGED -- holds an
- * {@code i31ref} pointer into a linear-memory block:
- *
- * <pre>
- *   ptr+0  i32 count    element count (the product of the dims)
- *   ptr+4  i32 kind     0 = double-float (f64), 1 = single-float (f32)
- *   ptr+8  i32 pad      reserved (keeps the element area 16-byte aligned)
- *   ptr+12 i32 pad
- *   ptr+16 elements     count * (kind ? 4 : 8) bytes
- * </pre>
- *
- * The kernels then need v128 / f64 / f32 / i32 locals -- which a defun body cannot have,
- * since {@link WasmLispCompiler} declares every extra local of a compiled body as one
- * {@code (ref null eq)} group. So each kernel is emitted here as a standalone runtime
- * function with hand-written local declarations, taking and returning
+ * The kernels need v128 / f64 / f32 / i32 / {@code (ref null $v128arr)} locals, which a
+ * defun body cannot have: {@link WasmLispCompiler} declares every extra local of a
+ * compiled body as one {@code (ref null eq)} group. So each kernel is emitted here as a
+ * standalone runtime function with hand-written local declarations, taking and returning
  * {@code (ref null eq)} exactly like a compiled Lisp function, and
- * {@link WasmExprCompiler} rewrites a {@code (vec:dot a b)} call site into a
+ * {@link WasmVecSimdCompiler} rewrites a {@code (vec:dot a b)} call site into a
  * {@code call $_vec_dot}. This mirrors the JVM {@code --simd} bridge: only the seven
  * vectorizable kernels (and their five {@code -into} siblings) are intercepted; every
  * other {@code vec:} member keeps running the scalar {@code vec.lisp} defun over the same
- * -- now linear -- packed surface.
- *
- * <h2>The arena</h2>
- *
- * {@code _vec_alloc} is a bump allocator over the single word at
- * {@link WasmLispCompiler#VEC_HEAP_PTR_ADDR}. The first call seeds it with the CURRENT
- * memory size, so the arena starts above every page anything statically reserves -- the
- * program's own string/intern heap, {@code getenv}'s page 3, the fetch scratch in page 4,
- * and (in component mode, where the memory is imported from the shared {@code mem}
- * module) the adapter scratch. It then grows the memory by whole pages. Nothing is ever
- * freed within a run: as on {@code --no-gc}, the high-water mark equals the peak live
- * set, which is why the destination-passing {@code -into} kernels matter here and why a
- * mark/reset of that one word is a complete arena pop.
+ * -- now grouped -- packed surface.
  *
  * <p>
- * Widths are decided at RUNTIME from the {@code kind} header word (the GC path told them
- * apart with {@code ref.test $f32arr}), so one kernel serves both {@code #d} and
- * {@code #f} vectors; each branch runs the loop from {@link WasmVecLoops} at its own
- * native precision. Mixing widths in one call traps, matching the JVM bridge's hard
- * error.
+ * The same reason drives {@code _v_new} / {@code _v_get} / {@code _v_set}: centralizing
+ * the width and immediate-lane branches in three helpers is what keeps
+ * {@link WasmArrayCompiler} / {@link WasmQuoteCompiler} / {@link WasmRuntimeBuilder} to
+ * one {@code call} apiece at an {@code aref} / literal / print site.
+ *
+ * <p>
+ * Widths are decided at RUNTIME from the {@code kind} field, so one kernel serves both
+ * {@code #d} and {@code #f} vectors; each branch runs the loop from {@link WasmVecLoops}
+ * at its own native precision. Mixing widths in one call traps, matching the JVM bridge's
+ * hard error.
  */
 final class WasmVecSimdRuntimeBuilder {
 
 	private WasmVecSimdRuntimeBuilder() {
 	}
 
-	/** Byte offset of the element data inside a packed block (a 16-byte header). */
-	static final int DATA_OFF = 16;
-
 	// Function indices, relative to WasmLispCompiler.FUNC_VEC_BASE. Emitted (and only
 	// emitted) under --simd, between the string-GC helpers and the user defuns.
-	static final int ALLOC = 0;
 
-	static final int ADD = 1;
+	/**
+	 * {@code _v_new (count i32, kind i32) -> (ref null eq)}: a zeroed {@code $vblock}.
+	 */
+	static final int V_NEW = 0;
 
-	static final int SUB = 2;
+	/** {@code _v_get ((ref null eq) vb, i32 idx) -> f64}: one element, widened. */
+	static final int V_GET = 1;
 
-	static final int MUL = 3;
+	/**
+	 * {@code _v_set ((ref null eq) vb, i32 idx, f64 v) -> f64}: stores one element and
+	 * returns it AS STORED (an f32 round-trip at single-float width).
+	 */
+	static final int V_SET = 2;
 
-	static final int SCALE = 4;
+	static final int ADD = 3;
 
-	static final int SUM = 5;
+	static final int SUB = 4;
 
-	static final int DOT = 6;
+	static final int MUL = 5;
 
-	static final int MATVEC = 7;
+	static final int SCALE = 6;
 
-	static final int ADD_INTO = 8;
+	static final int SUM = 7;
 
-	static final int SUB_INTO = 9;
+	static final int DOT = 8;
 
-	static final int MUL_INTO = 10;
+	static final int MATVEC = 9;
 
-	static final int SCALE_INTO = 11;
+	static final int ADD_INTO = 10;
 
-	static final int MATVEC_INTO = 12;
+	static final int SUB_INTO = 11;
+
+	static final int MUL_INTO = 12;
+
+	static final int SCALE_INTO = 13;
+
+	static final int MATVEC_INTO = 14;
 
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 13;
+	static final int FUNC_COUNT = 15;
 
 	/**
 	 * Emits the type index of each function, in emission order (for the function
@@ -104,8 +132,10 @@ final class WasmVecSimdRuntimeBuilder {
 	 */
 	static int typeIndexOf(int vecFunc) {
 		return switch (vecFunc) {
-			// _vec_alloc (i32) -> i32 reuses TYPE_LOOKUP's shape.
-			case ALLOC -> WasmLispCompiler.TYPE_LOOKUP;
+			// _v_new (i32, i32) -> (ref null eq) reuses TYPE_RAT_NEW's shape.
+			case V_NEW -> WasmLispCompiler.TYPE_RAT_NEW;
+			case V_GET -> WasmLispCompiler.TYPE_V_GET;
+			case V_SET -> WasmLispCompiler.TYPE_V_SET;
 			// One eq param -> eq.
 			case SUM -> WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Three eq params -> eq (the -into kernels).
@@ -118,281 +148,366 @@ final class WasmVecSimdRuntimeBuilder {
 	/** Builds the body of the given helper, in {@code vecFunc} index order. */
 	static byte[] build(int vecFunc, int vecBase) {
 		return switch (vecFunc) {
-			case ALLOC -> buildAllocBody();
-			case ADD -> buildElementwise(Instruction.F64X2_ADD, Instruction.F64_ADD, false, vecBase);
-			case SUB -> buildElementwise(Instruction.F64X2_SUB, Instruction.F64_SUB, false, vecBase);
-			case MUL -> buildElementwise(Instruction.F64X2_MUL, Instruction.F64_MUL, false, vecBase);
+			case V_NEW -> buildVNewBody();
+			case V_GET -> buildVGetBody();
+			case V_SET -> buildVSetBody();
+			case ADD -> buildElementwise(Instruction.F64X2_ADD, false, vecBase);
+			case SUB -> buildElementwise(Instruction.F64X2_SUB, false, vecBase);
+			case MUL -> buildElementwise(Instruction.F64X2_MUL, false, vecBase);
 			case SCALE -> buildScale(false, vecBase);
 			case SUM -> buildSum();
 			case DOT -> buildDot();
 			case MATVEC -> buildMatvec(false, vecBase);
-			case ADD_INTO -> buildElementwise(Instruction.F64X2_ADD, Instruction.F64_ADD, true, vecBase);
-			case SUB_INTO -> buildElementwise(Instruction.F64X2_SUB, Instruction.F64_SUB, true, vecBase);
-			case MUL_INTO -> buildElementwise(Instruction.F64X2_MUL, Instruction.F64_MUL, true, vecBase);
+			case ADD_INTO -> buildElementwise(Instruction.F64X2_ADD, true, vecBase);
+			case SUB_INTO -> buildElementwise(Instruction.F64X2_SUB, true, vecBase);
+			case MUL_INTO -> buildElementwise(Instruction.F64X2_MUL, true, vecBase);
 			case SCALE_INTO -> buildScale(true, vecBase);
 			case MATVEC_INTO -> buildMatvec(true, vecBase);
 			default -> throw new IllegalArgumentException("no vec: simd helper " + vecFunc);
 		};
 	}
 
-	// --- _vec_alloc ---------------------------------------------------------------
+	// --- _v_new / _v_get / _v_set ---------------------------------------------------
 
-	// _vec_alloc(size i32) -> i32: bump the arena at VEC_HEAP_PTR_ADDR by a 16-byte
-	// -rounded size, growing linear memory by whole pages when the new top exceeds the
-	// current size. A zero bump pointer means "not yet seeded": start the arena at the
-	// current memory size (page-aligned, so every block is 16-byte aligned and the
-	// elements at ptr+16 are too). Params: 0 = size. Locals: 1 = hp, 2 = end.
-	private static byte[] buildAllocBody() {
+	// _v_new(count, kind) -> $vblock: groups = array.new_default $v128arr (ceil(count /
+	// lanes) + 1), zero-filled, the trailing group being the shuffle sentinel. Params: 0
+	// =
+	// count, 1 = kind. Locals: 2 = shift (i32).
+	private static byte[] buildVNewBody() {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		// hp = load(VEC_HEAP_PTR_ADDR); if (hp == 0) hp = memory.size() << 16
-		i32Const(w, WasmLispCompiler.VEC_HEAP_PTR_ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		WasmVecLoops.set(w, 1);
-		WasmVecLoops.get(w, 1);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		memoryBytes(w);
-		WasmVecLoops.set(w, 1);
-		w.write(Instruction.END);
-		// end = hp + ((size + 15) & -16)
-		WasmVecLoops.get(w, 1);
-		WasmVecLoops.get(w, 0);
-		i32Const(w, 15);
+		int count = 0, kind = 1, shift = 2;
+		// shift = kind + 1 (1 = f64x2, 2 = f32x4)
+		WasmVecLoops.get(w, kind);
+		i32Const(w, 1);
 		w.write(Instruction.I32_ADD);
-		i32Const(w, -16);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.I32_ADD);
-		WasmVecLoops.set(w, 2);
-		// if (end > memory.size() << 16) { if (memory.grow((end - bytes + 65535) >> 16)
-		// == -1) unreachable }
-		WasmVecLoops.get(w, 2);
-		memoryBytes(w);
-		w.write(Instruction.I32_GT_U);
-		w.write(Instruction.IF, 0x40);
-		WasmVecLoops.get(w, 2);
-		memoryBytes(w);
+		WasmVecLoops.set(w, shift);
+		// struct.new $vblock (count, kind, groups)
+		WasmVecLoops.get(w, count);
+		WasmVecLoops.get(w, kind);
+		// ngroups = ((count + (1 << shift) - 1) >> shift) + 1
+		WasmVecLoops.get(w, count);
+		i32Const(w, 1);
+		WasmVecLoops.get(w, shift);
+		w.write(Instruction.I32_SHL);
+		i32Const(w, 1);
 		w.write(Instruction.I32_SUB);
-		i32Const(w, 0xffff);
 		w.write(Instruction.I32_ADD);
-		i32Const(w, 16);
+		WasmVecLoops.get(w, shift);
 		w.write(Instruction.I32_SHR_U);
-		w.write(Instruction.GROW_MEMORY, 0x00);
-		i32Const(w, -1);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
 		w.write(Instruction.END);
-		w.write(Instruction.END);
-		// store(VEC_HEAP_PTR_ADDR, end); return hp
-		i32Const(w, WasmLispCompiler.VEC_HEAP_PTR_ADDR);
-		WasmVecLoops.get(w, 2);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		WasmVecLoops.get(w, 1);
-		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 2, 0, 0, 0);
+		return withLocals(b.toByteArray(), 1, 0, 0, 0, 0, 0);
 	}
 
-	// Pushes the current memory size in BYTES (memory.size() << 16).
-	private static void memoryBytes(WasmWriter w) {
-		w.write(Instruction.CURRENT_MEMORY, 0x00);
-		i32Const(w, 16);
-		w.write(Instruction.I32_SHL);
+	// _v_get(vb, idx) -> f64: array.get the group, then the immediate-lane branch (a
+	// 2-way if for f64x2, a 4-way if-chain for f32x4 -- lane indices are shuffle-style
+	// immediates, so they cannot be computed). Params: 0 = vb, 1 = idx.
+	// Locals: 2 = lane (i32), 3 = v (v128), 4 = groups.
+	private static byte[] buildVGetBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int vb = 0, idx = 1, lane = 2, v = 3, groups = 4;
+		vblockGroups(w, vb, groups);
+		vblockField(w, vb, 1); // kind
+		w.write(Instruction.IF, Type.F64.code());
+		// single-float: four f32 lanes
+		loadGroupOf(w, groups, idx, v, true);
+		WasmVecLoops.get(w, idx);
+		i32Const(w, 3);
+		w.write(Instruction.I32_AND);
+		WasmVecLoops.set(w, lane);
+		emitLaneChain(w, lane, 4, Type.F32.code(), k -> {
+			WasmVecLoops.get(w, v);
+			WasmVecLoops.simd(w, Instruction.F32X4_EXTRACT_LANE);
+			w.write(k);
+		});
+		w.write(Instruction.F64_PROMOTE_F32);
+		w.write(Instruction.ELSE);
+		// double-float: two f64 lanes
+		loadGroupOf(w, groups, idx, v, false);
+		WasmVecLoops.get(w, idx);
+		i32Const(w, 1);
+		w.write(Instruction.I32_AND);
+		WasmVecLoops.set(w, lane);
+		emitLaneChain(w, lane, 2, Type.F64.code(), k -> {
+			WasmVecLoops.get(w, v);
+			WasmVecLoops.simd(w, Instruction.F64X2_EXTRACT_LANE);
+			w.write(k);
+		});
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 1, 0, 0, 1, 0, 1);
+	}
+
+	// _v_set(vb, idx, val) -> f64: a group read-modify-write through replace_lane, and
+	// the
+	// value AS STORED (an f32 round-trip at single width, matching the aset return value
+	// the interpreter and the JVM produce). Params: 0 = vb, 1 = idx, 2 = val.
+	// Locals: 3 = g, 4 = lane (i32); 5 = fv (f32); 6 = v (v128); 7 = groups.
+	private static byte[] buildVSetBody() {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int vb = 0, idx = 1, val = 2, g = 3, lane = 4, fv = 5, v = 6, groups = 7;
+		vblockGroups(w, vb, groups);
+		vblockField(w, vb, 1); // kind
+		w.write(Instruction.IF, Type.F64.code());
+		// single-float
+		groupIndex(w, idx, g, true);
+		WasmVecLoops.get(w, idx);
+		i32Const(w, 3);
+		w.write(Instruction.I32_AND);
+		WasmVecLoops.set(w, lane);
+		WasmVecLoops.get(w, val);
+		w.write(Instruction.F32_DEMOTE_F64);
+		WasmVecLoops.set(w, fv);
+		WasmVecLoops.groupGet(w, groups, g);
+		WasmVecLoops.set(w, v);
+		emitLaneChain(w, lane, 4, 0x40, k -> {
+			WasmVecLoops.get(w, v);
+			WasmVecLoops.get(w, fv);
+			WasmVecLoops.simd(w, Instruction.F32X4_REPLACE_LANE);
+			w.write(k);
+			WasmVecLoops.set(w, v);
+		});
+		storeGroup(w, groups, g, v);
+		WasmVecLoops.get(w, fv);
+		w.write(Instruction.F64_PROMOTE_F32);
+		w.write(Instruction.ELSE);
+		// double-float
+		groupIndex(w, idx, g, false);
+		WasmVecLoops.get(w, idx);
+		i32Const(w, 1);
+		w.write(Instruction.I32_AND);
+		WasmVecLoops.set(w, lane);
+		WasmVecLoops.groupGet(w, groups, g);
+		WasmVecLoops.set(w, v);
+		emitLaneChain(w, lane, 2, 0x40, k -> {
+			WasmVecLoops.get(w, v);
+			WasmVecLoops.get(w, val);
+			WasmVecLoops.simd(w, Instruction.F64X2_REPLACE_LANE);
+			w.write(k);
+			WasmVecLoops.set(w, v);
+		});
+		storeGroup(w, groups, g, v);
+		WasmVecLoops.get(w, val);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 2, 0, 1, 1, 0, 1);
+	}
+
+	/** Emits one lane body per immediate lane index, selected by {@code laneLocal}. */
+	private interface LaneBody {
+
+		void emit(int lane);
+
+	}
+
+	// if (lane == 0) body(0) else if (lane == 1) body(1) else ... else body(n-1).
+	// blockType is the shared result type of every arm (0x40 = void).
+	private static void emitLaneChain(WasmWriter w, int laneLocal, int laneCount, int blockType, LaneBody body) {
+		for (int k = 0; k < laneCount - 1; k++) {
+			WasmVecLoops.get(w, laneLocal);
+			if (k == 0) {
+				w.write(Instruction.I32_EQZ);
+			}
+			else {
+				i32Const(w, k);
+				w.write(Instruction.I32_EQ);
+			}
+			w.write(Instruction.IF, blockType);
+			body.emit(k);
+			w.write(Instruction.ELSE);
+		}
+		body.emit(laneCount - 1);
+		for (int k = 0; k < laneCount - 1; k++) {
+			w.write(Instruction.END);
+		}
 	}
 
 	// --- element-wise kernels (add / sub / mul, allocating and -into) ---------------
 
-	// (vec:add a b) / -into: dst[i] = op(a[i], b[i]).
+	// (vec:add a b) / -into: dst[i] = op(a[i], b[i]), run whole lane groups at a time.
 	//
 	// Plain: params 0 = a, 1 = b. -into: params 0 = out, 1 = a, 2 = b (CL's map-into
 	// order), and the destination block is the caller's -- so a loop over an -into kernel
-	// never advances the arena. Aliasing `out` with an operand is intentional and safe
-	// (element i depends only on element i).
+	// allocates nothing. Aliasing `out` with an operand is intentional and safe (element
+	// i
+	// depends only on element i).
 	//
-	// i32 locals: ap, bp, dst, count, kind, apd, bpd, dpd, rem, trem.
-	private static byte[] buildElementwise(int simdOp, int scalarOp, boolean into, int vecBase) {
+	// i32: count, kind, shift, ng, g, rem. v128: old, cur. eq: vbD. $v128arr: ga, gb, gd.
+	private static byte[] buildElementwise(int simdOp, boolean into, int vecBase) {
 		int params = into ? 3 : 2;
 		int a = into ? 1 : 0;
 		int bArg = into ? 2 : 1;
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		int ap = params, bp = params + 1, dst = params + 2, count = params + 3, kind = params + 4;
-		int apd = params + 5, bpd = params + 6, dpd = params + 7, rem = params + 8, trem = params + 9;
+		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
+		int old = params + 6, cur = params + 7; // v128
+		int vbD = params + 8;
+		int ga = params + 9, gb = params + 10, gd = params + 11;
 
-		blockPtr(w, a, ap);
-		blockPtr(w, bArg, bp);
-		loadHeader(w, ap, count, kind);
-		requireSameKind(w, kind, bp);
-		if (into) {
-			blockPtr(w, 0, dst);
-			requireSameKind(w, kind, dst);
-		}
-		else {
-			allocBlock(w, count, kind, dst, vecBase);
-		}
-		dataPtr(w, ap, apd);
-		dataPtr(w, bp, bpd);
-		dataPtr(w, dst, dpd);
-		// if (kind) f32x4 else f64x2
+		loadHeader(w, a, count, kind, shift, ng);
+		requireSameKind(w, kind, bArg);
+		destination(w, into, count, kind, vbD, gd, vecBase);
+		farrayGroups(w, a, ga);
+		farrayGroups(w, bArg, gb);
 		WasmVecLoops.get(w, kind);
 		w.write(Instruction.IF, 0x40);
-		WasmVecLoops.simdMap2(w, dpd, apd, bpd, count, rem, trem, true, simdOp, scalarOp);
+		WasmVecLoops.gcMap2(w, gd, ga, gb, ng, g, count, rem, old, cur, true, simdOp);
 		w.write(Instruction.ELSE);
-		WasmVecLoops.simdMap2(w, dpd, apd, bpd, count, rem, trem, false, simdOp, scalarOp);
+		WasmVecLoops.gcMap2(w, gd, ga, gb, ng, g, count, rem, old, cur, false, simdOp);
 		w.write(Instruction.END);
-		if (into) {
-			WasmVecLoops.get(w, 0); // the destination farray, unchanged
-		}
-		else {
-			makeFarray(w, count, dst);
-		}
+		finish(w, into, count, vbD);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 10, 0, 0, 0);
+		return withLocals(b.toByteArray(), 6, 0, 0, 2, 1, 3);
 	}
 
 	// --- scale ---------------------------------------------------------------------
 
-	// (vec:scale v s) / -into: dst[i] = v[i] * s. i32 locals: vp, dst, count, kind, vpd,
-	// dpd, rem, trem; then one f64 local for the unboxed scalar and one eq scratch for
-	// the unboxing type test.
+	// (vec:scale v s) / -into: dst[i] = v[i] * s.
+	// i32: count, kind, shift, ng, g, rem. f64: s. v128: old, cur. eq: vbD, box.
+	// $v128arr: gv, gd.
 	private static byte[] buildScale(boolean into, int vecBase) {
 		int params = into ? 3 : 2;
 		int v = into ? 1 : 0;
 		int sArg = into ? 2 : 1;
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		int vp = params, dst = params + 1, count = params + 2, kind = params + 3;
-		int vpd = params + 4, dpd = params + 5, rem = params + 6, trem = params + 7;
-		int s = params + 8; // f64
-		int box = params + 9; // (ref null eq) scratch
+		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
+		int s = params + 6; // f64
+		int old = params + 7, cur = params + 8; // v128
+		int vbD = params + 9, box = params + 10; // (ref null eq)
+		int gv = params + 11, gd = params + 12;
 
-		blockPtr(w, v, vp);
-		loadHeader(w, vp, count, kind);
+		loadHeader(w, v, count, kind, shift, ng);
 		WasmVecLoops.get(w, sArg);
 		unboxF64(w, box);
 		WasmVecLoops.set(w, s);
-		if (into) {
-			blockPtr(w, 0, dst);
-			requireSameKind(w, kind, dst);
-		}
-		else {
-			allocBlock(w, count, kind, dst, vecBase);
-		}
-		dataPtr(w, vp, vpd);
-		dataPtr(w, dst, dpd);
+		destination(w, into, count, kind, vbD, gd, vecBase);
+		farrayGroups(w, v, gv);
 		WasmVecLoops.get(w, kind);
 		w.write(Instruction.IF, 0x40);
-		WasmVecLoops.simdScale(w, dpd, vpd, count, rem, trem, s, true);
+		WasmVecLoops.gcScale(w, gd, gv, ng, g, count, rem, old, cur, s, true);
 		w.write(Instruction.ELSE);
-		WasmVecLoops.simdScale(w, dpd, vpd, count, rem, trem, s, false);
+		WasmVecLoops.gcScale(w, gd, gv, ng, g, count, rem, old, cur, s, false);
 		w.write(Instruction.END);
-		if (into) {
-			WasmVecLoops.get(w, 0);
-		}
-		else {
-			makeFarray(w, count, dst);
-		}
+		finish(w, into, count, vbD);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 8, 1, 0, 0, 1);
+		return withLocals(b.toByteArray(), 6, 1, 0, 2, 2, 2);
 	}
 
 	// --- reductions ----------------------------------------------------------------
 
-	// (vec:sum v) -> a boxed TYPE_FLOAT. i32: vp, count, kind, vpd, rem, trem; f64: sum;
-	// f32: sumF; v128: acc.
+	// (vec:sum v) -> a boxed TYPE_FLOAT.
+	// i32: count, kind, shift, ng, g. f64: sum. f32: sumF. v128: acc. $v128arr: gv.
 	private static byte[] buildSum() {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		int vp = 1, count = 2, kind = 3, vpd = 4, rem = 5, trem = 6;
-		int sum = 7; // f64
-		int sumF = 8; // f32
-		int acc = 9; // v128
+		int count = 1, kind = 2, shift = 3, ng = 4, g = 5;
+		int sum = 6; // f64
+		int sumF = 7; // f32
+		int acc = 8; // v128
+		int gv = 9;
 
-		blockPtr(w, 0, vp);
-		loadHeader(w, vp, count, kind);
-		dataPtr(w, vp, vpd);
+		loadHeader(w, 0, count, kind, shift, ng);
+		farrayGroups(w, 0, gv);
 		WasmVecLoops.get(w, kind);
 		w.write(Instruction.IF, Type.F64.code());
 		WasmVecLoops.splatZeroF32(w, acc);
-		WasmVecLoops.simdSum(w, vpd, count, rem, trem, acc, sumF, true);
+		WasmVecLoops.gcSum(w, gv, ng, g, acc, sumF, true);
 		w.write(Instruction.ELSE);
 		WasmVecLoops.splatZero(w, acc);
-		WasmVecLoops.simdSum(w, vpd, count, rem, trem, acc, sum, false);
+		WasmVecLoops.gcSum(w, gv, ng, g, acc, sum, false);
 		w.write(Instruction.END);
 		boxFloat(w);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 6, 1, 1, 1);
+		return withLocals(b.toByteArray(), 5, 1, 1, 1, 0, 1);
 	}
 
-	// (vec:dot a b) -> a boxed TYPE_FLOAT. i32: ap, bp, count, kind, apd, bpd, rem, trem;
-	// f64: sum; f32: sumF; v128: acc.
+	// (vec:dot a b) -> a boxed TYPE_FLOAT.
+	// i32: count, kind, shift, ng, g. f64: sum. f32: sumF. v128: acc. $v128arr: ga, gb.
 	private static byte[] buildDot() {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		int ap = 2, bp = 3, count = 4, kind = 5, apd = 6, bpd = 7, rem = 8, trem = 9;
-		int sum = 10; // f64
-		int sumF = 11; // f32
-		int acc = 12; // v128
+		int count = 2, kind = 3, shift = 4, ng = 5, g = 6;
+		int sum = 7; // f64
+		int sumF = 8; // f32
+		int acc = 9; // v128
+		int ga = 10, gb = 11;
 
-		blockPtr(w, 0, ap);
-		blockPtr(w, 1, bp);
-		loadHeader(w, ap, count, kind);
-		requireSameKind(w, kind, bp);
-		dataPtr(w, ap, apd);
-		dataPtr(w, bp, bpd);
+		loadHeader(w, 0, count, kind, shift, ng);
+		requireSameKind(w, kind, 1);
+		farrayGroups(w, 0, ga);
+		farrayGroups(w, 1, gb);
 		WasmVecLoops.get(w, kind);
 		w.write(Instruction.IF, Type.F64.code());
 		WasmVecLoops.splatZeroF32(w, acc);
-		WasmVecLoops.simdDot(w, apd, bpd, count, rem, trem, acc, sumF, true);
+		WasmVecLoops.gcDot(w, ga, gb, ng, g, acc, sumF, true);
 		w.write(Instruction.ELSE);
 		WasmVecLoops.splatZero(w, acc);
-		WasmVecLoops.simdDot(w, apd, bpd, count, rem, trem, acc, sum, false);
+		WasmVecLoops.gcDot(w, ga, gb, ng, g, acc, sum, false);
 		w.write(Instruction.END);
 		boxFloat(w);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 8, 1, 1, 1);
+		return withLocals(b.toByteArray(), 5, 1, 1, 1, 0, 2);
 	}
 
 	// --- matvec (GEMV) --------------------------------------------------------------
 
 	// (vec:matvec w x) / -into: a rank-2 matrix times a rank-1 vector. Unlike --no-gc
 	// (whose packed block is rank-1 only), the $farray struct carries its dims, so the
-	// rows are readable: r[row] = dot(W row, x) run once per row by the SAME simdDot
-	// loop, which amortizes the per-call setup over d rows.
+	// rows are readable: r[row] = dot(W row, x).
 	//
-	// Plain: params 0 = W, 1 = x. -into: 0 = out, 1 = W, 2 = x. `out` may NOT alias `x`
-	// (each output element folds over ALL of x), so the -into form traps on ref.eq --
-	// the same guard the vec.lisp defun and the JVM/interpreter kernels raise as an
-	// error.
+	// Row `row` of a d x n matrix starts at flat element row*n, i.e. inside group
+	// `base = (row*n) >> laneShift` at lane `off = (row*n) & (lanes-1)`, both
+	// loop-invariant
+	// per row. When off is 0 a row group is one array.get; otherwise it is the
+	// i8x16.shuffle window over groups base+k and base+k+1 (the immediate is simply
+	// [c, c+1, .. c+15] with c = off * elementBytes -- indices >= 16 naturally select the
+	// second operand). The trailing zero sentinel group makes that final base+k+1 safe.
+	// The lanes of the last row group that overhang into the NEXT row are multiplied by
+	// x's zero padding, so they contribute nothing -- the same zero invariant that
+	// removes
+	// the tail from every other kernel. f64 needs 2 row-loop variants, f32 needs 4,
+	// because
+	// the shuffle immediate cannot be computed.
 	//
-	// i32: wp, xp, dst, d, n, kind, wrow, xd, dpd, row, rem, trem, cnt, ap, bp;
-	// f64: res, sum; f32: sumF; v128: acc; eq: dims.
+	// Plain: params 0 = W, 1 = x. -into: 0 = out, 1 = W, 2 = x. `out` may alias NEITHER
+	// `x`
+	// (each output element folds over ALL of x) NOR `W` (the row windows keep reading
+	// it),
+	// so the -into form traps on ref.eq against both -- the guard the vec.lisp defun and
+	// the JVM/interpreter kernels raise as an error.
+	//
+	// i32: d, n, kind, shift, nrg, row, flat, base, off, k. f64: sum. f32: sumF.
+	// v128: acc. eq: dims, vbD. $v128arr: gw, gx.
 	private static byte[] buildMatvec(boolean into, int vecBase) {
 		int params = into ? 3 : 2;
 		int mat = into ? 1 : 0;
 		int vec = into ? 2 : 1;
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		int wp = params, xp = params + 1, dst = params + 2, d = params + 3, n = params + 4, kind = params + 5;
-		int wrow = params + 6, xd = params + 7, dpd = params + 8, row = params + 9;
-		int rem = params + 10, trem = params + 11, cnt = params + 12, ap = params + 13, bp = params + 14;
-		int res = params + 15; // f64
-		int sum = params + 16; // f64
-		int sumF = params + 17; // f32
-		int acc = params + 18; // v128
-		int dims = params + 19; // (ref null eq)
+		int d = params, n = params + 1, kind = params + 2, shift = params + 3, nrg = params + 4;
+		int row = params + 5, flat = params + 6, base = params + 7, off = params + 8, k = params + 9;
+		int sum = params + 10; // f64
+		int sumF = params + 11; // f32
+		int acc = params + 12; // v128
+		int dims = params + 13, vbD = params + 14; // (ref null eq)
+		int gw = params + 15, gx = params + 16;
 
 		if (into) {
-			// out and x must not alias.
-			WasmVecLoops.get(w, 0);
-			WasmVecLoops.get(w, vec);
-			w.write(Instruction.REF_EQ);
-			w.write(Instruction.IF, 0x40);
-			w.write(Instruction.UNREACHABLE);
-			w.write(Instruction.END);
+			// out may alias NEITHER x nor w: out[row] folds over all of x, and the row
+			// windows keep reading W while the rows already computed are written back.
+			// vec.lisp, JvmSimdVectorTemplate and VecSimd all reject both.
+			requireNotAliased(w, vec);
+			requireNotAliased(w, mat);
 		}
-		blockPtr(w, mat, wp);
-		blockPtr(w, vec, xp);
 		// dims = W.dims; trap unless rank 2
 		farrayField(w, mat, 0);
 		WasmVecLoops.set(w, dims);
@@ -407,76 +522,85 @@ final class WasmVecSimdRuntimeBuilder {
 		bucketI32(w, dims, 0, d);
 		bucketI32(w, dims, 1, n);
 		// kind from the matrix; the vector must match
-		WasmVecLoops.get(w, wp);
-		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		farrayKind(w, mat);
 		WasmVecLoops.set(w, kind);
-		requireSameKind(w, kind, xp);
+		requireSameKind(w, kind, vec);
+		WasmVecLoops.get(w, kind);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		WasmVecLoops.set(w, shift);
+		// nrg = ceil(n / lanes): the groups one row spans
+		ceilShift(w, n, shift, nrg);
 		if (into) {
-			blockPtr(w, 0, dst);
-			requireSameKind(w, kind, dst);
+			requireSameKind(w, kind, 0);
+			farrayField(w, 0, 1);
+			WasmVecLoops.set(w, vbD);
 		}
 		else {
-			allocBlock(w, d, kind, dst, vecBase);
+			WasmVecLoops.get(w, d);
+			WasmVecLoops.get(w, kind);
+			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			WasmVecLoops.set(w, vbD);
 		}
-		dataPtr(w, xp, xd);
-		dataPtr(w, wp, wrow);
-		dataPtr(w, dst, dpd);
+		farrayGroups(w, mat, gw);
+		farrayGroups(w, vec, gx);
 		WasmVecLoops.get(w, kind);
 		w.write(Instruction.IF, 0x40);
-		emitMatvecRows(w, d, n, wrow, xd, dpd, row, rem, trem, cnt, ap, bp, res, sumF, acc, true);
+		emitMatvecRows(w, d, n, nrg, row, flat, base, off, k, sumF, acc, gw, gx, vbD, true, vecBase);
 		w.write(Instruction.ELSE);
-		emitMatvecRows(w, d, n, wrow, xd, dpd, row, rem, trem, cnt, ap, bp, res, sum, acc, false);
+		emitMatvecRows(w, d, n, nrg, row, flat, base, off, k, sum, acc, gw, gx, vbD, false, vecBase);
 		w.write(Instruction.END);
-		if (into) {
-			WasmVecLoops.get(w, 0);
-		}
-		else {
-			makeFarray(w, d, dst);
-		}
+		finish(w, into, d, vbD);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 15, 2, 1, 1, 1);
+		return withLocals(b.toByteArray(), 10, 1, 1, 1, 2, 2);
 	}
 
-	// for (row = 0; row < d; row++) dst[row] = dot(W + row*n, x, n)
-	private static void emitMatvecRows(WasmWriter w, int d, int n, int wrow, int xd, int dpd, int row, int rem,
-			int trem, int cnt, int ap, int bp, int res, int sumLocal, int acc, boolean single) {
-		int stride = WasmVecLoops.stride(single);
+	// for (row = 0, flat = 0; row < d; row++, flat += n) dst[row] = dot(W row, x)
+	private static void emitMatvecRows(WasmWriter w, int d, int n, int nrg, int row, int flat, int base, int off, int k,
+			int sumLocal, int acc, int gw, int gx, int vbD, boolean single, int vecBase) {
+		int laneShift = WasmVecLoops.laneShift(single);
+		int lanes = WasmVecLoops.lanes(single);
 		i32Const(w, 0);
 		WasmVecLoops.set(w, row);
+		i32Const(w, 0);
+		WasmVecLoops.set(w, flat);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
 		WasmVecLoops.get(w, row);
 		WasmVecLoops.get(w, d);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		// the dot loop consumes ap/bp/cnt, so reset them from the row cursors
-		WasmVecLoops.get(w, wrow);
-		WasmVecLoops.set(w, ap);
-		WasmVecLoops.get(w, xd);
-		WasmVecLoops.set(w, bp);
-		WasmVecLoops.get(w, n);
-		WasmVecLoops.set(w, cnt);
+		// base = flat >> laneShift; off = flat & (lanes - 1)
+		WasmVecLoops.get(w, flat);
+		i32Const(w, laneShift);
+		w.write(Instruction.I32_SHR_U);
+		WasmVecLoops.set(w, base);
+		WasmVecLoops.get(w, flat);
+		i32Const(w, lanes - 1);
+		w.write(Instruction.I32_AND);
+		WasmVecLoops.set(w, off);
 		WasmVecLoops.splatZero(w, acc, single);
-		WasmVecLoops.simdDot(w, ap, bp, cnt, rem, trem, acc, sumLocal, single);
-		WasmVecLoops.set(w, res);
-		// dst[row] = res
-		WasmVecLoops.get(w, dpd);
-		WasmVecLoops.get(w, res);
+		emitLaneChain(w, off, lanes, 0x40, o -> emitRowDot(w, nrg, k, base, o, acc, gw, gx, single));
+		// dst[row] = fold(acc), through the shared element writer
 		if (single) {
-			w.write(Instruction.F32_DEMOTE_F64);
-			w.write(Instruction.F32_STORE, 0x00, 0x00);
+			WasmVecLoops.horizontalAddF32(w, acc, sumLocal);
 		}
 		else {
-			w.write(Instruction.F64_STORE, 0x00, 0x00);
+			WasmVecLoops.horizontalAdd(w, acc, sumLocal);
 		}
-		// wrow += n * width; dpd += width; row++
-		WasmVecLoops.get(w, wrow);
+		WasmVecLoops.get(w, vbD);
+		WasmVecLoops.get(w, row);
+		WasmVecLoops.get(w, sumLocal);
+		if (single) {
+			w.write(Instruction.F64_PROMOTE_F32);
+		}
+		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_SET);
+		w.write(Instruction.DROP);
+		// flat += n; row++
+		WasmVecLoops.get(w, flat);
 		WasmVecLoops.get(w, n);
-		i32Const(w, single ? 2 : 3);
-		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
-		WasmVecLoops.set(w, wrow);
-		WasmVecLoops.advancePtr(w, dpd, stride);
+		WasmVecLoops.set(w, flat);
 		WasmVecLoops.get(w, row);
 		i32Const(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -486,21 +610,112 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.END); // block
 	}
 
+	// acc += window(W, base + k, off) * x[k], over k in [0, nrg). `off` is a compile-time
+	// lane offset: 0 reads one group, otherwise the shuffle window spans two.
+	private static void emitRowDot(WasmWriter w, int nrg, int k, int base, int off, int acc, int gw, int gx,
+			boolean single) {
+		WasmVecLoops.openGroupLoop(w, nrg, k);
+		WasmVecLoops.get(w, acc);
+		emitRowGroup(w, gw, base, k, off, single);
+		WasmVecLoops.groupGet(w, gx, k);
+		WasmVecLoops.simd(w, single ? Instruction.F32X4_MUL : Instruction.F64X2_MUL);
+		WasmVecLoops.simd(w, single ? Instruction.F32X4_ADD : Instruction.F64X2_ADD);
+		WasmVecLoops.set(w, acc);
+		WasmVecLoops.closeGroupLoop(w, k);
+	}
+
+	// Pushes the lane group of row element k*lanes: groups[base+k] when the row is group
+	// aligned, else the i8x16.shuffle window over groups[base+k] and groups[base+k+1].
+	private static void emitRowGroup(WasmWriter w, int gw, int base, int k, int off, boolean single) {
+		groupGetOffset(w, gw, base, k, 0);
+		if (off == 0) {
+			return;
+		}
+		groupGetOffset(w, gw, base, k, 1);
+		int c = off * (single ? 4 : 8);
+		WasmVecLoops.simd(w, Instruction.I8X16_SHUFFLE);
+		for (int i = 0; i < 16; i++) {
+			w.write(c + i);
+		}
+	}
+
+	// array.get $v128arr (gw, base + k + delta)
+	private static void groupGetOffset(WasmWriter w, int gw, int base, int k, int delta) {
+		WasmVecLoops.get(w, gw);
+		WasmVecLoops.get(w, base);
+		WasmVecLoops.get(w, k);
+		w.write(Instruction.I32_ADD);
+		if (delta != 0) {
+			i32Const(w, delta);
+			w.write(Instruction.I32_ADD);
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+	}
+
 	// --- shared emit helpers --------------------------------------------------------
 
 	private static void i32Const(WasmWriter w, int value) {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(value);
 	}
 
-	// outLocal(i32) = the linear-memory block pointer of the $farray in argLocal.
-	// The data field is an i31ref; i31.get_u zero-extends its 31 payload bits, so any
-	// address below 2 GiB round-trips exactly.
-	private static void blockPtr(WasmWriter w, int argLocal, int outLocal) {
-		farrayField(w, argLocal, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_U);
+	// count/kind of the farray in argLocal, plus shift = kind + 1 and the REAL group
+	// count
+	// ng = ceil(count / lanes) -- never the trailing sentinel.
+	private static void loadHeader(WasmWriter w, int argLocal, int countLocal, int kindLocal, int shiftLocal,
+			int ngLocal) {
+		farrayCount(w, argLocal);
+		WasmVecLoops.set(w, countLocal);
+		farrayKind(w, argLocal);
+		WasmVecLoops.set(w, kindLocal);
+		WasmVecLoops.get(w, kindLocal);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		WasmVecLoops.set(w, shiftLocal);
+		ceilShift(w, countLocal, shiftLocal, ngLocal);
+	}
+
+	// outLocal = ceil(valueLocal / (1 << shiftLocal))
+	private static void ceilShift(WasmWriter w, int valueLocal, int shiftLocal, int outLocal) {
+		WasmVecLoops.get(w, valueLocal);
+		i32Const(w, 1);
+		WasmVecLoops.get(w, shiftLocal);
+		w.write(Instruction.I32_SHL);
+		i32Const(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_ADD);
+		WasmVecLoops.get(w, shiftLocal);
+		w.write(Instruction.I32_SHR_U);
 		WasmVecLoops.set(w, outLocal);
+	}
+
+	// Sets up the destination groups: the caller's block for -into (same width required),
+	// a fresh zeroed $vblock otherwise.
+	private static void destination(WasmWriter w, boolean into, int countLocal, int kindLocal, int vbDLocal,
+			int gdLocal, int vecBase) {
+		if (into) {
+			requireSameKind(w, kindLocal, 0);
+			farrayGroups(w, 0, gdLocal);
+		}
+		else {
+			WasmVecLoops.get(w, countLocal);
+			WasmVecLoops.get(w, kindLocal);
+			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			WasmVecLoops.set(w, vbDLocal);
+			vblockGroups(w, vbDLocal, gdLocal);
+		}
+	}
+
+	// The kernel's return value: the caller's destination farray for -into, a fresh
+	// rank-1
+	// farray over the new $vblock otherwise.
+	private static void finish(WasmWriter w, boolean into, int countLocal, int vbDLocal) {
+		if (into) {
+			WasmVecLoops.get(w, 0);
+		}
+		else {
+			makeFarray(w, countLocal, vbDLocal);
+		}
 	}
 
 	// Pushes field `field` of the $farray held (as eq) in argLocal.
@@ -511,6 +726,88 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 		w.writeSignedLeb128(field);
+	}
+
+	// Pushes field `field` of the $vblock held (as eq) in vbLocal.
+	private static void vblockField(WasmWriter w, int vbLocal, int field) {
+		WasmVecLoops.get(w, vbLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeSignedLeb128(field);
+	}
+
+	// Pushes the element count of the farray in argLocal.
+	private static void farrayCount(WasmWriter w, int argLocal) {
+		farrayField(w, argLocal, 1);
+		castVblockField(w, 0);
+	}
+
+	// Pushes the width tag of the farray in argLocal (0 = double, 1 = single).
+	private static void farrayKind(WasmWriter w, int argLocal) {
+		farrayField(w, argLocal, 1);
+		castVblockField(w, 1);
+	}
+
+	// Consumes the $vblock (as eq) on the stack and pushes the given field.
+	private static void castVblockField(WasmWriter w, int field) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeSignedLeb128(field);
+	}
+
+	// outLocal((ref null $v128arr)) = the group array of the farray in argLocal.
+	private static void farrayGroups(WasmWriter w, int argLocal, int outLocal) {
+		farrayField(w, argLocal, 1);
+		castGroups(w, outLocal);
+	}
+
+	// outLocal((ref null $v128arr)) = the group array of the $vblock (as eq) in vbLocal.
+	private static void vblockGroups(WasmWriter w, int vbLocal, int outLocal) {
+		WasmVecLoops.get(w, vbLocal);
+		castGroups(w, outLocal);
+	}
+
+	// Consumes the $vblock (as eq) on the stack and stores its groups into outLocal.
+	private static void castGroups(WasmWriter w, int outLocal) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_V128ARR);
+		WasmVecLoops.set(w, outLocal);
+	}
+
+	// gLocal = idx >> laneShift
+	private static void groupIndex(WasmWriter w, int idxLocal, int gLocal, boolean single) {
+		WasmVecLoops.get(w, idxLocal);
+		i32Const(w, WasmVecLoops.laneShift(single));
+		w.write(Instruction.I32_SHR_U);
+		WasmVecLoops.set(w, gLocal);
+	}
+
+	// vLocal(v128) = groups[idx >> laneShift]
+	private static void loadGroupOf(WasmWriter w, int groupsLocal, int idxLocal, int vLocal, boolean single) {
+		WasmVecLoops.get(w, groupsLocal);
+		WasmVecLoops.get(w, idxLocal);
+		i32Const(w, WasmVecLoops.laneShift(single));
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		WasmVecLoops.set(w, vLocal);
+	}
+
+	// groups[g] = v
+	private static void storeGroup(WasmWriter w, int groupsLocal, int gLocal, int vLocal) {
+		WasmVecLoops.get(w, groupsLocal);
+		WasmVecLoops.get(w, gLocal);
+		WasmVecLoops.get(w, vLocal);
+		WasmVecLoops.arraySet(w);
 	}
 
 	private static void castBuckets(WasmWriter w) {
@@ -531,69 +828,41 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.set(w, outLocal);
 	}
 
-	// countLocal = block[0]; kindLocal = block[4].
-	private static void loadHeader(WasmWriter w, int blockLocal, int countLocal, int kindLocal) {
-		WasmVecLoops.get(w, blockLocal);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		WasmVecLoops.set(w, countLocal);
-		WasmVecLoops.get(w, blockLocal);
-		w.write(Instruction.I32_LOAD, 0x02, 0x04);
-		WasmVecLoops.set(w, kindLocal);
+	// Traps when the -into destination (param 0) IS the farray in otherLocal. The struct
+	// identity is what `eq` compares, so ref.eq on the two $farray values is the exact
+	// analogue of the vec.lisp guard.
+	private static void requireNotAliased(WasmWriter w, int otherLocal) {
+		WasmVecLoops.get(w, 0);
+		WasmVecLoops.get(w, otherLocal);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 	}
 
-	// Traps unless the block in otherLocal has the same element width as kindLocal.
+	// Traps unless the farray in otherLocal has the same element width as kindLocal.
 	// Mixing a #d and a #f operand is a hard error on every backend.
 	private static void requireSameKind(WasmWriter w, int kindLocal, int otherLocal) {
 		WasmVecLoops.get(w, kindLocal);
-		WasmVecLoops.get(w, otherLocal);
-		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		farrayKind(w, otherLocal);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 	}
 
-	// dstLocal = _vec_alloc(16 + (count << (3 - kind))); write the count/kind header.
-	// The shift is computed from kind (0 -> 3 = f64 stride, 1 -> 2 = f32 stride), so the
-	// size needs no branch.
-	private static void allocBlock(WasmWriter w, int countLocal, int kindLocal, int dstLocal, int vecBase) {
-		i32Const(w, DATA_OFF);
-		WasmVecLoops.get(w, countLocal);
-		i32Const(w, 3);
-		WasmVecLoops.get(w, kindLocal);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_SHL);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + ALLOC);
-		WasmVecLoops.set(w, dstLocal);
-		WasmVecLoops.get(w, dstLocal);
-		WasmVecLoops.get(w, countLocal);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		WasmVecLoops.get(w, dstLocal);
-		WasmVecLoops.get(w, kindLocal);
-		w.write(Instruction.I32_STORE, 0x02, 0x04);
-	}
-
-	// outLocal = blockLocal + DATA_OFF (the element data pointer).
-	private static void dataPtr(WasmWriter w, int blockLocal, int outLocal) {
-		WasmVecLoops.get(w, blockLocal);
-		i32Const(w, DATA_OFF);
-		w.write(Instruction.I32_ADD);
-		WasmVecLoops.set(w, outLocal);
-	}
-
-	// Pushes struct.new $farray(array.new $hash_buckets(i31(count), 1), i31(ptr)) -- a
-	// fresh rank-1 packed array over the block at ptrLocal. (The vec: kernels are rank-1
-	// producers; matvec's result is rank-1 too. This matches the JVM bridge, whose result
-	// header is always [1.0, n, ...].)
-	private static void makeFarray(WasmWriter w, int countLocal, int ptrLocal) {
+	// Pushes struct.new $farray(array.new $hash_buckets(i31(count), 1), vblock) -- a
+	// fresh
+	// rank-1 packed array over the given block. (The vec: kernels are rank-1 producers;
+	// matvec's result is rank-1 too. This matches the JVM bridge, whose result header is
+	// always [1.0, n, ...].)
+	private static void makeFarray(WasmWriter w, int countLocal, int vbLocal) {
 		WasmVecLoops.get(w, countLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		i32Const(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		WasmVecLoops.get(w, ptrLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		WasmVecLoops.get(w, vbLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
@@ -641,18 +910,14 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.END);
 	}
 
-	private static byte[] withLocals(byte[] body, int i32Count, int f64Count, int f32Count, int v128Count) {
-		return withLocals(body, i32Count, f64Count, f32Count, v128Count, 0);
-	}
-
 	// Prepends the local declaration groups, in the fixed order the index arithmetic
-	// above assumes: i32, f64, f32, v128, (ref null eq).
-	private static byte[] withLocals(byte[] body, int i32Count, int f64Count, int f32Count, int v128Count,
-			int eqCount) {
+	// above assumes: i32, f64, f32, v128, (ref null eq), (ref null $v128arr).
+	private static byte[] withLocals(byte[] body, int i32Count, int f64Count, int f32Count, int v128Count, int eqCount,
+			int groupsCount) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		int groups = (i32Count > 0 ? 1 : 0) + (f64Count > 0 ? 1 : 0) + (f32Count > 0 ? 1 : 0) + (v128Count > 0 ? 1 : 0)
-				+ (eqCount > 0 ? 1 : 0);
+				+ (eqCount > 0 ? 1 : 0) + (groupsCount > 0 ? 1 : 0);
 		w.writeUnsignedLeb128(groups);
 		if (i32Count > 0) {
 			w.writeUnsignedLeb128(i32Count);
@@ -674,6 +939,11 @@ final class WasmVecSimdRuntimeBuilder {
 			w.writeUnsignedLeb128(eqCount);
 			w.write(Type.REFNULL.code());
 			w.writeHeapType(Type.EQ.code());
+		}
+		if (groupsCount > 0) {
+			w.writeUnsignedLeb128(groupsCount);
+			w.write(Type.REFNULL.code());
+			w.writeHeapType(WasmLispCompiler.TYPE_V128ARR);
 		}
 		w.write((Object) body);
 		return out.toByteArray();

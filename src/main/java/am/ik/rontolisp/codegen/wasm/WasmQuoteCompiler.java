@@ -49,13 +49,17 @@ final class WasmQuoteCompiler {
 		double[] data = fa.data();
 		int[] dims = fa.dims();
 		if (ctx.simd) {
-			int ptrSlot = compileLinearBlock(ctx, data.length, false);
-			for (int i = 0; i < data.length; i++) {
-				elementAddr(ctx, ptrSlot, i, false);
-				f64Const(ctx, data[i]);
-				ctx.writer.write(Instruction.F64_STORE, 0x00, 0x00);
-			}
-			finishLinearFarray(ctx, dims, ptrSlot);
+			compilePackedVblockLiteral(ctx, dims, data.length, false, group -> {
+				byte[] bytes = new byte[16];
+				for (int lane = 0; lane < 2; lane++) {
+					int i = group * 2 + lane;
+					long bits = i < data.length ? Double.doubleToRawLongBits(data[i]) : 0L;
+					for (int b = 0; b < 8; b++) {
+						bytes[lane * 8 + b] = (byte) (bits >>> (8 * b));
+					}
+				}
+				return bytes;
+			});
 			return;
 		}
 		// data: array.new TYPE_F64ARR (0.0, data.length), then array.set each element.
@@ -90,51 +94,59 @@ final class WasmQuoteCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
-	// --- --simd linear-memory packed literals -----------------------------------
+	// --- --simd packed literals (v128 lane groups) --------------------------------
 	//
-	// Under --simd a packed literal allocates its [count][kind][pad][elements] block from
-	// the vec arena at the point of evaluation (so a literal inside a loop body allocates
-	// once per iteration, exactly as the GC path's array.new does) and stores each
-	// element
-	// with a constant memarg offset. Element bytes are still baked into the code, not a
-	// data segment: the arena's base is a runtime value.
+	// Under --simd a packed literal allocates a zeroed TYPE_VBLOCK at the point of
+	// evaluation (so a literal inside a loop body allocates once per iteration, exactly
+	// as
+	// the GC path's array.new does) and fills it a whole lane group at a time with
+	// v128.const -- the element bytes are known at compile time. An all-zero group (and
+	// the trailing zero sentinel) is skipped: _v_new already wrote it.
 
-	// ptr = _vec_alloc(16 + count * width); store the count/kind header. Returns the temp
-	// slot holding the pointer, boxed as an i31.
-	private static int compileLinearBlock(WasmLispCompiler.Ctx ctx, int count, boolean single) {
-		i32Const(ctx, WasmVecSimdRuntimeBuilder.DATA_OFF + count * (single ? 4 : 8));
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.ALLOC);
-		int ptrSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		setLocal(ctx, ptrSlot);
-		ptr(ctx, ptrSlot);
+	/** Supplies the sixteen little-endian bytes of lane group {@code g}. */
+	private interface GroupBytes {
+
+		byte[] of(int group);
+
+	}
+
+	// vb = _v_new(count, kind); vb.groups[g] = v128.const <bytes(g)>; the TYPE_FARRAY.
+	private static void compilePackedVblockLiteral(WasmLispCompiler.Ctx ctx, int[] dims, int count, boolean single,
+			GroupBytes bytes) {
 		i32Const(ctx, count);
-		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
-		ptr(ctx, ptrSlot);
 		i32Const(ctx, single ? 1 : 0);
-		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x04);
-		return ptrSlot;
-	}
-
-	// Pushes the i32 block pointer held boxed as an i31 in slot.
-	private static void ptr(WasmLispCompiler.Ctx ctx, int slot) {
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(Type.I31.code());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_U);
-	}
-
-	// Pushes the address of element i as `ptr` with the constant part folded into the
-	// store's offset immediate (so no per-element i32.add is emitted).
-	private static void elementAddr(WasmLispCompiler.Ctx ctx, int ptrSlot, int index, boolean single) {
-		ptr(ctx, ptrSlot);
-		i32Const(ctx, WasmVecSimdRuntimeBuilder.DATA_OFF + index * (single ? 4 : 8));
-		ctx.writer.write(Instruction.I32_ADD);
-	}
-
-	// Builds the dims buckets and the TYPE_FARRAY struct over the linear block.
-	private static void finishLinearFarray(WasmLispCompiler.Ctx ctx, int[] dims, int ptrSlot) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_NEW);
+		int vbSlot = ctx.allocTemp();
+		setLocal(ctx, vbSlot);
+		int lanes = single ? 4 : 2;
+		int groupCount = (count + lanes - 1) / lanes;
+		if (groupCount > 0) {
+			int groupsSlot = ctx.allocTemp();
+			getLocal(ctx, vbSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+			ctx.writer.writeSignedLeb128(2);
+			setLocal(ctx, groupsSlot);
+			for (int g = 0; g < groupCount; g++) {
+				byte[] groupBytes = bytes.of(g);
+				if (isZero(groupBytes)) {
+					continue; // _v_new zeroed it
+				}
+				getLocal(ctx, groupsSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_V128ARR);
+				i32Const(ctx, g);
+				ctx.writer.write(Instruction.SIMD_PREFIX);
+				ctx.writer.writeUnsignedLeb128(Instruction.V128_CONST);
+				ctx.writer.write((Object) groupBytes);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+			}
+		}
+		// dims buckets, then struct.new TYPE_FARRAY (dims, vb)
 		refNull(ctx);
 		i32Const(ctx, dims.length);
 		arrayNew(ctx);
@@ -148,9 +160,18 @@ final class WasmQuoteCompiler {
 			arraySet(ctx);
 		}
 		getLocal(ctx, dimsSlot);
-		getLocal(ctx, ptrSlot);
+		getLocal(ctx, vbSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
+	private static boolean isZero(byte[] bytes) {
+		for (byte b : bytes) {
+			if (b != 0) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -169,13 +190,17 @@ final class WasmQuoteCompiler {
 		float[] data = fa.data();
 		int[] dims = fa.dims();
 		if (ctx.simd) {
-			int ptrSlot = compileLinearBlock(ctx, data.length, true);
-			for (int i = 0; i < data.length; i++) {
-				elementAddr(ctx, ptrSlot, i, true);
-				f32Const(ctx, data[i]);
-				ctx.writer.write(Instruction.F32_STORE, 0x00, 0x00);
-			}
-			finishLinearFarray(ctx, dims, ptrSlot);
+			compilePackedVblockLiteral(ctx, dims, data.length, true, group -> {
+				byte[] bytes = new byte[16];
+				for (int lane = 0; lane < 4; lane++) {
+					int i = group * 4 + lane;
+					int bits = i < data.length ? Float.floatToRawIntBits(data[i]) : 0;
+					for (int b = 0; b < 4; b++) {
+						bytes[lane * 4 + b] = (byte) (bits >>> (8 * b));
+					}
+				}
+				return bytes;
+			});
 			return;
 		}
 		// data: array.new TYPE_F32ARR (0.0, data.length), then array.set each element.

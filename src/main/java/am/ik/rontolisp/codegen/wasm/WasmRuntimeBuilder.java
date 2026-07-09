@@ -1671,8 +1671,7 @@ final class WasmRuntimeBuilder {
 		// used by the list printer); slots 3-4 = (ref null eq) array dims/data, slots
 		// 5-11 = i32 array index/length/rank/dimension/stride/scratch/displacement-base,
 		// slot 12 = i32 packed-array flag (0 general / 1 double "#d(" / 2 single "#f("),
-		// slot 13 = i32 single-float-width flag -- all used by the array printer. Under
-		// --simd slot 14 is a tenth i32: the packed block's linear-memory pointer.
+		// slot 13 = i32 single-float-width flag -- all used by the array printer.
 		w.write(4);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1682,7 +1681,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(simd ? 10 : 9);
+		w.write(9);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -1793,7 +1792,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd ? 14 : -1);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -1903,8 +1902,7 @@ final class WasmRuntimeBuilder {
 		// (length); slots 4-5 = ref null eq (array dims/data), slots 6-12 = i32 (array
 		// index/length/rank/dimension/stride/scratch/displacement-base), slot 13 = i32
 		// packed-array flag (0 general / 1 double "#d(" / 2 single "#f("), slot 14 = i32
-		// single-float-width flag. Under --simd slot 15 is a tenth i32 in that group: the
-		// packed block's linear-memory pointer.
+		// single-float-width flag.
 		w.write(5);
 		w.write(1);
 		w.write(Type.REFNULL.code());
@@ -1916,7 +1914,7 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		w.write(simd ? 10 : 9);
+		w.write(9);
 		w.write(Type.I32);
 
 		// Check null (nil)
@@ -2060,7 +2058,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
-		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd ? 15 : -1);
+		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd);
 
 		// Must be cons struct - print as list
 		w.write(Instruction.I32_CONST);
@@ -2279,18 +2277,15 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 	}
 
-	// Pushes the address of element idx of the --simd packed block whose pointer is in
-	// ptrSlot: ptr + 16 + (idx << shift).
-	private static void packedElementAddr(WasmWriter w, int ptrSlot, int idxSlot, boolean single) {
-		getLocal(w, ptrSlot);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmVecSimdRuntimeBuilder.DATA_OFF);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, idxSlot);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(single ? 2 : 3);
-		w.write(Instruction.I32_SHL);
-		w.write(Instruction.I32_ADD);
+	// Pushes the given field of the TYPE_VBLOCK that a --simd TYPE_FARRAY (in slot) holds
+	// as its data: 0 = the element count, 1 = the width tag.
+	private static void vblockField(WasmWriter w, int slot, int field) {
+		farrayDataRaw(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeSignedLeb128(field);
 	}
 
 	// Pushes the dims buckets (field 0, a TYPE_HASH_BUCKETS held as eq) of the
@@ -2335,10 +2330,10 @@ final class WasmRuntimeBuilder {
 	// = i32 locals.
 	private static void emitPrintArray(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc, int dimsSlot,
 			int dataSlot, int idxSlot, int lenSlot, int rankSlot, int jSlot, int strideSlot, int mSlot, int baseSlot,
-			int packedSlot, int singleSlot, int ptrSlot) {
-		// ptrSlot >= 0 selects the --simd lowering: the packed data is a linear-memory
-		// block, not a TYPE_F64ARR/TYPE_F32ARR GC array.
-		boolean simd = ptrSlot >= 0;
+			int packedSlot, int singleSlot, boolean simd) {
+		// `simd` selects the --simd lowering: the packed data is a TYPE_VBLOCK of v128
+		// lane groups, read one element at a time through the _v_get helper, not a
+		// TYPE_F64ARR/TYPE_F32ARR GC array.
 		// packedSlot = 0 (a general array prints "#("/"#nA("); 1 = a packed double array
 		// ("#d("); 2 = a packed single array ("#f(")
 		w.write(Instruction.I32_CONST);
@@ -2363,14 +2358,8 @@ final class WasmRuntimeBuilder {
 		getLocal(w, 0);
 		setLocal(w, dataSlot);
 		if (simd) {
-			// ptrSlot = the linear block; its header carries the width and the count.
-			farrayDataRaw(w, dataSlot);
-			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			w.writeHeapType(Type.I31.code());
-			w.write(Instruction.GC_PREFIX, Instruction.I31_GET_U);
-			setLocal(w, ptrSlot);
-			getLocal(w, ptrSlot);
-			w.write(Instruction.I32_LOAD, 0x02, 0x04);
+			// singleSlot = the vblock's width tag
+			vblockField(w, dataSlot, 1);
 			setLocal(w, singleSlot);
 		}
 		else {
@@ -2389,8 +2378,7 @@ final class WasmRuntimeBuilder {
 		setLocal(w, packedSlot);
 		// lenSlot = the element count
 		if (simd) {
-			getLocal(w, ptrSlot);
-			w.write(Instruction.I32_LOAD, 0x02, 0x00);
+			vblockField(w, dataSlot, 0);
 		}
 		else {
 			// array.len(farray.data) -- width-agnostic (abstract-array cast)
@@ -2417,31 +2405,28 @@ final class WasmRuntimeBuilder {
 		getBucketsLocal(w, dimsSlot);
 		getLocal(w, idxSlot);
 		// element as f64 (widen f32 -> f64 for a single-float array), then box it
-		getLocal(w, singleSlot);
-		w.write(Instruction.IF, Type.F64.code());
 		if (simd) {
-			packedElementAddr(w, ptrSlot, idxSlot, true);
-			w.write(Instruction.F32_LOAD, 0x00, 0x00);
+			// _v_get owns the width and lane branches
+			farrayDataRaw(w, dataSlot);
+			getLocal(w, idxSlot);
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_GET);
 		}
 		else {
+			getLocal(w, singleSlot);
+			w.write(Instruction.IF, Type.F64.code());
 			farrayDataF32(w, dataSlot);
 			getLocal(w, idxSlot);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			w.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
-		}
-		w.write(Instruction.F64_PROMOTE_F32);
-		w.write(Instruction.ELSE);
-		if (simd) {
-			packedElementAddr(w, ptrSlot, idxSlot, false);
-			w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		}
-		else {
+			w.write(Instruction.F64_PROMOTE_F32);
+			w.write(Instruction.ELSE);
 			farrayData(w, dataSlot);
 			getLocal(w, idxSlot);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			w.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+			w.write(Instruction.END);
 		}
-		w.write(Instruction.END);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);

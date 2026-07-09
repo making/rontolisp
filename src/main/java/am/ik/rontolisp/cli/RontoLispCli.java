@@ -256,10 +256,12 @@ public final class RontoLispCli {
 				// wasm-export wrapper that the serve adapter calls per request.
 				boolean serve = component && HttpHandlerInliner.usesHttpHandler(program);
 				List<LispVal> wasmProgram = serve ? HttpHandlerInliner.inline(program) : program;
-				// --simd routes the vectorizable vec: kernels to emitted v128 helpers.
-				// Because v128 addresses LINEAR memory, it also moves packed float arrays
-				// off the GC heap into a bump-allocated linear arena (.todo/101), which
-				// nothing frees within a run -- use the -into kernels in hot loops.
+				// --simd routes the vectorizable vec: kernels to emitted v128 helpers and
+				// switches a packed float array's storage to an (array (mut v128)) of
+				// lane
+				// groups -- still a GC object the engine collects, so memory behaves as
+				// it
+				// does without the flag.
 				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd).compile(wasmProgram);
 			}
 		}
