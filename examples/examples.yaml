@@ -161,6 +161,21 @@ examples:
       contains:
         - "Training XOR (2-4-1 network, vec + linalg)..."
         - "Predictions after training:"
+  - path: ml/simd-dot.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the minimal --simd showcase -- one vec:dot over 1024 doubles, 4000 times. The vector is 0.0..1023.0, so the dot is an exact integer and every partial sum is exactly representable; lane-order folding therefore cannot change it. The elapsed-time line is not checked. Run it a second time with --simd - interpreter 2.59 s -> 2.3 ms, wasm-GC 273 -> 2.4 ms
+    expect:
+      contains:
+        - "(vec:dot v v) over 1024 doubles, 4000 times = 4096000 multiply-adds"
+        - "sum of squares below 1024 = 357389824"
+  - path: ml/simd-gemv.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the --simd showcase -- 100 steps of vec:matvec (GEMV) + vec:dot on a 256x256 single-float matrix; deterministic (fixed-seed LCG weights, argmax indices printed instead of floats, so lane-order rounding cannot move them). The elapsed-time line is not checked. Run it a second time with --simd - wasm-GC 467 -> 3.9 ms, interpreter 4.67 -> 0.68 s
+    expect:
+      contains:
+        - "simd-gemv: 100 steps of (vec:matvec w x) on a 256x256 single-float matrix"
+        - "argmax after steps 1-10: (0 14 82 126 14 140 126 79 134 175)"
+        - "argmax after step 100:   85"
 
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp

@@ -129,6 +129,14 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
   f64-then-narrow `scaleF`), so interpreter `--simd` ≡ compiled `.class --simd` bit-for-bit.
   It is NOT reused from `codegen.jvm` — `eval` may not depend on it (package rule), and the
   template's kernels are written against the header-in-array layout anyway.
+  **The `F2D` widening is a liability on two counts** (measured 2026-07-09): it is the Vector-API
+  op most likely to be missing from a JIT's intrinsics (one compiler family emulates it lane by
+  lane, making `#f` `vec:dot` ~50x slower than `#d`), and it is never free even when intrinsified
+  (`#f` dot ~2x slower than `#d` despite twice the lanes). It buys bit-identity with the scalar
+  oracle — which the **WASM `--simd` kernels do not honour anyway**: they accumulate an `#f`
+  reduction in single precision (`WasmVecLoops`: "each width computes entirely in its own native
+  precision"), so `(vec:dot #f(4096.0 1.0 ...x1023))` prints 16777984 on wasm-GC `--simd` and the
+  exact 16778239 everywhere else. Redesign + prototype (574x on the emulating JIT): `.todo/106`.
 - `eval.VecSimd` — `available()` (links the kernels class; a `NoClassDefFoundError` on a JVM
   without the incubator module becomes `false`) and `install(Environment)` (defines native
   `LispFunction`s for `vec:add`..`vec:matvec`, overriding the just-evaluated defuns).
