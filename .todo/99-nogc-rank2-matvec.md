@@ -3,7 +3,8 @@
 **Motivation:** `vec:matvec` (GEMV, `y[i] = dot(row_i of W, x)`) is the one `vec:` member the
 `--no-gc` scalar backend rejects. JVM `--simd` runs it for both f32 and f64
 (`JvmSimdVectorTemplate.simdMatvec` / `matvecF`), and it is the dominant kernel in llama2-style
-inference (every projection / FFN / classifier is a GEMV — the `.todo/98` at-scale payoff). Now
+inference (every projection / FFN / classifier is a GEMV — the payoff `examples/ml/tiny-llm.lisp`
+demonstrates, and the reason `--no-gc` cannot run that example). Now
 that `vec:` and `linalg:` are single-float-complete across all backends (todo-97 + the vec
 constructor follow-on), the `--no-gc` GEMV gap is the remaining hole in the `vec:` surface on the
 scalar backend.
@@ -93,5 +94,7 @@ rank-2.
 - Scalar reference (the oracle): `vec.lisp` `vec:matvec` (reads `(aref w i j)` over
   `array-dimensions`, allocates via `vec::%make-like`).
 - Design context: `.kb/vec.md` "Acceleration layer 2 — --no-gc native v128" + "Not done"
-  (`--no-gc native f32x4 GEMV`); todo-95 Part 2 (the JVM GEMV that landed); `.todo/98` (the
-  at-scale demo that would exercise this).
+  (`--no-gc native f32x4 GEMV`) + "Writing a `--simd` example or benchmark"; todo-95 Part 2 (the JVM
+  GEMV that landed); `examples/ml/simd-gemv.lisp` and `examples/ml/tiny-llm.lisp` (the at-scale demos
+  that would exercise this — both are `[interpreter, jvm, wasm]` only today, precisely because of
+  this gap).

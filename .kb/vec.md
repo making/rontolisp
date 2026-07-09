@@ -526,6 +526,52 @@ ForSingleFloatVectors` uses `arange 200`, whose squared sum is 2646700). `ci-spe
 - Manual `--no-gc`: `wasmtime run --invoke <fn> module.wasm <args>` (result on stderr; filter
   `^warning:`).
 
+## Writing a `--simd` example or benchmark (constraints learned the hard way)
+
+Migrated from `.todo/98` (the "an example that actually shows the `--simd` win" task, closed
+2026-07-09 once `simd-dot` / `simd-gemv` / `tiny-llm` shipped). Its full measurement log — the
+`convert(F2D)` emulation cliff, the ablations, the two retracted rankings — is
+`git show 3df64eb:.todo/98-simd-showcase-example.md`. **Everything about how a particular JVM behaves
+is OUR measurement, not vendor-documented behavior: it may live here, never in `doc/**` or an example
+header.** The guides say only "whether the Vector API bridge becomes CPU instructions is up to the
+JVM that runs the class, so measure".
+
+- **`THRESHOLD = 128` is compared against the ROW LENGTH**, not the total element count
+  (`if (cols >= THRESHOLD)` in `simdMatvec`/`matvecF`). A matrix of many short rows runs the scalar
+  loop for every row no matter how large it is. Below 128 elements per row/vector the interpreter and
+  JVM run a scalar loop; wasm-GC and `--no-gc` have no threshold. `nn-vec.lisp`'s rows are 2 and 4
+  long, so `--simd` does literally nothing there. In `tiny-llm.lisp` exactly one of the thirteen
+  GEMVs falls below it — `(vec:matvec vt a)`, whose row length is the CONTEXT length because the V
+  cache is transposed (12 here) — worth 0.46% of the multiply-adds, and it vectorizes on its own once
+  a real context passes 128 tokens.
+- **Print only INTEGERS.** WASM prints floats to ~7 significant digits (`2.718281` vs
+  `2.7182818284590455`) and its `exp` differs from the JVM's in the low bits, so a float never
+  compares across backends. `argmax` is the trick: an integer that depends on every multiply-add yet
+  is unmoved by lane-order rounding. This matters MORE since todo-106 — an `#f` reduction under
+  `--simd` now genuinely differs from the scalar reference, not just in the last ULP.
+- `get-internal-real-time` is in **milliseconds** — an INTEGER on interpreter/JVM, a FLOAT on WASM —
+  and `internal-time-units-per-second` does NOT exist. So an elapsed-time line must never be checked
+  by `examples.yaml`.
+- `--no-gc` cannot compile `linalg:` at all (`&optional` in `linalg::%la-make`) and rejects
+  `vec:matvec`. Any example using either is `[interpreter, jvm, wasm]` only. `simd-gemv.lisp` avoids
+  `linalg:` entirely — `(make-array (list r c) :element-type 'single-float)` is enough for a packed
+  rank-2 matrix — but `vec:matvec` still rules `--no-gc` out.
+- Interpreter time budget for `ExamplesE2eTest`: heat3d 0.0 s .. simd-gemv 4.7 s .. deep-digits
+  10.1 s .. tiny-llm ~13 s .. mlp 38.4 s.
+- `ExamplesE2eTest` can fail spuriously when the GraalVM JIT prints a "Systemic Graal compilation
+  failure" warning onto the program's stdout (seen once on `ml/deep-digits.lisp: jvm`). Re-run.
+- **Benchmarking discipline.** Run benchmarks SEQUENTIALLY (a parallel subagent corrupts the
+  numbers). Take N >= 9 samples and print them ALL before claiming two configurations differ: a
+  GraalVM scalar timing turned out bimodal (`226 269 269 271 271 381 383 395 400`) and a median would
+  have hidden it. Raise the iteration count until the JIT reaches steady state. Measure allocation
+  with `-XX:+UseEpsilonGC -Xmx12g -Xlog:gc` and read heap-used-at-exit (the GC counts are useless).
+  And **zsh does not word-split an unquoted `$FLAGS`** — `java $FLAGS -cp . Prog` passes one giant
+  argument; write JVM flags inline.
+- **Vary the axis you are not thinking about.** Five separate experiments "confirmed" that GraalVM
+  cannot vectorize, because every one of them happened to use `#f`. The first `#d` program
+  (`simd-dot.lisp`) came out 1100x faster on the interpreter and destroyed the hypothesis; the real
+  cause was one un-intrinsified op in the `#f` reduction kernels, now gone (todo-106).
+
 ## Names / registration
 
 `LispNames.VEC_PKG` + `VEC_ZEROS`..`VEC_NORM`/`VEC_MATVEC` (+ `VEC_QUALIFIED_AREF`/`_ASET`);
