@@ -76,7 +76,7 @@ heads accept the same specs as `check-type`:
    `(eval-when (:compile-toplevel ...) (defmacro ...))` idiom registers the
    macro at compile time,
 2. `JvmLispCompiler.compile` / `WasmLispCompiler.compile` /
-   `ScalarWasmCompiler.compile`, right before/at the top-level preprocessing
+   `NoGcWasmCompiler.compile`, right before/at the top-level preprocessing
    (`expandTopLevelDefstructs`) -- so Pass 1 collects nested defuns in direct
    compiler invocations (compiler unit tests bypass the CLI).
 
@@ -93,7 +93,7 @@ Unwrapped directives are unaffected.
 ## Wiring points (the usual macro checklist)
 
 `LispNames` constants; `LispEvaluator.evalCons` cases; `Jvm/WasmExprCompiler`
-compileCons cases; `ScalarWasmCompiler.expandMacro`; `FreeVarAnalyzer` BOTH
+compileCons cases; `NoGcWasmCompiler.expandMacro`; `FreeVarAnalyzer` BOTH
 methods (explicit cases that expand first -- the default walk would misread
 the type symbol in `(the integer x)` as a free variable reference and collect
 declaration specifiers); `expandBuiltinMacro`.

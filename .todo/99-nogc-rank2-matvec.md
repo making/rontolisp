@@ -8,7 +8,7 @@ that `vec:` and `linalg:` are single-float-complete across all backends (todo-97
 constructor follow-on), the `--no-gc` GEMV gap is the remaining hole in the `vec:` surface on the
 scalar backend.
 
-Today it is a clean compile error: `ScalarWasmCompiler.SIMD_UNSUPPORTED_NO_GC = {VEC_MATVEC}`
+Today it is a clean compile error: `NoGcWasmCompiler.SIMD_UNSUPPORTED_NO_GC = {VEC_MATVEC}`
 (~L2434) throws "'matvec' is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1
 only" (~L2456).
 
@@ -61,7 +61,7 @@ rank-2.
   `(vec:matvec W x)`; check the GEMV result (a `truncate`d reduction of it) for BOTH widths, over
   a `d`/`n` that exercises the `f64x2` pair + tail and the `f32x4` quad + remainder loop. Mirror
   `noGcRuns{Double,Single}FloatVecKernelsWith{F64x2,F32x4}Simd`.
-- `ScalarWasmCompilerTest` (structural): the rank-2 layout + the `0xFD` `f64x2`/`f32x4` dot opcodes
+- `NoGcWasmCompilerTest` (structural): the rank-2 layout + the `0xFD` `f64x2`/`f32x4` dot opcodes
   appear in the matvec kernel.
 - (ci-spec does not run `--no-gc`, so no ci-spec case; the JVM `--simd` GEMV is already pinned by
   `vec-kernels-cross-backend` + `JvmSimdAccelCompilerTest`.)
@@ -72,7 +72,7 @@ rank-2.
 
 ## Pointers
 
-- Reject site: `ScalarWasmCompiler.SIMD_UNSUPPORTED_NO_GC` (~L2434), `requireKnownSimd` (~L2456).
+- Reject site: `NoGcWasmCompiler.SIMD_UNSUPPORTED_NO_GC` (~L2434), `requireKnownSimd` (~L2456).
 - Rank-1 guards to relax for packed float: `requireRank1Dims` (~L2342), `compileFloatArrayLiteral`
   (~L2157), the aref/aset subscript-count checks.
 - Layout helpers: `allocVec`/`emitElementAddr`/`elemShift`/`compileMakeArray`/`compileSimdConstruct`

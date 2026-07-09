@@ -350,20 +350,32 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvoke(program, "fibonacci-ish", "5")).isEqualTo("120");
 	}
 
-	// Compiles with --no-gc (the scalar non-GC lowering) and invokes an export
+	// Compiles with --no-gc (the non-GC lowering, scalar vec: kernels) and invokes an
+	// export
 	// WITHOUT `-W gc`, proving the module runs on a plain MVP runtime with no wasm-GC and
 	// no import object.
 	private static String compileNoGcAndInvoke(boolean optimize, String lispCode, String function, String... args)
 			throws Exception {
+		return compileNoGcAndInvoke(optimize, false, lispCode, function, args);
+	}
+
+	// As above, with an explicit --simd switch: simd=true lowers the vectorizable vec:
+	// kernels to native v128 (f64x2/f32x4), simd=false to scalar linear-memory loops.
+	// Both
+	// run on a plain MVP runtime; the v128 build additionally needs the SIMD proposal (on
+	// by
+	// default in wasmtime).
+	private static String compileNoGcAndInvoke(boolean optimize, boolean simd, String lispCode, String function,
+			String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new ScalarWasmCompiler(optimize).compile(program);
+		byte[] wasmBytes = new NoGcWasmCompiler(optimize, simd).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
 		List<String> command = new java.util.ArrayList<>(
 				List.of("wasmtime", "run", "--invoke", function, "/tmp/test.wasm"));
 		command.addAll(List.of(args));
 		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
 		assertThat(result.getExitCode())
-			.as("exit code for no-gc invoke %s: %s\nstderr: %s", function, lispCode, result.getStderr())
+			.as("exit code for no-gc invoke %s (simd=%s): %s\nstderr: %s", function, simd, lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
 	}
@@ -427,8 +439,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(true, program, "entry", "5")).isEqualTo("20");
 		// The optimized module is no larger than the plain one (the unreachable `dead`
 		// function is dropped); behavior is identical either way.
-		int plain = new ScalarWasmCompiler(false).compile(parsed).length;
-		int optimized = new ScalarWasmCompiler(true).compile(parsed).length;
+		int plain = new NoGcWasmCompiler(false).compile(parsed).length;
+		int optimized = new NoGcWasmCompiler(true).compile(parsed).length;
 		assertThat(optimized).isLessThanOrEqualTo(plain);
 		assertThat(compileNoGcAndInvoke(false, program, "entry", "5")).isEqualTo("20");
 	}
@@ -575,8 +587,9 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsDoubleFloatVecKernelsWithF64x2Simd() throws Exception {
-		// The packed double-float (F64VEC) vec: kernels lower to native f64x2 v128 SIMD
-		// and
+		// Under --no-gc --simd, the packed double-float (F64VEC) vec: kernels lower to
+		// native
+		// f64x2 v128 SIMD and
 		// run on a plain MVP runtime (no `-W gc`). Results are wrapped in truncate so the
 		// host boundary is a deterministic :int (independent of wasmtime's float
 		// printing).
@@ -601,20 +614,22 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'consd :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'arand :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(false, program, "sum280", "0")).isEqualTo("280");
-		assertThat(compileNoGcAndInvoke(false, program, "scalesum", "0")).isEqualTo("45");
-		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "5")).isEqualTo("30");
-		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "8")).isEqualTo("140");
+		assertThat(compileNoGcAndInvoke(false, true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(false, true, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(false, true, program, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "8")).isEqualTo("140");
 		// vec:ones / vec:arange with no element-type build the default F64VEC (the
 		// double path is byte-identical to before the todo-97 constructor change).
-		assertThat(compileNoGcAndInvoke(false, program, "consd", "0")).isEqualTo("5");
-		assertThat(compileNoGcAndInvoke(false, program, "arand", "0")).isEqualTo("6");
+		assertThat(compileNoGcAndInvoke(false, true, program, "consd", "0")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(false, true, program, "arand", "0")).isEqualTo("6");
 	}
 
 	@Test
 	void noGcRunsSingleFloatVecKernelsWithF32x4Simd() throws Exception {
-		// The packed single-float (F32VEC) vec: kernels lower to native f32x4 v128 SIMD
+		// Under --no-gc --simd, the packed single-float (F32VEC) vec: kernels lower to
+		// native
+		// f32x4 v128 SIMD
 		// (four lanes per iteration) and run on a plain MVP runtime (no `-W gc`). Inputs
 		// are
 		// f32-exact (integer-valued) so the f32-throughout computation matches the exact
@@ -647,20 +662,59 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'consf :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'aranf :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(false, program, "sum280", "0")).isEqualTo("280");
-		assertThat(compileNoGcAndInvoke(false, program, "addref", "0")).isEqualTo("11");
-		assertThat(compileNoGcAndInvoke(false, program, "addref", "2")).isEqualTo("33");
-		assertThat(compileNoGcAndInvoke(false, program, "scalesum", "0")).isEqualTo("45");
-		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "5")).isEqualTo("30");
-		assertThat(compileNoGcAndInvoke(false, program, "buildsum", "8")).isEqualTo("140");
+		assertThat(compileNoGcAndInvoke(false, true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(false, true, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(false, true, program, "addref", "0")).isEqualTo("11");
+		assertThat(compileNoGcAndInvoke(false, true, program, "addref", "2")).isEqualTo("33");
+		assertThat(compileNoGcAndInvoke(false, true, program, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "8")).isEqualTo("140");
 		// vec:ones / vec:arange with a literal 'single-float construct an F32VEC natively
 		// (todo-97 follow-on): sum(ones 5) = 5, sum(arange 4) = 0+1+2+3 = 6.
-		assertThat(compileNoGcAndInvoke(false, program, "consf", "0")).isEqualTo("5");
-		assertThat(compileNoGcAndInvoke(false, program, "aranf", "0")).isEqualTo("6");
+		assertThat(compileNoGcAndInvoke(false, true, program, "consf", "0")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(false, true, program, "aranf", "0")).isEqualTo("6");
 		// --optimize (tree-shaken module) still runs the f32x4 kernels identically.
-		assertThat(compileNoGcAndInvoke(true, program, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(true, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(true, true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(true, true, program, "sum280", "0")).isEqualTo("280");
+	}
+
+	@Test
+	void noGcRunsVecKernelsScalarWithoutSimdMatchingTheV128Results() throws Exception {
+		// The orthogonal --simd switch: WITHOUT --simd the same vec: kernels lower to
+		// plain
+		// scalar linear-memory loops (no v128) over the byte-identical [count][data]
+		// block
+		// and produce the SAME results the f64x2/f32x4 build does -- element-wise
+		// bit-for-bit, and reductions bit-for-bit here too because the inputs are exact.
+		// This proves --no-gc alone emits a SIMD-proposal-free module that still runs and
+		// computes correctly (a portability win). The precise "no 0xFD opcode" byte check
+		// lives in NoGcWasmCompilerTest; here we prove the scalar module executes.
+		String doubles = """
+				(defun dot55 (i) (let ((v #d(1.0 2.0 3.0 4.0 5.0))) (truncate (vec:dot v v))))
+				(defun sum280 (i) (truncate (vec:sum #d(10.0 20.0 30.0 40.0 50.0 60.0 70.0))))
+				(defun scalesum (i) (truncate (vec:sum (vec:scale #d(1.0 2.0 3.0 4.0 5.0) 3.0))))
+				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sum280 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'scalesum :params '(:int) :returns :int)
+				""";
+		// simd=false -- the scalar loops, run with no `-W gc` (and no SIMD proposal
+		// needed).
+		assertThat(compileNoGcAndInvoke(false, false, doubles, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(false, false, doubles, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(false, false, doubles, "scalesum", "0")).isEqualTo("45");
+		// Single-float scalar path: f32.load/store, computed in f32, promoted on return.
+		// Covers a pure-tail case (count 3 < a lane group) and a mixed case.
+		String singles = """
+				(defun dot55 (i) (let ((v #f(1.0 2.0 3.0 4.0 5.0))) (truncate (vec:dot v v))))
+				(defun addref (i)
+				  (let* ((a #f(1.0 2.0 3.0)) (b #f(10.0 20.0 30.0)) (c (vec:add a b)))
+				    (truncate (aref c i))))
+				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'addref :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoGcAndInvoke(false, false, singles, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(false, false, singles, "addref", "0")).isEqualTo("11");
+		assertThat(compileNoGcAndInvoke(false, false, singles, "addref", "2")).isEqualTo("33");
 	}
 
 	// Invokes a --no-gc :string-returning export and returns the length component of the

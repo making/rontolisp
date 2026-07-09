@@ -279,6 +279,12 @@ It achieves this by lowering each value directly onto an unboxed wasm scalar, pl
 linear-memory representation for strings — so the eligible subset is a restriction of the
 language, not a different one.
 
+Numeric vector kernels (the [`vec:` package](../guides/simd-acceleration.md)) work under
+`--no-gc` too, lowered to plain scalar loops by default — so a vector program keeps the
+"runs on any MVP runtime" property above. Add [`--simd`](../guides/simd-acceleration.md)
+to lower those kernels to native WebAssembly SIMD (`v128`) instead, which then needs a
+runtime with the SIMD proposal (on by default in wasmtime).
+
 ### Eligible subset
 
 A function is eligible only if its **entire transitive call graph** stays inside this

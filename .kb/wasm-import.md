@@ -38,7 +38,7 @@ old `exportUsesMemory`); an `:s-expr` result forces `usesRead`.
 
 **Export aliases**: `wasm-export` gained `:as "alias"` (string or quoted symbol) —
 `Decl.exportName()` defaults to the Lisp name; used by both the GC backend export
-section and `ScalarWasmCompiler`.
+section and `NoGcWasmCompiler`.
 
 **wasm-import/wasm-export inside a user `defpackage` (the shared `gl` package)**: unlike
 ordinary quoted data (which passes through `PackageResolver` untouched), the quoted name

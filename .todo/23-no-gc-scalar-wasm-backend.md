@@ -3,7 +3,7 @@
 **Status:** Phase 1 LANDED (2026-06-29), extended with iteration + math (2026-06-29),
 then **Phase 2a strings LANDED (2026-06-29)**. Only `:s-expr` (cons/reader/printer) is
 still open. Phase 1 shipped as
-`codegen.wasm.ScalarWasmCompiler` (a separate backend, GC path untouched): `--no-gc`
+`codegen.wasm.NoGcWasmCompiler` (a separate backend, GC path untouched): `--no-gc`
 emits a plain MVP module (no rec group / GC types / memory / import) for pure-numeric
 `rontolisp:wasm-export` functions with scalar boundary types (`:int`/`:float`/`:bool`/
 `:void`), runs with no `-W gc`. Resolved open decisions: integers are unboxed `i64` and
@@ -25,7 +25,7 @@ whose result = join of normal completion and every enclosing `return`), and the
 `logand`/`logior`/`logxor`/`lognot`/`ash` (`ash` picks `shl`/`shr_s` by `select` on the
 shift sign). `dolist`/list iteration, a free variable and assignment to a global stay
 ineligible (compile error). Docs: README "Non-GC Output" (`doc/en/compiling/wasm.md`);
-CLAUDE.md design-constraint bullet. Tests: `ScalarWasmCompilerTest` (structural) +
+CLAUDE.md design-constraint bullet. Tests: `NoGcWasmCompilerTest` (structural) +
 `--no-gc` cases in `WasmLispCompilerIntegrationTest` (`wasmtime --invoke` without `-W gc`,
 interpreter parity), incl. `noGcSupportsIterationAndLocalMutation`,
 `noGcSupportsReturnFromALoop`, `noGcSupportsSqrtAndBitwiseOps`.
@@ -34,7 +34,7 @@ interpreter parity), incl. `noGcSupportsIterationAndLocalMutation`,
 under `--no-gc`: the blocker was never strings/sexpr per se but that mandelbrot prints to
 stdout, which an import-free reactor cannot do. The fix is to **return the rendered grid
 as a string** (`examples/mandelbrot-nogc.lisp`) and let the host print it. Implemented in
-`ScalarWasmCompiler`: a `Ty.STRING` = `i32` pointer to a linear-memory `[len:i32 LE][UTF-8
+`NoGcWasmCompiler`: a `Ty.STRING` = `i32` pointer to a linear-memory `[len:i32 LE][UTF-8
 bytes]` header; string literals laid out 4-byte-aligned in a data segment from
 `STR_DATA_BASE`=8 (memory addr 0 is a canonical empty string, used to type-check the
 `cond`/`(if t body nil)` expansion); `(concatenate 'string ...)` bump-allocates via an
@@ -46,7 +46,7 @@ ABI: a param is a `(ptr,len)` pair copied into a fresh internal header; a result
 internal pointer returned as `(ptr+4, len)`. The `Ty.join` lattice treats INT as the
 inference bottom that yields to STRING and makes FLOAT-vs-STRING a type error; `coerce`
 rejects string/number mixing (except nil->""). Composes with `--optimize` (the tree shaker
-already decodes the memory/global/grow/block/loop opcodes). Tests: `ScalarWasmCompilerTest`
+already decodes the memory/global/grow/block/loop opcodes). Tests: `NoGcWasmCompilerTest`
 (memory/data/export structure, `:s-expr` still rejected) + `noGcSupportsStringConcatenation
 AtTheBoundary` in `WasmLispCompilerIntegrationTest` (wasmtime, no `-W gc`, asserts the
 returned `:string` length). Docs: README "Strings under `--no-gc`"; CLAUDE.md bullet.
@@ -147,7 +147,7 @@ non-GC output can be numerically *better*, not just smaller.
 - Thread a `noGc` boolean the same way `dynamic`/`component`/`noWasi`/`optimize` are
   threaded (CliOptions.noValueKeys, RontoLispCli.compileToFile, WasmLispCompiler ctor).
 - **Recommended structure:** a **separate backend class** (e.g.
-  `codegen.wasm.scalar.ScalarWasmCompiler`) rather than branching the GC `WasmLispCompiler`
+  `codegen.wasm.scalar.NoGcWasmCompiler`) rather than branching the GC `WasmLispCompiler`
   everywhere. The GC compiler's fixed-`FUNC_*`-index invariant and 200-function runtime are
   irrelevant here (no runtime is emitted), so a clean small compiler that only knows numeric
   ops is far simpler and keeps the GC path untouched (zero regression risk). `RontoLispCli`
@@ -186,7 +186,7 @@ non-GC output can be numerically *better*, not just smaller.
 
 ## Touch points
 - `cli/CliOptions.java`, `cli/RontoLispCli.java` (the `--no-gc` flag + dispatch).
-- New `codegen/wasm/scalar/ScalarWasmCompiler.java` (the lowering) over `am.ik.wasm`
+- New `codegen/wasm/scalar/NoGcWasmCompiler.java` (the lowering) over `am.ik.wasm`
   (reuse the section/encoder writers; emit no rec group).
 - An eligibility analyzer (call-graph closure over the numeric-op allow-list).
 - `am.ik.wasm.WasmTreeShaker` corpus/test additions for the non-GC shape.

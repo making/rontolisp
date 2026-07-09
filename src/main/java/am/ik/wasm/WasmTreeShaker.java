@@ -469,7 +469,7 @@ public final class WasmTreeShaker {
 	// sub-opcode. SIMD instructions carry no function references, so this only advances
 	// p.
 	// Only the sub-opcodes the compilers emit (the packed-float-vector kernels:
-	// ScalarWasmCompiler f64x2 / f32x4) are handled; an unknown one throws so a
+	// NoGcWasmCompiler f64x2 / f32x4) are handled; an unknown one throws so a
 	// newly-emitted SIMD op with different immediates is caught rather than silently
 	// mis-skipped (mirroring skipGc).
 	private static void skipSimd(byte[] buf, int[] p) {

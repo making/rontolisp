@@ -41,7 +41,7 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
   (locally shadowing an ordinary built-in function like `list` is allowed and
   works).
 - Wiring: `expandBuiltinMacro` + evaluator + Jvm/WasmExprCompiler +
-  ScalarWasmCompiler.expandMacro (--no-gc then fails on the lambda, as before) +
+  NoGcWasmCompiler.expandMacro (--no-gc then fails on the lambda, as before) +
   FreeVarAnalyzer (both walks, expand-before-walking) + a UserMacroExpander
   `expandAll` case (def names/lambda lists kept so a user macro of the same name
   is not expanded there).

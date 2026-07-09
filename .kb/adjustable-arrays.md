@@ -223,7 +223,7 @@ are untouched and Preview 1 / `--component` stay identical.
 ### `--no-gc` scalar WASM
 
 Unsupported, like every array operation on the scalar backend: the eligibility
-scan (`ScalarWasmCompiler.collectCallsCons`) names the operation in a clear
+scan (`NoGcWasmCompiler.collectCallsCons`) names the operation in a clear
 compile error ("--no-gc: unsupported operation 'vector-push' in function 'f'
 ..."). Documented under the `--no-gc` section of `doc/*/compiling/wasm.md`
 ("vectors" in the ineligible list).

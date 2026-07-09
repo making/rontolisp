@@ -5,7 +5,7 @@ dedicated **packed float-array type** (see the packed float-array constraint in
 `CLAUDE.md` and `.todo/94`). This file covers the `vec:` package and the two
 acceleration layers; the packed representation itself lives in `LispFloatArray`,
 `JvmFloatArrayRuntimeBuilder`, `WasmArrayCompiler` (the `$farray` struct) and
-`ScalarWasmCompiler` (`F64VEC`).
+`NoGcWasmCompiler` (`F64VEC`).
 
 ## The type it rides on
 
@@ -97,29 +97,51 @@ scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies c
 - Because the spliced `mean`/`norm` bodies always call `sum`/`dot`, ANY `--simd` program
   using the vec package at all embeds the bridge (the dead defuns are shaken by `--optimize`).
 
-## Acceleration layer 2 — `--no-gc` native v128 (`f64x2.*` / `f32x4.*`)
+## Acceleration layer 2 — `--no-gc` `--simd` native v128 (`f64x2.*` / `f32x4.*`); scalar loops by default
 
-`ScalarWasmCompiler` lowers the whole `vec:` surface to real fixed-width WASM SIMD over the
-`F64VEC`/`F32VEC` block — always on (not gated on `--simd`; it IS the `--no-gc`
-implementation of `vec:`, since vec.lisp is not spliced there). `isSimdCall(name)` (a
-`"vec:"` prefix test) dispatches in all three passes: `collectCalls` (eligibility:
-`requireKnownSimd` + walk-args), `typeOf`/`typeOfSimd` (constructors → `F64VEC`,
-element-wise/`scale` → the operand width, `length` → `INT`, else `FLOAT`), and
-`compileCall`/`compileSimd`. Each kernel branches on the operand's inferred width
-(`packedVecType`): `F64VEC` → the byte-identical `f64x2` path, `F32VEC` → the `f32x4`
-sibling. **`matvec` (GEMV) is the one `vec:` member `--no-gc` rejects** — a `--no-gc`
-packed vector is a rank-1 `[count][f...]` linear block with no rank-2 layout to read rows
-from, so `requireKnownSimd` throws via `SIMD_UNSUPPORTED_NO_GC` with a clear error pointing
-to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
+`NoGcWasmCompiler` lowers the whole `vec:` surface itself (vec.lisp is not spliced under
+`--no-gc`). **`--simd` (ctor `this.simd`) is the switch**: with it the vectorizable kernels
+lower to real fixed-width WASM SIMD over the `F64VEC`/`F32VEC` block; WITHOUT it (the
+DEFAULT) to plain scalar linear-memory loops with NO `0xFD` opcode — a v128-free MVP module
+that runs on a runtime lacking the SIMD proposal (`.todo/100`; before todo-100 `--no-gc`
+ALWAYS emitted v128 and `--simd` was silently JVM-only — this is the behavioral change). The
+`[count][data]` block layout is byte-identical either way, so the two compute the same
+result over the same memory (element-wise bit-for-bit; reductions modulo summation order —
+tests use exact inputs). The four vectorizable kernels (`compileSimdElementwise`/`Scale`/
+`Sum`/`Dot`) early-return to a `compileScalar*` seam when `this.simd` is false; the v128
+code is left untouched (so `--no-gc --simd` output is byte-identical to the pre-todo-100
+`--no-gc` output). `isSimdCall(name)` (a `"vec:"` prefix test) dispatches in all three
+passes: `collectCalls` (eligibility: `requireKnownSimd` + walk-args), `typeOf`/`typeOfSimd`
+(constructors → the constructor width, element-wise/`scale` → the operand width, `length` →
+`INT`, else `FLOAT`; UNCHANGED by `--simd`, so inference matches either lowering), and
+`compileCall`/`compileSimd`. In v128 mode each kernel branches on the operand's inferred
+width (`packedVecType`): `F64VEC` → the byte-identical `f64x2` path, `F32VEC` → the `f32x4`
+sibling. **`matvec` (GEMV) is the one `vec:` member `--no-gc` rejects** (both modes) — a
+`--no-gc` packed vector is a rank-1 `[count][f...]` linear block with no rank-2 layout to
+read rows from, so `requireKnownSimd` throws via `SIMD_UNSUPPORTED_NO_GC` with a clear error
+pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
-- **`F64VEC` (double, `f64x2` = 2 lanes/16 bytes):** element-wise (`add`/`sub`/`mul`) two
+- **Scalar (no `--simd`, the DEFAULT):** the four vectorizable kernels early-return to
+  `compileScalar{Elementwise,Scale,Sum,Dot}`, which set up the same block (arg eval +
+  `allocVec` + `dataPtr`) then drive a plain one-element-per-iteration loop
+  (`openScalarCountLoop` + body + `closeSimdLoop`, no `0xFD`). f64 stays f64
+  (`f64.load`/op/`f64.store`), f32 stays f32 (`f32.load`/op/`f32.store`; reductions
+  accumulate in an `allocF32Local` then `f64.promote_f32` on return) — the same per-width
+  precision as the v128 path, so numerically equivalent on exact inputs. `zeros`/`ones`/
+  `arange`/`aref`/`aset`/`length` are already scalar (no v128), so they are unaffected by the
+  switch. **Seam for `.todo/101`:** the `emitScalar{Map2,Scale,Sum,Dot}Loop` helpers take raw
+  linear-memory locals (data pointer past the `[count]` header + element count + width), so
+  the wasm-GC backend can later drive the same loop over a linear-memory mirror of a packed
+  GC array. Here "scalar" means non-SIMD, distinct from the non-GC value model the compiler
+  is named for.
+- **`F64VEC` under `--simd` (double, `f64x2` = 2 lanes/16 bytes):** element-wise (`add`/`sub`/`mul`) two
   f64 lanes per iteration via `v128.load` + `f64x2.<op>` + `v128.store`
   (`openSimdLoop`/`closeSimdLoop` over `pairs = count >> 1`), plus a one-element scalar tail
   when the length is odd (`emitOddTailGuard`). `scale`: `f64x2.splat` the scalar, one
   `f64x2.mul` per pair + tail. `sum`/`dot`: accumulate in a **v128 lane pair**
   (`fn.allocV128Local()`), fold with `f64x2.extract_lane` 0/1 (`emitHorizontalAdd`), plus
   the odd tail. Computes entirely in f64 (its native width).
-- **`F32VEC` (single, `f32x4` = 4 lanes/16 bytes; todo-95 Phase 5):** the same shape at
+- **`F32VEC` under `--simd` (single, `f32x4` = 4 lanes/16 bytes; todo-95 Phase 5):** the same shape at
   half the stride — FOUR f32 lanes per iteration (`openSimdLoop(..., laneShift=2)` over
   `quads = count >> 2`), and a scalar **remainder LOOP** over the last `count & 3` elements
   (`openScalarTailLoop`, 0..3 leftover) instead of the single odd-element guard. Scalars stay
@@ -147,9 +169,10 @@ to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
   in `am.ik.wasm.Instruction`; sub-opcodes above 127 (e.g. `f64x2.add` = 0xF0, `f32x4.add` =
   0xE4) use the u32-LEB writer. A simd program flags the memory section via `usesFloatArray`
   (umbrella-based: any `LispFloatArray` literal, `make-array`, or `vec:` call).
-- wasmtime enables the SIMD proposal by default, so `--no-gc` simd runs with a plain
-  `wasmtime run` (no `-W gc`). There is no scalar fallback on `--no-gc`, so a correct result
-  IS the proof the v128 path ran.
+- wasmtime enables the SIMD proposal by default, so `--no-gc --simd` v128 runs with a plain
+  `wasmtime run` (no `-W gc`). Correctness alone no longer proves v128 ran (the scalar
+  default is numerically equivalent), so the unit tests assert `0xFD` presence (v128) /
+  absence (scalar) directly.
 
 ## Verification
 
@@ -157,15 +180,21 @@ to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
   scalar-tail + large vector-loop arrays, packed-surface interop, bridge-embedded gating; the
   `matvec` GEMV set adds byte-identical scalar-tail + n≥128 vector-loop + concrete-value +
   width-preservation + mixed-width-error + dead-flag cases for both widths);
-  `ScalarWasmCompilerTest` (`--no-gc` v128: `0xFD` opcode presence for both `f64x2` and
-  `f32x4` kernels, `#f`/single-float storage narrow/widen opcodes, scalar-module shape,
-  mixed-width + from-list compile errors). Interpreter/JVM-scalar via the general suites.
+  `NoGcWasmCompilerTest` (compiled with `compileSimd()` = `NoGcWasmCompiler(false, true)` for
+  the v128 cases: `0xFD` opcode presence for both `f64x2` and `f32x4` kernels, `#f`/
+  single-float storage narrow/widen opcodes, plain-MVP-module shape, mixed-width + from-list
+  compile errors — PLUS the two scalar cases via `compile()` that assert NO `0xFD` and the
+  `f64.load/store` (0x2B/0x39) / `f32.load/store` (0x2A/0x38) scalar opcodes over the same
+  block). Interpreter/JVM-scalar via the general suites.
 - `--no-gc` end-to-end (automated, Docker+wasmtime): `WasmLispCompilerIntegrationTest`
   `noGcRunsDoubleFloatVecKernelsWithF64x2Simd` / `noGcRunsSingleFloatVecKernelsWithF32x4Simd`
+  (both now pass `simd=true` to `compileNoGcAndInvoke`) and
+  `noGcRunsVecKernelsScalarWithoutSimdMatchingTheV128Results` (the scalar default, `simd=false`)
   compile with `--no-gc` and `wasmtime run --invoke` int-returning `truncate` wrappers (no
   `-W gc`): `vec:dot`/`sum`/`scale`/`add` + `make-array` + `setf aref` correct across every
   tail config (0 / 1 / 3 leftover elements) and matching the interpreter f64 oracle for
-  integer-valued inputs, for BOTH widths (the f32 test also runs `--optimize`). This is the
+  integer-valued inputs, for BOTH widths and BOTH lowerings (the f32 v128 test also runs
+  `--optimize`). This is the
   first automated wasmtime run of the `--no-gc` vec kernels (they were structural-only
   before); it surfaced + fixed a pre-existing `WasmTreeShaker` gap — the `--optimize`
   tree-shaker had no case for the `0xFD` SIMD prefix (`skipSimd` added), so `--no-gc

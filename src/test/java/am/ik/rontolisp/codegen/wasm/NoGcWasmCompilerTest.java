@@ -15,17 +15,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Structural tests for {@link ScalarWasmCompiler}: the emitted module is a plain MVP
- * module (no wasm-GC types, no imports, no memory), exports the requested functions, and
+ * Structural tests for {@link NoGcWasmCompiler}: the emitted module is a plain MVP module
+ * (no wasm-GC types, no imports, no memory), exports the requested functions, and
  * ineligible functions reachable from an export are rejected with a clear error. These
  * run without Docker; the end-to-end {@code wasmtime --invoke} (without {@code -W gc})
  * checks live in {@link WasmLispCompilerIntegrationTest}.
  */
-class ScalarWasmCompilerTest {
+class NoGcWasmCompilerTest {
 
 	private static byte[] compile(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new ScalarWasmCompiler().compile(program);
+		return new NoGcWasmCompiler().compile(program);
+	}
+
+	// Compiles with --simd on, so the vectorizable vec: kernels lower to native v128
+	// (f64x2/f32x4). Without --simd (the plain compile() above) they lower to scalar
+	// loops
+	// with no 0xFD opcode. The [count][data] block layout is identical either way.
+	private static byte[] compileSimd(String source) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return new NoGcWasmCompiler(false, true).compile(program);
 	}
 
 	@Test
@@ -291,7 +300,7 @@ class ScalarWasmCompilerTest {
 
 	@Test
 	void optimizeProducesAValidShapeAndKeepsTheExport() {
-		byte[] module = new ScalarWasmCompiler(true).compile(LispReader.readAllFromString("""
+		byte[] module = new NoGcWasmCompiler(true).compile(LispReader.readAllFromString("""
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
 				"""));
@@ -642,13 +651,15 @@ class ScalarWasmCompilerTest {
 
 	@Test
 	void simdReductionKernelsEmitRealV128Instructions() {
-		// vec:dot lowers to native fixed-width SIMD over the packed vector: the code
-		// section carries the SIMD prefix (0xFD) with the f64x2 reduction ops (splat + a
-		// horizontal extract_lane fold), not a plain scalar loop. The module stays a
+		// With --simd, vec:dot lowers to native fixed-width SIMD over the packed vector:
+		// the
+		// code section carries the SIMD prefix (0xFD) with the f64x2 reduction ops (splat
+		// +
+		// a horizontal extract_lane fold), not a plain scalar loop. The module stays a
 		// plain
 		// MVP module: a memory section, scalar-only func types, no wasm-GC and no
 		// imports.
-		byte[] module = compile("""
+		byte[] module = compileSimd("""
 				(defun dot (n) (let ((v (vec:arange n))) (vec:dot v v)))
 				(rontolisp:wasm-export 'dot :params '(:int) :returns :float)
 				""");
@@ -662,11 +673,12 @@ class ScalarWasmCompilerTest {
 	}
 
 	@Test
-	void simdElementwiseAndConstructorKernelsCompileToAScalarModule() {
-		// zeros/ones/arange/add/scale/sum/mean/norm all lower to the packed vector + SIMD
-		// and stay a plain MVP module (no wasm-GC types, no imports). The element-wise
-		// kernels' lane loop emits v128.store (0xFD 0x0B).
-		byte[] module = compile("""
+	void simdElementwiseAndConstructorKernelsCompileToAPlainMvpModule() {
+		// With --simd, zeros/ones/arange/add/scale/sum/mean/norm all lower to the packed
+		// vector + v128 SIMD and stay a plain MVP module (no wasm-GC types, no imports).
+		// The
+		// element-wise kernels' lane loop emits v128.store (0xFD 0x0B).
+		byte[] module = compileSimd("""
 				(defun go (n)
 				  (let* ((a (vec:arange n))
 				         (b (vec:scale (vec:ones n) 2.0))
@@ -679,6 +691,41 @@ class ScalarWasmCompilerTest {
 		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
 		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("go");
 		assertThat(containsSequence(Objects.requireNonNull(sections.get(10)), 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)")
+			.isTrue();
+	}
+
+	@Test
+	void noSimdVecKernelsLowerToScalarLoopsWithNoV128() {
+		// Without --simd (the default --no-gc), the SAME vec: program lowers to plain
+		// scalar
+		// linear-memory loops: NO 0xFD SIMD opcode anywhere (runs on an MVP runtime
+		// lacking
+		// the SIMD proposal), yet it stays a plain module with a memory section and
+		// scalar-only func types. The element-wise and reduction kernels use
+		// f64.load/store
+		// (0x2B / 0x39) and f64.add/mul rather than v128, over the byte-identical
+		// [count][data] block.
+		String source = """
+				(defun go (n)
+				  (let* ((a (vec:arange n))
+				         (b (vec:scale (vec:ones n) 2.0))
+				         (c (vec:add a b)))
+				    (+ (vec:sum c) (vec:dot a b) (vec:mean a) (vec:norm b))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] module = compile(source);
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix (0xFD) in the scalar --no-gc module").isFalse();
+		assertThat(containsSequence(code, 0x2B, 0x00, 0x00)).as("f64.load (0x2B) reads packed elements").isTrue();
+		assertThat(containsSequence(code, 0x39, 0x00, 0x00)).as("f64.store (0x39) writes packed elements").isTrue();
+		// The v128 build of the very same source DOES carry 0xFD -- the two differ only
+		// in
+		// the loop body, so both are valid lowerings of one program.
+		assertThat(containsSequence(Objects.requireNonNull(sections(compileSimd(source)).get(10)), 0xFD))
+			.as("the --simd build of the same source does use v128")
 			.isTrue();
 	}
 
@@ -770,7 +817,7 @@ class ScalarWasmCompilerTest {
 		// (0xFD 0x13) and a four-lane extract_lane fold (0xFD 0x1F) -- NOT the f64x2 pair
 		// (0xFD 0x14 / 0xFD 0x21). Still a plain MVP module: memory section, scalar-only
 		// func types, no wasm-GC and no imports.
-		byte[] module = compile("""
+		byte[] module = compileSimd("""
 				(defun dot (i)
 				  (let ((v #f(1.0 2.0 3.0 4.0 5.0)))
 				    (vec:dot v v)))
@@ -791,7 +838,7 @@ class ScalarWasmCompilerTest {
 		// vec:add / vec:scale over #f operands emit the f32x4 element-wise lane loop
 		// (v128.store 0xFD 0x0B + f32x4.add 0xFD 0xE4 / f32x4.mul 0xFD 0xE6) and stay a
 		// plain MVP module. The result width is preserved (a f32 vector out).
-		byte[] module = compile("""
+		byte[] module = compileSimd("""
 				(defun go (i)
 				  (let* ((a #f(1.0 2.0 3.0))
 				         (b (vec:scale a 2.0))
@@ -806,6 +853,31 @@ class ScalarWasmCompilerTest {
 		assertThat(containsSequence(code, 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)").isTrue();
 		assertThat(containsSequence(code, 0xFD, 0xE4, 0x01)).as("f32x4.add (0xFD 0xE4)").isTrue();
 		assertThat(containsSequence(code, 0xFD, 0xE6, 0x01)).as("f32x4.mul (0xFD 0xE6) from scale").isTrue();
+	}
+
+	@Test
+	void noSimdSingleFloatKernelsLowerToScalarF32LoopsWithNoV128() {
+		// Without --simd, the same #f (single-float) program lowers to scalar f32 loops:
+		// NO
+		// 0xFD anywhere, but f32.load (0x2A) / f32.store (0x38) over the byte-identical
+		// [count][f32...] block, computing in f32 throughout (the reduction promotes to
+		// the
+		// f64 boundary on return). Runs on an MVP runtime without the SIMD proposal.
+		byte[] module = compile("""
+				(defun go (i)
+				  (let* ((a #f(1.0 2.0 3.0))
+				         (b (vec:scale a 2.0))
+				         (c (vec:add a b)))
+				    (vec:dot a c)))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix (0xFD) in the scalar f32 module").isFalse();
+		assertThat(containsSequence(code, 0x2A, 0x00, 0x00)).as("f32.load (0x2A) reads packed f32 elements").isTrue();
+		assertThat(containsSequence(code, 0x38, 0x00, 0x00)).as("f32.store (0x38) writes packed f32 elements").isTrue();
 	}
 
 	@Test

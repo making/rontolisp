@@ -1,7 +1,7 @@
 # WASM GC backend: strings as wasm-GC byte arrays
 
 Detail behind the CLAUDE.md constraint. Scope: the **GC WASM backend only**
-(`codegen.wasm`). `--no-gc` (`ScalarWasmCompiler`), the interpreter, and the JVM
+(`codegen.wasm`). `--no-gc` (`NoGcWasmCompiler`), the interpreter, and the JVM
 backend are unaffected -- their strings are already reclaimable.
 
 ## What changed and why

@@ -26,7 +26,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The {@code --no-gc} scalar WASM backend is the exception: it lowers the {@code vec:}
- * kernels to real fixed-width WASM SIMD itself ({@code ScalarWasmCompiler}) and has no
+ * kernels to real fixed-width WASM SIMD itself ({@code NoGcWasmCompiler}) and has no
  * general array type, so it must NOT get this splice -- {@code RontoLispCli} gates
  * {@link #process(List)} off for {@code .wasm} + {@code --no-gc}.
  *

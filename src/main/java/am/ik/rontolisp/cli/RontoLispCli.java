@@ -21,7 +21,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
-import am.ik.rontolisp.codegen.wasm.ScalarWasmCompiler;
+import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
@@ -68,6 +68,16 @@ public final class RontoLispCli {
 		if (options.contains("-v") || options.contains("--version")) {
 			this.out.println(Version.getVersionAsJson());
 			return;
+		}
+
+		// --simd names hardware vector acceleration of the vec: kernels; it only has an
+		// effect on a compiled target that can realize it (a .class via the Vector API,
+		// or
+		// --no-gc .wasm via v128). Without -o the interpreter always runs the scalar vec:
+		// reference, so the flag is a no-op -- say so rather than silently ignore it.
+		if (options.contains("--simd") && !options.contains("-o")) {
+			warn("--simd has no effect without -o (the interpreter runs the scalar vec: kernels); "
+					+ "compile with -o <name>.class --simd or -o <name>.wasm --no-gc --simd to accelerate.");
 		}
 
 		// The .asd search path for asdf:load-system: the --system-path option first,
@@ -211,7 +221,7 @@ public final class RontoLispCli {
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and
 		// lowers the whole vec: surface to native fixed-width WASM SIMD itself
-		// (ScalarWasmCompiler), so it must NOT get the splice.
+		// (NoGcWasmCompiler), so it must NOT get the splice.
 		if (!(outputFile.endsWith(".wasm") && noGc)) {
 			program = VecLibrary.process(program);
 		}
@@ -227,9 +237,24 @@ public final class RontoLispCli {
 					throw new UnsupportedOperationException(
 							"--no-gc cannot be combined with --component " + "(the component path requires wasm-GC)");
 				}
-				bytes = new ScalarWasmCompiler(optimize).compile(program);
+				// --simd is the orthogonal acceleration switch: with it the vec: kernels
+				// lower to native v128 (f64x2/f32x4); without it to plain scalar loops
+				// that
+				// run on a runtime lacking the SIMD proposal.
+				bytes = new NoGcWasmCompiler(optimize, simd).compile(program);
 			}
 			else {
+				// The wasm-GC backend cannot honor --simd yet: v128 addresses linear
+				// memory,
+				// but packed arrays here are GC objects reached by array.get/set (lifting
+				// this is .todo/101). Warn and fall back to the scalar vec: reference
+				// rather
+				// than fail, so a --simd-everywhere build keeps working.
+				if (simd) {
+					warn("--simd has no effect on the wasm-GC backend (packed arrays are GC objects, not "
+							+ "linear memory); the vec: kernels use the scalar reference. Use --no-gc for native "
+							+ "v128, or -o <name>.class --simd for the JVM Vector API.");
+				}
 				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
 				// component
 				// (--component only). The HttpHandlerInliner splices in a %http-dispatch
@@ -253,6 +278,13 @@ public final class RontoLispCli {
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
 		}
+	}
+
+	// Emits a one-line warning to stderr. Kept off stdout (this.out) so it never corrupts
+	// a
+	// compiled program's piped output or the REPL transcript.
+	private static void warn(String message) {
+		System.err.println("rontolisp: warning: " + message);
 	}
 
 	private void printUsage() {
@@ -281,6 +313,12 @@ public final class RontoLispCli {
 		this.out.println("                     Runs on any MVP runtime (no -W gc, no import object). Only");
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");
 		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
+		this.out.println("                     Scalar vec: loops by default; add --simd for native v128.");
+		this.out.println("  --simd             Accelerate the vec: kernels with hardware SIMD");
+		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
+		this.out.println("                     java --add-modules jdk.incubator.vector). --no-gc (.wasm): emit");
+		this.out.println("                     native v128 (f64x2/f32x4). No effect on the interpreter or the");
+		this.out.println("                     wasm-GC backend (a warning is printed there).");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 		this.out.println("  --system-path DIRS Directories searched for NAME.asd by asdf:load-system");

@@ -27,7 +27,7 @@
 ;; repr statically -- the count-based constructor counterpart of vec::%make-like
 ;; (which follows a prototype's width) and the mirror of linalg::%la-make. On the
 ;; --no-gc scalar backend these constructors are intercepted natively by
-;; ScalarWasmCompiler (which reads the same literal element-type -> F32VEC/F64VEC),
+;; NoGcWasmCompiler (which reads the same literal element-type -> F32VEC/F64VEC),
 ;; so this defun is only the interpreter / JVM / wasm-GC implementation.
 (defun vec::%make (n init &optional element-type)
   (if (eq element-type 'single-float)

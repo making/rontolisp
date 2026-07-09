@@ -132,7 +132,7 @@ general boxed/heterogeneous array.
 
 - WIP reference: commit `5b1b065`, `.kb/simd.md` ("Unboxing mitigation"), the todo-92
   audit of the JVM array surface. Frontend: `LispArray`/`reader`. Backends:
-  `JvmArrayRuntimeBuilder`, `WasmLispCompiler`, `ScalarWasmCompiler` (`F64VEC`), `LispEvaluator`.
+  `JvmArrayRuntimeBuilder`, `WasmLispCompiler`, `NoGcWasmCompiler` (`F64VEC`), `LispEvaluator`.
   Libraries: `SimdLibrary`/`simd.lisp`, `LinalgLibrary`/`linalg.lisp`. `.todo/93` (linalg
   acceleration) folds into this — build linalg on the packed type directly.
 
@@ -348,7 +348,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
       `vectorp`/`svref` (expand via `%arrayp`) on a `#f`-only program still emit what they need.
 - **Phase 4 (`--no-gc`) — split into 4A (repr+ops) and 4B (v128), forced by dependency order.**
   - **Phase 4A DONE (2026-07-08) — `F64VEC` repr + generic `aref`/`%aset`/`length`/`make-array`.**
-    `ScalarWasmCompiler` gained `Ty.F64VEC` (a 4th kind, i32 pointer to `[count:i32][count f64]`
+    `NoGcWasmCompiler` gained `Ty.F64VEC` (a 4th kind, i32 pointer to `[count:i32][count f64]`
     linear-memory block, mutually-incompatible reference kind like STRING; `join` rewritten to the
     INT-as-bottom form, `valType`/`wasmType` add `case STRING, F64VEC -> i32`). `#f(...)` rank-1
     literal (`compileFloatArrayLiteral`, straight-line f64.store from `LispFloatArray.data()`) and
@@ -368,7 +368,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
     `mem.used()`. rank>1 `#f`/`make-array '(2 3)`, `make-array` without `:element-type 'double-float`,
     and `:fill-pointer`/`:adjustable`/`:displaced-to` = CLEAR compile errors. `array-dimensions`/
     `array-element-type` NOT supported (no list/symbol runtime type on `--no-gc`). **Verified:** full
-    suite **2894** green (+6 new `ScalarWasmCompilerTest` F64VEC tests: 2 structural asserting a
+    suite **2894** green (+6 new `NoGcWasmCompilerTest` F64VEC tests: 2 structural asserting a
     memory section + scalar-only func types, 4 error-message); wasmtime `--invoke` end-to-end all
     correct (`#f`+aref=30, length=4, dot-product loop=32, make-array+setf=15, make-array+
     :initial-element+sum=10/15). Pure-numeric `--no-gc` still emits NO memory section (regression
@@ -377,7 +377,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
     5b1b065's `compileSimd` + `SIMD_MEMBERS`/`SIMD_PORTABLE_ONLY` + the `f64x2.*`
     `compileSimdElementwise`/`Scale`/`Sum`/`Dot` + `openSimdLoop`/`closeSimdLoop`/`emitSplatZero`/
     `emitHorizontalAdd`/`emitOddTailGuard` + `simd`/`simdLoad`/`simdStore`/`dataPtr`/`advancePtr` +
-    `compileSimdConstruct` (zeros/ones/arange) + the mean/norm expansions into `ScalarWasmCompiler`,
+    `compileSimdConstruct` (zeros/ones/arange) + the mean/norm expansions into `NoGcWasmCompiler`,
     REUSING Phase 4A's `allocVec`/`emitElementAddr`/`requireArgc`/`compileAref`/`compileAset`/
     `compileLength` (aref/aset/length delegate; NOT re-ported). `isSimdCall` (a `"simd:"` prefix
     test) wired into all three passes (`collectCalls`→`requireKnownSimd`+walk, `typeOf`→`typeOfSimd`,
@@ -387,7 +387,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
     emitted via new `withLocalsRaw`. Added the SIMD instruction constants (`SIMD_PREFIX`,
     `V128_LOAD/STORE`, `F64X2_*`) to `am.ik.wasm.Instruction`. `--no-gc` is gated OFF the simd.lisp
     splice (it has no general array type). **Verified** on wasmtime `--invoke` (sum256=32640,
-    dot256=5559680, scale, odd-tail element, mean); +3 `ScalarWasmCompilerTest` (0xFD opcode presence,
+    dot256=5559680, scale, odd-tail element, mean); +3 `NoGcWasmCompilerTest` (0xFD opcode presence,
     scalar-module shape, from-list = portable-only compile error). No scalar fallback on `--no-gc`, so
     a correct result IS the proof the v128 path ran.
 - **Phase 5 (libraries) — simd DONE, linalg PENDING.** `simd.lisp` re-added at
@@ -436,7 +436,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
   linalg-kernel interceptor + linalg doc/test/ci-spec reconciliation; get user sign-off first — it is an
   enhancement, not required for the simd deliverable). (2) A chained/matmul **benchmark** (nice-to-have).
   User-facing bilingual docs are DONE (data-types `#f` subsection + `guides/simd-acceleration.md`, en+ja).
-  Reuse refs: `git show 5b1b065:<path>` (JvmSimd*, ScalarWasmCompiler), `git show 21fb03e:<path>`
+  Reuse refs: `git show 5b1b065:<path>` (JvmSimd*, NoGcWasmCompiler), `git show 21fb03e:<path>`
   (simd.lisp, .kb/simd.md).
 - **New files:** `LispFloatArray.java`, `codegen/jvm/JvmFloatArrayRuntimeBuilder.java`, tests
   `CliOptionsTest`/`LispFloatArrayTest`/`JvmFloatArrayTest`, this `.todo/94`. **Modified:**
@@ -452,7 +452,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
   component `--component` + `wasmtime run -W gc=y -W component-model-async=y ...` (see CLAUDE.md).
   wasmtime 46.0.1 + docker are RUNNING locally. Docker integration tests: `WasmLispCompilerIntegrationTest`.
 - **Reuse (git):** `git show 5b1b065:<path>` for `JvmSimdVectorTemplate`/`JvmSimdCompiler`/
-  `JvmSimdRuntimeBuilder` (bridge, drop shadow) and `ScalarWasmCompiler` (F64VEC). `git show
+  `JvmSimdRuntimeBuilder` (bridge, drop shadow) and `NoGcWasmCompiler` (F64VEC). `git show
   21fb03e:<path>` for `simd.lisp`. The WIP's `usesSimd` gate pattern lives in
   `git show 5b1b065:.../JvmLispCompiler.java`.
 - **`arrayp` quirk RESOLVED:** confirmed pre-existing — `(arrayp x)` and `(typep x ...)` are
@@ -544,7 +544,7 @@ the kernel acceleration.
    produces packed doubles, intercept `add`/`sub`/`mul`/`div`/`emap`/`dot`/`sum`/`mean`/`norm`/
    `amax`/`amin` (rank-1) and `matmul`/`outer` (rank-2) like the simd package does. The simd
    interception is the template — `JvmSimd{Compiler,RuntimeBuilder,VectorTemplate}` (JVM `--simd`)
-   and `ScalarWasmCompiler.compileSimd`+kernels (`--no-gc` v128). `matmul`/`outer` are rank-2 and
+   and `NoGcWasmCompiler.compileSimd`+kernels (`--no-gc` v128). `matmul`/`outer` are rank-2 and
    NOT in the current simd kernel set, so they need new f64x2 rank-2 kernels (or leave them on the
    unboxed scalar loop initially — the packed repr from step 1 already unboxes them).
 
@@ -555,7 +555,7 @@ rank-1 float-vector ops at most; matrices are JVM/interp/wasm-GC only. Do not ch
 
 **Refs:** `LinalgLibrary` + `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`; `.kb/linalg.md`;
 `guides/linear-algebra.md`; `.todo/93` (linalg accel); the simd interception just committed
-(`.kb/simd.md`, `JvmSimd*`, `ScalarWasmCompiler` simd section). The `-Drontolisp.doc.fix=true` helper
+(`.kb/simd.md`, `JvmSimd*`, `NoGcWasmCompiler` simd section). The `-Drontolisp.doc.fix=true` helper
 is the key to the doc churn.
 
 ### Phase 5b DONE (steps 1+2) — linalg is packed double-float; verified + benchmarked (2026-07-08)

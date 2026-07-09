@@ -12,7 +12,7 @@ accumulators with `into`, `while`/`until`/`repeat`/`do`/`return`/`initially`/
 `finally`, and `when`/`if`/`unless` with `else`/`end`). It lowers to the existing
 core via `LispMacroExpander.expandLoop` + the private `LoopExpander` class
 (parse-into-pieces then build a `%block`/`let*`/`while`). Wired in:
-`LispEvaluator`, `Jvm/WasmExprCompiler`, `ScalarWasmCompiler.expandMacro`,
+`LispEvaluator`, `Jvm/WasmExprCompiler`, `NoGcWasmCompiler.expandMacro`,
 `FreeVarAnalyzer` (both methods). Docs: `doc/{en,ja}/reference/macros/loop.md`.
 
 ## Done (second cut, 2026-07)

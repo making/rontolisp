@@ -103,7 +103,7 @@ so PARSE_INTEGER and VALUES_LIST are part of the `injectMvSpillGlobal` scan.
 list-functions count 207 -> 208); `LispEvaluator.evalCons` cases (+ the
 floor-family arity branch); `Environment` `values` function;
 `Jvm/WasmExprCompiler` cases (+ floor-family branch around the IntConv
-compilers); `ScalarWasmCompiler.expandMacro` (mv forms then fail on
+compilers); `NoGcWasmCompiler.expandMacro` (mv forms then fail on
 `list`/`lambda` as before; the floor-divisor case works); `FreeVarAnalyzer`
 both walks (expand-before-walking, flet precedent -- the raw var list would
 misread as a call form); `UserMacroExpander.expandAll` +

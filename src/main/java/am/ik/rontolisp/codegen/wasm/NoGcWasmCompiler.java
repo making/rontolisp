@@ -36,8 +36,12 @@ import am.ik.wasm.WasmWriter;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A non-GC ("scalar") WASM lowering for pure-numeric {@code rontolisp:wasm-export}
- * functions ({@code --no-gc}).
+ * The non-GC WASM lowering (the {@code --no-gc} backend) for pure-numeric
+ * {@code rontolisp:wasm-export} functions. Values are unboxed native wasm scalars
+ * ({@code i64}/{@code f64}/linear-memory pointers) rather than GC heap objects; this
+ * "scalar" is the <em>value model</em> and is orthogonal to hardware SIMD -- the
+ * vectorizable {@code vec:} kernels lower to plain scalar loops by default and to native
+ * v128 ({@code f64x2}/{@code f32x4}) under {@code --simd} (see {@code .todo/100}).
  *
  * <p>
  * Unlike {@link WasmLispCompiler}, whose value model <em>is</em> wasm-GC (integers are
@@ -81,7 +85,7 @@ import org.jspecify.annotations.Nullable;
  * / omitted. Memory-backed {@code :string}/{@code :s-expr} would need a second
  * linear-memory string runtime and are deferred (Phase 2).
  */
-public final class ScalarWasmCompiler implements LispCompiler {
+public final class NoGcWasmCompiler implements LispCompiler {
 
 	/** The native representation of a value. */
 	private enum Ty {
@@ -178,20 +182,49 @@ public final class ScalarWasmCompiler implements LispCompiler {
 
 	private final boolean optimize;
 
-	/** Creates a new scalar WASM compiler. */
-	public ScalarWasmCompiler() {
-		this(false);
+	/**
+	 * Whether to accelerate the vectorizable {@code vec:} kernels with WASM fixed-width
+	 * SIMD (v128 {@code f64x2}/{@code f32x4}). When {@code false} (the default) the
+	 * kernels lower to plain scalar linear-memory loops that run on any MVP runtime
+	 * <em>without</em> the SIMD proposal; when {@code true} (the CLI's
+	 * {@code --no-gc --simd}) they lower to native v128. The {@code [count][data]} block
+	 * layout is byte-identical either way -- only the loop body differs -- so a scalar
+	 * and a v128 module compute the same result over the same memory (element-wise ops
+	 * bit-for-bit; reductions modulo summation order). This SIMD switch is orthogonal to
+	 * the non-GC value model (see {@code .todo/100}).
+	 */
+	private final boolean simd;
+
+	/** Creates a new non-GC WASM compiler (no optimize, scalar {@code vec:} kernels). */
+	public NoGcWasmCompiler() {
+		this(false, false);
 	}
 
 	/**
-	 * Creates a new scalar WASM compiler.
+	 * Creates a new non-GC WASM compiler with scalar (non-SIMD) {@code vec:} kernels.
 	 * @param optimize when {@code true}, the finished module is run through
 	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
 	 * dropped and the survivors renumbered. The shaker is GC-agnostic, so it composes
 	 * with the non-GC module shape for free.
 	 */
-	public ScalarWasmCompiler(boolean optimize) {
+	public NoGcWasmCompiler(boolean optimize) {
+		this(optimize, false);
+	}
+
+	/**
+	 * Creates a new non-GC WASM compiler.
+	 * @param optimize when {@code true}, the finished module is run through
+	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
+	 * dropped and the survivors renumbered.
+	 * @param simd when {@code true}, the vectorizable {@code vec:} kernels lower to
+	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
+	 * to scalar linear-memory loops that need no SIMD proposal. This is the
+	 * {@code --simd} switch wired on the {@code --no-gc} backend, orthogonal to the
+	 * memory model ({@code .todo/100}).
+	 */
+	public NoGcWasmCompiler(boolean optimize, boolean simd) {
 		this.optimize = optimize;
+		this.simd = simd;
 	}
 
 	@Override
@@ -2722,6 +2755,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// one-element scalar tail when the length is odd.
 	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
 		requireArgc(args, 3, "a simd element-wise kernel", fn);
+		if (!this.simd) {
+			return compileScalarElementwise(args, fn, scalarOp);
+		}
 		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
 			return compileSimdElementwiseF32(args, fn, f32x4Of(simdOp), f32ScalarOf(scalarOp));
 		}
@@ -2776,6 +2812,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// into both lanes with f64x2.splat, so the multiply is a single f64x2.mul per pair.
 	private Ty compileSimdScale(List<LispVal> args, Fn fn) {
 		requireArgc(args, 3, "vec:scale", fn);
+		if (!this.simd) {
+			return compileScalarScale(args, fn);
+		}
 		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
 			return compileSimdScaleF32(args, fn);
 		}
@@ -2826,6 +2865,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// f64x2.extract_lane, and adds the odd tail element.
 	private Ty compileSimdSum(List<LispVal> args, Fn fn) {
 		requireArgc(args, 2, "vec:sum", fn);
+		if (!this.simd) {
+			return compileScalarSum(args, fn);
+		}
 		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
 			return compileSimdSumF32(args, fn);
 		}
@@ -2869,6 +2911,9 @@ public final class ScalarWasmCompiler implements LispCompiler {
 	// horizontally, plus the odd tail product.
 	private Ty compileSimdDot(List<LispVal> args, Fn fn) {
 		requireArgc(args, 3, "vec:dot", fn);
+		if (!this.simd) {
+			return compileScalarDot(args, fn);
+		}
 		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
 			return compileSimdDotF32(args, fn);
 		}
@@ -3239,6 +3284,261 @@ public final class ScalarWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
+	}
+
+	// --- vec: package scalar (v128-free) kernels (--no-gc without --simd)
+	// ---------------
+	//
+	// The plain-loop lowering of the vectorizable vec: kernels, selected when --simd is
+	// off
+	// (this.simd == false). The packed [count][data] block is the SAME layout the v128
+	// path
+	// uses (byte-identical), so a scalar module computes the same result over the same
+	// memory -- element-wise ops bit-for-bit, reductions modulo summation order (tests
+	// use
+	// exact inputs). The module carries NO 0xFD SIMD opcode, so it runs on an MVP runtime
+	// that lacks the SIMD proposal -- a portability win over the always-v128 behavior.
+	//
+	// SEAM FOR .todo/101 (wasm-GC honoring --simd): each emitScalar*Loop below is
+	// expressed
+	// over a linear-memory block addressed by raw i32 locals (a data pointer past the
+	// [count] header + the element count + the element width) rather than the Lisp arg
+	// forms, so the GC backend can later drive the same loop over a linear-memory mirror
+	// of
+	// a packed GC array. The compileScalar* wrappers are the --no-gc-specific part (arg
+	// evaluation + block allocation); the emitScalar*Loop helpers are the reusable core.
+	// Here "scalar" means non-SIMD (one element per iteration), distinct from the non-GC
+	// value model the compiler is named for.
+
+	// Opens a loop over ALL `count` elements: rem = count; block; loop; break when rem ==
+	// 0.
+	// The v128-free counterpart of openSimdLoop's group loop -- one element per
+	// iteration.
+	// The body advances its data pointer(s) by one element width, then closeSimdLoop
+	// (rem--,
+	// br, end, end -- shared with the v128 path; emits no SIMD opcode).
+	private void openScalarCountLoop(Fn fn, int countLocal, int remLocal) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+	}
+
+	// (vec:add / vec:sub / vec:mul a b) without --simd: dst[i] = op(a[i], b[i]) over a
+	// plain
+	// scalar loop into a fresh vector. The result preserves the operand width (a #f in
+	// gives
+	// a #f out), matching the v128 path and typeOfSimd.
+	private Ty compileScalarElementwise(List<LispVal> args, Fn fn, int scalarOp) {
+		Ty vecTy = packedVecType(args.get(1), fn);
+		WasmWriter w = fn.writer;
+		int aL = fn.allocLocal(vecTy);
+		int bL = fn.allocLocal(vecTy);
+		compileCoerced(args.get(1), fn, vecTy);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		compileCoerced(args.get(2), fn, vecTy);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count, vecTy);
+		int ap = fn.allocLocal(vecTy);
+		int bp = fn.allocLocal(vecTy);
+		int dp = fn.allocLocal(vecTy);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		dataPtr(w, dst, dp);
+		emitScalarMap2Loop(fn, ap, bp, dp, count, vecTy, scalarOp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return vecTy;
+	}
+
+	// The reusable core of vec:add/sub/mul scalar lowering: for each of `count` elements,
+	// mem[dp] = op(mem[ap], mem[bp]); advance all three pointers by one element width.
+	// f64
+	// stays f64 (f64.load/op/store), f32 stays f32 (f32.load/op/store) so a single-float
+	// vector computes entirely in f32, matching the v128 f32 path's precision.
+	// `scalarF64Op`
+	// is the f64 arithmetic op (F64_ADD/SUB/MUL); the f32 sibling is derived via
+	// f32ScalarOf.
+	private void emitScalarMap2Loop(Fn fn, int ap, int bp, int dp, int count, Ty vecTy, int scalarF64Op) {
+		WasmWriter w = fn.writer;
+		boolean single = vecTy == Ty.F32VEC;
+		int loadOp = single ? Instruction.F32_LOAD : Instruction.F64_LOAD;
+		int storeOp = single ? Instruction.F32_STORE : Instruction.F64_STORE;
+		int op = single ? f32ScalarOf(scalarF64Op) : scalarF64Op;
+		int stride = single ? 4 : 8;
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openScalarCountLoop(fn, count, rem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		w.write(loadOp, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		w.write(loadOp, 0x00, 0x00);
+		w.write(op);
+		w.write(storeOp, 0x00, 0x00);
+		advancePtr(w, ap, stride);
+		advancePtr(w, bp, stride);
+		advancePtr(w, dp, stride);
+		closeSimdLoop(fn, rem);
+	}
+
+	// (vec:scale v s) without --simd: dst[i] = v[i] * s into a fresh vector. The scalar
+	// boundary s is f64; on a f32 vector it is narrowed per element (f32.demote_f64) so
+	// the
+	// product is computed in f32, matching the v128 f32 path.
+	private Ty compileScalarScale(List<LispVal> args, Fn fn) {
+		Ty vecTy = packedVecType(args.get(1), fn);
+		WasmWriter w = fn.writer;
+		int vL = fn.allocLocal(vecTy);
+		int s = fn.allocLocal(Ty.FLOAT);
+		compileCoerced(args.get(1), fn, vecTy);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int dst = allocVec(fn, count, vecTy);
+		int vp = fn.allocLocal(vecTy);
+		int dp = fn.allocLocal(vecTy);
+		dataPtr(w, vL, vp);
+		dataPtr(w, dst, dp);
+		emitScalarScaleLoop(fn, vp, dp, count, s, vecTy);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return vecTy;
+	}
+
+	private void emitScalarScaleLoop(Fn fn, int vp, int dp, int count, int sLocal, Ty vecTy) {
+		WasmWriter w = fn.writer;
+		boolean single = vecTy == Ty.F32VEC;
+		int stride = single ? 4 : 8;
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openScalarCountLoop(fn, count, rem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sLocal);
+		if (single) {
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.F32_MUL);
+		}
+		else {
+			w.write(Instruction.F64_MUL);
+		}
+		w.write(single ? Instruction.F32_STORE : Instruction.F64_STORE, 0x00, 0x00);
+		advancePtr(w, vp, stride);
+		advancePtr(w, dp, stride);
+		closeSimdLoop(fn, rem);
+	}
+
+	// (vec:sum v) without --simd: a left-to-right scalar sum, leaving the f64 total on
+	// the
+	// stack. A f32 vector accumulates in f32 then promotes to the f64 boundary (matching
+	// the
+	// v128 f32 path).
+	private Ty compileScalarSum(List<LispVal> args, Fn fn) {
+		Ty vecTy = packedVecType(args.get(1), fn);
+		WasmWriter w = fn.writer;
+		int vL = fn.allocLocal(vecTy);
+		compileCoerced(args.get(1), fn, vecTy);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int vp = fn.allocLocal(vecTy);
+		dataPtr(w, vL, vp);
+		emitScalarSumLoop(fn, vp, count, vecTy);
+		return Ty.FLOAT;
+	}
+
+	private void emitScalarSumLoop(Fn fn, int vp, int count, Ty vecTy) {
+		WasmWriter w = fn.writer;
+		boolean single = vecTy == Ty.F32VEC;
+		int stride = single ? 4 : 8;
+		int sum = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
+		if (single) {
+			f32Const(w, 0.0f);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+		}
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openScalarCountLoop(fn, count, rem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
+		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(single ? Instruction.F32_ADD : Instruction.F64_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
+		advancePtr(w, vp, stride);
+		closeSimdLoop(fn, rem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		if (single) {
+			w.write(Instruction.F64_PROMOTE_F32);
+		}
+	}
+
+	// (vec:dot a b) without --simd: a left-to-right scalar sum of a[i]*b[i], leaving the
+	// f64
+	// total on the stack. A f32 vector multiplies and accumulates in f32 then promotes.
+	private Ty compileScalarDot(List<LispVal> args, Fn fn) {
+		Ty vecTy = packedVecType(args.get(1), fn);
+		WasmWriter w = fn.writer;
+		int aL = fn.allocLocal(vecTy);
+		int bL = fn.allocLocal(vecTy);
+		compileCoerced(args.get(1), fn, vecTy);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		compileCoerced(args.get(2), fn, vecTy);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		int count = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		int ap = fn.allocLocal(vecTy);
+		int bp = fn.allocLocal(vecTy);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		emitScalarDotLoop(fn, ap, bp, count, vecTy);
+		return Ty.FLOAT;
+	}
+
+	private void emitScalarDotLoop(Fn fn, int ap, int bp, int count, Ty vecTy) {
+		WasmWriter w = fn.writer;
+		boolean single = vecTy == Ty.F32VEC;
+		int stride = single ? 4 : 8;
+		int acc = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
+		if (single) {
+			f32Const(w, 0.0f);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+		}
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		openScalarCountLoop(fn, count, rem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
+		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
+		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
+		w.write(single ? Instruction.F32_MUL : Instruction.F64_MUL);
+		w.write(single ? Instruction.F32_ADD : Instruction.F64_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		advancePtr(w, ap, stride);
+		advancePtr(w, bp, stride);
+		closeSimdLoop(fn, rem);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		if (single) {
+			w.write(Instruction.F64_PROMOTE_F32);
+		}
 	}
 
 	// (char s i): the byte at content offset i, as its code point (a character IS its

@@ -33,7 +33,7 @@ I/O reads, unlikely to exceed memory in one call):
 - `WasmRuntimeBuilder.buildReadLineBody` -- the `fd_read` byte-at-a-time line assembly.
 
 Fix: add `emitGrowHeapTo` at each bump (trivial; the string builders + `_str_to_mem`
-are the pattern; `ScalarWasmCompiler.allocBody` is the `--no-gc` reference). Then
+are the pattern; `NoGcWasmCompiler.allocBody` is the `--no-gc` reference). Then
 re-verify all four backends + native + the component path (byte-sensitive).
 
 Related: `.kb/wasm-gc-strings.md` (the leak fix + representation);

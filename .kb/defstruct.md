@@ -31,7 +31,7 @@ compares slot-wise.
   `Jvm/WasmExprCompiler.compileCons` case that errors ("only supported as a
   top-level form"); Pass 1 does not descend into `progn`, so splicing (not a
   1-form macro expansion) is load-bearing. `--no-gc`
-  (`ScalarWasmCompiler`) rejects defstruct via its generic "supports only
+  (`NoGcWasmCompiler`) rejects defstruct via its generic "supports only
   (defun ...)" top-level error.
 - **`UserMacroExpander`** has a defstruct case in its structure-aware walker:
   the struct/slot names are preserved, slot defaults are expanded as

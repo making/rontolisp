@@ -64,9 +64,9 @@ Same shape: `Ctx.specialVars`, specials unioned into `globals` (module-level
 `(mut (ref null eq))`). A special binding saves the global into a temp local
 (`global.get; local.set`), sets it, and restores after the body (`local.get;
 global.set`). Same for the `--component` path (shared core module). `--no-gc`
-`ScalarWasmCompiler` has no globals and rejects `defvar`/`declaim` at top level
+`NoGcWasmCompiler` has no globals and rejects `defvar`/`declaim` at top level
 outright, so a special can never be declared there
-(`ScalarWasmCompilerTest.rejectsSpecialVariableDeclaration`).
+(`NoGcWasmCompilerTest.rejectsSpecialVariableDeclaration`).
 
 ## Compile-path limitations (interpreter is unaffected)
 
@@ -123,6 +123,6 @@ it on all backends (pinned in `ci-spec.yaml`, the three backend tests, and
 
 `LispEvaluatorTest` (the `specialVar*`/`progv*`/`defparameter`/`declaim`/`proclaim`
 /thread-scoped group), `JvmLispCompilerTest` + `WasmLispCompilerIntegrationTest`
-(the `specialVar*` group + `progvIsRejectedOn*`), `ScalarWasmCompilerTest`
+(the `specialVar*` group + `progvIsRejectedOn*`), `NoGcWasmCompilerTest`
 (`rejectsSpecialVariableDeclaration`), and the `special-variable-dynamic-binding`
 ci-spec case (all four backends).

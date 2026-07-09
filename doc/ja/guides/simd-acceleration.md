@@ -19,7 +19,7 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 ## API
 
-構築: `vec:zeros` / `vec:ones` は長さ *n* の充填ベクトルを作り、`vec:arange` は `[0.0, 1.0, ..., n-1]` を作り、`vec:from-list` / `vec:to-list` はベクトルと Lisp リストを相互変換します(リスト系はインタプリタ・JVM・wasm-GC でのみ動作し、`--no-gc` では動きません)。`vec:zeros` / `vec:ones` / `vec:arange` は末尾に省略可能な `element-type` も取ります。`'single-float` を渡すとパックド単精度 (`#f`) ベクトルになります(デフォルトは倍精度)。[linalg のコンストラクタ](linear-algebra.md#単精度浮動小数点)と揃っており、`--simd` と `--no-gc` の SIMD 経路を含む全バックエンドで保持されます。
+構築: `vec:zeros` / `vec:ones` は長さ *n* の充填ベクトルを作り、`vec:arange` は `[0.0, 1.0, ..., n-1]` を作り、`vec:from-list` / `vec:to-list` はベクトルと Lisp リストを相互変換します(リスト系はインタプリタ・JVM・wasm-GC でのみ動作し、`--no-gc` では動きません)。`vec:zeros` / `vec:ones` / `vec:arange` は末尾に省略可能な `element-type` も取ります。`'single-float` を渡すとパックド単精度 (`#f`) ベクトルになります(デフォルトは倍精度)。[linalg のコンストラクタ](linear-algebra.md#単精度浮動小数点)と揃っており、JVM `--simd` と `--no-gc` の v128 経路を含む全バックエンドで保持されます。
 
 アクセス: `vec:aref` は要素を読み(`vec:aset` を介した `setf` の場所)、`vec:length` は要素数を返します。これらは汎用のパックド配列演算子への薄いラッパーなので、素の `aref` / `length` も使えます。
 
@@ -44,10 +44,20 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 ## ハードウェアアクセラレーション(任意)
 
-スカラーの `vec.lisp` 基準はどこでも正しく、2 つのバックエンドではベクトル化可能なカーネル(`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`、および波及的に `mean` / `norm`)を実際の SIMD ハードウェアにロワリングできます。これはオプトインで、結果は何も変えません。アクセラレートされた出力はスカラー基準とバイト単位で同一です。
+スカラーの `vec.lisp` 基準はすべてのバックエンドで正しく動きます。`--simd` は、ベクトル化可能なカーネル(`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`、および波及的に `mean` / `norm`)を実際の CPU ベクトル命令に追加でロワリングする、バックエンド非依存の唯一のスイッチです。オプトインで、結果は何も変えません。アクセラレートされた出力はスカラー基準とバイト単位で同一です(非正確な入力に対するリダクションは最終 ULP で異なることがあります。後述)。
+
+どのメモリモデル向けにコンパイルするか(`.class`・wasm-GC `.wasm`・`--no-gc` `.wasm`)と、`--simd` を渡すかどうかは**直交する**軸です。
+
+| ターゲット | `--simd` なし | `--simd` あり |
+|---|---|---|
+| インタプリタ(`-o` なし) | スカラー | スカラー(フラグは無効。警告を表示) |
+| JVM(`-o prog.class`) | スカラー `vec.lisp` | `jdk.incubator.vector` ブリッジ |
+| wasm-GC(`-o prog.wasm`) | スカラー `vec.lisp` | スカラー `vec.lisp`(未対応。警告を表示) |
+| `--no-gc`(`-o prog.wasm --no-gc`) | スカラーの線形メモリループ | ネイティブ v128(`f64x2` / `f32x4`) |
 
 - **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` はカーネルを、JIT が CPU のベクトル命令にイントリンシファイする埋め込みの `jdk.incubator.vector` ブリッジに振り向けます(`#d` には `DoubleVector`、`#f` には `FloatVector`。`vec:matvec` はそのベクトル化された内積を行列の行ごとに 1 回実行します)。そのクラスの実行には JVM にインキュベータモジュールが必要です: `java --add-modules jdk.incubator.vector Prog`。`--simd` なしのクラスは任意の JVM でスカラー基準を実行します。
-- **`--no-gc` ネイティブ `v128`**: 非 GC のスカラー WASM バックエンド(`rontolisp prog.lisp -o prog.wasm --no-gc`)では、`vec:` カーネルはパックドな線形メモリブロック上の WebAssembly 固定幅 SIMD(`f64x2.*`、単精度では `f32x4.*`)にロワリングされます。アクセラレーションフラグは不要で、これがこのバックエンドのネイティブ実装です。`vec:from-list` / `vec:to-list`(Lisp リストが必要)と `vec:matvec`(階数 2 の行列が必要)はここでは利用できません。
+- **`--no-gc --simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` は `vec:` カーネルを、パックドな線形メモリブロック上の WebAssembly 固定幅 SIMD(`f64x2.*`、単精度では `f32x4.*`)にロワリングします。**`--simd` なしの `--no-gc` は同じブロック上に素のスカラーループを出力します** — SIMD 提案を持たない WebAssembly ランタイムでも動く v128 非依存の MVP モジュールで、その移植性と引き換えにベクトル化による高速化を手放します。`vec:from-list` / `vec:to-list`(Lisp リストが必要)と `vec:matvec`(階数 2 の行列が必要)は、いずれにせよ `--no-gc` では利用できません。
+- **wasm-GC**: 既定の `.wasm` バックエンドはまだ `--simd` を尊重できません(そのパックド配列は線形メモリではなく GC オブジェクトです)。`--simd` を渡すと警告を表示してスカラー基準にフォールバックします。ネイティブ v128 には `--no-gc --simd` を、または JVM の `--simd` を使ってください。
 
 リダクションは SIMD 下では異なる順序で加算するため、非正確な入力に対するリダクションは左から右へのスカラー基準と最終 ULP で異なることがあります。テストで典型的な正確な double に対しては結果は完全に一致します。要素ごとのカーネルは常にビット単位で同一です。
 

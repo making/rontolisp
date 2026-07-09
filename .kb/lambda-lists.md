@@ -79,7 +79,7 @@ required params for a variadic function.
   `LambdaLists.appendTailBindings`; `&whole`/`&environment` stay errors.
 - The runtime `eval`'s own `lambda` (interpreted closures, funcId == -1) binds
   positionally and does not parse `&` keywords.
-- `--no-gc` (`ScalarWasmCompiler.extractDefun`) rejects lambda-list keywords with
+- `--no-gc` (`NoGcWasmCompiler.extractDefun`) rejects lambda-list keywords with
   a compile error — the rest list is a cons, which the scalar lowering lacks.
 - `BuiltinFunctionWrappers` still pin one arity per builtin (e.g. `#'+` is
   binary); they could now be widened with `&rest` but that shifts every wrapper's

@@ -190,7 +190,7 @@ class WasmImportCompilerTest {
 				(defun add10 (n) (add n 10))
 				(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
 				""");
-		assertThatThrownBy(() -> new ScalarWasmCompiler().compile(program)).hasMessageContaining("--no-gc");
+		assertThatThrownBy(() -> new NoGcWasmCompiler().compile(program)).hasMessageContaining("--no-gc");
 	}
 
 	@Test
