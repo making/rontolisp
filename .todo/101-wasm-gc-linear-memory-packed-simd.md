@@ -72,6 +72,43 @@ get faster output).
   from the shared layout.
 - Native `CiSpecE2eTest` after any cross-backend output touch.
 
+## Handoff from `.todo/102` (interpreter `--simd`, DONE 2026-07-09, NOT committed)
+
+Same worktree (`.claude/worktrees/simd-nogc-poc`, branch `feat/packed-float-array`). Nothing in
+102 touches the WASM backends, but four things change the ground under this todo:
+
+1. **The orthogonality matrix now has an accelerated interpreter row.** `doc/{en,ja}/guides/
+   simd-acceleration.md` reads `interpreter | scalar vec.lisp | jdk.incubator.vector`. This todo
+   flips the **wasm-GC** row from "scalar `vec.lisp` (not supported yet; a warning is printed)" to
+   `v128`. When you do, also delete the wasm-GC `--simd` warning in `RontoLispCli.compileToFile`
+   (search `--simd has no effect on the wasm-GC backend`) and the matching bullet under
+   "Hardware acceleration (optional)" in BOTH language files. `.kb/vec.md` now numbers the layers
+   **0 = interpreter Vector API, 1 = JVM Vector API, 2 = `--no-gc` v128**; wasm-GC v128 becomes a
+   new layer (or folds into 2 once the kernel seam is shared, which is exactly step 1 here).
+2. **The `native` Maven profile changed and you must know why.** It now passes `--add-modules
+   jdk.incubator.vector` + `-H:+VectorAPISupport` and **no longer passes `-H:+SharedArenaSupport`**
+   — GraalVM 25 rejects the combination (`Error: Support for Arena.ofShared is not available with
+   Vector API support`). `JLineRepl.selectNativeImageTerminalProvider()` pins
+   `org.jline.terminal.provider=jni` inside the image to compensate (JLine's FFM provider is what
+   wanted the shared arena, closing it from a signal handler on REPL shutdown). If a native build
+   suddenly fails on that error, someone re-added `SharedArenaSupport` — don't; fix the arena user.
+   Native `CiSpecE2eTest` (732) passes with the new flags.
+3. **`ci-spec.yaml` still never passes `--simd`**, and the DEFAULT interpreter still runs the scalar
+   `vec.lisp`. That invariant is what lets the interpreter stay the byte-identity oracle you compare
+   wasm-GC `--simd` output against. Keep it: do not make wasm-GC `--simd` the default either.
+4. **A worked example of "accelerated path ≡ scalar oracle" testing** is `src/test/java/am/ik/
+   rontolisp/eval/VecSimdTest.java`: every kernel at both widths, below AND above the `THRESHOLD =
+   128` lane-loop gate (n = 7 and n = 200, the latter not a lane-count multiple so the vector loop
+   and its scalar tail both run), plus a "the flag is not dead" guard (`#'vec:dot` prints
+   `#<function vec:dot>` when intercepted, `#<lambda>` when not). The wasm-GC equivalent of that
+   dead-flag guard is asserting `0xFD` presence in the module bytes — `NoGcWasmCompilerTest`
+   already does exactly this for both lowerings; mirror it.
+
+Uncommitted at handoff: `eval/VecSimd.java`, `eval/VecSimdKernels.java`, `eval/VecSimdTest.java`,
+`src/web/java/.../Target_VecSimd.java` (new); `pom.xml`, `cli/JLineRepl.java`,
+`cli/RontoLispCli.java`, `eval/LispEvaluator.java`, `CLAUDE.md`, `.kb/vec.md`, the two
+`simd-acceleration.md` (modified); `.todo/102-*.md` deleted.
+
 ## Pointers
 
 - wasm-GC backend: `WasmLispCompiler`; current packed repr `TYPE_FARRAY`/`TYPE_F64ARR`/`TYPE_F32ARR`

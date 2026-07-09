@@ -1,8 +1,8 @@
 # Vector Kernels (vec)
 
-The `vec` package provides portable packed-`f64` vector kernels: constructors, element access, element-wise arithmetic and reductions over the [packed float array type](../reference/data-types.md). It is the go-to package for tight numeric loops over vectors of doubles, and it carries an optional hardware-acceleration (SIMD) layer on two backends. The package names the portable abstraction; the `--simd` flag names how it is accelerated.
+The `vec` package provides portable packed-`f64` vector kernels: constructors, element access, element-wise arithmetic and reductions over the [packed float array type](../reference/data-types.md). It is the go-to package for tight numeric loops over vectors of doubles, and it carries an optional hardware-acceleration (SIMD) layer on three of the four backends. The package names the portable abstraction; the `--simd` flag names how it is accelerated.
 
-Like the JSON and `linalg` libraries, `vec` is implemented once in Lisp source (`vec.lisp`): the interpreter loads the definitions lazily on the first use of a `vec:` function, and the compile path splices them into the program when it references the package. This scalar definition is the implementation on the interpreter, the JVM compiler and the WASM (wasm-GC) backends, and the correctness oracle for the two accelerated backends, so every function behaves identically everywhere.
+Like the JSON and `linalg` libraries, `vec` is implemented once in Lisp source (`vec.lisp`): the interpreter loads the definitions lazily on the first use of a `vec:` function, and the compile path splices them into the program when it references the package. This scalar definition is the implementation on the interpreter, the JVM compiler and the WASM (wasm-GC) backends, and the correctness oracle for the accelerated paths, so every function behaves identically everywhere.
 
 ## Data representation
 
@@ -50,11 +50,12 @@ Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wa
 
 | target | without `--simd` | with `--simd` |
 |---|---|---|
-| interpreter (no `-o`) | scalar | scalar (the flag is a no-op; a warning is printed) |
+| interpreter (no `-o`) | scalar `vec.lisp` | `jdk.incubator.vector` (baked into the native binary; `java -jar` needs `--add-modules`) |
 | JVM (`-o prog.class`) | scalar `vec.lisp` | `jdk.incubator.vector` bridge |
 | wasm-GC (`-o prog.wasm`) | scalar `vec.lisp` | scalar `vec.lisp` (not supported yet; a warning is printed) |
 | `--no-gc` (`-o prog.wasm --no-gc`) | scalar linear-memory loops | native v128 (`f64x2` / `f32x4`) |
 
+- **Interpreter `--simd`**: `rontolisp prog.lisp --simd` runs the same seven kernels on `jdk.incubator.vector` instead of the scalar `vec.lisp` definitions -- no compilation step, and a large `vec:dot` gets several times faster. The native binary has the incubator module baked in and needs no runtime flag. On a plain `java -jar` the module is absent, so the flag falls back to the scalar reference and prints a note; re-run with `java --add-modules jdk.incubator.vector -jar rontolisp.jar prog.lisp --simd` to get the acceleration there. Without `--simd` the interpreter always runs the scalar reference -- it is the cross-backend oracle. The flag has no effect in the REPL.
 - **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` routes the kernels to an embedded `jdk.incubator.vector` bridge that the JIT intrinsifies to CPU vector instructions (a `DoubleVector` for `#d`, a `FloatVector` for `#f`; `vec:matvec` runs that vectorized dot once per matrix row). Running such a class requires the incubator module on the JVM: `java --add-modules jdk.incubator.vector Prog`. Without `--simd` the class runs the scalar reference on any JVM.
 - **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float) over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` (which needs a rank-2 matrix) are unavailable on `--no-gc` either way.
 - **wasm-GC**: the default `.wasm` backend cannot honor `--simd` yet (its packed arrays are GC objects, not linear memory); passing `--simd` prints a warning and falls back to the scalar reference. Use `--no-gc --simd` for native v128, or the JVM `--simd`.

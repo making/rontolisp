@@ -58,6 +58,8 @@ public final class LispEvaluator {
 
 	private boolean vecLibraryLoaded = false;
 
+	private boolean simd = false;
+
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
 	private boolean urlLibraryLoaded = false;
@@ -218,6 +220,19 @@ public final class LispEvaluator {
 	 */
 	public void setSystemPath(List<String> systemPath) {
 		this.systemPath = List.copyOf(systemPath);
+	}
+
+	/**
+	 * Enables the opt-in {@code --simd} acceleration of the {@code vec:} kernels: when
+	 * the vec library is loaded, its seven vectorizable defuns are overridden with the
+	 * {@code jdk.incubator.vector} natives of {@link VecSimd}. Off by default -- the
+	 * scalar {@code vec.lisp} reference is the cross-backend byte-identity oracle. The
+	 * caller must have checked {@link VecSimd#available()}; enabling it on a runtime
+	 * without the incubator module would fail at the first {@code vec:} call.
+	 * @param simd whether to vectorize the vec: kernels
+	 */
+	public void setSimd(boolean simd) {
+		this.simd = simd;
 	}
 
 	/**
@@ -1780,6 +1795,12 @@ public final class LispEvaluator {
 			this.vecLibraryLoaded = true;
 			for (LispVal form : VecLibrary.forms()) {
 				eval(form, this.globalEnv);
+			}
+			// Opt-in --simd: override the vectorizable defuns just evaluated with the
+			// Vector API natives. mean/norm keep their scalar bodies and pick the
+			// natives up through the global function namespace (Lisp-2).
+			if (this.simd) {
+				VecSimd.install(this.globalEnv);
 			}
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 			if (loaded != null) {

@@ -313,12 +313,22 @@ public final class Version {
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
-								<!-- JLine 4.1+ FFM terminal provider closes a shared Arena
-									 (Arena.ofShared) from its signal handler. Native Image
-									 disables shared-arena support by default, so enable it
-									 explicitly or the REPL crashes on the first readLine. -->
+								<!-- The interpreter's opt-in simd flag (VecSimdKernels) uses the
+									 incubator Vector API; the module must be in the image's
+									 module graph. Build-time only: the produced binary needs
+									 no runtime flag. -->
+								<buildArg>--add-modules</buildArg>
+								<buildArg>jdk.incubator.vector</buildArg>
 								<buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
-								<buildArg>-H:+SharedArenaSupport</buildArg>
+								<!-- Oracle GraalVM intrinsifies jdk.incubator.vector in Native
+									 Image only behind this (experimental) flag. Without it the
+									 Vector API falls back to per-lane emulation that is 6-32x
+									 SLOWER than a scalar loop, so it is effectively mandatory
+									 for the simd flag to be worth anything on the binary.
+									 GraalVM 25 refuses to combine it with -H:+SharedArenaSupport,
+									 which the JLine FFM terminal provider needs; JLineRepl pins
+									 the JNI provider in the image instead (no shared arena). -->
+								<buildArg>-H:+VectorAPISupport</buildArg>
 							</buildArgs>
 						</configuration>
 					</plugin>

@@ -33,9 +33,10 @@ block, keyed off the `#d`/`#f` literal or the `:element-type` (todo-95 Phase 5).
 
 `src/main/resources/am/ik/rontolisp/eval/vec.lisp` defines every `vec:` function as a
 plain `defun` over `make-array :element-type 'double-float` / `aref` / `length`. It is the
-implementation on the interpreter, the JVM compiler and the wasm-GC compiler (they run the
-scalar defuns over the packed repr, unboxed), and the correctness oracle for the two
-accelerated backends. `VecLibrary` splices/loads it exactly like `LinalgLibrary`:
+implementation on the interpreter (unless `--simd` — see acceleration layer 0), the JVM
+compiler and the wasm-GC compiler (they run the scalar defuns over the packed repr,
+unboxed), and the correctness oracle for the accelerated paths. `VecLibrary` splices/loads
+it exactly like `LinalgLibrary`:
 
 - Interpreter: `LispEvaluator` lazy-loads it on the first resolution of a `vec:`-qualified
   function (`VecLibrary.forms()`), mirroring linalg.
@@ -55,6 +56,48 @@ vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref 
 lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` needs a
 rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
+
+## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
+
+`rontolisp prog.lisp --simd` (interpret, no `-o`) runs the same seven vectorizable kernels
+on the Vector API instead of the scalar defuns. The DEFAULT interpreter is unchanged — it
+is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--simd`.
+
+- `eval.VecSimdKernels` — the lane loops, `static`, over the interpreter's **bare**
+  `double[]`/`float[]` + explicit `rows`/`cols` (a `LispDoubleFloatArray`/`LispSingleFloatArray`
+  has no in-array dimension header, unlike the compiled repr). Mirrors
+  `JvmSimdVectorTemplate` operation for operation (same `SPECIES_PREFERRED`, `THRESHOLD =
+  128`, two-rounding mul-then-add, `F2D` per-lane widening for the f32 reductions,
+  f64-then-narrow `scaleF`), so interpreter `--simd` ≡ compiled `.class --simd` bit-for-bit.
+  It is NOT reused from `codegen.jvm` — `eval` may not depend on it (package rule), and the
+  template's kernels are written against the header-in-array layout anyway.
+- `eval.VecSimd` — `available()` (links the kernels class; a `NoClassDefFoundError` on a JVM
+  without the incubator module becomes `false`) and `install(Environment)` (defines native
+  `LispFunction`s for `vec:add`..`vec:matvec`, overriding the just-evaluated defuns).
+  `mean`/`norm` keep their scalar bodies and pick the natives up through the Lisp-2 global
+  function namespace. These two methods are the ONLY callers of `VecSimdKernels`.
+- `LispEvaluator.setSimd(true)` → `VecSimd.install(globalEnv)` right after the `vec.lisp`
+  forms are evaluated in `resolveFunction`'s lazy-load hook.
+- `RontoLispCli.interpret` threads `--simd`, probing `VecSimd.available()` first: absent
+  module → a one-line note + the scalar reference (a graceful fallback, unlike the compiled
+  `.class`'s hard `NoClassDefFoundError` dead-flag guard). `--simd` in the REPL warns.
+- **Native binary**: the `native` profile passes `--add-modules jdk.incubator.vector` +
+  `-H:+VectorAPISupport` (build-time only; the binary needs no runtime flag). Without the
+  latter the Vector API falls back to per-lane emulation 6-32x SLOWER than scalar, so it is
+  effectively mandatory. **GraalVM 25 refuses to combine it with `-H:+SharedArenaSupport`**,
+  which the JLine FFM terminal provider needs (it closes an `Arena.ofShared` from its signal
+  handler on REPL shutdown) — so `JLineRepl.selectNativeImageTerminalProvider()` pins
+  `org.jline.terminal.provider=jni` in the image instead (no shared arena) and the pom drops
+  `SharedArenaSupport`. Forcing `-Dorg.jline.terminal.provider=ffm` on the binary reproduces
+  the old crash; that is the pinning test.
+- **Web Image**: `src/web/java/.../Target_VecSimd.java` substitutes both `available()` (→
+  `false`) and `install(...)`, making `VecSimdKernels` unreachable so the incubator module
+  never enters the browser image. Keeping VecSimd's kernel references confined to those two
+  methods is what makes the substitution sufficient.
+- Tests: `eval/VecSimdTest` (every kernel vs the scalar oracle at both widths, below and
+  above `THRESHOLD`; the `#<function vec:dot>` vs `#<lambda>` interception guard; mixed-width
+  and rank errors). Measured on the native binary: `vec:dot` over an 8192-element `#f`
+  vector, 2000 iterations — 9.4s scalar → 1.7s `--simd` (5.6x, identical result).
 
 ## Acceleration layer 1 — JVM `--simd` (jdk.incubator.vector)
 

@@ -28,6 +28,7 @@ import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
+import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
@@ -70,16 +71,6 @@ public final class RontoLispCli {
 			return;
 		}
 
-		// --simd names hardware vector acceleration of the vec: kernels; it only has an
-		// effect on a compiled target that can realize it (a .class via the Vector API,
-		// or
-		// --no-gc .wasm via v128). Without -o the interpreter always runs the scalar vec:
-		// reference, so the flag is a no-op -- say so rather than silently ignore it.
-		if (options.contains("--simd") && !options.contains("-o")) {
-			warn("--simd has no effect without -o (the interpreter runs the scalar vec: kernels); "
-					+ "compile with -o <name>.class --simd or -o <name>.wasm --no-gc --simd to accelerate.");
-		}
-
 		// The .asd search path for asdf:load-system: the --system-path option first,
 		// then the RONTOLISP_SOURCE_REGISTRY environment variable, both accepting
 		// several directories joined with the platform path separator (like PATH). The
@@ -87,6 +78,9 @@ public final class RontoLispCli {
 		List<String> systemPath = systemPath(options.get("--system-path"), System.getenv("RONTOLISP_SOURCE_REGISTRY"));
 
 		if (!options.containsNoKey()) {
+			if (options.contains("--simd")) {
+				warn("--simd has no effect in the REPL; pass a source file to accelerate its vec: kernels.");
+			}
 			repl(systemPath);
 			return;
 		}
@@ -105,7 +99,7 @@ public final class RontoLispCli {
 					options.contains("--no-gc"), options.contains("--simd"));
 		}
 		else {
-			interpret(source, baseDir, systemPath);
+			interpret(source, baseDir, systemPath, options.contains("--simd"));
 		}
 	}
 
@@ -184,10 +178,22 @@ public final class RontoLispCli {
 		buffer.setLength(0);
 	}
 
-	private void interpret(String source, @Nullable String baseDir, List<String> systemPath) {
+	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, boolean simd) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
+		// --simd on the interpreter routes the vec: kernels to jdk.incubator.vector. The
+		// native binary bakes the module in; a plain `java -jar` does not, so probe and
+		// fall back to the scalar reference with a note instead of failing.
+		if (simd) {
+			if (VecSimd.available()) {
+				evaluator.setSimd(true);
+			}
+			else {
+				warn("--simd: jdk.incubator.vector is unavailable, running the scalar vec: kernels; "
+						+ "re-run with `java --add-modules jdk.incubator.vector -jar ...`, or use the native binary.");
+			}
+		}
 		List<LispVal> exprs = LispReader.readAllFromString(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
@@ -317,8 +323,10 @@ public final class RontoLispCli {
 		this.out.println("  --simd             Accelerate the vec: kernels with hardware SIMD");
 		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
 		this.out.println("                     java --add-modules jdk.incubator.vector). --no-gc (.wasm): emit");
-		this.out.println("                     native v128 (f64x2/f32x4). No effect on the interpreter or the");
-		this.out.println("                     wasm-GC backend (a warning is printed there).");
+		this.out.println("                     native v128 (f64x2/f32x4). Interpreter: run the vec: kernels on");
+		this.out.println("                     the Vector API (baked into the native binary; on java -jar add");
+		this.out.println("                     --add-modules jdk.incubator.vector, else it falls back to scalar).");
+		this.out.println("                     No effect on the wasm-GC backend (a warning is printed there).");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 		this.out.println("  --system-path DIRS Directories searched for NAME.asd by asdf:load-system");
