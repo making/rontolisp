@@ -45,3 +45,6 @@ examples/browser/hiragana/weights-k49.lisp
 /bin.dat
 /seq.dat
 /crlf.dat
+
+### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
+/*.class
