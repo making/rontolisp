@@ -298,9 +298,276 @@ final class JvmSimdVectorTemplate {
 		return r;
 	}
 
+	// --- destination-passing kernels (write into out, allocate nothing) -----------
+	// The -into siblings of the four element-wise kernels and matvec (todo 103). Each
+	// returns the destination it was given, so a hot loop allocates no packed vector at
+	// all. The element-wise ones tolerate out == a and/or out == b: within one lane block
+	// the reads precede the store at the same indices, so in-place accumulation
+	// (vec:add-into acc acc d) is well-defined. matvec-into cannot: out[row] is a fold
+	// over ALL of x, so a store would clobber an element a later row still reads --
+	// hence the identity guard, mirroring the eq check in the scalar vec.lisp defun
+	// (which this call site replaces, so the guard has to be repeated here).
+
+	static @Nullable Object simdAddInto(@Nullable Object out, @Nullable Object a, @Nullable Object b) {
+		if (out instanceof float[] fr) {
+			addIntoF(fr, asFloat(a), asFloat(b));
+			return out;
+		}
+		requireDouble(a, b);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, ox + i)
+					.add(DoubleVector.fromArray(SPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] + y[oy + i];
+		}
+		return out;
+	}
+
+	static @Nullable Object simdSubInto(@Nullable Object out, @Nullable Object a, @Nullable Object b) {
+		if (out instanceof float[] fr) {
+			subIntoF(fr, asFloat(a), asFloat(b));
+			return out;
+		}
+		requireDouble(a, b);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, ox + i)
+					.sub(DoubleVector.fromArray(SPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] - y[oy + i];
+		}
+		return out;
+	}
+
+	static @Nullable Object simdMulInto(@Nullable Object out, @Nullable Object a, @Nullable Object b) {
+		if (out instanceof float[] fr) {
+			mulIntoF(fr, asFloat(a), asFloat(b));
+			return out;
+		}
+		requireDouble(a, b);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, ox + i)
+					.mul(DoubleVector.fromArray(SPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] * y[oy + i];
+		}
+		return out;
+	}
+
+	static @Nullable Object simdScaleInto(@Nullable Object out, @Nullable Object v, @Nullable Object s) {
+		double scalar = ((Number) java.util.Objects.requireNonNull(s)).doubleValue();
+		if (out instanceof float[] fr) {
+			scaleIntoF(fr, asFloat(v), scalar);
+			return out;
+		}
+		if (v instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(v);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int n = x.length - ox;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, ox + i).mul(scalar).intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] * scalar;
+		}
+		return out;
+	}
+
+	static @Nullable Object simdMatvecInto(@Nullable Object out, @Nullable Object w, @Nullable Object x) {
+		if (out == x || out == w) {
+			throw new IllegalArgumentException(
+					"vec:matvec-into: out must not be the same array as w or x (each out element folds over all of x)");
+		}
+		if (out instanceof float[] fr) {
+			matvecIntoF(fr, asFloat(w), asFloat(x));
+			return out;
+		}
+		requireDouble(w, x);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] mw = (double[]) java.util.Objects.requireNonNull(w);
+		double[] vx = (double[]) java.util.Objects.requireNonNull(x);
+		int or = 1 + (int) r[0];
+		int ow = 1 + (int) mw[0];
+		int d = (int) mw[1];
+		int n = (int) mw[2];
+		int ox = 1 + (int) vx[0];
+		for (int row = 0; row < d; row++) {
+			int base = ow + row * n;
+			int i = 0;
+			double acc = 0.0;
+			if (n >= THRESHOLD) {
+				DoubleVector vacc = DoubleVector.zero(SPECIES);
+				int bound = SPECIES.loopBound(n);
+				for (; i < bound; i += SPECIES.length()) {
+					vacc = vacc.add(DoubleVector.fromArray(SPECIES, mw, base + i)
+						.mul(DoubleVector.fromArray(SPECIES, vx, ox + i)));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < n; i++) {
+				acc += mw[base + i] * vx[ox + i];
+			}
+			r[or + row] = acc;
+		}
+		return out;
+	}
+
+	/** Rejects a single-float operand paired with a double-float destination. */
+	private static void requireDouble(@Nullable Object a, @Nullable Object b) {
+		if (a instanceof float[] || b instanceof float[]) {
+			throw mixedWidth();
+		}
+	}
+
 	// --- single-float (f32) kernels ----------------------------------------------
 	// A float[] operand runs these instead of the double[] path above; the result
 	// keeps the input width (element-wise) or is the usual f64 scalar (reductions).
+
+	private static void addIntoF(float[] r, float[] x, float[] y) {
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, ox + i)
+					.add(FloatVector.fromArray(FSPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] + y[oy + i];
+		}
+	}
+
+	private static void subIntoF(float[] r, float[] x, float[] y) {
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, ox + i)
+					.sub(FloatVector.fromArray(FSPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] - y[oy + i];
+		}
+	}
+
+	private static void mulIntoF(float[] r, float[] x, float[] y) {
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, ox + i)
+					.mul(FloatVector.fromArray(FSPECIES, y, oy + i))
+					.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = x[ox + i] * y[oy + i];
+		}
+	}
+
+	/**
+	 * Scalar, like {@link #scaleF}: the f64 intermediate defeats a native f32 lane mul.
+	 */
+	private static void scaleIntoF(float[] r, float[] x, double s) {
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int n = x.length - ox;
+		for (int i = 0; i < n; i++) {
+			r[or + i] = (float) (x[ox + i] * s);
+		}
+	}
+
+	private static void matvecIntoF(float[] r, float[] w, float[] x) {
+		int or = 1 + (int) r[0];
+		int ow = 1 + (int) w[0];
+		int d = (int) w[1];
+		int n = (int) w[2];
+		int ox = 1 + (int) x[0];
+		for (int row = 0; row < d; row++) {
+			int base = ow + row * n;
+			int i = 0;
+			double acc = 0.0;
+			if (n >= THRESHOLD) {
+				DoubleVector vacc = DoubleVector.zero(SPECIES);
+				int bound = FSPECIES.loopBound(n);
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector fw = FloatVector.fromArray(FSPECIES, w, base + i);
+					FloatVector fx = FloatVector.fromArray(FSPECIES, x, ox + i);
+					DoubleVector w0 = (DoubleVector) fw.convert(VectorOperators.F2D, 0);
+					DoubleVector w1 = (DoubleVector) fw.convert(VectorOperators.F2D, 1);
+					DoubleVector x0 = (DoubleVector) fx.convert(VectorOperators.F2D, 0);
+					DoubleVector x1 = (DoubleVector) fx.convert(VectorOperators.F2D, 1);
+					vacc = vacc.add(w0.mul(x0)).add(w1.mul(x1));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < n; i++) {
+				acc += (double) w[base + i] * (double) x[ox + i];
+			}
+			r[or + row] = (float) acc;
+		}
+	}
 
 	/** {@code r[i] = x[i] + y[i]} in native f32 (no double-rounding for a single +). */
 	private static float[] addF(float[] x, float[] y) {

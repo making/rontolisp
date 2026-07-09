@@ -1495,8 +1495,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code sum}/{@code dot} calls, so they need not be listed here.
 	 */
 	private static boolean programUsesAnyAcceleratedSimdOp(List<LispVal> program) {
-		for (String member : List.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE,
-				LispNames.VEC_DOT, LispNames.VEC_SUM, LispNames.VEC_MATVEC)) {
+		for (String member : JvmSimdCompiler.members()) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.VEC_PKG, member))) {
 				return true;
 			}

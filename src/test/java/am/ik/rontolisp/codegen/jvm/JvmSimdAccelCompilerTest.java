@@ -354,6 +354,99 @@ class JvmSimdAccelCompilerTest {
 		assertThat(embedsBridge(compile("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))", false))).isFalse();
 	}
 
+	// --- destination-passing kernels (todo 103) --------------------------------------
+
+	@Test
+	void acceleratedIntoKernelsMatchTheirAllocatingSiblingsByteForByte() throws Exception {
+		// Small arrays (scalar tail) and large ones (vector loop), both widths. The
+		// -into result must print exactly like the allocating sibling's fresh vector.
+		record Pair(String into, String alloc) {
+		}
+		for (Pair p : List.of(
+				new Pair("(print (vec:add-into (vec:zeros 3) #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))",
+						"(print (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"),
+				new Pair("(print (vec:sub-into (vec:zeros 3) #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))",
+						"(print (vec:sub #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))"),
+				new Pair("(print (vec:mul-into (vec:zeros 3) #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))",
+						"(print (vec:mul #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))"),
+				new Pair("(print (vec:scale-into (vec:zeros 3) #d(1.0 2.0 3.0) 10.0))",
+						"(print (vec:scale #d(1.0 2.0 3.0) 10.0))"),
+				new Pair("(print (vec:sum (vec:add-into (vec:zeros 1000) (vec:arange 1000) (vec:arange 1000))))",
+						"(print (vec:sum (vec:add (vec:arange 1000) (vec:arange 1000))))"),
+				new Pair("(print (vec:add-into (vec:zeros 3 'single-float) #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+						"(print (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))"),
+				new Pair("(print (vec:scale-into (vec:zeros 3 'single-float) #f(1.0 2.0 3.0) 10.0))",
+						"(print (vec:scale #f(1.0 2.0 3.0) 10.0))"),
+				new Pair(
+						"(print (vec:sum (vec:mul-into (vec:zeros 1000 'single-float) (vec:arange 1000 'single-float) (vec:ones 1000 'single-float))))",
+						"(print (vec:sum (vec:mul (vec:arange 1000 'single-float) (vec:ones 1000 'single-float))))"))) {
+			assertThat(accel(p.into())).as(p.into()).isEqualTo(scalar(p.alloc()));
+			assertThat(accel(p.into())).as(p.into()).isEqualTo(scalar(p.into()));
+		}
+	}
+
+	@Test
+	void acceleratedIntoKernelsReturnTheDestinationAndAllocateNothingInALoop() throws Exception {
+		// The point of -into: the loop rebinds nothing and the kernel returns the very
+		// vector it was handed, so in-place accumulation matches the allocating form.
+		String inPlace = """
+				(let ((acc (vec:zeros 1000)) (d (vec:arange 1000)))
+				  (dotimes (i 4) (vec:add-into acc acc d))
+				  (print (vec:sum acc)))
+				""";
+		String fresh = """
+				(let ((acc (vec:zeros 1000)) (d (vec:arange 1000)))
+				  (dotimes (i 4) (setq acc (vec:add acc d)))
+				  (print (vec:sum acc)))
+				""";
+		assertThat(accel(inPlace)).isEqualTo(scalar(fresh));
+		assertThat(accel("(let ((o (vec:zeros 2))) (print (eq o (vec:add-into o #d(1.0 2.0) #d(3.0 4.0)))))"))
+			.isEqualTo("t");
+	}
+
+	@Test
+	void acceleratedMatvecIntoMatchesTheAllocatingSibling() throws Exception {
+		assertThat(accel("(print (vec:matvec-into (vec:zeros 2) #d((1 2) (3 4)) #d(5 6)))")).isEqualTo("#d(17.0 39.0)");
+		assertThat(accel("(print (vec:matvec-into (vec:zeros 2 'single-float) #f((1 2) (3 4)) #f(5 6)))"))
+			.isEqualTo(scalar("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))"));
+		String wide = """
+				(let ((w (make-array '(3 200) :element-type 'double-float :initial-element 0.0))
+				      (x (vec:arange 200))
+				      (o (vec:zeros 3)))
+				  (dotimes (i 3) (dotimes (j 200) (setf (aref w i j) (float (+ (* i 200) j)))))
+				  (print (vec:sum (vec:matvec-into o w x))))
+				""";
+		assertThat(accel(wide)).isEqualTo(scalar(wide.replace("(vec:matvec-into o w x)", "(vec:matvec w x)")));
+	}
+
+	@Test
+	void acceleratedMatvecIntoRejectsADestinationAliasingItsOperands() {
+		// out[row] folds over ALL of x. The bridge replaces the vec.lisp defun that
+		// carries the eq guard, so the guard is repeated in the bridge.
+		assertThatThrownBy(() -> accel("(let ((x #d(1.0 2.0))) (print (vec:matvec-into x #d((1 1) (1 1)) x)))"))
+			.hasStackTraceContaining("must not be the same array");
+	}
+
+	@Test
+	void mixedWidthIntoOperandsAreAHardErrorUnderTheSimdFlag() {
+		assertThatThrownBy(() -> accel("(print (vec:add-into (vec:zeros 1) #d(1.0) #f(1.0)))"))
+			.hasStackTraceContaining("share an element type");
+		assertThatThrownBy(() -> accel("(print (vec:add-into (vec:zeros 1 'single-float) #d(1.0) #d(1.0)))"))
+			.hasStackTraceContaining("share an element type");
+		assertThatThrownBy(() -> accel("(print (vec:scale-into (vec:zeros 1 'single-float) #d(1.0) 2.0))"))
+			.hasStackTraceContaining("share an element type");
+	}
+
+	@Test
+	void theIntoBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// Dead-flag proof: without this every numeric assertion above would still pass on
+		// the scalar vec.lisp defuns, which -into also has.
+		assertThat(embedsBridge(compile("(print (vec:add-into (vec:zeros 1) #d(1.0) #d(1.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:matvec-into (vec:zeros 2) #d((1 2) (3 4)) #d(5 6)))", true)))
+			.isTrue();
+		assertThat(embedsBridge(compile("(print (vec:add-into (vec:zeros 1) #d(1.0) #d(1.0)))", false))).isFalse();
+	}
+
 	private static boolean embedsBridge(byte[] classBytes) {
 		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.BRIDGE_NAME);
 	}

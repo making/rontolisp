@@ -110,6 +110,85 @@ public final class VecSimd {
 			}
 			throw mixedWidth(name);
 		});
+		installInto(globalEnv);
+	}
+
+	/**
+	 * The destination-passing kernels (todo 103). Each writes into its first argument and
+	 * returns THAT LispVal unchanged, so {@code (vec:add-into acc acc d)} keeps
+	 * {@code acc} {@code eq} to itself -- wrapping the backing array in a fresh
+	 * {@link LispDoubleFloatArray} would not.
+	 *
+	 * <p>
+	 * These natives replace the scalar {@code vec.lisp} defuns, so the
+	 * {@code vec:matvec-into} alias guard written there has to be repeated here.
+	 */
+	private static void installInto(Environment globalEnv) {
+		defineInto(globalEnv, LispNames.VEC_ADD_INTO, VecSimdKernels::addInto, VecSimdKernels::addIntoF);
+		defineInto(globalEnv, LispNames.VEC_SUB_INTO, VecSimdKernels::subInto, VecSimdKernels::subIntoF);
+		defineInto(globalEnv, LispNames.VEC_MUL_INTO, VecSimdKernels::mulInto, VecSimdKernels::mulIntoF);
+		defineFn(globalEnv, LispNames.VEC_SCALE_INTO, 3, (name, args) -> {
+			LispFloatArray out = array(name, args.get(0));
+			LispFloatArray v = array(name, args.get(1));
+			double s = scalar(name, args.get(2));
+			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
+				VecSimdKernels.scaleInto(r.data(), x.data(), s);
+			}
+			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
+				VecSimdKernels.scaleIntoF(r.data(), x.data(), s);
+			}
+			else {
+				throw mixedWidth(name);
+			}
+			return args.get(0);
+		});
+		defineFn(globalEnv, LispNames.VEC_MATVEC_INTO, 3, (name, args) -> {
+			LispFloatArray out = array(name, args.get(0));
+			LispFloatArray w = array(name, args.get(1));
+			LispFloatArray x = array(name, args.get(2));
+			if (w.rank() != 2) {
+				throw new LispEvalException(qualified(name) + " expects a rank-2 matrix, got rank " + w.rank());
+			}
+			int rows = w.dims()[0];
+			int cols = w.dims()[1];
+			if (out instanceof LispDoubleFloatArray r && w instanceof LispDoubleFloatArray mw
+					&& x instanceof LispDoubleFloatArray vx) {
+				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
+				VecSimdKernels.matvecInto(r.data(), mw.data(), rows, cols, vx.data());
+			}
+			else if (out instanceof LispSingleFloatArray r && w instanceof LispSingleFloatArray mw
+					&& x instanceof LispSingleFloatArray vx) {
+				requireDisjoint(name, r.data() == mw.data() || r.data() == vx.data());
+				VecSimdKernels.matvecIntoF(r.data(), mw.data(), rows, cols, vx.data());
+			}
+			else {
+				throw mixedWidth(name);
+			}
+			return args.get(0);
+		});
+	}
+
+	/**
+	 * An element-wise -into kernel pair (the f64 and f32 lane loops of one operation).
+	 */
+	private static void defineInto(Environment globalEnv, String name, DoubleKernel2Into f64, FloatKernel2Into f32) {
+		defineFn(globalEnv, name, 3, (fnName, args) -> {
+			LispFloatArray out = array(fnName, args.get(0));
+			LispFloatArray a = array(fnName, args.get(1));
+			LispFloatArray b = array(fnName, args.get(2));
+			if (out instanceof LispDoubleFloatArray r && a instanceof LispDoubleFloatArray x
+					&& b instanceof LispDoubleFloatArray y) {
+				f64.apply(r.data(), x.data(), y.data());
+			}
+			else if (out instanceof LispSingleFloatArray r && a instanceof LispSingleFloatArray x
+					&& b instanceof LispSingleFloatArray y) {
+				f32.apply(r.data(), x.data(), y.data());
+			}
+			else {
+				throw mixedWidth(fnName);
+			}
+			return args.get(0);
+		});
 	}
 
 	/** An element-wise kernel pair (the f64 and f32 lane loops of one operation). */
@@ -156,6 +235,19 @@ public final class VecSimd {
 		};
 	}
 
+	/**
+	 * Signals when a {@code vec:matvec-into} destination shares storage with {@code w} or
+	 * {@code x}: {@code out[row]} is a fold over all of {@code x}, so a store would
+	 * clobber an element a later row still has to read. Aliasing is checked on the
+	 * BACKING array, the actual sharing condition.
+	 */
+	private static void requireDisjoint(String name, boolean aliased) {
+		if (aliased) {
+			throw new LispEvalException(qualified(name)
+					+ ": out must not be the same array as w or x (each out element folds over all of x)");
+		}
+	}
+
 	private static LispEvalException mixedWidth(String name) {
 		return new LispEvalException(
 				qualified(name) + ": operands must share an element type (mixed single-float and double-float)");
@@ -187,6 +279,20 @@ public final class VecSimd {
 	private interface FloatKernel2 {
 
 		float[] apply(float[] a, float[] b);
+
+	}
+
+	@FunctionalInterface
+	private interface DoubleKernel2Into {
+
+		void apply(double[] out, double[] a, double[] b);
+
+	}
+
+	@FunctionalInterface
+	private interface FloatKernel2Into {
+
+		void apply(float[] out, float[] a, float[] b);
 
 	}
 

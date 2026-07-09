@@ -97,6 +97,8 @@ final class JvmSimdRuntimeBuilder {
 		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(BRIDGE_NAME));
 		String binaryDesc = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		String unaryDesc = "(Ljava/lang/Object;)Ljava/lang/Object;";
+		// The destination-passing kernels take the destination as a leading argument.
+		String ternaryDesc = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
 		Utf8Constant initDesc = cp.addUtf8("()V");
@@ -115,6 +117,16 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvec"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_SUM,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSum"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_ADD_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAddInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_SUB_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSubInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_MUL_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMulInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_SCALE_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScaleInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_MATVEC_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvecInto"), cp.addUtf8(ternaryDesc))));
 
 		// --- _simdInit body (self-contained: no bind callback) ---
 		List<Integer> code = new ArrayList<>();

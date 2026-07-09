@@ -170,7 +170,8 @@ public final class PackageRegistry {
 			LispNames.VEC_ARANGE, LispNames.VEC_FROM_LIST, LispNames.VEC_TO_LIST, LispNames.VEC_AREF,
 			LispNames.VEC_ASET, LispNames.VEC_LENGTH, LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL,
 			LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN, LispNames.VEC_DOT, LispNames.VEC_NORM,
-			LispNames.VEC_MATVEC);
+			LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO,
+			LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO);
 
 	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 

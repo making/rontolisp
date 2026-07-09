@@ -108,6 +108,39 @@
     (dotimes (i (length v) out)
       (setf (aref out i) (* (aref v i) s)))))
 
+;; --- destination-passing kernels (write into out, allocate nothing) ----------
+
+;; The allocating kernels above return a fresh vector, so a loop over them creates
+;; one vector per iteration. On the WASM backends that memory is bump-allocated and
+;; never freed (see .todo/103), so the -into siblings below exist to hoist the
+;; allocation out of the loop:
+;;
+;;   (let ((acc (vec:zeros n)))
+;;     (dotimes (i steps) (vec:add-into acc acc d)))
+;;
+;; Each writes into out and returns it. out MAY alias a and/or b in the element-wise
+;; kernels: out[i] depends only on a[i] and b[i], so in-place accumulation is
+;; well-defined. out is NOT bounds-checked against the inputs (like vec:add itself,
+;; which happily reads past a shorter operand) -- it must be at least as long.
+;; Destination first, mirroring CL's own (map-into result fn &rest sequences).
+
+(defun vec::%map2-into (%vec-out %vec-op %vec-a %vec-b)
+  (dotimes (i (length %vec-a) %vec-out)
+    (setf (aref %vec-out i) (funcall %vec-op (aref %vec-a i) (aref %vec-b i)))))
+
+(defun vec:add-into (out a b)
+  (vec::%map2-into out #'+ a b))
+
+(defun vec:sub-into (out a b)
+  (vec::%map2-into out #'- a b))
+
+(defun vec:mul-into (out a b)
+  (vec::%map2-into out #'* a b))
+
+(defun vec:scale-into (out v s)
+  (dotimes (i (length v) out)
+    (setf (aref out i) (* (aref v i) s))))
+
 ;; --- reductions (return a scalar) --------------------------------------------
 
 (defun vec:sum (v)
@@ -141,6 +174,25 @@
          (d (car dims))
          (n (cadr dims))
          (out (vec::%make-like x d)))
+    (dotimes (i d out)
+      (let ((acc 0.0))
+        (dotimes (j n)
+          (setq acc (+ acc (* (aref w i j) (aref x j)))))
+        (setf (aref out i) acc)))))
+
+;; y = W x written into out (returned), allocating nothing -- the destination-passing
+;; sibling of vec:matvec. Unlike the element-wise -into kernels, out MUST NOT alias
+;; x or w: out[i] is a dot product over ALL of x, so storing it would clobber an
+;; element a later row still has to read. The eq guard costs one comparison per GEMV
+;; and turns silent corruption into an error.
+(defun vec:matvec-into (out w x)
+  (when (eq out x)
+    (error "vec:matvec-into: out must not be the same vector as x"))
+  (when (eq out w)
+    (error "vec:matvec-into: out must not be the same array as w"))
+  (let* ((dims (array-dimensions w))
+         (d (car dims))
+         (n (cadr dims)))
     (dotimes (i d out)
       (let ((acc 0.0))
         (dotimes (j n)

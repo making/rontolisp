@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -727,6 +728,147 @@ class NoGcWasmCompilerTest {
 		assertThat(containsSequence(Objects.requireNonNull(sections(compileSimd(source)).get(10)), 0xFD))
 			.as("the --simd build of the same source does use v128")
 			.isTrue();
+	}
+
+	// --- destination-passing kernels (todo 103) --------------------------------------
+
+	@Test
+	void intoKernelsCallTheBumpAllocatorOnlyForTheConstructors() {
+		// The whole point of -into: the kernel writes into the caller's block instead of
+		// bump-allocating a fresh one. Both programs construct two vectors (2 __alloc
+		// calls); the allocating vec:add adds a third, vec:add-into adds none. Asserted
+		// on
+		// both lowerings, since allocVec is emitted outside the scalar/v128 branch.
+		String into = """
+				(defun f (n)
+				  (let ((o (vec:zeros n)) (a (vec:ones n)))
+				    (vec:sum (vec:add-into o a a))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		String alloc = into.replace("(vec:add-into o a a)", "(vec:add a a)");
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(allocCallCount(simd ? compileSimd(into) : compile(into))).as("vec:add-into, simd=%s", simd)
+				.isEqualTo(2);
+			assertThat(allocCallCount(simd ? compileSimd(alloc) : compile(alloc))).as("vec:add, simd=%s", simd)
+				.isEqualTo(3);
+		}
+	}
+
+	@Test
+	void scaleIntoAlsoSkipsTheBumpAllocator() {
+		String into = """
+				(defun f (n)
+				  (let ((o (vec:zeros n)) (a (vec:ones n)))
+				    (vec:sum (vec:scale-into o a 2.0))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		assertThat(allocCallCount(compileSimd(into))).isEqualTo(2);
+		assertThat(allocCallCount(compileSimd(into.replace("(vec:scale-into o a 2.0)", "(vec:scale a 2.0)"))))
+			.isEqualTo(3);
+	}
+
+	@Test
+	void simdIntoKernelsEmitRealV128InstructionsAndTheScalarLoweringEmitsNone() {
+		// Same scalar/v128 seam as the allocating siblings: --simd emits v128.store
+		// (0xFD 0x0B), the default emits no 0xFD at all and drives f64.load/store.
+		String source = """
+				(defun go (n)
+				  (let ((o (vec:zeros n)) (a (vec:arange n)) (b (vec:ones n)))
+				    (vec:scale-into o (vec:mul-into o (vec:sub-into o (vec:add-into o a b) b) a) 2.0)
+				    (vec:sum o)))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] v128 = Objects.requireNonNull(sections(compileSimd(source)).get(10));
+		assertThat(containsSequence(v128, 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)").isTrue();
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0xFD)).as("no SIMD prefix in the scalar --no-gc -into lowering").isFalse();
+		assertThat(containsSequence(scalar, 0x2B, 0x00, 0x00)).as("f64.load (0x2B)").isTrue();
+		assertThat(containsSequence(scalar, 0x39, 0x00, 0x00)).as("f64.store (0x39)").isTrue();
+	}
+
+	@Test
+	void singleFloatIntoKernelsUseTheF32StrideAndOpcodes() {
+		String source = """
+				(defun go (n)
+				  (let ((o (vec:zeros n 'single-float)) (a (vec:arange n 'single-float)))
+				    (vec:sum (vec:add-into o a a))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0x2A, 0x00, 0x00)).as("f32.load (0x2A)").isTrue();
+		assertThat(containsSequence(scalar, 0x38, 0x00, 0x00)).as("f32.store (0x38)").isTrue();
+		assertThat(allocCallCount(compile(source))).as("only the two constructors allocate").isEqualTo(2);
+	}
+
+	@Test
+	void matvecIntoIsAClearCompileErrorLikeMatvec() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("vec:matvec-into")
+			.hasMessageContaining("rank-1 only");
+	}
+
+	/**
+	 * Counts {@code allocVec} sites in the FIRST function body -- the first reachable
+	 * defun, which the tests above name {@code f} / {@code go}. Restricted to that body
+	 * because the always-emitted {@code __itoa} helper calls the allocator too, so a
+	 * whole-code-section count carries a constant helper baseline.
+	 *
+	 * <p>
+	 * Matched on {@code allocVec}'s full trailing instruction sequence
+	 * ({@code i32.shl; i32.add; call $__ronto_alloc}) rather than the bare {@code call}:
+	 * a two-byte {@code 0x10 <index>} scan hits false positives inside the v128
+	 * immediates of a {@code --simd} body. The allocator's function index is read from
+	 * the export section (a memory-using module exports it) rather than recomputed.
+	 */
+	private static int allocCallCount(byte[] module) {
+		Map<Integer, byte[]> sections = sections(module);
+		int allocIndex = exportedFunctionIndex(Objects.requireNonNull(sections.get(7)), "__ronto_alloc");
+		assertThat(allocIndex).as("__ronto_alloc is exported by a memory-using --no-gc module").isNotNegative();
+		assertThat(allocIndex).as("a single-byte LEB index keeps the byte scan exact").isLessThan(128);
+		byte[] body = functionBodies(Objects.requireNonNull(sections.get(10))).get(0);
+		int count = 0;
+		for (int i = 0; i + 3 < body.length; i++) {
+			boolean allocVec = (body[i] & 0xFF) == 0x74 // i32.shl (count << elemShift)
+					&& (body[i + 1] & 0xFF) == 0x6A // i32.add (+ the 4-byte header)
+					&& (body[i + 2] & 0xFF) == 0x10 // call
+					&& (body[i + 3] & 0xFF) == allocIndex;
+			if (allocVec) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/** Splits a code section into its per-function bodies (each a size-prefixed blob). */
+	private static List<byte[]> functionBodies(byte[] codeSection) {
+		List<byte[]> bodies = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readUleb(codeSection, p);
+		for (int i = 0; i < count; i++) {
+			int size = readUleb(codeSection, p);
+			bodies.add(Arrays.copyOfRange(codeSection, p[0], p[0] + size));
+			p[0] += size;
+		}
+		return bodies;
+	}
+
+	private static int exportedFunctionIndex(byte[] exportSection, String name) {
+		int[] p = { 0 };
+		int count = readUleb(exportSection, p);
+		for (int i = 0; i < count; i++) {
+			int len = readUleb(exportSection, p);
+			String found = new String(exportSection, p[0], len, StandardCharsets.UTF_8);
+			p[0] += len;
+			p[0]++; // external kind
+			int index = readUleb(exportSection, p);
+			if (found.equals(name)) {
+				return index;
+			}
+		}
+		return -1;
 	}
 
 	@Test

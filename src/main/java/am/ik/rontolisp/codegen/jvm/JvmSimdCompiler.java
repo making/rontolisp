@@ -28,14 +28,27 @@ final class JvmSimdCompiler {
 	private JvmSimdCompiler() {
 	}
 
+	/** The accelerated members, mapped to the argument count of their Lisp call form. */
+	private static final Map<String, Integer> ARITIES = Map.ofEntries(Map.entry(LispNames.VEC_SUM, 1),
+			Map.entry(LispNames.VEC_ADD, 2), Map.entry(LispNames.VEC_SUB, 2), Map.entry(LispNames.VEC_MUL, 2),
+			Map.entry(LispNames.VEC_SCALE, 2), Map.entry(LispNames.VEC_DOT, 2), Map.entry(LispNames.VEC_MATVEC, 2),
+			Map.entry(LispNames.VEC_ADD_INTO, 3), Map.entry(LispNames.VEC_SUB_INTO, 3),
+			Map.entry(LispNames.VEC_MUL_INTO, 3), Map.entry(LispNames.VEC_SCALE_INTO, 3),
+			Map.entry(LispNames.VEC_MATVEC_INTO, 3));
+
 	/**
-	 * Returns whether the given {@code simd} package member is one of the seven
-	 * vectorizable kernels this compiler accelerates.
+	 * Returns whether the given {@code simd} package member is one of the vectorizable
+	 * kernels this compiler accelerates.
 	 */
 	static boolean handles(String member) {
-		return LispNames.VEC_ADD.equals(member) || LispNames.VEC_SUB.equals(member) || LispNames.VEC_MUL.equals(member)
-				|| LispNames.VEC_SCALE.equals(member) || LispNames.VEC_DOT.equals(member)
-				|| LispNames.VEC_SUM.equals(member) || LispNames.VEC_MATVEC.equals(member);
+		return ARITIES.containsKey(member);
+	}
+
+	/** The accelerated member names, in a stable order (the {@code --simd} emit gate). */
+	static List<String> members() {
+		return List.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_DOT,
+				LispNames.VEC_SUM, LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
+				LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -44,18 +57,14 @@ final class JvmSimdCompiler {
 			throw new IllegalStateException("simd acceleration runtime was not emitted");
 		}
 		List<LispVal> args = cons.toList();
+		int arity = Objects.requireNonNull(ARITIES.get(member));
+		requireArity(args.size() == arity + 1,
+				"vec:" + member + " expects " + arity + " argument" + (arity == 1 ? "" : "s"));
 		// Make sure the bridge class is defined before its method reference resolves.
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
-		if (LispNames.VEC_SUM.equals(member)) {
-			requireArity(args.size() == 2, "vec:sum expects (vec:sum vector)");
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		}
-		else {
-			// add / sub / mul / scale / dot are all binary.
-			requireArity(args.size() == 3, "vec:" + member + " expects two arguments");
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		for (int i = 1; i <= arity; i++) {
+			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get(member)).index());

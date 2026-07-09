@@ -9,6 +9,41 @@ threading, the `--no-gc` scalar path, the v128 kernels gated by `--simd`) surviv
 "additive + one factoring": reuse 案2's kernel seam from the GC backend, plus the genuinely new and
 heavier piece below.
 
+## Status 2026-07-09: NOT started. Two findings change the plan below — read first.
+
+**(1) The design fork ("single hybrid repr" vs "dual repr gated by `--simd`") is not neutral.**
+The single hybrid repr — packed float arrays ALWAYS linear-memory-backed on wasm-GC — reinstates
+exactly the leak `.todo/27` closed (`.kb/wasm-gc-strings.md`: strings were moved OFF the linear
+heap because it only ever grew), for a data type far larger than a string, and it hits the DEFAULT
+wasm-GC build plus all of `linalg:` (also packed). Recommendation flipped: **gate the linear repr
+behind `--simd`**. The repr is chosen at COMPILE time, so within one module there is exactly one
+packed representation — the "identity/printing/interop footgun" 案2 worried about cannot occur at
+runtime; the cost is two lowerings to maintain in `WasmArrayCompiler` (~52 sites) plus
+`WasmQuoteCompiler` / `WasmRuntimeBuilder`.
+
+**(2) Two implementation facts make this cheaper than it looks.**
+
+- `TYPE_FARRAY = struct {(ref null eq) dims, (ref null eq) data}` — the `data` field is `eq`-typed,
+  so a linear-memory pointer can go in as an `i31ref` **without changing the type section at all**.
+  Export/import wrapper type bases and the byte-identical component blobs stay untouched. Put the
+  width tag in the linear block header (`[count:i32][kind:i32][elements...]`), not the struct.
+- The wasm-GC backend declares **all** extra function locals as one `(ref null eq)` group
+  (`WasmLispCompiler.java:1049-1054`), so v128/i32/f64 locals cannot be allocated inline in a defun
+  body. Don't touch that machinery: emit the kernels as standalone runtime helper functions (the
+  existing `Wasm*RuntimeBuilder` pattern, e.g. `WasmVecSimdRuntimeBuilder` emitting
+  `_vec_add`..`_vec_matvec` with hand-written local declarations). Call sites then become
+  `call $_vec_dot` over `(ref null eq)` args — the same shape as the JVM `--simd` bridge. Only the
+  7 vectorizable kernels need interception; everything else keeps running the scalar `vec.lisp`
+  defuns over the (now linear) packed surface, exactly as JVM `--simd` does.
+- `matvec` is EASY here (unlike `--no-gc`): the `$farray` struct carries `dims`, so rank-2 rows are
+  readable. wasm-GC-simd can ship GEMV that `--no-gc` still rejects.
+
+**(3) `.todo/103` (destination-passing `vec:add-into` &c) is DONE and lands first.** It does not
+block 101 technically, but it changes the stakes: with `-into`, a bump allocator's high-water
+equals the live set, so the leak this todo would introduce under `--simd` is bounded rather than
+unbounded. **`.todo/104`** (`with-arena` = `__ronto_alloc_mark`/`_reset` exposed to Lisp) is the
+actual reclamation story for both WASM backends; sequence it with, or before, this.
+
 ## The blocker 案2 leaves open
 
 WASM `v128.load`/`store` address **linear memory**. wasm-GC packed float arrays are GC objects
@@ -85,6 +120,15 @@ Same worktree (`.claude/worktrees/simd-nogc-poc`, branch `feat/packed-float-arra
    "Hardware acceleration (optional)" in BOTH language files. `.kb/vec.md` now numbers the layers
    **0 = interpreter Vector API, 1 = JVM Vector API, 2 = `--no-gc` v128**; wasm-GC v128 becomes a
    new layer (or folds into 2 once the kernel seam is shared, which is exactly step 1 here).
+
+   **Also update the second table**, "Memory: where vectors live, and what reclaims them" (same
+   two files, added by `.todo/103`). Today its wasm-GC row reads "the WebAssembly GC heap |
+   yes, by the engine's collector". Split it into `wasm-GC` and `wasm-GC --simd`, giving the
+   latter `--no-gc`'s cells ("linear memory, bump-allocated | no -- nothing is ever freed, so you
+   must watch memory growth"), and delete the closing blockquote that predicts exactly this
+   change. Nearby prose also asserts "packed arrays never touch [wasm-GC's] linear memory" -- that
+   sentence becomes false for the `--simd` half. The same claim is repeated in `CLAUDE.md`'s
+   `-into` bullet and in `.kb/vec.md`'s Rationale paragraph; fix all four places.
 2. **The `native` Maven profile changed and you must know why.** It now passes `--add-modules
    jdk.incubator.vector` + `-H:+VectorAPISupport` and **no longer passes `-H:+SharedArenaSupport`**
    — GraalVM 25 rejects the combination (`Error: Support for Arena.ofShared is not available with

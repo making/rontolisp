@@ -717,6 +717,64 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(false, false, singles, "addref", "2")).isEqualTo("33");
 	}
 
+	@Test
+	void noGcRunsDestinationPassingVecKernelsUnderBothLowerings() throws Exception {
+		// The -into kernels (todo 103) write into the caller's [count][data] block
+		// instead
+		// of bump-allocating a fresh one, so a loop over them keeps the (never-freed)
+		// linear
+		// heap flat. Here we prove the emitted loops COMPUTE correctly on both lowerings
+		// and
+		// both widths; the "no __alloc call in the kernel" property is asserted
+		// structurally
+		// in NoGcWasmCompilerTest, and the resulting flat peak RSS is measured in
+		// .kb/vec.md.
+		String doubles = """
+				(defun addinto (i)
+				  (let* ((o (vec:zeros 5)) (a #d(1.0 2.0 3.0 4.0 5.0)))
+				    (truncate (aref (vec:add-into o a a) i))))
+				(defun scaleinto (i)
+				  (let* ((o (vec:zeros 5)) (a #d(1.0 2.0 3.0 4.0 5.0)))
+				    (truncate (vec:sum (vec:scale-into o a 3.0)))))
+				(defun accumulate (iters)
+				  ;; in-place accumulation: out aliases the first operand, allocating nothing
+				  ;; inside the loop. acc[3] = 4 * iters.
+				  (let ((acc (vec:zeros 5)) (d #d(1.0 2.0 3.0 4.0 5.0)))
+				    (dotimes (i iters) (vec:add-into acc acc d))
+				    (truncate (aref acc 3))))
+				(rontolisp:wasm-export 'addinto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'scaleinto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'accumulate :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "addinto", "0")).isEqualTo("2");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "addinto", "4")).isEqualTo("10");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "scaleinto", "0")).isEqualTo("45");
+			// 100000 iterations x a fresh 5-element vector would be ~4.4 MB of bump heap
+			// in
+			// the allocating form; -into allocates once, before the loop.
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "accumulate", "100000")).isEqualTo("400000");
+		}
+		// Single-float: the f32 stride, a pure scalar-tail count (3) and a lane-group
+		// count.
+		String singles = """
+				(defun addinto (i)
+				  (let* ((o (vec:zeros 3 'single-float)) (a #f(1.0 2.0 3.0)) (b #f(10.0 20.0 30.0)))
+				    (truncate (aref (vec:add-into o a b) i))))
+				(defun mulinto (i)
+				  (let* ((o (vec:zeros 8 'single-float)) (a (vec:arange 8 'single-float)))
+				    (truncate (vec:sum (vec:mul-into o a a)))))
+				(rontolisp:wasm-export 'addinto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'mulinto :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, singles, "addinto", "0")).isEqualTo("11");
+			assertThat(compileNoGcAndInvoke(false, simd, singles, "addinto", "2")).isEqualTo("33");
+			// sum of i^2 for i in 0..7 = 140
+			assertThat(compileNoGcAndInvoke(false, simd, singles, "mulinto", "0")).isEqualTo("140");
+		}
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,

@@ -2290,6 +2290,43 @@ cases:
       #d(17.0 39.0)
       #d(14.0 32.0)
 
+  # Destination-passing vec: kernels (.todo/103): the -into siblings write into a
+  # caller-supplied vector and return it, so a loop allocates nothing. Semantics must be
+  # identical to the allocating kernels on every backend, including in-place aliasing
+  # (out eq a) for the element-wise ops. vec:matvec-into forbids aliasing out with x.
+  - name: vec-destination-passing-kernels
+    source: |
+      (defun ci-vec-into ()
+        (let ((a #d(1.0 2.0 3.0))
+              (b #d(4.0 5.0 6.0)))
+          (print (vec:add-into (vec:zeros 3) a b))
+          (print (vec:sub-into (vec:zeros 3) b a))
+          (print (vec:mul-into (vec:zeros 3) a b))
+          (print (vec:scale-into (vec:zeros 3) a 2))
+          ;; the destination is returned, not a copy: eq to what was passed in
+          (let ((o (vec:zeros 3)))
+            (print (eq o (vec:add-into o a b))))
+          ;; in-place accumulation: out aliases the first operand
+          (let ((acc (vec:zeros 3)))
+            (dotimes (i 3) (vec:add-into acc acc a))
+            (print acc))
+          ;; single-float width is preserved through the destination
+          (print (vec:add-into (vec:zeros 2 'single-float) #f(1.0 2.0) #f(3.0 4.0)))
+          ;; GEMV into a destination, square and non-square
+          (print (vec:matvec-into (vec:zeros 2) #d((1 2) (3 4)) #d(5 6)))
+          (print (vec:matvec-into (vec:zeros 2) #d((1 2 3) (4 5 6)) #d(1 2 3)))))
+      (ci-vec-into)
+    expected: |
+      #d(5.0 7.0 9.0)
+      #d(3.0 3.0 3.0)
+      #d(4.0 10.0 18.0)
+      #d(2.0 4.0 6.0)
+      t
+      #d(3.0 6.0 9.0)
+      #f(4.0 6.0)
+      #d(17.0 39.0)
+      #d(14.0 32.0)
+
   # Packed single-float arrays (.todo/95): the #f(...) / :element-type 'single-float
   # counterpart of packed-float-arrays-cross-backend, storing elements unboxed as f32
   # (half the memory, 2x the SIMD lanes) on every backend (interpreter float[]/int[];

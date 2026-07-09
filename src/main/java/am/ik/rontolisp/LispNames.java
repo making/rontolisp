@@ -2183,6 +2183,31 @@ public final class LispNames {
 	public static final String VEC_MATVEC = "matvec";
 
 	/**
+	 * {@code vec:add-into}: element-wise {@code a + b} written into {@code out}, which is
+	 * returned. The destination-passing sibling of {@link #VEC_ADD}: it allocates
+	 * nothing, so a loop over it keeps the bump-allocated linear heap of the WASM
+	 * backends flat. {@code out} may alias {@code a} and/or {@code b} (element {@code i}
+	 * depends only on element {@code i}).
+	 */
+	public static final String VEC_ADD_INTO = "add-into";
+
+	/** {@code vec:sub-into}: element-wise {@code a - b} into {@code out}. */
+	public static final String VEC_SUB_INTO = "sub-into";
+
+	/** {@code vec:mul-into}: element-wise {@code a * b} into {@code out}. */
+	public static final String VEC_MUL_INTO = "mul-into";
+
+	/** {@code vec:scale-into}: {@code v * s} (scalar broadcast) into {@code out}. */
+	public static final String VEC_SCALE_INTO = "scale-into";
+
+	/**
+	 * {@code vec:matvec-into}: GEMV written into {@code out}. Unlike the element-wise
+	 * kernels, {@code out[i]} depends on every element of {@code x}, so {@code out} must
+	 * not be {@code eq} to {@code x} (nor to {@code w}); the call signals otherwise.
+	 */
+	public static final String VEC_MATVEC_INTO = "matvec-into";
+
+	/**
 	 * {@code vec:aref} fully qualified: a {@code setf} place (writer {@code vec:aset}).
 	 */
 	public static final String VEC_QUALIFIED_AREF = VEC_PKG + ":" + VEC_AREF;

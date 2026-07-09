@@ -2164,6 +2164,28 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return dst;
 	}
 
+	// Evaluates a vector-valued argument into a fresh local holding its base pointer (the
+	// [count][data] block). Factored out because the -into kernels evaluate one more
+	// vector
+	// argument (the destination) than their allocating siblings, in argument order.
+	private int compileVecArg(LispVal arg, Fn fn, Ty vecTy) {
+		int slot = fn.allocLocal(vecTy);
+		compileCoerced(arg, fn, vecTy);
+		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+		return slot;
+	}
+
+	// Reads the [count] header word of the vector whose base pointer is in vecLocal into
+	// a
+	// fresh i32 local.
+	private int loadVecCount(Fn fn, int vecLocal) {
+		int count = fn.allocLocal(Ty.F64VEC);
+		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(vecLocal);
+		fn.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		return count;
+	}
+
 	// Emits base + 4 + (i << shift): the i32 address of element i, given the vector arg,
 	// the index arg and the vector's element width (f64 = <<3, f32 = <<2).
 	private void emitElementAddr(LispVal vec, LispVal idx, Fn fn, Ty vecTy) {
@@ -2452,7 +2474,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static final Set<String> SIMD_MEMBERS = Set.of(LispNames.VEC_ZEROS, LispNames.VEC_ONES,
 			LispNames.VEC_ARANGE, LispNames.VEC_AREF, LispNames.VEC_ASET, LispNames.VEC_LENGTH, LispNames.VEC_ADD,
 			LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN,
-			LispNames.VEC_DOT, LispNames.VEC_NORM);
+			LispNames.VEC_DOT, LispNames.VEC_NORM, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
+			LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
@@ -2464,7 +2487,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// [count][f...] linear blocks only -- there is no rank-2 layout to read rows from.
 	// Use the JVM --simd backend (or the interpreter / JVM / wasm-GC scalar path)
 	// instead.
-	private static final Set<String> SIMD_UNSUPPORTED_NO_GC = Set.of(LispNames.VEC_MATVEC);
+	private static final Set<String> SIMD_UNSUPPORTED_NO_GC = Set.of(LispNames.VEC_MATVEC, LispNames.VEC_MATVEC_INTO);
 
 	// Whether a (resolved) symbol name is a vec: package member, e.g. "vec:dot". vec:
 	// names are always qualified with the package prefix, so a prefix test suffices.
@@ -2517,7 +2540,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		Ty operandWidth = firstVecWidth == null ? Ty.F64VEC : firstVecWidth;
 		return switch (simdMember(name)) {
 			case LispNames.VEC_ZEROS, LispNames.VEC_ONES, LispNames.VEC_ARANGE -> constructorVecType(args);
-			case LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE -> operandWidth;
+			// An -into kernel returns its destination, which is argument 1 -- the same
+			// slot
+			// the allocating kernels take their first operand from, so firstVecWidth
+			// already
+			// holds the right width for both shapes.
+			case LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_ADD_INTO,
+					LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO ->
+				operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
 		};
@@ -2539,10 +2569,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_LENGTH -> compileLength(args, fn);
 			case LispNames.VEC_AREF -> compileAref(name, args, fn);
 			case LispNames.VEC_ASET -> compileAset(name, args, fn);
-			case LispNames.VEC_ADD -> compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD);
-			case LispNames.VEC_SUB -> compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB);
-			case LispNames.VEC_MUL -> compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL);
-			case LispNames.VEC_SCALE -> compileSimdScale(args, fn);
+			case LispNames.VEC_ADD ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD, false);
+			case LispNames.VEC_SUB ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB, false);
+			case LispNames.VEC_MUL ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, false);
+			case LispNames.VEC_SCALE -> compileSimdScale(args, fn, false);
+			// The destination-passing kernels (todo 103): same loops, but the destination
+			// is
+			// the caller's vector instead of a fresh allocVec block -- so a loop over
+			// them
+			// never advances the bump allocator.
+			case LispNames.VEC_ADD_INTO ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD, true);
+			case LispNames.VEC_SUB_INTO ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_SUB, Instruction.F64_SUB, true);
+			case LispNames.VEC_MUL_INTO ->
+				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, true);
+			case LispNames.VEC_SCALE_INTO -> compileSimdScale(args, fn, true);
 			case LispNames.VEC_SUM -> compileSimdSum(args, fn);
 			case LispNames.VEC_DOT -> compileSimdDot(args, fn);
 			// mean and norm are composites over sum/dot/length -- expand and recompile so
@@ -2753,26 +2798,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// (vec:add a b) / (vec:sub a b) / (vec:mul a b): element-wise into a fresh vector.
 	// Two f64 lanes per iteration via v128.load + f64x2.<op> + v128.store, then a
 	// one-element scalar tail when the length is odd.
-	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
-		requireArgc(args, 3, "a simd element-wise kernel", fn);
+	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp, boolean into) {
+		requireArgc(args, into ? 4 : 3, into ? "a simd element-wise -into kernel" : "a simd element-wise kernel", fn);
+		Ty vecTy = packedVecType(args.get(1), fn);
 		if (!this.simd) {
-			return compileScalarElementwise(args, fn, scalarOp);
+			return compileScalarElementwise(args, fn, scalarOp, into);
 		}
-		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
-			return compileSimdElementwiseF32(args, fn, f32x4Of(simdOp), f32ScalarOf(scalarOp));
+		if (vecTy == Ty.F32VEC) {
+			return compileSimdElementwiseF32(args, fn, f32x4Of(simdOp), f32ScalarOf(scalarOp), into);
 		}
 		WasmWriter w = fn.writer;
-		int aL = fn.allocLocal(Ty.F64VEC);
-		int bL = fn.allocLocal(Ty.F64VEC);
-		compileCoerced(args.get(1), fn, Ty.F64VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
-		compileCoerced(args.get(2), fn, Ty.F64VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
-		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count);
+		// -into evaluates the destination first (it is argument 1), then the two
+		// operands;
+		// the plain kernel allocates the destination after sizing it from operand a.
+		int dstL = into ? compileVecArg(args.get(1), fn, Ty.F64VEC) : -1;
+		int aL = compileVecArg(args.get(into ? 2 : 1), fn, Ty.F64VEC);
+		int bL = compileVecArg(args.get(into ? 3 : 2), fn, Ty.F64VEC);
+		int count = loadVecCount(fn, aL);
+		int dst = into ? dstL : allocVec(fn, count);
 		int ap = fn.allocLocal(Ty.F64VEC);
 		int bp = fn.allocLocal(Ty.F64VEC);
 		int dp = fn.allocLocal(Ty.F64VEC);
@@ -2810,26 +2853,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// (vec:scale v s): v * s (scalar broadcast) into a fresh vector. The scalar is
 	// splatted
 	// into both lanes with f64x2.splat, so the multiply is a single f64x2.mul per pair.
-	private Ty compileSimdScale(List<LispVal> args, Fn fn) {
-		requireArgc(args, 3, "vec:scale", fn);
+	private Ty compileSimdScale(List<LispVal> args, Fn fn, boolean into) {
+		requireArgc(args, into ? 4 : 3, into ? "vec:scale-into" : "vec:scale", fn);
+		Ty vecTy = packedVecType(args.get(1), fn);
 		if (!this.simd) {
-			return compileScalarScale(args, fn);
+			return compileScalarScale(args, fn, into);
 		}
-		if (packedVecType(args.get(1), fn) == Ty.F32VEC) {
-			return compileSimdScaleF32(args, fn);
+		if (vecTy == Ty.F32VEC) {
+			return compileSimdScaleF32(args, fn, into);
 		}
 		WasmWriter w = fn.writer;
-		int vL = fn.allocLocal(Ty.F64VEC);
+		int dstL = into ? compileVecArg(args.get(1), fn, Ty.F64VEC) : -1;
+		int vL = compileVecArg(args.get(into ? 2 : 1), fn, Ty.F64VEC);
 		int s = fn.allocLocal(Ty.FLOAT);
-		compileCoerced(args.get(1), fn, Ty.F64VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
-		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
-		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count);
+		int count = loadVecCount(fn, vL);
+		int dst = into ? dstL : allocVec(fn, count);
 		int vp = fn.allocLocal(Ty.F64VEC);
 		int dp = fn.allocLocal(Ty.F64VEC);
 		dataPtr(w, vL, vp);
@@ -3011,19 +3051,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// (vec:add a b) / (vec:sub a b) / (vec:mul a b) on f32 vectors: element-wise into a
 	// fresh f32 vector. Four f32 lanes per iteration via v128.load + f32x4.<op> +
 	// v128.store, then a scalar remainder loop over the last count & 3 elements.
-	private Ty compileSimdElementwiseF32(List<LispVal> args, Fn fn, int simdOp, int scalarOp) {
+	private Ty compileSimdElementwiseF32(List<LispVal> args, Fn fn, int simdOp, int scalarOp, boolean into) {
 		WasmWriter w = fn.writer;
-		int aL = fn.allocLocal(Ty.F32VEC);
-		int bL = fn.allocLocal(Ty.F32VEC);
-		compileCoerced(args.get(1), fn, Ty.F32VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
-		compileCoerced(args.get(2), fn, Ty.F32VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
-		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count, Ty.F32VEC);
+		int dstL = into ? compileVecArg(args.get(1), fn, Ty.F32VEC) : -1;
+		int aL = compileVecArg(args.get(into ? 2 : 1), fn, Ty.F32VEC);
+		int bL = compileVecArg(args.get(into ? 3 : 2), fn, Ty.F32VEC);
+		int count = loadVecCount(fn, aL);
+		int dst = into ? dstL : allocVec(fn, count, Ty.F32VEC);
 		int ap = fn.allocLocal(Ty.F32VEC);
 		int bp = fn.allocLocal(Ty.F32VEC);
 		int dp = fn.allocLocal(Ty.F32VEC);
@@ -3067,19 +3101,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// (the
 	// scalar s is narrowed to f32 and broadcast with f32x4.splat, matching the f32
 	// lanes).
-	private Ty compileSimdScaleF32(List<LispVal> args, Fn fn) {
+	private Ty compileSimdScaleF32(List<LispVal> args, Fn fn, boolean into) {
 		WasmWriter w = fn.writer;
-		int vL = fn.allocLocal(Ty.F32VEC);
+		int dstL = into ? compileVecArg(args.get(1), fn, Ty.F32VEC) : -1;
+		int vL = compileVecArg(args.get(into ? 2 : 1), fn, Ty.F32VEC);
 		int s = fn.allocLocal(Ty.FLOAT);
-		compileCoerced(args.get(1), fn, Ty.F32VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
-		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
-		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count, Ty.F32VEC);
+		int count = loadVecCount(fn, vL);
+		int dst = into ? dstL : allocVec(fn, count, Ty.F32VEC);
 		int vp = fn.allocLocal(Ty.F32VEC);
 		int dp = fn.allocLocal(Ty.F32VEC);
 		dataPtr(w, vL, vp);
@@ -3333,20 +3363,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// scalar loop into a fresh vector. The result preserves the operand width (a #f in
 	// gives
 	// a #f out), matching the v128 path and typeOfSimd.
-	private Ty compileScalarElementwise(List<LispVal> args, Fn fn, int scalarOp) {
+	private Ty compileScalarElementwise(List<LispVal> args, Fn fn, int scalarOp, boolean into) {
 		Ty vecTy = packedVecType(args.get(1), fn);
 		WasmWriter w = fn.writer;
-		int aL = fn.allocLocal(vecTy);
-		int bL = fn.allocLocal(vecTy);
-		compileCoerced(args.get(1), fn, vecTy);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
-		compileCoerced(args.get(2), fn, vecTy);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
-		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count, vecTy);
+		int dstL = into ? compileVecArg(args.get(1), fn, vecTy) : -1;
+		int aL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
+		int bL = compileVecArg(args.get(into ? 3 : 2), fn, vecTy);
+		int count = loadVecCount(fn, aL);
+		int dst = into ? dstL : allocVec(fn, count, vecTy);
 		int ap = fn.allocLocal(vecTy);
 		int bp = fn.allocLocal(vecTy);
 		int dp = fn.allocLocal(vecTy);
@@ -3392,20 +3416,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// boundary s is f64; on a f32 vector it is narrowed per element (f32.demote_f64) so
 	// the
 	// product is computed in f32, matching the v128 f32 path.
-	private Ty compileScalarScale(List<LispVal> args, Fn fn) {
+	private Ty compileScalarScale(List<LispVal> args, Fn fn, boolean into) {
 		Ty vecTy = packedVecType(args.get(1), fn);
 		WasmWriter w = fn.writer;
-		int vL = fn.allocLocal(vecTy);
+		int dstL = into ? compileVecArg(args.get(1), fn, vecTy) : -1;
+		int vL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
 		int s = fn.allocLocal(Ty.FLOAT);
-		compileCoerced(args.get(1), fn, vecTy);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
-		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
-		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
-		int dst = allocVec(fn, count, vecTy);
+		int count = loadVecCount(fn, vL);
+		int dst = into ? dstL : allocVec(fn, count, vecTy);
 		int vp = fn.allocLocal(vecTy);
 		int dp = fn.allocLocal(vecTy);
 		dataPtr(w, vL, vp);

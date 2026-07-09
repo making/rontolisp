@@ -198,6 +198,166 @@ final class VecSimdKernels {
 		return r;
 	}
 
+	// --- destination-passing kernels (write into r, allocate nothing) -------------
+	// The -into siblings (todo 103). Lane logic identical to the allocating kernels
+	// above, only the destination differs, so results stay bit-identical. r may alias x
+	// and/or y in the element-wise kernels (within one lane block the reads precede the
+	// store at the same indices); matvecInto may not -- VecSimd guards that.
+
+	static void addInto(double[] r, double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).add(DoubleVector.fromArray(SPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] + y[i];
+		}
+	}
+
+	static void subInto(double[] r, double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).sub(DoubleVector.fromArray(SPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] - y[i];
+		}
+	}
+
+	static void mulInto(double[] r, double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).mul(DoubleVector.fromArray(SPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] * y[i];
+		}
+	}
+
+	static void scaleInto(double[] r, double[] x, double s) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).mul(s).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] * s;
+		}
+	}
+
+	static void matvecInto(double[] r, double[] w, int rows, int cols, double[] x) {
+		for (int row = 0; row < rows; row++) {
+			int base = row * cols;
+			int i = 0;
+			double acc = 0.0;
+			if (cols >= THRESHOLD) {
+				DoubleVector vacc = DoubleVector.zero(SPECIES);
+				int bound = SPECIES.loopBound(cols);
+				for (; i < bound; i += SPECIES.length()) {
+					vacc = vacc
+						.add(DoubleVector.fromArray(SPECIES, w, base + i).mul(DoubleVector.fromArray(SPECIES, x, i)));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < cols; i++) {
+				acc += w[base + i] * x[i];
+			}
+			r[row] = acc;
+		}
+	}
+
+	static void addIntoF(float[] r, float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).add(FloatVector.fromArray(FSPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] + y[i];
+		}
+	}
+
+	static void subIntoF(float[] r, float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).sub(FloatVector.fromArray(FSPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] - y[i];
+		}
+	}
+
+	static void mulIntoF(float[] r, float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).mul(FloatVector.fromArray(FSPECIES, y, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = x[i] * y[i];
+		}
+	}
+
+	/**
+	 * Scalar, like {@link #scaleF}: the f64 intermediate defeats a native f32 lane mul.
+	 */
+	static void scaleIntoF(float[] r, float[] x, double s) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) (x[i] * s);
+		}
+	}
+
+	static void matvecIntoF(float[] r, float[] w, int rows, int cols, float[] x) {
+		for (int row = 0; row < rows; row++) {
+			int base = row * cols;
+			int i = 0;
+			double acc = 0.0;
+			if (cols >= THRESHOLD) {
+				DoubleVector vacc = DoubleVector.zero(SPECIES);
+				int bound = FSPECIES.loopBound(cols);
+				for (; i < bound; i += FSPECIES.length()) {
+					FloatVector fw = FloatVector.fromArray(FSPECIES, w, base + i);
+					FloatVector fx = FloatVector.fromArray(FSPECIES, x, i);
+					DoubleVector w0 = (DoubleVector) fw.convert(VectorOperators.F2D, 0);
+					DoubleVector w1 = (DoubleVector) fw.convert(VectorOperators.F2D, 1);
+					DoubleVector x0 = (DoubleVector) fx.convert(VectorOperators.F2D, 0);
+					DoubleVector x1 = (DoubleVector) fx.convert(VectorOperators.F2D, 1);
+					vacc = vacc.add(w0.mul(x0)).add(w1.mul(x1));
+				}
+				acc = vacc.reduceLanes(VectorOperators.ADD);
+			}
+			for (; i < cols; i++) {
+				acc += (double) w[base + i] * (double) x[i];
+			}
+			r[row] = (float) acc;
+		}
+	}
+
 	// --- single-float (f32) kernels ----------------------------------------------
 	// Element-wise ops run natively in f32 (a single +/-/* of two floats has no
 	// double-rounding error, so they stay bit-identical to the widen-compute-narrow

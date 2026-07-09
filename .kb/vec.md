@@ -57,6 +57,54 @@ lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` 
 rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 
+## Destination-passing `-into` kernels (todo-103)
+
+Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/
+`scale-into`/`matvec-into` — that writes into a caller-supplied destination (argument 1,
+CL's `map-into` order) and RETURNS that very value. Reductions have none (they never
+allocated).
+
+**Rationale, and exactly which backend leaks.** A packed array is a GC object on the
+interpreter (`double[]` in a `LispFloatArray`), the JVM (a bare `double[]`) and **wasm-GC**
+(`array.new $f64arr` inside `$farray`) — all three reclaim it. Only `--no-gc` puts it in
+linear memory, bump-allocated by `__alloc` with **no free**, so an allocating kernel in a
+loop grows the heap monotonically until `memory.grow` fails. (Measured: 1024-element
+`vec:add` × 200000 on wasm-GC peaks at ~123 MB, same as × 50000, though 1.5 GB passed
+through the allocator; `linalg:add` × 80000 likewise flat. `linalg` does not compile under
+`--no-gc` at all, so `vec:` is the only affected surface.) `--no-gc` reclaims only by
+popping the whole arena at an export boundary (todo-88 auto-reset on a scalar return,
+todo-89 `__ronto_alloc_mark`/`_reset` for a host) — nothing is freed *within* one call.
+`-into` makes the bump high-water equal the live set, which is all a GC would have kept
+anyway, so freeing becomes an optimization rather than a correctness requirement
+(`.todo/104` — `with-arena`). On the three GC'd backends `-into` is purely an
+allocation-rate optimization. **This changes if `.todo/101` lands**: moving wasm-GC packed
+arrays into linear memory so `--simd` can emit v128 gives that backend `--no-gc`'s memory
+behavior — which is why 101 should gate the linear repr behind `--simd`.
+
+- **Aliasing.** The element-wise kernels tolerate `out` aliasing `a` and/or `b` (element
+  `i` depends only on element `i`; within one lane block the reads precede the store), so
+  `(vec:add-into acc acc d)` is the intended in-place accumulation. `matvec-into` does NOT:
+  `out[row]` folds over all of `x`. The guard is an `eq` in the `vec.lisp` defun AND is
+  repeated in `VecSimd` / `JvmSimdVectorTemplate` — the accelerated call sites REPLACE the
+  defun, so the defun's guard never runs there. Interpreter/JVM compare the BACKING array
+  (`r.data() == vx.data()`), the real sharing condition.
+- **Widths** must match across `out` and the operands (a mixed call is the usual hard
+  error). `out`'s length is NOT checked, matching `vec:add`'s existing behavior on
+  unequal-length operands.
+- Per backend: `vec.lisp` covers interpreter/JVM/wasm-GC for free. `eval/VecSimdKernels`
+  (`addInto`..`matvecIntoF`) + `VecSimd.installInto` accelerate the interpreter;
+  `JvmSimdVectorTemplate.simdAddInto`..`simdMatvecInto` + `JvmSimdCompiler.ARITIES` (arity 3,
+  a `ternaryDesc` in `JvmSimdRuntimeBuilder`) the JVM. `NoGcWasmCompiler` threads a
+  `boolean into` through `compileSimd/ScalarElementwise{,F32}` and
+  `compileSimd/ScalarScale{,F32}`: `-into` skips `allocVec` and uses the caller's block as
+  `dp` (via the new `compileVecArg`/`loadVecCount` helpers), so the loop bodies are literally
+  unchanged. `matvec-into` joins `matvec` in `SIMD_UNSUPPORTED_NO_GC` (rank-1 blocks only).
+- **Measured** (`--no-gc --simd`, 12000 accumulations over a 65536-element vector, macOS
+  `/usr/bin/time -l`): `vec:add-into` peaks at 13.7 MB and returns 12000; `vec:add` peaks at
+  4.31 GB and then traps (`memory.grow` fails, so the store goes out of bounds). This is the
+  property the feature exists to buy; `NoGcWasmCompilerTest.intoKernelsCallTheBumpAllocator`
+  `OnlyForTheConstructors` pins it structurally (2 `allocVec` sites vs 3).
+
 ## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
 
 `rontolisp prog.lisp --simd` (interpret, no `-o`) runs the same seven vectorizable kernels
@@ -92,8 +140,11 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
   the old crash; that is the pinning test.
 - **Web Image**: `src/web/java/.../Target_VecSimd.java` substitutes both `available()` (→
   `false`) and `install(...)`, making `VecSimdKernels` unreachable so the incubator module
-  never enters the browser image. Keeping VecSimd's kernel references confined to those two
-  methods is what makes the substitution sufficient.
+  never enters the browser image. What makes the substitution sufficient is that those two
+  are the only ENTRY POINTS into the kernels — the `-into` kernel references (todo-103) sit
+  in the private `installInto`/`defineInto`, reachable only from the substituted `install`.
+  A new PUBLIC `VecSimd` method touching the kernels would break it, and only the Pages
+  workflow's Web Image build would notice ([[web-playground-native-image-gotcha]]).
 - Tests: `eval/VecSimdTest` (every kernel vs the scalar oracle at both widths, below and
   above `THRESHOLD`; the `#<function vec:dot>` vs `#<lambda>` interception guard; mixed-width
   and rank errors). Measured on the native binary: `vec:dot` over an 8192-element `#f`
@@ -219,6 +270,17 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 ## Verification
 
+- `-into` (todo-103): `VecSimdTest` (interception guard `#<function vec:add-into>`, each
+  kernel vs its allocating sibling at n = 7 and 200, both widths, `(eq o (add-into o ...))`,
+  in-place aliasing, `matvec-into` alias error on BOTH paths, mixed width);
+  `JvmSimdAccelCompilerTest` (same set + the bridge-embedded dead-flag guard);
+  `NoGcWasmCompilerTest` (`allocVec` site count 2 vs 3 under both lowerings — matched on the
+  `i32.shl; i32.add; call $__ronto_alloc` sequence, since a bare `0x10 <idx>` scan
+  false-positives inside v128 immediates; `0xFD` presence/absence; f32 stride;
+  `matvec-into` compile error); `WasmLispCompilerIntegrationTest`
+  `noGcRunsDestinationPassingVecKernelsUnderBothLowerings` (wasmtime, both lowerings, both
+  widths, a 100000-iteration in-place accumulation); `ci-spec.yaml`
+  `vec-destination-passing-kernels` (all four backends).
 - Unit: `JvmSimdAccelCompilerTest` (JVM `--simd`: byte-identical to scalar over small
   scalar-tail + large vector-loop arrays, packed-surface interop, bridge-embedded gating; the
   `matvec` GEMV set adds byte-identical scalar-tail + n≥128 vector-loop + concrete-value +
