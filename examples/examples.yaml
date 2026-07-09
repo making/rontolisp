@@ -170,12 +170,20 @@ examples:
         - "sum of squares below 1024 = 357389824"
   - path: ml/simd-gemv.lisp
     backends: [interpreter, jvm, wasm]
-    note: the --simd showcase -- 100 steps of vec:matvec (GEMV) + vec:dot on a 256x256 single-float matrix; deterministic (fixed-seed LCG weights, argmax indices printed instead of floats, so lane-order rounding cannot move them). The elapsed-time line is not checked. Run it a second time with --simd - wasm-GC 467 -> 3.9 ms, interpreter 4.67 -> 0.68 s
+    note: the --simd showcase -- 100 steps of vec:matvec (GEMV) + vec:dot on a 256x256 single-float matrix; deterministic (fixed-seed LCG weights, argmax indices printed instead of floats, so lane-order rounding cannot move them). The elapsed-time line is not checked. Run it a second time with --simd - wasm-GC 467 -> 3.9 ms, interpreter 4.6 s -> 15 ms
     expect:
       contains:
         - "simd-gemv: 100 steps of (vec:matvec w x) on a 256x256 single-float matrix"
         - "argmax after steps 1-10: (0 14 82 126 14 140 126 79 134 175)"
         - "argmax after step 100:   85"
+  - path: ml/tiny-llm.lisp
+    backends: [interpreter, jvm, wasm]
+    note: a 2-layer transformer decoder -- llama2's forward() without the tokenizer or the weight loader (RMSNorm, Q/K/V projections, causal self-attention over a KV cache, softmax, SwiGLU FFN, residuals, classifier head, greedy argmax decode). Deterministic (fixed-seed pseudo-random weights, token ids printed, not floats). 13 GEMVs per forward pass, so it is the example --simd earns its keep on. The elapsed-time line is not checked. Run it a second time with --simd - native interpreter 11.3 s -> 20 ms, wasm-GC 891 -> 7.8 ms. Uses vec:matvec and linalg:, so no --no-gc. ~13 s on the interpreter leg
+    expect:
+      contains:
+        - "tiny-llm: 2-layer transformer decoder, dim=256 hidden=512 ctx=12 vocab=48, single-float"
+        - "prompt:    (3 14 1 5)"
+        - "generated: (39 27 23 18 42 7 5 39 27)"
 
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp

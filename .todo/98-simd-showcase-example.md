@@ -4,7 +4,8 @@
 behaves is *our measurement*, not vendor-documented behavior, and may not match what the vendor
 officially guarantees or does in the next release. **Do not put it in `doc/**` or in the example
 headers.** Those say only: whether the Vector API bridge becomes CPU instructions is up to the JVM
-that runs the class, so measure. Keep the JVM names, ablations and numbers here and in `.todo/106`.
+that runs the class, so measure. Keep the JVM names, ablations and numbers here. (`.todo/106`, where
+the `#f`-reduction fix was designed, was completed on 2026-07-09 and folded into this file.)
 
 **Motivation:** we have a real SIMD acceleration layer on every backend, and (until now) no example
 where it pays off. `examples/ml/nn-vec.lisp`'s tensors are rows of length 2 and 4 — far below the
@@ -85,13 +86,14 @@ What it does not intrinsify is `FloatVector.convert(VectorOperators.F2D, part)`*
 conversion. (oracle/graal#10285 lists load/store/arithmetic/reduce/compare/blend; conversions are
 absent.) One unsupported op drops the entire loop to per-lane emulation.
 
-rontolisp's `#f` **reduction** kernels all widen f32 -> f64 before accumulating, to match the scalar
-reference bit for bit (`VecSimdKernels.dotF` L459-462: four `convert(F2D, ...)` per iteration; the
-same in `sumF`, and `matvecF` is a dot per row). So every `#f` `dot`/`sum`/`matvec` hits it. `#d`
-kernels have no conversion, and the `#f` **element-wise** kernels (`addF` etc: load, add, store) have
-none either.
+rontolisp's `#f` **reduction** kernels all widened f32 -> f64 before accumulating (until todo-106,
+below), to match the scalar reference bit for bit (`VecSimdKernels.dotF`: four `convert(F2D, ...)`
+per iteration; the same in `sumF`, and `matvecF` is a dot per row). So every `#f` `dot`/`sum`/
+`matvec` hit it. `#d` kernels have no conversion, and the `#f` **element-wise** kernels (`addF` etc:
+load, add, store) never had one either.
 
-`vec:dot`, 40.96M multiply-adds, steady state:
+`vec:dot`, 40.96M multiply-adds, steady state (the `#f` column is the OLD, widening kernel — see
+"FIXED by todo-106" below for the current numbers):
 
 | runtime | `#d` (`f64x2`) | `#f` (`f32x4`) |
 |---|---|---|
@@ -118,16 +120,55 @@ now *faster* than `#d` on every runtime (4 lanes vs 2), with no emulation cliff:
 - Every earlier `--simd`-is-slow-on-Graal result — tiny-llm, simd-gemv, the pure-kernel bench — used
   `#f`. That is why they all agreed.
 
-**Open follow-up: `.todo/106`** — make the `#f` reductions conversion-free. Prototyped and proven
-(a `FloatVector` accumulator runs the same kernel in 4 ms on BOTH JVMs, vs 2296 ms and 14 ms for the
-widening version). It also turns out wasm-GC `--simd` already accumulates `#f` in single precision
-and therefore already disagrees with the other backends, so the widening is buying us nothing. That
-todo has the prototype, the before/after probe, the lane-count trap, and the exact call sites.
+### FIXED by todo-106 (2026-07-09) — the `#f` reductions are conversion-free
 
-### Why GraalVM's scalar path is the fastest configuration of all (measured 2026-07-09)
+`sumF`/`dotF`/`matvecF`/`matvecIntoF` in BOTH `eval/VecSimdKernels` and
+`codegen/jvm/JvmSimdVectorTemplate` now multiply and accumulate in `FloatVector` and promote to f64
+once, at the value boundary — exactly what the WASM kernels always did. The lane count of the
+REDUCTION kernels is pinned to `FloatVector.SPECIES_128` (4 lanes) so the result cannot depend on
+the host's vector width; the element-wise kernels stay on `SPECIES_PREFERRED` (bit-exact at any
+width). Precision contract, now explicit: **`--simd` accumulates an `#f` reduction in single
+precision on every backend**, the scalar `vec.lisp` reference stays the accurate oracle, `#d` is
+untouched. `.kb/vec.md` has the pinning probe and its three tests.
 
-`-o Prog.class` with no `--simd`, run on the GraalVM JIT, beats *every* `--simd` configuration
-(tiny-llm decode: 68 ms, vs 116 ms for C2 `--simd`). That looked like auto-vectorization. It is not.
+Re-measured, same bench (interpreter kernels, `vec:dot`, 40.96M MAC, 9 samples, steady state):
+
+| runtime | `#d` | `#f` before | `#f` after |
+|---|---|---|---|
+| native binary (GraalVM AOT) | 30 ms | 4149 ms | **23 ms** |
+| GraalVM JIT (jar) | 22 ms | 2250 ms | **18 ms** |
+| Liberica 25 / HotSpot (jar) | 21 ms | 23 ms | **15 ms** |
+
+`#f` is now faster than `#d` on every runtime (4 lanes vs 2), as it already was for `vec:add`. The
+compiled-`.class` bridge lands at 4-5 ms on BOTH JVMs, matching the standalone prototype. The 180x
+native win and the 125x GraalVM-JIT win are the emulation cliff going away; Liberica's 1.5x is the
+conversion itself, which was never free. Downstream: `tiny-llm.lisp` decode on the native
+interpreter 1669 ms → **20 ms**, `simd-gemv.lisp` 673 ms → **15 ms**, both with unchanged output.
+
+Note the two `#f`-only findings above are now historical: **there is no `convert` left on any hot
+path**, so the "GraalVM does not intrinsify `convert(F2D)`" cliff can no longer be reached from
+rontolisp. It stays recorded here because it is the reason the kernel looks the way it does.
+
+**`--simd` no longer inverts anywhere we measured.** The compiled `.class`, `vec:dot` 40.96M MAC:
+GraalVM JIT `#f` 22 ms scalar → 5 ms `--simd`, `#d` 21 → 12; Liberica `#f` 101 → 4. And tiny-llm
+decode, the config that used to invert worst (GraalVM JIT compiled class, 67 ms scalar vs 1015 ms
+`--simd`): now **66 ms scalar vs 52 ms `--simd`**, with Liberica at 253 → 51. Both JVMs converge on
+~51 ms, as they should once the kernel is the same vector code. tiny-llm's margin is small only
+because 12 forward passes is too short to amortize JIT warm-up; the steady-state `vec:dot` bench
+above shows the real ratio.
+
+### Why GraalVM's scalar path was the fastest configuration of all (measured 2026-07-09)
+
+**RETRACTED as a ranking by todo-106, kept for its mechanism.** It was true only while every `--simd`
+configuration was crippled by `convert(F2D)`: once the `#f` reductions became conversion-free, the
+same tiny-llm decode runs 52 ms with `--simd` against 66 ms for Graal's scalar path, and the
+compiled-`.class` `vec:dot` bench inverts back the right way on both JVMs. What survives, and is the
+reason this section exists, is the *mechanism*: Graal's scalar path is fast because it deletes boxes,
+not because it vectorizes — and `--simd` is a second, independent way to delete the same boxes.
+
+The original observation: `-o Prog.class` with no `--simd`, run on the GraalVM JIT, beat *every*
+`--simd` configuration (tiny-llm decode: 68 ms, vs 116 ms for C2 `--simd`). That looked like
+auto-vectorization. It is not.
 
 **The compiled scalar numeric loop is allocation-bound, not FLOP-bound.** `javap` of the generated
 class shows `vec:matvec`'s inner loop calling `_fvAref2` / `_fvAref1` (both `-> java.lang.Object`,
@@ -209,7 +250,7 @@ the interpreter and blew the hypothesis up. Vary the axis you are not thinking a
 - `ExamplesE2eTest` can fail spuriously when the GraalVM JIT prints a "Systemic Graal compilation
   failure" warning onto the program's stdout (seen once on `ml/deep-digits.lisp: jvm`). Re-run.
 
-## Parked: `examples/ml/tiny-llm.lisp` (untracked, works, NOT registered)
+## DONE 2026-07-09 — `examples/ml/tiny-llm.lisp` (registered)
 
 A complete 2-layer transformer decoder: RMSNorm, Q/K/V GEMVs, causal self-attention over a KV cache,
 softmax, output projection, SwiGLU FFN, residuals, classifier head, greedy argmax decode. The one
@@ -256,5 +297,12 @@ The `--simd` trio (interpreter 101-103, compiled Liberica 114-118, compiled Graa
 114-124) likewise overlaps: the last two are the same compiler and must not be ranked against
 each other.
 
-Decide: keep it as a second, heavier example (it would need an `examples.yaml` entry and would add
-~13 s to the interpreter leg of `ExamplesE2eTest`), or delete it now that `simd-gemv.lisp` ships.
+**Decided 2026-07-09 (user): keep it.** Registered in `examples/examples.yaml` (`[interpreter, jvm,
+wasm]`, `contains` on the header / `prompt:` / `generated:` lines; the elapsed line is deliberately
+unchecked) and in the `examples/README.md` ml table. It adds ~13 s to the interpreter leg of
+`ExamplesE2eTest`. Uses `vec:matvec` + `linalg:`, so no `--no-gc`; `--component` compiles and runs.
+
+The table above predates todo-106. After it, the two GraalVM rows collapse: the native interpreter
+decodes in **20 ms** under `--simd` (was 1669) and the GraalVM-JIT compiled class no longer inverts
+(its `--simd` decode was 1015 ms because of `convert(F2D)`). The `#f`-only reasoning below stands as
+the record of how the cause was found.

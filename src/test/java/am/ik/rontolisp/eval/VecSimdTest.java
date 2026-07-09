@@ -84,9 +84,60 @@ class VecSimdTest {
 
 	@Test
 	void dotAndSumMatchTheScalarOracleForSingleFloatVectors() {
+		// These inputs stay below 2^24, so a single-precision accumulator is exact and
+		// they match the scalar oracle. They do NOT pin the accumulator width -- that is
+		// what singleFloatReductionsAccumulateInSinglePrecisionUnderSimd below is for.
 		assertMatchesScalarOracle("(vec:dot (vec:arange 200 'single-float) (vec:arange 200 'single-float))");
 		assertMatchesScalarOracle("(vec:sum (vec:arange 200 'single-float))");
 		assertMatchesScalarOracle("(vec:dot (vec:arange 7 'single-float) (vec:arange 7 'single-float))");
+	}
+
+	@Test
+	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() {
+		// The precision contract (todo 106), and the ONLY test that pins it.
+		//
+		// v = #f(4096.0 1.0 1.0 ... 1.0), 1024 elements. dot(v,v) = 4096^2 + 1023 =
+		// 16778239 exactly. 4096^2 is 2^24, where the f32 spacing is 2, so whichever of
+		// the four pinned lanes holds it swallows every 1.0 added to it (16777217 ties to
+		// even). The other three lanes each fold 256 ones, giving 2^24 + 768 = 16777984.
+		//
+		// The value therefore depends on the lane count, which is why the reduction
+		// kernels pin FloatVector.SPECIES_128: 8 lanes would print 16778112 and 16 lanes
+		// 16778176. All four --simd backends print 16777984; the scalar reference stays
+		// the exact oracle. Same story for sum with 2^24 in element 0.
+		assertThat(eval(probe32("4096.0", "(vec:dot v v)"), true).print()).isEqualTo("16777984");
+		assertThat(eval(probe32("4096.0", "(vec:dot v v)"), false).print()).isEqualTo("16778239");
+		assertThat(eval(probe32("16777216.0", "(vec:sum v)"), true).print()).isEqualTo("16777984");
+		assertThat(eval(probe32("16777216.0", "(vec:sum v)"), false).print()).isEqualTo("16778239");
+		// matvec is a dot per row, so its rows accumulate in f32 too. The scalar path
+		// accumulates 16778239 in f64 and narrows on store: an odd multiple of the f32
+		// spacing at 2^24, so it ties to even -> 16778240, not 16778239.
+		String gemv = """
+				(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))
+				      (v (vec:ones 1024 'single-float)))
+				  (setf (aref m 0 0) 4096.0)
+				  (setf (aref v 0) 4096.0)
+				  (round (aref (vec:matvec m v) 0)))
+				""";
+		assertThat(eval(gemv, true).print()).isEqualTo("16777984");
+		assertThat(eval(gemv, false).print()).isEqualTo("16778240");
+		// The #d control: double-float reductions are untouched, exact on both paths.
+		String probe64 = """
+				(let ((v (vec:ones 1024)))
+				  (setf (aref v 0) 4096.0)
+				  (round (vec:dot v v)))
+				""";
+		assertThat(eval(probe64, true).print()).isEqualTo("16778239");
+		assertThat(eval(probe64, false).print()).isEqualTo("16778239");
+	}
+
+	/** A 1024-element {@code #f} vector of ones with {@code elem0} in element 0. */
+	private String probe32(String elem0, String reduction) {
+		return """
+				(let ((v (vec:ones 1024 'single-float)))
+				  (setf (aref v 0) %s)
+				  (round %s))
+				""".formatted(elem0, reduction);
 	}
 
 	@Test

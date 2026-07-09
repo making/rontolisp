@@ -124,19 +124,40 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
 - `eval.VecSimdKernels` — the lane loops, `static`, over the interpreter's **bare**
   `double[]`/`float[]` + explicit `rows`/`cols` (a `LispDoubleFloatArray`/`LispSingleFloatArray`
   has no in-array dimension header, unlike the compiled repr). Mirrors
-  `JvmSimdVectorTemplate` operation for operation (same `SPECIES_PREFERRED`, `THRESHOLD =
-  128`, two-rounding mul-then-add, `F2D` per-lane widening for the f32 reductions,
+  `JvmSimdVectorTemplate` operation for operation (same `SPECIES_PREFERRED` for the
+  element-wise kernels, same `FSPECIES_REDUCE = FloatVector.SPECIES_128` pin on the f32
+  reductions, `THRESHOLD = 128`, two-rounding mul-then-add, f32-throughout f32 reductions,
   f64-then-narrow `scaleF`), so interpreter `--simd` ≡ compiled `.class --simd` bit-for-bit.
   It is NOT reused from `codegen.jvm` — `eval` may not depend on it (package rule), and the
   template's kernels are written against the header-in-array layout anyway.
-  **The `F2D` widening is a liability on two counts** (measured 2026-07-09): it is the Vector-API
-  op most likely to be missing from a JIT's intrinsics (one compiler family emulates it lane by
-  lane, making `#f` `vec:dot` ~50x slower than `#d`), and it is never free even when intrinsified
-  (`#f` dot ~2x slower than `#d` despite twice the lanes). It buys bit-identity with the scalar
-  oracle — which the **WASM `--simd` kernels do not honour anyway**: they accumulate an `#f`
-  reduction in single precision (`WasmVecLoops`: "each width computes entirely in its own native
-  precision"), so `(vec:dot #f(4096.0 1.0 ...x1023))` prints 16777984 on wasm-GC `--simd` and the
-  exact 16778239 everywhere else. Redesign + prototype (574x on the emulating JIT): `.todo/106`.
+- **The f32 reductions are conversion-free (todo-106, 2026-07-09).** `sumF`/`dotF`/`matvecF`/
+  `matvecIntoF` used to widen every f32 lane to f64 via `FloatVector.convert(F2D, part)` before
+  accumulating, to stay bit-identical to the f64-accumulating scalar oracle. That widening was a
+  liability on two counts: it is the Vector-API op most likely to be missing from a JIT's
+  intrinsics (one compiler family emulates it lane by lane), and it is never free even when
+  intrinsified. And it bought a bit-identity the **WASM `--simd` kernels never honoured**
+  (`WasmVecLoops`: "each width computes entirely in its own native precision"). Now every
+  `--simd` backend accumulates an f32 reduction in f32 and promotes once, at the value boundary,
+  so all four agree; the scalar `vec.lisp` reference stays the more accurate oracle and is
+  unchanged. **`#d` is untouched** (`DoubleVector`, `SPECIES_PREFERRED`, f64 accumulator).
+  Measured on an M4, `vec:dot` over 40.96M multiply-adds through the interpreter kernels:
+
+  | runtime | `#d` | `#f` before | `#f` after |
+  |---|---|---|---|
+  | native binary | 30 ms | 4149 ms | **23 ms** |
+  | GraalVM JIT (jar) | 22 ms | 2250 ms | **18 ms** |
+  | Liberica 25 / HotSpot (jar) | 21 ms | 23 ms | **15 ms** |
+
+  `#f` is now FASTER than `#d` everywhere (4 lanes vs 2), which is the point of `f32x4`; the
+  compiled-`.class` bridge lands at 4-5 ms on both JVMs. `examples/ml/tiny-llm.lisp` decode on the
+  native interpreter: 1669 ms → **20 ms**; `simd-gemv.lisp`: 673 ms → **15 ms**.
+- **The lane-count pin.** An f32 reduction's value depends on the lane count (`2^24 + 768` with 4
+  lanes, `+ 896` with 8, `+ 960` with 16), so `FSPECIES_REDUCE` is `SPECIES_128` rather than
+  `SPECIES_PREFERRED` in BOTH kernel files: a compiled `.class` / native binary must not answer
+  differently on an AVX-512 host, and the WASM kernels are always `f32x4`. The element-wise f32
+  kernels keep `SPECIES_PREFERRED` — they are bit-exact at any width. (The f64 reductions still use
+  `SPECIES_PREFERRED`; their lane count also reorders the summation, but that was true before and
+  `#d` partial sums are exact on the inputs the tests use.)
 - `eval.VecSimd` — `available()` (links the kernels class; a `NoClassDefFoundError` on a JVM
   without the incubator module becomes `false`) and `install(Environment)` (defines native
   `LispFunction`s for `vec:add`..`vec:matvec`, overriding the just-evaluated defuns).
@@ -165,8 +186,8 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
   workflow's Web Image build would notice ([[web-playground-native-image-gotcha]]).
 - Tests: `eval/VecSimdTest` (every kernel vs the scalar oracle at both widths, below and
   above `THRESHOLD`; the `#<function vec:dot>` vs `#<lambda>` interception guard; mixed-width
-  and rank errors). Measured on the native binary: `vec:dot` over an 8192-element `#f`
-  vector, 2000 iterations — 9.4s scalar → 1.7s `--simd` (5.6x, identical result).
+  and rank errors) plus `singleFloatReductionsAccumulateInSinglePrecisionUnderSimd`, the
+  todo-106 pinning probe (see "The f32-reduction pinning probe" below).
 
 ## Acceleration layer 1 — JVM `--simd` (jdk.incubator.vector)
 
@@ -184,13 +205,15 @@ scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies c
   scalar-vs-vector divergence to reduction associativity.
 - **Width-polymorphic bridge:** each kernel dispatches on the runtime backing — a `double[]`
   runs the `DoubleVector` path, a `float[]` the sibling `FloatVector` kernel (element-wise
-  → a fresh `float[]`, width preserved; `sum`/`dot` → an f64 scalar accumulated via per-lane
-  `F2D` widening). Mixed single/double operands are a hard `IllegalArgumentException`.
+  → a fresh `float[]`, width preserved; `sum`/`dot` → an f64 scalar, accumulated in f32 over
+  four pinned lanes and promoted once on return — todo-106). Mixed single/double operands are
+  a hard `IllegalArgumentException`.
 - **`simdMatvec` (GEMV, todo-95 Part 2):** the `simdDot` lane loop run once per row of a
   rank-2 matrix `W` — header `[2, d, n, ...]` so `ow = 1 + (int)W[0] = 3`, `d = (int)W[1]`
   rows, `n = (int)W[2]` cols; `r[2 + row] = dot(W row, x)` into a fresh length-`d` vector.
   ONE bridge call covers the whole matrix (amortizing entry over `d` rows). Width-polymorphic
-  like the rest (`matvecF` mirrors `dotF`, narrowing each row's f64 acc to f32 on store).
+  like the rest (`matvecF` mirrors `dotF`, each row's f32 acc stored straight into the
+  `float[]`).
 - `JvmSimdRuntimeBuilder` — reads the template `.class` from the classpath, renames it into
   the default package (`RontoLispSimdBridge`), base64-embeds it, and emits `_simdInit`
   (a `Lookup.defineClass` guarded by `_simdInited`), exactly like the `java:` interop bridge.
@@ -437,6 +460,30 @@ Mechanics:
 
 ## Verification
 
+### The f32-reduction pinning probe (todo-106) — the ONLY test that pins the precision contract
+
+`v = #f(4096.0 1.0 1.0 ... 1.0)`, 1024 elements. `dot(v,v) = 4096^2 + 1023 = 16778239` exactly;
+`4096^2` is `2^24`, where the f32 spacing is 2, so the lane holding it swallows every `1.0` added
+to it (`2^24 + 1` ties to even) while the other three lanes fold 256 ones each — hence `2^24 + 768
+= 16777984` under `--simd`, on all four backends.
+
+| probe | scalar (all backends) | `--simd` (all backends) |
+|---|---|---|
+| `(round (vec:dot v v))`, `v[0] = 4096.0` | 16778239 | **16777984** |
+| `(round (vec:sum v))`, `v[0] = 2^24` | 16778239 | **16777984** |
+| `(round (aref (vec:matvec m v) 0))`, 1×1024 | 16778240 | **16777984** |
+| any of the above at `#d` width | 16778239 | 16778239 |
+
+The scalar `matvec` prints 16778240, not 16778239: it accumulates in f64 and narrows on store, and
+`2^24 + 1023` is an odd multiple of the f32 spacing there, so it ties to even. Pinned three times —
+`eval/VecSimdTest`, `codegen/jvm/JvmSimdAccelCompilerTest` (both
+`singleFloatReductionsAccumulateInSinglePrecisionUnderSimd`) and
+`WasmLispCompilerIntegrationTest.wasmGcSimdSingleFloatReductionsAccumulateInSinglePrecision`.
+**Nothing else catches a regression here**: every other `#f` test input stays under `2^24`, where an
+f32 accumulator is exact, so they pass on both contracts (`VecSimdTest.dotAndSumMatchTheScalarOracle
+ForSingleFloatVectors` uses `arange 200`, whose squared sum is 2646700). `ci-spec.yaml` never passes
+`--simd`, so the cross-backend E2E is unaffected; the component leg was verified by hand.
+
 - `-into` (todo-103): `VecSimdTest` (interception guard `#<function vec:add-into>`, each
   kernel vs its allocating sibling at n = 7 and 200, both widths, `(eq o (add-into o ...))`,
   in-place aliasing, `matvec-into` alias error on BOTH paths, mixed width);
@@ -503,5 +550,6 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
   wasm-GC `--simd` already ships GEMV (its `$farray` carries dims), and `.todo/99` should
   now reuse `WasmVecLoops.simdDot` + the per-row cursor walk from
   `WasmVecSimdRuntimeBuilder.emitMatvecRows`.
-- A chained/GEMV timing benchmark + a stories15M-scale llama2 demo (the `ml/nn-vec.lisp`
-  XOR net is the small-scale `vec:matvec` example; a real transformer is the payoff).
+- A stories15M-scale llama2 demo with real weights. `examples/ml/tiny-llm.lisp` (registered
+  2026-07-09) is the real-transformer payoff at toy scale — a 2-layer decoder, 13 GEMVs per
+  forward pass, deterministic token ids; what is left is a tokenizer and a weight loader.

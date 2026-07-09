@@ -214,11 +214,11 @@ class JvmSimdAccelCompilerTest {
 
 	@Test
 	void acceleratedSingleFloatLargeArraysMatchTheScalarReferenceOverTheVectorLoop() throws Exception {
-		// n >= THRESHOLD drives the real FloatVector loop (element-wise) and the
-		// F2D-widen
-		// f64 accumulation (reductions). Integer values 0..199 stay f64-exact, so the
-		// vector
-		// and scalar paths are byte-identical.
+		// n >= THRESHOLD drives the real FloatVector loop (element-wise) and the f32
+		// accumulation (reductions). Integer values 0..199 are exact at BOTH widths --
+		// every partial sum stays under 2^24 -- so the vector and scalar paths are
+		// byte-identical. Values that separate them are pinned by
+		// singleFloatReductionsAccumulateInSinglePrecisionUnderSimd below.
 		String build = "(let ((a (make-array 200 :element-type 'single-float :initial-element 0.0)))"
 				+ " (dotimes (i 200) (setf (aref a i) (float i))) ";
 		for (String tail : List.of("(print (vec:sum a)))", "(print (vec:dot a a)))", "(print (vec:sum (vec:add a a))))",
@@ -237,6 +237,40 @@ class JvmSimdAccelCompilerTest {
 				+ " (dotimes (i 200) (setf (aref a i) (float i))) ";
 		assertThat(accel(build + "(print (vec:sum a)))")).isEqualTo("19900.0");
 		assertThat(accel(build + "(print (vec:dot a a)))")).isEqualTo("2646700.0");
+	}
+
+	@Test
+	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() throws Exception {
+		// The compiled-path half of the todo-106 precision contract (the interpreter half
+		// is eval/VecSimdTest, same probe, same numbers -- the two kernel files are
+		// deliberate duplicates and must not drift).
+		//
+		// v = #f(4096.0 1.0 ... 1.0), 1024 elements: dot(v,v) = 4096^2 + 1023 = 16778239.
+		// 4096^2 = 2^24, where the f32 spacing is 2, so the pinned lane holding it
+		// swallows its 1.0s; the other three lanes fold 256 each -> 2^24 + 768.
+		// FloatVector.SPECIES_128 is what makes 16777984 the answer on every host (8
+		// lanes would give 16778112, 16 lanes 16778176).
+		String v = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 4096.0) ";
+		assertThat(accel(v + "(print (round (vec:dot v v))))")).isEqualTo("16777984");
+		assertThat(scalar(v + "(print (round (vec:dot v v))))")).isEqualTo("16778239");
+
+		String s = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 16777216.0) ";
+		assertThat(accel(s + "(print (round (vec:sum v))))")).isEqualTo("16777984");
+		assertThat(scalar(s + "(print (round (vec:sum v))))")).isEqualTo("16778239");
+
+		// matvec is a dot per row. The scalar path accumulates 16778239 in f64 then
+		// narrows on store; that is an odd multiple of the f32 spacing at 2^24, so it
+		// ties to even -> 16778240.
+		String gemv = "(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))"
+				+ " (v (vec:ones 1024 'single-float)))" + " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
+				+ " (print (round (aref (vec:matvec m v) 0))))";
+		assertThat(accel(gemv)).isEqualTo("16777984");
+		assertThat(scalar(gemv)).isEqualTo("16778240");
+
+		// The #d control: double-float reductions are untouched and exact on both paths.
+		String d = "(let ((v (vec:ones 1024))) (setf (aref v 0) 4096.0) (print (round (vec:dot v v))))";
+		assertThat(accel(d)).isEqualTo("16778239");
+		assertThat(scalar(d)).isEqualTo("16778239");
 	}
 
 	@Test

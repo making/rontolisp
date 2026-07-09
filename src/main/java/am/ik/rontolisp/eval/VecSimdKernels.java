@@ -18,14 +18,16 @@ import jdk.incubator.vector.VectorSpecies;
  * <p>
  * The lane logic mirrors the compiled {@code --simd} bridge
  * ({@code codegen.jvm.JvmSimdVectorTemplate}) operation for operation -- same
- * {@code SPECIES_PREFERRED}, same {@code THRESHOLD}, same two-rounding mul-then-add in
- * the reductions (deliberately not {@code fma}), same per-lane {@code F2D} widening for
+ * {@code SPECIES_PREFERRED} for the element-wise kernels, same {@code SPECIES_128} pin on
+ * the single-float reductions, same {@code THRESHOLD}, same two-rounding mul-then-add in
+ * the reductions (deliberately not {@code fma}), same single-precision accumulation for
  * the single-float reductions, same f64-then-narrow {@code scale}. Interpreter
  * {@code --simd} therefore produces bit-identical results to a compiled {@code .class
  * --simd}, and both differ from the scalar {@code vec.lisp} oracle only by reduction
- * associativity. The duplication is deliberate: {@code eval} may not depend on
- * {@code codegen.jvm} (the package dependency rule), and the compiled template's kernels
- * are written against the header-in-array representation anyway.
+ * associativity (and, at single width, by the accumulator width -- see below). The
+ * duplication is deliberate: {@code eval} may not depend on {@code codegen.jvm} (the
+ * package dependency rule), and the compiled template's kernels are written against the
+ * header-in-array representation anyway.
  *
  * <p>
  * This class is the ONLY part of the interpreter that references the incubator Vector
@@ -41,6 +43,18 @@ final class VecSimdKernels {
 	private static final VectorSpecies<Double> SPECIES = DoubleVector.SPECIES_PREFERRED;
 
 	private static final VectorSpecies<Float> FSPECIES = FloatVector.SPECIES_PREFERRED;
+
+	/**
+	 * The species the single-float REDUCTIONS use, pinned to four lanes on every host.
+	 * They accumulate in {@code float}, so their result depends on the lane count: a
+	 * {@code SPECIES_PREFERRED} of 8 or 16 lanes would make {@code (vec:dot v v)} answer
+	 * differently on an AVX2 or AVX-512 machine than on a 128-bit one. The WASM
+	 * {@code --simd} kernels are always {@code f32x4}, so pinning here is what lets every
+	 * {@code --simd} backend agree, and keeps a compiled {@code .class} / native binary
+	 * host-independent. The element-wise kernels stay on {@code SPECIES_PREFERRED}: they
+	 * are bit-exact at any width.
+	 */
+	private static final VectorSpecies<Float> FSPECIES_REDUCE = FloatVector.SPECIES_128;
 
 	/**
 	 * Below this element count the Vector API setup cost outweighs the lane parallelism,
@@ -336,33 +350,28 @@ final class VecSimdKernels {
 		for (int row = 0; row < rows; row++) {
 			int base = row * cols;
 			int i = 0;
-			double acc = 0.0;
+			float acc = 0.0f;
 			if (cols >= THRESHOLD) {
-				DoubleVector vacc = DoubleVector.zero(SPECIES);
-				int bound = FSPECIES.loopBound(cols);
-				for (; i < bound; i += FSPECIES.length()) {
-					FloatVector fw = FloatVector.fromArray(FSPECIES, w, base + i);
-					FloatVector fx = FloatVector.fromArray(FSPECIES, x, i);
-					DoubleVector w0 = (DoubleVector) fw.convert(VectorOperators.F2D, 0);
-					DoubleVector w1 = (DoubleVector) fw.convert(VectorOperators.F2D, 1);
-					DoubleVector x0 = (DoubleVector) fx.convert(VectorOperators.F2D, 0);
-					DoubleVector x1 = (DoubleVector) fx.convert(VectorOperators.F2D, 1);
-					vacc = vacc.add(w0.mul(x0)).add(w1.mul(x1));
+				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
+				int bound = FSPECIES_REDUCE.loopBound(cols);
+				for (; i < bound; i += FSPECIES_REDUCE.length()) {
+					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
+						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
 				}
 				acc = vacc.reduceLanes(VectorOperators.ADD);
 			}
 			for (; i < cols; i++) {
-				acc += (double) w[base + i] * (double) x[i];
+				acc += w[base + i] * x[i];
 			}
-			r[row] = (float) acc;
+			r[row] = acc;
 		}
 	}
 
 	// --- single-float (f32) kernels ----------------------------------------------
 	// Element-wise ops run natively in f32 (a single +/-/* of two floats has no
 	// double-rounding error, so they stay bit-identical to the widen-compute-narrow
-	// scalar reference); the reductions widen each lane to f64 and fold to an f64
-	// scalar, and scale multiplies by the genuine f64 scalar before narrowing.
+	// scalar reference); the reductions compute entirely in f32 and promote once, at the
+	// value boundary; and scale multiplies by the genuine f64 scalar before narrowing.
 
 	static float[] addF(float[] x, float[] y) {
 		int n = Math.min(x.length, y.length);
@@ -426,17 +435,19 @@ final class VecSimdKernels {
 		return r;
 	}
 
+	/**
+	 * {@code sum(x)} accumulated in {@code float} (four pinned lanes plus a {@code float}
+	 * tail) and promoted to f64 once, on return. See {@link #dotF} for why.
+	 */
 	static double sumF(float[] x) {
 		int n = x.length;
 		int i = 0;
-		double acc = 0.0;
+		float acc = 0.0f;
 		if (n >= THRESHOLD) {
-			DoubleVector vacc = DoubleVector.zero(SPECIES);
-			int bound = FSPECIES.loopBound(n);
-			for (; i < bound; i += FSPECIES.length()) {
-				FloatVector fv = FloatVector.fromArray(FSPECIES, x, i);
-				vacc = vacc.add((DoubleVector) fv.convert(VectorOperators.F2D, 0))
-					.add((DoubleVector) fv.convert(VectorOperators.F2D, 1));
+			FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
+			int bound = FSPECIES_REDUCE.loopBound(n);
+			for (; i < bound; i += FSPECIES_REDUCE.length()) {
+				vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, x, i));
 			}
 			acc = vacc.reduceLanes(VectorOperators.ADD);
 		}
@@ -446,55 +457,61 @@ final class VecSimdKernels {
 		return acc;
 	}
 
+	/**
+	 * {@code dot(x, y)} multiplied and accumulated entirely in {@code float}, promoted to
+	 * f64 once at the value boundary -- the contract the WASM {@code --simd} kernels
+	 * already follow ("each width computes in its own native precision").
+	 *
+	 * <p>
+	 * The obvious alternative, widening each lane to f64 first so the reduction is
+	 * bit-identical to the f64-accumulating scalar {@code vec.lisp} reference, costs a
+	 * {@code FloatVector.convert(F2D, part)} per lane group. That conversion is the one
+	 * Vector API operation a JIT is most likely to leave un-intrinsified, dropping the
+	 * whole loop to per-lane emulation (measured: {@code #f} {@code vec:dot} ~140x slower
+	 * than {@code #d} on one compiler family), and it is never free even where it IS
+	 * intrinsified. It also bought a bit-identity the WASM backends never honoured. So a
+	 * single-float reduction under {@code --simd} accumulates in single precision on
+	 * every backend, and the scalar reference stays the more accurate oracle.
+	 */
 	static double dotF(float[] x, float[] y) {
 		int n = Math.min(x.length, y.length);
 		int i = 0;
-		double acc = 0.0;
+		float acc = 0.0f;
 		if (n >= THRESHOLD) {
-			DoubleVector vacc = DoubleVector.zero(SPECIES);
-			int bound = FSPECIES.loopBound(n);
-			for (; i < bound; i += FSPECIES.length()) {
-				FloatVector fx = FloatVector.fromArray(FSPECIES, x, i);
-				FloatVector fy = FloatVector.fromArray(FSPECIES, y, i);
-				DoubleVector x0 = (DoubleVector) fx.convert(VectorOperators.F2D, 0);
-				DoubleVector x1 = (DoubleVector) fx.convert(VectorOperators.F2D, 1);
-				DoubleVector y0 = (DoubleVector) fy.convert(VectorOperators.F2D, 0);
-				DoubleVector y1 = (DoubleVector) fy.convert(VectorOperators.F2D, 1);
-				vacc = vacc.add(x0.mul(y0)).add(x1.mul(y1));
+			FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
+			int bound = FSPECIES_REDUCE.loopBound(n);
+			for (; i < bound; i += FSPECIES_REDUCE.length()) {
+				vacc = vacc.add(
+						FloatVector.fromArray(FSPECIES_REDUCE, x, i).mul(FloatVector.fromArray(FSPECIES_REDUCE, y, i)));
 			}
 			acc = vacc.reduceLanes(VectorOperators.ADD);
 		}
 		for (; i < n; i++) {
-			acc += (double) x[i] * (double) y[i];
+			acc += x[i] * y[i];
 		}
 		return acc;
 	}
 
-	/** {@link #matvec} for a single-float matrix: f64 accumulation, narrowed on store. */
+	/** {@link #matvec} for a single-float matrix: {@link #dotF} once per row. */
 	static float[] matvecF(float[] w, int rows, int cols, float[] x) {
 		float[] r = new float[rows];
 		for (int row = 0; row < rows; row++) {
 			int base = row * cols;
 			int i = 0;
-			double acc = 0.0;
+			float acc = 0.0f;
 			if (cols >= THRESHOLD) {
-				DoubleVector vacc = DoubleVector.zero(SPECIES);
-				int bound = FSPECIES.loopBound(cols);
-				for (; i < bound; i += FSPECIES.length()) {
-					FloatVector fw = FloatVector.fromArray(FSPECIES, w, base + i);
-					FloatVector fx = FloatVector.fromArray(FSPECIES, x, i);
-					DoubleVector w0 = (DoubleVector) fw.convert(VectorOperators.F2D, 0);
-					DoubleVector w1 = (DoubleVector) fw.convert(VectorOperators.F2D, 1);
-					DoubleVector x0 = (DoubleVector) fx.convert(VectorOperators.F2D, 0);
-					DoubleVector x1 = (DoubleVector) fx.convert(VectorOperators.F2D, 1);
-					vacc = vacc.add(w0.mul(x0)).add(w1.mul(x1));
+				FloatVector vacc = FloatVector.zero(FSPECIES_REDUCE);
+				int bound = FSPECIES_REDUCE.loopBound(cols);
+				for (; i < bound; i += FSPECIES_REDUCE.length()) {
+					vacc = vacc.add(FloatVector.fromArray(FSPECIES_REDUCE, w, base + i)
+						.mul(FloatVector.fromArray(FSPECIES_REDUCE, x, i)));
 				}
 				acc = vacc.reduceLanes(VectorOperators.ADD);
 			}
 			for (; i < cols; i++) {
-				acc += (double) w[base + i] * (double) x[i];
+				acc += w[base + i] * x[i];
 			}
-			r[row] = (float) acc;
+			r[row] = acc;
 		}
 		return r;
 	}

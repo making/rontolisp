@@ -5964,6 +5964,41 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void wasmGcSimdSingleFloatReductionsAccumulateInSinglePrecision() throws Exception {
+		// The wasm leg of the todo-106 precision contract: an #f reduction folds in f32
+		// lanes and promotes only at the value boundary. wasm-GC has always done this;
+		// the interpreter and JVM kernels now do it too (they used to widen every lane
+		// to f64 first), so all four --simd backends print the same 16777984 here while
+		// the scalar reference stays the exact oracle. eval/VecSimdTest and
+		// JvmSimdAccelCompilerTest pin the same probe with the same numbers.
+		//
+		// dot(v,v) = 4096^2 + 1023 = 16778239 exactly; 4096^2 is 2^24, where the f32
+		// spacing is 2, so the lane holding it swallows its 1.0s and the other three
+		// lanes fold 256 each -> 2^24 + 768. matvec's scalar path narrows an f64 16778239
+		// on store, which ties to even -> 16778240.
+		String dot = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 4096.0)"
+				+ " (print (round (vec:dot v v))))";
+		assertThat(compileAndRunVec(dot, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(dot, false)).isEqualTo("16778239");
+
+		String sum = "(let ((v (vec:ones 1024 'single-float))) (setf (aref v 0) 16777216.0)"
+				+ " (print (round (vec:sum v))))";
+		assertThat(compileAndRunVec(sum, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(sum, false)).isEqualTo("16778239");
+
+		String gemv = "(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))"
+				+ " (v (vec:ones 1024 'single-float)))" + " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
+				+ " (print (round (aref (vec:matvec m v) 0))))";
+		assertThat(compileAndRunVec(gemv, true)).isEqualTo("16777984");
+		assertThat(compileAndRunVec(gemv, false)).isEqualTo("16778240");
+
+		// The #d control: double-float reductions are exact on both paths.
+		String d = "(let ((v (vec:ones 1024))) (setf (aref v 0) 4096.0) (print (round (vec:dot v v))))";
+		assertThat(compileAndRunVec(d, true)).isEqualTo("16778239");
+		assertThat(compileAndRunVec(d, false)).isEqualTo("16778239");
+	}
+
+	@Test
 	void wasmGcSimdOptimizedIsByteIdenticalToTheScalarPath() throws Exception {
 		// --optimize shakes the (now dead) vec.lisp kernel defuns and must not disturb
 		// the
