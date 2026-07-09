@@ -25,7 +25,10 @@ offset `1 + rank`, so a rank-1 vector is `[1.0, n, e0..]`; single-float is a bar
 `float[]` with the same header); wasm-GC a distinct `TYPE_FARRAY` struct whose data field
 holds a `TYPE_F64ARR = (array (mut f64))` (double) or, for `#f` single-float, a
 `TYPE_F32ARR = (array (mut f32))` — the same struct, width told apart by
-`ref.test $f32arr` (todo-95 Phase 4); `--no-gc` a `[count:i32][count f64]` (`Ty.F64VEC`,
+`ref.test $f32arr` (todo-95 Phase 4) -- **except under `--simd`**, where the data field
+instead holds an `i31ref` pointer into a linear-memory block (acceleration layer 3 below;
+the struct type and the whole type section stay unchanged, since the field is
+`(ref null eq)` either way, todo-101); `--no-gc` a `[count:i32][count f64]` (`Ty.F64VEC`,
 8-byte stride) or `[count:i32][count f32]` (`Ty.F32VEC`, 4-byte stride) linear-memory
 block, keyed off the `#d`/`#f` literal or the `:element-type` (todo-95 Phase 5).
 
@@ -35,7 +38,9 @@ block, keyed off the `#d`/`#f` literal or the `:element-type` (todo-95 Phase 5).
 plain `defun` over `make-array :element-type 'double-float` / `aref` / `length`. It is the
 implementation on the interpreter (unless `--simd` — see acceleration layer 0), the JVM
 compiler and the wasm-GC compiler (they run the scalar defuns over the packed repr,
-unboxed), and the correctness oracle for the accelerated paths. `VecLibrary` splices/loads
+unboxed; a `--simd` build of either intercepts the seven vectorizable kernels at their
+call sites and leaves the rest of the defuns in place), and the correctness oracle for the
+accelerated paths. `VecLibrary` splices/loads
 it exactly like `LinalgLibrary`:
 
 - Interpreter: `LispEvaluator` lazy-loads it on the first resolution of a `vec:`-qualified
@@ -65,21 +70,23 @@ CL's `map-into` order) and RETURNS that very value. Reductions have none (they n
 allocated).
 
 **Rationale, and exactly which backend leaks.** A packed array is a GC object on the
-interpreter (`double[]` in a `LispFloatArray`), the JVM (a bare `double[]`) and **wasm-GC**
-(`array.new $f64arr` inside `$farray`) — all three reclaim it. Only `--no-gc` puts it in
-linear memory, bump-allocated by `__alloc` with **no free**, so an allocating kernel in a
-loop grows the heap monotonically until `memory.grow` fails. (Measured: 1024-element
-`vec:add` × 200000 on wasm-GC peaks at ~123 MB, same as × 50000, though 1.5 GB passed
-through the allocator; `linalg:add` × 80000 likewise flat. `linalg` does not compile under
-`--no-gc` at all, so `vec:` is the only affected surface.) `--no-gc` reclaims only by
+interpreter (`double[]` in a `LispFloatArray`), the JVM (a bare `double[]`) and **wasm-GC
+without `--simd`** (`array.new $f64arr` inside `$farray`) — all three reclaim it. The two
+v128-emitting WASM targets put it in linear memory instead, bump-allocated with **no
+free**, so an allocating kernel in a loop grows the heap monotonically: `--no-gc` (always)
+and **wasm-GC `--simd`** (todo-101 — v128 addresses linear memory, so the repr had to move
+with the kernels). (Measured: 1024-element `vec:add` × 200000 on scalar wasm-GC peaks at
+~123 MB, same as × 50000, though 1.5 GB passed through the allocator; `linalg:add` × 80000
+likewise flat.) `--no-gc` reclaims by
 popping the whole arena at an export boundary (todo-88 auto-reset on a scalar return,
-todo-89 `__ronto_alloc_mark`/`_reset` for a host) — nothing is freed *within* one call.
-`-into` makes the bump high-water equal the live set, which is all a GC would have kept
-anyway, so freeing becomes an optimization rather than a correctness requirement
-(`.todo/104` — `with-arena`). On the three GC'd backends `-into` is purely an
-allocation-rate optimization. **This changes if `.todo/101` lands**: moving wasm-GC packed
-arrays into linear memory so `--simd` can emit v128 gives that backend `--no-gc`'s memory
-behavior — which is why 101 should gate the linear repr behind `--simd`.
+todo-89 `__ronto_alloc_mark`/`_reset` for a host) — nothing is freed *within* one call;
+wasm-GC `--simd` has no export boundary at all (its top level is `_start`), so its arena
+only grows. `-into` makes the bump high-water equal the live set, which is all a GC would
+have kept anyway, so freeing becomes an optimization rather than a correctness requirement
+(`.todo/104` — `with-arena`, which on both WASM targets is a mark/reset of one bump word).
+On the GC'd backends `-into` is purely an allocation-rate optimization. `linalg` arrays are
+the same packed type, so they move into the arena under wasm-GC `--simd` too (`linalg` does
+not compile under `--no-gc` at all).
 
 - **Aliasing.** The element-wise kernels tolerate `out` aliasing `a` and/or `b` (element
   `i` depends only on element `i`; within one lane block the reads precede the store), so
@@ -94,7 +101,10 @@ behavior — which is why 101 should gate the linear repr behind `--simd`.
 - Per backend: `vec.lisp` covers interpreter/JVM/wasm-GC for free. `eval/VecSimdKernels`
   (`addInto`..`matvecIntoF`) + `VecSimd.installInto` accelerate the interpreter;
   `JvmSimdVectorTemplate.simdAddInto`..`simdMatvecInto` + `JvmSimdCompiler.ARITIES` (arity 3,
-  a `ternaryDesc` in `JvmSimdRuntimeBuilder`) the JVM. `NoGcWasmCompiler` threads a
+  a `ternaryDesc` in `JvmSimdRuntimeBuilder`) the JVM; `WasmVecSimdRuntimeBuilder`'s
+  `_vec_add_into`.._vec_matvec_into` (a `boolean into` through `buildElementwise`/
+  `buildScale`/`buildMatvec`, which then use the caller's block as the destination and
+  return argument 0) the wasm-GC `--simd` path. `NoGcWasmCompiler` threads a
   `boolean into` through `compileSimd/ScalarElementwise{,F32}` and
   `compileSimd/ScalarScale{,F32}`: `-into` skips `allocVec` and uses the caller's block as
   `dp` (via the new `compileVecArg`/`loadVecCount` helpers), so the loop bodies are literally
@@ -268,6 +278,86 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
   default is numerically equivalent), so the unit tests assert `0xFD` presence (v128) /
   absence (scalar) directly.
 
+## Acceleration layer 3 — wasm-GC `--simd` native v128 over linear-memory packed arrays (todo-101)
+
+`--simd` on the DEFAULT `.wasm` backend routes the same twelve kernels (the seven
+vectorizable ones plus the five `-into` siblings) to emitted v128 runtime helpers. The
+blocker it clears: `v128.load`/`store` address LINEAR memory, but a wasm-GC packed array is
+a GC object with no address. So `--simd` **changes the packed representation**, and only
+that:
+
+- `TYPE_FARRAY = struct {(ref null eq) dims, (ref null eq) data}` keeps `dims` on the GC
+  heap; `data` holds an `i31ref` linear-memory pointer instead of a `TYPE_F64ARR`/
+  `TYPE_F32ARR`. The data field is `eq`-typed either way, so **the type section is
+  byte-identical** and the export/import wrapper type bases + component blobs are untouched
+  (pinned by `WasmLispCompilerTest.simdKeepsTheTypeSectionIdenticalAndAddsExactlyTheVecBlock`).
+  Pointers use `i31.get_u` (`WasmEmitHelper.castI31GetU`), so an address below 2 GiB
+  round-trips; `i31.get_s` would sign-extend past 1 GiB.
+- Block layout `[count:i32][kind:i32][pad][pad][elements]` (`WasmVecSimdRuntimeBuilder.DATA_OFF`
+  = 16). `kind` 0 = f64, 1 = f32 — the runtime width test that replaces `ref.test $f32arr`.
+  The 16-byte header keeps the element area 16-byte aligned for `v128.load`.
+- `_vec_alloc` (the 13th emitted function) bumps ONE word, `VEC_HEAP_PTR_ADDR` = 160. A zero
+  value means "unseeded": the first call starts the arena at `memory.size() << 16`, i.e.
+  ABOVE every statically reserved page — the intern heap, `getenv`'s page 3, the fetch
+  scratch at page 4, and (component mode, where the memory is imported from `mem.wasm`) the
+  adapter scratch at pages 5-8. Then `memory.grow` by whole pages. This is why no fixed base
+  is baked in, why `--component --simd` works, and why `.todo/104`'s `with-arena` is just a
+  mark/reset of that word.
+
+Mechanics:
+
+- **The kernels are standalone runtime functions**, not inline code: `WasmLispCompiler`
+  declares every extra local of a compiled body as one `(ref null eq)` group, so a defun
+  body cannot hold a v128/f64/i32 local. `WasmVecSimdRuntimeBuilder` hand-writes the local
+  declarations (`withLocals(i32, f64, f32, v128, eq)`) for 13 functions taking/returning
+  `(ref null eq)`. One kernel serves both widths by branching on the `kind` word; a mixed-
+  width call traps (`requireSameKind`), matching the JVM bridge's hard error. `matvec-into`
+  additionally traps on `ref.eq(out, x)`.
+- **Function indices**: `FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1`, then `_vec_alloc` +
+  `_vec_add`..`_vec_matvec_into` (`FUNC_COUNT` = 13). Emitted ONLY under `--simd`, so
+  `FUNC_USER_BASE` becomes dynamic (`WasmLispCompiler.userFuncBase()`, threaded via
+  `Ctx.userFuncBase` into `WasmLambdaCompiler` and `WasmRuntimeBuilder.buildDispatchBody` —
+  the only three readers). Every fixed `FUNC_*` below it keeps its value, and a
+  non-`--simd` module is **byte-identical** to a build that never knew about the flag.
+  Types are reused: `_vec_alloc` is `TYPE_LOOKUP` ((i32)->i32); the kernels are
+  `TYPE_CALLABLE_BASE + (params - 1)`. No new type entries.
+- **Call-site interception**: `WasmVecSimdCompiler.handles/compile` in `WasmExprCompiler.
+  compileCons`, gated on `ctx.simd` — the exact shape of `JvmSimdCompiler`. `mean`/`norm` are
+  accelerated transitively (their spliced bodies call `sum`/`dot`); `#'vec:dot` still names
+  the scalar defun, as on the JVM. Everything not in the twelve keeps running `vec.lisp` over
+  the now-linear surface.
+- **The rest of the packed surface** branches on `ctx.simd` at compile time (one module, one
+  repr): `WasmArrayCompiler.compilePackedMakeLinear`/`emitPackedReadF64Linear`/
+  `emitPackedWriteF64Linear`/`compileElementType`, `WasmQuoteCompiler`'s `#d`/`#f` literals
+  (`compileLinearBlock`, storing each element with a folded memarg offset), and
+  `WasmRuntimeBuilder.emitPrintArray` (one extra i32 local for the block pointer).
+  `length`/`%arrayp`/`array-dimensions` read only `dims` and are untouched.
+- **Shared loop seam**: `WasmVecLoops` holds the four v128 bodies (`simdMap2`/`simdScale`/
+  `simdSum`/`simdDot`) and the four scalar ones, over raw i32 locals. `NoGcWasmCompiler`
+  delegates to them with its locals allocated in the original order, so its output stays
+  byte-identical (verified on `--no-gc`, `--no-gc --simd`, `--no-gc --simd --optimize`).
+  This is the seam `.todo/100` carved out; `matvec` is the one kernel wasm-GC can do that
+  `--no-gc` cannot, because the `$farray` struct carries its dims.
+- **Memory**: this gives wasm-GC `--no-gc`'s memory behavior for packed arrays only
+  (measured: 2000 × 65536-element accumulation peaks at 22 MB with `vec:add-into`, 1.16 GB
+  with `vec:add`; scalar wasm-GC 125 MB). `.todo/104` is the reclamation story.
+- **Measured**: `vec:dot` over an 8192-element `#d` vector, 20000 iterations under
+  `wasmtime run -W gc` — 10.2 s scalar, 0.03 s `--simd`. The jump is large because `--simd`
+  replaces the boxing-heavy scalar defun AND scalarizes to lanes; it is not 2x-per-lane.
+- Composes with `--optimize` (the shaker's `skipSimd` already decodes 0xFD) and
+  `--component` (verified end to end under `wasmtime run -W gc=y -W component-model-async=y`).
+- Tests: `WasmLispCompilerTest` (v128 local declarations present/absent — the local decls are
+  the one part of a code section that decodes without a full opcode walker, so an opcode-byte
+  scan would false-positive; type-section identity; `FUNC_COUNT` delta; component/optimize
+  compile). `WasmLispCompilerIntegrationTest` (Docker+wasmtime):
+  `wasmGcSimdIsByteIdenticalToTheScalarPathOverTheWholeVecSurface` (both widths, every
+  f64x2/f32x4 tail config, `-into`, GEMV, packed accessors, `make-array`, literals),
+  `...Optimized...`, `wasmGcSimdGrowsItsArenaForVectorsLargerThanTheInitialMemory`, and the
+  runnable dead-flag guard `wasmGcSimdModuleNeedsTheSimdProposalAndTheDefaultOneDoesNot`
+  (`wasmtime --wasm simd=n --wasm relaxed-simd=n` refuses the `--simd` module, runs the
+  default one — the wasm counterpart of the JVM's `NoClassDefFoundError` guard; relaxed-simd
+  must be disabled too or wasmtime rejects the flag combination).
+
 ## Verification
 
 - `-into` (todo-103): `VecSimdTest` (interception guard `#<function vec:add-into>`, each
@@ -325,11 +415,16 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
   `#f` opt-in via a trailing constructor `element-type`, and every transform preserves the
   input width (so a `#f` from `vec:` is never force-widened to `#d`). See `.kb/linalg.md`.
 - `linalg:` acceleration (`.todo/93`): a linalg-kernel `--simd`/`v128` interceptor (like the
-  `vec:` bridge) is still a distinct step -- linalg runs the scalar packed defuns everywhere.
+  `vec:` bridge) is still a distinct step -- linalg runs the scalar packed defuns everywhere
+  (under wasm-GC `--simd` it does so over the linear repr, so it pays the arena cost without
+  the v128 win until intercepted).
 - Full matrix×matrix **GEMM** (`matmul`): NOT `vec:` (it produces a matrix) — it belongs in
   `linalg:` and needs a transpose that GEMV avoids. `vec:matvec` (GEMV) is the mat×vec case
   llama2's single-token decode needs; GEMM is deferred (prefill batching only).
 - `--no-gc` native `f32x4` GEMV: `matvec` is a `--no-gc` compile error today (no rank-2
   block layout); a native kernel would need explicit dims or a rank-2 `--no-gc` layout.
+  wasm-GC `--simd` already ships GEMV (its `$farray` carries dims), and `.todo/99` should
+  now reuse `WasmVecLoops.simdDot` + the per-row cursor walk from
+  `WasmVecSimdRuntimeBuilder.emitMatvecRows`.
 - A chained/GEMV timing benchmark + a stories15M-scale llama2 demo (the `ml/nn-vec.lisp`
   XOR net is the small-scale `vec:matvec` example; a real transformer is the payoff).

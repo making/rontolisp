@@ -62,6 +62,19 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Like {@link #castI31GetS} but zero-extends the 31 payload bits. Used for a
+	 * linear-memory pointer stored in an i31ref (the {@code --simd} packed float-array
+	 * block, see {@link WasmVecSimdRuntimeBuilder}): any address below 2 GiB then
+	 * round-trips exactly, where {@code i31.get_s} would sign-extend everything above 1
+	 * GiB.
+	 */
+	static void castI31GetU(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_U);
+	}
+
+	/**
 	 * Emits a list-type guard for the {@code map*} family over the value in
 	 * {@code listSlot}: if the value is neither null (nil) nor a cons, the function traps
 	 * ({@code unreachable}). This matches the interpreter, which signals an error rather

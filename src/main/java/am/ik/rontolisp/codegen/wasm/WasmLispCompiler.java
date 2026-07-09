@@ -55,6 +55,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean serve;
 
+	private final boolean simd;
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -135,6 +137,31 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * component.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve) {
+		this(dynamic, component, noWasi, optimize, serve, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
+	 * @param optimize see {@link #WasmLispCompiler(boolean, boolean, boolean, boolean)}
+	 * @param serve see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, boolean, boolean)}
+	 * @param simd when {@code true} (the CLI's {@code --simd}), the vectorizable
+	 * {@code vec:} kernels are intercepted at their call sites and routed to emitted v128
+	 * runtime helpers ({@link WasmVecSimdRuntimeBuilder}) instead of the scalar
+	 * {@code vec.lisp} defuns. Because {@code v128.load}/{@code v128.store} address
+	 * LINEAR memory, this also switches the packed float-array representation: a
+	 * {@code TYPE_FARRAY}'s data field then holds an {@code i31ref} pointer into a
+	 * bump-allocated linear-memory block instead of a {@code TYPE_F64ARR}/
+	 * {@code TYPE_F32ARR} GC array. The type section is unchanged (the data field is
+	 * {@code (ref null eq)} either way); the representation is fixed at compile time, so
+	 * one module only ever holds one of the two. Without {@code simd} the output is
+	 * byte-identical to a build of this compiler that never knew about the flag.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve,
+			boolean simd) {
 		this.dynamic = dynamic;
 		this.component = component;
 		// no-wasi is a Preview 1-only mode; a component has its own (lowered) import
@@ -142,6 +169,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.noWasi = noWasi && !component;
 		this.optimize = optimize;
 		this.serve = serve && component;
+		this.simd = simd;
+	}
+
+	/**
+	 * The index of the first user defun: the fixed runtime helpers, plus -- under
+	 * {@code --simd} only -- the {@link WasmVecSimdRuntimeBuilder} block. Every fixed
+	 * {@code FUNC_*} constant below {@link #FUNC_USER_BASE} keeps its value in both
+	 * modes; only what follows shifts, and only when {@code simd} is set.
+	 */
+	int userFuncBase() {
+		return FUNC_USER_BASE + (this.simd ? WasmVecSimdRuntimeBuilder.FUNC_COUNT : 0);
 	}
 
 	// Function indices (imports come first). Defined functions are indexed relative to
@@ -429,11 +467,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// of a string value straight from its GC array. See the type comment.
 	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
 
+	// The vec: SIMD block (_vec_alloc + the twelve v128 kernels), emitted ONLY under
+	// --simd. Fixed indices relative to FUNC_WRITE_STR_GC, so every constant above keeps
+	// its value; the user defuns below shift by WasmVecSimdRuntimeBuilder.FUNC_COUNT when
+	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
+	static final int FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1;
+
 	// User defuns start after the dispatch functions, the four fetch helpers, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// promise-await helper, the two binary stream helpers, the four string-stream
 	// helpers, the five symbol-API helpers, the read-char helper, and the four string
-	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc).
+	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc) -- plus, under
+	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
 	static final int FUNC_USER_BASE = FUNC_WRITE_STR_GC + 1;
 
 	// Type indices
@@ -671,6 +716,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bump scratch offset they were assembled at is reused (HEAP_PTR is a stack pointer
 	// -- see FUNC_STR_FRESH). This is what retires the linear string heap leak.
 	static final int STRING_ID_CTR_ADDR = 156;
+
+	// Bump pointer of the packed float-array arena (--simd only; see
+	// WasmVecSimdRuntimeBuilder). Zero-initialized linear memory means "not yet seeded":
+	// the first _vec_alloc starts the arena at the CURRENT memory size, i.e. above every
+	// page the module (or, in component mode, the shared mem module + its adapters)
+	// statically reserves, and grows the memory from there. That is why no fixed base
+	// address is baked in -- the arena is always the top of the address space, which is
+	// also why a mark/reset of this single word is a complete arena pop (.todo/104).
+	static final int VEC_HEAP_PTR_ADDR = 160;
 
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
@@ -957,7 +1011,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ arity + " (bundle the extra arguments into a list)");
 			}
 			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, funcId,
-					TYPE_CALLABLE_BASE + arity, FUNC_USER_BASE + i));
+					TYPE_CALLABLE_BASE + arity, userFuncBase() + i));
 		}
 
 		// Shared state for lambda discovery
@@ -992,6 +1046,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.component(this.component)
+			.simd(this.simd)
+			.userFuncBase(userFuncBase())
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
@@ -1184,7 +1240,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// They precede the wrappers so the fixed FUNC_* constants are unaffected.
 		boolean exportUsesMemory = (!this.component || this.serve)
 				&& exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
-		int exportHelperBase = FUNC_USER_BASE + numDefuns + numLambdas;
+		int exportHelperBase = userFuncBase() + numDefuns + numLambdas;
 		// A :string import result is written into linear memory by the host and boxed
 		// with the same _str_from_mem helper, so it forces the helper pair on too.
 		boolean importUsesStrFromMem = importDecls.stream().anyMatch(WasmImportCompiler::usesStrFromMem);
@@ -1260,7 +1316,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
 				dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns,
-						stringTable, usesEval));
+						stringTable, usesEval, userFuncBase()));
 			}
 			else {
 				// Unused arity: unreachable body
@@ -1276,13 +1332,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Build helper function bodies
 		byte[] printI32Body = WasmRuntimeBuilder.buildPrintI32Core(true);
 		byte[] writeStrBody = WasmRuntimeBuilder.buildWriteStrBody();
-		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable);
+		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
-		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable);
+		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd);
 
 		// Build the eval runtime (interpreter + function-name registry). The registry
 		// maps a symbol-name string offset to (funcId, arity). Because the string table
@@ -1895,6 +1951,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
+				// vec: SIMD block (--simd only): _vec_alloc + the twelve v128 kernels
+				if (this.simd) {
+					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
+						fnDef.addFunction(WasmVecSimdRuntimeBuilder.typeIndexOf(i));
+					}
+				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -2128,6 +2190,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _write_str_gc (FUNC_WRITE_STR_GC): print a string value from its GC
 				// array.
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
+				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
+				if (this.simd) {
+					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
+						code.addFunction(WasmVecSimdRuntimeBuilder.build(i, FUNC_VEC_BASE));
+					}
+				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -2412,6 +2480,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean component = false;
 
 		/**
+		 * True under {@code --simd}: the vectorizable {@code vec:} kernels are routed to
+		 * the {@link WasmVecSimdRuntimeBuilder} v128 helpers at their call sites, and a
+		 * packed float array's {@code TYPE_FARRAY} data field holds an {@code i31ref}
+		 * pointer into the linear-memory arena rather than a {@code TYPE_F64ARR}/
+		 * {@code TYPE_F32ARR} GC array. One module only ever uses one representation, so
+		 * every packed reader/writer branches on this flag at COMPILE time.
+		 */
+		boolean simd = false;
+
+		/**
+		 * {@link WasmLispCompiler#userFuncBase()} -- the index of the first user defun.
+		 */
+		int userFuncBase = FUNC_USER_BASE;
+
+		/**
 		 * True for the single context that compiles top-level forms (the {@code _start}
 		 * body), false for defun/lambda bodies. When {@link #usesEval} is also set, a
 		 * top-level global variable binding is mirrored into the eval runtime's global
@@ -2489,6 +2572,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
 			this.component = builder.component;
+			this.simd = builder.simd;
+			this.userFuncBase = builder.userFuncBase;
 			this.userDefunNames = builder.userDefunNames;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
@@ -2520,6 +2605,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean dynamic = false;
 
 			private boolean component = false;
+
+			private boolean simd = false;
+
+			private int userFuncBase = FUNC_USER_BASE;
 
 			private Set<String> userDefunNames = Set.of();
 
@@ -2575,6 +2664,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder component(boolean component) {
 				this.component = component;
+				return this;
+			}
+
+			Builder simd(boolean simd) {
+				this.simd = simd;
+				return this;
+			}
+
+			Builder userFuncBase(int userFuncBase) {
+				this.userFuncBase = userFuncBase;
 				return this;
 			}
 

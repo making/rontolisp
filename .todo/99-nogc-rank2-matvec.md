@@ -8,9 +8,17 @@ that `vec:` and `linalg:` are single-float-complete across all backends (todo-97
 constructor follow-on), the `--no-gc` GEMV gap is the remaining hole in the `vec:` surface on the
 scalar backend.
 
-Today it is a clean compile error: `NoGcWasmCompiler.SIMD_UNSUPPORTED_NO_GC = {VEC_MATVEC}`
-(~L2434) throws "'matvec' is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1
-only" (~L2456).
+Today it is a clean compile error: `NoGcWasmCompiler.SIMD_UNSUPPORTED_NO_GC = {VEC_MATVEC,
+VEC_MATVEC_INTO}` throws "'matvec' is GEMV over a rank-2 matrix, but --no-gc packed vectors are
+rank-1 only".
+
+**Update 2026-07-09 (`.todo/101` landed).** wasm-GC `--simd` now ships GEMV, and the kernel work is
+already done and shared: `WasmVecLoops.simdDot` is the per-row loop, and
+`WasmVecSimdRuntimeBuilder.emitMatvecRows` is the row-cursor walk (reset `ap`/`bp`/`cnt` per row,
+advance `wrow` by `n << shift`, store `res` demoted for f32). Only the LAYOUT half of this todo is
+left on `--no-gc`: give it a rank-2 block and read `d`/`n` out of it, then call the shared emitters.
+wasm-GC gets away with rank-1-only blocks because the `$farray` struct carries `dims` on the GC
+heap; `--no-gc` has no struct, so the dims must go in the block header.
 
 ## The real blocker: `--no-gc` is rank-1-only by design
 

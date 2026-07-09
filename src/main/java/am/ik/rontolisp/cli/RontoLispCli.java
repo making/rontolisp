@@ -250,24 +250,17 @@ public final class RontoLispCli {
 				bytes = new NoGcWasmCompiler(optimize, simd).compile(program);
 			}
 			else {
-				// The wasm-GC backend cannot honor --simd yet: v128 addresses linear
-				// memory,
-				// but packed arrays here are GC objects reached by array.get/set (lifting
-				// this is .todo/101). Warn and fall back to the scalar vec: reference
-				// rather
-				// than fail, so a --simd-everywhere build keeps working.
-				if (simd) {
-					warn("--simd has no effect on the wasm-GC backend (packed arrays are GC objects, not "
-							+ "linear memory); the vec: kernels use the scalar reference. Use --no-gc for native "
-							+ "v128, or -o <name>.class --simd for the JVM Vector API.");
-				}
 				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
 				// component
 				// (--component only). The HttpHandlerInliner splices in a %http-dispatch
 				// wasm-export wrapper that the serve adapter calls per request.
 				boolean serve = component && HttpHandlerInliner.usesHttpHandler(program);
 				List<LispVal> wasmProgram = serve ? HttpHandlerInliner.inline(program) : program;
-				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve).compile(wasmProgram);
+				// --simd routes the vectorizable vec: kernels to emitted v128 helpers.
+				// Because v128 addresses LINEAR memory, it also moves packed float arrays
+				// off the GC heap into a bump-allocated linear arena (.todo/101), which
+				// nothing frees within a run -- use the -into kernels in hot loops.
+				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd).compile(wasmProgram);
 			}
 		}
 		else {
@@ -322,11 +315,13 @@ public final class RontoLispCli {
 		this.out.println("                     Scalar vec: loops by default; add --simd for native v128.");
 		this.out.println("  --simd             Accelerate the vec: kernels with hardware SIMD");
 		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
-		this.out.println("                     java --add-modules jdk.incubator.vector). --no-gc (.wasm): emit");
-		this.out.println("                     native v128 (f64x2/f32x4). Interpreter: run the vec: kernels on");
-		this.out.println("                     the Vector API (baked into the native binary; on java -jar add");
+		this.out.println("                     java --add-modules jdk.incubator.vector). WASM (.wasm, both");
+		this.out.println("                     wasm-GC and --no-gc): emit native v128 (f64x2/f32x4). On wasm-GC");
+		this.out.println("                     this also moves packed float arrays into a bump-allocated linear");
+		this.out.println("                     arena that nothing frees, so prefer the vec: -into kernels in hot");
+		this.out.println("                     loops. Interpreter: run the vec: kernels on the Vector API (baked");
+		this.out.println("                     into the native binary; on java -jar add");
 		this.out.println("                     --add-modules jdk.incubator.vector, else it falls back to scalar).");
-		this.out.println("                     No effect on the wasm-GC backend (a warning is printed there).");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 		this.out.println("  --system-path DIRS Directories searched for NAME.asd by asdf:load-system");

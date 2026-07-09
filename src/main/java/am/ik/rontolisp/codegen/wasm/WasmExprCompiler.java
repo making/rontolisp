@@ -125,6 +125,13 @@ final class WasmExprCompiler {
 			throw new UnsupportedOperationException("Improper list in call position: " + cons.print());
 		}
 		if (head instanceof LispSymbol sym) {
+			// --simd: the vectorizable vec: kernels are routed to the emitted v128
+			// runtime
+			// helpers instead of the scalar vec.lisp defun of the same name.
+			if (ctx.simd && WasmVecSimdCompiler.handles(sym.name())) {
+				WasmVecSimdCompiler.compile(sym.name(), cons, ctx);
+				return;
+			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
 				if (LispNames.VERSION.equals(qn.member())) {

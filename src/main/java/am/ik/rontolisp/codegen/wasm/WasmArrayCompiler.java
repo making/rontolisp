@@ -302,7 +302,8 @@ final class WasmArrayCompiler {
 	// (double) or TYPE_F32ARR (single) filled with the coerced init (default 0.0), stored
 	// in the SAME TYPE_FARRAY struct. No fill pointer / adjustable / displacement -- a
 	// packed array never has them, and the caller has already routed those cases to the
-	// general path.
+	// general path. Under --simd the data is a linear-memory block instead; see
+	// compilePackedMakeLinear.
 	private static void compilePackedMake(List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean single) {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
@@ -316,15 +317,16 @@ final class WasmArrayCompiler {
 		if (init != null) {
 			WasmExprCompiler.compileExpr(init, ctx);
 			WasmEmitHelper.castFloatGetF64(ctx);
-			if (single) {
-				ctx.writer.write(Instruction.F32_DEMOTE_F64);
-			}
-		}
-		else if (single) {
-			f32Const(ctx, 0.0f);
 		}
 		else {
 			f64Const(ctx, 0.0);
+		}
+		if (ctx.simd) {
+			compilePackedMakeLinear(ctx, dimsArrSlot, totalSlot, single);
+			return;
+		}
+		if (single) {
+			ctx.writer.write(Instruction.F32_DEMOTE_F64);
 		}
 		// data = array.new TYPE_F32ARR / TYPE_F64ARR (init, total)
 		getLocal(ctx, totalSlot);
@@ -339,6 +341,51 @@ final class WasmArrayCompiler {
 		// struct.new TYPE_FARRAY (dims, data)
 		getLocal(ctx, dimsArrSlot);
 		getLocal(ctx, dataArrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
+	// The --simd lowering of compilePackedMake: the data lives in a _vec_alloc'd linear
+	// block ([count][kind][pad][elements]) whose pointer is stored as an i31ref in the
+	// SAME (ref null eq) data field. Expects the coerced f64 init on the stack.
+	private static void compilePackedMakeLinear(WasmLispCompiler.Ctx ctx, int dimsArrSlot, int totalSlot,
+			boolean single) {
+		boxFloat(ctx);
+		int initSlot = setTemp(ctx);
+		int ptrSlot = ctx.allocTemp(); // the block pointer, held boxed as an i31
+		emitVecAlloc(ctx, totalSlot, single);
+		boxI31(ctx);
+		setLocal(ctx, ptrSlot);
+		emitStoreBlockHeader(ctx, ptrSlot, totalSlot, single);
+		// for (i = 0; i < total; i++) mem[ptr + 16 + (i << shift)] = init
+		int iSlot = ctx.allocTemp();
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		setLocal(ctx, iSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getLocal(ctx, iSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_GE_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		emitElementAddr(ctx, ptrSlot, iSlot, single);
+		getLocal(ctx, initSlot);
+		unboxKnownFloat(ctx);
+		emitStoreElement(ctx, single);
+		getLocal(ctx, iSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_ADD);
+		boxI31(ctx);
+		setLocal(ctx, iSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // loop
+		ctx.writer.write(Instruction.END); // block
+		// struct.new TYPE_FARRAY (dims, i31(ptr))
+		getLocal(ctx, dimsArrSlot);
+		getLocal(ctx, ptrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
@@ -793,10 +840,17 @@ final class WasmArrayCompiler {
 		int arrSlot = setTemp(ctx);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
-		// packed: single-float when the data array is a TYPE_F32ARR, else double-float.
-		farrayField(ctx, arrSlot, 1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		// packed: single-float when the data array is a TYPE_F32ARR (--simd: when the
+		// block's kind word is 1), else double-float.
+		if (ctx.simd) {
+			blockPtr(ctx, arrSlot);
+			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x04);
+		}
+		else {
+			farrayField(ctx, arrSlot, 1);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+		}
 		emitIfEq(ctx);
 		WasmEmitHelper.compileStringLiteral(LispNames.SINGLE_FLOAT, ctx);
 		ctx.writer.write(Instruction.ELSE);
@@ -1325,12 +1379,163 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(field);
 	}
 
+	// --- packed float-array LINEAR-memory helpers (--simd only) -----------------------
+	//
+	// Under --simd the farray's data field is an i31ref pointer to a _vec_alloc'd block:
+	// [count:i32][kind:i32][pad][pad][elements] (kind 0 = f64, 1 = f32; elements at +16,
+	// 16-byte aligned so v128.load/store hit their natural alignment). Everything below
+	// mirrors the GC-array helpers above, one memory op at a time. The width is a runtime
+	// header word for the shared kernels, but at these call sites it is also known
+	// statically wherever the GC path knew it, so the `single` flag stays a compile-time
+	// choice exactly as before -- except in
+	// emitPackedReadF64/WriteF64/compileElementType,
+	// where the GC path likewise had to test the data array's type at runtime.
+
+	// Pushes the i32 block pointer of the farray held (as eq) in slot.
+	private static void blockPtr(WasmLispCompiler.Ctx ctx, int slot) {
+		farrayField(ctx, slot, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_U);
+	}
+
+	// Pushes the i32 kind word (0 = double, 1 = single) of the block whose pointer is
+	// held boxed as an i31 in ptrSlot.
+	private static void loadKindFromPtr(WasmLispCompiler.Ctx ctx, int ptrSlot) {
+		getLocal(ctx, ptrSlot);
+		WasmEmitHelper.castI31GetU(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x04);
+	}
+
+	// Pushes ptr = _vec_alloc(16 + (total << shift)) as an i32. totalSlot holds the
+	// i31-boxed element count.
+	private static void emitVecAlloc(WasmLispCompiler.Ctx ctx, int totalSlot, boolean single) {
+		i32Const(ctx, WasmVecSimdRuntimeBuilder.DATA_OFF);
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, single ? 2 : 3);
+		ctx.writer.write(Instruction.I32_SHL);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.ALLOC);
+	}
+
+	// mem[ptr] = count; mem[ptr+4] = kind.
+	private static void emitStoreBlockHeader(WasmLispCompiler.Ctx ctx, int ptrSlot, int totalSlot, boolean single) {
+		getLocal(ctx, ptrSlot);
+		WasmEmitHelper.castI31GetU(ctx);
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(ctx, ptrSlot);
+		WasmEmitHelper.castI31GetU(ctx);
+		i32Const(ctx, single ? 1 : 0);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x04);
+	}
+
+	// Pushes the i32 address of element idx: ptr + 16 + (idx << shift). Both slots hold
+	// i31-boxed values (the pointer via i31.get_u, the index via i31.get_s).
+	private static void emitElementAddr(WasmLispCompiler.Ctx ctx, int ptrSlot, int idxSlot, boolean single) {
+		getLocal(ctx, ptrSlot);
+		WasmEmitHelper.castI31GetU(ctx);
+		i32Const(ctx, WasmVecSimdRuntimeBuilder.DATA_OFF);
+		ctx.writer.write(Instruction.I32_ADD);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, single ? 2 : 3);
+		ctx.writer.write(Instruction.I32_SHL);
+		ctx.writer.write(Instruction.I32_ADD);
+	}
+
+	// Stores the f64 on the stack at the address below it, narrowing for a single-float
+	// block.
+	private static void emitStoreElement(WasmLispCompiler.Ctx ctx, boolean single) {
+		if (single) {
+			ctx.writer.write(Instruction.F32_DEMOTE_F64);
+			ctx.writer.write(Instruction.F32_STORE, 0x00, 0x00);
+		}
+		else {
+			ctx.writer.write(Instruction.F64_STORE, 0x00, 0x00);
+		}
+	}
+
+	// Loads the element at the address on the stack as an f64, widening from a
+	// single-float block.
+	private static void emitLoadElement(WasmLispCompiler.Ctx ctx, boolean single) {
+		if (single) {
+			ctx.writer.write(Instruction.F32_LOAD, 0x00, 0x00);
+			ctx.writer.write(Instruction.F64_PROMOTE_F32);
+		}
+		else {
+			ctx.writer.write(Instruction.F64_LOAD, 0x00, 0x00);
+		}
+	}
+
+	// Unboxes a value KNOWN to be a TYPE_FLOAT struct (the compiler boxed it itself), so
+	// no i31/ratio type test is needed.
+	private static void unboxKnownFloat(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeSignedLeb128(0);
+	}
+
+	// The --simd counterpart of emitPackedReadF64: branch on the block's kind word.
+	private static void emitPackedReadF64Linear(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		blockPtr(ctx, arrSlot);
+		boxI31(ctx);
+		int ptrSlot = setTemp(ctx);
+		loadKindFromPtr(ctx, ptrSlot);
+		ctx.writer.write(Instruction.IF, Type.F64.code());
+		emitElementAddr(ctx, ptrSlot, idxSlot, true);
+		emitLoadElement(ctx, true);
+		ctx.writer.write(Instruction.ELSE);
+		emitElementAddr(ctx, ptrSlot, idxSlot, false);
+		emitLoadElement(ctx, false);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// The --simd counterpart of emitPackedWriteF64: same "return the value AS STORED"
+	// contract (a single-float write returns the f32-round-tripped value).
+	private static void emitPackedWriteF64Linear(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int boxValSlot) {
+		blockPtr(ctx, arrSlot);
+		boxI31(ctx);
+		int ptrSlot = setTemp(ctx);
+		loadKindFromPtr(ctx, ptrSlot);
+		emitIfEq(ctx); // (result (ref null eq)): the boxed value as stored
+		// single: store demote(value); return box(promote(demote(value))).
+		getLocal(ctx, boxValSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		ctx.writer.write(Instruction.F32_DEMOTE_F64);
+		ctx.writer.write(Instruction.F64_PROMOTE_F32);
+		boxFloat(ctx);
+		int narrowedSlot = setTemp(ctx);
+		emitElementAddr(ctx, ptrSlot, idxSlot, true);
+		getLocal(ctx, narrowedSlot);
+		unboxKnownFloat(ctx);
+		emitStoreElement(ctx, true);
+		getLocal(ctx, narrowedSlot);
+		ctx.writer.write(Instruction.ELSE);
+		// double: store the coerced f64, return it unchanged.
+		emitElementAddr(ctx, ptrSlot, idxSlot, false);
+		getLocal(ctx, boxValSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		emitStoreElement(ctx, false);
+		getLocal(ctx, boxValSlot);
+		ctx.writer.write(Instruction.END);
+	}
+
 	// Reads the packed farray element data[idx] as an f64, dispatching on the data
 	// array's width: a TYPE_F32ARR element is widened f32->f64 (f64.promote_f32), a
 	// TYPE_F64ARR element is read directly. Leaves one f64 on the stack. arrSlot holds
 	// the
 	// farray (as eq); idxSlot holds the i31-boxed flat index.
 	private static void emitPackedReadF64(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		if (ctx.simd) {
+			emitPackedReadF64Linear(ctx, arrSlot, idxSlot);
+			return;
+		}
 		farrayField(ctx, arrSlot, 1);
 		int dataSlot = setTemp(ctx);
 		getLocal(ctx, dataSlot);
@@ -1364,6 +1569,10 @@ final class WasmArrayCompiler {
 	// the
 	// i31-boxed flat index.
 	private static void emitPackedWriteF64(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int boxValSlot) {
+		if (ctx.simd) {
+			emitPackedWriteF64Linear(ctx, arrSlot, idxSlot, boxValSlot);
+			return;
+		}
 		farrayField(ctx, arrSlot, 1);
 		int dataSlot = setTemp(ctx);
 		getLocal(ctx, dataSlot);

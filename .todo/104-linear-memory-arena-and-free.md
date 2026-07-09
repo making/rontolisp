@@ -6,15 +6,36 @@ usable from Lisp (not only from the host across an export boundary).
 Sequenced AFTER `.todo/103` (destination-passing kernels), which removes the *need* to free in the
 common case by making the bump high-water equal the live set. 104 handles what 103 cannot reach:
 `linalg:` transforms (fresh array every call), `vec:zeros`/`from-list` inside a loop, and any
-`--simd` wasm-GC program once `.todo/101` moves packed arrays into linear memory.
+`--simd` wasm-GC program.
+
+## Status 2026-07-09: `.todo/101` HAS LANDED — a third arena now exists, and it is the urgent one
+
+wasm-GC `--simd` puts packed float arrays in linear memory (`.kb/vec.md` acceleration layer 3).
+Its allocator is `WasmVecSimdRuntimeBuilder._vec_alloc` over a SINGLE word,
+`WasmLispCompiler.VEC_HEAP_PTR_ADDR = 160`, seeded lazily with `memory.size() << 16` and grown by
+whole pages. Measured: 2000 allocating `vec:add`s over a 65536-element vector reach 1.16 GB;
+`vec:add-into` stays at 22 MB. Two consequences for this todo:
+
+1. **`with-arena` over the vec arena is trivially sound and is the single highest-value piece.**
+   Mark = `i32.load 160`, reset = `i32.store 160`. Nothing else lives in that arena (strings and the
+   intern table use `HEAP_PTR_ADDR = 84`; cons cells, closures and general arrays are GC objects),
+   so a reset can only invalidate packed-array data blocks. The escape hazard is narrow and easy to
+   state: a packed array allocated inside the arena scope must not be read after the reset — the same
+   contract `--no-gc`'s `__ronto_alloc_reset` already documents.
+2. **wasm-GC `--simd` has NO export boundary** (its top level is `_start`), so unlike `--no-gc` there
+   is no automatic pop at all. A long-running `--simd` program has today exactly one tool: `-into`.
+
+The `HEAP_PTR_ADDR` (string/intern) arena keeps every caveat below; the vec arena does not share
+them. Consider shipping `with-arena` for the vec arena FIRST, and treating the string heap as a
+separate, harder question.
 
 ## Where things stand
 
 Both WASM backends bump-allocate and never free:
 
-| | `--no-gc` | wasm-GC |
-|---|---|---|
-| heap pointer | wasm global 0 | linear memory cell `HEAP_PTR_ADDR = 84` |
+| | `--no-gc` | wasm-GC (strings/intern) | wasm-GC `--simd` (packed arrays) |
+|---|---|---|---|
+| heap pointer | wasm global 0 | linear memory cell `HEAP_PTR_ADDR = 84` | linear memory cell `VEC_HEAP_PTR_ADDR = 160` |
 | bump allocator | `__alloc` (4-byte aligned) | `__ronto_alloc` (8-byte aligned) |
 | exported | when `mem.used()` | when a memory-typed export exists |
 | `__ronto_alloc_mark` / `__ronto_alloc_reset` | **yes** (todo-89) | **no** |

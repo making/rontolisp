@@ -386,4 +386,119 @@ class WasmLispCompilerTest {
 		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
 	}
 
+	// --- --simd (todo-101): v128 kernels over linear-memory packed float arrays -------
+
+	private static byte[] compileVec(String source, boolean simd) {
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
+		return new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
+	}
+
+	@Test
+	void simdEmitsV128LocalsAndTheDefaultBuildDeclaresNone() {
+		// The dead-flag guard. Correctness alone cannot prove the interception fired: a
+		// --simd module computes exactly what the scalar vec.lisp defuns do. A v128 local
+		// can only come from a lane loop, and local declarations are the one part of a
+		// code section that decodes without a full opcode walker (an opcode-byte scan
+		// false-positives on immediates), so assert on those. The runnable half of the
+		// guard is in WasmLispCompilerIntegrationTest: a --simd module is REJECTED by a
+		// wasmtime with the SIMD proposal turned off, a default one runs.
+		String source = "(print (vec:dot (vec:ones 5) (vec:ones 5)))";
+		assertThat(declaresV128Local(compileVec(source, true))).as("v128 locals in the --simd kernels").isTrue();
+		assertThat(declaresV128Local(compileVec(source, false))).as("no v128 local in the default wasm-GC module")
+			.isFalse();
+	}
+
+	@Test
+	void simdKeepsTheTypeSectionIdenticalAndAddsExactlyTheVecBlock() {
+		// The representation change rides entirely inside TYPE_FARRAY's (ref null eq)
+		// data
+		// field -- an i31ref pointer instead of a TYPE_F64ARR/TYPE_F32ARR GC array -- so
+		// the type section (and with it the export/import wrapper type bases and the
+		// byte-identical component blobs) is untouched. What --simd does add is exactly
+		// the thirteen-function vec block, which is why FUNC_USER_BASE shifts by that
+		// much
+		// and by nothing else.
+		String source = "(print (aref #d(1.0 2.0 3.0) 1))";
+		byte[] scalar = compileVec(source, false);
+		byte[] simd = compileVec(source, true);
+		assertThat(section(simd, 1)).as("type section unchanged by --simd").isEqualTo(section(scalar, 1));
+		assertThat(functionCount(simd) - functionCount(scalar)).isEqualTo(WasmVecSimdRuntimeBuilder.FUNC_COUNT);
+		assertThat(new WasmLispCompiler().userFuncBase()).isEqualTo(WasmLispCompiler.FUNC_USER_BASE);
+		assertThat(new WasmLispCompiler(false, false, false, false, false, true).userFuncBase())
+			.isEqualTo(WasmLispCompiler.FUNC_USER_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT);
+	}
+
+	@Test
+	void simdComposesWithComponentAndOptimize() {
+		// --simd is orthogonal to the output mode: the vec arena starts above every page
+		// the shared component memory statically reserves, so a component core can grow
+		// it, and the tree shaker decodes the 0xFD prefix.
+		String source = "(print (vec:sum (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))))";
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
+		assertThat(new WasmLispCompiler(false, true, false, false, false, true).compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, false, false, true, false, true).compile(program)).isNotEmpty();
+	}
+
+	// --- minimal module reader (sections + code-section local declarations) -----------
+
+	// The payload of the given section id, or an empty array when absent.
+	private static byte[] section(byte[] module, int wanted) {
+		int[] p = { 8 }; // past the magic + version
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xFF;
+			int size = readUleb(module, p);
+			if (id == wanted) {
+				byte[] payload = new byte[size];
+				System.arraycopy(module, p[0], payload, 0, size);
+				return payload;
+			}
+			p[0] += size;
+		}
+		return new byte[0];
+	}
+
+	// The number of entries in the function section (id 3).
+	private static int functionCount(byte[] module) {
+		return readUleb(section(module, 3), new int[] { 0 });
+	}
+
+	// Whether any function body in the code section (id 10) declares a v128 local. The
+	// local declarations are a decodable prefix of each body -- unlike its instructions,
+	// which need a full opcode walker to scan safely.
+	private static boolean declaresV128Local(byte[] module) {
+		byte[] code = section(module, 10);
+		int[] p = { 0 };
+		int bodies = readUleb(code, p);
+		for (int i = 0; i < bodies; i++) {
+			int size = readUleb(code, p);
+			int end = p[0] + size;
+			int groups = readUleb(code, p);
+			for (int g = 0; g < groups; g++) {
+				readUleb(code, p); // the group's local count
+				int valType = code[p[0]++] & 0xFF;
+				if (valType == 0x7B) { // v128
+					return true;
+				}
+				if (valType == 0x63 || valType == 0x64) { // (ref null ht) / (ref ht)
+					readUleb(code, p);
+				}
+			}
+			p[0] = end;
+		}
+		return false;
+	}
+
+	private static int readUleb(byte[] buf, int[] p) {
+		int result = 0;
+		int shift = 0;
+		while (true) {
+			int b = buf[p[0]++] & 0xFF;
+			result |= (b & 0x7F) << shift;
+			if ((b & 0x80) == 0) {
+				return result;
+			}
+			shift += 7;
+		}
+	}
+
 }

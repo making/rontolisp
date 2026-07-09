@@ -1,0 +1,95 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+
+/**
+ * Compiles the accelerated {@code vec:} kernels ({@code add}/{@code sub}/{@code mul}/
+ * {@code scale}/{@code dot}/{@code sum}/{@code matvec} and their five {@code -into}
+ * siblings) to calls into the emitted v128 runtime helpers
+ * ({@link WasmVecSimdRuntimeBuilder}), replacing the scalar {@code vec.lisp} defun at
+ * those call sites. The wasm-GC counterpart of {@code JvmSimdCompiler}, and wired in the
+ * same way: only when {@code --simd} emitted the helpers
+ * ({@link WasmLispCompiler.Ctx#simd}), otherwise the qualified call falls through to the
+ * ordinary spliced defun.
+ *
+ * <p>
+ * {@code mean}/{@code norm} are not intercepted directly -- they are accelerated
+ * transitively, because their spliced bodies call {@code sum}/{@code dot}. Nor is
+ * {@code #'vec:dot}: a first-class function value still refers to the scalar defun,
+ * exactly as on the JVM.
+ */
+final class WasmVecSimdCompiler {
+
+	private WasmVecSimdCompiler() {
+	}
+
+	/**
+	 * The accelerated members, mapped to their {@link WasmVecSimdRuntimeBuilder} function
+	 * offset. The Lisp call form's argument count is the helper's parameter count.
+	 */
+	private static final Map<String, Integer> KERNELS = Map.ofEntries(
+			Map.entry(LispNames.VEC_ADD, WasmVecSimdRuntimeBuilder.ADD),
+			Map.entry(LispNames.VEC_SUB, WasmVecSimdRuntimeBuilder.SUB),
+			Map.entry(LispNames.VEC_MUL, WasmVecSimdRuntimeBuilder.MUL),
+			Map.entry(LispNames.VEC_SCALE, WasmVecSimdRuntimeBuilder.SCALE),
+			Map.entry(LispNames.VEC_SUM, WasmVecSimdRuntimeBuilder.SUM),
+			Map.entry(LispNames.VEC_DOT, WasmVecSimdRuntimeBuilder.DOT),
+			Map.entry(LispNames.VEC_MATVEC, WasmVecSimdRuntimeBuilder.MATVEC),
+			Map.entry(LispNames.VEC_ADD_INTO, WasmVecSimdRuntimeBuilder.ADD_INTO),
+			Map.entry(LispNames.VEC_SUB_INTO, WasmVecSimdRuntimeBuilder.SUB_INTO),
+			Map.entry(LispNames.VEC_MUL_INTO, WasmVecSimdRuntimeBuilder.MUL_INTO),
+			Map.entry(LispNames.VEC_SCALE_INTO, WasmVecSimdRuntimeBuilder.SCALE_INTO),
+			Map.entry(LispNames.VEC_MATVEC_INTO, WasmVecSimdRuntimeBuilder.MATVEC_INTO));
+
+	/** The argument count of each accelerated member's Lisp call form. */
+	private static int arity(String member) {
+		return switch (member) {
+			case LispNames.VEC_SUM -> 1;
+			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO,
+					LispNames.VEC_MATVEC_INTO ->
+				3;
+			default -> 2;
+		};
+	}
+
+	/** Returns whether the given qualified name is a kernel this compiler accelerates. */
+	static boolean handles(String qualifiedName) {
+		return KERNELS.containsKey(member(qualifiedName));
+	}
+
+	/**
+	 * The member part of a {@code vec:}-qualified name ({@code "vec:dot"} ->
+	 * {@code "dot"}).
+	 */
+	private static String member(String qualifiedName) {
+		if (!qualifiedName.startsWith(LispNames.VEC_PKG + ":")) {
+			return "";
+		}
+		return qualifiedName.substring(qualifiedName.lastIndexOf(':') + 1);
+	}
+
+	/** Emits {@code <args...> call $_vec_<member>} for an accelerated call site. */
+	static void compile(String qualifiedName, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		String member = member(qualifiedName);
+		int offset = Objects.requireNonNull(KERNELS.get(member));
+		int arity = arity(member);
+		List<LispVal> args = cons.toList();
+		if (args.size() != arity + 1) {
+			throw new UnsupportedOperationException("vec:" + member + " expects " + arity + " argument"
+					+ (arity == 1 ? "" : "s") + ", got " + (args.size() - 1));
+		}
+		for (int i = 1; i <= arity; i++) {
+			WasmExprCompiler.compileExpr(args.get(i), ctx);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + offset);
+	}
+
+}

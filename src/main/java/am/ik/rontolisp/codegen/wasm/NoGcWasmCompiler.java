@@ -2245,8 +2245,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// the
 	// same f32 bits, so the round-trip is lossless.
 	private static void f32Const(WasmWriter w, float value) {
-		w.write(Instruction.F64_CONST).writeF64((double) value);
-		w.write(Instruction.F32_DEMOTE_F64);
+		WasmVecLoops.f32Const(w, value);
 	}
 
 	// The packed width of a vector operand at code-gen time: F32VEC if it statically
@@ -2646,21 +2645,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// (e.g.
 	// f64x2.add = 0xF0) MUST use the LEB path, so this never uses the single-byte writer.
 	private static void simd(WasmWriter w, int subOpcode) {
-		w.write(Instruction.SIMD_PREFIX);
-		w.writeUnsignedLeb128(subOpcode);
-	}
-
-	// v128.load / v128.store with a byte-aligned memarg (align 0, offset 0). Byte
-	// alignment
-	// is always valid, so correctness never depends on the block's actual alignment.
-	private static void simdLoad(WasmWriter w) {
-		simd(w, Instruction.V128_LOAD);
-		w.write(0x00, 0x00);
-	}
-
-	private static void simdStore(WasmWriter w) {
-		simd(w, Instruction.V128_STORE);
-		w.write(0x00, 0x00);
+		WasmVecLoops.simd(w, subOpcode);
 	}
 
 	// out = base + 4 (skip the count header to reach the packed f64 data).
@@ -2669,14 +2654,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(outLocal);
-	}
-
-	// ptr += bytes.
-	private static void advancePtr(WasmWriter w, int ptrLocal, int bytes) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ptrLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(bytes);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ptrLocal);
 	}
 
 	// count = i32.wrap(the length argument) into a fresh i32 local.
@@ -2761,43 +2738,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return vecTy;
 	}
 
-	// Opens the SIMD loop header over `count >> laneShift` vector groups (laneShift 1 =
-	// f64x2 pairs, 2 = f32x4 quads): block/loop, break when the group count == 0. Leaves
-	// the block+loop open (the caller emits the body then closeSimdLoop). The 3-arg form
-	// is
-	// the f64x2 default (laneShift 1), kept so its byte output is unchanged.
-	private void openSimdLoop(Fn fn, int countLocal, int remLocal) {
-		openSimdLoop(fn, countLocal, remLocal, 1);
-	}
-
-	private void openSimdLoop(Fn fn, int countLocal, int remLocal, int laneShift) {
-		WasmWriter w = fn.writer;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(laneShift);
-		w.write(Instruction.I32_SHR_U);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-	}
-
-	// Closes the SIMD loop: rem--, branch back, end loop, end block.
-	private void closeSimdLoop(Fn fn, int remLocal) {
-		WasmWriter w = fn.writer;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-	}
-
 	// (vec:add a b) / (vec:sub a b) / (vec:mul a b): element-wise into a fresh vector.
 	// Two f64 lanes per iteration via v128.load + f64x2.<op> + v128.store, then a
-	// one-element scalar tail when the length is odd.
+	// one-element scalar tail when the length is odd. The loop itself is
+	// WasmVecLoops.simdMap2 (shared with the wasm-GC --simd kernels); only the argument
+	// evaluation + block allocation below are --no-gc-specific.
 	private Ty compileSimdElementwise(List<LispVal> args, Fn fn, int simdOp, int scalarOp, boolean into) {
 		requireArgc(args, into ? 4 : 3, into ? "a simd element-wise -into kernel" : "a simd element-wise kernel", fn);
 		Ty vecTy = packedVecType(args.get(1), fn);
@@ -2805,7 +2750,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return compileScalarElementwise(args, fn, scalarOp, into);
 		}
 		if (vecTy == Ty.F32VEC) {
-			return compileSimdElementwiseF32(args, fn, f32x4Of(simdOp), f32ScalarOf(scalarOp), into);
+			return compileSimdElementwiseF32(args, fn, simdOp, scalarOp, into);
 		}
 		WasmWriter w = fn.writer;
 		// -into evaluates the destination first (it is argument 1), then the two
@@ -2823,29 +2768,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, bL, bp);
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem);
-		// mem[dp] = f64x2.<op>(v128.load ap, v128.load bp)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		simdLoad(w);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		simdLoad(w);
-		simd(w, simdOp);
-		simdStore(w);
-		advancePtr(w, ap, 16);
-		advancePtr(w, bp, 16);
-		advancePtr(w, dp, 16);
-		closeSimdLoop(fn, rem);
-		// scalar tail: if (count & 1) mem[dp] = f64.<op>(f64.load ap, f64.load bp)
-		emitOddTailGuard(w, count);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(scalarOp);
-		w.write(Instruction.F64_STORE, 0x00, 0x00);
-		w.write(Instruction.END); // if
+		WasmVecLoops.simdMap2(w, dp, ap, bp, count, rem, -1, false, simdOp, scalarOp);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		return Ty.F64VEC;
 	}
@@ -2875,27 +2798,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, vL, vp);
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem);
-		// mem[dp] = f64x2.mul(v128.load vp, f64x2.splat s)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		simdLoad(w);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
-		simd(w, Instruction.F64X2_SPLAT);
-		simd(w, Instruction.F64X2_MUL);
-		simdStore(w);
-		advancePtr(w, vp, 16);
-		advancePtr(w, dp, 16);
-		closeSimdLoop(fn, rem);
-		// scalar tail: if (count & 1) mem[dp] = f64.load vp * s
-		emitOddTailGuard(w, count);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_STORE, 0x00, 0x00);
-		w.write(Instruction.END); // if
+		WasmVecLoops.simdScale(w, dp, vp, count, rem, -1, s, false);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		return Ty.F64VEC;
 	}
@@ -2920,30 +2823,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
 		int acc = fn.allocV128Local();
-		emitSplatZero(w, acc);
+		WasmVecLoops.splatZero(w, acc);
 		int vp = fn.allocLocal(Ty.F64VEC);
 		dataPtr(w, vL, vp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem);
-		// acc = f64x2.add(acc, v128.load vp)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		simdLoad(w);
-		simd(w, Instruction.F64X2_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
-		advancePtr(w, vp, 16);
-		closeSimdLoop(fn, rem);
 		int sum = fn.allocLocal(Ty.FLOAT);
-		emitHorizontalAdd(w, acc, sum);
-		// tail: if (count & 1) sum += f64.load vp
-		emitOddTailGuard(w, count);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.END); // if
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		WasmVecLoops.simdSum(w, vp, count, rem, -1, acc, sum, false);
 		return Ty.FLOAT;
 	}
 
@@ -2969,39 +2854,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
 		int acc = fn.allocV128Local();
-		emitSplatZero(w, acc);
+		WasmVecLoops.splatZero(w, acc);
 		int ap = fn.allocLocal(Ty.F64VEC);
 		int bp = fn.allocLocal(Ty.F64VEC);
 		dataPtr(w, aL, ap);
 		dataPtr(w, bL, bp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem);
-		// acc = f64x2.add(acc, f64x2.mul(v128.load ap, v128.load bp))
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		simdLoad(w);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		simdLoad(w);
-		simd(w, Instruction.F64X2_MUL);
-		simd(w, Instruction.F64X2_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
-		advancePtr(w, ap, 16);
-		advancePtr(w, bp, 16);
-		closeSimdLoop(fn, rem);
 		int sum = fn.allocLocal(Ty.FLOAT);
-		emitHorizontalAdd(w, acc, sum);
-		// tail: if (count & 1) sum += f64.load ap * f64.load bp
-		emitOddTailGuard(w, count);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		w.write(Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.END); // if
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
+		WasmVecLoops.simdDot(w, ap, bp, count, rem, -1, acc, sum, false);
 		return Ty.FLOAT;
 	}
 
@@ -3026,31 +2886,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// power-of-two) inputs. The f64x2 kernels above are left byte-identical; only an #f /
 	// single-float operand reaches here.
 
-	// Maps a f64x2 lane op to its f32x4 sibling (the element-wise kernels are dispatched
-	// by
-	// the f64 op, so the f32 branch translates once).
-	private static int f32x4Of(int f64x2Op) {
-		return switch (f64x2Op) {
-			case Instruction.F64X2_ADD -> Instruction.F32X4_ADD;
-			case Instruction.F64X2_SUB -> Instruction.F32X4_SUB;
-			case Instruction.F64X2_MUL -> Instruction.F32X4_MUL;
-			default ->
-				throw new IllegalArgumentException("no f32x4 sibling for f64x2 op 0x" + Integer.toHexString(f64x2Op));
-		};
-	}
-
-	private static int f32ScalarOf(int f64Op) {
-		return switch (f64Op) {
-			case Instruction.F64_ADD -> Instruction.F32_ADD;
-			case Instruction.F64_SUB -> Instruction.F32_SUB;
-			case Instruction.F64_MUL -> Instruction.F32_MUL;
-			default -> throw new IllegalArgumentException("no f32 sibling for f64 op 0x" + Integer.toHexString(f64Op));
-		};
-	}
-
 	// (vec:add a b) / (vec:sub a b) / (vec:mul a b) on f32 vectors: element-wise into a
 	// fresh f32 vector. Four f32 lanes per iteration via v128.load + f32x4.<op> +
-	// v128.store, then a scalar remainder loop over the last count & 3 elements.
+	// v128.store, then a scalar remainder loop over the last count & 3 elements. The op
+	// arguments are the f64 ones; WasmVecLoops maps them to their f32 siblings.
 	private Ty compileSimdElementwiseF32(List<LispVal> args, Fn fn, int simdOp, int scalarOp, boolean into) {
 		WasmWriter w = fn.writer;
 		int dstL = into ? compileVecArg(args.get(1), fn, Ty.F32VEC) : -1;
@@ -3065,34 +2904,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, bL, bp);
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem, 2);
-		// mem[dp] = f32x4.<op>(v128.load ap, v128.load bp)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		simdLoad(w);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		simdLoad(w);
-		simd(w, simdOp);
-		simdStore(w);
-		advancePtr(w, ap, 16);
-		advancePtr(w, bp, 16);
-		advancePtr(w, dp, 16);
-		closeSimdLoop(fn, rem);
-		// scalar remainder: for each of the last count & 3 elements,
-		// mem[dp] = f32.<op>(f32.load ap, f32.load bp)
 		int trem = fn.allocLocal(Ty.F64VEC);
-		openScalarTailLoop(fn, count, trem, 3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		w.write(Instruction.F32_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		w.write(Instruction.F32_LOAD, 0x00, 0x00);
-		w.write(scalarOp);
-		w.write(Instruction.F32_STORE, 0x00, 0x00);
-		advancePtr(w, ap, 4);
-		advancePtr(w, bp, 4);
-		advancePtr(w, dp, 4);
-		closeSimdLoop(fn, trem);
+		WasmVecLoops.simdMap2(w, dp, ap, bp, count, rem, trem, true, simdOp, scalarOp);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		return Ty.F32VEC;
 	}
@@ -3115,32 +2928,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, vL, vp);
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem, 2);
-		// mem[dp] = f32x4.mul(v128.load vp, f32x4.splat (demote s))
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		simdLoad(w);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
-		w.write(Instruction.F32_DEMOTE_F64);
-		simd(w, Instruction.F32X4_SPLAT);
-		simd(w, Instruction.F32X4_MUL);
-		simdStore(w);
-		advancePtr(w, vp, 16);
-		advancePtr(w, dp, 16);
-		closeSimdLoop(fn, rem);
-		// scalar remainder: mem[dp] = f32.load vp * (demote s)
 		int trem = fn.allocLocal(Ty.F64VEC);
-		openScalarTailLoop(fn, count, trem, 3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		w.write(Instruction.F32_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
-		w.write(Instruction.F32_DEMOTE_F64);
-		w.write(Instruction.F32_MUL);
-		w.write(Instruction.F32_STORE, 0x00, 0x00);
-		advancePtr(w, vp, 4);
-		advancePtr(w, dp, 4);
-		closeSimdLoop(fn, trem);
+		WasmVecLoops.simdScale(w, dp, vp, count, rem, trem, s, true);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		return Ty.F32VEC;
 	}
@@ -3159,34 +2948,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
 		int acc = fn.allocV128Local();
-		emitSplatZeroF32(w, acc);
+		WasmVecLoops.splatZeroF32(w, acc);
 		int vp = fn.allocLocal(Ty.F32VEC);
 		dataPtr(w, vL, vp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem, 2);
-		// acc = f32x4.add(acc, v128.load vp)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		simdLoad(w);
-		simd(w, Instruction.F32X4_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
-		advancePtr(w, vp, 16);
-		closeSimdLoop(fn, rem);
 		int sum = fn.allocF32Local();
-		emitHorizontalAddF32(w, acc, sum);
-		// tail: for each of the last count & 3 elements, sum += f32.load vp
 		int trem = fn.allocLocal(Ty.F64VEC);
-		openScalarTailLoop(fn, count, trem, 3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		w.write(Instruction.F32_LOAD, 0x00, 0x00);
-		w.write(Instruction.F32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
-		advancePtr(w, vp, 4);
-		closeSimdLoop(fn, trem);
-		// promote the f32 running sum to the f64 scalar boundary.
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.F64_PROMOTE_F32);
+		WasmVecLoops.simdSum(w, vp, count, rem, trem, acc, sum, true);
 		return Ty.FLOAT;
 	}
 
@@ -3206,114 +2974,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
 		int acc = fn.allocV128Local();
-		emitSplatZeroF32(w, acc);
+		WasmVecLoops.splatZeroF32(w, acc);
 		int ap = fn.allocLocal(Ty.F32VEC);
 		int bp = fn.allocLocal(Ty.F32VEC);
 		dataPtr(w, aL, ap);
 		dataPtr(w, bL, bp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openSimdLoop(fn, count, rem, 2);
-		// acc = f32x4.add(acc, f32x4.mul(v128.load ap, v128.load bp))
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		simdLoad(w);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		simdLoad(w);
-		simd(w, Instruction.F32X4_MUL);
-		simd(w, Instruction.F32X4_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
-		advancePtr(w, ap, 16);
-		advancePtr(w, bp, 16);
-		closeSimdLoop(fn, rem);
 		int sum = fn.allocF32Local();
-		emitHorizontalAddF32(w, acc, sum);
-		// tail: for each of the last count & 3 elements, sum += f32.load ap * f32.load bp
 		int trem = fn.allocLocal(Ty.F64VEC);
-		openScalarTailLoop(fn, count, trem, 3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		w.write(Instruction.F32_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		w.write(Instruction.F32_LOAD, 0x00, 0x00);
-		w.write(Instruction.F32_MUL);
-		w.write(Instruction.F32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
-		advancePtr(w, ap, 4);
-		advancePtr(w, bp, 4);
-		closeSimdLoop(fn, trem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.F64_PROMOTE_F32);
+		WasmVecLoops.simdDot(w, ap, bp, count, rem, trem, acc, sum, true);
 		return Ty.FLOAT;
-	}
-
-	// accLocal(v128) = f32x4.splat(0.0f)
-	private static void emitSplatZeroF32(WasmWriter w, int accLocal) {
-		f32Const(w, 0.0f);
-		simd(w, Instruction.F32X4_SPLAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(accLocal);
-	}
-
-	// sumLocal(f32) = lane0 + lane1 + lane2 + lane3 of acc.
-	private static void emitHorizontalAddF32(WasmWriter w, int accLocal, int sumLocal) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
-		simd(w, Instruction.F32X4_EXTRACT_LANE);
-		w.write(0x00);
-		for (int lane = 1; lane < 4; lane++) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
-			simd(w, Instruction.F32X4_EXTRACT_LANE);
-			w.write(lane);
-			w.write(Instruction.F32_ADD);
-		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sumLocal);
-	}
-
-	// Opens a scalar remainder loop over the last (count & mask) elements: rem = count &
-	// mask; block; loop; break when rem == 0. The caller emits the per-element body
-	// (which
-	// must advance the data pointers) then closeSimdLoop (identical shape: rem--, br,
-	// end,
-	// end). Used for the f32x4 tail (mask 3, up to 3 leftover), where the f64x2 single
-	// odd-element guard does not suffice.
-	private void openScalarTailLoop(Fn fn, int countLocal, int remLocal, int mask) {
-		WasmWriter w = fn.writer;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(mask);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-	}
-
-	// accLocal(v128) = f64x2.splat(0.0)
-	private static void emitSplatZero(WasmWriter w, int accLocal) {
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		simd(w, Instruction.F64X2_SPLAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(accLocal);
-	}
-
-	// sumLocal(f64) = lane0(acc) + lane1(acc)
-	private static void emitHorizontalAdd(WasmWriter w, int accLocal, int sumLocal) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
-		simd(w, Instruction.F64X2_EXTRACT_LANE);
-		w.write(0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(accLocal);
-		simd(w, Instruction.F64X2_EXTRACT_LANE);
-		w.write(0x01);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sumLocal);
-	}
-
-	// Opens `if (count & 1) { ...tail... }` (void blocktype); the caller emits the body
-	// and
-	// the matching `end`. Handles the last element when the length is odd.
-	private static void emitOddTailGuard(WasmWriter w, int countLocal) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.IF, 0x40);
 	}
 
 	// --- vec: package scalar (v128-free) kernels (--no-gc without --simd)
@@ -3339,24 +3009,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// evaluation + block allocation); the emitScalar*Loop helpers are the reusable core.
 	// Here "scalar" means non-SIMD (one element per iteration), distinct from the non-GC
 	// value model the compiler is named for.
-
-	// Opens a loop over ALL `count` elements: rem = count; block; loop; break when rem ==
-	// 0.
-	// The v128-free counterpart of openSimdLoop's group loop -- one element per
-	// iteration.
-	// The body advances its data pointer(s) by one element width, then closeSimdLoop
-	// (rem--,
-	// br, end, end -- shared with the v128 path; emits no SIMD opcode).
-	private void openScalarCountLoop(Fn fn, int countLocal, int remLocal) {
-		WasmWriter w = fn.writer;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(remLocal);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-	}
 
 	// (vec:add / vec:sub / vec:mul a b) without --simd: dst[i] = op(a[i], b[i]) over a
 	// plain
@@ -3391,25 +3043,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// is the f64 arithmetic op (F64_ADD/SUB/MUL); the f32 sibling is derived via
 	// f32ScalarOf.
 	private void emitScalarMap2Loop(Fn fn, int ap, int bp, int dp, int count, Ty vecTy, int scalarF64Op) {
-		WasmWriter w = fn.writer;
-		boolean single = vecTy == Ty.F32VEC;
-		int loadOp = single ? Instruction.F32_LOAD : Instruction.F64_LOAD;
-		int storeOp = single ? Instruction.F32_STORE : Instruction.F64_STORE;
-		int op = single ? f32ScalarOf(scalarF64Op) : scalarF64Op;
-		int stride = single ? 4 : 8;
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openScalarCountLoop(fn, count, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		w.write(loadOp, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		w.write(loadOp, 0x00, 0x00);
-		w.write(op);
-		w.write(storeOp, 0x00, 0x00);
-		advancePtr(w, ap, stride);
-		advancePtr(w, bp, stride);
-		advancePtr(w, dp, stride);
-		closeSimdLoop(fn, rem);
+		WasmVecLoops.scalarMap2(fn.writer, dp, ap, bp, count, rem, vecTy == Ty.F32VEC, scalarF64Op);
 	}
 
 	// (vec:scale v s) without --simd: dst[i] = v[i] * s into a fresh vector. The scalar
@@ -3436,26 +3071,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private void emitScalarScaleLoop(Fn fn, int vp, int dp, int count, int sLocal, Ty vecTy) {
-		WasmWriter w = fn.writer;
-		boolean single = vecTy == Ty.F32VEC;
-		int stride = single ? 4 : 8;
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openScalarCountLoop(fn, count, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sLocal);
-		if (single) {
-			w.write(Instruction.F32_DEMOTE_F64);
-			w.write(Instruction.F32_MUL);
-		}
-		else {
-			w.write(Instruction.F64_MUL);
-		}
-		w.write(single ? Instruction.F32_STORE : Instruction.F64_STORE, 0x00, 0x00);
-		advancePtr(w, vp, stride);
-		advancePtr(w, dp, stride);
-		closeSimdLoop(fn, rem);
+		WasmVecLoops.scalarScale(fn.writer, dp, vp, count, rem, sLocal, vecTy == Ty.F32VEC);
 	}
 
 	// (vec:sum v) without --simd: a left-to-right scalar sum, leaving the f64 total on
@@ -3480,30 +3097,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private void emitScalarSumLoop(Fn fn, int vp, int count, Ty vecTy) {
-		WasmWriter w = fn.writer;
 		boolean single = vecTy == Ty.F32VEC;
-		int stride = single ? 4 : 8;
 		int sum = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
-		if (single) {
-			f32Const(w, 0.0f);
-		}
-		else {
-			w.write(Instruction.F64_CONST).writeF64(0.0);
-		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openScalarCountLoop(fn, count, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vp);
-		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(single ? Instruction.F32_ADD : Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(sum);
-		advancePtr(w, vp, stride);
-		closeSimdLoop(fn, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(sum);
-		if (single) {
-			w.write(Instruction.F64_PROMOTE_F32);
-		}
+		WasmVecLoops.scalarSum(fn.writer, vp, count, rem, sum, single);
 	}
 
 	// (vec:dot a b) without --simd: a left-to-right scalar sum of a[i]*b[i], leaving the
@@ -3531,34 +3128,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private void emitScalarDotLoop(Fn fn, int ap, int bp, int count, Ty vecTy) {
-		WasmWriter w = fn.writer;
 		boolean single = vecTy == Ty.F32VEC;
-		int stride = single ? 4 : 8;
 		int acc = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
-		if (single) {
-			f32Const(w, 0.0f);
-		}
-		else {
-			w.write(Instruction.F64_CONST).writeF64(0.0);
-		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		openScalarCountLoop(fn, count, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ap);
-		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(bp);
-		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
-		w.write(single ? Instruction.F32_MUL : Instruction.F64_MUL);
-		w.write(single ? Instruction.F32_ADD : Instruction.F64_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
-		advancePtr(w, ap, stride);
-		advancePtr(w, bp, stride);
-		closeSimdLoop(fn, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-		if (single) {
-			w.write(Instruction.F64_PROMOTE_F32);
-		}
+		WasmVecLoops.scalarDot(fn.writer, ap, bp, count, rem, acc, single);
 	}
 
 	// (char s i): the byte at content offset i, as its code point (a character IS its

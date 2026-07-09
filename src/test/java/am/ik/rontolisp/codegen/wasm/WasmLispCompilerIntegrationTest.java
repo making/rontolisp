@@ -5845,4 +5845,117 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("progv");
 	}
 
+	// --- wasm-GC --simd (todo-101) ---------------------------------------------------
+
+	// Compiles a vec:-using program on the wasm-GC backend, with or without --simd, and
+	// runs it. Splices vec.lisp like RontoLispCli does (the scalar members -- zeros/ones/
+	// arange/aref/length/mean/norm/to-list -- keep running as defuns over the packed
+	// surface even under --simd; only the vectorizable kernels are intercepted).
+	private static String compileAndRunVec(String lispCode, boolean simd, String... extraFlags) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "--wasm", "gc"));
+		command.addAll(List.of(extraFlags));
+		command.add("/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode()).as("exit code (simd=%s): %s\nstderr: %s", simd, lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	// The whole vec: surface at both widths, at lengths covering every SIMD tail
+	// configuration: f64x2 needs even/odd, f32x4 needs 0/1/2/3 leftover elements.
+	private static final String VEC_SURFACE = """
+			(dolist (n '(1 2 3 4 5 7 8))
+			  (let ((a (vec:arange n)) (b (vec:ones n)))
+			    (print (list n (vec:dot a b) (vec:sum a) (vec:add a b) (vec:sub a b)
+			                 (vec:mul a a) (vec:scale a 2.5) (vec:mean a)))))
+			(dolist (n '(1 2 3 4 5 7 8))
+			  (let ((a (vec:arange n 'single-float)) (b (vec:ones n 'single-float)))
+			    (print (list n (vec:dot a b) (vec:sum a) (vec:add a b) (vec:scale a 2.0)))))
+			(let ((o (vec:zeros 5)) (d (vec:ones 5)))
+			  (print (eq o (vec:add-into o o d)))
+			  (print o)
+			  (print (vec:sub-into o o d))
+			  (print (vec:mul-into o o o))
+			  (print (vec:scale-into o o 3.0)))
+			(let ((w #d((1.0 2.0 3.0) (4.0 5.0 6.0))) (x #d(1.0 2.0 3.0)) (o (vec:zeros 2)))
+			  (print (vec:matvec w x))
+			  (print (vec:matvec-into o w x)))
+			(print (vec:matvec #f((1.0 2.0) (3.0 4.0) (5.0 6.0)) #f(2.0 4.0)))
+			(let ((d #d(1.0 2.0 3.0 4.0 5.0)) (f #f(1.0 2.0 3.0)))
+			  (setf (aref d 0) 9.5)
+			  (print (list d (aref d 0) (length d) (array-dimensions d) (array-element-type d)))
+			  (print (list f (array-element-type f) (row-major-aref f 1))))
+			(print (vec:to-list #d(1.0 2.0 3.0)))
+			(print (vec:from-list '(4.0 5.0 6.0)))
+			(print (make-array '(2 3) :element-type 'double-float :initial-element 2.0))
+			""";
+
+	@Test
+	void wasmGcSimdIsByteIdenticalToTheScalarPathOverTheWholeVecSurface() throws Exception {
+		// The correctness contract: --simd changes the packed representation (GC array ->
+		// linear-memory block) and the kernels (scalar defuns -> v128), and must produce
+		// exactly what the scalar wasm-GC path -- the cross-backend oracle -- produces.
+		// Covers both widths, every f64x2/f32x4 tail configuration, the -into kernels,
+		// GEMV, the generic packed accessors and make-array/#d/#f literals.
+		assertThat(compileAndRunVec(VEC_SURFACE, true)).isEqualTo(compileAndRunVec(VEC_SURFACE, false));
+	}
+
+	@Test
+	void wasmGcSimdOptimizedIsByteIdenticalToTheScalarPath() throws Exception {
+		// --optimize shakes the (now dead) vec.lisp kernel defuns and must not disturb
+		// the
+		// v128 bodies; the tree shaker's 0xFD decoder is what makes that safe.
+		String source = "(print (vec:dot (vec:arange 9) (vec:ones 9)))"
+				+ "(print (vec:sum (vec:add (vec:arange 7 'single-float) (vec:ones 7 'single-float))))"
+				+ "(print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))";
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
+		byte[] optimized = new WasmLispCompiler(false, false, false, true, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo(compileAndRunVec(source, false));
+	}
+
+	@Test
+	void wasmGcSimdModuleNeedsTheSimdProposalAndTheDefaultOneDoesNot() throws Exception {
+		// The runnable dead-flag guard, the wasm-GC counterpart of the JVM's
+		// NoClassDefFoundError-without-the-incubator-module check: turning the SIMD
+		// proposal off makes wasmtime REFUSE to compile the --simd module (its v128
+		// opcodes no longer validate), while the default module still runs. Proves the
+		// interception fired -- correctness alone cannot, since both compute the same
+		// values. (relaxed-simd must be disabled too: wasmtime rejects simd=n on its
+		// own.)
+		String source = "(print (vec:dot (vec:ones 5) (vec:ones 5)))";
+		String[] noSimd = { "--wasm", "simd=n", "--wasm", "relaxed-simd=n" };
+		assertThat(compileAndRunVec(source, false, noSimd)).isEqualTo("5.0");
+
+		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
+		byte[] simdBytes = new WasmLispCompiler(false, false, false, false, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(simdBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "--wasm", "simd=n", "--wasm",
+				"relaxed-simd=n", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("a --simd module must not validate without the SIMD proposal").isNotZero();
+	}
+
+	@Test
+	void wasmGcSimdGrowsItsArenaForVectorsLargerThanTheInitialMemory() throws Exception {
+		// A packed float array lives in linear memory under --simd, and the arena starts
+		// above every statically reserved page -- so anything past the module's initial
+		// four pages exercises _vec_alloc's memory.grow. 65536 f64 elements = 512 KB per
+		// block, well past it. The -into accumulation also pins the destination-passing
+		// contract (the arena high-water stays at the live set instead of growing per
+		// iteration).
+		String source = """
+				(let* ((n 65536) (a (vec:ones n)) (b (vec:ones n)) (o (vec:zeros n)))
+				  (print (vec:dot a b))
+				  (dotimes (i 100) (vec:add-into o o b))
+				  (print (vec:aref o 0))
+				  (print (vec:aref o 65535)))
+				""";
+		assertThat(compileAndRunVec(source, true)).isEqualTo("65536.0\n100.0\n100.0");
+	}
+
 }
