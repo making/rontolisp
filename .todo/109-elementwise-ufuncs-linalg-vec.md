@@ -1,6 +1,6 @@
 # 109 — Named element-wise math functions (numpy ufunc parity) for `linalg:` and `vec:`
 
-**Status: PHASE 1 DONE (2026-07-10). Phases 2 and 3 remain.**
+**Status: PHASE 1 + 1.5 DONE (2026-07-10). Phases 2 and 3 remain.**
 
 Phase 1 shipped `exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` in BOTH
 packages (each `vec:` member with its `-into` sibling), intercepted under `--simd` on
@@ -9,9 +9,10 @@ the interpreter / JVM / wasm-GC and lowered natively on `--no-gc`. Decisions tak
 - `linalg:square` = `(linalg:mul a a)`, `linalg:reciprocal` = `(linalg:div 1 a)`,
   `vec:square` = `(vec:mul v v)`: transitively accelerated, NO new kernels for them
   (the interception guards pin them as `#<lambda>`).
-- `--no-gc` = decision (b): `vec:exp` / `vec:sign` (+`-into`) are clear compile errors
-  (`SIMD_NO_SCALAR_IMPL_NO_GC`); the five arithmetic ufuncs lower natively (scalar
-  loops by default, v128 under `--simd`, `WasmVecLoops.simdMap1`/`scalarMap1`).
+- `--no-gc` = decision (b): `vec:exp` / `vec:sign` (+`-into`) were clear compile errors
+  (`SIMD_NO_SCALAR_IMPL_NO_GC`) -- SUPERSEDED by Phase 1.5 below, which lowers them
+  natively; the five arithmetic ufuncs lower natively (scalar loops by default, v128
+  under `--simd`, `WasmVecLoops.simdMap1`/`scalarMap1`).
 - Per-backend bit-identity holds against each backend's OWN defun: the wasm kernels
   mirror wasm's `0 - x` unary minus / `x < 0 ? 0 - x : x` abs / `(x>0)-(x<0)` signum /
   software `exp` (todo-108 residual edges), so `-0.0`/NaN/exp cross-backend output
@@ -21,48 +22,34 @@ the interpreter / JVM / wasm-GC and lowered natively on `--no-gc`. Decisions tak
   `WasmTreeShaker.skipSimd`. Full design record: `.kb/vec.md` (todo-109 section),
   `.kb/linalg-simd.md`.
 
-## Phase 1.5 — flip `--no-gc` exp/sign from decision (b) to (a) (NEXT SESSION)
+## Phase 1.5 — flip `--no-gc` exp/sign from decision (b) to (a) — DONE (2026-07-10)
 
-Phase 1 took decision (b) (clear compile error) for `vec:exp` / `vec:sign` on `--no-gc`
-because the exp software approximation lived only in the GC backend's boxed
-`WasmExpCompiler`. That hurdle is now gone: the wasm-GC `--simd` kernels needed the same
-sequences on RAW f64 locals, so `WasmVecSimdRuntimeBuilder.emitExpF64(w, tLocal, accLocal)`
-(argument reduction + Horner + 8 squarings, constants shared with `WasmExpCompiler` --
-bit-identical by construction) and `emitSignumF64(w, xLocal)` (`(x>0)-(x<0)` +
-`f64.convert_i32_s`) already exist, are `static`, and sit in the same
-`codegen.wasm` package as `NoGcWasmCompiler`. The recipe:
+`vec:exp` / `vec:sign` (+`-into`) now lower natively on `--no-gc` instead of erroring.
+As shipped:
 
-1. `NoGcWasmCompiler`: move `exp`/`sign`/`exp-into`/`sign-into` from
-   `SIMD_NO_SCALAR_IMPL_NO_GC` (delete the set + its `requireKnownSimd` branch if empty)
-   into `SIMD_MEMBERS`; add them to the `typeOfSimd` operandWidth case and to
-   `compileSimd`. Lowering = an element loop over the linear block (both `--simd` modes
-   identical -- exp has no lane form anywhere, and sign's lane form is not worth it):
-   per element `f64.load`(f32: `f32.load` + `f64.promote_f32`) -> `emitExpF64` /
-   `emitSignumF64` -> store (f32: `f32.demote_f64` + `f32.store`). That is the emap rule,
-   so f32 results are the widen-compute-narrow values. Needs 2 f64 `Fn` locals (t/acc for
-   exp; sign reuses one as x). Consider a `scalarMap1`-style seam in `WasmVecLoops`
-   (e.g. `scalarMap1F64Body(...)` taking an element-body callback) OR just a private
-   NoGc loop -- the existing `compileSimdUnary` already sets up dst/vp/dp/count, so the
-   cheapest cut is a new uop pair handled inside `emitMap1Element`-like code that calls
-   the two emitters (they consume an f64 on the stack and leave an f64: exactly the
-   element-body shape).
-2. Semantics note for the docs/kb: `--no-gc` exp/sign then mirror the WASM family's own
-   edges (software exp low digits; sign maps -0.0/NaN to 0.0) -- consistent with wasm-GC,
-   still divergent from interpreter/JVM at those edges (pre-existing).
-3. Optional same-session stretch: lower the SCALAR `(exp x)` / `(signum x)` builtins on
-   `--no-gc` too, reusing the same emitters (today they are simply "unknown builtin"
-   errors there). Decide scope first; vec:-only is a complete, shippable step.
-4. Tests to flip/extend: `NoGcWasmCompilerTest.expAndSignAreClearCompileErrorsOnNoGc`
-   becomes a positive structural test (exp constants / no 0xFD in scalar mode);
-   `WasmLispCompilerIntegrationTest.noGcRunsUnaryUfuncsUnderBothLowerings` gains
-   exp/sign cases -- compare against the WASM-GC backend's values (NOT the interpreter)
-   for exp, or use exp(0)=1 / integer-safe probes like `(round (* 1000000 (vec:sum
-   (vec:exp ...))))` matched against the wasm-GC run.
-5. Docs to update (en+ja in the same commit): simd-acceleration guide (the two
-   "vec:exp / vec:sign are unavailable on --no-gc" sentences -- API paragraph and the
-   --no-gc bullet), `.kb/vec.md` (todo-109 section decision (b) paragraph + layer 2),
-   `CLAUDE.md` if it mentions the restriction, this file, and the
-   [[elementwise-ufuncs-todo109]] memory.
+- `NoGcWasmCompiler`: the four names moved from `SIMD_NO_SCALAR_IMPL_NO_GC` (set +
+  `requireKnownSimd` branch deleted) into `SIMD_MEMBERS`, joined the `typeOfSimd`
+  operandWidth case, and compile via the new private `compileSimdUnaryF64(args, fn,
+  isExp, into, what)` -- the same dst/vp/dp/count setup as `compileSimdUnary`, then a
+  one-element-per-iteration loop (WasmVecLoops `openScalarCountLoop`/`advancePtr`/
+  `closeLoop`) whose body is `f64.load` (f32: `f32.load` + promote) ->
+  `WasmVecSimdRuntimeBuilder.emitExpF64(w, t, acc)` / `emitSignumF64(w, t)` -> store
+  (f32: demote + `f32.store`). BOTH `--simd` modes emit this identical loop (exp has
+  no lane form anywhere; sign's is not worth one) -- no `0xFD`. Two f64 `Fn` locals
+  (t + acc for exp, t only for sign). `out` may alias `v` (the add-into rule).
+- Semantics: `--no-gc` exp/sign mirror the WASM family's own edges (software exp low
+  digits; sign maps -0.0/NaN to 0.0) -- consistent with wasm-GC, divergent from
+  interpreter/JVM at those edges (pre-existing; kept out of ci-spec).
+- Scope decision: `vec:`-only. The SCALAR `(exp x)` / `(signum x)` builtins remain
+  unknown on `--no-gc` (the same emitters would serve if ever wanted).
+- Tests: `NoGcWasmCompilerTest.expAndSignAreClearCompileErrorsOnNoGc` flipped to
+  `expAndSignLowerNativelyOnNoGc` (INV_SCALE `f64.const` present, no `0xFD` in either
+  mode, `-into` skips the bump allocator);
+  `WasmLispCompilerIntegrationTest.noGcRunsExpAndSignUnderBothLowerings` compares the
+  nontrivial exp probes against a wasm-GC run (not a hardcoded constant) and pins the
+  exact sign/exp(0) values at both widths under both lowerings.
+- Docs: simd-acceleration guide (en+ja, API paragraph + `--no-gc` bullet) now say all
+  seven ufuncs work everywhere; `.kb/vec.md` todo-109 section + layer 2 updated.
 
 **Status of the original plan below: Phase 1 text kept for reference; Phases 2/3 NOT
 STARTED (filed 2026-07-10, from the todo-107 lane-form review).**

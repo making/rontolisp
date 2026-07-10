@@ -780,7 +780,7 @@ class WasmLispCompilerIntegrationTest {
 		// The arithmetic unary ufuncs (todo 109): sqrt / abs / square / negative /
 		// reciprocal + -into, both widths, both lowerings (scalar loops by default,
 		// v128 under --simd), matching the interpreter oracle on exact inputs. exp /
-		// sign are compile errors here (NoGcWasmCompilerTest pins the message).
+		// sign lower natively too (Phase 1.5) and are covered separately below.
 		String doubles = """
 				(defun ufuncs (i)
 				  (let* ((v #d(-3.0 4.0 -5.0 12.0 -2.0))
@@ -818,6 +818,50 @@ class WasmLispCompilerIntegrationTest {
 		for (boolean simd : new boolean[] { false, true }) {
 			// sum a = 15, sum s = 15, 8 * (1/2 + 1/4 + 1/8) = 7 -> 37
 			assertThat(compileNoGcAndInvoke(false, simd, singles, "ufuncs", "0")).isEqualTo("37");
+		}
+	}
+
+	@Test
+	void noGcRunsExpAndSignUnderBothLowerings() throws Exception {
+		// todo 109 Phase 1.5: vec:exp / vec:sign (+ -into) reuse the GC backend's
+		// raw-f64 emitters (the WasmExpCompiler software approximation and the
+		// (x>0)-(x<0) sign), so a --no-gc value equals the wasm-GC backend's exactly
+		// at both widths -- the nontrivial exp probes are compared against a wasm-GC
+		// run rather than a hardcoded constant, the exact ones (exp(0) = 1, sign) to
+		// literals. Both lowerings drive the same element loop.
+		String wasmGcExpD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:exp #d(1.0)) 0))))", false);
+		String wasmGcExpF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:exp #f(1.0)) 0))))", false);
+		String source = """
+				(defun expd (i) (truncate (* 1000000 (vec:aref (vec:exp #d(1.0)) 0))))
+				(defun expf (i) (truncate (* 1000000 (vec:aref (vec:exp #f(1.0)) 0))))
+				(defun expzero (i) (truncate (vec:sum (vec:exp (vec:zeros 3)))))
+				(defun sgn (i) (truncate (vec:aref (vec:sign #d(-3.5 0.0 7.25)) i)))
+				(defun sgninto (i)
+				  (let ((o (vec:zeros 3)))
+				    (vec:sign-into o #d(-3.5 0.0 7.25))
+				    (vec:sign-into o o)
+				    (truncate (+ (* 100 (vec:aref o 0)) (* 10 (vec:aref o 1)) (vec:aref o 2)))))
+				(defun sgnf (i)
+				  (truncate (vec:sum (vec:sign (vec:negative (vec:arange 4 'single-float))))))
+				(rontolisp:wasm-export 'expd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'expf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'expzero :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sgn :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sgninto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sgnf :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, source, "expd", "0")).isEqualTo(wasmGcExpD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "expf", "0")).isEqualTo(wasmGcExpF);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "expzero", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sgn", "0")).isEqualTo("-1");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sgn", "1")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sgn", "2")).isEqualTo("1");
+			// sign-into aliases its operand (sign of sign is sign): -100 + 0 + 1.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sgninto", "0")).isEqualTo("-99");
+			// negative(arange) = (-0.0 -1.0 -2.0 -3.0); sign maps -0.0 to 0.0 here
+			// (the wasm family's own edge), so the sum is -3.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sgnf", "0")).isEqualTo("-3");
 		}
 	}
 

@@ -806,7 +806,7 @@ class NoGcWasmCompilerTest {
 	void unaryUfuncsEmitV128UnderSimdAndScalarLoopsByDefault() {
 		// sqrt/abs/square/negative/reciprocal (+ -into) lower to whole v128 groups under
 		// --simd (f64x2.sqrt 0xFD 0xEF among them) and to plain f64 loops by default (no
-		// 0xFD at all). exp / sign are rejected separately below.
+		// 0xFD at all). exp / sign lower as element loops in both modes (pinned below).
 		String source = """
 				(defun go (n)
 				  (let ((o (vec:zeros n)) (v (vec:arange n)))
@@ -862,19 +862,40 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void expAndSignAreClearCompileErrorsOnNoGc() {
-		// Decision (b) of todo 109: the exp software approximation and the signum float
-		// path exist only on the GC backends, so vec:exp / vec:sign (and -into) are
-		// documented unavailability here, like vec:matvec / from-list.
-		for (String call : new String[] { "(vec:exp v)", "(vec:sign v)", "(vec:exp-into v v)",
-				"(vec:sign-into v v)" }) {
-			assertThatThrownBy(() -> compile("""
-					(defun f (n) (let ((v (vec:ones n))) (vec:sum %s)))
-					(rontolisp:wasm-export 'f :params '(:int) :returns :float)
-					""".replace("%s", call))).as(call)
-				.isInstanceOf(UnsupportedOperationException.class)
-				.hasMessageContaining("has no --no-gc lowering");
+	void expAndSignLowerNativelyOnNoGc() {
+		// Decision (a) of todo 109 Phase 1.5: vec:exp / vec:sign (and -into) reuse the
+		// GC backend's raw-f64 emitters (WasmVecSimdRuntimeBuilder.emitExpF64 /
+		// emitSignumF64), so BOTH lowerings drive the same scalar element loop -- no
+		// 0xFD SIMD opcode even under --simd, and the exp argument-reduction constant
+		// (f64.const 1/256, WasmExpCompiler.INV_SCALE) appears in the body. The probe
+		// avoids vec:sum (whose --simd lowering IS v128) so 0xFD absence is exp/sign's.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:exp-into o v)
+				    (vec:sign-into o o)
+				    (+ (vec:aref (vec:exp v) 0) (vec:aref (vec:sign o) 1))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		int[] invScale = new int[9];
+		invScale[0] = 0x44; // f64.const
+		long bits = Double.doubleToRawLongBits(WasmExpCompiler.INV_SCALE);
+		for (int i = 0; i < 8; i++) {
+			invScale[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
 		}
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			assertThat(containsSequence(code, invScale)).as("exp INV_SCALE constant, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the exp/sign lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sum (vec:sign-into o (vec:exp-into o v)))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("exp-into / sign-into skip the bump allocator").isEqualTo(2);
 	}
 
 	@Test

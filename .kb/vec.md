@@ -147,19 +147,32 @@ BOTH packages under their numpy ufunc names. The design decisions, per backend:
   `(linalg:div 1 a)` -- accelerated transitively, never intercepted (the interception
   guards pin `#'vec:square` as `#<lambda>`). `vec:reciprocal` has its own kernel (vec:
   has no div).
-- **`--no-gc` (decision b)**: the five arithmetic ufuncs (+`-into`) lower natively --
+- **`--no-gc`**: the five arithmetic ufuncs (+`-into`) lower natively --
   `WasmVecLoops.simdMap1`/`scalarMap1` over the linear block, native IEEE `f64.abs`/
-  `f64.neg` semantics since there is no defun to mirror there -- while `vec:exp` /
-  `vec:sign` are clear compile errors (`SIMD_NO_SCALAR_IMPL_NO_GC`: no exp/signum
-  lowering on the scalar backend), the `vec:matvec`/`from-list` precedent.
+  `f64.neg` semantics since there is no defun to mirror there. `vec:exp` / `vec:sign`
+  (+`-into`) lower natively too (Phase 1.5, 2026-07-10; they were decision-(b) compile
+  errors in Phase 1): `NoGcWasmCompiler.compileSimdUnaryF64` drives a one-element-per-
+  iteration loop over the SAME raw-f64 emitters the wasm-GC `--simd` kernels use
+  (`WasmVecSimdRuntimeBuilder.emitExpF64`/`emitSignumF64` -- the `WasmExpCompiler`
+  software approximation and the `(x>0)-(x<0)` sign), an f32 element widening on read
+  and narrowing on store (the emap rule). exp has no lane form anywhere and sign's is
+  not worth one, so BOTH `--simd` modes emit the identical loop (no `0xFD`); values
+  equal the wasm-GC backend's exactly and diverge from interpreter/JVM at the same
+  edges the wasm scalar builtins already do (exp low digits; sign maps `-0.0`/NaN to
+  `0.0`). The scalar `(exp x)`/`(signum x)` builtins themselves remain unknown on
+  `--no-gc` (only the `vec:` kernels gained the lowering).
 - New v128 opcodes for all this (`f32x4/f64x2.sqrt/abs/neg/lt`, `v128.bitselect`) are in
   `am.ik.wasm.Instruction` AND `WasmTreeShaker.skipSimd` (which throws on unknown 0xFD).
 
 Pinned by the unary-ufunc test blocks in `eval/VecSimdTest`, `eval/LinalgSimdTest`,
-`JvmSimdAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `NoGcWasmCompilerTest` and
-`WasmLispCompilerIntegrationTest` (`wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath`,
+`JvmSimdAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `NoGcWasmCompilerTest`
+(incl. `expAndSignLowerNativelyOnNoGc`: INV_SCALE constant present, no `0xFD` in either
+mode, `-into` skips the allocator) and `WasmLispCompilerIntegrationTest`
+(`wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath`,
 `wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath`,
-`noGcRunsUnaryUfuncsUnderBothLowerings`).
+`noGcRunsUnaryUfuncsUnderBothLowerings`, `noGcRunsExpAndSignUnderBothLowerings` --
+the nontrivial exp probes compare a `--no-gc` run against a wasm-GC run, not a
+hardcoded constant).
 
 ## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
 
@@ -293,7 +306,9 @@ tests use exact inputs). The four vectorizable kernels (`compileSimdElementwise`
 todo-109 arithmetic unary ufuncs (`compileSimdUnary` over `WasmVecLoops.simdMap1`/
 `scalarMap1`) branch the same way; the v128
 code is left untouched (so `--no-gc --simd` output is byte-identical to the pre-todo-100
-`--no-gc` output). `isSimdCall(name)` (a `"vec:"` prefix test) dispatches in all three
+`--no-gc` output). `vec:exp`/`vec:sign` (+`-into`) are the exception to the mode branch:
+`compileSimdUnaryF64` emits the SAME element loop in both modes (no lane form exists;
+raw-f64 emitters shared with the wasm-GC kernels -- see the todo-109 section above). `isSimdCall(name)` (a `"vec:"` prefix test) dispatches in all three
 passes: `collectCalls` (eligibility: `requireKnownSimd` + walk-args), `typeOf`/`typeOfSimd`
 (constructors → the constructor width, element-wise/`scale` → the operand width, `length` →
 `INT`, else `FLOAT`; UNCHANGED by `--simd`, so inference matches either lowering), and

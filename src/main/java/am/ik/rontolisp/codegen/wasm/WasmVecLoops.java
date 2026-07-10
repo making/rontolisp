@@ -449,7 +449,9 @@ final class WasmVecLoops {
 	// (vec:negative #d(0.0)) at -0.0, f64.abs maps -0.0 to 0.0 -- the same edges the
 	// interpreter / JVM defuns produce). U_SQUARE exists only here: on the defun-driven
 	// backends vec:square rides the mul kernels. The v128 and scalar lowerings compute
-	// identical results (every op is exact or correctly rounded per element).
+	// identical results (every op is exact or correctly rounded per element). exp and
+	// sign are not driven through these bodies: their --no-gc lowering is a dedicated
+	// element loop over the raw-f64 emitters (NoGcWasmCompiler.compileSimdUnaryF64).
 
 	/** {@code v * v}: the one unary op with no gcMap1 form (square is mul there). */
 	static final int U_SQUARE = 4;
@@ -693,8 +695,10 @@ final class WasmVecLoops {
 	// the lane form is bitselect(0 - v, v, v < 0), NOT f64x2.abs (which
 	// would map -0.0 to 0.0 and diverge from the defun).
 	//
-	// exp and signum have no lane form at all; their kernels walk elements through
-	// _v_get / _v_set (see WasmVecSimdRuntimeBuilder).
+	// exp and signum have no lane form at all; their wasm-GC kernels walk elements
+	// through _v_get / _v_set (see WasmVecSimdRuntimeBuilder), and the --no-gc
+	// lowering walks the linear block with the same raw-f64 emitters
+	// (NoGcWasmCompiler.compileSimdUnaryF64).
 
 	static final int U_SQRT = 0;
 

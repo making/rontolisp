@@ -42,7 +42,7 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 要素ごと(新しいベクトル): `vec:add`・`vec:sub`・`vec:mul`(アダマール積)・`vec:scale`(スカラー倍)。
 
-要素ごとの単項、numpy の ufunc 名で(新しいベクトル): `vec:exp`・`vec:sqrt`・`vec:abs`・`vec:square`・`vec:negative`・`vec:sign`・`vec:reciprocal`(`1 / x`)。それぞれ各バックエンド自身のスカラー演算を要素ごとに適用します。そのため `vec:exp` は WASM バックエンドではソフトウェア近似の `exp` を使い(下位桁が JVM と異なります)、`vec:abs` / `vec:negative` / `vec:sign` の `-0.0` の端値は各バックエンドの `abs` / 単項マイナス / `signum` に従います。`vec:exp` と `vec:sign` は `--no-gc` では利用できません(`exp` / `signum` のロワリングがありません)。残りの 5 つはどこでも動きます。
+要素ごとの単項、numpy の ufunc 名で(新しいベクトル): `vec:exp`・`vec:sqrt`・`vec:abs`・`vec:square`・`vec:negative`・`vec:sign`・`vec:reciprocal`(`1 / x`)。それぞれ各バックエンド自身のスカラー演算を要素ごとに適用します。そのため `vec:exp` は WASM バックエンドではソフトウェア近似の `exp` を使い(下位桁が JVM と異なります)、`vec:abs` / `vec:negative` / `vec:sign` の `-0.0` の端値は各バックエンドの `abs` / 単項マイナス / `signum` に従います。`--no-gc` でも `vec:exp` / `vec:sign` は他の WASM バックエンドと同じソフトウェア `exp` / `(x>0)-(x<0)` の命令列で動くので、7 つすべてがどこでも動きます。
 
 リダクション(スカラー): `vec:sum`・`vec:dot`・`vec:mean`・`vec:norm`(ユークリッドノルム、自己内積の `sqrt`)。
 
@@ -138,7 +138,7 @@ wasm-GC にも線形メモリはありますが、パックド配列がそこに
 
 JVM バックエンドが読みにくい理由はもうひとつあり、そちらは SIMD とは無関係です。コンパイルされた Lisp の数値ループは中間値をすべてボックス化します。配列要素の読み出しごと、積ごと、累算ごとに `Double` が 1 個、さらにループカウンタごとに `Long` が 1 個。つまりスカラーの `vec:` カーネルの律速は演算ではなく確保とディスパッチです。そのボックス化をどれだけ消去できるか(エスケープ解析とインライン化による)は JVM によって大きく異なり、まったく同じスカラーループが JVM を替えるだけで数倍速くなることもあります。`--simd` はこの問いを迂回します。カーネルを、そもそもボックス化しないプリミティブな `double[]` / `float[]` のループに置き換えるからです。
 - **wasm-GC `--simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` は `vec:` カーネルを WebAssembly 固定幅 SIMD(`f64x2.*`、単精度では `f32x4.*`)にロワリングします。パックド浮動小数点配列はレーングループの `(array (mut v128))` になりますが、これも通常の GC オブジェクトであり、エンジンの GC で回収されます。メモリの挙動はスカラーの wasm-GC とまったく同じです。`vec:` API 全体(`vec:matvec` や `vec:from-list` / `vec:to-list` を含む)はそのまま動き、結果も変わりません。`--component` や `--optimize` とも併用できます。実行はこれまでどおり `wasmtime run -W gc` です(wasmtime は SIMD 提案を既定で有効にしています)。
-- **`--no-gc --simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` は同じカーネルを、パックドな線形メモリブロック上にロワリングします。**`--simd` なしの `--no-gc` は同じブロック上に素のスカラーループを出力します** — SIMD 提案を持たない WebAssembly ランタイムでも動く v128 非依存の MVP モジュールで、その移植性と引き換えにベクトル化による高速化を手放します。`vec:from-list` / `vec:to-list`(Lisp リストが必要)、`vec:matvec` / `vec:matvec-into`(階数 2 の行列が必要)、`vec:exp` / `vec:sign`(スカラー演算に `--no-gc` のロワリングがありません)は、いずれにせよ `--no-gc` では利用できません。
+- **`--no-gc --simd` ネイティブ `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` は同じカーネルを、パックドな線形メモリブロック上にロワリングします。**`--simd` なしの `--no-gc` は同じブロック上に素のスカラーループを出力します** — SIMD 提案を持たない WebAssembly ランタイムでも動く v128 非依存の MVP モジュールで、その移植性と引き換えにベクトル化による高速化を手放します。`vec:from-list` / `vec:to-list`(Lisp リストが必要)と `vec:matvec` / `vec:matvec-into`(階数 2 の行列が必要)は、いずれにせよ `--no-gc` では利用できません。`vec:exp` / `vec:sign` にはベクトル命令が存在しないため、どちらのモードでも同じ要素ごとのループで実行されます。
 
 wasm-GC で速度差が大きいのは、`--simd` が 2 つのものを同時に置き換えるからです。ボックス化の多いスカラー `vec.lisp` の defun と、1 要素ずつ回すループの両方です。8192 要素のベクトルに対する `vec:dot` を 20000 回反復すると、`wasmtime run -W gc` でスカラーは約 10.1 秒、`--simd` では約 0.10 秒です。
 
