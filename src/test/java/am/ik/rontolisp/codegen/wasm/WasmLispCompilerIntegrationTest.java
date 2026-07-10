@@ -6291,4 +6291,53 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// --- IEEE-754 float edge semantics (.todo/108 groups B2, C and E) ----------------
+
+	@Test
+	void unaryMinusOfFloatLiteralFormNegates() throws Exception {
+		// group B2: the double-literal fast path used to compile unary minus as identity
+		assertThat(compileAndRun("(print (- 5.0))")).isEqualTo("-5.0");
+		assertThat(compileAndRun("(print (- (* 2.0 3.0)))")).isEqualTo("-6.0");
+		assertThat(compileAndRun("(print (- -1.5))")).isEqualTo("1.5");
+		assertThat(compileAndRun("(print (- 0.0))")).isEqualTo("-0.0");
+	}
+
+	@Test
+	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
+		// literal path: per-operator f64 opcodes, IEEE already
+		assertThat(compileAndRun("(print (list (< (/ 0.0 0.0) 1.0) (<= (/ 0.0 0.0) 1.0) (> (/ 0.0 0.0) 1.0)"
+				+ " (>= (/ 0.0 0.0) 1.0) (= (/ 0.0 0.0) (/ 0.0 0.0))))"))
+			.isEqualTo("(nil nil nil nil nil)");
+		// group E: the no-literal forms used to funnel through the signum _rat_cmp,
+		// which answered "equal" for NaN; /= binds temps, so it ALWAYS took that path
+		assertThat(compileAndRun("(let ((n (/ 0.0 0.0)) (one 1.0))"
+				+ " (print (list (< n one) (<= n one) (> n one) (>= n one) (= n n) (/= n n))))"))
+			.isEqualTo("(nil nil nil nil nil t)");
+		assertThat(compileAndRun("(print (/= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("t");
+		assertThat(compileAndRun("(let ((z (* -1.0 0.0)) (p (* 1.0 0.0))) (print (= z p)))")).isEqualTo("t");
+	}
+
+	@Test
+	void floatPrinterHandlesSignedZeroInfinityNanAndLargeMagnitudes() throws Exception {
+		// group C (same root as .todo/46): the printer used to trap on |x| >= 2^31,
+		// on Infinity and on NaN, and dropped -0.0's sign (is_neg was `x < 0.0`)
+		assertThat(compileAndRun("(print -0.0)")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (* -1.0 0.0))")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (/ 1.0 0.0))")).isEqualTo("Infinity");
+		assertThat(compileAndRun("(print (/ -1.0 0.0))")).isEqualTo("-Infinity");
+		assertThat(compileAndRun("(print (/ 0.0 0.0))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (* 1.5 (expt 10.0 12)))")).isEqualTo("1500000000000.0");
+		assertThat(compileAndRun("(print (- (* 2.5 (expt 10.0 15))))")).isEqualTo("-2500000000000000.0");
+		assertThat(compileAndRun("(print (expt 10.0 19))")).isEqualTo("1.0E19");
+		// print of the returned STRING prin1-quotes it; the point is princ-to-string
+		// shares the fixed core and no longer traps
+		assertThat(compileAndRun("(print (princ-to-string (/ 1.0 0.0)))")).isEqualTo("\"Infinity\"");
+	}
+
+	@Test
+	void minMaxDoubleLiteralPathFollowsF64MinMax() throws Exception {
+		assertThat(compileAndRun("(print (min 0.0 -0.0))")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (max -0.0 0.0))")).isEqualTo("0.0");
+	}
+
 }

@@ -63,8 +63,9 @@ Three design decisions worth not re-deriving:
   `Double.compare` (a total order, `(> 0.0 -0.0)` → `t`); JVM `>` is `DCMPL` and wasm's is
   `f64.gt` (both IEEE, → `nil`). Each `amax`/`amin`/`argmax`/`argmin` kernel reproduces its
   OWN backend's comparison, so each is bit-identical to its own defun — but the three defuns
-  already disagree with each other. **Pre-existing, unrelated to `--simd`, deserves its own
-  todo.** Never put a `-0.0` case in `ci-spec.yaml`. See the table in `.kb/linalg-simd.md`.
+  already disagree with each other. **Now filed as `.todo/108`**, whose survey found this is
+  one corner of five bug groups (unary `(- 5.0)` is even IDENTITY on both compilers). Never
+  put a `-0.0` case in `ci-spec.yaml`. See the table in `.kb/linalg-simd.md`.
 - A possible `emap` special case when `f` is a *known builtin* (`#'abs`, `#'sqrt`, `#'exp`).
   `linalg:emap #'silu` in `examples/ml/tiny-llm.lisp` is a user lambda and would not benefit.
 

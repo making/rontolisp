@@ -5354,4 +5354,46 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("progv");
 	}
 
+	// ---- IEEE-754 float edge semantics (.todo/108 groups B and D) ----
+
+	@Test
+	void unaryMinusOfFloatLiteralFormNegates() throws Exception {
+		// The double-literal fast path used to compile unary minus as identity.
+		assertThat(compileAndRun("(print (- 5.0))")).isEqualTo("-5.0");
+		assertThat(compileAndRun("(print (- (* 2.0 3.0)))")).isEqualTo("-6.0");
+		assertThat(compileAndRun("(print (- -1.5))")).isEqualTo("1.5");
+		assertThat(compileAndRun("(print (- 0.0))")).isEqualTo("-0.0");
+	}
+
+	@Test
+	void negativeZeroLiteralKeepsItsSign() throws Exception {
+		// -0.0 used to fold into DCONST_0 because -0.0 == 0.0.
+		assertThat(compileAndRun("(print -0.0)")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (/ 1.0 -0.0))")).isEqualTo("-Infinity");
+	}
+
+	@Test
+	void nanComparisonsAreUnorderedOnBothPaths() throws Exception {
+		// DCMPL-for-every-operator made < and <= answer t against NaN.
+		assertThat(compileAndRun("(print (< (/ 0.0 0.0) 1.0))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (<= (/ 0.0 0.0) 1.0))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (> (/ 0.0 0.0) 1.0))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (>= (/ 0.0 0.0) 1.0))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (/= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("t");
+		// No float literal in the comparison form: the _cmp runtime path.
+		assertThat(compileAndRun(
+				"(let ((n (/ 0.0 0.0)) (one 1.0)) (print (list (< n one) (<= n one) (> n one) (>= n one) (= n n) (/= n n))))"))
+			.isEqualTo("(nil nil nil nil nil t)");
+		assertThat(compileAndRun("(let ((z (* -1.0 0.0)) (p (* 1.0 0.0))) (print (= z p)))")).isEqualTo("t");
+	}
+
+	@Test
+	void minMaxDoubleLiteralPathFollowsMathMinMax() throws Exception {
+		// Passes once the -0.0 literal survives compilation: Math.min/max are
+		// sign- and NaN-aware on the double-literal path.
+		assertThat(compileAndRun("(print (min 0.0 -0.0))")).isEqualTo("-0.0");
+		assertThat(compileAndRun("(print (max -0.0 0.0))")).isEqualTo("0.0");
+	}
+
 }

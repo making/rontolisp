@@ -418,6 +418,68 @@ final class WasmRatioRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	// _rat_cmp_bits((ref null eq) a, (ref null eq) b) -> i32: the comparison as a
+	// bitmask -- 1 = a<b, 2 = a=b, 4 = a>b, 0 = unordered (a NaN operand). The
+	// comparison call sites AND the operator's accepted mask and test nonzero, so NaN
+	// fails every one of = < > <= >= (IEEE); _rat_cmp's -1/0/1 signum against zero
+	// cannot express "unordered" (it answered "equal"). Non-float operands delegate to
+	// _rat_cmp (exact, never unordered).
+	static byte[] buildRatCmpBitsBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+
+		w.write(0); // no extra locals
+
+		emitEitherFloat(w);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// lt -> 1, gt -> 4, eq -> 2, else (NaN) -> 0
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.ELSE);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.ELSE);
+		emitLocalToF64(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// exact types: 1 << (_rat_cmp(a, b) + 1) maps -1/0/1 to 1/2/4
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		call(w, WasmLispCompiler.FUNC_RAT_CMP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.END); // end float-fast-path if
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	// _rat_trunc((ref null eq) x) -> (ref null eq): num/den truncating toward zero.
 	static byte[] buildRatTruncBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();

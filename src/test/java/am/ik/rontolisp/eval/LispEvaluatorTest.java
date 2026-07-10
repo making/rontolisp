@@ -6217,4 +6217,55 @@ class LispEvaluatorTest {
 		pool.shutdown();
 	}
 
+	// ---- IEEE-754 float edge semantics (.todo/108 group A) ----
+
+	@Test
+	void negativeZeroComparesEqualToPositiveZero() {
+		assertThat(eval("(= 0.0 -0.0)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(= 0 -0.0)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(< -0.0 0.0)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(> 0.0 -0.0)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(<= 0.0 -0.0)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(>= -0.0 0.0)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(sort (list 0.0 -0.0) #'<)").print()).isEqualTo("(0.0 -0.0)");
+	}
+
+	@Test
+	void negativeZeroPredicatesMatchTheirFunctionValues() {
+		// The direct call and the #' function value used to disagree on the
+		// interpreter (the call expands to (= x 0) over compareNumeric, the
+		// function value is Environment's own IEEE definition).
+		assertThat(eval("(zerop (* -1.0 0.0))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(minusp (* -1.0 0.0))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(plusp (* -1.0 0.0))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'zerop (* -1.0 0.0))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(funcall #'minusp (* -1.0 0.0))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void nanComparisonsAreUnordered() {
+		assertThat(eval("(= (/ 0.0 0.0) (/ 0.0 0.0))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(< (/ 0.0 0.0) 1.0)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(> (/ 0.0 0.0) 1.0)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(<= (/ 0.0 0.0) 1.0)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(>= (/ 0.0 0.0) 1.0)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(/= (/ 0.0 0.0) (/ 0.0 0.0))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(let ((n (/ 0.0 0.0))) (= n n))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void minMaxHandleSignedZerosAndNansLikeMathMinMax() {
+		assertThat(eval("(min 0.0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+		assertThat(eval("(min -0.0 0.0)")).isEqualTo(new LispDouble(-0.0));
+		assertThat(eval("(max -0.0 0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(max 0.0 -0.0)")).isEqualTo(new LispDouble(0.0));
+		assertThat(eval("(min 0 -0.0)")).isEqualTo(new LispDouble(-0.0));
+		assertThat(eval("(min 1.0 (/ 0.0 0.0))")).isEqualTo(new LispDouble(Double.NaN));
+		assertThat(eval("(min (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(Double.NaN));
+		assertThat(eval("(max 1.0 (/ 0.0 0.0))")).isEqualTo(new LispDouble(Double.NaN));
+		assertThat(eval("(max (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(Double.NaN));
+		// float contagion on the result is unchanged
+		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispDouble(1.0));
+	}
+
 }

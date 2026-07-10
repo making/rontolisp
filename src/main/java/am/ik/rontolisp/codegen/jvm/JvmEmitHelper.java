@@ -28,7 +28,9 @@ final class JvmEmitHelper {
 	}
 
 	static void compileDouble(double value, JvmLispCompiler.Ctx ctx) {
-		if (value == 0.0) {
+		// The raw-bits guard keeps -0.0 out of the DCONST_0 peephole (-0.0 == 0.0
+		// in Java), mirroring JvmQuoteCompiler.emitRawDouble.
+		if (value == 0.0 && Double.doubleToRawLongBits(value) == 0L) {
 			ctx.emit(Opcode.DCONST_0);
 		}
 		else if (value == 1.0) {

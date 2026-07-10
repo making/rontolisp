@@ -3482,3 +3482,86 @@ cases:
       (:FOO t)
       5
       (("k" . 42))
+  # IEEE-754 float edge semantics (todo-108): unary minus over float-literal
+  # forms, the -0.0 literal and its comparisons, NaN as "unordered" on both the
+  # literal and the variable (runtime-helper) comparison paths, and the printing
+  # of -0.0 / Infinity / NaN. All four backends must agree on every line.
+  - name: ieee-float-unary-minus
+    source: |
+      (print (- 5.0))
+      (print (- (* 2.0 3.0)))
+      (print (- -1.5))
+      (print (- 0.0))
+    expected: |
+      -5.0
+      -6.0
+      1.5
+      -0.0
+  - name: ieee-float-negative-zero
+    source: |
+      (print -0.0)
+      (print (* -1.0 0.0))
+      (print (= 0.0 -0.0))
+      (print (< -0.0 0.0))
+      (print (> 0.0 -0.0))
+      (print (<= 0.0 -0.0))
+      (print (>= -0.0 0.0))
+      (print (zerop (* -1.0 0.0)))
+      (print (minusp (* -1.0 0.0)))
+      (print (plusp (* -1.0 0.0)))
+      (print (min 0.0 -0.0))
+      (print (max -0.0 0.0))
+    expected: |
+      -0.0
+      -0.0
+      t
+      nil
+      nil
+      t
+      t
+      t
+      nil
+      nil
+      -0.0
+      0.0
+  - name: ieee-float-nan-comparisons
+    source: |
+      (print (= (/ 0.0 0.0) (/ 0.0 0.0)))
+      (print (< (/ 0.0 0.0) 1.0))
+      (print (> (/ 0.0 0.0) 1.0))
+      (print (<= (/ 0.0 0.0) 1.0))
+      (print (>= (/ 0.0 0.0) 1.0))
+      (print (/= (/ 0.0 0.0) (/ 0.0 0.0)))
+      (let ((n (/ 0.0 0.0)) (one 1.0))
+        (print (list (< n one) (<= n one) (> n one) (>= n one) (= n n) (/= n n))))
+      (print (min 1.0 (/ 0.0 0.0)))
+      (print (max (/ 0.0 0.0) 1.0))
+    expected: |
+      nil
+      nil
+      nil
+      nil
+      nil
+      t
+      (nil nil nil nil nil t)
+      NaN
+      NaN
+  - name: ieee-float-infinity-nan-printing
+    source: |
+      (print (/ 1.0 0.0))
+      (print (/ -1.0 0.0))
+      (print (/ 1.0 -0.0))
+      (print (/ 0.0 0.0))
+    expected: |
+      Infinity
+      -Infinity
+      -Infinity
+      NaN
+  - name: ieee-float-large-magnitude-printing
+    source: |
+      (print (* 1.5 (expt 10.0 12)))
+    expected: |
+      1.5E12
+    expectedByBackend:
+      wasm: |
+        1500000000000.0

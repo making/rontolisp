@@ -367,8 +367,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// is
 	// the same IEEE comparison the compiled `>` lowers to, so ties, -0.0 and NaN all
 	// agree
-	// with the defun. (The INTERPRETER's `>` is Double.compare, a total order -- the two
-	// backends already disagree about (> 0.0 -0.0) without any of this.)
+	// with the defun -- and, since the todo-108 fixes, with the interpreter's and the
+	// JVM's `>` as well (all three backends compare IEEE now).
 	//
 	// params: 0 = a. i32: count 1, i 2, bi 3. f64: best 4, x 5. eq: res 6, vbA 7.
 	private static byte[] buildExtremum(boolean max, boolean index, int vecBase) {

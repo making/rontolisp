@@ -48,6 +48,16 @@ final class WasmArithCompiler {
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 				return;
 			}
+			// Unary (- x) is IEEE negation: f64.neg. (Falling through to the loop
+			// below would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
+			if (args.size() == 2 && ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmEmitHelper.castFloatGetF64(ctx);
+				ctx.writer.write(Instruction.F64_NEG);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				return;
+			}
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			for (int i = 2; i < args.size(); i++) {

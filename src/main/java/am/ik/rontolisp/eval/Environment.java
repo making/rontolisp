@@ -1105,13 +1105,22 @@ public final class Environment implements Scope {
 		}));
 		// min/max: variadic. Float contagion -- when any argument is a float the result
 		// is
-		// a float (Common Lisp semantics).
+		// a float (Common Lisp semantics). Doubles follow Math.min/Math.max: NaN
+		// propagates, and a 0.0/-0.0 tie resolves by sign -- matching the compiled
+		// backends' Math.min / f64.min double paths.
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireMinArgCount(LispNames.MIN, args, 1);
 			LispVal best = args.get(0);
 			for (int i = 1; i < args.size(); i++) {
-				if (compareNumeric(args.get(i), best) < 0) {
-					best = args.get(i);
+				LispVal cand = args.get(i);
+				int sign = compareNumeric(cand, best);
+				if (sign == UNORDERED) {
+					if (!isNaN(best)) {
+						best = cand;
+					}
+				}
+				else if (sign < 0 || (sign == 0 && isNegativeZero(cand) && !isNegativeZero(best))) {
+					best = cand;
 				}
 			}
 			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
@@ -1120,8 +1129,15 @@ public final class Environment implements Scope {
 			requireMinArgCount(LispNames.MAX, args, 1);
 			LispVal best = args.get(0);
 			for (int i = 1; i < args.size(); i++) {
-				if (compareNumeric(args.get(i), best) > 0) {
-					best = args.get(i);
+				LispVal cand = args.get(i);
+				int sign = compareNumeric(cand, best);
+				if (sign == UNORDERED) {
+					if (!isNaN(best)) {
+						best = cand;
+					}
+				}
+				else if (sign > 0 || (sign == 0 && isNegativeZero(best) && !isNegativeZero(cand))) {
+					best = cand;
 				}
 			}
 			return hasDouble(args) ? new LispDouble(asDouble(best)) : best;
@@ -3569,12 +3585,31 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Compares two numbers, returning -1, 0 or 1, promoting to the widest type present
-	 * (double &gt; ratio &gt; bigint &gt; long).
+	 * Result of {@link #compareNumeric} when the operands do not compare (IEEE 754
+	 * "unordered": either side is NaN). The value 2 falls outside every
+	 * {@code [loSign, hiSign]} window of {@link #compareChain}, so any comparison
+	 * involving NaN is false -- and {@code /=}, which expands to {@code (not (= ...))},
+	 * is true.
+	 */
+	private static final int UNORDERED = 2;
+
+	/**
+	 * Compares two numbers, returning -1, 0, 1 or {@link #UNORDERED}, promoting to the
+	 * widest type present (double &gt; ratio &gt; bigint &gt; long). Doubles compare per
+	 * IEEE 754: {@code -0.0} equals {@code 0.0}, and NaN is unordered against everything
+	 * (not {@code Double.compare}'s total order).
 	 */
 	private static int compareNumeric(LispVal a, LispVal b) {
 		if (a instanceof LispDouble || b instanceof LispDouble) {
-			return Integer.signum(Double.compare(asDouble(a), asDouble(b)));
+			double x = asDouble(a);
+			double y = asDouble(b);
+			if (x < y) {
+				return -1;
+			}
+			if (x > y) {
+				return 1;
+			}
+			return x == y ? 0 : UNORDERED;
 		}
 		if (a instanceof LispRatio || b instanceof LispRatio) {
 			return Integer.signum(compareRational(a, b));
@@ -3588,7 +3623,7 @@ public final class Environment implements Scope {
 	/**
 	 * Evaluates a variadic numeric comparison: true when, for every adjacent pair, the
 	 * sign of the comparison falls within {@code [loSign, hiSign]}. A single argument is
-	 * trivially true.
+	 * trivially true. An {@link #UNORDERED} pair fails every window.
 	 */
 	private static LispVal compareChain(String name, List<LispVal> args, int loSign, int hiSign) {
 		requireMinArgCount(name, args, 1);
@@ -3599,6 +3634,14 @@ public final class Environment implements Scope {
 			}
 		}
 		return LispTrue.INSTANCE;
+	}
+
+	private static boolean isNaN(LispVal v) {
+		return v instanceof LispDouble d && Double.isNaN(d.value());
+	}
+
+	private static boolean isNegativeZero(LispVal v) {
+		return v instanceof LispDouble d && Double.doubleToRawLongBits(d.value()) == Long.MIN_VALUE;
 	}
 
 	private static boolean hasRatio(List<LispVal> args) {

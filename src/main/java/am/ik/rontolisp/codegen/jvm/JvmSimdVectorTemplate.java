@@ -492,12 +492,11 @@ final class JvmSimdVectorTemplate {
 	// (2) A packed argument is only USABLE when its partner has the same width; a mixed
 	// pair declines rather than signalling.
 	//
-	// Precision matches the interpreter's LinalgSimdKernels except in one place, and
-	// deliberately: amax/amin/argmax/argmin compare with the plain IEEE `>` here, because
-	// the JVM backend's `>` on two doubles is DCMPL (see JvmComparisonCompiler / the _cmp
-	// Double path), whereas the interpreter's is Double.compare. Each kernel reproduces
-	// ITS OWN backend's scalar defun; the two backends already disagree about
-	// (> 0.0 -0.0) without any of this.
+	// Precision matches the interpreter's LinalgSimdKernels everywhere:
+	// amax/amin/argmax/argmin compare with the plain IEEE `>`, which since the todo-108
+	// fixes is every backend's `>` on two doubles (interpreter compareNumeric, the
+	// JVM's DCMPG/DCMPL + _cmpb, wasm's f64.gt), so ties, -0.0 and NaN agree with the
+	// scalar defun on all of them.
 
 	private static final int OP_ADD = 0;
 

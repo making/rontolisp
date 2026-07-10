@@ -30,6 +30,15 @@ final class JvmArithCompiler {
 				JvmEmitHelper.boxDouble(ctx);
 				return;
 			}
+			// Unary (- x) is IEEE negation: DNEG. (Falling through to the loop below
+			// would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
+			if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmEmitHelper.unboxDouble(ctx);
+				ctx.emit(Opcode.DNEG);
+				JvmEmitHelper.boxDouble(ctx);
+				return;
+			}
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmEmitHelper.unboxDouble(ctx);
 			for (int i = 2; i < args.size(); i++) {

@@ -55,6 +55,8 @@ final class JvmNumericRuntimeBuilder {
 
 	static final String CMP = "_cmp";
 
+	static final String CMPB = "_cmpb";
+
 	static final String ABS = "_abs";
 
 	static final String SIGNUM = "_signum";
@@ -188,6 +190,8 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
 		MethodrefConstant signumDouble = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D")));
+		MethodrefConstant intSignum = cp.addMethodref(integerClass,
+				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(I)I")));
 		MethodrefConstant mathRandom = cp.addMethodref(mathClass,
 				cp.addNameAndType(cp.addUtf8("random"), cp.addUtf8("()D")));
 		MethodrefConstant floorModLong = cp.addMethodref(mathClass,
@@ -274,6 +278,7 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nRem = cp.addUtf8(REM);
 		Utf8Constant nFmod = cp.addUtf8(FMOD);
 		Utf8Constant nCmp = cp.addUtf8(CMP);
+		Utf8Constant nCmpb = cp.addUtf8(CMPB);
 		Utf8Constant nAbs = cp.addUtf8(ABS);
 		Utf8Constant nSignum = cp.addUtf8(SIGNUM);
 		Utf8Constant nRandom = cp.addUtf8(RANDOM);
@@ -303,6 +308,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rRem = cp.addMethodref(thisClass, cp.addNameAndType(nRem, dBinary));
 		MethodrefConstant rFmod = cp.addMethodref(thisClass, cp.addNameAndType(nFmod, dFmod));
 		MethodrefConstant rCmp = cp.addMethodref(thisClass, cp.addNameAndType(nCmp, dCmp));
+		MethodrefConstant rCmpb = cp.addMethodref(thisClass, cp.addNameAndType(nCmpb, dCmp));
 		MethodrefConstant rAbs = cp.addMethodref(thisClass, cp.addNameAndType(nAbs, dUnary));
 		MethodrefConstant rSignum = cp.addMethodref(thisClass, cp.addNameAndType(nSignum, dUnary));
 		MethodrefConstant rRandom = cp.addMethodref(thisClass, cp.addNameAndType(nRandom, dUnary));
@@ -344,6 +350,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildFmod(nFmod, dFmod));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
 				doubleClass, rDbl, numberClass, numDoubleValue));
+		methods.add(buildCmpBits(nCmpb, dCmp, doubleClass, rDbl, numberClass, numDoubleValue, rCmp, intSignum));
 		methods.add(buildAbs(nAbs, dUnary, longClass, bigClass, longValue, longValueOf, absLong, biValueOf, biNeg,
 				biAbs, rNorm, cMin, ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue,
 				doubleValueOf, absDouble));
@@ -375,6 +382,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(REM, rRem);
 		ops.put(FMOD, rFmod);
 		ops.put(CMP, rCmp);
+		ops.put(CMPB, rCmpb);
 		ops.put(ABS, rAbs);
 		ops.put(SIGNUM, rSignum);
 		ops.put(RANDOM, rRandom);
@@ -888,6 +896,85 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, biCompareTo.index());
 		c.add(Opcode.IRETURN);
 		return new NumericMethod(name, desc, c, 4, 2, List.of());
+	}
+
+	// _cmpb(Object a, Object b): the comparison as a bitmask -- 1 = a<b, 2 = a=b,
+	// 4 = a>b, 0 = unordered (a NaN operand). The comparison operators AND the mask
+	// they accept and branch on nonzero, so NaN fails every one of = < > <= >= (IEEE),
+	// which a -1/0/1 signum cannot express. Non-double operands delegate to _cmp
+	// (exact, never unordered).
+	private static NumericMethod buildCmpBits(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
+			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant rCmp,
+			MethodrefConstant intSignum) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifADouble = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifBNotDouble = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, ifADouble, c.size());
+		// x -> locals 2/3, y -> locals 4/5
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.DSTORE_2);
+		emitToDouble(c, Opcode.ALOAD_1, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.DSTORE);
+		c.add(4);
+		// x < y -> 1 (DCMPG: NaN falls out as +1, so IFGE skips)
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DCMPG);
+		int notLt = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, notLt, c.size());
+		// x > y -> 4 (DCMPL: NaN falls out as -1, so IFLE skips)
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DCMPL);
+		int notGt = c.size();
+		c.add(Opcode.IFLE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_4);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, notGt, c.size());
+		// x == y -> 2, else unordered -> 0 (only NaN reaches here unequal)
+		c.add(Opcode.DLOAD_2);
+		c.add(Opcode.DLOAD);
+		c.add(4);
+		c.add(Opcode.DCMPL);
+		int notEq = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_2);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, notEq, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		// exact types: 1 << (signum(_cmp(a, b)) + 1)
+		JvmRuntimeBuilder.patchBranch(c, ifBNotDouble, c.size());
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rCmp.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, intSignum.index());
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IADD);
+		c.add(Opcode.ISHL);
+		c.add(Opcode.IRETURN);
+		return new NumericMethod(name, desc, c, 4, 6, List.of());
 	}
 
 	// _abs(Object a): Math.abs for a Double (float), Math.abs for Long (promoting

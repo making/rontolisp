@@ -318,7 +318,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_RAT_CMP = FUNC_RAT_DIV + 1;
 
-	static final int FUNC_RAT_TRUNC = FUNC_RAT_CMP + 1;
+	// The comparison as a bitmask (1 = lt, 2 = eq, 4 = gt, 0 = unordered): the numeric
+	// comparison operators AND the mask they accept, so a NaN operand fails every one
+	// of = < > <= >= -- which _rat_cmp's -1/0/1 signum cannot express (todo-108).
+	static final int FUNC_RAT_CMP_BITS = FUNC_RAT_CMP + 1;
+
+	static final int FUNC_RAT_TRUNC = FUNC_RAT_CMP_BITS + 1;
 
 	static final int FUNC_RAT_FLOOR = FUNC_RAT_TRUNC + 1;
 
@@ -1961,6 +1966,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mul
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_div
 				fnDef.addFunction(TYPE_RAT_CMP); // _rat_cmp
+				fnDef.addFunction(TYPE_RAT_CMP); // _rat_cmp_bits
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_trunc
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_floor
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_ceil
@@ -2215,6 +2221,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL, Instruction.F64_MUL))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBitsBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatTruncBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(false))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(true))
@@ -2866,6 +2873,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry slash;
 
+		// Float printing: the IEEE specials and the exponent marker (todo-108 group C).
+		final StringEntry nanStr;
+
+		final StringEntry infinityStr;
+
+		final StringEntry expE;
+
 		// Character printing: the "#\" prefix and the standard names for the non-graphic
 		// characters that prin1 spells out (see WasmRuntimeBuilder.emitPrintChar).
 		final StringEntry charPrefix;
@@ -2904,6 +2918,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.minus = addString("-");
 			this.period = addString(".");
 			this.slash = addString("/");
+			this.nanStr = addString("NaN");
+			this.infinityStr = addString("Infinity");
+			this.expE = addString("E");
 			this.charPrefix = addString("#\\");
 			this.charSpace = addString("Space");
 			this.charNewline = addString("Newline");

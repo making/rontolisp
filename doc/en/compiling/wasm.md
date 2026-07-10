@@ -34,9 +34,12 @@ still errors -- bundle those arguments into a list yourself. The rest list of a
 variadic function counts as one parameter, so a `&rest` function may declare at most six
 required parameters while accepting any number of arguments at a direct call site.
 
-A float with magnitude 2³¹ or larger computes and compares correctly but
-cannot be printed (`print`/`princ-to-string` trap with an integer overflow);
-this also limits `rontolisp:json-stringify` for such values.
+Floats of every magnitude print on WASM: the integer part is exact up to 2⁶³,
+larger values fall back to an approximate exponent form (`1.0E19`), and
+`Infinity`, `-Infinity` and `NaN` print as those words, like the other backends.
+One shape difference remains: from 10⁷ up to 2⁶³ WASM prints all the digits
+(`1500000000000.0`) where the interpreter and the JVM use exponent notation
+(`1.5E12`); `rontolisp:json-stringify` inherits that shape difference.
 
 The default output is a Preview 1 core module that exposes only the WASI `_start` entry
 point. The sections below cover the WASM-specific options: marking individual functions as

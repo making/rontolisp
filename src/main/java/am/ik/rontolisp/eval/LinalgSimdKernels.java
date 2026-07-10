@@ -44,8 +44,9 @@ import jdk.incubator.vector.VectorSpecies;
  * summation associativity. {@link #trace} is the exception -- it reads elements widened
  * to {@code double} and accumulates in {@code double} at both widths, exactly as the
  * oracle does, so it is bit-identical. {@link #amax} / {@link #amin} / {@link #argmax} /
- * {@link #argmin} are plain scalar loops over {@code Double.compare}, the oracle's own
- * comparison, so they agree on ties, on {@code -0.0} and on {@code NaN} as well.
+ * {@link #argmin} are plain scalar loops over Java's IEEE {@code >} / {@code <}, the
+ * oracle's own comparison since the todo-108 group-A fix, so they agree on ties, on
+ * {@code -0.0} and on {@code NaN} as well.
  *
  * <p>
  * {@link LinalgSimd} is this class's only caller. Keep it free of any other rontolisp
@@ -293,17 +294,17 @@ final class LinalgSimdKernels {
 
 	/**
 	 * The oracle's {@code best = a[0]; when (> x best) best = x} loop, verbatim --
-	 * including its comparison semantics. rontolisp's {@code >} on two floats is
-	 * {@code Double.compare(a, b) > 0} (a TOTAL order: {@code -0.0 < 0.0}, and
-	 * {@code NaN} greater than everything), not the IEEE {@code >}, so a plain
-	 * {@code x[i] > best} would answer {@code -0.0} where the defun answers {@code 0.0}.
-	 * A lane {@code MAX} reduce would do the same, and would additionally have to work
-	 * around the zero padding of a partial lane group -- these stay scalar loops.
+	 * including its comparison semantics. Since the todo-108 group-A fix, rontolisp's
+	 * {@code >} on two floats IS the IEEE {@code >} (a {@code 0.0}/{@code -0.0} tie keeps
+	 * the earlier element, {@code NaN} never wins), so plain Java {@code >} is the
+	 * defun's own comparison. A lane {@code MAX} reduce would diverge on those edges (and
+	 * would have to work around the zero padding of a partial lane group) -- these stay
+	 * scalar loops.
 	 */
 	static double amax(double[] x) {
 		double best = x[0];
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) > 0) {
+			if (x[i] > best) {
 				best = x[i];
 			}
 		}
@@ -313,7 +314,7 @@ final class LinalgSimdKernels {
 	static double amin(double[] x) {
 		double best = x[0];
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) < 0) {
+			if (x[i] < best) {
 				best = x[i];
 			}
 		}
@@ -323,7 +324,7 @@ final class LinalgSimdKernels {
 	static double amaxF(float[] x) {
 		double best = x[0];
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) > 0) {
+			if (x[i] > best) {
 				best = x[i];
 			}
 		}
@@ -333,7 +334,7 @@ final class LinalgSimdKernels {
 	static double aminF(float[] x) {
 		double best = x[0];
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) < 0) {
+			if (x[i] < best) {
 				best = x[i];
 			}
 		}
@@ -344,7 +345,7 @@ final class LinalgSimdKernels {
 		double best = x[0];
 		int bi = 0;
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) > 0) {
+			if (x[i] > best) {
 				best = x[i];
 				bi = i;
 			}
@@ -356,7 +357,7 @@ final class LinalgSimdKernels {
 		double best = x[0];
 		int bi = 0;
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) < 0) {
+			if (x[i] < best) {
 				best = x[i];
 				bi = i;
 			}
@@ -368,7 +369,7 @@ final class LinalgSimdKernels {
 		double best = x[0];
 		int bi = 0;
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) > 0) {
+			if (x[i] > best) {
 				best = x[i];
 				bi = i;
 			}
@@ -380,7 +381,7 @@ final class LinalgSimdKernels {
 		double best = x[0];
 		int bi = 0;
 		for (int i = 1; i < x.length; i++) {
-			if (Double.compare(x[i], best) < 0) {
+			if (x[i] < best) {
 				best = x[i];
 				bi = i;
 			}

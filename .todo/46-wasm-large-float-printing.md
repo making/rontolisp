@@ -1,23 +1,29 @@
-# WASM cannot print floats with magnitude >= 2^31
+# WASM float printing: no more traps; the remaining gap is E-notation SHAPE parity
 
 Discovered 2026-07-03 while adding `rontolisp:json-parse` (a 13-digit JSON
-integer parses to a float on every backend, but printing it traps on WASM).
-Reproduces on plain develop without JSON:
+integer parses to a float on every backend, but printing it trapped on WASM).
+
+**2026-07-10 (todo-108 group C): the trap class is FIXED.** `buildPrintF64Core`
+now takes the sign from the bit pattern (`-0.0` prints as `-0.0`), prints
+`Infinity` / `-Infinity` / `NaN` as text, extracts the integer part through an
+i64 MSD digit loop up to 2^63, and above 2^63 normalizes into [1, 10) and
+appends `E<exp>` (approximate — each /10 rounds). Covered by
+`WasmLispCompilerIntegrationTest.floatPrinterHandlesSignedZeroInfinityNanAndLargeMagnitudes`
+and the `ieee-float-*` ci-spec cases.
+
+What REMAINS of this todo is cosmetic cross-backend parity of the printed
+SHAPE for large finite floats:
 
 ```lisp
 (print (* 1.5 (expt 10.0 12)))
-; interpreter/JVM: 1.5E12
-; WASM (Preview 1 and component): wasm trap: integer overflow
+; interpreter/JVM: 1.5E12          (Java shortest round-trip, E-form from 1e7)
+; WASM:            1500000000000.0 (all digits, exact integer part, up to 2^63)
 ```
 
-The value itself is correct (arithmetic and comparisons work); only
-`print`/`princ`/`princ-to-string` trap, because the float formatter extracts
-the integer part through an `i32` conversion. Affects `rontolisp:json-parse`
-(printing wide-integer-derived floats) and `rontolisp:json-stringify`
-(serializing them), documented in both reference pages and the WASM guide.
-
-Fix sketch: in the WASM float-to-string runtime, either extract the integer
-part via `i64` (magnitudes up to 2^63) or switch to exponent normalization
-(divide by 10 until the mantissa fits) before digit extraction, matching the
-`1.5E12` shape the JVM/interpreter produce. Add ci-spec cases printing
-`1.5e12` and `-2.5e15` once fixed.
+The ci-spec case `ieee-float-large-magnitude-printing` pins today's split via
+`expectedByBackend`. Closing it means switching the WASM printer to exponent
+normalization with shortest-round-trip digits (a Ryu/Grisu-style emitter, or at
+least Java-shaped E-form from 1e7 with trailing-zero trimming) — then collapse
+that ci-spec case to a single expected value. Also affects
+`rontolisp:json-stringify` output shape (documented in
+`doc/{en,ja}/compiling/wasm.md` and `.kb/json.md`).

@@ -191,22 +191,22 @@ where an f32 accumulator is exact. Pinned three times -- `eval/LinalgSimdTest`,
 Precision`. The three `--simd` backends print the same seven lines, so they pin each other
 as well as the contract.
 
-## `>` disagrees across backends already -- do not "fix" it in a kernel
+## `>` agrees across backends since todo-108 -- the kernels all compare IEEE
 
-`amax` / `amin` / `argmax` / `argmin` compare with `>`, and rontolisp's `>` on two floats is
-**not the same operation on every backend**:
-
-| | `(> 0.0 -0.0)` | `(linalg:amax #d(-0.0 0.0))` |
-|---|---|---|
-| interpreter (`Environment.compare` -> `Double.compare`, a total order) | `t` | `0.0` |
-| JVM (`_cmp`'s Double path -> `DCMPL`, IEEE) | `nil` | `-0.0` |
-| wasm-GC (`f64.gt`, IEEE) | `nil` | `0.0` (prints `-0.0` as `0.0`) |
-
-This is **pre-existing** and has nothing to do with `--simd`. Each kernel therefore
-reproduces ITS OWN backend's comparison -- `Double.compare` in `LinalgSimdKernels`, plain
-`>` in `JvmSimdVectorTemplate` and `f64.gt` in the wasm kernels -- so every backend's
-accelerated `amax` is bit-identical to that backend's own scalar defun. Never put a `-0.0`
-case in `ci-spec.yaml`. Worth a separate todo; not this one.
+`amax` / `amin` / `argmax` / `argmin` compare with `>`. Historically rontolisp's `>` on
+two floats was three different operations (interpreter `Double.compare`, a total order;
+JVM `DCMPL` for every operator; wasm literal `f64.gt` but a signum `_rat_cmp` through
+variables), so each kernel mirrored ITS OWN backend and `(linalg:amax #d(-0.0 0.0))`
+differed per backend. **`.todo/108` fixed the scalar comparisons on all three backends**
+(interpreter `compareNumeric` gained an UNORDERED state; the JVM literal path picks
+DCMPG/DCMPL per operator and the runtime path uses the `_cmpb` bitmask; wasm's variable
+path funnels through `_rat_cmp_bits`), and `LinalgSimdKernels` switched from
+`Double.compare` to plain Java `>`/`<` in the same change -- the lockstep the old version
+of this section demanded. All three kernels now compare IEEE, all three match their own
+scalar defun (pinned by `LinalgSimdTest`'s `-0.0` oracle-match cases), and the defuns
+match each other: `(linalg:amax #d(-0.0 0.0))` is `-0.0` everywhere (first-element tie
+win, since IEEE `>` is false on a `0.0`/`-0.0` tie). `-0.0` / NaN comparison cases are
+allowed in `ci-spec.yaml` now; the float-edge cases there pin the convergence.
 
 ## Per-backend mechanics
 
