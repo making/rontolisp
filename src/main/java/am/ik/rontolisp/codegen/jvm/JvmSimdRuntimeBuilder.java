@@ -142,6 +142,16 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdCos"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_TAN,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdTan"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_ASIN,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAsin"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_ACOS,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAcos"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_ATAN,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAtan"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_SINH,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSinh"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_COSH,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdCosh"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_SQRT,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSqrt"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_ABS,
@@ -164,6 +174,16 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdCosInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_TAN_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdTanInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_ASIN_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAsinInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_ACOS_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAcosInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_ATAN_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAtanInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_SINH_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSinhInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_COSH_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdCoshInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_SQRT_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSqrtInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_ABS_INTO,

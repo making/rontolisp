@@ -2477,10 +2477,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_SQRT, LispNames.VEC_ABS,
 			LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP,
 			LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS, LispNames.VEC_TAN,
+			LispNames.VEC_ASIN, LispNames.VEC_ACOS, LispNames.VEC_ATAN, LispNames.VEC_SINH, LispNames.VEC_COSH,
 			LispNames.VEC_SIGN, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO,
 			LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO,
 			LispNames.VEC_TANH_INTO, LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO,
-			LispNames.VEC_SIGN_INTO);
+			LispNames.VEC_ASIN_INTO, LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO,
+			LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
@@ -2554,10 +2556,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_SQRT,
 					LispNames.VEC_ABS, LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL,
 					LispNames.VEC_EXP, LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS,
-					LispNames.VEC_TAN, LispNames.VEC_SIGN, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO,
+					LispNames.VEC_TAN, LispNames.VEC_ASIN, LispNames.VEC_ACOS, LispNames.VEC_ATAN, LispNames.VEC_SINH,
+					LispNames.VEC_COSH, LispNames.VEC_SIGN, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO,
 					LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO,
 					LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO, LispNames.VEC_SIN_INTO,
-					LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_SIGN_INTO ->
+					LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO, LispNames.VEC_ACOS_INTO,
+					LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
+					LispNames.VEC_SIGN_INTO ->
 				operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
@@ -2601,8 +2606,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_SCALE_INTO -> compileSimdScale(args, fn, true);
 			// The arithmetic unary ufuncs (todo 109): NATIVE IEEE per-element semantics
 			// (this backend has no vec.lisp defun to mirror; see WasmVecLoops.simdMap1).
-			// exp / log / tanh / sin / cos / tan / sign reuse the GC backend's raw-f64
-			// emitters instead (todo 109 Phases 1.5 and 2; see compileSimdUnaryF64).
+			// exp / log / tanh / sin / cos / tan / asin / acos / atan / sinh / cosh /
+			// sign reuse the GC backend's raw-f64 emitters instead (todo 109 Phases 1.5
+			// and 2; see compileSimdUnaryF64).
 			case LispNames.VEC_SQRT -> compileSimdUnary(args, fn, WasmVecLoops.U_SQRT, false, "vec:sqrt");
 			case LispNames.VEC_ABS -> compileSimdUnary(args, fn, WasmVecLoops.U_ABS, false, "vec:abs");
 			case LispNames.VEC_SQUARE -> compileSimdUnary(args, fn, WasmVecLoops.U_SQUARE, false, "vec:square");
@@ -2628,6 +2634,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_COS, false, "vec:cos");
 			case LispNames.VEC_TAN ->
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_TAN, false, "vec:tan");
+			case LispNames.VEC_ASIN ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_ASIN, false, "vec:asin");
+			case LispNames.VEC_ACOS ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_ACOS, false, "vec:acos");
+			case LispNames.VEC_ATAN ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_ATAN, false, "vec:atan");
+			case LispNames.VEC_SINH ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SINH, false, "vec:sinh");
+			case LispNames.VEC_COSH ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, false, "vec:cosh");
 			case LispNames.VEC_SIGN ->
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIGN, false, "vec:sign");
 			case LispNames.VEC_EXP_INTO ->
@@ -2642,6 +2658,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_COS, true, "vec:cos-into");
 			case LispNames.VEC_TAN_INTO ->
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_TAN, true, "vec:tan-into");
+			case LispNames.VEC_ASIN_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_ASIN, true, "vec:asin-into");
+			case LispNames.VEC_ACOS_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_ACOS, true, "vec:acos-into");
+			case LispNames.VEC_ATAN_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_ATAN, true, "vec:atan-into");
+			case LispNames.VEC_SINH_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SINH, true, "vec:sinh-into");
+			case LispNames.VEC_COSH_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, true, "vec:cosh-into");
 			case LispNames.VEC_SIGN_INTO ->
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIGN, true, "vec:sign-into");
 			case LispNames.VEC_SUM -> compileSimdSum(args, fn);

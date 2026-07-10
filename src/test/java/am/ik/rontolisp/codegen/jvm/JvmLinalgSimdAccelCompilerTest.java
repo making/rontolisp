@@ -332,6 +332,26 @@ class JvmLinalgSimdAccelCompilerTest {
 			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4))))");
 			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:arange 0 200 'single-float)))");
 		}
+		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
+		// sign-mixed range (todo 109 Phase 2 third release).
+		for (String op : new String[] { "asin", "acos" }) {
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))");
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.005)))");
+		}
+		for (String op : new String[] { "atan", "sinh", "cosh" }) {
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.05)))");
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:reshape (linalg:mul (linalg:arange 12) 0.05) '(3 4))))");
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.05)))");
+		}
+		assertMatchesScalarReference("(print (linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
+		assertMatchesScalarReference("(print (linalg:acos #d(1.0 -1.0 0.0 0.5)))");
+		assertMatchesScalarReference("(print (linalg:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))");
+		assertMatchesScalarReference("(print (linalg:cosh #d(0.0 -0.0 1.0)))");
 	}
 
 	@Test
@@ -339,6 +359,9 @@ class JvmLinalgSimdAccelCompilerTest {
 		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square", "negative",
 				"sign", "reciprocal" }) {
 			assertMatchesScalarReference("(print (linalg:" + op + " #(1 4 9)))");
+		}
+		for (String op : new String[] { "asin", "acos", "atan", "sinh", "cosh" }) {
+			assertMatchesScalarReference("(print (linalg:" + op + " #(0 1)))");
 		}
 		assertThat(accel("(print (linalg:sqrt #(4 9)))")).isEqualTo("#d(2.0 3.0)");
 		assertThat(accel("(print (linalg:square 3))")).isEqualTo("9");

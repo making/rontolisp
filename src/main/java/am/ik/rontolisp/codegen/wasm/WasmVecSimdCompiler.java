@@ -56,6 +56,11 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_SIN, WasmVecSimdRuntimeBuilder.SIN),
 			Map.entry(LispNames.VEC_COS, WasmVecSimdRuntimeBuilder.COS),
 			Map.entry(LispNames.VEC_TAN, WasmVecSimdRuntimeBuilder.TAN),
+			Map.entry(LispNames.VEC_ASIN, WasmVecSimdRuntimeBuilder.ASIN),
+			Map.entry(LispNames.VEC_ACOS, WasmVecSimdRuntimeBuilder.ACOS),
+			Map.entry(LispNames.VEC_ATAN, WasmVecSimdRuntimeBuilder.ATAN),
+			Map.entry(LispNames.VEC_SINH, WasmVecSimdRuntimeBuilder.SINH),
+			Map.entry(LispNames.VEC_COSH, WasmVecSimdRuntimeBuilder.COSH),
 			Map.entry(LispNames.VEC_SQRT, WasmVecSimdRuntimeBuilder.SQRT),
 			Map.entry(LispNames.VEC_ABS, WasmVecSimdRuntimeBuilder.ABS),
 			Map.entry(LispNames.VEC_NEGATIVE, WasmVecSimdRuntimeBuilder.NEGATIVE),
@@ -67,6 +72,11 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_SIN_INTO, WasmVecSimdRuntimeBuilder.SIN_INTO),
 			Map.entry(LispNames.VEC_COS_INTO, WasmVecSimdRuntimeBuilder.COS_INTO),
 			Map.entry(LispNames.VEC_TAN_INTO, WasmVecSimdRuntimeBuilder.TAN_INTO),
+			Map.entry(LispNames.VEC_ASIN_INTO, WasmVecSimdRuntimeBuilder.ASIN_INTO),
+			Map.entry(LispNames.VEC_ACOS_INTO, WasmVecSimdRuntimeBuilder.ACOS_INTO),
+			Map.entry(LispNames.VEC_ATAN_INTO, WasmVecSimdRuntimeBuilder.ATAN_INTO),
+			Map.entry(LispNames.VEC_SINH_INTO, WasmVecSimdRuntimeBuilder.SINH_INTO),
+			Map.entry(LispNames.VEC_COSH_INTO, WasmVecSimdRuntimeBuilder.COSH_INTO),
 			Map.entry(LispNames.VEC_SQRT_INTO, WasmVecSimdRuntimeBuilder.SQRT_INTO),
 			Map.entry(LispNames.VEC_ABS_INTO, WasmVecSimdRuntimeBuilder.ABS_INTO),
 			Map.entry(LispNames.VEC_NEGATIVE_INTO, WasmVecSimdRuntimeBuilder.NEGATIVE_INTO),
@@ -77,8 +87,9 @@ final class WasmVecSimdCompiler {
 	private static int arity(String member) {
 		return switch (member) {
 			case LispNames.VEC_SUM, LispNames.VEC_EXP, LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIN,
-					LispNames.VEC_COS, LispNames.VEC_TAN, LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE,
-					LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL ->
+					LispNames.VEC_COS, LispNames.VEC_TAN, LispNames.VEC_ASIN, LispNames.VEC_ACOS, LispNames.VEC_ATAN,
+					LispNames.VEC_SINH, LispNames.VEC_COSH, LispNames.VEC_SQRT, LispNames.VEC_ABS,
+					LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL ->
 				1;
 			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO,
 					LispNames.VEC_MATVEC_INTO ->

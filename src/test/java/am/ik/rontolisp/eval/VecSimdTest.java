@@ -318,8 +318,9 @@ class VecSimdTest {
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
-		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "negative",
-				"sign", "reciprocal", "exp-into", "log-into", "tanh-into", "sin-into", "cos-into", "tan-into",
+		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
+				"cosh", "sqrt", "abs", "negative", "sign", "reciprocal", "exp-into", "log-into", "tanh-into",
+				"sin-into", "cos-into", "tan-into", "asin-into", "acos-into", "atan-into", "sinh-into", "cosh-into",
 				"sqrt-into", "abs-into", "negative-into", "sign-into", "reciprocal-into" }) {
 			String form = "(vec:zeros 1) #'vec:" + member;
 			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
@@ -376,6 +377,30 @@ class VecSimdTest {
 			}
 			assertMatchesScalarOracle("(vec:%s (vec:arange 200 'single-float))".formatted(op));
 		}
+		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
+		// sign-mixed range (todo 109 Phase 2 third release -- Math.asin / Math.acos /
+		// Math.atan / Math.sinh / Math.cosh scalar loops on this backend).
+		for (String op : new String[] { "asin", "acos" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(vec:%s (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.005))"
+							.formatted(op, n, n));
+			}
+			assertMatchesScalarOracle("(vec:%s (vec:scale (vec:arange 200 'single-float) 0.005))".formatted(op));
+		}
+		for (String op : new String[] { "atan", "sinh", "cosh" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(vec:%s (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.05))"
+							.formatted(op, n, n));
+			}
+			assertMatchesScalarOracle("(vec:%s (vec:scale (vec:arange 200 'single-float) 0.05))".formatted(op));
+		}
+		assertMatchesScalarOracle("(vec:asin #d(0.0 -0.0 1.0 -1.0 0.5))");
+		assertMatchesScalarOracle("(vec:acos #d(1.0 -1.0 0.0 0.5))");
+		assertMatchesScalarOracle("(vec:atan (vec:reciprocal #d(0.0 -0.0)))");
+		assertMatchesScalarOracle("(vec:sinh #d(0.0 -0.0 0.25 -0.25 0.3))");
+		assertMatchesScalarOracle("(vec:cosh #d(0.0 -0.0 1.0))");
 	}
 
 	@Test
@@ -392,8 +417,8 @@ class VecSimdTest {
 
 	@Test
 	void unaryIntoKernelsMatchTheirAllocatingSiblingsAndReturnTheDestination() {
-		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "negative", "sign",
-				"reciprocal" }) {
+		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
+				"cosh", "sqrt", "abs", "negative", "sign", "reciprocal" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertIntoMatchesAllocating(
 						"(vec:" + op + "-into (vec:zeros %s) (vec:add (vec:arange %s) (vec:ones %s)))",

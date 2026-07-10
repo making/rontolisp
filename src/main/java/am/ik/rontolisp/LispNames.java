@@ -2176,6 +2176,21 @@ public final class LispNames {
 	/** {@code linalg:tan}: element-wise tangent (numpy {@code np.tan}). */
 	public static final String LINALG_TAN = "tan";
 
+	/** {@code linalg:asin}: element-wise arc sine (numpy {@code np.arcsin}). */
+	public static final String LINALG_ASIN = "asin";
+
+	/** {@code linalg:acos}: element-wise arc cosine (numpy {@code np.arccos}). */
+	public static final String LINALG_ACOS = "acos";
+
+	/** {@code linalg:atan}: element-wise arc tangent (numpy {@code np.arctan}). */
+	public static final String LINALG_ATAN = "atan";
+
+	/** {@code linalg:sinh}: element-wise hyperbolic sine (numpy {@code np.sinh}). */
+	public static final String LINALG_SINH = "sinh";
+
+	/** {@code linalg:cosh}: element-wise hyperbolic cosine (numpy {@code np.cosh}). */
+	public static final String LINALG_COSH = "cosh";
+
 	/** {@code linalg:sqrt}: element-wise square root (numpy {@code np.sqrt}). */
 	public static final String LINALG_SQRT = "sqrt";
 
@@ -2318,6 +2333,21 @@ public final class LispNames {
 	/** {@code vec:tan}: element-wise tangent into a fresh vector. */
 	public static final String VEC_TAN = "tan";
 
+	/** {@code vec:asin}: element-wise arc sine into a fresh vector. */
+	public static final String VEC_ASIN = "asin";
+
+	/** {@code vec:acos}: element-wise arc cosine into a fresh vector. */
+	public static final String VEC_ACOS = "acos";
+
+	/** {@code vec:atan}: element-wise arc tangent into a fresh vector. */
+	public static final String VEC_ATAN = "atan";
+
+	/** {@code vec:sinh}: element-wise hyperbolic sine into a fresh vector. */
+	public static final String VEC_SINH = "sinh";
+
+	/** {@code vec:cosh}: element-wise hyperbolic cosine into a fresh vector. */
+	public static final String VEC_COSH = "cosh";
+
 	/** {@code vec:sqrt}: element-wise square root into a fresh vector. */
 	public static final String VEC_SQRT = "sqrt";
 
@@ -2353,6 +2383,21 @@ public final class LispNames {
 
 	/** {@code vec:tan-into}: element-wise tangent into {@code out}. */
 	public static final String VEC_TAN_INTO = "tan-into";
+
+	/** {@code vec:asin-into}: element-wise arc sine into {@code out}. */
+	public static final String VEC_ASIN_INTO = "asin-into";
+
+	/** {@code vec:acos-into}: element-wise arc cosine into {@code out}. */
+	public static final String VEC_ACOS_INTO = "acos-into";
+
+	/** {@code vec:atan-into}: element-wise arc tangent into {@code out}. */
+	public static final String VEC_ATAN_INTO = "atan-into";
+
+	/** {@code vec:sinh-into}: element-wise hyperbolic sine into {@code out}. */
+	public static final String VEC_SINH_INTO = "sinh-into";
+
+	/** {@code vec:cosh-into}: element-wise hyperbolic cosine into {@code out}. */
+	public static final String VEC_COSH_INTO = "cosh-into";
 
 	/** {@code vec:sqrt-into}: element-wise square root into {@code out}. */
 	public static final String VEC_SQRT_INTO = "sqrt-into";

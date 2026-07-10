@@ -483,7 +483,8 @@ final class JvmSimdVectorTemplate {
 	// f64, apply, narrow on store. sqrt / abs / neg / 1-over-x have lane forms
 	// bit-identical to that (sqrt and div correctly rounded, abs and neg exact, and the
 	// f32 widen-compute-narrow round trip is exact by the 53 >= 2*24+2 bound); exp /
-	// log / tanh / sin / cos / tan / signum have NO bit-safe lane form
+	// log / tanh / sin / cos / tan / asin / acos / atan / sinh / cosh / signum have
+	// NO bit-safe lane form
 	// (VectorOperators.EXP etc. are not bit-identical to Math.exp), so they stay
 	// de-boxed scalar loops over the same java.lang.Math calls the compiled defun makes.
 
@@ -509,6 +510,16 @@ final class JvmSimdVectorTemplate {
 
 	private static final int UOP_TAN = 10;
 
+	private static final int UOP_ASIN = 11;
+
+	private static final int UOP_ACOS = 12;
+
+	private static final int UOP_ATAN = 13;
+
+	private static final int UOP_SINH = 14;
+
+	private static final int UOP_COSH = 15;
+
 	static @Nullable Object simdExp(@Nullable Object v) {
 		return simdUnary(UOP_EXP, v);
 	}
@@ -531,6 +542,26 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdTan(@Nullable Object v) {
 		return simdUnary(UOP_TAN, v);
+	}
+
+	static @Nullable Object simdAsin(@Nullable Object v) {
+		return simdUnary(UOP_ASIN, v);
+	}
+
+	static @Nullable Object simdAcos(@Nullable Object v) {
+		return simdUnary(UOP_ACOS, v);
+	}
+
+	static @Nullable Object simdAtan(@Nullable Object v) {
+		return simdUnary(UOP_ATAN, v);
+	}
+
+	static @Nullable Object simdSinh(@Nullable Object v) {
+		return simdUnary(UOP_SINH, v);
+	}
+
+	static @Nullable Object simdCosh(@Nullable Object v) {
+		return simdUnary(UOP_COSH, v);
 	}
 
 	static @Nullable Object simdSqrt(@Nullable Object v) {
@@ -575,6 +606,26 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdTanInto(@Nullable Object out, @Nullable Object v) {
 		return simdUnaryInto(UOP_TAN, out, v);
+	}
+
+	static @Nullable Object simdAsinInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_ASIN, out, v);
+	}
+
+	static @Nullable Object simdAcosInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_ACOS, out, v);
+	}
+
+	static @Nullable Object simdAtanInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_ATAN, out, v);
+	}
+
+	static @Nullable Object simdSinhInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_SINH, out, v);
+	}
+
+	static @Nullable Object simdCoshInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_COSH, out, v);
 	}
 
 	static @Nullable Object simdSqrtInto(@Nullable Object out, @Nullable Object v) {
@@ -685,8 +736,9 @@ final class JvmSimdVectorTemplate {
 		}
 	}
 
-	// exp / log / tanh / sin / cos / tan / signum have no lane form bit-identical to
-	// java.lang.Math, so they stay scalar loops (see the section comment above).
+	// exp / log / tanh / sin / cos / tan / asin / acos / atan / sinh / cosh / signum
+	// have no lane form bit-identical to java.lang.Math, so they stay scalar loops
+	// (see the section comment above).
 	private static boolean hasLaneForm(int op) {
 		return op == UOP_SQRT || op == UOP_ABS || op == UOP_NEG || op == UOP_RECIP;
 	}
@@ -709,6 +761,21 @@ final class JvmSimdVectorTemplate {
 		}
 		if (op == UOP_TAN) {
 			return Math.tan(x);
+		}
+		if (op == UOP_ASIN) {
+			return Math.asin(x);
+		}
+		if (op == UOP_ACOS) {
+			return Math.acos(x);
+		}
+		if (op == UOP_ATAN) {
+			return Math.atan(x);
+		}
+		if (op == UOP_SINH) {
+			return Math.sinh(x);
+		}
+		if (op == UOP_COSH) {
+			return Math.cosh(x);
 		}
 		if (op == UOP_SQRT) {
 			return Math.sqrt(x);
@@ -802,6 +869,26 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laTan(@Nullable Object a) {
 		return laUnary(UOP_TAN, a);
+	}
+
+	static @Nullable Object laAsin(@Nullable Object a) {
+		return laUnary(UOP_ASIN, a);
+	}
+
+	static @Nullable Object laAcos(@Nullable Object a) {
+		return laUnary(UOP_ACOS, a);
+	}
+
+	static @Nullable Object laAtan(@Nullable Object a) {
+		return laUnary(UOP_ATAN, a);
+	}
+
+	static @Nullable Object laSinh(@Nullable Object a) {
+		return laUnary(UOP_SINH, a);
+	}
+
+	static @Nullable Object laCosh(@Nullable Object a) {
+		return laUnary(UOP_COSH, a);
 	}
 
 	static @Nullable Object laSqrt(@Nullable Object a) {

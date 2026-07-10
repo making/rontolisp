@@ -182,8 +182,8 @@
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |
-| `asin` `acos` `atan` | `(atan 0)` | `0.0`(インタプリタ/JVMのみ) |
-| `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0`(`tanh` は全バックエンド -- WASM はソフトウェア近似。`sinh`/`cosh` はインタプリタ/JVMのみ) |
+| `asin` `acos` `atan` | `(atan 0)` | `0.0`(全バックエンド -- WASM はソフトウェア近似) |
+| `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0`(全バックエンド -- WASM は 3 つともソフトウェア `exp` から導出) |
 | `gcd` | `(gcd 12 18)`, `(gcd 24 36 60)` | `6`, `12`(可変長引数。最大公約数、`(gcd)` は `0`) |
 | `lcm` | `(lcm 4 6)`, `(lcm 2 3 4)` | `12`, `12`(可変長引数。最小公倍数。いずれかの引数が `0` なら `0`、`(lcm)` は `1`) |
 | `signum` | `(signum -5)`, `(signum 3.5)` | `-1`, `1.0`(符号。整数/浮動小数点の型を保ちます) |
@@ -328,6 +328,11 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:sin` | `(linalg:sin (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの正弦) |
 | `linalg:cos` | `(linalg:cos (linalg:zeros 3))` | `#d(1.0 1.0 1.0)`(要素ごとの余弦) |
 | `linalg:tan` | `(linalg:tan (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの正接) |
+| `linalg:asin` | `(linalg:asin (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの逆正弦) |
+| `linalg:acos` | `(linalg:acos (linalg:ones 3))` | `#d(0.0 0.0 0.0)`(要素ごとの逆余弦) |
+| `linalg:atan` | `(linalg:atan (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの逆正接) |
+| `linalg:sinh` | `(linalg:sinh (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの双曲線正弦) |
+| `linalg:cosh` | `(linalg:cosh (linalg:zeros 3))` | `#d(1.0 1.0 1.0)`(要素ごとの双曲線余弦) |
 | `linalg:sqrt` | `(linalg:sqrt #(4 9 16))` | `#d(2.0 3.0 4.0)`(要素ごとの平方根) |
 | `linalg:abs` | `(linalg:abs #(-3 2 -1))` | `#d(3.0 2.0 1.0)`(要素ごとの絶対値) |
 | `linalg:square` | `(linalg:square #(1 2 3))` | `#d(1.0 4.0 9.0)`(要素ごとの `x * x`) |

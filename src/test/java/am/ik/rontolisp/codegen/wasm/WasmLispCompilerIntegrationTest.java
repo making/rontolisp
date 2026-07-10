@@ -961,6 +961,68 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void noGcRunsArcAndHyperbolicUnderBothLowerings() throws Exception {
+		// todo 109 Phase 2 third release: vec:asin / vec:acos / vec:atan / vec:sinh /
+		// vec:cosh (+ -into) reuse the GC backend's raw-f64 emitters
+		// (WasmAtanCompiler's fold-and-series, WasmSinhCoshCompiler's exp derivation),
+		// so a --no-gc value equals the wasm-GC backend's exactly at both widths -- the
+		// nontrivial probes are compared against a wasm-GC run, the exact ones
+		// (atan(0) = asin(0) = sinh(0) = 0, acos(1) = 0, cosh(0) = 1) to literals.
+		String wasmGcAtanD = compileAndRunVec(
+				"(print (truncate (* 1000000 (vec:aref (vec:atan #d(1.0 -2.5 100.0)) 1))))", false);
+		String wasmGcAsinF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:asin #f(0.5 -0.5)) 0))))",
+				false);
+		String wasmGcAcosD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:acos #d(-0.5)) 0))))", false);
+		String wasmGcSinhD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:sinh #d(0.1 2.0)) 1))))",
+				false);
+		String wasmGcCoshF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:cosh #f(2.0)) 0))))", false);
+		String source = """
+				(defun atand (i) (truncate (* 1000000 (vec:aref (vec:atan #d(1.0 -2.5 100.0)) 1))))
+				(defun asinf (i) (truncate (* 1000000 (vec:aref (vec:asin #f(0.5 -0.5)) 0))))
+				(defun acosd (i) (truncate (* 1000000 (vec:aref (vec:acos #d(-0.5)) 0))))
+				(defun sinhd (i) (truncate (* 1000000 (vec:aref (vec:sinh #d(0.1 2.0)) 1))))
+				(defun coshf (i) (truncate (* 1000000 (vec:aref (vec:cosh #f(2.0)) 0))))
+				(defun anchors (i)
+				  (truncate (+ (vec:aref (vec:atan (vec:zeros 1)) 0)
+				               (vec:aref (vec:asin (vec:zeros 1)) 0)
+				               (vec:aref (vec:acos (vec:ones 1)) 0)
+				               (vec:aref (vec:sinh (vec:zeros 1)) 0)
+				               (vec:sum (vec:cosh (vec:zeros 3))))))
+				(defun arcinto (i)
+				  (let ((o (vec:zeros 3)))
+				    (vec:asin-into o (vec:zeros 3))
+				    (vec:acos-into o (vec:atan-into o o))
+				    (vec:cosh-into o (vec:sinh-into o o))
+				    (truncate (* 1000000 (vec:aref o 0)))))
+				(rontolisp:wasm-export 'atand :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'asinf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'acosd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sinhd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'coshf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'anchors :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'arcinto :params '(:int) :returns :int)
+				""";
+		// The -into chain, computed once against the wasm-GC backend too.
+		String wasmGcInto = compileAndRunVec("""
+				(let ((o (vec:zeros 3)))
+				  (vec:asin-into o (vec:zeros 3))
+				  (vec:acos-into o (vec:atan-into o o))
+				  (vec:cosh-into o (vec:sinh-into o o))
+				  (print (truncate (* 1000000 (vec:aref o 0)))))
+				""", false);
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, source, "atand", "0")).isEqualTo(wasmGcAtanD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "asinf", "0")).isEqualTo(wasmGcAsinF);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "acosd", "0")).isEqualTo(wasmGcAcosD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sinhd", "0")).isEqualTo(wasmGcSinhD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "coshf", "0")).isEqualTo(wasmGcCoshF);
+			// atan(0) + asin(0) + acos(1) + sinh(0) + 3 * cosh(0) = 3.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "anchors", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "arcinto", "0")).isEqualTo(wasmGcInto);
+		}
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,
@@ -4643,12 +4705,66 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void transcendentalFunctionsAreUnsupported() {
-		// asin/acos/atan/sinh/cosh have no native WASM instruction and no software
-		// approximation (yet), so they are rejected (exp/log/tanh/sin/cos/tan have
-		// one).
-		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (asin 0))")))
-			.isInstanceOf(UnsupportedOperationException.class);
+	void arcAndHyperbolicSoftwareApproximation() throws Exception {
+		// todo 109 Phase 2 third release: asin/acos/atan/sinh/cosh were the LAST
+		// members of BuiltinFunctionWrappers.WASM_UNSUPPORTED -- every transcendental
+		// built-in now has a WASM software approximation. atan = odd/reciprocal folds +
+		// two half-angle folds + a 10-term Taylor series (~1e-15 relative); asin/acos
+		// derive from it; sinh/cosh derive from the software exp (~1e-7 relative for
+		// |x| up to ~20, degrading beyond like exp itself), sinh switching to its odd
+		// Taylor series below |x| = 0.25 to dodge the e - 1/e cancellation. Exact
+		// anchors and IEEE edges are exact; everything else matches java.lang.Math to
+		// the printer's six decimal places but not bit-exactly.
+		assertThat(compileAndRun("(print (atan 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (asin 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (acos 1))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (sinh 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (cosh 0))")).isEqualTo("1.0");
+		// The reciprocal fold maps the domain edges exactly: atan(inf) = asin(1) =
+		// pi/2, acos(-1) = pi.
+		assertThat(Double.parseDouble(compileAndRun("(print (asin 1))"))).isCloseTo(Math.PI / 2, within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (asin -1))"))).isCloseTo(-Math.PI / 2, within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (acos -1))"))).isCloseTo(Math.PI, within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (atan (/ 1.0 0.0)))"))).isCloseTo(Math.PI / 2,
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (atan (/ -1.0 0.0)))"))).isCloseTo(-Math.PI / 2,
+				within(1e-5));
+		// Both atan folds (|x| <= 1 and the reciprocal branch), and the derivations.
+		assertThat(Double.parseDouble(compileAndRun("(print (atan 1.0))"))).isCloseTo(Math.atan(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (atan -2.5))"))).isCloseTo(Math.atan(-2.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (atan 1000000.0))"))).isCloseTo(Math.atan(1e6),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (asin 0.5))"))).isCloseTo(Math.asin(0.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (asin -0.9999))"))).isCloseTo(Math.asin(-0.9999),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (acos 0.5))"))).isCloseTo(Math.acos(0.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (acos -0.5))"))).isCloseTo(Math.acos(-0.5), within(1e-5));
+		// sinh's small-x series branch (|x| <= 0.25), the exp branch on both sides of
+		// it, and cosh.
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh 0.1))"))).isCloseTo(Math.sinh(0.1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh -0.3))"))).isCloseTo(Math.sinh(-0.3), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh 2.0))"))).isCloseTo(Math.sinh(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sinh -2.0))"))).isCloseTo(Math.sinh(-2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cosh 2.0))"))).isCloseTo(Math.cosh(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cosh -1.0))"))).isCloseTo(Math.cosh(-1), within(1e-5));
+		// The IEEE edges: out-of-domain asin/acos and NaN map to NaN; infinities.
+		assertThat(compileAndRun("(print (asin 1.5))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (acos -1.5))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (asin (/ 1.0 0.0)))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (atan (/ 0.0 0.0)))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (sinh (/ 0.0 0.0)))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (sinh (/ 1.0 0.0)))")).isEqualTo("Infinity");
+		assertThat(compileAndRun("(print (sinh (/ -1.0 0.0)))")).isEqualTo("-Infinity");
+		assertThat(compileAndRun("(print (cosh (/ -1.0 0.0)))")).isEqualTo("Infinity");
+		assertThat(compileAndRun("(print (sinh 800.0))")).isEqualTo("Infinity");
+		// First-class values over integer arguments (the wrappers left
+		// WASM_UNSUPPORTED, which is now empty).
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'atan 1))"))).isCloseTo(Math.atan(1),
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'asin 1))"))).isCloseTo(Math.PI / 2,
+				within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'cosh 1))"))).isCloseTo(Math.cosh(1),
+				within(1e-5));
 	}
 
 	@Test
@@ -6387,7 +6503,11 @@ class WasmLispCompilerIntegrationTest {
 			    (print (vec:tanh v))
 			    (print (vec:tanh f))
 			    (print (list (vec:sin v) (vec:cos v) (vec:tan v)))
-			    (print (list (vec:sin f) (vec:cos f) (vec:tan f)))))
+			    (print (list (vec:sin f) (vec:cos f) (vec:tan f)))
+			    (print (list (vec:asin (vec:scale v 0.00390625)) (vec:acos (vec:scale v 0.00390625)) (vec:atan v)))
+			    (print (list (vec:asin (vec:scale f 0.00390625)) (vec:acos (vec:scale f 0.00390625)) (vec:atan f)))
+			    (print (list (vec:sinh (vec:scale v 0.0625)) (vec:cosh (vec:scale v 0.0625))))
+			    (print (list (vec:sinh (vec:scale f 0.0625)) (vec:cosh (vec:scale f 0.0625))))))
 			(print (vec:negative #d(0.0 -0.0 1.5)))
 			(print (vec:abs #d(-0.0 0.0 -2.5)))
 			(print (vec:sign #d(-0.0 0.0 -3.5 3.5)))
@@ -6396,6 +6516,11 @@ class WasmLispCompilerIntegrationTest {
 			(print (vec:sin #d(0.0 -0.0 1.0 -2.5 100.0)))
 			(print (vec:cos #d(0.0 1.0 -2.5 100.0)))
 			(print (vec:tan #d(0.0 1.0 -2.5 2.0)))
+			(print (vec:asin #d(0.0 -0.0 1.0 -1.0 0.5)))
+			(print (vec:acos #d(1.0 -1.0 0.0 0.5)))
+			(print (vec:atan (vec:reciprocal #d(0.0 -0.0))))
+			(print (vec:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))
+			(print (vec:cosh #d(0.0 -0.0 1.0)))
 			(let ((o (vec:zeros 5)))
 			  (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0 25.0 36.0))))
 			  (print o)
@@ -6409,7 +6534,12 @@ class WasmLispCompilerIntegrationTest {
 			  (print (vec:tanh-into o o))
 			  (print (vec:sin-into o (vec:sub (vec:arange 5) (vec:scale (vec:ones 5) 2.0))))
 			  (print (vec:cos-into o o))
-			  (print (vec:tan-into o o)))
+			  (print (vec:tan-into o o))
+			  (print (vec:asin-into o (vec:scale (vec:sub (vec:arange 5) (vec:scale (vec:ones 5) 2.0)) 0.4)))
+			  (print (vec:acos-into o o))
+			  (print (vec:atan-into o o))
+			  (print (vec:sinh-into o o))
+			  (print (vec:cosh-into o o)))
 			(let ((long (vec:scale (vec:ones 7) 9.0)))
 			  (print (vec:sqrt-into long #d(4.0 9.0 16.0)))
 			  (print (vec:reciprocal-into long #d(2.0 4.0)))
@@ -6685,6 +6815,19 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath("(print (linalg:cos (linalg:reshape (linalg:arange 12) '(3 4))))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:tan (linalg:sub (linalg:arange 0 8 'single-float) 4)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sin #d(0.0 -0.0 1.0 -2.5 100.0)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:asin (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:acos (linalg:mul (linalg:arange 0 8 'single-float) 0.005)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:atan (linalg:sub (linalg:arange 200) 100)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:atan (linalg:reshape (linalg:arange 0 12 'single-float) '(3 4))))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:sinh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.05)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:cosh (linalg:mul (linalg:arange 0 8 'single-float) 0.05)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:acos #d(1.0 -1.0 0.0 0.5)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:cosh #d(0.0 -0.0 1.0)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:negative #d(0.0 -0.0 1.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:abs #d(-0.0 0.0 -2.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sign #d(-0.0 0.0 -3.5 3.5)))");
@@ -6693,6 +6836,9 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath("(print (linalg:log #(1 4 9)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #(-1 0 1)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sin #(-1 0 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:asin #(0 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:atan #(-1 0 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:cosh #(0 1)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:square 3))");
 	}
 

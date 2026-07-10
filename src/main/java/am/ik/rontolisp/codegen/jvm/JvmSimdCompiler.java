@@ -40,11 +40,15 @@ final class JvmSimdCompiler {
 			// accelerated transitively, like mean/norm.
 			Map.entry(LispNames.VEC_EXP, 1), Map.entry(LispNames.VEC_LOG, 1), Map.entry(LispNames.VEC_TANH, 1),
 			Map.entry(LispNames.VEC_SIN, 1), Map.entry(LispNames.VEC_COS, 1), Map.entry(LispNames.VEC_TAN, 1),
-			Map.entry(LispNames.VEC_SQRT, 1), Map.entry(LispNames.VEC_ABS, 1), Map.entry(LispNames.VEC_NEGATIVE, 1),
-			Map.entry(LispNames.VEC_SIGN, 1), Map.entry(LispNames.VEC_RECIPROCAL, 1),
-			Map.entry(LispNames.VEC_EXP_INTO, 2), Map.entry(LispNames.VEC_LOG_INTO, 2),
-			Map.entry(LispNames.VEC_TANH_INTO, 2), Map.entry(LispNames.VEC_SIN_INTO, 2),
-			Map.entry(LispNames.VEC_COS_INTO, 2), Map.entry(LispNames.VEC_TAN_INTO, 2),
+			Map.entry(LispNames.VEC_ASIN, 1), Map.entry(LispNames.VEC_ACOS, 1), Map.entry(LispNames.VEC_ATAN, 1),
+			Map.entry(LispNames.VEC_SINH, 1), Map.entry(LispNames.VEC_COSH, 1), Map.entry(LispNames.VEC_SQRT, 1),
+			Map.entry(LispNames.VEC_ABS, 1), Map.entry(LispNames.VEC_NEGATIVE, 1), Map.entry(LispNames.VEC_SIGN, 1),
+			Map.entry(LispNames.VEC_RECIPROCAL, 1), Map.entry(LispNames.VEC_EXP_INTO, 2),
+			Map.entry(LispNames.VEC_LOG_INTO, 2), Map.entry(LispNames.VEC_TANH_INTO, 2),
+			Map.entry(LispNames.VEC_SIN_INTO, 2), Map.entry(LispNames.VEC_COS_INTO, 2),
+			Map.entry(LispNames.VEC_TAN_INTO, 2), Map.entry(LispNames.VEC_ASIN_INTO, 2),
+			Map.entry(LispNames.VEC_ACOS_INTO, 2), Map.entry(LispNames.VEC_ATAN_INTO, 2),
+			Map.entry(LispNames.VEC_SINH_INTO, 2), Map.entry(LispNames.VEC_COSH_INTO, 2),
 			Map.entry(LispNames.VEC_SQRT_INTO, 2), Map.entry(LispNames.VEC_ABS_INTO, 2),
 			Map.entry(LispNames.VEC_NEGATIVE_INTO, 2), Map.entry(LispNames.VEC_SIGN_INTO, 2),
 			Map.entry(LispNames.VEC_RECIPROCAL_INTO, 2));
@@ -63,10 +67,12 @@ final class JvmSimdCompiler {
 				LispNames.VEC_SUM, LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
 				LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO, LispNames.VEC_EXP,
 				LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS, LispNames.VEC_TAN,
+				LispNames.VEC_ASIN, LispNames.VEC_ACOS, LispNames.VEC_ATAN, LispNames.VEC_SINH, LispNames.VEC_COSH,
 				LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN,
 				LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO,
-				LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_SQRT_INTO,
-				LispNames.VEC_ABS_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_SIGN_INTO,
+				LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO,
+				LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
+				LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_SIGN_INTO,
 				LispNames.VEC_RECIPROCAL_INTO);
 	}
 

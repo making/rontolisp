@@ -1,0 +1,9 @@
+# linalg:asin
+
+`(linalg:asin array)`
+
+すべての要素に逆正弦を適用した、同じ形状の新しい配列を返します（numpy の `np.arcsin`）。`(linalg:emap #'asin array)` と等価ですが、名前付き関数なので [`--simd`](../../guides/simd-acceleration.md#linalg-のアクセラレーション) で高速化されます。[`asin`](asin-acos-atan.md) 自体と同じく、WASM バックエンドはソフトウェア近似で計算するため、下位桁がインタプリタ・JVM と異なることがあります。
+
+```lisp
+(linalg:asin (linalg:zeros 3)) ; => #d(0.0 0.0 0.0)
+```

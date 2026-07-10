@@ -136,6 +136,21 @@
 (defun vec:tan (v)
   (vec::%map1 #'tan v))
 
+(defun vec:asin (v)
+  (vec::%map1 #'asin v))
+
+(defun vec:acos (v)
+  (vec::%map1 #'acos v))
+
+(defun vec:atan (v)
+  (vec::%map1 #'atan v))
+
+(defun vec:sinh (v)
+  (vec::%map1 #'sinh v))
+
+(defun vec:cosh (v)
+  (vec::%map1 #'cosh v))
+
 (defun vec:sqrt (v)
   (vec::%map1 #'sqrt v))
 
@@ -214,6 +229,21 @@
 
 (defun vec:tan-into (out v)
   (vec::%map1-into out #'tan v))
+
+(defun vec:asin-into (out v)
+  (vec::%map1-into out #'asin v))
+
+(defun vec:acos-into (out v)
+  (vec::%map1-into out #'acos v))
+
+(defun vec:atan-into (out v)
+  (vec::%map1-into out #'atan v))
+
+(defun vec:sinh-into (out v)
+  (vec::%map1-into out #'sinh v))
+
+(defun vec:cosh-into (out v)
+  (vec::%map1-into out #'cosh v))
 
 (defun vec:sqrt-into (out v)
   (vec::%map1-into out #'sqrt v))

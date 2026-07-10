@@ -218,7 +218,8 @@ final class VecSimdKernels {
 	// the add-into rule). sqrt / abs / neg / 1-over-x have lane forms bit-identical to
 	// the scalar defun (sqrt and div are correctly rounded, abs and neg exact, so the
 	// f32 widen-compute-narrow round trip is exact); exp / log / tanh / sin / cos / tan
-	// / signum have NO bit-safe lane form (VectorOperators.EXP etc. are not
+	// / asin / acos / atan / sinh / cosh / signum have NO bit-safe lane form
+	// (VectorOperators.EXP etc. are not
 	// bit-identical to Math.exp), so they stay de-boxed scalar loops calling the same
 	// java.lang.Math the interpreter defun does.
 
@@ -291,6 +292,66 @@ final class VecSimdKernels {
 	static void tanIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
 			r[i] = (float) Math.tan(x[i]);
+		}
+	}
+
+	static void asinInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.asin(x[i]);
+		}
+	}
+
+	static void asinIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.asin(x[i]);
+		}
+	}
+
+	static void acosInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.acos(x[i]);
+		}
+	}
+
+	static void acosIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.acos(x[i]);
+		}
+	}
+
+	static void atanInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.atan(x[i]);
+		}
+	}
+
+	static void atanIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.atan(x[i]);
+		}
+	}
+
+	static void sinhInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.sinh(x[i]);
+		}
+	}
+
+	static void sinhIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.sinh(x[i]);
+		}
+	}
+
+	static void coshInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.cosh(x[i]);
+		}
+	}
+
+	static void coshIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.cosh(x[i]);
 		}
 	}
 

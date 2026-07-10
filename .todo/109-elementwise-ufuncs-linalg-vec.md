@@ -1,8 +1,66 @@
 # 109 — Named element-wise math functions (numpy ufunc parity) for `linalg:` and `vec:`
 
-**Status: PHASE 1 + 1.5 DONE; PHASE 2 PARTIAL — `log` + `tanh` DONE (first release) and
-`sin`/`cos`/`tan` DONE (2026-07-10, second release); `asin`/`acos`/`atan` +
-`sinh`/`cosh` remain (third release). Phase 3 not started.**
+**Status: PHASE 1 + 1.5 + 2 DONE — `log` + `tanh` (first release), `sin`/`cos`/`tan`
+(second release) and `asin`/`acos`/`atan`/`sinh`/`cosh` (third release, 2026-07-10) all
+shipped; `BuiltinFunctionWrappers.WASM_UNSUPPORTED` is now EMPTY. Phase 3 not started.**
+
+## Phase 2 third release — `asin`/`acos`/`atan` + `sinh`/`cosh` (DONE 2026-07-10)
+
+The design was prototyped in plain Java first (ArcProbe, the SinCosProbe discipline);
+the error figures below are that probe's measurements.
+
+- **Scalar builtins**: `WasmAtanCompiler` (one compiler for the three arcs): atan folds
+  by odd symmetry (t = x<0 ? 0-x : x), by the reciprocal identity atan(t) = pi/2 -
+  atan(1/t) for t > 1 (mapping +-inf to +-pi/2 with no special case, since 1/inf = 0),
+  and by TWO half-angle folds u = u/(1 + sqrt(1 + u^2)) (f64.sqrt is native), then a
+  10-term Taylor series in Horner form over z = u^2 (|u| <= tan(pi/16) ~ 0.199) times
+  4; max measured error 7.1e-16 relative over the whole range. There is NO i32.trunc,
+  so no edge branch exists at all: NaN flows through every comparison/arithmetic path,
+  and -0.0 is PRESERVED (the sign fold passes it through the series untouched) --
+  atan/asin match Math.atan/Math.asin on that edge, unlike the signum class.
+  asin(x) = atan(x / sqrt((1-x)(1+x))) -- the factored radicand beats 1 - x^2 near
+  |x| = 1 (4e-16 vs 2.3e-15) and x = +-1 divides to +-inf, which the reciprocal fold
+  turns into exactly +-pi/2. acos(x) = 2*atan(sqrt((1-x)/(1+x))) -- NOT pi/2 - asin(x),
+  which loses relative accuracy near x = 1; this form makes (acos 1) = 0.0 exact and
+  (acos -1) = pi via (1-x)/(1+x) = 2/+0 = inf. Both reject |x| > 1 with NaN via one
+  f64.abs/gt guard (NaN falls through it into the NaN-propagating main path).
+  `WasmSinhCoshCompiler`: e = exp(|x|) through the shared
+  `WasmExpCompiler.emitExpCore` (|x| keeps the exp polynomial on its accurate side; one
+  evaluation serves both exponentials via 1/e); sinh = (e - 1/e)/2 sign-restored, cosh
+  = (e + 1/e)/2. The e - 1/e cancellation is UNBOUNDED for tiny x (2.6e-2 relative at
+  x = 1e-12, worse than tanh's doubled argument), so sinh switches to its odd Taylor
+  series x * Horner(1/9!, 1/7!, 1/120, 1/6, 1 over z = x^2) for |x| <= SMALL = 0.25 --
+  ~2.4e-14 relative below the threshold, 1.9e-13 at the boundary region, and applied to
+  x directly it PRESERVES -0.0. Elsewhere accuracy tracks the software exp: ~1e-7 for
+  |x| <= 20, degrading beyond (1.4e-1 at 256, documented like exp), overflow to inf
+  near |x| ~ 755 vs the true 710.5. NaN and +-inf branch BEFORE the exponential (the
+  exp core's Horner maps -inf to +inf, not 0): sinh(+-inf) = x, cosh(+-inf) = |x|.
+  All five removed from `BuiltinFunctionWrappers.WASM_UNSUPPORTED`, which is now EMPTY
+  (kept as the seam); `transcendentalFunctionsAreUnsupported` replaced by
+  `arcAndHyperbolicSoftwareApproximation`. Exact anchors: atan(0) = asin(0) = acos(1) =
+  sinh(0) = 0.0, cosh(0) = 1.0 (the exp core is exactly 1.0 at 0), asin(+-1) = +-pi/2,
+  acos(-1) = pi. ci-spec gained `arc-hyperbolic-exact-cross-backend-cases`.
+- **Defuns**: `linalg:asin`/`acos`/`atan`/`sinh`/`cosh` (named emaps), `vec:` siblings +
+  `-into`; PackageRegistry exports, LispNames constants.
+- **`--simd`**: interpreter (`VecSimdKernels.asinInto`..`coshIntoF`,
+  `LinalgSimdKernels.asin`..`coshF`), JVM (`UOP_ASIN`..`UOP_COSH`, no lane forms),
+  wasm-GC (raw-f64 mirrors `emitAtanFamilyF64` -- 5 f64 locals, x overwritten by the
+  transformed argument exactly like the boxed slot -- and `emitSinhCoshF64` -- 3 locals,
+  reusing `emitExpF64`; vec FUNC_COUNT 37 -> 47, linalg 25 -> 30, `userFuncBase()`
+  shift 62 -> 77; `scalarOpF64Locals` became a switch: arc family 5, sinh/cosh/log 3,
+  else 2 -- `buildUnary`'s 5-f64 scratch was already wide enough, NO local-layout
+  change this time), `--no-gc` (`compileSimdUnaryF64` cases only, zero new lowering
+  code again). Byte-identity pinned by the extended UNARY_UFUNCS program (trap
+  re-learned: its f32 `vec:scale` inputs must use POWER-OF-TWO factors -- the f32 v128
+  scale kernel computes natively in f32, so an inexact factor like 0.004 breaks
+  simd-vs-scalar byte-identity; 0.00390625 / 0.0625 used).
+- Docs en+ja: asin-acos-atan / sinh-cosh-tanh rewritten (all-backends), math-backends'
+  "remaining transcendental functions" bullet replaced by asin/acos/atan + sinh/cosh
+  bullets ("every transcendental built-in now works on all three backends"), new
+  `linalg-asin`..`linalg-cosh` pages + catalog + functions.md rows, simd guide ufunc
+  lists + `-into` table (seventeen unary ufuncs), linear-algebra ufunc list + the STALE
+  "twenty functions" accelerated-set count fixed to thirty (it had missed the first two
+  releases). `.kb/vec.md`/`.kb/linalg-simd.md`/CLAUDE.md counts updated.
 
 ## Phase 2 second release — `sin` + `cos` + `tan` (DONE 2026-07-10)
 
@@ -40,15 +98,12 @@ scalar builtins, and the ufunc layer rode the recipe unchanged:
   functions.md rows, simd guide lists + `-into` table (twelve unary ufuncs),
   linear-algebra ufunc list. `.kb/vec.md`/`.kb/linalg-simd.md`/CLAUDE.md counts updated.
 
-## Phase 2 third release — the arc/hyperbolic remainder (NOT STARTED)
+## (superseded) Phase 2 third release plan, as filed after the second release
 
-`asin`/`acos`/`atan` need their own series/reductions (atan first -- `atan(x) = x`
-series for |x| <= 1, `pi/2 - atan(1/x)` beyond; then `asin(x) = atan(x/sqrt(1-x^2))`,
-`acos = pi/2 - asin`); `sinh`/`cosh` could derive from the software exp like tanh, but
-mind that exp's Taylor accuracy degrades for |t| > ~1 (i.e. |x| > 256) and sinh's
-small-x cancellation -- deferred rather than shipped half-designed. All five stay in
-`BuiltinFunctionWrappers.WASM_UNSUPPORTED` and interpreter/JVM-only; do NOT add their
-ufuncs until the wasm scalar exists.
+`asin`/`acos`/`atan` need their own series/reductions; `sinh`/`cosh` derive from the
+software exp -- shipped 2026-07-10 with the design refined by the Java probe (two
+half-angle folds instead of a long series; the acos 2*atan form instead of pi/2 - asin;
+a sinh small-x series branch), see "Phase 2 third release" above.
 
 ## Phase 2 first release — `log` + `tanh` (DONE 2026-07-10)
 

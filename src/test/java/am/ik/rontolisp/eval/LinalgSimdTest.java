@@ -326,8 +326,8 @@ class LinalgSimdTest {
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
-		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "negative",
-				"sign" }) {
+		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
+				"cosh", "sqrt", "abs", "negative", "sign" }) {
 			String form = "(linalg:zeros 1) #'linalg:" + member;
 			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
@@ -376,6 +376,28 @@ class LinalgSimdTest {
 			assertMatchesScalarOracle("(linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4)))");
 			assertMatchesScalarOracle("(linalg:" + op + " (linalg:arange 0 200 'single-float))");
 		}
+		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
+		// sign-mixed range (todo 109 Phase 2 third release).
+		for (String op : new String[] { "asin", "acos" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.005))");
+			}
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.005))");
+		}
+		for (String op : new String[] { "atan", "sinh", "cosh" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.05))");
+			}
+			assertMatchesScalarOracle(
+					"(linalg:" + op + " (linalg:reshape (linalg:mul (linalg:arange 12) 0.05) '(3 4)))");
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:mul (linalg:arange 0 200 'single-float) 0.05))");
+		}
+		assertMatchesScalarOracle("(linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5))");
+		assertMatchesScalarOracle("(linalg:acos #d(1.0 -1.0 0.0 0.5))");
+		assertMatchesScalarOracle("(linalg:sinh #d(0.0 -0.0 0.25 -0.25 0.3))");
+		assertMatchesScalarOracle("(linalg:cosh #d(0.0 -0.0 1.0))");
 	}
 
 	@Test
@@ -396,6 +418,9 @@ class LinalgSimdTest {
 		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square", "negative",
 				"sign", "reciprocal" }) {
 			assertMatchesScalarOracle("(linalg:" + op + " #(1 4 9))");
+		}
+		for (String op : new String[] { "asin", "acos", "atan", "sinh", "cosh" }) {
+			assertMatchesScalarOracle("(linalg:" + op + " #(0 1))");
 		}
 		assertThat(eval("(linalg:sqrt #(4 9))", true).print()).isEqualTo("#d(2.0 3.0)");
 	}

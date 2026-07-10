@@ -337,6 +337,11 @@ categories:
       - { slug: linalg-sin, name: "linalg:sin" }
       - { slug: linalg-cos, name: "linalg:cos" }
       - { slug: linalg-tan, name: "linalg:tan" }
+      - { slug: linalg-asin, name: "linalg:asin" }
+      - { slug: linalg-acos, name: "linalg:acos" }
+      - { slug: linalg-atan, name: "linalg:atan" }
+      - { slug: linalg-sinh, name: "linalg:sinh" }
+      - { slug: linalg-cosh, name: "linalg:cosh" }
       - { slug: linalg-sqrt, name: "linalg:sqrt" }
       - { slug: linalg-abs, name: "linalg:abs" }
       - { slug: linalg-square, name: "linalg:square" }

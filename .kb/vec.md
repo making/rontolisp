@@ -55,9 +55,9 @@ Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction; `zeros`/`o
 else the double default — through the `vec::%make` funnel, mirroring the linalg constructors),
 `aref`/`aset`/
 `length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), the
-unary ufuncs `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`sqrt`/`abs`/`square`/`negative`/
-`sign`/`reciprocal` (element-wise, fresh vector, numpy names -- todo 109; see
-"Element-wise unary ufuncs" below), `sum`/
+unary ufuncs `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/
+`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (element-wise, fresh vector, numpy
+names -- todo 109; see "Element-wise unary ufuncs" below), `sum`/
 `dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
@@ -68,7 +68,7 @@ rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)`
 ## Destination-passing `-into` kernels (todo-103)
 
 Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/
-`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into`; todo 109) —
+`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into` and `asin-into`..`cosh-into`; todo 109) —
 that writes into a caller-supplied destination (argument 1, CL's `map-into` order) and
 RETURNS that very value. A unary `-into` destination MAY alias the operand (element i
 depends only on element i, the add-into rule). Reductions have none (they never
@@ -122,10 +122,24 @@ not compile under `--no-gc` at all).
 
 ## Element-wise unary ufuncs (todo 109 Phases 1 and 2)
 
-`exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`sqrt`/`abs`/`square`/`negative`/`sign`/
-`reciprocal` (+ `-into` siblings) exist in BOTH packages under their numpy ufunc names
-(`log`/`tanh` = Phase 2 first release; `sin`/`cos`/`tan` = Phase 2 second release,
-2026-07-10, over the new `WasmSinCosCompiler` software scalars -- Cody-Waite reduction
+`exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/`sqrt`/`abs`/
+`square`/`negative`/`sign`/`reciprocal` (+ `-into` siblings) exist in BOTH packages under
+their numpy ufunc names (`log`/`tanh` = Phase 2 first release; `sin`/`cos`/`tan` = Phase
+2 second release; `asin`/`acos`/`atan`/`sinh`/`cosh` = Phase 2 third release, 2026-07-10
+-- `WasmAtanCompiler`: atan = odd/reciprocal folds (mapping +-inf to +-pi/2 for free,
+1/inf = 0) + two half-angle folds + a 10-term Taylor series over z = u^2, ~1e-15
+relative (measured max 7.1e-16), NO i32.trunc so NaN/inf flow through with no edge
+branch and `-0.0` is PRESERVED (unlike the signum class); asin = atan(x /
+sqrt((1-x)(1+x))) (factored radicand, accurate near |x|=1), acos = 2*atan(sqrt((1-x)/
+(1+x))) (NOT pi/2 - asin; makes (acos 1) = 0.0 exact), |x| > 1 -> NaN;
+`WasmSinhCoshCompiler`: e = exp(|x|) via the shared `WasmExpCompiler.emitExpCore`, sinh
+= sign-restored (e - 1/e)/2 with an odd Taylor-series branch below |x| = 0.25 killing
+the e - 1/e cancellation (~2e-14 relative there, and applied to x directly it preserves
+-0.0), cosh = (e + 1/e)/2; accuracy tracks the software exp (~1e-7 to |x| ~ 20,
+degrading beyond, inf near |x| ~ 755); NaN/+-inf branches precede the exponential
+because the exp core's Horner maps -inf to +inf. These five emptied
+`BuiltinFunctionWrappers.WASM_UNSUPPORTED` -- every transcendental built-in now
+compiles on WASM. `sin`/`cos`/`tan` ride the `WasmSinCosCompiler` software scalars -- Cody-Waite reduction
 `k = nearest(x*2/pi)`, `r = (x - k*pio2_1) - k*pio2_1t` (the fdlibm two-part split),
 quadrant `trunc(k) & 3` sign/swap, degree-11/12 Taylor polynomials; ~1e-11 relative for
 |x| <= ~1e6, absolute error growing like |x|*2^-53 beyond, a 2*pi pre-fold + clamp
@@ -408,8 +422,8 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 ## Acceleration layer 3 — wasm-GC `--simd` native v128 over `(array (mut v128))` (todo-105)
 
-`--simd` on the DEFAULT `.wasm` backend routes the same thirty-four kernels (the seven
-vectorizable ones, the eleven todo-109 unary ufuncs, and their sixteen `-into` siblings)
+`--simd` on the DEFAULT `.wasm` backend routes the same forty-four kernels (the seven
+vectorizable ones, the sixteen todo-109 unary ufuncs, and their twenty-one `-into` siblings)
 to emitted v128 runtime helpers.
 
 The apparent blocker — "`v128.load`/`store` address LINEAR memory, so a packed array must
@@ -488,7 +502,7 @@ Mechanics:
   three of which reject both. (todo-101 guarded only `x`; an adversarial review of todo-105 caught
   it. Pinned by `wasmGcSimdMatvecIntoRejectsADestinationAliasingEitherOperand`.)
 - **Function indices**: `FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1`, then `_v_new`/`_v_get`/
-  `_v_set` + `_vec_add`..`_vec_tan_into` (`FUNC_COUNT` = 37). Emitted ONLY under `--simd`,
+  `_v_set` + `_vec_add`..`_vec_cosh_into` (`FUNC_COUNT` = 47). Emitted ONLY under `--simd`,
   so `FUNC_USER_BASE` becomes dynamic (`WasmLispCompiler.userFuncBase()`, threaded via
   `Ctx.userFuncBase` into `WasmLambdaCompiler` and `WasmRuntimeBuilder.buildDispatchBody` —
   the only three readers). Every fixed `FUNC_*` below it keeps its value, and a
@@ -496,7 +510,7 @@ Mechanics:
 - **Call-site interception**: `WasmVecSimdCompiler.handles/compile` in `WasmExprCompiler.
   compileCons`, gated on `ctx.simd` — the exact shape of `JvmSimdCompiler`. `mean`/`norm` are
   accelerated transitively (their spliced bodies call `sum`/`dot`); `#'vec:dot` still names
-  the scalar defun, as on the JVM. Everything not in the thirty-four keeps running `vec.lisp` over
+  the scalar defun, as on the JVM. Everything not in the forty-four keeps running `vec.lisp` over
   the now-grouped surface (`square`/`square-into` are transitive through `mul`).
 - **The rest of the packed surface** branches on `ctx.simd` at compile time (one module, one
   repr): `WasmArrayCompiler.compilePackedMakeVblock`/`emitPackedReadF64Vblock`/

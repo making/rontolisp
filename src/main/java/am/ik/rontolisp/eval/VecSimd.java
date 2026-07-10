@@ -116,7 +116,8 @@ public final class VecSimd {
 
 	/**
 	 * The element-wise unary ufuncs (todo 109): {@code exp}/{@code log}/{@code tanh}/
-	 * {@code sin}/{@code cos}/{@code tan}/{@code sqrt}/{@code abs}/{@code negative}/
+	 * {@code sin}/{@code cos}/{@code tan}/{@code asin}/{@code acos}/{@code atan}/
+	 * {@code sinh}/{@code cosh}/{@code sqrt}/{@code abs}/{@code negative}/
 	 * {@code sign}/{@code reciprocal}, each with its {@code -into} sibling.
 	 * {@code square}/{@code square-into} are NOT installed -- their {@code vec.lisp}
 	 * bodies call {@code vec:mul}/{@code vec:mul-into}, which resolve through the global
@@ -133,6 +134,11 @@ public final class VecSimd {
 		defineUnary(globalEnv, LispNames.VEC_SIN, VecSimdKernels::sinInto, VecSimdKernels::sinIntoF);
 		defineUnary(globalEnv, LispNames.VEC_COS, VecSimdKernels::cosInto, VecSimdKernels::cosIntoF);
 		defineUnary(globalEnv, LispNames.VEC_TAN, VecSimdKernels::tanInto, VecSimdKernels::tanIntoF);
+		defineUnary(globalEnv, LispNames.VEC_ASIN, VecSimdKernels::asinInto, VecSimdKernels::asinIntoF);
+		defineUnary(globalEnv, LispNames.VEC_ACOS, VecSimdKernels::acosInto, VecSimdKernels::acosIntoF);
+		defineUnary(globalEnv, LispNames.VEC_ATAN, VecSimdKernels::atanInto, VecSimdKernels::atanIntoF);
+		defineUnary(globalEnv, LispNames.VEC_SINH, VecSimdKernels::sinhInto, VecSimdKernels::sinhIntoF);
+		defineUnary(globalEnv, LispNames.VEC_COSH, VecSimdKernels::coshInto, VecSimdKernels::coshIntoF);
 		defineUnary(globalEnv, LispNames.VEC_SQRT, VecSimdKernels::sqrtInto, VecSimdKernels::sqrtIntoF);
 		defineUnary(globalEnv, LispNames.VEC_ABS, VecSimdKernels::absInto, VecSimdKernels::absIntoF);
 		defineUnary(globalEnv, LispNames.VEC_NEGATIVE, VecSimdKernels::negInto, VecSimdKernels::negIntoF);
@@ -145,6 +151,11 @@ public final class VecSimd {
 		defineUnaryInto(globalEnv, LispNames.VEC_SIN_INTO, VecSimdKernels::sinInto, VecSimdKernels::sinIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_COS_INTO, VecSimdKernels::cosInto, VecSimdKernels::cosIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_TAN_INTO, VecSimdKernels::tanInto, VecSimdKernels::tanIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_ASIN_INTO, VecSimdKernels::asinInto, VecSimdKernels::asinIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_ACOS_INTO, VecSimdKernels::acosInto, VecSimdKernels::acosIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_ATAN_INTO, VecSimdKernels::atanInto, VecSimdKernels::atanIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_SINH_INTO, VecSimdKernels::sinhInto, VecSimdKernels::sinhIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_COSH_INTO, VecSimdKernels::coshInto, VecSimdKernels::coshIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_SQRT_INTO, VecSimdKernels::sqrtInto, VecSimdKernels::sqrtIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_ABS_INTO, VecSimdKernels::absInto, VecSimdKernels::absIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_NEGATIVE_INTO, VecSimdKernels::negInto, VecSimdKernels::negIntoF);

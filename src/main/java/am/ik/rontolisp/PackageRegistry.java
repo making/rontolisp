@@ -154,8 +154,8 @@ public final class PackageRegistry {
 	private static final Set<String> LINALG_FUNCTIONS = Set.of("zeros", "ones", "full", "eye", "arange", "linspace",
 			"from-list", "to-list", "shape", "size", "reshape", "flatten", "transpose", "add", "sub", "mul", "div",
 			"emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm", "trace", "det",
-			"inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square",
-			"negative", "sign", "reciprocal");
+			"inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
+			"cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 
@@ -173,12 +173,14 @@ public final class PackageRegistry {
 			LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN, LispNames.VEC_DOT, LispNames.VEC_NORM,
 			LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO,
 			LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO, LispNames.VEC_EXP, LispNames.VEC_LOG,
-			LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS, LispNames.VEC_TAN, LispNames.VEC_SQRT,
+			LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS, LispNames.VEC_TAN, LispNames.VEC_ASIN,
+			LispNames.VEC_ACOS, LispNames.VEC_ATAN, LispNames.VEC_SINH, LispNames.VEC_COSH, LispNames.VEC_SQRT,
 			LispNames.VEC_ABS, LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN,
 			LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO,
-			LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_SQRT_INTO,
-			LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_SIGN_INTO,
-			LispNames.VEC_RECIPROCAL_INTO);
+			LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO,
+			LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
+			LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO,
+			LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO);
 
 	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 

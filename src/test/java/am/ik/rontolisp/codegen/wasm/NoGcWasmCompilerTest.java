@@ -973,6 +973,58 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void arcAndHyperbolicLowerNativelyOnNoGc() {
+		// todo 109 Phase 2 third release: vec:asin / vec:acos / vec:atan / vec:sinh /
+		// vec:cosh (and -into) reuse the GC backend's raw-f64 emitters
+		// (WasmVecSimdRuntimeBuilder.emitAtanFamilyF64 / emitSinhCoshF64), so BOTH
+		// lowerings drive the same scalar element loop -- no 0xFD SIMD opcode even
+		// under --simd, and the atan reciprocal-fold constant (f64.const pi/2,
+		// WasmAtanCompiler.PI_OVER_2) plus the sinh series constant (f64.const 1/9!,
+		// WasmSinhCoshCompiler.SINH_COEFFS[0]) appear in the body. The probe avoids
+		// vec:sum (whose --simd lowering IS v128) so 0xFD absence is these ops'.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:asin-into o v)
+				    (vec:acos-into o o)
+				    (vec:atan-into o o)
+				    (vec:sinh-into o o)
+				    (+ (vec:aref (vec:asin v) 0) (vec:aref (vec:acos o) 1) (vec:aref (vec:atan v) 0)
+				       (vec:aref (vec:sinh v) 0) (vec:aref (vec:cosh (vec:cosh-into o o)) 2))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		int[] piOver2 = new int[9];
+		piOver2[0] = 0x44; // f64.const
+		long bits = Double.doubleToRawLongBits(WasmAtanCompiler.PI_OVER_2);
+		for (int i = 0; i < 8; i++) {
+			piOver2[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
+		}
+		int[] sinhC0 = new int[9];
+		sinhC0[0] = 0x44; // f64.const
+		long sBits = Double.doubleToRawLongBits(WasmSinhCoshCompiler.SINH_COEFFS[0]);
+		for (int i = 0; i < 8; i++) {
+			sinhC0[1 + i] = (int) ((sBits >>> (8 * i)) & 0xFF);
+		}
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			assertThat(containsSequence(code, piOver2)).as("atan PI_OVER_2 constant, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, sinhC0)).as("sinh series constant, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the arc/hyperbolic lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(
+				compile("""
+						(defun f (n)
+						  (let ((v (vec:ones n)) (o (vec:zeros n)))
+						    (vec:sum (vec:cosh-into o (vec:sinh-into o (vec:atan-into o (vec:acos-into o (vec:asin-into o v))))))))
+						(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+						""")))
+			.as("asin..cosh -into skip the bump allocator")
+			.isEqualTo(2);
+	}
+
+	@Test
 	void matvecIntoIsAClearCompileErrorLikeMatvec() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))

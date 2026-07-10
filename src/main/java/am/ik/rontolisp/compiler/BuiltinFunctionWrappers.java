@@ -28,16 +28,17 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
-	 * Built-in operators that the WASM backend cannot compile (transcendental functions
-	 * have no native WASM instruction). The WASM compiler passes these to
-	 * {@link #generate(Set, Set)} so that no wrapper defun referencing them is injected.
-	 * {@code exp}, {@code log}, {@code tanh}, {@code sin}, {@code cos} and {@code tan}
-	 * are omitted because the WASM backend emits software approximations for them (see
-	 * {@code WasmExpCompiler} / {@code WasmLogCompiler} / {@code WasmTanhCompiler} /
-	 * {@code WasmSinCosCompiler}), so their {@code #'} first-class values are supported.
+	 * Built-in operators that the WASM backend cannot compile. The WASM compiler passes
+	 * these to {@link #generate(Set, Set)} so that no wrapper defun referencing them is
+	 * injected. Now EMPTY -- the last members ({@code asin} / {@code acos} / {@code atan}
+	 * / {@code sinh} / {@code cosh}) left when the WASM backend gained software
+	 * approximations for every transcendental built-in ({@code WasmExpCompiler} /
+	 * {@code WasmLogCompiler} / {@code WasmTanhCompiler} / {@code WasmSinCosCompiler} /
+	 * {@code WasmAtanCompiler} / {@code WasmSinhCoshCompiler}), so every {@code #'}
+	 * first-class value is supported. Kept as the seam for any future built-in a backend
+	 * cannot compile.
 	 */
-	public static final Set<String> WASM_UNSUPPORTED = Set.of(LispNames.ASIN, LispNames.ACOS, LispNames.ATAN,
-			LispNames.SINH, LispNames.COSH);
+	public static final Set<String> WASM_UNSUPPORTED = Set.of();
 
 	/**
 	 * Hash-table operator wrappers whose compiled bodies reference runtime helpers (JVM)

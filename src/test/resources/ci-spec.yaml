@@ -1757,6 +1757,24 @@ cases:
       1.0
       -1.0
 
+  # The arc/hyperbolic remainder (todo 109 Phase 2 third release): only the exact
+  # anchors -- the wasm software approximations agree with Math.* to ~1e-15 (atan
+  # family) / ~1e-7 (sinh/cosh), which diverges in printed low digits, so pi/4-class
+  # values stay out (documented like exp's low-digit divergence).
+  - name: arc-hyperbolic-exact-cross-backend-cases
+    source: |
+      (print (atan 0))
+      (print (asin 0))
+      (print (acos 1))
+      (print (sinh 0))
+      (print (cosh 0))
+    expected: |
+      0.0
+      0.0
+      0.0
+      0.0
+      1.0
+
   # Character type and accessors, plus string/number parsing. Every value below is
   # deterministic and identical across the interpreter, JVM and WASM backends.
   - name: characters-and-parsing-cross-backend

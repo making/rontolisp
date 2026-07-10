@@ -515,6 +515,27 @@ class JvmSimdAccelCompilerTest {
 			}
 			assertMatchesScalarReference("(print (vec:%s (vec:arange 200 'single-float)))".formatted(op));
 		}
+		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
+		// sign-mixed range (todo 109 Phase 2 third release).
+		for (String op : new String[] { "asin", "acos" }) {
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.005)))"
+						.formatted(op));
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:arange 200 'single-float) 0.005)))".formatted(op));
+		}
+		for (String op : new String[] { "atan", "sinh", "cosh" }) {
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.05)))"
+						.formatted(op));
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:arange 200 'single-float) 0.05)))".formatted(op));
+		}
+		assertMatchesScalarReference("(print (vec:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
+		assertMatchesScalarReference("(print (vec:acos #d(1.0 -1.0 0.0 0.5)))");
+		assertMatchesScalarReference("(print (vec:atan (vec:reciprocal #d(0.0 -0.0))))");
+		assertMatchesScalarReference("(print (vec:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))");
+		assertMatchesScalarReference("(print (vec:cosh #d(0.0 -0.0 1.0)))");
 	}
 
 	@Test
@@ -532,8 +553,8 @@ class JvmSimdAccelCompilerTest {
 				  (vec:abs-into v v)
 				  (print v))
 				""");
-		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh", "sin", "cos",
-				"tan" }) {
+		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh", "sin", "cos", "tan",
+				"atan", "sinh", "cosh" }) {
 			assertMatchesScalarReference(
 					"(print (vec:" + op + "-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
 		}

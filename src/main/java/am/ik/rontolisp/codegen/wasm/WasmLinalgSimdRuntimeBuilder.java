@@ -144,9 +144,10 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int SIGN = 19;
 
-	// The todo-109 Phase 2 transcendental ufuncs (log / tanh / sin / cos / tan): element
-	// loops like exp / sign, mirroring WasmLogCompiler / WasmTanhCompiler /
-	// WasmSinCosCompiler (no lane form exists).
+	// The todo-109 Phase 2 transcendental ufuncs (log / tanh / sin / cos / tan / asin /
+	// acos / atan / sinh / cosh): element loops like exp / sign, mirroring
+	// WasmLogCompiler / WasmTanhCompiler / WasmSinCosCompiler / WasmAtanCompiler /
+	// WasmSinhCoshCompiler (no lane form exists).
 
 	static final int LOG = 20;
 
@@ -158,17 +159,30 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int TAN = 24;
 
+	// The todo-109 Phase 2 third-release ufuncs (asin / acos / atan / sinh / cosh):
+	// element loops mirroring WasmAtanCompiler / WasmSinhCoshCompiler.
+
+	static final int ASIN = 25;
+
+	static final int ACOS = 26;
+
+	static final int ATAN = 27;
+
+	static final int SINH = 28;
+
+	static final int COSH = 29;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 25;
+	static final int FUNC_COUNT = 30;
 
 	/** The type index of each function, in emission order (for the function section). */
 	static int typeIndexOf(int fn) {
 		return switch (fn) {
 			// One eq param -> eq.
-			case SUM, NORM, AMAX, AMIN, ARGMAX, ARGMIN, TRACE, TRANSPOSE, EXP, LOG, TANH, SIN, COS, TAN, SQRT, ABS,
-					NEGATIVE, SIGN ->
+			case SUM, NORM, AMAX, AMIN, ARGMAX, ARGMIN, TRACE, TRANSPOSE, EXP, LOG, TANH, SIN, COS, TAN, ASIN, ACOS,
+					ATAN, SINH, COSH, SQRT, ABS, NEGATIVE, SIGN ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Two eq params -> eq.
 			default -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
@@ -210,6 +224,11 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case SIN -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIN, vecBase);
 			case COS -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_COS, vecBase);
 			case TAN -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_TAN, vecBase);
+			case ASIN -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_ASIN, vecBase);
+			case ACOS -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_ACOS, vecBase);
+			case ATAN -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_ATAN, vecBase);
+			case SINH -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_SINH, vecBase);
+			case COSH -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -368,7 +387,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 	//
 	// params: 0 = a
 	// i32: count 1, kind 2, shift 3, ng 4, g 5, rem 6, i 7, len 8
-	// f64: scratch 9-13 (the widest scalarOps, sin/cos/tan, need 5)
+	// f64: scratch 9-13 (the widest scalarOps, the sin/cos/tan and asin/acos/atan
+	// families, need 5)
 	// v128: old 14, cur 15
 	// eq: res 16, vbD 17, vbA 18, nd 19, da 20
 	// $v128arr: gv 21, gd 22
