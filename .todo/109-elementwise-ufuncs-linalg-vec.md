@@ -20,6 +20,15 @@ the scalar builtins allow, in BOTH packages (`linalg:` = permissive/broadcasting
    `vec.lisp`. Works on every backend immediately, `--simd` or not; the Lisp source stays
    the single source of truth. Docs: per-operator pages (en+ja) + `_catalog.yaml` + a row
    in the curated `reference/functions.md` tables (the step that keeps getting missed).
+   **Every new `vec:` member also gets its `-into` sibling** (`vec:exp-into out v`, ...):
+   destination-first (CL `map-into` order), returns the destination, and — these being
+   element-wise unary — `out` MAY alias the operand (element i depends only on element i,
+   the `add-into` rule, NOT the `matvec-into` one). Same contract as the existing five:
+   same width required, `out` at least as long, length unchecked. The alias-permission
+   comment lives in three places for the binary kernels (vec.lisp / VecSimd /
+   JvmSimdVectorTemplate) because each accelerated site replaces the defun — keep that
+   discipline. `-into` stays a `vec:`-only concept; `linalg:` remains value-oriented
+   (that split is now user-documented in the choosing table — don't blur it).
 2. **`--simd` interception**: per backend, a de-boxed element loop that calls the SAME
    scalar implementation the defun would call (`Math.exp` on interpreter/JVM, the
    `WasmExpCompiler` software approximation on wasm) — read widened to f64, compute,
@@ -37,8 +46,14 @@ the scalar builtins allow, in BOTH packages (`linalg:` = permissive/broadcasting
 
 ## Candidates, phased
 
-**Phase 1 — the scalar builtin already works on every backend** (interpreter, JVM,
-wasm-GC; `vec:` versions also on `--no-gc`):
+**Phase 1 — the scalar builtin already works on interpreter / JVM / wasm-GC.** `vec:`
+versions (each with its `-into` sibling) also target `--no-gc`, with one verified caveat:
+`NoGcWasmCompiler` has NO `exp` and NO `signum` case (grep confirmed 2026-07-10), so
+`vec:exp` / `vec:sign` on `--no-gc` need either a scalar lowering added there (the exp
+software approximation exists only in the GC backend's `WasmExpCompiler`) or a documented
+per-function unavailability, the `vec:matvec` / `from-list` precedent. Decide early;
+the arithmetic-only members (`sqrt`/`abs`/`square`/`negative`/`reciprocal`) have no such
+problem:
 
 | new function | scalar impl | notes |
 |---|---|---|
@@ -85,8 +100,12 @@ max-subtraction stabilization — whatever the defun says becomes the contract),
   `userFuncBase()` bookkeeping and UPDATE (never weaken)
   `simdAppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks`; a build without
   `--simd` must stay byte-identical.
-- Docs en+ja mirrored in the same commit; the `--simd` guide's intercepted-function list
-  and the linalg guide's "SIMD acceleration" section must be extended in sync (and the
-  vec/linalg choosing table if the `-into` story changes).
+- Docs en+ja mirrored in the same commit; the `--simd` guide's intercepted-function list,
+  its destination-passing table (which gains the new `-into` rows) and the linalg guide's
+  "SIMD acceleration" section must be extended in sync (and the vec/linalg choosing table
+  if the `-into` story changes).
+- Both WASM `--simd` paths lower `-into` by threading `boolean into` through the SAME
+  kernel bodies (skip the destination allocation, write into the caller's) — reuse that
+  seam for the unary kernels rather than inventing a second one.
 - Interpreter kernels live behind `LinalgSimd`/`VecSimd` only (the `Target_*` Web Image
   substitutions must keep cutting them out — `./mvnw -Pweb compile` is the local check).
