@@ -1568,4 +1568,106 @@ class NoGcWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("incompatible types");
 	}
 
+	// --- --no-gc --component (compact reactor component, todo 93)
+	// -----------------------
+
+	// Compiles in component mode: the same MVP core module wrapped as a reactor-style
+	// component whose scalar exports are typed component-model exports.
+	private static byte[] compileComponent(String source) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return new NoGcWasmCompiler(false, false, true).compile(program);
+	}
+
+	private static final String COMPONENT_PROGRAM = """
+			(defun sumsquared (a b) (+ (* a a) (* b b)))
+			(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+			""";
+
+	@Test
+	void componentWrapsThePlainCoreModuleVerbatim() {
+		// The wrap is a pure post stage: the component preamble (layer 0x01), then core
+		// module section 0 carrying the byte-identical non-component module, then the
+		// instantiate / alias / type / lift / export wiring -- no import block, no
+		// adapter module, no shared-memory module (the compact selling point).
+		byte[] plain = compile(COMPONENT_PROGRAM);
+		byte[] component = compileComponent(COMPONENT_PROGRAM);
+		assertThat(new String(component, 0, 4, StandardCharsets.ISO_8859_1)).isEqualTo("\0asm");
+		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
+		Map<Integer, byte[]> outer = sections(component);
+		// Core-module section (component section id 1) carries the plain module
+		// byte-for-byte; no second core module (adapter/mem) exists.
+		assertThat(outer.get(1)).isEqualTo(plain);
+		// Exactly the reactor wiring: core instance (2), alias (6), type (7), canon (8),
+		// export (11) -- and no component/instance import machinery (10, 5, 4, 3).
+		assertThat(outer).containsKeys(2, 6, 7, 8, 11);
+		assertThat(outer).doesNotContainKey(10).doesNotContainKey(5).doesNotContainKey(4).doesNotContainKey(3);
+		// A single-export component of a tiny program stays in the hundreds of bytes.
+		assertThat(component.length).as("compact component size").isLessThan(1024);
+	}
+
+	@Test
+	void componentLongExportsUseS64() {
+		// :long crosses the canonical ABI as s64 (VT_S64 = 0x78) -- --no-gc is the one
+		// backend where :long is valid, so the component type section must carry it.
+		byte[] component = compileComponent("""
+				(defun bigmul (a b) (* a b))
+				(rontolisp:wasm-export 'bigmul :params '(:long :long) :returns :long)
+				""");
+		byte[] typeSection = Objects.requireNonNull(sections(component).get(7));
+		int s64Count = 0;
+		for (byte b : typeSection) {
+			if ((b & 0xFF) == 0x78) {
+				s64Count++;
+			}
+		}
+		assertThat(s64Count).as("two s64 params + one s64 result").isGreaterThanOrEqualTo(3);
+	}
+
+	@Test
+	void componentRejectsPrint() {
+		// todo-110 Release-1 decision: printing pulls in the fd_write import, and the
+		// compact wrap has no WASI adapter to satisfy it -- a clear compile error until
+		// a micro-adapter phase lands (.todo/93).
+		assertThatThrownBy(() -> compileComponent("""
+				(defun f (n) (print n) n)
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("print/princ/terpri are not supported with --no-gc --component");
+	}
+
+	@Test
+	void componentRejectsStringExports() {
+		// :string needs the Tier-2 canonical string lift (module memory + realloc shim);
+		// the core-module (ptr,len) ABI remains available without --component.
+		assertThatThrownBy(() -> compileComponent("""
+				(defun g (s) (length s))
+				(rontolisp:wasm-export 'g :params '(:string) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":string is not yet supported with --no-gc --component");
+	}
+
+	@Test
+	void componentRejectsNonKebabName() {
+		// Component-model export names must match the label grammar; the same rule as
+		// the GC component path (rename with :as).
+		assertThatThrownBy(() -> compileComponent("""
+				(defun sum_squared (a) a)
+				(rontolisp:wasm-export 'sum_squared :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("not a valid component-model export name");
+	}
+
+	@Test
+	void componentInternalStringUseIsAllowedWhenTheBoundaryIsScalar() {
+		// Internal strings (the module-private linear memory) are fine under the wrap;
+		// only the :string BOUNDARY type is Tier 2. The core module keeps its memory
+		// section; the component still has no import machinery.
+		byte[] component = compileComponent("""
+				(defun f (n) (length (princ-to-string n)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""");
+		assertThat(new String(component, 0, 4, StandardCharsets.ISO_8859_1)).isEqualTo("\0asm");
+		assertThat(component[6]).isEqualTo((byte) 0x01);
+	}
+
 }

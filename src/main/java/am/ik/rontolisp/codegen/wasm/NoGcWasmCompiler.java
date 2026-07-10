@@ -214,6 +214,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private final boolean simd;
 
+	/**
+	 * Whether to wrap the finished MVP core module as a reactor-style WASM component (the
+	 * CLI's {@code --no-gc --component}, {@code .todo/93}): every scalar export is
+	 * additionally exposed as a typed component-model export via a synchronous
+	 * {@code canon lift} ({@link NoGcWasmComponentBuilder}), callable with
+	 * {@code wasmtime run --invoke 'name(args)'} and no extra flags. The wrap is a pure
+	 * post stage -- the core module inside the component is byte-identical to the
+	 * non-component output -- but it narrows the surface: printing ({@code fd_write}) and
+	 * the {@code :string} boundary type are compile errors, and export names must match
+	 * the component-model {@code label} grammar.
+	 */
+	private final boolean component;
+
 	/** Creates a new non-GC WASM compiler (no optimize, scalar {@code vec:} kernels). */
 	public NoGcWasmCompiler() {
 		this(false, false);
@@ -242,8 +255,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * memory model ({@code .todo/100}).
 	 */
 	public NoGcWasmCompiler(boolean optimize, boolean simd) {
+		this(optimize, simd, false);
+	}
+
+	/**
+	 * Creates a new non-GC WASM compiler.
+	 * @param optimize when {@code true}, the finished module is run through
+	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
+	 * dropped and the survivors renumbered.
+	 * @param simd when {@code true}, the vectorizable {@code vec:} kernels lower to
+	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
+	 * to scalar linear-memory loops that need no SIMD proposal.
+	 * @param component when {@code true}, wrap the module as a reactor-style WASM
+	 * component whose scalar exports are typed component-model exports (the CLI's
+	 * {@code --no-gc --component}); printing and {@code :string} boundary types become
+	 * compile errors and export names must be lower-kebab-case
+	 */
+	public NoGcWasmCompiler(boolean optimize, boolean simd, boolean component) {
 		this.optimize = optimize;
 		this.simd = simd;
+		this.component = component;
 	}
 
 	@Override
@@ -288,6 +319,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// function must be a top-level defun, and the arity must match.
 		for (WasmExportCompiler.Decl decl : exportDecls) {
 			validateScalarTypes(decl);
+			if (this.component) {
+				validateComponentExport(decl);
+			}
 			Defun target = defuns.get(decl.name());
 			if (target == null) {
 				throw new UnsupportedOperationException("rontolisp:wasm-export names an unknown function "
@@ -334,6 +368,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// boundary type is present).
 		int internalCount = reachable.size();
 		Mem mem = planMemory(reachable, defuns, exportDecls, internalCount, types);
+		// The component wrap is adapter-free -- the whole point of the compact output is
+		// a zero-import core module -- so a program that prints (the one thing that
+		// pulls in the fd_write import, todo 110) is a clear compile error here; a
+		// later phase can supply a micro-adapter implementing fd_write over
+		// wasi:cli/stdout by swapping the __write_stdout funnel (.todo/93).
+		if (this.component && mem.printUsed()) {
+			throw new UnsupportedOperationException(
+					"print/princ/terpri are not supported with --no-gc --component (the compact component"
+							+ " wrap has no WASI adapter for the fd_write import); drop the printing or use"
+							+ " --no-gc without --component");
+		}
 
 		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j; the two
 		// memory helpers (when present) occupy N+E and N+E+1.
@@ -347,7 +392,40 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 
 		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, internalCount, types, mem);
-		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(module) : module;
+		if (this.optimize) {
+			module = am.ik.wasm.WasmTreeShaker.shake(module);
+		}
+		if (this.component) {
+			// Post-stage wrap: the core module above is byte-identical to the
+			// non-component output; the component just aliases + lifts its exports.
+			List<WasmComponentBuilder.FuncExport> componentExports = new ArrayList<>();
+			for (WasmExportCompiler.Decl decl : exportDecls) {
+				componentExports.add(WasmExportCompiler.componentExport(decl));
+			}
+			return NoGcWasmComponentBuilder.build(module, componentExports);
+		}
+		return module;
+	}
+
+	/**
+	 * Validates an export directive against the {@code --component} constraints: scalars
+	 * only ({@code :string} needs the Tier-2 canonical string lift over the module's own
+	 * memory + a realloc shim, {@code .todo/93}) and a lower-kebab-case export name (the
+	 * component-model {@code label} grammar).
+	 * @param decl the parsed export directive
+	 */
+	private static void validateComponentExport(WasmExportCompiler.Decl decl) {
+		if (WasmExportCompiler.usesMemory(decl)) {
+			throw new UnsupportedOperationException("rontolisp:wasm-export :string is not yet supported with"
+					+ " --no-gc --component for '" + decl.name()
+					+ "' (component exports are scalar-only: :int/:long/:float/:bool/:void; use --no-gc"
+					+ " without --component for the core-module (ptr,len) string ABI)");
+		}
+		if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
+					+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
+					+ " \"sum-squared\"); rename it with :as \"kebab-name\"");
+		}
 	}
 
 	private static void enqueue(String name, Map<String, Integer> index, Deque<String> work) {

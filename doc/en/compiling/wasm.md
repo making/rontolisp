@@ -125,9 +125,10 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 
 Limitations:
 
-- Under `--component`, scalar exports (`:int`/`:float`/`:bool`/void) become **typed
-  component-model exports** — see
+- Under `--component`, scalar exports (`:int`/`:float`/`:bool`/void — plus `:long`
+  with `--no-gc`) become **typed component-model exports** — see
   [Component-model function exports](#component-model-function-exports-wasm-export)
+  and [Compact component output](#compact-component-output---no-gc---component)
   below. `:string`/`:s-expr` are not supported there yet (compile error). On the
   interpreter and JVM backends the directive is a no-op (it just returns the named
   symbol), so the same source runs on every backend.
@@ -539,11 +540,53 @@ garbage collector already reclaims — so the same source runs on every backend.
 `--no-gc` is a pure-compute reactor: it exports each `rontolisp:wasm-export` function
 under its name, imports nothing unless the program [prints](#printing-print--princ--terpri)
 (then exactly `fd_write`), and rejects any other I/O; top-level forms other than `defun`
-and directives are rejected. It composes with `--optimize`, but cannot be combined with
-`--component` (that path is wasm-GC bound). Calling it from JavaScript is the same
-"instantiate, then call the exports" as a GC reactor — see the
+and directives are rejected. It composes with `--optimize`, and adding `--component`
+wraps the same module as a compact typed component — see
+[the next section](#compact-component-output---no-gc---component). Calling it from
+JavaScript is the same "instantiate, then call the exports" as a GC reactor — see the
 [appendix](#appendix-calling-a-module-from-javascript) — only here the module runs on
 **any** WebAssembly engine, with no wasm-GC support required.
+
+### Compact Component Output (`--no-gc --component`)
+
+Add `--component` to wrap the same MVP core module as a **WASM component** whose scalar
+exports become typed component-model exports, callable through the canonical ABI with
+WAVE syntax. Because the core module has zero imports, the wrap needs no WASI adapter,
+no shared-memory module and no wasm-GC — the whole component stays in the hundreds of
+bytes for a small program and runs with **no extra wasmtime flags at all**:
+
+```lisp
+;; sumsq.lisp
+(defun sumsquared (a b) (+ (* a a) (* b b)))
+(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+```
+
+```bash
+rontolisp sumsq.lisp --no-gc --component -o sumsq.wasm
+wasmtime run --invoke 'sumsquared(2, 3)' sumsq.wasm
+# 13
+```
+
+The typed WIT signature maps `:int` → `s32`, `:long` → `s64` (valid here, unlike the
+GC component path — use it when a value can exceed the 32-bit range), `:float` → `f64`,
+`:bool` → `bool`, and an omitted `:returns` → no result. The component also transpiles
+with jco (`jco transpile`, where `:long` surfaces as a JavaScript BigInt) and runs on
+any component-model host, with no wasm-GC support required.
+
+Trade-offs against the plain `--no-gc` output, and current limits:
+
+- A component needs a component-model-capable host; the raw core module runs on **any**
+  WebAssembly engine through the plain embedding API. Both outputs stay available —
+  pick per host, and note the component is *not* the default for `--no-gc`.
+- The component is a pure reactor: there is no `wasi:cli/run` entry (nothing runs at
+  the top level), and `print`/`princ`/`terpri` are a compile error under
+  `--no-gc --component` (the compact wrap carries no WASI adapter to satisfy the
+  `fd_write` import they need).
+- `:string` is a compile error under `--no-gc --component` for now; the `(ptr,len)`
+  string ABI remains available without `--component`.
+- The export name must be a lower-kebab-case component-model name; for a Lisp name
+  outside that grammar the compiler asks you to rename it with `:as`.
+- `--optimize` composes: the core module is tree-shaken before the wrap.
 
 ## WASI 0.3 Component
 
@@ -614,6 +657,11 @@ component export just like the core one. Current limitations of component export
 - Invoking an export does not run the program's top level first, so an export that reads
   a `defvar`/`defparameter` global would see it uninitialized (this matches the
   Preview 1 `--invoke` behavior).
+
+For a pure-compute export kit, the compact
+[`--no-gc --component`](#compact-component-output---no-gc---component) variant emits the
+same typed exports (plus `:long` → `s64`) in a component of a few hundred bytes that
+needs no wasmtime flags at all.
 
 Notes and current limitations of component mode:
 

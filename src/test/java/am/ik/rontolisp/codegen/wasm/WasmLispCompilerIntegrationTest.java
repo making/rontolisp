@@ -421,6 +421,73 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(true, program, "sumsquared", "100000", "100000")).isEqualTo("40000000000");
 	}
 
+	// Compiles with --no-gc --component (the compact reactor component, todo 93) and
+	// calls an export through the canonical ABI with WAVE syntax. The component carries
+	// the plain MVP core module with NO adapter / import block / mem module, so it runs
+	// with ZERO extra flags: no `-W gc`, no component-model-async flags -- assert that by
+	// passing none. Like the GC component path this is the supported invoke path, so
+	// stderr must carry no "experimental" warning.
+	private static String compileNoGcComponentAndInvoke(String lispCode, String waveInvocation) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] componentBytes = new NoGcWasmCompiler(false, false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", waveInvocation,
+				"/tmp/test.component.wasm");
+		assertThat(result.getExitCode())
+			.as("exit code for no-gc component invoke %s: %s\nstderr: %s", waveInvocation, lispCode, result.getStderr())
+			.isZero();
+		assertThat(result.getStderr()).as("WAVE invoke on a component is the supported path, no experimental warning")
+			.doesNotContain("experimental");
+		return result.getStdout().trim();
+	}
+
+	private static final String NO_GC_COMPONENT_PROGRAM = """
+			(defun sumsquared (a b) (+ (* a a) (* b b)))
+			(defun bigmul (a b) (* a b))
+			(defun hyp (a b) (sqrt (+ (* a a) (* b b))))
+			(defun evenish (n) (evenp n))
+			(defun quiet-double (n) (* n 2))
+			(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+			(rontolisp:wasm-export 'bigmul :params '(:long :long) :returns :long)
+			(rontolisp:wasm-export 'hyp :params '(:float :float) :returns :float)
+			(rontolisp:wasm-export 'evenish :params '(:int) :returns :bool)
+			(rontolisp:wasm-export 'quiet-double :params '(:int))
+			""";
+
+	@Test
+	void noGcComponentExportsCallableViaWaveInvokeWithNoFlags() throws Exception {
+		// Every --no-gc scalar type crosses the canonical ABI: :int -> s32, :long -> s64
+		// (the full 64-bit range -- :long is valid here, unlike the GC component),
+		// :float -> f64, :bool -> bool (WAVE prints true/false), omitted :returns -> no
+		// result. All with zero wasmtime flags (no -W gc, no async built-ins).
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "sumsquared(2, 3)")).isEqualTo("13");
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "bigmul(3000000000, 3)"))
+			.isEqualTo("9000000000");
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "hyp(3.0, 4.0)")).isEqualTo("5");
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "evenish(4)")).isEqualTo("true");
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "evenish(5)")).isEqualTo("false");
+		// wasmtime prints a void invocation's (absent) result as the empty tuple ().
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_PROGRAM, "quiet-double(6)")).isEqualTo("()");
+	}
+
+	@Test
+	void noGcComponentHonorsAsAliasAndComposesWithOptimize() throws Exception {
+		// :as renames to a valid component label; --optimize tree-shakes the core module
+		// before the wrap (unlike the GC path, where --optimize is skipped under
+		// --component).
+		String program = """
+				(defun sum-sq (a b) (* (+ a b) (+ a b)))
+				(rontolisp:wasm-export 'sum-sq :as "sum-squared" :params '(:int :int) :returns :int)
+				""";
+		assertThat(compileNoGcComponentAndInvoke(program, "sum-squared(2, 3)")).isEqualTo("25");
+		byte[] optimized = new NoGcWasmCompiler(true, false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "sum-squared(2, 3)",
+				"/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("25");
+	}
+
 	@Test
 	void noGcComposesWithOptimize() throws Exception {
 		// --no-gc --optimize: the (GC-agnostic) tree shaker runs on the non-GC module

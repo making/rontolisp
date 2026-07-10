@@ -72,6 +72,16 @@ final class WasmExportCompiler {
 
 	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_LONG, T_FLOAT, T_BOOL, T_STRING, T_S_EXPR);
 
+	/**
+	 * The component-model {@code label} grammar (lower-kebab-case words) a component
+	 * export name must match; a Lisp name outside it (e.g. one containing {@code *} or
+	 * {@code %}) must be renamed with {@code :as}. Shared by the GC
+	 * ({@code WasmLispCompiler}) and non-GC ({@code NoGcWasmCompiler})
+	 * {@code --component} paths.
+	 */
+	static final java.util.regex.Pattern COMPONENT_EXPORT_NAME = java.util.regex.Pattern
+		.compile("[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*");
+
 	private WasmExportCompiler() {
 	}
 
@@ -360,14 +370,16 @@ final class WasmExportCompiler {
 	/**
 	 * Maps a Tier-1 scalar type designator to its component-model primitive value type
 	 * code for the {@code --component} export path ({@code null} = no result). The
-	 * memory-backed designators ({@code :string}/{@code :s-expr}) and {@code :long} are
-	 * rejected before this is reached.
+	 * memory-backed designators ({@code :string}/{@code :s-expr}) are rejected before
+	 * this is reached; {@code :long} (s64) is reachable only from the {@code --no-gc}
+	 * component path (the GC backend rejects {@code :long} outright).
 	 * @param type the type designator
 	 * @return the {@code ComponentWriter.VT_*} code, or {@code null} for {@code :void}
 	 */
 	static @Nullable Integer componentValType(String type) {
 		return switch (type) {
 			case T_INT -> am.ik.wasm.ComponentWriter.VT_S32;
+			case T_LONG -> am.ik.wasm.ComponentWriter.VT_S64;
 			case T_FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
 			case T_BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
 			case T_VOID -> null;

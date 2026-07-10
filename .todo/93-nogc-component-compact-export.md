@@ -1,137 +1,71 @@
 # 93. Compact `--no-gc` + `--component` output (tiny component-model export)
 
-## Goal / selling point
+## STATUS: Release 1 DONE (2026-07-11) -- remaining tasks below
 
-Make `--no-gc --component` produce a **very compact WASM component** whose
-`wasm-export` functions are callable through the component model
-(`wasmtime run ... --invoke 'sumsquared(2, 3)'`, jco, wasmCloud) -- with **no
-wasm-GC requirement** and **no WASI adapter machinery**.
+Scalar release complete. `--no-gc --component` emits a **run-less reactor
+component**: the byte-identical MVP core module (core module 0, instance 0, no
+args) + per-export `aliasCoreFunc`/`funcTypeScalars`/sync `canonLift`/`exportFunc`
+-- NO import block, NO adapter, NO mem module, NO `wasi:cli/run`.
 
-Framing: once **#92** (component-model exports on the GC backend) and **#93**
-(this, the non-GC compact path) are both done, rontolisp can emit a *tiny*
-component-model module that a host invokes with typed WIT signatures and WAVE
-syntax -- a distinct rontolisp selling point (compact + typed + no experimental
-`--invoke` warning + runs on any component host, GC not needed).
+Measured 2026-07-11 (wasmtime 46.0.1 local, jco 1.25.2):
 
-Depends on / after: **#92** (reuse the per-export `canonLift` + type-mapping
-wiring introduced there; this issue is the non-GC, adapter-free variant).
-**#92 Tier 1 is DONE (2026-07-11)** -- the reusable pieces now exist:
-`ComponentWriter.funcTypeScalars` + `VT_F64` (= 0x75, not 0x74!),
-`WasmExportCompiler.componentValType`/`componentExport`, the
-`WasmComponentBuilder.FuncExport` record and the
-`appendFuncExports(c, exports, nextCoreFunc, nextType, nextComponentFunc)`
-section-appending pattern, plus the kebab-label name validation
-(`WasmLispCompiler.COMPONENT_EXPORT_NAME`). This issue's wrap is much simpler
-(no import block / adapter / mem module -- core module 0, instance 0, aliases
-from instance 0). Remember todo-110's `Mem.funcIndex()` accessors for the
-core-export indices.
+- 4-export program (`:int`/`:long`/`:float`/`:bool`): plain module 221 bytes,
+  component **406 bytes** (single-export ~250 bytes; structural pin asserts
+  < 1 KB). Kilobyte order confirmed vs the GC component's fixed multi-KB blob set.
+- `wasmtime run --invoke 'sumsquared(2, 3)' comp.wasm` works with **ZERO extra
+  flags** (no `-W gc`, no async flags -- the early probe confirmed a run-less
+  component invokes fine) and no experimental warning.
+- jco transpile + Node: all types round-trip; `:long` surfaces as BigInt.
+- `wasm-tools component wit` shows the typed world (`s32`/`s64`/`f64`/`bool`).
 
-## Current state
+### What was built
 
-- `--no-gc --component` is a **hard error today**:
-  `RontoLispCli.java:217-219` -> "--no-gc cannot be combined with --component
-  (the component path requires wasm-GC)". Relaxing this is part of the work.
-- `--no-gc` selects the separate `NoGcWasmCompiler` (plain MVP module) and
-  **implies `--no-wasi`** (RontoLispCli comment at ~line 216).
-- **Since todo-110 (2026-07-10)** the 0-import property is CONDITIONAL: a
-  program using `print`/`princ`/`terpri` gains ONE
-  `wasi_snapshot_preview1.fd_write` import, funneled through the single
-  `__write_stdout(ptr,len)` helper (the ONLY caller of the import -- the seam
-  left for this todo). Function indices shift by `Mem.funcBase()` (1 when
-  printing); ALL index math flows through the `Mem.funcIndex()`/`*Index()`
-  accessors, so the per-export `aliasCoreFunc` wiring here must read indices
-  from those accessors, never hardcode. **Release-1 decision (recorded in
-  110):** make `print` under `--no-gc --component` a clear compile error; a
-  later phase can add a micro-adapter (a minuscule core module implementing
-  fd_write over `wasi:cli/stdout`, the adapter-serve-p1 pattern in miniature)
-  by swapping the `__write_stdout` implementation only. A print-free program
-  still has 0 imports, so the adapter-free wrap below applies verbatim.
+- `NoGcWasmCompiler(optimize, simd, component)` third ctor arg (2-arg delegates
+  `false`); validation only in `compile()`, codegen UNTOUCHED -- `--no-gc`
+  non-component output proven byte-identical by stash dance (scalar + `--simd`).
+- new `codegen/wasm/NoGcWasmComponentBuilder` (adapter-free wrap; all existing
+  `ComponentWriter` encoders sufficed, no `am.ik.wasm` change).
+- `WasmExportCompiler.componentValType` maps `:long` -> `VT_S64` (0x78); the GC
+  path still rejects `:long` before reaching it. Kebab-name pattern
+  `COMPONENT_EXPORT_NAME` moved from `WasmLispCompiler` to `WasmExportCompiler`
+  (shared).
+- CLI gate removed (`RontoLispCli` routes `--no-gc --component` to the new ctor);
+  usage text updated.
+- Component-mode compile errors: `print`/`princ`/`terpri` (todo-110 Release-1
+  decision; `mem.printUsed()`), `:string` boundary (Tier 2 below), non-kebab
+  names. Internal string use stays fine. `--optimize` composes (shake before
+  wrap), unlike the GC path where `--optimize` is a no-op under `--component`.
+- Tests: `NoGcWasmCompilerTest` (verbatim-core/size/S64/error pins),
+  `WasmLispCompilerIntegrationTest` (`noGcComponentExportsCallableViaWaveInvokeWithNoFlags`,
+  `noGcComponentHonorsAsAliasAndComposesWithOptimize`); #92 GC export tests
+  unchanged and green. ci-spec NOT extended (the driver does not run `--no-gc`).
+- Docs: `doc/{en,ja}/compiling/wasm.md` new "Compact Component Output" section
+  + cross-links, `rontolisp-wasm-export.md` limitation bullet, CLI usage,
+  `.kb/no-gc-scalar-wasm.md`, `.kb/wasi-component.md`, CLAUDE.md.
 
-## Key insight: the heavy fixed-blob set is NOT needed here
+## Remaining tasks (later phases)
 
-Measured 2026-07-07 on `--no-gc` output:
+1. **`:string` exports (Tier 2)**: canonical string lift over the module's OWN
+   exported `memory` + a `cabi_realloc`-signature shim wrapping `__ronto_alloc`
+   (4-arg `(old, oldsz, align, newsz)`); utf8 canon options on lift and lower.
+   The `(ptr,len)` core ABI stays available without `--component`.
+2. **print micro-adapter**: a minuscule core module implementing `fd_write` over
+   `wasi:cli/stdout` (adapter-serve-p1 pattern in miniature), swapping only the
+   `__write_stdout` funnel implementation (the todo-110 seam). Un-errors print
+   under `--no-gc --component`.
+3. **(optional) WIT output** (`.wit` file next to the `.wasm`) so hosts / jco
+   generate bindings without `wasm-tools component wit`.
 
-| export shape | imports | memory | allocator |
-|---|---|---|---|
-| scalar (`sumsquared :int,:int -> :int`) | **0** | none | none |
-| string (`count_a :string -> :int`) | **0** | self, `export "memory"` | `__ronto_alloc` (+ `_mark`/`_reset`) exported |
+## Non-goal / trade-off (recorded in docs)
 
-The existing `WasmComponentBuilder` fixed blobs exist **only** to serve the GC
-backend:
-
-- `import-block.bin` -- declares the GC module's 8 WASI 0.3 imports. A `--no-gc`
-  module has **0 imports** -> not needed.
-- `adapter.wasm` -- bridges those preview1-style imports to WASI 0.3 async ->
-  **not needed** (nothing to adapt).
-- `mem.wasm` -- supplies shared canonical linear memory + `cabi_realloc` (the GC
-  module keeps cons on the GC heap, so it has no linear memory of its own). The
-  scalar module **already exports its own `memory` + `__ronto_alloc`** -> not
-  needed.
-
-So a `--no-gc` component is a **reactor with only exports and no imports** --
-much simpler than the GC path. This is a NEW small builder, not a clone of
-`WasmComponentBuilder`.
-
-## Work (small dedicated builder / mode)
-
-1. **Relax the CLI gate**: allow `--no-gc --component` (remove/adjust the
-   `RontoLispCli.java:217` error); route to the new builder.
-2. **Wrap the single MVP core module** emitted by `NoGcWasmCompiler` -- no
-   adapter, no import-block, no mem module. A `ComponentWriter` with:
-   `SEC_CORE_MODULE` (the scalar module) + `SEC_CORE_INSTANCE` +
-   per-export `aliasCoreFunc` + `canonLift` + `SEC_EXPORT`.
-3. **Scalar exports** (`:int`/`:long`/`:float`/`:bool`/`:void`): trivial
-   **synchronous** `canonLift`, no canonical memory needed. Note `:long`<->i64
-   (s64) IS valid here (the scalar backend computes in i64) -- unlike the GC
-   component in #92 which rejects `:long`.
-4. **String / s-expr exports**: use the module's own exported `memory` as the
-   canonical memory + a `cabi_realloc`-signature function. `__ronto_alloc` is a
-   1-arg bump allocator, but the canonical ABI `realloc` is 4-arg
-   `(old, oldsz, align, newsz)` -> add a tiny **realloc shim** (wrap
-   `__ronto_alloc`; the `_mark`/`_reset` arena ops already exist). Then use the
-   utf8 canon options (`canonLift...Utf8` counterpart of the existing
-   `canonLowerMemoryReallocUtf8`).
-5. **World / init**: reactor-style (no `run`; `_initialize` if any top-level
-   init is required -- for pure exports likely none).
-6. **(optional) WIT output** so hosts / jco can generate bindings.
-
-## Non-goal / trade-off to record in docs
-
-`--no-gc`'s whole value is a plain MVP module that **any** engine runs, callable
-via a raw core `(func)` through a simple embedding API (no component tooling, no
-warning). Wrapping it as a component **re-introduces a component-model-capable
-host requirement**, trading that portability for typed WIT + WAVE `--invoke`.
-So keep BOTH outputs available: raw `--no-gc` (max portability, embedding API)
-and `--no-gc --component` (typed component export). Do not make component the
-default for `--no-gc`.
-
-## Testing
-
-- E2E: build `--no-gc --component`, call via
-  `wasmtime run --invoke 'sumsquared(2, 3)'` (NO `-W gc` flag needed -- assert
-  that) and via `jco`. Confirm the module is markedly smaller than the GC
-  component (size assertion / note in docs).
-- Round-trip a `:string` export (`count_a`) through the canonical string ABI.
-
-## Files
-
-- `cli/RontoLispCli.java` (relax the `--no-gc + --component` gate; route to the
-  new builder)
-- new `codegen/wasm/ScalarWasmComponentBuilder.java` (or a `--no-gc` mode wired
-  off `WasmComponentBuilder`) -- adapter-free single-module wrap
-- `codegen/wasm/NoGcWasmCompiler.java` (emit the `cabi_realloc` shim for string
-  exports; ensure export wrappers survive)
-- `am.ik.wasm.ComponentWriter` (only if a lift variant is missing)
-- Docs: `doc/{en,ja}/compiling/wasm.md`,
-  `doc/{en,ja}/reference/functions/rontolisp-wasm-export.md`,
-  `.kb/no-gc-scalar-wasm.md`, `.kb/wasi-component.md`.
+`--no-gc`'s whole value is a plain MVP module that **any** engine runs via a raw
+core `(func)`. Wrapping as a component re-introduces a component-model-capable
+host requirement, trading portability for typed WIT + WAVE `--invoke`. BOTH
+outputs stay available; component is NOT the default for `--no-gc`.
 
 ## Related
 
-- **#92** (component exports on the GC backend -- prerequisite; shares the
-  per-export canonLift + type-mapping design)
-- `.kb/no-gc-scalar-wasm.md` (scalar backend: memory header, `__ronto_alloc`,
-  string primitives)
-- `.kb/wasm-export-no-wasi.md` (`:long`<->i64 is `--no-gc`-only; `--no-wasi`
-  reactor `_initialize` ABI)
-- `.kb/wasi-component.md` (GC component blob set this path deliberately avoids)
+- **#92** (GC-backend component exports; Tier 2/3 live in `.todo/92`)
+- `.kb/no-gc-scalar-wasm.md` (the authoritative mechanics paragraph)
+- `.kb/wasi-component.md` (GC blob set this path deliberately avoids)
+- `.kb/wasm-export-no-wasi.md` (`:long`<->i64; reactor ABI)

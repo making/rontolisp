@@ -44,13 +44,16 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 
 ## 制限事項
 
-- `--component` では、スカラーエクスポート (`:int`/`:float`/`:bool`/void) は WAVE
+- `--component` では、スカラーエクスポート (`:int`/`:float`/`:bool`/void — `--no-gc`
+  では `:long` も) は WAVE
   構文 (`wasmtime run --invoke 'name(args)'`) で呼び出せる**型付き
   コンポーネントモデルエクスポート**になります。`:string`/`:s-expr` は現時点では
   コンパイルエラーで、エクスポートは純粋計算でなければならず (内部の I/O は
-  トラップします)、名前は lower-kebab-case である必要があります (そうでない場合は
+  トラップし、`--no-gc --component` では印字はコンパイルエラーです)、名前は
+  lower-kebab-case である必要があります (そうでない場合は
   `:as` で改名します)。
   [コンポーネントモデル関数エクスポート](../../compiling/wasm.md#component-model-function-exports-wasm-export)
+  と[コンパクトなコンポーネント出力](../../compiling/wasm.md#compact-component-output---no-gc---component)
   を参照してください。インタプリタおよび JVM では名前付きシンボルを返すだけです。
 - エクスポートできるのはトップレベルの `defun` のみで、宣言した引数の数はその
   アリティと一致しなければなりません。また関数値を引数や戻り値とする関数は対象外

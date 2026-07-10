@@ -57,14 +57,6 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean simd;
 
-	/**
-	 * The component-model {@code label} grammar (lower-kebab-case words) a component
-	 * export name must match; a Lisp name outside it (e.g. one containing {@code *} or
-	 * {@code %}) must be renamed with {@code :as}.
-	 */
-	private static final java.util.regex.Pattern COMPONENT_EXPORT_NAME = java.util.regex.Pattern
-		.compile("[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*");
-
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -1336,7 +1328,7 @@ public final class WasmLispCompiler implements LispCompiler {
 								+ " supported with --component for '" + decl.name()
 								+ "' (component exports are scalar-only: :int/:float/:bool/:void)");
 					}
-					if (!COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
+					if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
 						throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 								+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
 								+ " \"sum-squared\"); rename it with :as \"kebab-name\"");

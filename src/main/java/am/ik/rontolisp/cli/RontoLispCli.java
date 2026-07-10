@@ -240,16 +240,14 @@ public final class RontoLispCli {
 				// module
 				// with no wasm-GC types, no imports and no memory, for pure-numeric
 				// rontolisp:wasm-export functions. It is a pure-compute reactor, so it
-				// implies --no-wasi; --component is GC-bound and not supported here.
-				if (component) {
-					throw new UnsupportedOperationException(
-							"--no-gc cannot be combined with --component " + "(the component path requires wasm-GC)");
-				}
+				// implies --no-wasi. With --component the same core module is wrapped as
+				// a compact reactor-style component (typed scalar exports, no adapter,
+				// no wasm-GC requirement) instead of the GC component pipeline.
 				// --simd is the orthogonal acceleration switch: with it the vec: kernels
 				// lower to native v128 (f64x2/f32x4); without it to plain scalar loops
 				// that
 				// run on a runtime lacking the SIMD proposal.
-				bytes = new NoGcWasmCompiler(optimize, simd).compile(program);
+				bytes = new NoGcWasmCompiler(optimize, simd, component).compile(program);
 			}
 			else {
 				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
@@ -306,6 +304,8 @@ public final class RontoLispCli {
 		this.out.println("                     WASM only; print/stdin/file I/O work. Scalar (pure-compute)");
 		this.out.println("                     rontolisp:wasm-export functions become typed component");
 		this.out.println("                     exports, callable via wasmtime run --invoke 'name(args)'");
+		this.out.println("                     With --no-gc: a compact reactor component (typed scalar");
+		this.out.println("                     exports only, incl. :long; no WASI, no wasm-GC, no flags)");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");
@@ -319,6 +319,7 @@ public final class RontoLispCli {
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");
 		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
 		this.out.println("                     Scalar vec: loops by default; add --simd for native v128.");
+		this.out.println("                     Add --component for a compact typed component-model wrap.");
 		this.out.println("  --simd             Accelerate the vec: and linalg: kernels with hardware SIMD");
 		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
 		this.out.println("                     java --add-modules jdk.incubator.vector). WASM (.wasm, both");
