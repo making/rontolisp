@@ -1775,6 +1775,33 @@ cases:
       0.0
       1.0
 
+  # The comparison-select ufuncs (todo 109 Phase 3): every value is a select of an
+  # exact input, so all four backends print identically -- including the -0.0/0.0
+  # tie, where the strict comparison keeps the SECOND operand.
+  - name: comparison-select-ufuncs-cross-backend-cases
+    source: |
+      (print (aref (linalg:maximum #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)) 0))
+      (print (aref (linalg:minimum #d(1.0 5.0) 4.0) 1))
+      (print (aref (linalg:clip #d(-2.0 0.5 3.0) -1.0 1.0) 0))
+      (print (aref (linalg:relu #d(-2.0 7.0)) 1))
+      (print (aref (linalg:relu #d(-0.0)) 0))
+      (print (aref (linalg:maximum #d(-0.0) #d(0.0)) 0))
+      (print (aref (linalg:maximum #d(0.0) #d(-0.0)) 0))
+      (print (vec:aref (vec:maximum (vec:from-list '(1.0 5.0)) (vec:from-list '(4.0 2.0))) 1))
+      (print (vec:aref (vec:relu (vec:from-list '(-3.0 2.0))) 0))
+      (print (vec:aref (vec:clip (vec:from-list '(9.0)) -1.0 1.0) 0))
+    expected: |
+      4.0
+      4.0
+      -1.0
+      7.0
+      0.0
+      0.0
+      -0.0
+      5.0
+      0.0
+      1.0
+
   # Character type and accessors, plus string/number parsing. Every value below is
   # deterministic and identical across the interpreter, JVM and WASM backends.
   - name: characters-and-parsing-cross-backend

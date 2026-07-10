@@ -1,8 +1,56 @@
 # 109 — Named element-wise math functions (numpy ufunc parity) for `linalg:` and `vec:`
 
-**Status: PHASE 1 + 1.5 + 2 DONE — `log` + `tanh` (first release), `sin`/`cos`/`tan`
-(second release) and `asin`/`acos`/`atan`/`sinh`/`cosh` (third release, 2026-07-10) all
-shipped; `BuiltinFunctionWrappers.WASM_UNSUPPORTED` is now EMPTY. Phase 3 not started.**
+**Status: PHASE 1 + 1.5 + 2 DONE; PHASE 3 first release (`maximum`/`minimum`/`clip`/
+`relu`, 2026-07-10) DONE — see below. Remaining Phase 3 candidates (`power`,
+`floor`/`ceil`/`trunc`/`round`, fused `sigmoid`/`silu`/`softmax`) not started.**
+
+## Phase 3 first release — `maximum` / `minimum` / `clip` / `relu` (DONE 2026-07-10)
+
+The first BINARY ufuncs. Everything followed the `>`-comparison oracle rule this file
+prescribed; full design record in `.kb/vec.md` (Phase 3 section) + `.kb/linalg-simd.md`.
+
+- **Oracle**: strict comparison selects in the Lisp sources -- `vec:maximum` =
+  `(vec::%map2 (lambda (x y) (if (> x y) x y)) a b)` and mirrors; `vec:relu` a `%map1`
+  select against 0.0; `vec:clip` the min(max(x, lo), hi) NESTING (so vec:clip ==
+  linalg:clip's composition semantics: NaN -> lo, inverted bounds -> hi);
+  `linalg:maximum`/`minimum` = `%la-bcast` lambdas, `linalg:clip`/`relu` = compositions
+  riding the maximum/minimum kernels transitively (the square/reciprocal pattern -- NO
+  clip/relu kernels anywhere). Second operand (or bound) wins any false comparison:
+  the -0.0/0.0 tie takes the second, maximum(NaN, y) = y but maximum(x, NaN) = NaN,
+  relu(NaN) = relu(-0.0) = 0.0. NEVER Math.max / f64x2.min/max (different NaN/-0.0).
+- **Cross-backend identical** (unlike the transcendentals): `>`/`<` are IEEE everywhere
+  since todo-108 and a select only copies input bits, so `--no-gc` (which has no defun
+  to mirror) uses the same compare+select and all four backends agree bit-for-bit;
+  ci-spec gained `comparison-select-ufuncs-cross-backend-cases` INCLUDING the -0.0 tie.
+- **Kernels**: interpreter/JVM = plain scalar select loops (lane forms would be
+  perf-only -- select bits cannot depend on lane grouping; JVM linalg lane blocks gated
+  `op <= OP_DIV`, OP_MAX/OP_MIN added to laApply; maximum/minimum are NOT commutative
+  on ties/NaN so the scalar-on-left shape must run laEwSD/laEwSF, never the
+  ADD/MUL commutative shortcut). wasm-GC = `gcMap2Select` (gt/lt lane mask +
+  v128.bitselect, both widths -- an f32 lane compare equals the widened compare;
+  `F32X4_GT`/`F64X2_GT` added to `Instruction` + `WasmTreeShaker.skipSimd`), `U_RELU`
+  lane form (the U_ABS argument: the 0.0 bound is f32-exact), `buildClip` element loop
+  vs full-f64 bounds, linalg `buildSelectElementwise` + `emitBroadcastSelect` +
+  `gcBroadcastSelectF64` (bracket kept: a select over padding can answer s; f32-scalar
+  broadcast stays the widened `_v_get`/`_v_set` loop). `--no-gc` =
+  `simdMap2Select`/`scalarMap2Select` + U_RELU + `compileSimdClip` (clip identical in
+  both --simd modes, like exp). Bookkeeping: vec FUNC_COUNT 47 -> 55 (CLIP_INTO = the
+  first TYPE_CALLABLE_BASE+3 four-param kernel), linalg 30 -> 32, `userFuncBase()`
+  shift 77 -> 87; JVM quaternaryDesc for simdClipInto.
+- Suite 3142/0 (2 skip), native E2E 772/0, DocExamplesTest 436/0.
+
+## Phase 3 remaining (not started)
+
+- `power` (element-wise `expt`): CL `expt` has exact integer/ratio semantics; decide
+  whether `linalg:power` is float-only (numpy-like) BEFORE touching it.
+- `floor` / `ceil` / `trunc` / `round` element-wise: numpy returns FLOATS; CL `floor`
+  returns integers. Needs a semantics decision (float-valued like `ffloor`?) -- do not
+  overload the CL names. wasm has native f64.floor/ceil/trunc/nearest, so scalar
+  support is cheap; `round` vs f64.nearest ties-to-even needs a look at the CL round
+  contract first.
+- Maybe, as fused named ops (norm precedent): `sigmoid`, `silu`, `softmax` (decide
+  whether the defun does the max-subtraction stabilization -- whatever the defun says
+  becomes the contract; `linalg:relu` exists now).
 
 ## Phase 2 third release — `asin`/`acos`/`atan` + `sinh`/`cosh` (DONE 2026-07-10)
 
@@ -269,7 +317,10 @@ interpreter/JVM-only... which contradicts "every function behaves identically
 everywhere" — so prefer doing the wasm prerequisite first, or gate the whole phase.
 `tanh` is the highest-value member (ML activations).
 
-**Phase 3 — binary/comparison ufuncs, todo-108 territory (design care needed)**:
+**(superseded) Phase 3 — binary/comparison ufuncs, as originally filed** — the
+`maximum`/`minimum`/`clip`/`relu` half shipped 2026-07-10 exactly on the `>`-oracle
+rule below (see "Phase 3 first release" above); `power` and the float-valued
+rounders remain, tracked in "Phase 3 remaining" above:
 
 - `maximum` / `minimum` (element-wise binary), `clip`, `relu` (= max with 0): wasm has
   `f64x2.min/max` but its NaN/-0.0 semantics differ from Java `Math.max` and from a

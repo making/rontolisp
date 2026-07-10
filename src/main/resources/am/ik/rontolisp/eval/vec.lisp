@@ -171,6 +171,37 @@
 (defun vec:reciprocal (v)
   (vec::%map1 (lambda (x) (/ 1.0 x)) v))
 
+;; --- comparison-select ufuncs (numpy parity, todo 109 Phase 3) ----------------
+;;
+;; All four are defined by the strict comparison select (if (> x y) x y) and its
+;; mirrors -- NOT by a min/max primitive. The second operand (or the bound) wins
+;; whenever the comparison is false, which covers ties ((vec:maximum #d(-0.0)
+;; #d(0.0)) is #d(0.0), the second element) and unordered NaN comparisons
+;; ((vec:maximum #d(nan) w) takes w's element; (vec:maximum v #d(nan)) keeps the
+;; NaN). This is the same first-strictly-greater-wins rule linalg:amax uses, and
+;; since todo-108 the scalar > / < agree bit-for-bit on every backend, so the
+;; --simd kernels mirror the comparison (a lane gt mask + bitselect, never the
+;; IEEE lane min/max whose NaN/-0.0 semantics differ).
+
+(defun vec:maximum (a b)
+  (vec::%map2 (lambda (x y) (if (> x y) x y)) a b))
+
+(defun vec:minimum (a b)
+  (vec::%map2 (lambda (x y) (if (< x y) x y)) a b))
+
+(defun vec:relu (v)
+  (vec::%map1 (lambda (x) (if (> x 0.0) x 0.0)) v))
+
+;; min(max(x, lo), hi) as the same nested selects linalg:clip composes from
+;; linalg:maximum / linalg:minimum, so the two clips agree on every input --
+;; including a NaN element (the first select's comparison is false, so it
+;; becomes lo) and inverted bounds (lo > hi ends at hi).
+(defun vec:clip (v lo hi)
+  (vec::%map1 (lambda (x)
+                (let ((%vec-t (if (> x lo) x lo)))
+                  (if (< %vec-t hi) %vec-t hi)))
+              v))
+
 ;; --- destination-passing kernels (write into out, allocate nothing) ----------
 
 ;; The allocating kernels above return a fresh vector, so a loop over them creates
@@ -262,6 +293,22 @@
 
 (defun vec:reciprocal-into (out v)
   (vec::%map1-into out (lambda (x) (/ 1.0 x)) v))
+
+(defun vec:maximum-into (out a b)
+  (vec::%map2-into out (lambda (x y) (if (> x y) x y)) a b))
+
+(defun vec:minimum-into (out a b)
+  (vec::%map2-into out (lambda (x y) (if (< x y) x y)) a b))
+
+(defun vec:relu-into (out v)
+  (vec::%map1-into out (lambda (x) (if (> x 0.0) x 0.0)) v))
+
+(defun vec:clip-into (out v lo hi)
+  (vec::%map1-into out
+                   (lambda (x)
+                     (let ((%vec-t (if (> x lo) x lo)))
+                       (if (< %vec-t hi) %vec-t hi)))
+                   v))
 
 ;; --- reductions (return a scalar) --------------------------------------------
 

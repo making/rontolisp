@@ -270,6 +270,104 @@ final class LinalgSimdKernels {
 		return r;
 	}
 
+	// --- element-wise comparison selects: maximum / minimum (todo 109 Phase 3) ------
+	// linalg:maximum / linalg:minimum are %la-bcast over (if (> x y) x y) and its
+	// mirror, so the kernels mirror the comparison select, never Math.max/Math.min
+	// (different NaN / -0.0 handling). The array-array loops are vec:'s; the scalar
+	// broadcasts compare the widened element against the FULL double scalar and narrow
+	// the selected value once, exactly as emap does (the same array-vs-scalar rule the
+	// arithmetic broadcasts follow). linalg:clip and linalg:relu need no kernel: their
+	// defuns compose linalg:maximum / linalg:minimum, which are already intercepted
+	// (the square / reciprocal pattern).
+
+	static double[] maximum(double[] x, double[] y) {
+		return VecSimdKernels.maximum(x, y);
+	}
+
+	static double[] minimum(double[] x, double[] y) {
+		return VecSimdKernels.minimum(x, y);
+	}
+
+	static float[] maximumF(float[] x, float[] y) {
+		return VecSimdKernels.maximumF(x, y);
+	}
+
+	static float[] minimumF(float[] x, float[] y) {
+		return VecSimdKernels.minimumF(x, y);
+	}
+
+	static double[] maxScalar(double[] x, double s) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = x[i] > s ? x[i] : s;
+		}
+		return r;
+	}
+
+	static double[] minScalar(double[] x, double s) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = x[i] < s ? x[i] : s;
+		}
+		return r;
+	}
+
+	/**
+	 * {@code (if (> s x[i]) s x[i])}: the operand order {@code (linalg:maximum 3.0 a)}
+	 * gives.
+	 */
+	static double[] maxFrom(double s, double[] x) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = s > x[i] ? s : x[i];
+		}
+		return r;
+	}
+
+	static double[] minFrom(double s, double[] x) {
+		double[] r = new double[x.length];
+		for (int i = 0; i < x.length; i++) {
+			r[i] = s < x[i] ? s : x[i];
+		}
+		return r;
+	}
+
+	static float[] maxScalarF(float[] x, double s) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			double xd = x[i];
+			r[i] = (float) (xd > s ? xd : s);
+		}
+		return r;
+	}
+
+	static float[] minScalarF(float[] x, double s) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			double xd = x[i];
+			r[i] = (float) (xd < s ? xd : s);
+		}
+		return r;
+	}
+
+	static float[] maxFromF(double s, float[] x) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			double xd = x[i];
+			r[i] = (float) (s > xd ? s : xd);
+		}
+		return r;
+	}
+
+	static float[] minFromF(double s, float[] x) {
+		float[] r = new float[x.length];
+		for (int i = 0; i < x.length; i++) {
+			double xd = x[i];
+			r[i] = (float) (s < xd ? s : xd);
+		}
+		return r;
+	}
+
 	// --- element-wise unary ufuncs (todo 109) ----------------------------------------
 	// linalg:exp / log / tanh / sin / cos / tan / asin / acos / atan / sinh / cosh /
 	// sqrt / abs / negative / sign are named

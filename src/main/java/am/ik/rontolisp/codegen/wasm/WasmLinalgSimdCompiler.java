@@ -90,7 +90,13 @@ final class WasmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_SQRT, WasmLinalgSimdRuntimeBuilder.SQRT),
 			Map.entry(LispNames.LINALG_ABS, WasmLinalgSimdRuntimeBuilder.ABS),
 			Map.entry(LispNames.LINALG_NEGATIVE, WasmLinalgSimdRuntimeBuilder.NEGATIVE),
-			Map.entry(LispNames.LINALG_SIGN, WasmLinalgSimdRuntimeBuilder.SIGN));
+			Map.entry(LispNames.LINALG_SIGN, WasmLinalgSimdRuntimeBuilder.SIGN),
+			// The comparison-select ufuncs (todo 109 Phase 3). linalg:clip / linalg:relu
+			// are not here: their spliced defuns compose linalg:maximum /
+			// linalg:minimum, so they are accelerated transitively, like
+			// square/reciprocal.
+			Map.entry(LispNames.LINALG_MAXIMUM, WasmLinalgSimdRuntimeBuilder.MAXIMUM),
+			Map.entry(LispNames.LINALG_MINIMUM, WasmLinalgSimdRuntimeBuilder.MINIMUM));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,

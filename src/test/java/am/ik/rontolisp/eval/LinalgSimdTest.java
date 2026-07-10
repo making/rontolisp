@@ -140,6 +140,83 @@ class LinalgSimdTest {
 		}
 	}
 
+	// --- element-wise: comparison selects (todo 109 Phase 3) -----------------------
+
+	@Test
+	void simdReplacesTheComparisonSelectDefunsWithNativeFunctions() {
+		for (String member : new String[] { "maximum", "minimum" }) {
+			String form = "(linalg:zeros 1) #'linalg:" + member;
+			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+		// clip / relu are accelerated transitively -- their defuns compose
+		// linalg:maximum / linalg:minimum -- so they stay lambdas, like
+		// square/reciprocal.
+		assertThat(eval("(linalg:zeros 1) #'linalg:clip", true).print()).isEqualTo("#<lambda>");
+		assertThat(eval("(linalg:zeros 1) #'linalg:relu", true).print()).isEqualTo("#<lambda>");
+	}
+
+	@Test
+	void comparisonSelectsMatchTheScalarOracleAtBothSizesWidthsAndShapes() {
+		for (String op : new String[] { "maximum", "minimum" }) {
+			// a ascends through zero, the negation descends: the winner flips
+			// mid-array; both sizes, both widths, a rank-2 shape, and both broadcast
+			// sides (all values integer-valued, exact at either width).
+			for (String n : new String[] { "8", "201" }) {
+				assertMatchesScalarOracle(
+						"(let ((a (linalg:sub (linalg:arange 1 %1$s) 100.0))) (linalg:%2$s a (linalg:negative a)))"
+							.formatted(n, op));
+			}
+			assertMatchesScalarOracle(
+					"(let ((a (linalg:arange 1 201 1 'single-float))) (linalg:%s a (linalg:negative a)))"
+						.formatted(op));
+			assertMatchesScalarOracle(
+					"(linalg:%s (linalg:reshape (linalg:arange 200) '(10 20)) (linalg:negative (linalg:reshape (linalg:arange 200) '(10 20))))"
+						.formatted(op));
+			assertMatchesScalarOracle("(linalg:%s (linalg:sub (linalg:arange 1 201) 100.0) 3.0)".formatted(op));
+			assertMatchesScalarOracle("(linalg:%s 3.0 (linalg:sub (linalg:arange 1 201) 100.0))".formatted(op));
+			// The f32-vs-scalar broadcast must compare the widened element against the
+			// FULL double scalar (an inexact bound), like the arithmetic broadcasts.
+			assertMatchesScalarOracle("(linalg:%s (linalg:arange 1 201 1 'single-float) 100.3)".formatted(op));
+			assertMatchesScalarOracle("(linalg:%s 100.3 (linalg:arange 1 201 1 'single-float))".formatted(op));
+		}
+		// clip / relu ride the maximum/minimum kernels transitively.
+		assertMatchesScalarOracle("(linalg:clip (linalg:sub (linalg:arange 1 201) 100.0) -50.0 50.0)");
+		assertMatchesScalarOracle("(linalg:relu (linalg:sub (linalg:arange 1 201) 100.0))");
+		assertMatchesScalarOracle("(linalg:relu (linalg:reshape (linalg:sub (linalg:arange 200) 100.0) '(10 20)))");
+	}
+
+	@Test
+	void comparisonSelectsFollowTheStrictComparisonNotMathMax() {
+		// The second operand wins any false comparison: ties (a -0.0/0.0 pair) and
+		// unordered NaN comparisons -- unlike Math.max/Math.min. Same rule as amax.
+		assertMatchesScalarOracle("(linalg:maximum #d(-0.0 0.0) #d(0.0 -0.0))");
+		assertMatchesScalarOracle("(linalg:minimum #d(-0.0 0.0) #d(0.0 -0.0))");
+		assertThat(eval("(linalg:maximum #d(-0.0) #d(0.0))", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(linalg:maximum #d(0.0) #d(-0.0))", true).print()).isEqualTo("#d(-0.0)");
+		assertMatchesScalarOracle("(linalg:maximum (linalg:mul (linalg:ones 2) (/ 0.0 0.0)) #d(1.0 2.0))");
+		assertMatchesScalarOracle("(linalg:maximum #d(1.0 2.0) (linalg:mul (linalg:ones 2) (/ 0.0 0.0)))");
+		// The scalar-broadcast tie: (linalg:maximum #d(-0.0) 0.0) selects the bound.
+		assertThat(eval("(linalg:maximum #d(-0.0) 0.0)", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(linalg:minimum #d(0.0) -0.0)", true).print()).isEqualTo("#d(-0.0)");
+		// relu maps -0.0 and NaN to 0.0; clip sends a NaN element to lo.
+		assertThat(eval("(linalg:relu #d(-0.0))", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(linalg:clip (linalg:mul (linalg:ones 1) (/ 0.0 0.0)) -1.0 1.0)", true).print())
+			.isEqualTo("#d(-1.0)");
+	}
+
+	@Test
+	void comparisonSelectsDeclineTheSameInputsAsTheArithmeticKernels() {
+		// General boxed arrays, mixed widths and two plain numbers all fall back to
+		// the %la-bcast defun.
+		assertThat(eval("(linalg:maximum #(1 5 3) #(4 2 3))", true).print()).isEqualTo("#d(4.0 5.0 3.0)");
+		assertThat(eval("(linalg:minimum #d(1.0 5.0) #f(4.0 2.0))", true).print()).isEqualTo("#d(1.0 2.0)");
+		assertThat(eval("(linalg:maximum 2 3)", true).print()).isEqualTo("3");
+		assertThat(eval("(linalg:minimum 1/3 1/2)", true).print()).isEqualTo("1/3");
+		assertThatThrownBy(() -> eval("(linalg:maximum #d(1.0) #d(1.0 2.0))", true))
+			.hasMessageContaining("linalg: shape mismatch");
+	}
+
 	// --- the inputs the kernels decline (fall back to the scalar defun) -----------
 
 	@Test

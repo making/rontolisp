@@ -155,7 +155,7 @@ public final class PackageRegistry {
 			"from-list", "to-list", "shape", "size", "reshape", "flatten", "transpose", "add", "sub", "mul", "div",
 			"emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm", "trace", "det",
 			"inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
-			"cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal");
+			"cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum", "clip", "relu");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 
@@ -180,7 +180,9 @@ public final class PackageRegistry {
 			LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO,
 			LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
 			LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO,
-			LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO);
+			LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM,
+			LispNames.VEC_RELU, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO,
+			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO);
 
 	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 

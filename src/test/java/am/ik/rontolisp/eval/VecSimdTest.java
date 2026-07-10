@@ -454,6 +454,100 @@ class VecSimdTest {
 			.hasMessageContaining("must share an element type");
 	}
 
+	// --- comparison-select ufuncs (todo 109 Phase 3) -------------------------------
+
+	@Test
+	void simdReplacesTheComparisonSelectDefunsWithNativeFunctions() {
+		for (String member : new String[] { "maximum", "minimum", "relu", "clip", "maximum-into", "minimum-into",
+				"relu-into", "clip-into" }) {
+			String form = "(vec:zeros 1) #'vec:" + member;
+			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+	}
+
+	@Test
+	void comparisonSelectsMatchTheScalarOracleAtBothSizesAndWidths() {
+		// a ascends through zero, b is its mirror image, so the winner flips
+		// mid-vector; sizes on both sides of THRESHOLD, both widths (all inputs
+		// integer-valued, so every intermediate is exact at either width).
+		for (String op : new String[] { "maximum", "minimum" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(let ((a (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)))) (vec:%2$s a (vec:negative a)))"
+							.formatted(n, op));
+			}
+			assertMatchesScalarOracle(
+					"(let ((a (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)))) (vec:%s a (vec:negative a)))"
+						.formatted(op));
+		}
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarOracle(
+					"(vec:relu (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)))".formatted(n));
+			assertMatchesScalarOracle(
+					"(vec:clip (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)) -50.0 50.0)".formatted(n));
+		}
+		assertMatchesScalarOracle(
+				"(vec:relu (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)))");
+		// The f32 clip bounds are deliberately NOT f32-representable: the kernel must
+		// compare the widened element against the full double bound, like the defun.
+		assertMatchesScalarOracle(
+				"(vec:clip (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)) -50.3 50.3)");
+	}
+
+	@Test
+	void comparisonSelectsFollowTheStrictComparisonNotMathMax() {
+		// The contract: (if (> x y) x y) and its mirrors -- the SECOND operand (or the
+		// bound) wins any false comparison, unlike Math.max/Math.min (which propagate a
+		// NaN from either side and order -0.0 below 0.0).
+		assertMatchesScalarOracle("(vec:maximum #d(-0.0 0.0) #d(0.0 -0.0))");
+		assertMatchesScalarOracle("(vec:minimum #d(-0.0 0.0) #d(0.0 -0.0))");
+		assertThat(eval("(vec:maximum #d(-0.0) #d(0.0))", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(vec:maximum #d(0.0) #d(-0.0))", true).print()).isEqualTo("#d(-0.0)");
+		assertThat(eval("(vec:minimum #d(0.0) #d(-0.0))", true).print()).isEqualTo("#d(-0.0)");
+		// NaN: (> NaN y) is false, so maximum(NaN, y) takes y; (> x NaN) is false, so
+		// maximum(x, NaN) keeps the NaN.
+		assertMatchesScalarOracle("(vec:maximum (vec:scale (vec:ones 3) (/ 0.0 0.0)) #d(1.0 2.0 3.0))");
+		assertMatchesScalarOracle("(vec:maximum #d(1.0 2.0 3.0) (vec:scale (vec:ones 3) (/ 0.0 0.0)))");
+		assertThat(eval("(vec:maximum (vec:scale (vec:ones 1) (/ 0.0 0.0)) #d(7.0))", true).print())
+			.isEqualTo("#d(7.0)");
+		assertThat(eval("(vec:maximum #d(7.0) (vec:scale (vec:ones 1) (/ 0.0 0.0)))", true).print())
+			.isEqualTo("#d(NaN)");
+		// relu: -0.0 and NaN both fall to the 0.0 arm.
+		assertMatchesScalarOracle("(vec:relu #d(-0.0 0.0))");
+		assertThat(eval("(vec:relu #d(-0.0))", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(vec:relu (vec:scale (vec:ones 1) (/ 0.0 0.0)))", true).print()).isEqualTo("#d(0.0)");
+		// clip: a NaN element becomes lo (the first select's comparison is false), and
+		// inverted bounds (lo > hi) end at hi -- the min(max(x, lo), hi) composition.
+		assertMatchesScalarOracle("(vec:clip (vec:scale (vec:ones 2) (/ 0.0 0.0)) -1.0 1.0)");
+		assertThat(eval("(vec:clip (vec:scale (vec:ones 1) (/ 0.0 0.0)) -1.0 1.0)", true).print())
+			.isEqualTo("#d(-1.0)");
+		assertMatchesScalarOracle("(vec:clip #d(0.0 3.0 -3.0) 2.0 1.0)");
+	}
+
+	@Test
+	void comparisonSelectIntoKernelsMatchTheirAllocatingSiblings() {
+		for (String n : new String[] { "7", "200" }) {
+			String operands = "(vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0))".formatted(n);
+			for (String op : new String[] { "maximum", "minimum" }) {
+				String into = "(vec:%s-into (vec:zeros %s) %s (vec:negative %s))".formatted(op, n, operands, operands);
+				String alloc = "(vec:%s %s (vec:negative %s))".formatted(op, operands, operands);
+				assertThat(eval(into, true).print()).as(op + " n=" + n).isEqualTo(eval(alloc, true).print());
+			}
+			assertThat(eval("(vec:relu-into (vec:zeros %s) %s)".formatted(n, operands), true).print())
+				.isEqualTo(eval("(vec:relu %s)".formatted(operands), true).print());
+			assertThat(eval("(vec:clip-into (vec:zeros %s) %s -50.0 50.0)".formatted(n, operands), true).print())
+				.isEqualTo(eval("(vec:clip %s -50.0 50.0)".formatted(operands), true).print());
+		}
+		// -into returns the very destination and tolerates aliasing (the add-into rule).
+		assertThat(eval("(let ((o (vec:zeros 2))) (eq o (vec:maximum-into o #d(1.0 2.0) #d(2.0 1.0))))", true).print())
+			.isEqualTo("t");
+		assertThat(eval("(let ((v (vec:from-list '(-1.0 2.0)))) (vec:relu-into v v) v)", true).print())
+			.isEqualTo(eval("(vec:relu (vec:from-list '(-1.0 2.0)))", false).print());
+		assertThat(eval("(let ((v (vec:from-list '(-9.0 9.0)))) (vec:clip-into v v -1.0 1.0) v)", true).print())
+			.isEqualTo("#d(-1.0 1.0)");
+	}
+
 	// --- fixed-width contract ----------------------------------------------------
 
 	@Test

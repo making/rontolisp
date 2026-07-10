@@ -1023,6 +1023,63 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void noGcRunsComparisonSelectsUnderBothLowerings() throws Exception {
+		// todo 109 Phase 3: vec:maximum / vec:minimum / vec:relu / vec:clip (+ -into)
+		// are strict-comparison selects ((if (> x y) x y) and its mirrors), so every
+		// probe value is exact and pinned to a literal -- and, unlike exp/sign, the
+		// values agree with every other backend, because a select only copies input
+		// bits and > agrees everywhere since todo-108. maximum/minimum run v128
+		// gt/lt+bitselect under --simd and a compare+select scalar loop otherwise;
+		// relu rides the U_RELU map1 form; clip is the same element loop in both
+		// modes.
+		String source = """
+				(defun mkab (a b)
+				  (dotimes (i 5)
+				    (vec:aset a i (- (float i) 2.0))
+				    (vec:aset b i (- 2.0 (float i)))))
+				(defun probe (i)
+				  (let ((a (vec:zeros 5))
+				        (b (vec:zeros 5)))
+				    (mkab a b)
+				    (round (+ (vec:sum (vec:maximum a b))
+				              (* 100 (vec:sum (vec:minimum a b)))
+				              (* 10000 (vec:sum (vec:relu a)))
+				              (* 1000000 (vec:sum (vec:clip a -1.0 1.0)))))))
+				(defun probef (i)
+				  (let ((a (vec:zeros 5 'single-float))
+				        (out (vec:zeros 5 'single-float)))
+				    (dotimes (i 5)
+				      (vec:aset a i (- (float i) 2.0)))
+				    (vec:relu-into out a)
+				    (vec:maximum-into out out a)
+				    (vec:clip-into out out -1.5 1.5)
+				    (round (* 100 (vec:sum out)))))
+				(defun probeinto (i)
+				  (let ((a (vec:zeros 5))
+				        (b (vec:zeros 5))
+				        (o (vec:zeros 5)))
+				    (mkab a b)
+				    (vec:minimum-into o a b)
+				    (vec:maximum-into o o a)
+				    (round (vec:sum (vec:relu-into o o)))))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'probef :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'probeinto :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			// a = (-2 -1 0 1 2), b = (2 1 0 -1 -2): maximum sums to 6, minimum to -6,
+			// relu(a) to 3, clip(a, -1, 1) to 0 -> 6 - 600 + 30000 + 0 = 29406.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "probe", "0")).isEqualTo("29406");
+			// relu(a) = (0 0 0 1 2); maximum with a is unchanged; clip to [-1.5, 1.5]
+			// gives (0 0 0 1 1.5), whose sum is 2.5 -> 250.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "probef", "0")).isEqualTo("250");
+			// minimum(a, b) = (-2 -1 0 -1 -2); maximum with a = (-2 -1 0 1 2);
+			// relu of that = (0 0 0 1 2) -> 3. Exercises aliasing at every step.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "probeinto", "0")).isEqualTo("3");
+		}
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,
@@ -6554,6 +6611,57 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunVec(UNARY_UFUNCS, true)).isEqualTo(compileAndRunVec(UNARY_UFUNCS, false));
 	}
 
+	// The comparison-select ufuncs (todo 109 Phase 3): maximum/minimum over operands
+	// whose winner flips mid-vector, at lengths on both sides of a lane-group boundary
+	// and both widths (integer-valued inputs, exact at either width; the gt/lt lane
+	// mask + bitselect only copies input bits, so f32 lanes are bit-identical too);
+	// relu over the sign mix (the U_RELU lane form); clip against fractional bounds
+	// that are NOT f32-representable (the element loop must compare the widened
+	// element against the full f64 bound); the strict-comparison edges (-0.0/0.0 ties
+	// and NaN taking the second operand / the bound, inverted clip bounds ending at
+	// hi); and the -into siblings with destination identity, aliasing, and a longer
+	// destination keeping its tail.
+	private static final String COMPARISON_SELECTS = """
+			(dolist (n '(1 4 5 8 200))
+			  (let ((v (vec:sub (vec:arange n) (vec:scale (vec:ones n) 2.0)))
+			        (f (vec:sub (vec:arange n 'single-float) (vec:scale (vec:ones n 'single-float) 2.0))))
+			    (print (list n (vec:maximum v (vec:negative v)) (vec:minimum v (vec:negative v))))
+			    (print (list (vec:maximum f (vec:negative f)) (vec:minimum f (vec:negative f))))
+			    (print (list (vec:relu v) (vec:relu f)))
+			    (print (vec:clip v -1.5 1.5))
+			    (print (vec:clip f -1.5 1.5))))
+			(print (vec:maximum #d(-0.0 0.0) #d(0.0 -0.0)))
+			(print (vec:minimum #d(-0.0 0.0) #d(0.0 -0.0)))
+			(print (vec:maximum (vec:scale (vec:ones 2) (/ 0.0 0.0)) #d(1.0 2.0)))
+			(print (vec:maximum #d(1.0 2.0) (vec:scale (vec:ones 2) (/ 0.0 0.0))))
+			(print (vec:relu #d(-0.0 0.0)))
+			(print (vec:relu (vec:scale (vec:ones 1) (/ 0.0 0.0))))
+			(print (vec:clip (vec:scale (vec:ones 2) (/ 0.0 0.0)) -1.0 1.0))
+			(print (vec:clip #d(0.0 3.0 -3.0) 2.0 1.0))
+			(let ((o (vec:zeros 5)))
+			  (print (eq o (vec:maximum-into o #d(1.0 5.0 3.0 -1.0 0.0) #d(4.0 2.0 3.0 1.0 -0.0))))
+			  (print o)
+			  (print (vec:minimum-into o o #d(2.0 2.0 2.0 2.0 2.0)))
+			  (print (vec:relu-into o o))
+			  (print (vec:clip-into o (vec:sub (vec:arange 5) (vec:scale (vec:ones 5) 2.0)) -1.0 1.0)))
+			(let ((v (vec:sub (vec:arange 5) (vec:scale (vec:ones 5) 2.0))))
+			  (vec:relu-into v v)
+			  (print v))
+			(let ((long (vec:scale (vec:ones 7) 9.0)))
+			  (print (vec:maximum-into long #d(1.0 5.0) #d(4.0 2.0)))
+			  (print (vec:relu-into long #d(-1.0 3.0)))
+			  (print (vec:clip-into long #d(-9.0 0.5 9.0) -1.0 1.0))
+			  (print long))
+			(let ((flong (vec:scale (vec:ones 6 'single-float) 9.0)))
+			  (print (vec:minimum-into flong #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))
+			  (print flong))
+			""";
+
+	@Test
+	void wasmGcSimdComparisonSelectsAreByteIdenticalToTheScalarPath() throws Exception {
+		assertThat(compileAndRunVec(COMPARISON_SELECTS, true)).isEqualTo(compileAndRunVec(COMPARISON_SELECTS, false));
+	}
+
 	// Compiles and runs a vec: program without asserting success; returns the exit code.
 	private static int compileAndRunVecExitCode(String lispCode, boolean simd) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
@@ -6840,6 +6948,42 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath("(print (linalg:atan #(-1 0 1)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:cosh #(0 1)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:square 3))");
+	}
+
+	@Test
+	void wasmGcSimdLinalgComparisonSelectsAreByteIdenticalToTheScalarPath() throws Exception {
+		// The comparison-select ufuncs (todo 109 Phase 3): array-array at both widths
+		// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
+		// (the lane select), the f32 scalar broadcast against a NOT-f32-representable
+		// bound (the widened element loop), the strict-comparison ties/NaN edges, the
+		// declined inputs, and clip / relu riding maximum/minimum transitively.
+		assertLinalgMatchesTheScalarPath(
+				"(let ((a (linalg:sub (linalg:arange 200) 100))) (print (linalg:maximum a (linalg:negative a))))");
+		assertLinalgMatchesTheScalarPath(
+				"(let ((a (linalg:sub (linalg:arange 0 8 'single-float) 4))) (print (linalg:minimum a (linalg:negative a))))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:maximum (linalg:reshape (linalg:arange 12) '(3 4)) (linalg:negative (linalg:reshape (linalg:arange 12) '(3 4)))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:maximum (linalg:sub (linalg:arange 200) 100) 3.0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:minimum 3.0 (linalg:sub (linalg:arange 200) 100)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:maximum (linalg:arange 0 8 'single-float) 4.3))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:minimum 4.3 (linalg:arange 0 8 'single-float)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:maximum #d(-0.0 0.0) #d(0.0 -0.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:minimum #d(-0.0 0.0) #d(0.0 -0.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:maximum #d(-0.0) 0.0))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:maximum (linalg:mul (linalg:ones 2) (/ 0.0 0.0)) #d(1.0 2.0)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:maximum #d(1.0 2.0) (linalg:mul (linalg:ones 2) (/ 0.0 0.0))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:clip (linalg:sub (linalg:arange 200) 100) -50.0 50.0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:clip (linalg:arange 0 8 'single-float) 1.3 5.3))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:relu (linalg:sub (linalg:arange 200) 100)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:relu (linalg:reshape (linalg:sub (linalg:arange 0 12 'single-float) 6) '(3 4))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:relu #d(-0.0 0.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:clip (linalg:mul (linalg:ones 1) (/ 0.0 0.0)) -1.0 1.0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:maximum #(1 5 3) #(4 2 3)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:minimum #d(1.0 5.0) #f(4.0 2.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:maximum 2 3))");
 	}
 
 	/** {@code --simd --optimize} over the linalg library, run under wasm-GC. */

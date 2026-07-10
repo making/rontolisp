@@ -96,10 +96,23 @@ public final class LinalgSimd {
 		Elementwise div = new Elementwise(LinalgSimdKernels::div, LinalgSimdKernels::divF, LinalgSimdKernels::divScalar,
 				LinalgSimdKernels::divScalarF, LinalgSimdKernels::divFrom, LinalgSimdKernels::divFromF);
 
+		// The comparison-select ufuncs (todo 109 Phase 3) share the elementwise
+		// dispatch: same three %la-bcast shapes, same decline protocol. linalg:clip
+		// and linalg:relu are accelerated transitively -- their defuns compose
+		// linalg:maximum / linalg:minimum (the square / reciprocal pattern).
+		Elementwise maximum = new Elementwise(LinalgSimdKernels::maximum, LinalgSimdKernels::maximumF,
+				LinalgSimdKernels::maxScalar, LinalgSimdKernels::maxScalarF, LinalgSimdKernels::maxFrom,
+				LinalgSimdKernels::maxFromF);
+		Elementwise minimum = new Elementwise(LinalgSimdKernels::minimum, LinalgSimdKernels::minimumF,
+				LinalgSimdKernels::minScalar, LinalgSimdKernels::minScalarF, LinalgSimdKernels::minFrom,
+				LinalgSimdKernels::minFromF);
+
 		define(globalEnv, evaluator, LispNames.LINALG_ADD, 2, args -> elementwise(add, args));
 		define(globalEnv, evaluator, LispNames.LINALG_SUB, 2, args -> elementwise(sub, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MUL, 2, args -> elementwise(mul, args));
 		define(globalEnv, evaluator, LispNames.LINALG_DIV, 2, args -> elementwise(div, args));
+		define(globalEnv, evaluator, LispNames.LINALG_MAXIMUM, 2, args -> elementwise(maximum, args));
+		define(globalEnv, evaluator, LispNames.LINALG_MINIMUM, 2, args -> elementwise(minimum, args));
 		define(globalEnv, evaluator, LispNames.LINALG_SUM, 1, LinalgSimd::sum);
 		define(globalEnv, evaluator, LispNames.LINALG_NORM, 1, LinalgSimd::norm);
 		define(globalEnv, evaluator, LispNames.LINALG_AMAX, 1, args -> extremum(args, true));

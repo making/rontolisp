@@ -88,7 +88,7 @@ Two consequences worth remembering:
   both the kernel and the scalar defun, so the defun stays reachable wherever a kernel can
   decline.
 
-## The intercepted set (30 members)
+## The intercepted set (32 members)
 
 `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin` `trace` `transpose`
 `reshape` `dot` `outer`, plus the todo-109 unary ufuncs `exp` `log` `tanh` `sin` `cos`
@@ -96,11 +96,16 @@ Two consequences worth remembering:
 the todo-109 section of `.kb/vec.md` for the per-backend lane vs element-loop decisions
 and the wasm defun-edge mirroring; `log`/`tanh`, then `sin`/`cos`/`tan`, then
 `asin`/`acos`/`atan`/`sinh`/`cosh` are the Phase 2 members over the new WASM software
-scalar builtins).
+scalar builtins), plus the todo-109 Phase 3 comparison selects `maximum` `minimum`
+(strict `(if (> x y) x y)` / `(if (< x y) x y)` selects, never Math.max or a lane
+min/max -- the SECOND operand wins any false comparison, ties and NaN included, and
+unlike the transcendentals the values are CROSS-BACKEND-identical; see the Phase 3
+section of `.kb/vec.md`).
 
 Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
 `matmul` (calls `dot`), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
-`square` (calls `mul`), `reciprocal` (calls `div`).
+`square` (calls `mul`), `reciprocal` (calls `div`), `clip` (calls `maximum` then
+`minimum`), `relu` (calls `maximum` with the 0.0 bound).
 
 **Never** intercepted: `emap` (an arbitrary Lisp callback), `det` / `inv` / `solve`'s
 pivoting elimination (data-dependent pivots, sequential column dependency), `array-equal`
@@ -114,7 +119,7 @@ behavior as `vec:`, deliberately.
 ## What is vectorized, and what is merely de-boxed
 
 Not every member has a lane form worth writing. The interception is still worth it for all
-thirty: it removes the per-element box allocation and the generic numeric dispatch that the
+thirty-two: it removes the per-element box allocation and the generic numeric dispatch that the
 compiled defun pays, and on the interpreter it removes the whole tree-walking loop.
 
 | member | interpreter / JVM | wasm-GC |
@@ -127,6 +132,9 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | `outer` | lane loop over the row | whole destination groups when `m % lanes == 0`, else `_v_get`/`_v_set` |
 | `amax`/`amin`/`argmax`/`argmin`/`trace` | scalar loop | `_v_get` element loop |
 | `sqrt`/`abs`/`negative` (unary, todo 109) | lane loop | `gcMap1` lane loop (defun-mirroring forms) |
+| `maximum`/`minimum`, array with array | scalar select loop (perf-only choice; bits identical either way) | `gcMap2Select` gt/lt mask + bitselect lane loop, BOTH widths |
+| the same, array with a **double** scalar | scalar select loop | `gcBroadcastSelectF64` lane select (save/restore bracket kept: a select over padding can answer s) |
+| the same, array with a **single** scalar | scalar loop widened vs the full double | `_v_get`/`_v_set` element loop widened vs the full double |
 | `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/`sign` (unary, todo 109) | de-boxed scalar loop (the same `java.lang.Math` call) | `_v_get`/`_v_set` element loop emitting the defun's f64 sequence |
 | `transpose` | scalar loop | lanes x lanes register-block shuffles when BOTH dims are lane-aligned, else `_v_get`/`_v_set` |
 | `reshape` | `Arrays.copyOf` | whole lane-group copy |

@@ -569,6 +569,79 @@ class JvmSimdAccelCompilerTest {
 			.hasStackTraceContaining("share an element type");
 	}
 
+	// --- comparison-select ufuncs (todo 109 Phase 3) -----------------------------------
+
+	@Test
+	void comparisonSelectsMatchTheScalarReferenceAtBothSizesAndWidths() throws Exception {
+		// a ascends through zero and b is its mirror image, so the winner flips
+		// mid-vector; both sizes, both widths (all inputs integer-valued, exact at
+		// either width).
+		for (String op : new String[] { "maximum", "minimum" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference(
+						"(let ((a (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)))) (print (vec:%2$s a (vec:negative a))))"
+							.formatted(n, op));
+			}
+			assertMatchesScalarReference(
+					"(let ((a (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)))) (print (vec:%s a (vec:negative a))))"
+						.formatted(op));
+		}
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarReference(
+					"(print (vec:relu (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0))))".formatted(n));
+			assertMatchesScalarReference(
+					"(print (vec:clip (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)) -50.0 50.0))"
+						.formatted(n));
+		}
+		assertMatchesScalarReference(
+				"(print (vec:relu (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0))))");
+		// f32 clip bounds deliberately NOT f32-representable: the bridge compares the
+		// widened element against the full double bound, like the spliced defun.
+		assertMatchesScalarReference(
+				"(print (vec:clip (vec:sub (vec:arange 200 'single-float) (vec:scale (vec:ones 200 'single-float) 100.0)) -50.3 50.3))");
+	}
+
+	@Test
+	void comparisonSelectsFollowTheStrictComparisonNotMathMax() throws Exception {
+		// The second operand (or the bound) wins any false comparison: the -0.0/0.0
+		// tie and NaN -- unlike Math.max/Math.min. The bridge mirrors the defun.
+		assertMatchesScalarReference("(print (vec:maximum #d(-0.0 0.0) #d(0.0 -0.0)))");
+		assertThat(accel("(print (vec:maximum #d(-0.0) #d(0.0)))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (vec:maximum #d(0.0) #d(-0.0)))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (vec:minimum #d(0.0) #d(-0.0)))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (vec:maximum (vec:scale (vec:ones 1) (/ 0.0 0.0)) #d(7.0)))")).isEqualTo("#d(7.0)");
+		assertThat(accel("(print (vec:maximum #d(7.0) (vec:scale (vec:ones 1) (/ 0.0 0.0))))")).isEqualTo("#d(NaN)");
+		assertThat(accel("(print (vec:relu #d(-0.0)))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (vec:relu (vec:scale (vec:ones 1) (/ 0.0 0.0))))")).isEqualTo("#d(0.0)");
+		// clip: a NaN element becomes lo; inverted bounds (lo > hi) end at hi.
+		assertThat(accel("(print (vec:clip (vec:scale (vec:ones 1) (/ 0.0 0.0)) -1.0 1.0))")).isEqualTo("#d(-1.0)");
+		assertMatchesScalarReference("(print (vec:clip #d(0.0 3.0 -3.0) 2.0 1.0))");
+	}
+
+	@Test
+	void comparisonSelectIntoKernelsMatchTheirAllocatingSiblings() throws Exception {
+		assertThat(accel("(print (vec:maximum-into (vec:zeros 3) #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)))"))
+			.isEqualTo(scalar("(print (vec:maximum #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)))"));
+		assertThat(accel("(print (vec:minimum-into (vec:zeros 3 'single-float) #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"))
+			.isEqualTo(scalar("(print (vec:minimum #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"));
+		assertThat(accel("(print (vec:relu-into (vec:zeros 3) #d(-1.0 0.0 2.0)))"))
+			.isEqualTo(scalar("(print (vec:relu #d(-1.0 0.0 2.0)))"));
+		assertThat(accel("(print (vec:clip-into (vec:zeros 3) #d(-9.0 0.5 9.0) -1.0 1.0))"))
+			.isEqualTo(scalar("(print (vec:clip #d(-9.0 0.5 9.0) -1.0 1.0))"));
+		// -into returns the very destination and tolerates aliasing (the add-into
+		// rule); the guard comment lives in the bridge because it replaces the defun.
+		assertThat(accel("(let ((o (vec:zeros 2))) (print (eq o (vec:maximum-into o #d(1.0 2.0) #d(2.0 1.0)))))"))
+			.isEqualTo("t");
+		assertThat(accel("(let ((v #d(-9.0 9.0))) (vec:clip-into v v -1.0 1.0) (print v))")).isEqualTo("#d(-1.0 1.0)");
+	}
+
+	@Test
+	void theComparisonSelectBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		assertThat(embedsBridge(compile("(print (vec:maximum #d(1.0) #d(2.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:clip #d(1.0) 0.0 2.0))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:maximum #d(1.0) #d(2.0)))", false))).isFalse();
+	}
+
 	@Test
 	void theIntoBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
 		// Dead-flag proof: without this every numeric assertion above would still pass on

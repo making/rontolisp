@@ -203,10 +203,32 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int COSH_INTO = 46;
 
+	// The comparison-select ufuncs (todo 109 Phase 3): maximum / minimum are lane
+	// bitselects over a gt/lt mask (bit-identical at both widths -- a select only
+	// copies input bits), relu rides the U_RELU lane form, and clip is an element
+	// loop comparing the widened element against the two FULL f64 bounds (the
+	// array-vs-scalar rule).
+
+	static final int MAXIMUM = 47;
+
+	static final int MINIMUM = 48;
+
+	static final int RELU = 49;
+
+	static final int CLIP = 50;
+
+	static final int MAXIMUM_INTO = 51;
+
+	static final int MINIMUM_INTO = 52;
+
+	static final int RELU_INTO = 53;
+
+	static final int CLIP_INTO = 54;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 47;
+	static final int FUNC_COUNT = 55;
 
 	/**
 	 * Emits the type index of each function, in emission order (for the function
@@ -220,10 +242,13 @@ final class WasmVecSimdRuntimeBuilder {
 			case V_SET -> WasmLispCompiler.TYPE_V_SET;
 			// One eq param -> eq (sum + the unary ufuncs).
 			case SUM, EXP, LOG, TANH, SIN, COS, TAN, ASIN, ACOS, ATAN, SINH, COSH, SQRT, ABS, NEGATIVE, SIGN,
-					RECIPROCAL ->
+					RECIPROCAL, RELU ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE;
-			// Three eq params -> eq (the binary -into kernels).
-			case ADD_INTO, SUB_INTO, MUL_INTO, SCALE_INTO, MATVEC_INTO -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
+			// Three eq params -> eq (the binary -into kernels + clip's two bounds).
+			case ADD_INTO, SUB_INTO, MUL_INTO, SCALE_INTO, MATVEC_INTO, CLIP, MAXIMUM_INTO, MINIMUM_INTO ->
+				WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
+			// Four eq params -> eq (clip-into: out, v, lo, hi).
+			case CLIP_INTO -> WasmLispCompiler.TYPE_CALLABLE_BASE + 3;
 			// Two eq params -> eq (the binary kernels + the unary -into kernels).
 			default -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
 		};
@@ -279,6 +304,14 @@ final class WasmVecSimdRuntimeBuilder {
 			case ATAN_INTO -> buildUnaryElement(SCALAR_OP_ATAN, true, vecBase);
 			case SINH_INTO -> buildUnaryElement(SCALAR_OP_SINH, true, vecBase);
 			case COSH_INTO -> buildUnaryElement(SCALAR_OP_COSH, true, vecBase);
+			case MAXIMUM -> buildSelectElementwise(true, false, vecBase);
+			case MINIMUM -> buildSelectElementwise(false, false, vecBase);
+			case RELU -> buildUnaryLane(WasmVecLoops.U_RELU, false, vecBase);
+			case CLIP -> buildClip(false, vecBase);
+			case MAXIMUM_INTO -> buildSelectElementwise(true, true, vecBase);
+			case MINIMUM_INTO -> buildSelectElementwise(false, true, vecBase);
+			case RELU_INTO -> buildUnaryLane(WasmVecLoops.U_RELU, true, vecBase);
+			case CLIP_INTO -> buildClip(true, vecBase);
 			default -> throw new IllegalArgumentException("no vec: simd helper " + vecFunc);
 		};
 	}
@@ -482,6 +515,111 @@ final class WasmVecSimdRuntimeBuilder {
 		finish(w, into, count, vbD);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), 6, 0, 0, 2, 1, 3);
+	}
+
+	// --- comparison-select ufuncs (todo 109 Phase 3) --------------------------------
+
+	// (vec:maximum a b) / (vec:minimum a b) and their -into siblings: dst[i] =
+	// (if (> a[i] b[i]) a[i] b[i]) (or <), run whole lane groups at a time through
+	// WasmVecLoops.gcMap2Select -- a gt/lt lane mask + bitselect, never the IEEE lane
+	// min/max (the strict-comparison contract the vec.lisp defuns state; the SECOND
+	// operand wins any false comparison, NaN and the -0.0/0.0 tie included). Same
+	// shape, params and locals as buildElementwise.
+	private static byte[] buildSelectElementwise(boolean greater, boolean into, int vecBase) {
+		int params = into ? 3 : 2;
+		int a = into ? 1 : 0;
+		int bArg = into ? 2 : 1;
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
+		int old = params + 6, cur = params + 7; // v128
+		int vbD = params + 8;
+		int ga = params + 9, gb = params + 10, gd = params + 11;
+
+		loadHeader(w, a, count, kind, shift, ng);
+		requireSameKind(w, kind, bArg);
+		destination(w, into, count, kind, vbD, gd, vecBase);
+		farrayGroups(w, a, ga);
+		farrayGroups(w, bArg, gb);
+		WasmVecLoops.get(w, kind);
+		w.write(Instruction.IF, 0x40);
+		WasmVecLoops.gcMap2Select(w, gd, ga, gb, ng, g, count, rem, old, cur, true, greater);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.gcMap2Select(w, gd, ga, gb, ng, g, count, rem, old, cur, false, greater);
+		w.write(Instruction.END);
+		finish(w, into, count, vbD);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 6, 0, 0, 2, 1, 3);
+	}
+
+	// (vec:clip v lo hi) / (vec:clip-into out v lo hi): an element loop through
+	// _v_get / _v_set with the two bounds unboxed to raw f64 locals once. Each element
+	// runs the composition selects the vec.lisp lambda spells out -- t = (if (> x lo)
+	// x lo), then (if (< t hi) t hi) -- with both comparisons against the FULL double
+	// bounds at either width (the array-vs-scalar rule; splatting (f32) lo would not
+	// widen), so a NaN element becomes lo and inverted bounds end at hi, exactly like
+	// the defun.
+	//
+	// i32: count, kind, shift, ng, i. f64: lo, hi, t. eq: vbD, vbV, box.
+	private static byte[] buildClip(boolean into, int vecBase) {
+		int params = into ? 4 : 3;
+		int v = into ? 1 : 0;
+		int loArg = into ? 2 : 1;
+		int hiArg = into ? 3 : 2;
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, i = params + 4;
+		int lo = params + 5, hi = params + 6, t = params + 7; // f64
+		int vbD = params + 8, vbV = params + 9, box = params + 10; // (ref null eq)
+
+		loadHeader(w, v, count, kind, shift, ng);
+		WasmVecLoops.get(w, loArg);
+		unboxF64(w, box);
+		WasmVecLoops.set(w, lo);
+		WasmVecLoops.get(w, hiArg);
+		unboxF64(w, box);
+		WasmVecLoops.set(w, hi);
+		if (into) {
+			requireSameKind(w, kind, 0);
+			farrayField(w, 0, 1);
+			WasmVecLoops.set(w, vbD);
+		}
+		else {
+			WasmVecLoops.get(w, count);
+			WasmVecLoops.get(w, kind);
+			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			WasmVecLoops.set(w, vbD);
+		}
+		farrayField(w, v, 1);
+		WasmVecLoops.set(w, vbV);
+		WasmVecLoops.openIndexLoop(w, i, count);
+		WasmVecLoops.get(w, vbD);
+		WasmVecLoops.get(w, i);
+		WasmVecLoops.get(w, vbV);
+		WasmVecLoops.get(w, i);
+		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_GET);
+		WasmVecLoops.set(w, t);
+		// t = select(x, lo, x > lo)
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, lo);
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, lo);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.SELECT);
+		WasmVecLoops.set(w, t);
+		// select(t, hi, t < hi)
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, hi);
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, hi);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_SET);
+		w.write(Instruction.DROP);
+		WasmVecLoops.closeIndexLoop(w, i);
+		finish(w, into, count, vbD);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 5, 3, 0, 0, 3, 0);
 	}
 
 	// --- scale ---------------------------------------------------------------------

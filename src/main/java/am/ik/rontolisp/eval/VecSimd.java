@@ -111,7 +111,57 @@ public final class VecSimd {
 			throw mixedWidth(name);
 		});
 		installUnary(globalEnv);
+		installCompare(globalEnv);
 		installInto(globalEnv);
+	}
+
+	/**
+	 * The comparison-select ufuncs (todo 109 Phase 3): {@code maximum}/{@code minimum}/
+	 * {@code relu}/{@code clip} with their {@code -into} siblings. All are defined by the
+	 * strict comparison select the {@code vec.lisp} defuns spell out ({@code (if (>
+	 * x y) x y)} and its mirrors), never {@code Math.max}/{@code Math.min}, so the second
+	 * operand or the bound wins on any false comparison (ties and NaN included).
+	 */
+	private static void installCompare(Environment globalEnv) {
+		define(globalEnv, LispNames.VEC_MAXIMUM, VecSimdKernels::maximum, VecSimdKernels::maximumF);
+		define(globalEnv, LispNames.VEC_MINIMUM, VecSimdKernels::minimum, VecSimdKernels::minimumF);
+		defineUnary(globalEnv, LispNames.VEC_RELU, VecSimdKernels::reluInto, VecSimdKernels::reluIntoF);
+		defineFn(globalEnv, LispNames.VEC_CLIP, 3, (name, args) -> {
+			LispFloatArray v = array(name, args.get(0));
+			double lo = scalar(name, args.get(1));
+			double hi = scalar(name, args.get(2));
+			return switch (v) {
+				case LispDoubleFloatArray x -> {
+					double[] r = new double[x.data().length];
+					VecSimdKernels.clipInto(r, x.data(), lo, hi);
+					yield vector(r);
+				}
+				case LispSingleFloatArray x -> {
+					float[] r = new float[x.data().length];
+					VecSimdKernels.clipIntoF(r, x.data(), lo, hi);
+					yield vector(r);
+				}
+			};
+		});
+		defineInto(globalEnv, LispNames.VEC_MAXIMUM_INTO, VecSimdKernels::maximumInto, VecSimdKernels::maximumIntoF);
+		defineInto(globalEnv, LispNames.VEC_MINIMUM_INTO, VecSimdKernels::minimumInto, VecSimdKernels::minimumIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_RELU_INTO, VecSimdKernels::reluInto, VecSimdKernels::reluIntoF);
+		defineFn(globalEnv, LispNames.VEC_CLIP_INTO, 4, (name, args) -> {
+			LispFloatArray out = array(name, args.get(0));
+			LispFloatArray v = array(name, args.get(1));
+			double lo = scalar(name, args.get(2));
+			double hi = scalar(name, args.get(3));
+			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
+				VecSimdKernels.clipInto(r.data(), x.data(), lo, hi);
+			}
+			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
+				VecSimdKernels.clipIntoF(r.data(), x.data(), lo, hi);
+			}
+			else {
+				throw mixedWidth(name);
+			}
+			return args.get(0);
+		});
 	}
 
 	/**

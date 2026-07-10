@@ -81,7 +81,16 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_ABS_INTO, WasmVecSimdRuntimeBuilder.ABS_INTO),
 			Map.entry(LispNames.VEC_NEGATIVE_INTO, WasmVecSimdRuntimeBuilder.NEGATIVE_INTO),
 			Map.entry(LispNames.VEC_SIGN_INTO, WasmVecSimdRuntimeBuilder.SIGN_INTO),
-			Map.entry(LispNames.VEC_RECIPROCAL_INTO, WasmVecSimdRuntimeBuilder.RECIPROCAL_INTO));
+			Map.entry(LispNames.VEC_RECIPROCAL_INTO, WasmVecSimdRuntimeBuilder.RECIPROCAL_INTO),
+			// The comparison-select ufuncs (todo 109 Phase 3).
+			Map.entry(LispNames.VEC_MAXIMUM, WasmVecSimdRuntimeBuilder.MAXIMUM),
+			Map.entry(LispNames.VEC_MINIMUM, WasmVecSimdRuntimeBuilder.MINIMUM),
+			Map.entry(LispNames.VEC_RELU, WasmVecSimdRuntimeBuilder.RELU),
+			Map.entry(LispNames.VEC_CLIP, WasmVecSimdRuntimeBuilder.CLIP),
+			Map.entry(LispNames.VEC_MAXIMUM_INTO, WasmVecSimdRuntimeBuilder.MAXIMUM_INTO),
+			Map.entry(LispNames.VEC_MINIMUM_INTO, WasmVecSimdRuntimeBuilder.MINIMUM_INTO),
+			Map.entry(LispNames.VEC_RELU_INTO, WasmVecSimdRuntimeBuilder.RELU_INTO),
+			Map.entry(LispNames.VEC_CLIP_INTO, WasmVecSimdRuntimeBuilder.CLIP_INTO));
 
 	/** The argument count of each accelerated member's Lisp call form. */
 	private static int arity(String member) {
@@ -89,11 +98,13 @@ final class WasmVecSimdCompiler {
 			case LispNames.VEC_SUM, LispNames.VEC_EXP, LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIN,
 					LispNames.VEC_COS, LispNames.VEC_TAN, LispNames.VEC_ASIN, LispNames.VEC_ACOS, LispNames.VEC_ATAN,
 					LispNames.VEC_SINH, LispNames.VEC_COSH, LispNames.VEC_SQRT, LispNames.VEC_ABS,
-					LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL ->
+					LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL, LispNames.VEC_RELU ->
 				1;
 			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO,
-					LispNames.VEC_MATVEC_INTO ->
+					LispNames.VEC_MATVEC_INTO, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO,
+					LispNames.VEC_MINIMUM_INTO ->
 				3;
+			case LispNames.VEC_CLIP_INTO -> 4;
 			default -> 2;
 		};
 	}

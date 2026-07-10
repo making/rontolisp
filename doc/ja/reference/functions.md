@@ -339,6 +339,10 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:negative` | `(linalg:negative #(1 -2 3))` | `#d(-1.0 2.0 -3.0)`(要素ごとの符号反転) |
 | `linalg:sign` | `(linalg:sign #(-5 0 7))` | `#d(-1.0 0.0 1.0)`(要素ごとの符号) |
 | `linalg:reciprocal` | `(linalg:reciprocal #(2 4 8))` | `#d(0.5 0.25 0.125)`(要素ごとの `1 / x`、float で計算) |
+| `linalg:maximum` | `(linalg:maximum #(1 5 3) #(4 2 3))` | `#d(4.0 5.0 3.0)`(要素ごとに大きい方。どちらかの被演算子はスカラー可) |
+| `linalg:minimum` | `(linalg:minimum #(1 5 3) 4)` | `#d(1.0 4.0 3.0)`(要素ごとに小さい方。どちらかの被演算子はスカラー可) |
+| `linalg:clip` | `(linalg:clip #(-2 0 3) -1.0 1.0)` | `#d(-1.0 0.0 1.0)`(要素ごとの `min(max(x, lo), hi)`) |
+| `linalg:relu` | `(linalg:relu #(-2 0 3))` | `#d(0.0 0.0 3.0)`(要素ごとの `max(x, 0.0)`) |
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
 | `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |

@@ -306,6 +306,71 @@ final class WasmVecLoops {
 	}
 
 	/**
+	 * {@code dst[i] = (if (cmp a[i] b[i]) a[i] b[i])} over v128 lanes plus a scalar tail
+	 * (todo 109 Phase 3): the {@code --no-gc} lowering of {@code vec:maximum} /
+	 * {@code vec:minimum}, the select sibling of {@link #simdMap2}. bitselect over a
+	 * {@code gt} / {@code lt} lane mask, never the IEEE lane min/max -- the second
+	 * operand wins any false comparison (NaN and the -0.0/0.0 tie included), matching the
+	 * strict-comparison contract every other backend's defun states.
+	 */
+	static void simdMap2Select(WasmWriter w, int dp, int ap, int bp, int count, int rem, int trem, boolean single,
+			boolean greater) {
+		openSimdLoop(w, count, rem, single ? 2 : 1);
+		get(w, dp);
+		get(w, ap);
+		simdLoad(w);
+		get(w, bp);
+		simdLoad(w);
+		get(w, ap);
+		simdLoad(w);
+		get(w, bp);
+		simdLoad(w);
+		simd(w, laneCompare(single, greater));
+		simd(w, Instruction.V128_BITSELECT);
+		simdStore(w);
+		advancePtr(w, ap, 16);
+		advancePtr(w, bp, 16);
+		advancePtr(w, dp, 16);
+		closeLoop(w, rem);
+		if (single) {
+			openScalarTailLoop(w, count, trem, 3);
+			emitMap2SelectElement(w, dp, ap, bp, single, greater);
+			advancePtr(w, ap, 4);
+			advancePtr(w, bp, 4);
+			advancePtr(w, dp, 4);
+			closeLoop(w, trem);
+		}
+		else {
+			openOddTailGuard(w, count);
+			emitMap2SelectElement(w, dp, ap, bp, single, greater);
+			w.write(Instruction.END); // if
+		}
+	}
+
+	/** The one-element select body: {@code select(a[i], b[i], cmp(a[i], b[i]))}. */
+	private static void emitMap2SelectElement(WasmWriter w, int dp, int ap, int bp, boolean single, boolean greater) {
+		int loadOp = single ? Instruction.F32_LOAD : Instruction.F64_LOAD;
+		int storeOp = single ? Instruction.F32_STORE : Instruction.F64_STORE;
+		get(w, dp);
+		get(w, ap);
+		w.write(loadOp, 0x00, 0x00);
+		get(w, bp);
+		w.write(loadOp, 0x00, 0x00);
+		get(w, ap);
+		w.write(loadOp, 0x00, 0x00);
+		get(w, bp);
+		w.write(loadOp, 0x00, 0x00);
+		if (greater) {
+			w.write(single ? Instruction.F32_GT : Instruction.F64_GT);
+		}
+		else {
+			w.write(single ? Instruction.F32_LT : Instruction.F64_LT);
+		}
+		w.write(Instruction.SELECT);
+		w.write(storeOp, 0x00, 0x00);
+	}
+
+	/**
 	 * {@code dst[i] = v[i] * s} over v128 lanes plus a scalar tail. {@code sLocal} is an
 	 * f64 local; on the f32 path it is narrowed per use so the product is computed in
 	 * f32.
@@ -480,6 +545,17 @@ final class WasmVecLoops {
 				simd(w, single ? Instruction.F32X4_MUL : Instruction.F64X2_MUL);
 			}
 			case U_RECIP -> simd(w, single ? Instruction.F32X4_DIV : Instruction.F64X2_DIV);
+			case U_RELU -> {
+				// bitselect picks v where the mask (v > 0) is set, 0 elsewhere -- the
+				// (if (> x 0.0) x 0.0) select the other backends' defun states, never
+				// the IEEE lane max (a NaN lane becomes 0.0 here).
+				splatConstZero(w, single);
+				get(w, vp);
+				simdLoad(w);
+				splatConstZero(w, single);
+				simd(w, single ? Instruction.F32X4_GT : Instruction.F64X2_GT);
+				simd(w, Instruction.V128_BITSELECT);
+			}
 			default -> throw new IllegalArgumentException("no linear unary lane op " + uop);
 		}
 		simdStore(w);
@@ -534,9 +610,28 @@ final class WasmVecLoops {
 				w.write(single ? Instruction.F32_MUL : Instruction.F64_MUL);
 			}
 			case U_RECIP -> w.write(single ? Instruction.F32_DIV : Instruction.F64_DIV);
+			case U_RELU -> {
+				// select(x, 0, x > 0); the operand is reloaded for the comparison.
+				pushZero(w, single);
+				get(w, vp);
+				w.write(loadOp, 0x00, 0x00);
+				pushZero(w, single);
+				w.write(single ? Instruction.F32_GT : Instruction.F64_GT);
+				w.write(Instruction.SELECT);
+			}
 			default -> throw new IllegalArgumentException("no linear unary element op " + uop);
 		}
 		w.write(storeOp, 0x00, 0x00);
+	}
+
+	/** Pushes a scalar zero constant at the given width. */
+	private static void pushZero(WasmWriter w, boolean single) {
+		if (single) {
+			f32Const(w, 0.0f);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+		}
 	}
 
 	// --- scalar (v128-free) kernel bodies ----------------------------------------
@@ -553,6 +648,21 @@ final class WasmVecLoops {
 		int stride = stride(single);
 		openScalarCountLoop(w, count, rem);
 		emitMap2Element(w, dp, ap, bp, loadOp, storeOp, op);
+		advancePtr(w, ap, stride);
+		advancePtr(w, bp, stride);
+		advancePtr(w, dp, stride);
+		closeLoop(w, rem);
+	}
+
+	/**
+	 * {@code dst[i] = (if (cmp a[i] b[i]) a[i] b[i])} over a plain
+	 * one-element-per-iteration loop (the v128-free sibling of {@link #simdMap2Select}).
+	 */
+	static void scalarMap2Select(WasmWriter w, int dp, int ap, int bp, int count, int rem, boolean single,
+			boolean greater) {
+		int stride = stride(single);
+		openScalarCountLoop(w, count, rem);
+		emitMap2SelectElement(w, dp, ap, bp, single, greater);
 		advancePtr(w, ap, stride);
 		advancePtr(w, bp, stride);
 		advancePtr(w, dp, stride);
@@ -708,6 +818,16 @@ final class WasmVecLoops {
 
 	static final int U_ABS = 3;
 
+	/**
+	 * {@code (if (> x 0.0) x 0.0)} (todo 109 Phase 3): bitselect(v, 0, v > 0), the
+	 * strict-comparison select the {@code vec:relu} defun spells out -- never the IEEE
+	 * lane max, whose NaN handling differs (here a NaN or -0.0 lane becomes 0.0, the
+	 * false-comparison arm). The zero bound is exactly representable at both widths, so
+	 * the f32 lane compare equals the defun's widened compare and the lane form is
+	 * bit-identical, the same argument as U_ABS's {@code v < 0} mask.
+	 */
+	static final int U_RELU = 5;
+
 	/** {@code dst[g] = uop(v[g])} over whole lane groups (unary sibling of gcMap2). */
 	static void gcMap1(WasmWriter w, int gd, int gv, int ngroups, int g, int count, int rem, int old, int cur,
 			boolean single, int uop) {
@@ -741,11 +861,55 @@ final class WasmVecLoops {
 				simd(w, single ? Instruction.F32X4_LT : Instruction.F64X2_LT);
 				simd(w, Instruction.V128_BITSELECT);
 			}
+			case U_RELU -> {
+				// bitselect picks v where the mask (v > 0) is set, 0 elsewhere.
+				groupGet(w, gv, g);
+				splatConstZero(w, single);
+				groupGet(w, gv, g);
+				splatConstZero(w, single);
+				simd(w, single ? Instruction.F32X4_GT : Instruction.F64X2_GT);
+				simd(w, Instruction.V128_BITSELECT);
+			}
 			default -> throw new IllegalArgumentException("no unary lane op " + uop);
 		}
 		arraySet(w);
 		closeGroupLoop(w, g);
 		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, single);
+	}
+
+	/**
+	 * {@code dst[g] = (if (cmp a[g] b[g]) a[g] b[g])} over whole lane groups (todo 109
+	 * Phase 3): bitselect(a, b, a &gt; b) for {@code vec:maximum} ({@code greater}),
+	 * bitselect(a, b, a &lt; b) for {@code vec:minimum} -- the strict-comparison selects
+	 * the defuns spell out, never the IEEE lane min/max (whose NaN and -0.0 handling
+	 * differ; here the SECOND operand wins any false comparison). A select only copies
+	 * input bits and an f32 lane compare equals the defun's widened f64 compare, so both
+	 * widths are bit-identical to the scalar oracle. Padding lanes compute select(0, 0) =
+	 * 0; the save/restore bracket still guards a destination longer than the operands.
+	 */
+	static void gcMap2Select(WasmWriter w, int gd, int ga, int gb, int ngroups, int g, int count, int rem, int old,
+			int cur, boolean single, boolean greater) {
+		gcSaveLastGroup(w, gd, ngroups, count, rem, old, single);
+		openGroupLoop(w, ngroups, g);
+		get(w, gd);
+		get(w, g);
+		groupGet(w, ga, g);
+		groupGet(w, gb, g);
+		groupGet(w, ga, g);
+		groupGet(w, gb, g);
+		simd(w, laneCompare(single, greater));
+		simd(w, Instruction.V128_BITSELECT);
+		arraySet(w);
+		closeGroupLoop(w, g);
+		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, single);
+	}
+
+	/** The lane-mask comparison opcode for a select: {@code gt} or {@code lt}. */
+	private static int laneCompare(boolean single, boolean greater) {
+		if (greater) {
+			return single ? Instruction.F32X4_GT : Instruction.F64X2_GT;
+		}
+		return single ? Instruction.F32X4_LT : Instruction.F64X2_LT;
 	}
 
 	/** Pushes a zero lane group at the given width. */
@@ -897,6 +1061,45 @@ final class WasmVecLoops {
 			simd(w, Instruction.F64X2_SPLAT);
 		}
 		simd(w, f64x2Op);
+		arraySet(w);
+		closeGroupLoop(w, g);
+		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, false);
+	}
+
+	/**
+	 * {@code dst[i] = (if (cmp v[i] s) v[i] s)} -- or the {@code (cmp s v[i])} select
+	 * when {@code reversed} -- over whole {@code f64x2} lane groups: the {@code linalg:}
+	 * maximum/minimum scalar broadcasts (todo 109 Phase 3), the select sibling of
+	 * {@link #gcBroadcastF64}. DOUBLE WIDTH ONLY, like that one: the single-float kernels
+	 * walk elements widened through {@code _v_get} / {@code _v_set} so the comparison
+	 * sees the FULL double scalar. The save/restore bracket matters here too: a select
+	 * over the padding can answer {@code s} (select(0, s, 0 &gt; s)), so the
+	 * destination's padding lanes must be put back.
+	 */
+	static void gcBroadcastSelectF64(WasmWriter w, int gd, int gv, int ngroups, int g, int count, int rem, int old,
+			int cur, int sLocal, boolean greater, boolean reversed) {
+		gcSaveLastGroup(w, gd, ngroups, count, rem, old, false);
+		openGroupLoop(w, ngroups, g);
+		get(w, gd);
+		get(w, g);
+		if (reversed) {
+			get(w, sLocal);
+			simd(w, Instruction.F64X2_SPLAT);
+			groupGet(w, gv, g);
+			get(w, sLocal);
+			simd(w, Instruction.F64X2_SPLAT);
+			groupGet(w, gv, g);
+		}
+		else {
+			groupGet(w, gv, g);
+			get(w, sLocal);
+			simd(w, Instruction.F64X2_SPLAT);
+			groupGet(w, gv, g);
+			get(w, sLocal);
+			simd(w, Instruction.F64X2_SPLAT);
+		}
+		simd(w, laneCompare(false, greater));
+		simd(w, Instruction.V128_BITSELECT);
 		arraySet(w);
 		closeGroupLoop(w, g);
 		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, false);

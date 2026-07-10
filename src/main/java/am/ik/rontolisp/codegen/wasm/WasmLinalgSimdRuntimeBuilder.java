@@ -172,10 +172,21 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int COSH = 29;
 
+	// The comparison-select ufuncs (todo 109 Phase 3): the elementwise shape with the
+	// arithmetic lane op replaced by a gt/lt mask + bitselect (array-array and the f64
+	// scalar broadcast) or a scalar select (the widened f32-vs-scalar element loop).
+	// linalg:clip / linalg:relu need no kernel -- their spliced defuns compose
+	// linalg:maximum / linalg:minimum, which are intercepted (the square/reciprocal
+	// pattern).
+
+	static final int MAXIMUM = 30;
+
+	static final int MINIMUM = 31;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 30;
+	static final int FUNC_COUNT = 32;
 
 	/** The type index of each function, in emission order (for the function section). */
 	static int typeIndexOf(int fn) {
@@ -229,6 +240,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case ATAN -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_ATAN, vecBase);
 			case SINH -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_SINH, vecBase);
 			case COSH -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, vecBase);
+			case MAXIMUM -> buildSelectElementwise(true, vecBase);
+			case MINIMUM -> buildSelectElementwise(false, vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -326,6 +339,150 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, res);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), 9, 1, 0, 2, 7, 3);
+	}
+
+	// (linalg:maximum a b) / (linalg:minimum a b): the buildElementwise shapes with
+	// every arithmetic op replaced by the strict-comparison select the %la-bcast
+	// lambda spells out ((if (> x y) x y) / (if (< x y) x y); the SECOND operand wins
+	// any false comparison, NaN and the -0.0/0.0 tie included). Array-array runs
+	// gcMap2Select lane groups at both widths (a select only copies input bits, so
+	// f32 lanes are bit-identical); a #d-vs-scalar broadcast runs the
+	// gcBroadcastSelectF64 lane select; a #f-vs-scalar broadcast walks elements
+	// widened through _v_get / _v_set so the comparison sees the FULL f64 scalar.
+	// Same params and local layout as buildElementwise, plus one f64 temp (t) for the
+	// element select.
+	//
+	// params: 0 = a, 1 = b
+	// i32: count 2, kind 3, shift 4, ng 5, g 6, rem 7, ok 8, i 9, len 10
+	// f64: s 11, t 12
+	// v128: old 13, cur 14
+	// eq: res 15, vbD 16, vbA 17, da 18, db 19, nd 20, box 21
+	// $v128arr: ga 22, gb 23, gd 24
+	private static byte[] buildSelectElementwise(boolean greater, int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0, bArg = 1;
+		int count = 2, kind = 3, shift = 4, ng = 5, g = 6, rem = 7, ok = 8, i = 9, len = 10;
+		int s = 11, t = 12;
+		int old = 13, cur = 14;
+		int res = 15, vbD = 16, vbA = 17, da = 18, db = 19, nd = 20, box = 21;
+		int ga = 22, gb = 23, gd = 24;
+
+		block(w); // B0: the declined exit -- res stays null
+		block(w); // B1: a is not an farray
+		block(w); // B2: a and b are both farrays
+
+		// --- array (+) array ---
+		isFarray(w, a);
+		isFarray(w, bArg);
+		w.write(Instruction.I32_AND);
+		brIfFalse(w, 0); // not both -> B1
+		farrayKind(w, a);
+		set(w, kind);
+		get(w, kind);
+		farrayKind(w, bArg);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 2); // mixed widths -> decline
+		emitDimsEqual(w, a, bArg, da, db, len, i, ok);
+		get(w, ok);
+		brIfFalse(w, 2); // shape mismatch -> decline (the defun signals)
+		loadHeader(w, a, count, kind, shift, ng);
+		newVblock(w, count, kind, vbD, vecBase);
+		vblockGroups(w, vbD, gd);
+		farrayGroups(w, a, ga);
+		farrayGroups(w, bArg, gb);
+		get(w, kind);
+		w.write(Instruction.IF, 0x40);
+		WasmVecLoops.gcMap2Select(w, gd, ga, gb, ng, g, count, rem, old, cur, true, greater);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.gcMap2Select(w, gd, ga, gb, ng, g, count, rem, old, cur, false, greater);
+		w.write(Instruction.END);
+		copyDims(w, a, nd, len, i, da);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END); // B2
+
+		// --- array (+) scalar ---
+		isFarray(w, a);
+		brIfFalse(w, 0); // a is not an farray -> B0
+		isNumber(w, bArg);
+		brIfFalse(w, 1); // not a broadcastable number -> decline
+		get(w, bArg);
+		unboxF64(w, box);
+		set(w, s);
+		emitBroadcastSelect(w, a, count, kind, shift, ng, g, rem, i, s, t, old, cur, vbD, vbA, nd, len, da, ga, gd,
+				greater, false, vecBase);
+		set(w, res);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END); // B1
+
+		// --- scalar (+) array ---
+		isFarray(w, bArg);
+		brIfFalse(w, 0);
+		isNumber(w, a);
+		brIfFalse(w, 0);
+		get(w, a);
+		unboxF64(w, box);
+		set(w, s);
+		emitBroadcastSelect(w, bArg, count, kind, shift, ng, g, rem, i, s, t, old, cur, vbD, vbA, nd, len, da, ga, gd,
+				greater, true, vecBase);
+		set(w, res);
+		w.write(Instruction.END); // B0
+
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 9, 2, 0, 2, 7, 3);
+	}
+
+	/**
+	 * Leaves the broadcast select result {@code $farray} on the stack: the select sibling
+	 * of {@link #emitBroadcast}. The double path runs {@code gcBroadcastSelectF64} lane
+	 * groups; the single path walks elements through {@code _v_get} / {@code _v_set} and
+	 * selects between the widened element and the FULL f64 scalar ({@code tLocal} holds
+	 * the element across the comparison).
+	 */
+	private static void emitBroadcastSelect(WasmWriter w, int arr, int count, int kind, int shift, int ng, int g,
+			int rem, int i, int s, int tLocal, int old, int cur, int vbD, int vbA, int nd, int len, int da, int gv,
+			int gd, boolean greater, boolean reversed, int vecBase) {
+		loadHeader(w, arr, count, kind, shift, ng);
+		newVblock(w, count, kind, vbD, vecBase);
+		farrayField(w, arr, 1);
+		set(w, vbA);
+		get(w, kind);
+		w.write(Instruction.IF, 0x40);
+		// single-float: widen, compare against the full f64 scalar, narrow on store.
+		openCountLoop(w, i, count);
+		get(w, vbD);
+		get(w, i);
+		vget(w, vbA, i, vecBase);
+		set(w, tLocal);
+		if (reversed) {
+			// select(s, x, cmp(s, x))
+			get(w, s);
+			get(w, tLocal);
+			get(w, s);
+			get(w, tLocal);
+		}
+		else {
+			// select(x, s, cmp(x, s))
+			get(w, tLocal);
+			get(w, s);
+			get(w, tLocal);
+			get(w, s);
+		}
+		w.write(greater ? Instruction.F64_GT : Instruction.F64_LT);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		closeCountLoop(w, i);
+		w.write(Instruction.ELSE);
+		vblockGroups(w, vbD, gd);
+		farrayGroups(w, arr, gv);
+		WasmVecLoops.gcBroadcastSelectF64(w, gd, gv, ng, g, count, rem, old, cur, s, greater, reversed);
+		w.write(Instruction.END);
+		copyDims(w, arr, nd, len, i, da);
+		makeFarrayWithDims(w, nd, vbD);
 	}
 
 	/**

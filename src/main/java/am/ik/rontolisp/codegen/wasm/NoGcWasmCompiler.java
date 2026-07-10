@@ -2482,7 +2482,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO,
 			LispNames.VEC_TANH_INTO, LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO,
 			LispNames.VEC_ASIN_INTO, LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO,
-			LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO);
+			LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM,
+			LispNames.VEC_RELU, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO,
+			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
@@ -2561,8 +2563,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO,
 					LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO, LispNames.VEC_SIN_INTO,
 					LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO, LispNames.VEC_ACOS_INTO,
-					LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
-					LispNames.VEC_SIGN_INTO ->
+					LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO,
+					LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM, LispNames.VEC_RELU, LispNames.VEC_CLIP,
+					LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO, LispNames.VEC_RELU_INTO,
+					LispNames.VEC_CLIP_INTO ->
 				operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
@@ -2670,6 +2674,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, true, "vec:cosh-into");
 			case LispNames.VEC_SIGN_INTO ->
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIGN, true, "vec:sign-into");
+			// The comparison-select ufuncs (todo 109 Phase 3): the strict-comparison
+			// selects every other backend's defun states ((if (> x y) x y) and its
+			// mirrors), never the IEEE min/max instructions -- the second operand or the
+			// bound wins any false comparison (NaN and the -0.0/0.0 tie included), so
+			// this backend agrees with the cross-backend contract. relu rides the U_RELU
+			// map1 form (v128 under --simd, scalar loop otherwise); clip is an element
+			// loop comparing the widened element against the two FULL f64 bounds in both
+			// --simd modes, like exp.
+			case LispNames.VEC_MAXIMUM -> compileSimdSelectElementwise(args, fn, true, false, "vec:maximum");
+			case LispNames.VEC_MINIMUM -> compileSimdSelectElementwise(args, fn, false, false, "vec:minimum");
+			case LispNames.VEC_RELU -> compileSimdUnary(args, fn, WasmVecLoops.U_RELU, false, "vec:relu");
+			case LispNames.VEC_CLIP -> compileSimdClip(args, fn, false, "vec:clip");
+			case LispNames.VEC_MAXIMUM_INTO -> compileSimdSelectElementwise(args, fn, true, true, "vec:maximum-into");
+			case LispNames.VEC_MINIMUM_INTO -> compileSimdSelectElementwise(args, fn, false, true, "vec:minimum-into");
+			case LispNames.VEC_RELU_INTO -> compileSimdUnary(args, fn, WasmVecLoops.U_RELU, true, "vec:relu-into");
+			case LispNames.VEC_CLIP_INTO -> compileSimdClip(args, fn, true, "vec:clip-into");
 			case LispNames.VEC_SUM -> compileSimdSum(args, fn);
 			case LispNames.VEC_DOT -> compileSimdDot(args, fn);
 			// mean and norm are composites over sum/dot/length -- expand and recompile so
@@ -2886,6 +2906,105 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			WasmVecLoops.scalarMap1(w, dp, vp, count, rem, single, uop);
 		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return vecTy;
+	}
+
+	// (vec:maximum a b) / (vec:minimum a b) and their -into siblings (todo 109 Phase
+	// 3): dst[i] = (if (> a[i] b[i]) a[i] b[i]) (or <). Both widths are handled in one
+	// body -- a select only copies input bits and a native-width compare equals the
+	// widened compare, so the f32 path needs no separate widening shape. v128 gt/lt
+	// mask + bitselect under --simd, a scalar compare + select loop otherwise; the two
+	// lowerings compute identical results. The destination MAY alias an operand (the
+	// add-into rule).
+	private Ty compileSimdSelectElementwise(List<LispVal> args, Fn fn, boolean greater, boolean into, String what) {
+		requireArgc(args, into ? 4 : 3, what, fn);
+		Ty vecTy = packedVecType(args.get(1), fn);
+		boolean single = vecTy == Ty.F32VEC;
+		WasmWriter w = fn.writer;
+		// -into evaluates the destination first (it is argument 1), then the two
+		// operands; the plain kernel allocates the destination after sizing it from a.
+		int dstL = into ? compileVecArg(args.get(1), fn, vecTy) : -1;
+		int aL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
+		int bL = compileVecArg(args.get(into ? 3 : 2), fn, vecTy);
+		int count = loadVecCount(fn, aL);
+		int dst = into ? dstL : allocVec(fn, count, vecTy);
+		int ap = fn.allocLocal(Ty.F64VEC);
+		int bp = fn.allocLocal(Ty.F64VEC);
+		int dp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, aL, ap);
+		dataPtr(w, bL, bp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		if (this.simd) {
+			int trem = single ? fn.allocLocal(Ty.F64VEC) : -1;
+			WasmVecLoops.simdMap2Select(w, dp, ap, bp, count, rem, trem, single, greater);
+		}
+		else {
+			WasmVecLoops.scalarMap2Select(w, dp, ap, bp, count, rem, single, greater);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return vecTy;
+	}
+
+	// (vec:clip v lo hi) / (vec:clip-into out v lo hi) (todo 109 Phase 3): each element
+	// is widened to f64 and run through the composition selects the other backends'
+	// defun states -- t = (if (> x lo) x lo), then (if (< t hi) t hi) -- against the
+	// two FULL f64 bounds, then narrowed on store (the emap / array-vs-scalar rule; a
+	// narrowed f32 bound would not widen). BOTH --simd modes drive this same
+	// one-element-per-iteration loop, like exp. The destination MAY alias v.
+	private Ty compileSimdClip(List<LispVal> args, Fn fn, boolean into, String what) {
+		requireArgc(args, into ? 5 : 4, what, fn);
+		Ty vecTy = packedVecType(args.get(1), fn);
+		boolean single = vecTy == Ty.F32VEC;
+		WasmWriter w = fn.writer;
+		int dstL = into ? compileVecArg(args.get(1), fn, vecTy) : -1;
+		int vL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
+		int lo = fn.allocLocal(Ty.FLOAT);
+		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(lo);
+		int hi = fn.allocLocal(Ty.FLOAT);
+		compileCoerced(args.get(into ? 4 : 3), fn, Ty.FLOAT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(hi);
+		int count = loadVecCount(fn, vL);
+		int dst = into ? dstL : allocVec(fn, count, vecTy);
+		int vp = fn.allocLocal(Ty.F64VEC);
+		int dp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, vL, vp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		int t = fn.allocLocal(Ty.FLOAT);
+		int stride = single ? 4 : 8;
+		WasmVecLoops.openScalarCountLoop(w, count, rem);
+		WasmVecLoops.get(w, dp);
+		WasmVecLoops.get(w, vp);
+		w.write(single ? Instruction.F32_LOAD : Instruction.F64_LOAD, 0x00, 0x00);
+		if (single) {
+			w.write(Instruction.F64_PROMOTE_F32);
+		}
+		WasmVecLoops.set(w, t);
+		// t = select(x, lo, x > lo)
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, lo);
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, lo);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.SELECT);
+		WasmVecLoops.set(w, t);
+		// select(t, hi, t < hi)
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, hi);
+		WasmVecLoops.get(w, t);
+		WasmVecLoops.get(w, hi);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.SELECT);
+		if (single) {
+			w.write(Instruction.F32_DEMOTE_F64);
+		}
+		w.write(single ? Instruction.F32_STORE : Instruction.F64_STORE, 0x00, 0x00);
+		WasmVecLoops.advancePtr(w, vp, stride);
+		WasmVecLoops.advancePtr(w, dp, stride);
+		WasmVecLoops.closeLoop(w, rem);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		return vecTy;
 	}

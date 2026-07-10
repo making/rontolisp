@@ -417,6 +417,32 @@
   ;; Elementwise 1 / x (numpy np.reciprocal, float semantics).
   (linalg:div 1 a))
 
+;; --- comparison-select ufuncs (numpy parity, todo 109 Phase 3) ----------------
+;; Defined by the strict comparison select, NOT a min/max primitive: the second
+;; operand wins whenever the comparison is false -- ties (a -0.0 / 0.0 pair takes
+;; the second) and unordered NaN comparisons included. Same rule as linalg:amax;
+;; > and < agree bit-for-bit across backends since todo-108.
+
+(defun linalg:maximum (a b)
+  ;; Elementwise larger of a and b (numpy np.maximum); either may be a scalar.
+  (linalg::%la-bcast (lambda (x y) (if (> x y) x y)) a b))
+
+(defun linalg:minimum (a b)
+  ;; Elementwise smaller of a and b (numpy np.minimum); either may be a scalar.
+  (linalg::%la-bcast (lambda (x y) (if (< x y) x y)) a b))
+
+(defun linalg:clip (a lo hi)
+  ;; Elementwise min(max(x, lo), hi) with scalar bounds (numpy np.clip). The
+  ;; composition rides the maximum/minimum kernels under --simd (the
+  ;; square/reciprocal pattern); a NaN element becomes lo (the first select's
+  ;; comparison is false), and inverted bounds (lo > hi) end at hi.
+  (linalg:minimum (linalg:maximum a lo) hi))
+
+(defun linalg:relu (a)
+  ;; Elementwise max(x, 0.0): (linalg:maximum a 0.0), so a NaN or -0.0 element
+  ;; becomes 0.0. Rides the maximum kernel under --simd.
+  (linalg:maximum a 0.0))
+
 ;; --- products ----------------------------------------------------------------
 
 (defun linalg:dot (a b)

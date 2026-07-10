@@ -57,7 +57,11 @@ else the double default — through the `vec::%make` funnel, mirroring the linal
 `length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), the
 unary ufuncs `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/
 `sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (element-wise, fresh vector, numpy
-names -- todo 109; see "Element-wise unary ufuncs" below), `sum`/
+names -- todo 109; see "Element-wise unary ufuncs" below), the comparison selects
+`maximum`/`minimum` (binary), `relu` and `clip` (todo 109 Phase 3; strict `(if (> x y) x y)`
+mirrors -- the SECOND operand or the bound wins any false comparison, ties and NaN
+included, identically on every backend incl. `--no-gc`; clip = min(max(x, lo), hi)
+composition, so NaN -> lo and inverted bounds -> hi), `sum`/
 `dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
@@ -68,7 +72,8 @@ rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)`
 ## Destination-passing `-into` kernels (todo-103)
 
 Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/
-`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into` and `asin-into`..`cosh-into`; todo 109) —
+`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into` and `asin-into`..`cosh-into`; todo 109) and the comparison-select
+`maximum-into`/`minimum-into`/`relu-into`/`clip-into` (todo 109 Phase 3) —
 that writes into a caller-supplied destination (argument 1, CL's `map-into` order) and
 RETURNS that very value. A unary `-into` destination MAY alias the operand (element i
 depends only on element i, the add-into rule). Reductions have none (they never
@@ -119,6 +124,39 @@ not compile under `--no-gc` at all).
   4.31 GB and then traps (`memory.grow` fails, so the store goes out of bounds). This is the
   property the feature exists to buy; `NoGcWasmCompilerTest.intoKernelsCallTheBumpAllocator`
   `OnlyForTheConstructors` pins it structurally (2 `allocVec` sites vs 3).
+
+## Comparison-select ufuncs (todo 109 Phase 3)
+
+`maximum`/`minimum` (binary), `relu` (unary) and `clip` (unary + two scalar bounds), each
+with its `-into` sibling, in BOTH packages (linalg: `maximum`/`minimum` kernels only;
+`clip` = `(minimum (maximum a lo) hi)` and `relu` = `(maximum a 0.0)` compose them, the
+square/reciprocal transitive pattern). The oracle is the strict comparison select --
+`(if (> x y) x y)`, `(if (< x y) x y)`, relu `(if (> x 0.0) x 0.0)`, clip the min-max
+nesting -- NEVER an IEEE min/max primitive (Math.max propagates NaN from either side and
+orders -0.0 below 0.0; wasm f64x2.min/max propagate NaN too): the SECOND operand or the
+bound wins any false comparison, so `(vec:maximum #d(-0.0) #d(0.0))` is `#d(0.0)`,
+`maximum(x, NaN)` keeps the NaN, relu maps NaN/-0.0 to 0.0, clip sends a NaN element to
+lo and inverted bounds (lo > hi) to hi. Unlike the transcendentals this is
+CROSS-BACKEND-identical (todo-108 made `>`/`<` IEEE everywhere, and a select only copies
+input bits), so `--no-gc` matches the other three and ci-spec carries the -0.0 tie
+(`comparison-select-ufuncs-cross-backend-cases`). Kernel shapes: an f32 lane/native
+compare equals the defun's widened compare (widening is exact and order-preserving), so
+array-array selects lane-ize at BOTH widths -- interpreter/JVM keep plain scalar select
+loops (a select's bits cannot depend on lane grouping, so lane forms are perf-only; the
+JVM linalg lane blocks are gated `op <= OP_DIV`), wasm-GC runs
+`WasmVecLoops.gcMap2Select` (gt/lt mask + `v128.bitselect`; `F32X4_GT`/`F64X2_GT` joined
+`Instruction` + `WasmTreeShaker.skipSimd`), relu is the `U_RELU` gcMap1/simdMap1 lane
+form (the 0.0 bound is exact at f32, the U_ABS argument), and `--no-gc` uses
+`simdMap2Select` under `--simd` / `scalarMap2Select` (compare + core `select`) without.
+The scalar-vs-array shapes keep the established widen rule: linalg's f64-scalar
+broadcast lane-selects (`gcBroadcastSelectF64`, WITH the save/restore bracket -- a
+select over the padding can answer s), its f32-scalar broadcast walks `_v_get`/`_v_set`
+widened against the FULL double scalar, and clip compares widened elements against
+full-double bounds in an element loop everywhere (`buildClip` on wasm-GC,
+`compileSimdClip` on `--no-gc`, identical in both `--simd` modes like exp). vec
+FUNC_COUNT 47 -> 55 (MAXIMUM..CLIP_INTO; CLIP_INTO is the first
+`TYPE_CALLABLE_BASE + 3` four-param kernel), linalg 30 -> 32, `userFuncBase()` shift
+77 -> 87.
 
 ## Element-wise unary ufuncs (todo 109 Phases 1 and 2)
 
@@ -422,8 +460,9 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 ## Acceleration layer 3 — wasm-GC `--simd` native v128 over `(array (mut v128))` (todo-105)
 
-`--simd` on the DEFAULT `.wasm` backend routes the same forty-four kernels (the seven
-vectorizable ones, the sixteen todo-109 unary ufuncs, and their twenty-one `-into` siblings)
+`--simd` on the DEFAULT `.wasm` backend routes the same fifty-two kernels (the seven
+vectorizable ones, the sixteen todo-109 unary ufuncs, the four todo-109-Phase-3
+comparison selects, and their twenty-five `-into` siblings)
 to emitted v128 runtime helpers.
 
 The apparent blocker — "`v128.load`/`store` address LINEAR memory, so a packed array must
@@ -510,7 +549,7 @@ Mechanics:
 - **Call-site interception**: `WasmVecSimdCompiler.handles/compile` in `WasmExprCompiler.
   compileCons`, gated on `ctx.simd` — the exact shape of `JvmSimdCompiler`. `mean`/`norm` are
   accelerated transitively (their spliced bodies call `sum`/`dot`); `#'vec:dot` still names
-  the scalar defun, as on the JVM. Everything not in the forty-four keeps running `vec.lisp` over
+  the scalar defun, as on the JVM. Everything not in the fifty-two keeps running `vec.lisp` over
   the now-grouped surface (`square`/`square-into` are transitive through `mul`).
 - **The rest of the packed surface** branches on `ctx.simd` at compile time (one module, one
   repr): `WasmArrayCompiler.compilePackedMakeVblock`/`emitPackedReadF64Vblock`/

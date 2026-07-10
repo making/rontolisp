@@ -188,6 +188,132 @@ final class JvmSimdVectorTemplate {
 		return r;
 	}
 
+	// --- comparison-select ufuncs (todo 109 Phase 3) --------------------------------
+	// maximum / minimum / relu / clip mirror the vec.lisp comparison selects
+	// ((if (> x y) x y) and its mirrors), never Math.max / Math.min (different NaN /
+	// -0.0 handling: the select keeps the SECOND operand or the bound on any false
+	// comparison). A float compare equals the widened double compare and a select
+	// only copies input bits, so the f32 array-array loops compare natively; clip
+	// compares the widened element against the FULL double bounds and narrows the
+	// selected value once (the array-vs-scalar rule). Plain scalar loops: a select's
+	// bits do not depend on lane grouping, so a lane form would buy speed only.
+
+	static @Nullable Object simdMaximum(@Nullable Object a, @Nullable Object b) {
+		if (a instanceof float[] fx) {
+			return maximumF(fx, asFloat(b));
+		}
+		if (b instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		double[] r = newVec(n);
+		for (int i = 0; i < n; i++) {
+			r[2 + i] = x[ox + i] > y[oy + i] ? x[ox + i] : y[oy + i];
+		}
+		return r;
+	}
+
+	static @Nullable Object simdMinimum(@Nullable Object a, @Nullable Object b) {
+		if (a instanceof float[] fx) {
+			return minimumF(fx, asFloat(b));
+		}
+		if (b instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		double[] r = newVec(n);
+		for (int i = 0; i < n; i++) {
+			r[2 + i] = x[ox + i] < y[oy + i] ? x[ox + i] : y[oy + i];
+		}
+		return r;
+	}
+
+	private static float[] maximumF(float[] x, float[] y) {
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		float[] r = newVecF(n);
+		for (int i = 0; i < n; i++) {
+			r[2 + i] = x[ox + i] > y[oy + i] ? x[ox + i] : y[oy + i];
+		}
+		return r;
+	}
+
+	private static float[] minimumF(float[] x, float[] y) {
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		float[] r = newVecF(n);
+		for (int i = 0; i < n; i++) {
+			r[2 + i] = x[ox + i] < y[oy + i] ? x[ox + i] : y[oy + i];
+		}
+		return r;
+	}
+
+	static @Nullable Object simdClip(@Nullable Object v, @Nullable Object lo, @Nullable Object hi) {
+		double l = ((Number) java.util.Objects.requireNonNull(lo)).doubleValue();
+		double h = ((Number) java.util.Objects.requireNonNull(hi)).doubleValue();
+		if (v instanceof float[] fx) {
+			int o = 1 + (int) fx[0];
+			int n = fx.length - o;
+			float[] r = newVecF(n);
+			clipIntoF(r, 2, fx, o, n, l, h);
+			return r;
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(v);
+		int ox = 1 + (int) x[0];
+		int n = x.length - ox;
+		double[] r = newVec(n);
+		clipIntoD(r, 2, x, ox, n, l, h);
+		return r;
+	}
+
+	static @Nullable Object simdClipInto(@Nullable Object out, @Nullable Object v, @Nullable Object lo,
+			@Nullable Object hi) {
+		double l = ((Number) java.util.Objects.requireNonNull(lo)).doubleValue();
+		double h = ((Number) java.util.Objects.requireNonNull(hi)).doubleValue();
+		if (out instanceof float[] fr) {
+			float[] fx = asFloat(v);
+			int ox = 1 + (int) fx[0];
+			clipIntoF(fr, 1 + (int) fr[0], fx, ox, fx.length - ox, l, h);
+			return out;
+		}
+		if (v instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(v);
+		int ox = 1 + (int) x[0];
+		clipIntoD(r, 1 + (int) r[0], x, ox, x.length - ox, l, h);
+		return out;
+	}
+
+	// clip mirrors the composition semantics the vec.lisp lambda spells out:
+	// t = (if (> x lo) x lo), then (if (< t hi) t hi) -- so a NaN element becomes lo
+	// and inverted bounds (lo > hi) end at hi.
+	private static void clipIntoD(double[] r, int or, double[] x, int ox, int n, double lo, double hi) {
+		for (int i = 0; i < n; i++) {
+			double t = x[ox + i] > lo ? x[ox + i] : lo;
+			r[or + i] = t < hi ? t : hi;
+		}
+	}
+
+	private static void clipIntoF(float[] r, int or, float[] x, int ox, int n, double lo, double hi) {
+		for (int i = 0; i < n; i++) {
+			double xd = x[ox + i];
+			double t = xd > lo ? xd : lo;
+			r[or + i] = (float) (t < hi ? t : hi);
+		}
+	}
+
 	static @Nullable Object simdScale(@Nullable Object v, @Nullable Object s) {
 		if (v instanceof float[] fx) {
 			return scaleF(fx, ((Number) java.util.Objects.requireNonNull(s)).doubleValue());
@@ -434,6 +560,60 @@ final class JvmSimdVectorTemplate {
 		return out;
 	}
 
+	static @Nullable Object simdMaximumInto(@Nullable Object out, @Nullable Object a, @Nullable Object b) {
+		if (out instanceof float[] fr) {
+			float[] fx = asFloat(a);
+			float[] fy = asFloat(b);
+			int or = 1 + (int) fr[0];
+			int ox = 1 + (int) fx[0];
+			int oy = 1 + (int) fy[0];
+			int n = Math.min(fx.length - ox, fy.length - oy);
+			for (int i = 0; i < n; i++) {
+				fr[or + i] = fx[ox + i] > fy[oy + i] ? fx[ox + i] : fy[oy + i];
+			}
+			return out;
+		}
+		requireDouble(a, b);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		for (int i = 0; i < n; i++) {
+			r[or + i] = x[ox + i] > y[oy + i] ? x[ox + i] : y[oy + i];
+		}
+		return out;
+	}
+
+	static @Nullable Object simdMinimumInto(@Nullable Object out, @Nullable Object a, @Nullable Object b) {
+		if (out instanceof float[] fr) {
+			float[] fx = asFloat(a);
+			float[] fy = asFloat(b);
+			int or = 1 + (int) fr[0];
+			int ox = 1 + (int) fx[0];
+			int oy = 1 + (int) fy[0];
+			int n = Math.min(fx.length - ox, fy.length - oy);
+			for (int i = 0; i < n; i++) {
+				fr[or + i] = fx[ox + i] < fy[oy + i] ? fx[ox + i] : fy[oy + i];
+			}
+			return out;
+		}
+		requireDouble(a, b);
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(a);
+		double[] y = (double[]) java.util.Objects.requireNonNull(b);
+		int or = 1 + (int) r[0];
+		int ox = 1 + (int) x[0];
+		int oy = 1 + (int) y[0];
+		int n = Math.min(x.length - ox, y.length - oy);
+		for (int i = 0; i < n; i++) {
+			r[or + i] = x[ox + i] < y[oy + i] ? x[ox + i] : y[oy + i];
+		}
+		return out;
+	}
+
 	static @Nullable Object simdMatvecInto(@Nullable Object out, @Nullable Object w, @Nullable Object x) {
 		if (out == x || out == w) {
 			throw new IllegalArgumentException(
@@ -519,6 +699,12 @@ final class JvmSimdVectorTemplate {
 	private static final int UOP_SINH = 14;
 
 	private static final int UOP_COSH = 15;
+
+	/**
+	 * {@code (if (> x 0.0) x 0.0)}: the comparison select, not Math.max (todo 109 Phase
+	 * 3).
+	 */
+	private static final int UOP_RELU = 16;
 
 	static @Nullable Object simdExp(@Nullable Object v) {
 		return simdUnary(UOP_EXP, v);
@@ -646,6 +832,14 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdReciprocalInto(@Nullable Object out, @Nullable Object v) {
 		return simdUnaryInto(UOP_RECIP, out, v);
+	}
+
+	static @Nullable Object simdRelu(@Nullable Object v) {
+		return simdUnary(UOP_RELU, v);
+	}
+
+	static @Nullable Object simdReluInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_RELU, out, v);
 	}
 
 	private static @Nullable Object simdUnary(int op, @Nullable Object v) {
@@ -789,6 +983,9 @@ final class JvmSimdVectorTemplate {
 		if (op == UOP_SIGN) {
 			return Math.signum(x);
 		}
+		if (op == UOP_RELU) {
+			return x > 0.0 ? x : 0.0;
+		}
 		return 1.0 / x;
 	}
 
@@ -825,6 +1022,17 @@ final class JvmSimdVectorTemplate {
 
 	private static final int OP_DIV = 3;
 
+	// The comparison selects (todo 109 Phase 3): scalar loops only -- the lane blocks
+	// below are gated to op <= OP_DIV, and laApply mirrors the %la-bcast lambdas
+	// ((if (> x y) x y) / (if (< x y) x y)). NOT commutative on ties and NaN (the
+	// second operand wins on a false comparison), so the scalar-on-the-left shape must
+	// run laEwSD / laEwSF, never the array-scalar shortcut. linalg:clip / linalg:relu
+	// have no kernel: their spliced defuns compose linalg:maximum / linalg:minimum.
+
+	private static final int OP_MAX = 4;
+
+	private static final int OP_MIN = 5;
+
 	static @Nullable Object laAdd(@Nullable Object a, @Nullable Object b) {
 		return laElementwise(OP_ADD, a, b);
 	}
@@ -839,6 +1047,14 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laDiv(@Nullable Object a, @Nullable Object b) {
 		return laElementwise(OP_DIV, a, b);
+	}
+
+	static @Nullable Object laMaximum(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_MAX, a, b);
+	}
+
+	static @Nullable Object laMinimum(@Nullable Object a, @Nullable Object b) {
+		return laElementwise(OP_MIN, a, b);
 	}
 
 	// The named element-wise unary ufuncs (todo 109): the vec: unary loops at the
@@ -969,7 +1185,9 @@ final class JvmSimdVectorTemplate {
 		double[] r = laNewLike(x);
 		int or = ox;
 		int i = 0;
-		if (n >= THRESHOLD) {
+		// The lane block serves the four arithmetic ops only; OP_MAX / OP_MIN run the
+		// scalar select tail (laApply) over the whole range.
+		if (n >= THRESHOLD && op <= OP_DIV) {
 			int bound = SPECIES.loopBound(n);
 			if (op == OP_ADD) {
 				for (; i < bound; i += SPECIES.length()) {
@@ -1013,7 +1231,7 @@ final class JvmSimdVectorTemplate {
 		float[] r = laNewLikeF(x);
 		int or = ox;
 		int i = 0;
-		if (n >= THRESHOLD) {
+		if (n >= THRESHOLD && op <= OP_DIV) {
 			int bound = FSPECIES.loopBound(n);
 			if (op == OP_ADD) {
 				for (; i < bound; i += FSPECIES.length()) {
@@ -1055,7 +1273,7 @@ final class JvmSimdVectorTemplate {
 		int n = x.length - ox;
 		double[] r = laNewLike(x);
 		int i = 0;
-		if (n >= THRESHOLD) {
+		if (n >= THRESHOLD && op <= OP_DIV) {
 			int bound = SPECIES.loopBound(n);
 			if (op == OP_ADD) {
 				for (; i < bound; i += SPECIES.length()) {
@@ -1089,7 +1307,7 @@ final class JvmSimdVectorTemplate {
 		int n = y.length - oy;
 		double[] r = laNewLike(y);
 		int i = 0;
-		if (n >= THRESHOLD) {
+		if (n >= THRESHOLD && op <= OP_DIV) {
 			int bound = SPECIES.loopBound(n);
 			if (op == OP_SUB) {
 				for (; i < bound; i += SPECIES.length()) {
@@ -1148,6 +1366,12 @@ final class JvmSimdVectorTemplate {
 		}
 		if (op == OP_MUL) {
 			return a * b;
+		}
+		if (op == OP_MAX) {
+			return a > b ? a : b;
+		}
+		if (op == OP_MIN) {
+			return a < b ? a : b;
 		}
 		return a / b;
 	}

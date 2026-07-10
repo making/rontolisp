@@ -2204,6 +2204,34 @@ public final class LispNames {
 	public static final String LINALG_SIGN = "sign";
 
 	/**
+	 * {@code linalg:maximum}: element-wise larger of two operands (numpy
+	 * {@code np.maximum}); either operand may be a scalar. Defined by the strict
+	 * comparison {@code (if (> x y) x y)}, so the second operand wins whenever the first
+	 * is not strictly greater (ties, and unordered {@code NaN} comparisons).
+	 */
+	public static final String LINALG_MAXIMUM = "maximum";
+
+	/**
+	 * {@code linalg:minimum}: element-wise smaller of two operands (numpy
+	 * {@code np.minimum}); either operand may be a scalar. Defined by
+	 * {@code (if (< x y) x y)}, the mirror of {@link #LINALG_MAXIMUM}.
+	 */
+	public static final String LINALG_MINIMUM = "minimum";
+
+	/**
+	 * {@code linalg:clip}: element-wise {@code min(max(x, lo), hi)} (numpy
+	 * {@code np.clip} with scalar bounds), defined as the composition
+	 * {@code (linalg:minimum (linalg:maximum a lo) hi)}.
+	 */
+	public static final String LINALG_CLIP = "clip";
+
+	/**
+	 * {@code linalg:relu}: element-wise {@code max(x, 0.0)}, defined as
+	 * {@code (linalg:maximum a 0.0)}.
+	 */
+	public static final String LINALG_RELU = "relu";
+
+	/**
 	 * The {@code vec} package name: portable packed-{@code f64} vector kernels over the
 	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself
 	 * ({@code vec.lisp}, see {@code VecLibrary}) as the scalar reference / cross-backend
@@ -2366,6 +2394,26 @@ public final class LispNames {
 	/** {@code vec:reciprocal}: element-wise {@code 1 / x} into a fresh vector. */
 	public static final String VEC_RECIPROCAL = "reciprocal";
 
+	// The comparison-select ufuncs (todo 109 Phase 3). All are defined by the strict
+	// comparison the linalg: siblings state ((if (> x y) x y) and its mirrors), so the
+	// second operand / the bound wins whenever the comparison is false -- including
+	// unordered NaN comparisons.
+
+	/** {@code vec:maximum}: element-wise larger of two vectors into a fresh vector. */
+	public static final String VEC_MAXIMUM = "maximum";
+
+	/** {@code vec:minimum}: element-wise smaller of two vectors into a fresh vector. */
+	public static final String VEC_MINIMUM = "minimum";
+
+	/** {@code vec:relu}: element-wise {@code max(x, 0.0)} into a fresh vector. */
+	public static final String VEC_RELU = "relu";
+
+	/**
+	 * {@code vec:clip}: element-wise {@code min(max(x, lo), hi)} (scalar bounds) into a
+	 * fresh vector.
+	 */
+	public static final String VEC_CLIP = "clip";
+
 	/** {@code vec:exp-into}: element-wise {@code e^x} into {@code out}. */
 	public static final String VEC_EXP_INTO = "exp-into";
 
@@ -2416,6 +2464,20 @@ public final class LispNames {
 
 	/** {@code vec:reciprocal-into}: element-wise {@code 1 / x} into {@code out}. */
 	public static final String VEC_RECIPROCAL_INTO = "reciprocal-into";
+
+	/** {@code vec:maximum-into}: element-wise larger of two vectors into {@code out}. */
+	public static final String VEC_MAXIMUM_INTO = "maximum-into";
+
+	/** {@code vec:minimum-into}: element-wise smaller of two vectors into {@code out}. */
+	public static final String VEC_MINIMUM_INTO = "minimum-into";
+
+	/** {@code vec:relu-into}: element-wise {@code max(x, 0.0)} into {@code out}. */
+	public static final String VEC_RELU_INTO = "relu-into";
+
+	/**
+	 * {@code vec:clip-into}: element-wise {@code min(max(x, lo), hi)} into {@code out}.
+	 */
+	public static final String VEC_CLIP_INTO = "clip-into";
 
 	/**
 	 * {@code vec:aref} fully qualified: a {@code setf} place (writer {@code vec:aset}).

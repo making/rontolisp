@@ -479,6 +479,98 @@ final class VecSimdKernels {
 		}
 	}
 
+	// --- comparison-select ufuncs (todo 109 Phase 3) --------------------------------
+	// maximum / minimum / relu / clip mirror the vec.lisp comparison selects
+	// ((if (> x y) x y) and its mirrors), NOT Math.max / Math.min -- whose NaN and
+	// -0.0 handling differ (Math.max propagates a NaN from either side and orders
+	// -0.0 below 0.0, where the select keeps the SECOND operand on any false
+	// comparison). A float compare equals the widened double compare (widening is
+	// exact and order-preserving) and a select only copies input bits, so the f32
+	// loops compare natively and stay bit-identical to the widen-compute-narrow
+	// oracle; clip compares against the FULL double bounds (the array-vs-scalar
+	// rule), narrowing the selected value once. Plain scalar loops throughout: a
+	// select's bits do not depend on lane grouping, so lane forms would buy speed
+	// only, and the JIT vectorizes a branchless select fine.
+
+	static double[] maximum(double[] x, double[] y) {
+		double[] r = new double[Math.min(x.length, y.length)];
+		maximumInto(r, x, y);
+		return r;
+	}
+
+	static double[] minimum(double[] x, double[] y) {
+		double[] r = new double[Math.min(x.length, y.length)];
+		minimumInto(r, x, y);
+		return r;
+	}
+
+	static float[] maximumF(float[] x, float[] y) {
+		float[] r = new float[Math.min(x.length, y.length)];
+		maximumIntoF(r, x, y);
+		return r;
+	}
+
+	static float[] minimumF(float[] x, float[] y) {
+		float[] r = new float[Math.min(x.length, y.length)];
+		minimumIntoF(r, x, y);
+		return r;
+	}
+
+	static void maximumInto(double[] r, double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		for (int i = 0; i < n; i++) {
+			r[i] = x[i] > y[i] ? x[i] : y[i];
+		}
+	}
+
+	static void minimumInto(double[] r, double[] x, double[] y) {
+		int n = Math.min(x.length, y.length);
+		for (int i = 0; i < n; i++) {
+			r[i] = x[i] < y[i] ? x[i] : y[i];
+		}
+	}
+
+	static void maximumIntoF(float[] r, float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		for (int i = 0; i < n; i++) {
+			r[i] = x[i] > y[i] ? x[i] : y[i];
+		}
+	}
+
+	static void minimumIntoF(float[] r, float[] x, float[] y) {
+		int n = Math.min(x.length, y.length);
+		for (int i = 0; i < n; i++) {
+			r[i] = x[i] < y[i] ? x[i] : y[i];
+		}
+	}
+
+	static void reluInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = x[i] > 0.0 ? x[i] : 0.0;
+		}
+	}
+
+	static void reluIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = x[i] > 0.0f ? x[i] : 0.0f;
+		}
+	}
+
+	static void clipInto(double[] r, double[] x, double lo, double hi) {
+		for (int i = 0; i < x.length; i++) {
+			double t = x[i] > lo ? x[i] : lo;
+			r[i] = t < hi ? t : hi;
+		}
+	}
+
+	static void clipIntoF(float[] r, float[] x, double lo, double hi) {
+		for (int i = 0; i < x.length; i++) {
+			double xd = x[i];
+			double t = xd > lo ? xd : lo;
+			r[i] = (float) (t < hi ? t : hi);
+		}
+	}
+
 	// --- destination-passing kernels (write into r, allocate nothing) -------------
 	// The -into siblings (todo 103). Lane logic identical to the allocating kernels
 	// above, only the destination differs, so results stay bit-identical. r may alias x

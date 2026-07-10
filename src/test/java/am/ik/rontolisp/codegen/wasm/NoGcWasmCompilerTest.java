@@ -1025,6 +1025,58 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void comparisonSelectsLowerNativelyOnNoGc() {
+		// todo 109 Phase 3: vec:maximum / vec:minimum / vec:relu / vec:clip (and
+		// -into) are strict-comparison selects. Without --simd they are scalar
+		// compare+select loops -- the f64.gt/f64.lt + select pairs appear and no 0xFD
+		// SIMD opcode does; under --simd, maximum/minimum/relu become gt/lt lane masks
+		// + v128.bitselect. The probes avoid vec:sum (whose --simd lowering IS v128)
+		// so the 0xFD assertions are these ops' own.
+		String selects = """
+				(defun f (n)
+				  (let ((a (vec:ones n)) (b (vec:zeros n)) (o (vec:zeros n)))
+				    (vec:maximum-into o a b)
+				    (vec:minimum-into o o a)
+				    (vec:relu-into o o)
+				    (+ (vec:aref (vec:maximum a b) 0) (vec:aref (vec:minimum a b) 0) (vec:aref (vec:relu o) 0))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		byte[] scalarCode = Objects.requireNonNull(sections(compile(selects)).get(10));
+		assertThat(containsSequence(scalarCode, 0xFD)).as("no SIMD prefix in the default lowering").isFalse();
+		assertThat(containsSequence(scalarCode, 0x64, 0x1B)).as("f64.gt + select (maximum/relu)").isTrue();
+		assertThat(containsSequence(scalarCode, 0x63, 0x1B)).as("f64.lt + select (minimum)").isTrue();
+		byte[] simdCode = Objects.requireNonNull(sections(compileSimd(selects)).get(10));
+		assertThat(containsSequence(simdCode, 0xFD, 0x4A)).as("f64x2.gt lane mask under --simd").isTrue();
+		assertThat(containsSequence(simdCode, 0xFD, 0x49)).as("f64x2.lt lane mask under --simd").isTrue();
+		assertThat(containsSequence(simdCode, 0xFD, 0x52)).as("v128.bitselect under --simd").isTrue();
+		// clip drives the same widened scalar element loop in BOTH modes (like exp).
+		String clip = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:clip-into o v -1.0 1.0)
+				    (vec:aref (vec:clip o 0.0 2.0) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(clip) : compile(clip)).get(10));
+			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the clip lowering, simd=%s", simd).isFalse();
+			assertThat(containsSequence(code, 0x64, 0x1B)).as("clip's gt select, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, 0x63, 0x1B)).as("clip's lt select, simd=%s", simd).isTrue();
+		}
+		// -into writes into the caller's block: only the three constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((a (vec:ones n)) (b (vec:zeros n)) (o (vec:zeros n)))
+				    (vec:maximum-into o a b)
+				    (vec:minimum-into o o b)
+				    (vec:relu-into o o)
+				    (vec:clip-into o o -1.0 1.0)
+				    (vec:sum o)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("the comparison-select -into forms skip the bump allocator").isEqualTo(3);
+	}
+
+	@Test
 	void matvecIntoIsAClearCompileErrorLikeMatvec() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))

@@ -75,7 +75,11 @@ final class JvmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_ATAN, "laAtan"), Map.entry(LispNames.LINALG_SINH, "laSinh"),
 			Map.entry(LispNames.LINALG_COSH, "laCosh"), Map.entry(LispNames.LINALG_SQRT, "laSqrt"),
 			Map.entry(LispNames.LINALG_ABS, "laAbs"), Map.entry(LispNames.LINALG_NEGATIVE, "laNegative"),
-			Map.entry(LispNames.LINALG_SIGN, "laSign"));
+			Map.entry(LispNames.LINALG_SIGN, "laSign"),
+			// The comparison-select ufuncs (todo 109 Phase 3). linalg:clip / linalg:relu
+			// are not here: their spliced defuns compose linalg:maximum / linalg:minimum,
+			// so they are accelerated transitively, like square/reciprocal.
+			Map.entry(LispNames.LINALG_MAXIMUM, "laMaximum"), Map.entry(LispNames.LINALG_MINIMUM, "laMinimum"));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,

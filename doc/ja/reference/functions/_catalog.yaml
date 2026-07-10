@@ -348,6 +348,10 @@ categories:
       - { slug: linalg-negative, name: "linalg:negative" }
       - { slug: linalg-sign, name: "linalg:sign" }
       - { slug: linalg-reciprocal, name: "linalg:reciprocal" }
+      - { slug: linalg-maximum, name: "linalg:maximum" }
+      - { slug: linalg-minimum, name: "linalg:minimum" }
+      - { slug: linalg-clip, name: "linalg:clip" }
+      - { slug: linalg-relu, name: "linalg:relu" }
       - { slug: linalg-dot, name: "linalg:dot" }
       - { slug: linalg-matmul, name: "linalg:matmul" }
       - { slug: linalg-outer, name: "linalg:outer" }

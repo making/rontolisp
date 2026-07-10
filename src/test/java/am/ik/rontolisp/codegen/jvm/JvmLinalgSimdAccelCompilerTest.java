@@ -367,6 +367,67 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertThat(accel("(print (linalg:square 3))")).isEqualTo("9");
 	}
 
+	// --- comparison-select ufuncs (todo 109 Phase 3) -----------------------------------
+
+	@Test
+	void comparisonSelectsMatchTheScalarReferenceAtBothSizesWidthsAndShapes() throws Exception {
+		for (String op : new String[] { "maximum", "minimum" }) {
+			// a ascends through zero, its negation descends: the winner flips
+			// mid-array; both sizes, both widths, a rank-2 shape, and both broadcast
+			// sides (integer-valued inputs, exact at either width).
+			for (String n : new String[] { "8", "201" }) {
+				assertMatchesScalarReference(
+						"(let ((a (linalg:sub (linalg:arange 1 %1$s) 100.0))) (print (linalg:%2$s a (linalg:negative a))))"
+							.formatted(n, op));
+			}
+			assertMatchesScalarReference(
+					"(let ((a (linalg:arange 1 201 1 'single-float))) (print (linalg:%s a (linalg:negative a))))"
+						.formatted(op));
+			assertMatchesScalarReference(
+					"(print (linalg:%s (linalg:reshape (linalg:arange 12) '(3 4)) (linalg:negative (linalg:reshape (linalg:arange 12) '(3 4)))))"
+						.formatted(op));
+			assertMatchesScalarReference(
+					"(print (linalg:%s (linalg:sub (linalg:arange 1 201) 100.0) 3.0))".formatted(op));
+			assertMatchesScalarReference(
+					"(print (linalg:%s 3.0 (linalg:sub (linalg:arange 1 201) 100.0)))".formatted(op));
+			// The f32-vs-scalar broadcast compares the widened element against the
+			// FULL double scalar (an inexact bound), like the arithmetic broadcasts.
+			assertMatchesScalarReference(
+					"(print (linalg:%s (linalg:arange 1 201 1 'single-float) 100.3))".formatted(op));
+			assertMatchesScalarReference(
+					"(print (linalg:%s 100.3 (linalg:arange 1 201 1 'single-float)))".formatted(op));
+		}
+		// clip / relu ride the maximum/minimum call sites inside their own spliced
+		// defuns (the square/reciprocal pattern -- no laClip/laRelu bridge entry).
+		assertMatchesScalarReference("(print (linalg:clip (linalg:sub (linalg:arange 1 201) 100.0) -50.0 50.0))");
+		assertMatchesScalarReference("(print (linalg:relu (linalg:sub (linalg:arange 1 201) 100.0)))");
+		assertMatchesScalarReference(
+				"(print (linalg:relu (linalg:reshape (linalg:sub (linalg:arange 12) 6.0) '(3 4))))");
+	}
+
+	@Test
+	void comparisonSelectsFollowTheStrictComparisonNotMathMax() throws Exception {
+		// The second operand (or the bound) wins any false comparison: the -0.0/0.0
+		// tie and NaN -- the bridge mirrors the %la-bcast lambda, never Math.max.
+		assertMatchesScalarReference("(print (linalg:maximum #d(-0.0 0.0) #d(0.0 -0.0)))");
+		assertMatchesScalarReference("(print (linalg:minimum #d(-0.0 0.0) #d(0.0 -0.0)))");
+		assertThat(accel("(print (linalg:maximum #d(-0.0) #d(0.0)))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (linalg:maximum #d(0.0) #d(-0.0)))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (linalg:maximum #d(-0.0) 0.0))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (linalg:relu #d(-0.0)))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (linalg:clip (linalg:mul (linalg:ones 1) (/ 0.0 0.0)) -1.0 1.0))"))
+			.isEqualTo("#d(-1.0)");
+	}
+
+	@Test
+	void comparisonSelectsDeclineTheSameInputsAsTheArithmeticKernels() throws Exception {
+		assertThat(accel("(print (linalg:maximum #(1 5 3) #(4 2 3)))")).isEqualTo("#d(4.0 5.0 3.0)");
+		assertMatchesScalarReference("(print (linalg:minimum #d(1.0 5.0) #f(4.0 2.0)))");
+		assertThat(accel("(print (linalg:maximum 2 3))")).isEqualTo("3");
+		assertThatThrownBy(() -> accel("(print (linalg:maximum #d(1.0) #d(1.0 2.0)))"))
+			.hasStackTraceContaining("linalg: shape mismatch");
+	}
+
 	@Test
 	void theAcceleratedProgramStillInteroperatesWithThePackedArraySurface() throws Exception {
 		assertMatchesScalarReference("""

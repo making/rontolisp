@@ -44,6 +44,8 @@ Element-wise (a fresh vector): `vec:add`, `vec:sub`, `vec:mul` (Hadamard product
 
 Element-wise unary, under their numpy ufunc names (a fresh vector): `vec:exp`, `vec:log`, `vec:tanh`, `vec:sin`, `vec:cos`, `vec:tan`, `vec:asin`, `vec:acos`, `vec:atan`, `vec:sinh`, `vec:cosh`, `vec:sqrt`, `vec:abs`, `vec:square`, `vec:negative`, `vec:sign` and `vec:reciprocal` (`1 / x`). Each applies the backend's own scalar operation per element, so the transcendental members (`vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh`) on the WASM backends use their software approximations (whose low-order digits differ from the JVM's), and the `-0.0` edges of `vec:abs` / `vec:negative` / `vec:sign` / `vec:tanh` / `vec:sin` / `vec:tan` follow each backend's own scalar operation. On `--no-gc`, the transcendental members and `vec:sign` run the same software sequences as the other WASM backends, so all seventeen work everywhere.
 
+Comparison selects: `vec:maximum` / `vec:minimum` (the element-wise larger / smaller of two vectors), `vec:relu` (element-wise `max(x, 0.0)`) and `vec:clip` (element-wise `min(max(x, lo), hi)` with scalar bounds). All four are defined by the strict comparison select `(if (> x y) x y)` and its mirrors -- never an IEEE min/max primitive -- so the second operand (or the bound) wins whenever the comparison is false: a `-0.0` element against `0.0` takes the second, a `NaN` follows the same rule (`vec:relu` maps it to `0.0`, `vec:clip` to `lo`), and every backend agrees exactly, `--no-gc` included.
+
 Reductions (a scalar): `vec:sum`, `vec:dot`, `vec:mean` and `vec:norm` (the Euclidean norm, `sqrt` of the self-dot).
 
 ```lisp
@@ -112,6 +114,10 @@ Every kernel above that returns a vector returns a **fresh** one, so a loop over
 | `(vec:negative v)` | `(vec:negative-into out v)` |
 | `(vec:sign v)` | `(vec:sign-into out v)` |
 | `(vec:reciprocal v)` | `(vec:reciprocal-into out v)` |
+| `(vec:maximum a b)` | `(vec:maximum-into out a b)` |
+| `(vec:minimum a b)` | `(vec:minimum-into out a b)` |
+| `(vec:relu v)` | `(vec:relu-into out v)` |
+| `(vec:clip v lo hi)` | `(vec:clip-into out v lo hi)` |
 
 The reductions (`vec:sum`, `vec:dot`, `vec:mean`, `vec:norm`) return a scalar and never allocated, so they have no sibling.
 
@@ -132,7 +138,7 @@ This is what makes `--no-gc` usable for real numeric loops (see the memory table
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, the comparison selects `maximum` / `minimum` / `relu` / `clip`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 
@@ -148,7 +154,7 @@ Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wa
 
 There is another reason the JVM backend is hard to predict, and it has nothing to do with SIMD. A compiled Lisp numeric loop boxes every intermediate value -- one `Double` per array element read, per product, per running sum, plus a `Long` per loop counter -- so a scalar `vec:` kernel is bound by allocation and dispatch rather than by arithmetic. How much of that boxing a given JIT eliminates (through escape analysis and inlining) varies enormously between JVMs, so the very same scalar loop can be several times faster on one than on another. What `--simd` does here is sidestep the question: it replaces those kernels with primitive `double[]` / `float[]` loops that never box in the first place.
 - **wasm-GC `--simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float). A packed float array becomes an `(array (mut v128))` of lane groups -- still an ordinary GC object, still reclaimed by the engine's collector, so memory behaves exactly as it does on scalar wasm-GC. The whole `vec:` API (including `vec:matvec` and `vec:from-list` / `vec:to-list`) keeps working, and the results are unchanged. Composes with `--component` and `--optimize`. Run it with `wasmtime run -W gc` as usual -- wasmtime enables the SIMD proposal by default.
-- **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way; `vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh` / `vec:sign` have no vector instruction, so they run the same per-element loop in both modes.
+- **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way; `vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh` / `vec:sign` have no vector instruction, so they run the same per-element loop in both modes, as does `vec:clip` (its bounds are full doubles, so each element is compared widened); `vec:maximum` / `vec:minimum` / `vec:relu` vectorize as comparison-mask selects under `--simd` and fall back to scalar compare-and-select loops without it.
 
 On wasm-GC the speedup is large because `--simd` replaces two things at once: the boxing-heavy scalar `vec.lisp` defun *and* the one-element-at-a-time loop. A `vec:dot` over an 8192-element vector, 20000 iterations, runs in ~10.1 s scalar and ~0.10 s with `--simd` under `wasmtime run -W gc`.
 
@@ -160,10 +166,10 @@ Single-float reductions carry one more caveat. Under `--simd`, an `#f` reduction
 
 ## Accelerating linalg
 
-The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes twenty-five of its functions to the same kernels:
+The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes thirty-two of its functions to the same kernels:
 
-- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`, and the unary ufuncs `exp`, `log`, `tanh`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `sqrt`, `abs`, `negative`, `sign`
-- **accelerated with them**: `mean`, `matmul`, `flatten`, `solve`, `square` and `reciprocal`, each of which is written in terms of the functions above
+- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`, the unary ufuncs `exp`, `log`, `tanh`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `sqrt`, `abs`, `negative`, `sign`, and the comparison selects `maximum`, `minimum`
+- **accelerated with them**: `mean`, `matmul`, `flatten`, `solve`, `square`, `reciprocal`, `clip` and `relu`, each of which is written in terms of the functions above
 - **never accelerated**: `emap` (it applies an arbitrary function to each element), `det`, `inv`, `array-equal` and the constructors
 
 There is no separate flag and nothing to opt into per function: compile or run with `--simd` and the calls are routed, exactly as they are for `vec`.
@@ -177,7 +183,7 @@ Where `vec` insists on packed arrays of one width, `linalg` accepts far more: ge
 
 The precision rules above carry over, with one exception in linalg's favor:
 
-- **Element-wise operations are bit-identical** to the portable definitions at both widths -- `add` / `sub` / `mul` / `div`, whether against another array or against a scalar, and the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` -- and so are `transpose`, `reshape`, `outer`, `trace`, `amax`, `amin`, `argmax` and `argmin`.
+- **Element-wise operations are bit-identical** to the portable definitions at both widths -- `add` / `sub` / `mul` / `div`, whether against another array or against a scalar, the unary ufuncs `exp` / `log` / `tanh` / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` / `sinh` / `cosh` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal`, and the comparison selects `maximum` / `minimum` / `clip` / `relu` (a select only copies input bits, so it cannot round) -- and so are `transpose`, `reshape`, `outer`, `trace`, `amax`, `amin`, `argmax` and `argmin`.
 - **Reductions follow the `vec` rule**: `sum`, `mean`, `norm` and the vector and matrix-vector forms of `dot` sum in a different order, and over a single-float array they accumulate in single precision.
 - **The full matrix product is exempt.** `(linalg:dot A B)` and `linalg:matmul` over two matrices accumulate in double at both widths and stay bit-identical to the portable definition. The rule behind all three lines is the same one: an accumulator narrows to the lane element type only when the lanes *are* the axis being summed, and in a matrix product they run across the output row instead.
 

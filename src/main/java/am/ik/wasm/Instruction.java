@@ -720,6 +720,18 @@ public interface Instruction {
 	int F64X2_LT = 0x49;
 
 	/**
+	 * {@code f32x4.gt} (0xFD 0x44): lane-wise IEEE {@code >}, yielding an all-ones /
+	 * all-zeros lane mask.
+	 */
+	int F32X4_GT = 0x44;
+
+	/**
+	 * {@code f64x2.gt} (0xFD 0x4A): lane-wise IEEE {@code >}, yielding an all-ones /
+	 * all-zeros lane mask.
+	 */
+	int F64X2_GT = 0x4A;
+
+	/**
 	 * {@code v128.bitselect} (0xFD 0x52): {@code (a & c) | (b & ~c)} -- picks {@code a}'s
 	 * bits where the mask {@code c} is set, {@code b}'s elsewhere.
 	 */

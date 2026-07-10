@@ -194,6 +194,25 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSignInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_RECIPROCAL_INTO, cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("simdReciprocalInto"), cp.addUtf8(binaryDesc))));
+		// The comparison-select ufuncs (todo 109 Phase 3). vec:clip carries two scalar
+		// bounds, so its -into sibling is the one four-argument bridge entry.
+		String quaternaryDesc = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+		ops.put(LispNames.VEC_MAXIMUM,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMaximum"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_MINIMUM,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMinimum"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_RELU,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdRelu"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_CLIP,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdClip"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_MAXIMUM_INTO, cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("simdMaximumInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_MINIMUM_INTO, cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("simdMinimumInto"), cp.addUtf8(ternaryDesc))));
+		ops.put(LispNames.VEC_RELU_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdReluInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_CLIP_INTO, cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("simdClipInto"), cp.addUtf8(quaternaryDesc))));
 
 		// The linalg: kernels share the one bridge class (and so the one _simdInit and
 		// the
