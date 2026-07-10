@@ -800,6 +800,83 @@ class NoGcWasmCompilerTest {
 		assertThat(allocCallCount(compile(source))).as("only the two constructors allocate").isEqualTo(2);
 	}
 
+	// --- element-wise unary ufuncs (todo 109) ------------------------------------------
+
+	@Test
+	void unaryUfuncsEmitV128UnderSimdAndScalarLoopsByDefault() {
+		// sqrt/abs/square/negative/reciprocal (+ -into) lower to whole v128 groups under
+		// --simd (f64x2.sqrt 0xFD 0xEF among them) and to plain f64 loops by default (no
+		// 0xFD at all). exp / sign are rejected separately below.
+		String source = """
+				(defun go (n)
+				  (let ((o (vec:zeros n)) (v (vec:arange n)))
+				    (vec:sqrt-into o (vec:square v))
+				    (vec:negative-into o o)
+				    (vec:abs-into o o)
+				    (vec:reciprocal-into o (vec:add o (vec:ones n)))
+				    (+ (vec:sum o) (vec:sum (vec:sqrt (vec:abs (vec:negative (vec:reciprocal (vec:square v)))))))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] v128 = Objects.requireNonNull(sections(compileSimd(source)).get(10));
+		assertThat(containsSequence(v128, 0xFD, 0xEF)).as("f64x2.sqrt (0xFD 0xEF)").isTrue();
+		assertThat(containsSequence(v128, 0xFD, 0xEC)).as("f64x2.abs (0xFD 0xEC)").isTrue();
+		assertThat(containsSequence(v128, 0xFD, 0xED)).as("f64x2.neg (0xFD 0xED)").isTrue();
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0xFD)).as("no SIMD prefix in the scalar --no-gc unary lowering").isFalse();
+		assertThat(containsSequence(scalar, 0x9F)).as("f64.sqrt (0x9F)").isTrue();
+		assertThat(containsSequence(scalar, 0x99)).as("f64.abs (0x99)").isTrue();
+		assertThat(containsSequence(scalar, 0x9A)).as("f64.neg (0x9A)").isTrue();
+	}
+
+	@Test
+	void singleFloatUnaryUfuncsUseTheF32Opcodes() {
+		String source = """
+				(defun go (n)
+				  (let ((v (vec:arange n 'single-float)))
+				    (vec:sum (vec:sqrt (vec:abs (vec:negative v))))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0x91)).as("f32.sqrt (0x91)").isTrue();
+		assertThat(containsSequence(scalar, 0x8B)).as("f32.abs (0x8B)").isTrue();
+		assertThat(containsSequence(scalar, 0x8C)).as("f32.neg (0x8C)").isTrue();
+		byte[] v128 = Objects.requireNonNull(sections(compileSimd(source)).get(10));
+		assertThat(containsSequence(v128, 0xFD, 0xE3)).as("f32x4.sqrt (0xFD 0xE3)").isTrue();
+	}
+
+	@Test
+	void unaryIntoKernelsSkipTheBumpAllocator() {
+		String into = """
+				(defun f (n)
+				  (let ((o (vec:zeros n)) (a (vec:ones n)))
+				    (vec:sum (vec:sqrt-into o a))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		String alloc = into.replace("(vec:sqrt-into o a)", "(vec:sqrt a)");
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(allocCallCount(simd ? compileSimd(into) : compile(into))).as("vec:sqrt-into, simd=%s", simd)
+				.isEqualTo(2);
+			assertThat(allocCallCount(simd ? compileSimd(alloc) : compile(alloc))).as("vec:sqrt, simd=%s", simd)
+				.isEqualTo(3);
+		}
+	}
+
+	@Test
+	void expAndSignAreClearCompileErrorsOnNoGc() {
+		// Decision (b) of todo 109: the exp software approximation and the signum float
+		// path exist only on the GC backends, so vec:exp / vec:sign (and -into) are
+		// documented unavailability here, like vec:matvec / from-list.
+		for (String call : new String[] { "(vec:exp v)", "(vec:sign v)", "(vec:exp-into v v)",
+				"(vec:sign-into v v)" }) {
+			assertThatThrownBy(() -> compile("""
+					(defun f (n) (let ((v (vec:ones n))) (vec:sum %s)))
+					(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+					""".replace("%s", call))).as(call)
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("has no --no-gc lowering");
+		}
+	}
+
 	@Test
 	void matvecIntoIsAClearCompileErrorLikeMatvec() {
 		assertThatThrownBy(() -> compile("""

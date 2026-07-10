@@ -270,6 +270,73 @@ final class LinalgSimdKernels {
 		return r;
 	}
 
+	// --- element-wise unary ufuncs (todo 109) ----------------------------------------
+	// linalg:exp / sqrt / abs / negative / sign are named emaps, so their oracle is the
+	// emap rule: read widened to double, apply the operator, narrow on store. The loops
+	// are DELEGATED to VecSimdKernels' -into forms (one implementation per operation);
+	// linalg:square and linalg:reciprocal need no kernel at all -- their defuns call
+	// linalg:mul / linalg:div, which are already intercepted.
+
+	static double[] exp(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.expInto(r, x);
+		return r;
+	}
+
+	static float[] expF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.expIntoF(r, x);
+		return r;
+	}
+
+	static double[] sqrt(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.sqrtInto(r, x);
+		return r;
+	}
+
+	static float[] sqrtF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.sqrtIntoF(r, x);
+		return r;
+	}
+
+	static double[] abs(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.absInto(r, x);
+		return r;
+	}
+
+	static float[] absF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.absIntoF(r, x);
+		return r;
+	}
+
+	static double[] negative(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.negInto(r, x);
+		return r;
+	}
+
+	static float[] negativeF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.negIntoF(r, x);
+		return r;
+	}
+
+	static double[] sign(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.signInto(r, x);
+		return r;
+	}
+
+	static float[] signF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.signIntoF(r, x);
+		return r;
+	}
+
 	// --- reductions ----------------------------------------------------------------
 
 	static double sum(double[] x) {

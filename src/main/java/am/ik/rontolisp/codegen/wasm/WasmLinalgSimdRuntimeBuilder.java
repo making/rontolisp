@@ -129,16 +129,32 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int OUTER = 14;
 
+	// The element-wise unary ufuncs (todo 109): named emaps, so the kernels are the
+	// vec: unary loops with the linalg decline protocol and a copied rank-n dims.
+	// linalg:square / linalg:reciprocal need no kernel -- their spliced defuns call
+	// linalg:mul / linalg:div, which are already intercepted.
+
+	static final int EXP = 15;
+
+	static final int SQRT = 16;
+
+	static final int ABS = 17;
+
+	static final int NEGATIVE = 18;
+
+	static final int SIGN = 19;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 15;
+	static final int FUNC_COUNT = 20;
 
 	/** The type index of each function, in emission order (for the function section). */
 	static int typeIndexOf(int fn) {
 		return switch (fn) {
 			// One eq param -> eq.
-			case SUM, NORM, AMAX, AMIN, ARGMAX, ARGMIN, TRACE, TRANSPOSE -> WasmLispCompiler.TYPE_CALLABLE_BASE;
+			case SUM, NORM, AMAX, AMIN, ARGMAX, ARGMIN, TRACE, TRANSPOSE, EXP, SQRT, ABS, NEGATIVE, SIGN ->
+				WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Two eq params -> eq.
 			default -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
 		};
@@ -169,6 +185,11 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case RESHAPE -> buildReshape(vecBase);
 			case DOT -> buildDot(vecBase);
 			case OUTER -> buildOuter(vecBase);
+			case EXP -> buildUnary(-1, true, vecBase);
+			case SQRT -> buildUnary(WasmVecLoops.U_SQRT, false, vecBase);
+			case ABS -> buildUnary(WasmVecLoops.U_ABS, false, vecBase);
+			case NEGATIVE -> buildUnary(WasmVecLoops.U_NEG, false, vecBase);
+			case SIGN -> buildUnary(-1, false, vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -307,6 +328,76 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.END);
 		copyDims(w, arr, nd, len, i, da);
 		makeFarrayWithDims(w, nd, vbD);
+	}
+
+	// --- element-wise unary ufuncs (todo 109)
+	// --------------------------------------------
+
+	// (linalg:exp a) / (linalg:sqrt a) / (linalg:abs a) / (linalg:negative a) /
+	// (linalg:sign a): a named emap over one packed operand of either width and any rank
+	// (the flat store is rank-agnostic; the dims are copied into the result). Anything
+	// else -- a general boxed array, a plain number -- declines to the defun.
+	//
+	// laneUop >= 0 runs whole lane groups (WasmVecLoops.gcMap1: sqrt / abs / negative,
+	// each mirroring the wasm defun's own scalar semantics); laneUop < 0 walks elements
+	// through _v_get / _v_set with the defun's exact f64 sequence (isExp: the
+	// WasmExpCompiler Horner approximation, else WasmSignumCompiler's (x>0)-(x<0)).
+	//
+	// params: 0 = a
+	// i32: count 1, kind 2, shift 3, ng 4, g 5, rem 6, i 7, len 8
+	// f64: t 9, acc 10
+	// v128: old 11, cur 12
+	// eq: res 13, vbD 14, vbA 15, nd 16, da 17
+	// $v128arr: gv 18, gd 19
+	private static byte[] buildUnary(int laneUop, boolean isExp, int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int a = 0;
+		int count = 1, kind = 2, shift = 3, ng = 4, g = 5, rem = 6, i = 7, len = 8;
+		int t = 9, acc = 10;
+		int old = 11, cur = 12;
+		int res = 13, vbD = 14, vbA = 15, nd = 16, da = 17;
+		int gv = 18, gd = 19;
+
+		block(w); // B0: the declined exit -- res stays null
+		isFarray(w, a);
+		brIfFalse(w, 0);
+		loadHeader(w, a, count, kind, shift, ng);
+		newVblock(w, count, kind, vbD, vecBase);
+		if (laneUop >= 0) {
+			vblockGroups(w, vbD, gd);
+			farrayGroups(w, a, gv);
+			get(w, kind);
+			w.write(Instruction.IF, 0x40);
+			WasmVecLoops.gcMap1(w, gd, gv, ng, g, count, rem, old, cur, true, laneUop);
+			w.write(Instruction.ELSE);
+			WasmVecLoops.gcMap1(w, gd, gv, ng, g, count, rem, old, cur, false, laneUop);
+			w.write(Instruction.END);
+		}
+		else {
+			farrayField(w, a, 1);
+			set(w, vbA);
+			WasmVecLoops.openIndexLoop(w, i, count);
+			get(w, vbD);
+			get(w, i);
+			vget(w, vbA, i, vecBase);
+			if (isExp) {
+				WasmVecSimdRuntimeBuilder.emitExpF64(w, t, acc);
+			}
+			else {
+				WasmVecSimdRuntimeBuilder.emitSignumF64(w, t);
+			}
+			w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+			w.write(Instruction.DROP);
+			WasmVecLoops.closeIndexLoop(w, i);
+		}
+		copyDims(w, a, nd, len, i, da);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 8, 2, 0, 2, 5, 2);
 	}
 
 	// --- sum / norm --------------------------------------------------------------------

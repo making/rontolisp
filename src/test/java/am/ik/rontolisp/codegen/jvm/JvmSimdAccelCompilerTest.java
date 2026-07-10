@@ -69,6 +69,11 @@ class JvmSimdAccelCompilerTest {
 		return run(compile(lispCode, false));
 	}
 
+	/** Asserts the accelerated class prints exactly what the scalar one prints. */
+	private void assertMatchesScalarReference(String lispCode) throws Exception {
+		assertThat(accel(lispCode)).as(lispCode).isEqualTo(scalar(lispCode));
+	}
+
 	@Test
 	void acceleratedKernelsMatchTheScalarReferenceByteForByte() throws Exception {
 		// Small arrays (n < THRESHOLD) exercise the scalar tail of each kernel; the
@@ -468,6 +473,55 @@ class JvmSimdAccelCompilerTest {
 		assertThatThrownBy(() -> accel("(print (vec:add-into (vec:zeros 1 'single-float) #d(1.0) #d(1.0)))"))
 			.hasStackTraceContaining("share an element type");
 		assertThatThrownBy(() -> accel("(print (vec:scale-into (vec:zeros 1 'single-float) #d(1.0) 2.0))"))
+			.hasStackTraceContaining("share an element type");
+	}
+
+	// --- element-wise unary ufuncs (todo 109) -----------------------------------------
+
+	@Test
+	void unaryUfuncsMatchTheScalarReferenceAtBothSizesAndWidths() throws Exception {
+		for (String op : new String[] { "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			String inner = op.equals("sqrt") ? "(vec:add %v (vec:ones %n))"
+					: "(vec:sub %v (vec:scale (vec:ones %n) 100.0))";
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference("(print (vec:" + op + " "
+						+ inner.replace("%v", "(vec:arange " + n + ")").replace("%n", n) + "))");
+			}
+			assertMatchesScalarReference(
+					"(print (vec:" + op + " (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
+		}
+		// exp over reciprocal's (0, 1] range so the values stay bounded.
+		assertMatchesScalarReference(
+				"(print (round (* 1000000 (vec:sum (vec:exp (vec:reciprocal (vec:add (vec:arange 200) (vec:ones 200))))))))");
+		assertMatchesScalarReference("(print (vec:exp #d(0.0 1.0)))");
+	}
+
+	@Test
+	void unaryIntoKernelsWriteIntoTheDestinationAndReturnIt() throws Exception {
+		assertThat(accel("(let ((o (vec:zeros 3))) (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0)))) (print o))"))
+			.isEqualTo("t\n#d(2.0 3.0 4.0)");
+		// In-place update: out MAY alias the operand (the add-into rule).
+		assertMatchesScalarReference("""
+				(let ((v (vec:add (vec:arange 200) (vec:ones 200))))
+				  (vec:sqrt-into v v)
+				  (print v))
+				""");
+		assertMatchesScalarReference("""
+				(let ((v (vec:sub (vec:arange 7 'single-float) (vec:scale (vec:ones 7 'single-float) 3.0))))
+				  (vec:abs-into v v)
+				  (print v))
+				""");
+		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square" }) {
+			assertMatchesScalarReference(
+					"(print (vec:" + op + "-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
+		}
+	}
+
+	@Test
+	void mixedWidthUnaryIntoOperandsAreAHardErrorUnderTheSimdFlag() {
+		assertThatThrownBy(() -> accel("(print (vec:sqrt-into (vec:zeros 1) #f(1.0)))"))
+			.hasStackTraceContaining("share an element type");
+		assertThatThrownBy(() -> accel("(print (vec:abs-into (vec:zeros 1 'single-float) #d(1.0)))"))
 			.hasStackTraceContaining("share an element type");
 	}
 

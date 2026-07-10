@@ -775,6 +775,52 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void noGcRunsUnaryUfuncsUnderBothLowerings() throws Exception {
+		// The arithmetic unary ufuncs (todo 109): sqrt / abs / square / negative /
+		// reciprocal + -into, both widths, both lowerings (scalar loops by default,
+		// v128 under --simd), matching the interpreter oracle on exact inputs. exp /
+		// sign are compile errors here (NoGcWasmCompilerTest pins the message).
+		String doubles = """
+				(defun ufuncs (i)
+				  (let* ((v #d(-3.0 4.0 -5.0 12.0 -2.0))
+				         (s (vec:sqrt (vec:square v)))
+				         (a (vec:abs v))
+				         (n (vec:negative v))
+				         (r (vec:reciprocal #d(2.0 4.0 8.0 16.0 32.0))))
+				    (truncate (+ (vec:sum s) (vec:sum a) (vec:sum n) (* 32.0 (vec:sum r))))))
+				(defun intos (i)
+				  (let ((o (vec:zeros 5)) (v #d(-3.0 4.0 -5.0 12.0 -2.0)))
+				    (vec:square-into o v)
+				    (vec:sqrt-into o o)
+				    (vec:negative-into o o)
+				    (vec:abs-into o o)
+				    (truncate (aref o i))))
+				(rontolisp:wasm-export 'ufuncs :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'intos :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			// sum s = 26, sum |v| = 26, sum -v = -6, 32 * sum(1/2^k) = 31 -> 26+26-6+31 =
+			// 77
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "ufuncs", "0")).isEqualTo("77");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "intos", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "intos", "3")).isEqualTo("12");
+		}
+		String singles = """
+				(defun ufuncs (i)
+				  (let* ((v (vec:negative (vec:arange 6 'single-float)))
+				         (a (vec:abs v))
+				         (s (vec:sqrt (vec:square v)))
+				         (r (vec:reciprocal #f(2.0 4.0 8.0))))
+				    (truncate (+ (vec:sum a) (vec:sum s) (* 8.0 (vec:sum r))))))
+				(rontolisp:wasm-export 'ufuncs :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			// sum a = 15, sum s = 15, 8 * (1/2 + 1/4 + 1/8) = 7 -> 37
+			assertThat(compileNoGcAndInvoke(false, simd, singles, "ufuncs", "0")).isEqualTo("37");
+		}
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,
@@ -6103,6 +6149,50 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(compileAndRunVec(INTO_LONGER_DESTINATION, false));
 	}
 
+	// The element-wise unary ufuncs (todo 109): every op at lengths on both sides of a
+	// lane-group boundary, both widths (the signed operand is arange - 2, so the sign
+	// mix hits abs/negative/sign), exp over reciprocal's bounded (0, 1] range, the wasm
+	// defun's own signed-zero edges (0 - x negation, abs keeping -0.0, sign mapping
+	// -0.0 to 0.0 -- the kernels mirror THIS backend's defun, not java.lang.Math), and
+	// the -into siblings: destination identity, in-place aliasing (the add-into rule)
+	// and a destination longer than the operand keeping its tail elements.
+	private static final String UNARY_UFUNCS = """
+			(dolist (n '(1 4 5 8 200))
+			  (let ((v (vec:sub (vec:arange n) (vec:scale (vec:ones n) 2.0)))
+			        (f (vec:sub (vec:arange n 'single-float) (vec:scale (vec:ones n 'single-float) 2.0))))
+			    (print (list n (vec:abs v) (vec:negative v) (vec:sign v) (vec:square v)))
+			    (print (list (vec:abs f) (vec:negative f) (vec:sign f) (vec:square f)))
+			    (print (list (vec:sqrt (vec:square v)) (vec:sqrt (vec:square f))))
+			    (print (vec:reciprocal (vec:add (vec:arange n) (vec:ones n))))
+			    (print (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float))))
+			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n) (vec:ones n)))))
+			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float)))))))
+			(print (vec:negative #d(0.0 -0.0 1.5)))
+			(print (vec:abs #d(-0.0 0.0 -2.5)))
+			(print (vec:sign #d(-0.0 0.0 -3.5 3.5)))
+			(let ((o (vec:zeros 5)))
+			  (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0 25.0 36.0))))
+			  (print o)
+			  (print (vec:exp-into o o))
+			  (print (vec:negative-into o o))
+			  (print (vec:abs-into o o))
+			  (print (vec:sign-into o o))
+			  (print (vec:reciprocal-into o (vec:add (vec:arange 5) (vec:ones 5))))
+			  (print (vec:square-into o o)))
+			(let ((long (vec:scale (vec:ones 7) 9.0)))
+			  (print (vec:sqrt-into long #d(4.0 9.0 16.0)))
+			  (print (vec:reciprocal-into long #d(2.0 4.0)))
+			  (print long))
+			(let ((flong (vec:scale (vec:ones 6 'single-float) 9.0)))
+			  (print (vec:abs-into flong #f(-1.0 -2.0 -3.0)))
+			  (print flong))
+			""";
+
+	@Test
+	void wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath() throws Exception {
+		assertThat(compileAndRunVec(UNARY_UFUNCS, true)).isEqualTo(compileAndRunVec(UNARY_UFUNCS, false));
+	}
+
 	// Compiles and runs a vec: program without asserting success; returns the exit code.
 	private static int compileAndRunVecExitCode(String lispCode, boolean simd) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
@@ -6333,6 +6423,31 @@ class WasmLispCompilerIntegrationTest {
 		String source = "(print (linalg:sum (linalg:add (linalg:arange 200) (linalg:arange 200))))"
 				+ "(print (linalg:add #(1 2) #(3 4)))";
 		assertThat(compileAndRunLinalgSimdOptimized(source)).isEqualTo(compileAndRunVec(source, false));
+	}
+
+	@Test
+	void wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath() throws Exception {
+		// The named element-wise unary ufuncs (todo 109): both widths, rank 1 and rank 2,
+		// exp over reciprocal's bounded range, the wasm defun's own signed-zero edges,
+		// and the declined inputs (general boxed arrays, plain numbers) running the
+		// defun. square / reciprocal are accelerated transitively through mul / div.
+		assertLinalgMatchesTheScalarPath("(print (linalg:sqrt (linalg:reshape (linalg:arange 12) '(3 4))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:abs (linalg:sub (linalg:arange 7) 3)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:negative (linalg:reshape (linalg:arange 0 6 'single-float) '(2 3))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sign (linalg:sub (linalg:arange 0 9 'single-float) 4)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:square (linalg:sub (linalg:arange 5) 2)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:square (linalg:arange 0 5 'single-float)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:reciprocal (linalg:add (linalg:arange 6) 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1))))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 8 'single-float) 1))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:negative #d(0.0 -0.0 1.5)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:abs #d(-0.0 0.0 -2.5)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sign #d(-0.0 0.0 -3.5 3.5)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sqrt #(4 9)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:abs #(-1 2)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:square 3))");
 	}
 
 	/** {@code --simd --optimize} over the linalg library, run under wasm-GC. */

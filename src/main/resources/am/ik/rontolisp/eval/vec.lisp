@@ -108,6 +108,39 @@
     (dotimes (i (length v) out)
       (setf (aref out i) (* (aref v i) s)))))
 
+;; --- element-wise unary ufuncs (numpy parity, todo 109) -----------------------
+
+;; %vec-op applied element-wise over one vector -> a fresh vector of the same
+;; width. The element read widens f32 -> f64, the operator runs in f64, and the
+;; store narrows back -- the same emap rule the --simd kernels reproduce.
+(defun vec::%map1 (%vec-op %vec-v)
+  (let ((out (vec::%make-like %vec-v (length %vec-v))))
+    (dotimes (i (length %vec-v) out)
+      (setf (aref out i) (funcall %vec-op (aref %vec-v i))))))
+
+(defun vec:exp (v)
+  (vec::%map1 #'exp v))
+
+(defun vec:sqrt (v)
+  (vec::%map1 #'sqrt v))
+
+(defun vec:abs (v)
+  (vec::%map1 #'abs v))
+
+(defun vec:square (v)
+  ;; x * x is vec:mul with itself, so it rides the mul kernels under --simd.
+  (vec:mul v v))
+
+(defun vec:negative (v)
+  ;; (- x) is true negation (todo 108), so (vec:negative #d(0.0)) is #d(-0.0).
+  (vec::%map1 (lambda (x) (- x)) v))
+
+(defun vec:sign (v)
+  (vec::%map1 #'signum v))
+
+(defun vec:reciprocal (v)
+  (vec::%map1 (lambda (x) (/ 1.0 x)) v))
+
 ;; --- destination-passing kernels (write into out, allocate nothing) ----------
 
 ;; The allocating kernels above return a fresh vector, so a loop over them creates
@@ -140,6 +173,35 @@
 (defun vec:scale-into (out v s)
   (dotimes (i (length v) out)
     (setf (aref out i) (* (aref v i) s))))
+
+;; The unary -into siblings. out MAY alias v (element i depends only on element
+;; i, the add-into rule -- NOT the matvec-into one), so (vec:exp-into v v) is the
+;; intended in-place update. Same contract as the binary -into kernels: same
+;; width required, out at least as long, length unchecked.
+(defun vec::%map1-into (%vec-out %vec-op %vec-v)
+  (dotimes (i (length %vec-v) %vec-out)
+    (setf (aref %vec-out i) (funcall %vec-op (aref %vec-v i)))))
+
+(defun vec:exp-into (out v)
+  (vec::%map1-into out #'exp v))
+
+(defun vec:sqrt-into (out v)
+  (vec::%map1-into out #'sqrt v))
+
+(defun vec:abs-into (out v)
+  (vec::%map1-into out #'abs v))
+
+(defun vec:square-into (out v)
+  (vec:mul-into out v v))
+
+(defun vec:negative-into (out v)
+  (vec::%map1-into out (lambda (x) (- x)) v))
+
+(defun vec:sign-into (out v)
+  (vec::%map1-into out #'signum v))
+
+(defun vec:reciprocal-into (out v)
+  (vec::%map1-into out (lambda (x) (/ 1.0 x)) v))
 
 ;; --- reductions (return a scalar) --------------------------------------------
 

@@ -128,6 +128,32 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScaleInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_MATVEC_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvecInto"), cp.addUtf8(ternaryDesc))));
+		// The element-wise unary ufuncs (todo 109): one operand (unary), or a
+		// destination plus one operand (binary) for the -into siblings.
+		ops.put(LispNames.VEC_EXP,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdExp"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_SQRT,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSqrt"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_ABS,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAbs"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_NEGATIVE,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdNegative"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_SIGN,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSign"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_RECIPROCAL,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdReciprocal"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_EXP_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdExpInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_SQRT_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSqrtInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_ABS_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdAbsInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_NEGATIVE_INTO, cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("simdNegativeInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_SIGN_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSignInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_RECIPROCAL_INTO, cp.addMethodref(bridgeClass,
+				cp.addNameAndType(cp.addUtf8("simdReciprocalInto"), cp.addUtf8(binaryDesc))));
 
 		// The linalg: kernels share the one bridge class (and so the one _simdInit and
 		// the

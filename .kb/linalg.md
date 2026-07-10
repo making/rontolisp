@@ -2,7 +2,7 @@
 
 One hand-written Lisp-source library, `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`,
 following the `json.lisp` pattern (see `json.md`) so a single implementation
-runs identically on all backends. 33 exported functions (constructors `zeros`/
+runs identically on all backends. 40 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
 `add`/`sub`/`mul`/`div`/`emap`, products `dot`/`matmul`/`outer`, reductions,
 and floating-point Gaussian-elimination `det`/`inv`/`solve`) over the built-in
@@ -45,6 +45,7 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:transpose a)` | matrix transpose; a vector is returned unchanged |
 | `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise; a scalar operand on either side broadcasts; two arrays must have equal shapes; `mul` is Hadamard (NOT matrix product); results are packed double-float arrays |
 | `(linalg:emap f a)` | fresh array with f applied to every element |
+| `(linalg:exp a)` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` | named elementwise unary ufuncs (numpy parity, todo 109): `emap` of the obvious scalar op (`square` = `mul a a`, `reciprocal` = `div 1 a`); unlike `emap` they are `--simd`-interceptable |
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
 | `(linalg:matmul a b)` | matrix product (also mat.vec); rejects scalar operands |
 | `(linalg:outer u v)` | outer product (inputs flattened first) |
@@ -115,11 +116,12 @@ which is byte-identical on all four backends.
 
 ## `--simd` acceleration (`.todo/107`)
 
-Fifteen members -- `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin`
-`trace` `transpose` `reshape` `dot` `outer` -- are intercepted under `--simd` on the
-interpreter, the JVM and wasm-GC, reusing the `vec:` lane loops. `mean`/`matmul`/`flatten`/
-`solve` ride along through the `sum`/`dot`/`reshape` their bodies call. `emap`, `det`,
-`inv` and `array-equal` are never intercepted.
+Twenty members -- `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin`
+`trace` `transpose` `reshape` `dot` `outer` plus the unary ufuncs `exp` `sqrt` `abs`
+`negative` `sign` (todo 109) -- are intercepted under `--simd` on the interpreter, the
+JVM and wasm-GC, reusing the `vec:` lane loops. `mean`/`matmul`/`flatten`/`solve`/
+`square`/`reciprocal` ride along through the `sum`/`dot`/`reshape`/`mul`/`div` their
+bodies call. `emap`, `det`, `inv` and `array-equal` are never intercepted.
 
 **linalg.lisp stays the oracle and is never rewritten to suit a kernel.** Each kernel is a
 PARTIAL function: it returns null for an input it does not handle -- a general (boxed)

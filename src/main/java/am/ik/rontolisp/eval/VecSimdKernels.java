@@ -212,6 +212,151 @@ final class VecSimdKernels {
 		return r;
 	}
 
+	// --- element-wise unary ufuncs (todo 109) --------------------------------------
+	// Each writes op(x[i]) into r[i]; the allocating wrappers in VecSimd pass a fresh r,
+	// the -into ones the caller's (r MAY alias x -- element i depends only on element i,
+	// the add-into rule). sqrt / abs / neg / 1-over-x have lane forms bit-identical to
+	// the scalar defun (sqrt and div are correctly rounded, abs and neg exact, so the
+	// f32 widen-compute-narrow round trip is exact); exp and signum have NO bit-safe
+	// lane form (VectorOperators.EXP is not bit-identical to Math.exp), so they stay
+	// de-boxed scalar loops calling the same java.lang.Math the interpreter defun does.
+
+	static void expInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.exp(x[i]);
+		}
+	}
+
+	static void expIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.exp(x[i]);
+		}
+	}
+
+	static void sqrtInto(double[] r, double[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).lanewise(VectorOperators.SQRT).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = Math.sqrt(x[i]);
+		}
+	}
+
+	static void sqrtIntoF(float[] r, float[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).lanewise(VectorOperators.SQRT).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = (float) Math.sqrt(x[i]);
+		}
+	}
+
+	static void absInto(double[] r, double[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).abs().intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = Math.abs(x[i]);
+		}
+	}
+
+	static void absIntoF(float[] r, float[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).abs().intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = Math.abs(x[i]);
+		}
+	}
+
+	static void negInto(double[] r, double[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.fromArray(SPECIES, x, i).neg().intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = -x[i];
+		}
+	}
+
+	static void negIntoF(float[] r, float[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.fromArray(FSPECIES, x, i).neg().intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = -x[i];
+		}
+	}
+
+	static void signInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.signum(x[i]);
+		}
+	}
+
+	static void signIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.signum((double) x[i]);
+		}
+	}
+
+	static void reciprocalInto(double[] r, double[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector.broadcast(SPECIES, 1.0).div(DoubleVector.fromArray(SPECIES, x, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = 1.0 / x[i];
+		}
+	}
+
+	static void reciprocalIntoF(float[] r, float[] x) {
+		int n = x.length;
+		int i = 0;
+		if (n >= THRESHOLD) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector.broadcast(FSPECIES, 1.0f).div(FloatVector.fromArray(FSPECIES, x, i)).intoArray(r, i);
+			}
+		}
+		for (; i < n; i++) {
+			r[i] = 1.0f / x[i];
+		}
+	}
+
 	// --- destination-passing kernels (write into r, allocate nothing) -------------
 	// The -into siblings (todo 103). Lane logic identical to the allocating kernels
 	// above, only the destination differs, so results stay bit-identical. r may alias x

@@ -88,13 +88,16 @@ Two consequences worth remembering:
   both the kernel and the scalar defun, so the defun stays reachable wherever a kernel can
   decline.
 
-## The intercepted set (15 members)
+## The intercepted set (20 members)
 
 `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin` `trace` `transpose`
-`reshape` `dot` `outer`.
+`reshape` `dot` `outer`, plus the todo-109 unary ufuncs `exp` `sqrt` `abs` `negative`
+`sign` (named emaps; see the todo-109 section of `.kb/vec.md` for the per-backend lane
+vs element-loop decisions and the wasm defun-edge mirroring).
 
 Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
-`matmul` (calls `dot`), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`).
+`matmul` (calls `dot`), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
+`square` (calls `mul`), `reciprocal` (calls `div`).
 
 **Never** intercepted: `emap` (an arbitrary Lisp callback), `det` / `inv` / `solve`'s
 pivoting elimination (data-dependent pivots, sequential column dependency), `array-equal`
@@ -108,7 +111,7 @@ behavior as `vec:`, deliberately.
 ## What is vectorized, and what is merely de-boxed
 
 Not every member has a lane form worth writing. The interception is still worth it for all
-fifteen: it removes the per-element box allocation and the generic numeric dispatch that the
+twenty: it removes the per-element box allocation and the generic numeric dispatch that the
 compiled defun pays, and on the interpreter it removes the whole tree-walking loop.
 
 | member | interpreter / JVM | wasm-GC |
@@ -120,6 +123,8 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | `dot` (v.M), `dot` (M.M) | `ikj` lane loop over the output row | `ikj` lane loop: shuffle-window b rows into an f64 scratch row, `_v_set` write-out (see below) |
 | `outer` | lane loop over the row | whole destination groups when `m % lanes == 0`, else `_v_get`/`_v_set` |
 | `amax`/`amin`/`argmax`/`argmin`/`trace` | scalar loop | `_v_get` element loop |
+| `sqrt`/`abs`/`negative` (unary, todo 109) | lane loop | `gcMap1` lane loop (defun-mirroring forms) |
+| `exp`/`sign` (unary, todo 109) | de-boxed scalar loop (`Math.exp`/`Math.signum`) | `_v_get`/`_v_set` element loop emitting the defun's f64 sequence |
 | `transpose` | scalar loop | lanes x lanes register-block shuffles when BOTH dims are lane-aligned, else `_v_get`/`_v_set` |
 | `reshape` | `Arrays.copyOf` | whole lane-group copy |
 
@@ -260,7 +265,7 @@ the same incubator module.
 **One bridge class** (`JvmSimdVectorTemplate`), so one `_simdInit` and one
 `resource-config.json` entry -- adding a second template class would need its own entry, and
 the failure would be at RUN time, not build time. `JvmSimdRuntimeBuilder` registers the
-fifteen `la*` method refs under **package-prefixed keys** (`"linalg:add"`), because
+twenty `la*` method refs under **package-prefixed keys** (`"linalg:add"`), because
 `vec:add` and `linalg:add` share a member name.
 
 The compiled packed array carries an **in-array header** `[rank, dim..., data...]`,
@@ -282,8 +287,9 @@ call sites) -- exactly as any `vec:` program does. `(print (+ 1 2))` does not.
 
 ### wasm-GC
 
-Fifteen standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE + 15`,
-emitted only under `--simd`; `userFuncBase()` now shifts by 30. `WasmLispCompilerTest.simd
+Twenty standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE + 27`
+(the vec: block grew to 27 with the todo-109 unary kernels), emitted only under
+`--simd`; `userFuncBase()` now shifts by 47. `WasmLispCompilerTest.simd
 AppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks` pins the delta -- it is the
 only structural guard that a build WITHOUT `--simd` stays byte-identical to one that never
 knew the flag. **Update it, never weaken it.**

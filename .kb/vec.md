@@ -54,7 +54,9 @@ Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction; `zeros`/`o
 `arange` take an optional trailing `element-type` — a literal `'single-float` builds `#f`,
 else the double default — through the `vec::%make` funnel, mirroring the linalg constructors),
 `aref`/`aset`/
-`length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), `sum`/
+`length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), the
+unary ufuncs `exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (element-wise,
+fresh vector, numpy names -- todo 109; see "Element-wise unary ufuncs" below), `sum`/
 `dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
@@ -65,8 +67,10 @@ rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)`
 ## Destination-passing `-into` kernels (todo-103)
 
 Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/
-`scale-into`/`matvec-into` — that writes into a caller-supplied destination (argument 1,
-CL's `map-into` order) and RETURNS that very value. Reductions have none (they never
+`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (todo 109) —
+that writes into a caller-supplied destination (argument 1, CL's `map-into` order) and
+RETURNS that very value. A unary `-into` destination MAY alias the operand (element i
+depends only on element i, the add-into rule). Reductions have none (they never
 allocated).
 
 **Rationale, and exactly which backend leaks.** A packed array is a GC object on the
@@ -114,6 +118,48 @@ not compile under `--no-gc` at all).
   4.31 GB and then traps (`memory.grow` fails, so the store goes out of bounds). This is the
   property the feature exists to buy; `NoGcWasmCompilerTest.intoKernelsCallTheBumpAllocator`
   `OnlyForTheConstructors` pins it structurally (2 `allocVec` sites vs 3).
+
+## Element-wise unary ufuncs (todo 109 Phase 1)
+
+`exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (+ `-into` siblings) exist in
+BOTH packages under their numpy ufunc names. The design decisions, per backend:
+
+- **The oracle is each backend's OWN scalar defun** (the emap rule: read widened to f64,
+  apply the backend's scalar op, narrow on store). The scalar ops' edges already diverge
+  across backends -- interpreter/JVM use `Math.exp/sqrt/abs/signum` and true negation,
+  while wasm's variable-path `abs` is `x < 0 ? 0 - x : x` (keeps `-0.0`), its unary
+  minus is `0 - x` (`(- 0.0)` is `0.0`), its `signum` maps `-0.0`/NaN to `0.0`, and its
+  `exp` is the `WasmExpCompiler` software approximation (todo-108 residuals). So each
+  `--simd` kernel mirrors ITS backend's defun, per-backend bit-identity holds, and
+  cross-backend `-0.0`/NaN/exp-low-digit output stays out of ci-spec.
+- **Lane forms only where they equal the defun**: interpreter/JVM lane-ize sqrt (SQRT,
+  correctly rounded), abs (ABS), negative (NEG) and reciprocal (broadcast(1)/v); exp and
+  sign stay de-boxed scalar loops (`VectorOperators.EXP` is NOT bit-identical to
+  `Math.exp`). wasm-GC lane-izes sqrt (`f64x2/f32x4.sqrt`), negative (sub-from-splat-0),
+  reciprocal (div-from-splat-1) and abs (`bitselect(0 - v, v, v < 0)` -- NOT
+  `f64x2.abs`, which would map `-0.0` to `0.0` and diverge from the wasm defun); exp and
+  sign walk `_v_get`/`_v_set` element loops emitting the defun's exact f64 sequence
+  (`WasmExpCompiler`'s constants are package-private for that). All f32 lane forms are
+  exact by the `53 >= 2*24+2` bound or correct rounding, so `#f` results equal the
+  widen-compute-narrow defun bit-for-bit.
+- **`square` and `reciprocal` ride existing kernels where a defun exists**: `vec:square`
+  = `(vec:mul v v)`, `linalg:square` = `(linalg:mul a a)`, `linalg:reciprocal` =
+  `(linalg:div 1 a)` -- accelerated transitively, never intercepted (the interception
+  guards pin `#'vec:square` as `#<lambda>`). `vec:reciprocal` has its own kernel (vec:
+  has no div).
+- **`--no-gc` (decision b)**: the five arithmetic ufuncs (+`-into`) lower natively --
+  `WasmVecLoops.simdMap1`/`scalarMap1` over the linear block, native IEEE `f64.abs`/
+  `f64.neg` semantics since there is no defun to mirror there -- while `vec:exp` /
+  `vec:sign` are clear compile errors (`SIMD_NO_SCALAR_IMPL_NO_GC`: no exp/signum
+  lowering on the scalar backend), the `vec:matvec`/`from-list` precedent.
+- New v128 opcodes for all this (`f32x4/f64x2.sqrt/abs/neg/lt`, `v128.bitselect`) are in
+  `am.ik.wasm.Instruction` AND `WasmTreeShaker.skipSimd` (which throws on unknown 0xFD).
+
+Pinned by the unary-ufunc test blocks in `eval/VecSimdTest`, `eval/LinalgSimdTest`,
+`JvmSimdAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `NoGcWasmCompilerTest` and
+`WasmLispCompilerIntegrationTest` (`wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath`,
+`wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath`,
+`noGcRunsUnaryUfuncsUnderBothLowerings`).
 
 ## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
 
@@ -243,7 +289,9 @@ ALWAYS emitted v128 and `--simd` was silently JVM-only — this is the behaviora
 `[count][data]` block layout is byte-identical either way, so the two compute the same
 result over the same memory (element-wise bit-for-bit; reductions modulo summation order —
 tests use exact inputs). The four vectorizable kernels (`compileSimdElementwise`/`Scale`/
-`Sum`/`Dot`) early-return to a `compileScalar*` seam when `this.simd` is false; the v128
+`Sum`/`Dot`) early-return to a `compileScalar*` seam when `this.simd` is false, and the
+todo-109 arithmetic unary ufuncs (`compileSimdUnary` over `WasmVecLoops.simdMap1`/
+`scalarMap1`) branch the same way; the v128
 code is left untouched (so `--no-gc --simd` output is byte-identical to the pre-todo-100
 `--no-gc` output). `isSimdCall(name)` (a `"vec:"` prefix test) dispatches in all three
 passes: `collectCalls` (eligibility: `requireKnownSimd` + walk-args), `typeOf`/`typeOfSimd`
@@ -311,8 +359,9 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 ## Acceleration layer 3 — wasm-GC `--simd` native v128 over `(array (mut v128))` (todo-105)
 
-`--simd` on the DEFAULT `.wasm` backend routes the same twelve kernels (the seven
-vectorizable ones plus the five `-into` siblings) to emitted v128 runtime helpers.
+`--simd` on the DEFAULT `.wasm` backend routes the same twenty-four kernels (the seven
+vectorizable ones, the six todo-109 unary ufuncs, and their eleven `-into` siblings) to
+emitted v128 runtime helpers.
 
 The apparent blocker — "`v128.load`/`store` address LINEAR memory, so a packed array must
 leave the GC heap" — is false, and todo-101 shipped on it before todo-105 corrected it. The
@@ -390,7 +439,7 @@ Mechanics:
   three of which reject both. (todo-101 guarded only `x`; an adversarial review of todo-105 caught
   it. Pinned by `wasmGcSimdMatvecIntoRejectsADestinationAliasingEitherOperand`.)
 - **Function indices**: `FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1`, then `_v_new`/`_v_get`/
-  `_v_set` + `_vec_add`..`_vec_matvec_into` (`FUNC_COUNT` = 15). Emitted ONLY under `--simd`,
+  `_v_set` + `_vec_add`..`_vec_reciprocal_into` (`FUNC_COUNT` = 27). Emitted ONLY under `--simd`,
   so `FUNC_USER_BASE` becomes dynamic (`WasmLispCompiler.userFuncBase()`, threaded via
   `Ctx.userFuncBase` into `WasmLambdaCompiler` and `WasmRuntimeBuilder.buildDispatchBody` —
   the only three readers). Every fixed `FUNC_*` below it keeps its value, and a
@@ -398,8 +447,8 @@ Mechanics:
 - **Call-site interception**: `WasmVecSimdCompiler.handles/compile` in `WasmExprCompiler.
   compileCons`, gated on `ctx.simd` — the exact shape of `JvmSimdCompiler`. `mean`/`norm` are
   accelerated transitively (their spliced bodies call `sum`/`dot`); `#'vec:dot` still names
-  the scalar defun, as on the JVM. Everything not in the twelve keeps running `vec.lisp` over
-  the now-grouped surface.
+  the scalar defun, as on the JVM. Everything not in the twenty-four keeps running `vec.lisp` over
+  the now-grouped surface (`square`/`square-into` are transitive through `mul`).
 - **The rest of the packed surface** branches on `ctx.simd` at compile time (one module, one
   repr): `WasmArrayCompiler.compilePackedMakeVblock`/`emitPackedReadF64Vblock`/
   `emitPackedWriteF64Vblock`/`compileElementType`, `WasmQuoteCompiler`'s `#d`/`#f` literals

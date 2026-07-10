@@ -28,14 +28,17 @@ import am.ik.wasm.Instruction;
  */
 final class WasmExpCompiler {
 
-	// Argument reduction: exp(x) = (exp(x / 2^SQUARINGS))^(2^SQUARINGS).
-	private static final int SQUARINGS = 8;
+	// Argument reduction: exp(x) = (exp(x / 2^SQUARINGS))^(2^SQUARINGS). Package-private
+	// so the --simd unary kernels (WasmVecSimdRuntimeBuilder) reproduce the SAME
+	// approximation on raw f64 locals -- bit-identity to this defun path by shared
+	// constants and operation order.
+	static final int SQUARINGS = 8;
 
-	private static final double INV_SCALE = 1.0 / (1 << SQUARINGS); // 1/256
+	static final double INV_SCALE = 1.0 / (1 << SQUARINGS); // 1/256
 
 	// Taylor coefficients of exp around 0, from the highest degree down (Horner order):
 	// 1/120, 1/24, 1/6, 1/2, 1, 1.
-	private static final double[] HORNER_COEFFS = { 1.0 / 120.0, 1.0 / 24.0, 1.0 / 6.0, 0.5, 1.0, 1.0 };
+	static final double[] HORNER_COEFFS = { 1.0 / 120.0, 1.0 / 24.0, 1.0 / 6.0, 0.5, 1.0, 1.0 };
 
 	private WasmExpCompiler() {
 	}

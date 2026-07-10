@@ -344,6 +344,39 @@
         ((>= k n) out)
       (setf (row-major-aref out k) (funcall f (row-major-aref a k))))))
 
+;; --- named elementwise ufuncs (numpy parity, todo 109) ------------------------
+;; Each is a named emap so the common per-element operations need no boxed
+;; funcall under --simd (the names are interceptable; emap itself never is).
+;; square and reciprocal ride the mul/div kernels instead of needing their own.
+
+(defun linalg:exp (a)
+  ;; Elementwise e^x (numpy np.exp).
+  (linalg:emap (function exp) a))
+
+(defun linalg:sqrt (a)
+  ;; Elementwise square root (numpy np.sqrt).
+  (linalg:emap (function sqrt) a))
+
+(defun linalg:abs (a)
+  ;; Elementwise absolute value (numpy np.abs).
+  (linalg:emap (function abs) a))
+
+(defun linalg:square (a)
+  ;; Elementwise x * x (numpy np.square).
+  (linalg:mul a a))
+
+(defun linalg:negative (a)
+  ;; Elementwise negation (numpy np.negative); (- x) so -0.0 edges match minus.
+  (linalg:emap (lambda (x) (- x)) a))
+
+(defun linalg:sign (a)
+  ;; Elementwise signum (numpy np.sign).
+  (linalg:emap (function signum) a))
+
+(defun linalg:reciprocal (a)
+  ;; Elementwise 1 / x (numpy np.reciprocal, float semantics).
+  (linalg:div 1 a))
+
 ;; --- products ----------------------------------------------------------------
 
 (defun linalg:dot (a b)

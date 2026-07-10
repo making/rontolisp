@@ -72,12 +72,21 @@ final class WasmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_TRANSPOSE, WasmLinalgSimdRuntimeBuilder.TRANSPOSE),
 			Map.entry(LispNames.LINALG_RESHAPE, WasmLinalgSimdRuntimeBuilder.RESHAPE),
 			Map.entry(LispNames.LINALG_DOT, WasmLinalgSimdRuntimeBuilder.DOT),
-			Map.entry(LispNames.LINALG_OUTER, WasmLinalgSimdRuntimeBuilder.OUTER));
+			Map.entry(LispNames.LINALG_OUTER, WasmLinalgSimdRuntimeBuilder.OUTER),
+			// The element-wise unary ufuncs (todo 109). linalg:square / linalg:reciprocal
+			// are not here: their spliced defuns call linalg:mul / linalg:div, so they
+			// are accelerated transitively, like mean/matmul.
+			Map.entry(LispNames.LINALG_EXP, WasmLinalgSimdRuntimeBuilder.EXP),
+			Map.entry(LispNames.LINALG_SQRT, WasmLinalgSimdRuntimeBuilder.SQRT),
+			Map.entry(LispNames.LINALG_ABS, WasmLinalgSimdRuntimeBuilder.ABS),
+			Map.entry(LispNames.LINALG_NEGATIVE, WasmLinalgSimdRuntimeBuilder.NEGATIVE),
+			Map.entry(LispNames.LINALG_SIGN, WasmLinalgSimdRuntimeBuilder.SIGN));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
 			LispNames.LINALG_AMAX, LispNames.LINALG_AMIN, LispNames.LINALG_ARGMAX, LispNames.LINALG_ARGMIN,
-			LispNames.LINALG_TRACE, LispNames.LINALG_TRANSPOSE);
+			LispNames.LINALG_TRACE, LispNames.LINALG_TRANSPOSE, LispNames.LINALG_EXP, LispNames.LINALG_SQRT,
+			LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE, LispNames.LINALG_SIGN);
 
 	/** Returns whether the given qualified name is a kernel this compiler accelerates. */
 	static boolean handles(String qualifiedName) {

@@ -46,12 +46,29 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_SUB_INTO, WasmVecSimdRuntimeBuilder.SUB_INTO),
 			Map.entry(LispNames.VEC_MUL_INTO, WasmVecSimdRuntimeBuilder.MUL_INTO),
 			Map.entry(LispNames.VEC_SCALE_INTO, WasmVecSimdRuntimeBuilder.SCALE_INTO),
-			Map.entry(LispNames.VEC_MATVEC_INTO, WasmVecSimdRuntimeBuilder.MATVEC_INTO));
+			Map.entry(LispNames.VEC_MATVEC_INTO, WasmVecSimdRuntimeBuilder.MATVEC_INTO),
+			// The element-wise unary ufuncs (todo 109). vec:square / vec:square-into are
+			// not here: their spliced defuns call vec:mul / vec:mul-into, so they are
+			// accelerated transitively, like mean/norm.
+			Map.entry(LispNames.VEC_EXP, WasmVecSimdRuntimeBuilder.EXP),
+			Map.entry(LispNames.VEC_SQRT, WasmVecSimdRuntimeBuilder.SQRT),
+			Map.entry(LispNames.VEC_ABS, WasmVecSimdRuntimeBuilder.ABS),
+			Map.entry(LispNames.VEC_NEGATIVE, WasmVecSimdRuntimeBuilder.NEGATIVE),
+			Map.entry(LispNames.VEC_SIGN, WasmVecSimdRuntimeBuilder.SIGN),
+			Map.entry(LispNames.VEC_RECIPROCAL, WasmVecSimdRuntimeBuilder.RECIPROCAL),
+			Map.entry(LispNames.VEC_EXP_INTO, WasmVecSimdRuntimeBuilder.EXP_INTO),
+			Map.entry(LispNames.VEC_SQRT_INTO, WasmVecSimdRuntimeBuilder.SQRT_INTO),
+			Map.entry(LispNames.VEC_ABS_INTO, WasmVecSimdRuntimeBuilder.ABS_INTO),
+			Map.entry(LispNames.VEC_NEGATIVE_INTO, WasmVecSimdRuntimeBuilder.NEGATIVE_INTO),
+			Map.entry(LispNames.VEC_SIGN_INTO, WasmVecSimdRuntimeBuilder.SIGN_INTO),
+			Map.entry(LispNames.VEC_RECIPROCAL_INTO, WasmVecSimdRuntimeBuilder.RECIPROCAL_INTO));
 
 	/** The argument count of each accelerated member's Lisp call form. */
 	private static int arity(String member) {
 		return switch (member) {
-			case LispNames.VEC_SUM -> 1;
+			case LispNames.VEC_SUM, LispNames.VEC_EXP, LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE,
+					LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL ->
+				1;
 			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO,
 					LispNames.VEC_MATVEC_INTO ->
 				3;

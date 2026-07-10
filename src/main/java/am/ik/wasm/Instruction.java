@@ -689,4 +689,40 @@ public interface Instruction {
 	/** {@code f32x4.div} (0xFD 0xE7): lane-wise division (four {@code f32} lanes). */
 	int F32X4_DIV = 0xE7;
 
+	/** {@code f32x4.sqrt} (0xFD 0xE3): lane-wise square root (four {@code f32} lanes). */
+	int F32X4_SQRT = 0xE3;
+
+	/** {@code f32x4.abs} (0xFD 0xE0): lane-wise IEEE absolute value. */
+	int F32X4_ABS = 0xE0;
+
+	/** {@code f32x4.neg} (0xFD 0xE1): lane-wise IEEE negation (sign-bit flip). */
+	int F32X4_NEG = 0xE1;
+
+	/** {@code f64x2.abs} (0xFD 0xEC): lane-wise IEEE absolute value. */
+	int F64X2_ABS = 0xEC;
+
+	/** {@code f64x2.neg} (0xFD 0xED): lane-wise IEEE negation (sign-bit flip). */
+	int F64X2_NEG = 0xED;
+
+	/** {@code f64x2.sqrt} (0xFD 0xEF): lane-wise square root (two {@code f64} lanes). */
+	int F64X2_SQRT = 0xEF;
+
+	/**
+	 * {@code f32x4.lt} (0xFD 0x43): lane-wise IEEE {@code <}, yielding an all-ones /
+	 * all-zeros lane mask.
+	 */
+	int F32X4_LT = 0x43;
+
+	/**
+	 * {@code f64x2.lt} (0xFD 0x49): lane-wise IEEE {@code <}, yielding an all-ones /
+	 * all-zeros lane mask.
+	 */
+	int F64X2_LT = 0x49;
+
+	/**
+	 * {@code v128.bitselect} (0xFD 0x52): {@code (a & c) | (b & ~c)} -- picks {@code a}'s
+	 * bits where the mask {@code c} is set, {@code b}'s elsewhere.
+	 */
+	int V128_BITSELECT = 0x52;
+
 }

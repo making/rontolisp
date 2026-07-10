@@ -29,10 +29,14 @@ The `inv` and `solve` matrices above are chosen so their float results are exact
 
 [`linalg:add`](../reference/functions/linalg-add.md), [`linalg:sub`](../reference/functions/linalg-sub.md), [`linalg:mul`](../reference/functions/linalg-mul.md) and [`linalg:div`](../reference/functions/linalg-div.md) operate elementwise, and a scalar operand on either side is broadcast over the other operand's shape; two array operands must have equal shapes. Note that `mul` is the Hadamard (elementwise) product -- the matrix product is [`linalg:matmul`](../reference/functions/linalg-matmul.md) (or the rank-dispatching [`linalg:dot`](../reference/functions/linalg-dot.md)). Arbitrary per-element transformations go through [`linalg:emap`](../reference/functions/linalg-emap.md).
 
+The frequent per-element operations also exist under their numpy ufunc names: [`linalg:exp`](../reference/functions/linalg-exp.md), [`linalg:sqrt`](../reference/functions/linalg-sqrt.md), [`linalg:abs`](../reference/functions/linalg-abs.md), [`linalg:square`](../reference/functions/linalg-square.md), [`linalg:negative`](../reference/functions/linalg-negative.md), [`linalg:sign`](../reference/functions/linalg-sign.md) and [`linalg:reciprocal`](../reference/functions/linalg-reciprocal.md). Each is equivalent to the obvious `emap` (or `mul` / `div` call), but as named functions they are accelerated under [`--simd`](simd-acceleration.md#accelerating-linalg), which `emap` with an arbitrary callback never is.
+
 ```lisp
 (linalg:add #(1 2 3) 10)        ; => #d(11.0 12.0 13.0)
 (linalg:mul 2 #2A((1 2) (3 4))) ; => #d((2.0 4.0) (6.0 8.0))
 (linalg:div #(1 2 3) 2)         ; => #d(0.5 1.0 1.5)
+(linalg:sqrt #(4 9 16))         ; => #d(2.0 3.0 4.0)
+(linalg:square #2A((1 2) (3 4))) ; => #d((1.0 4.0) (9.0 16.0))
 ```
 
 ## Single-float precision
@@ -49,7 +53,7 @@ linalg computes in `double-float` by default, but it is **width-polymorphic**: i
 
 ## SIMD acceleration
 
-`linalg` needs no flag to be correct anywhere, but the [`--simd` flag](simd-acceleration.md) accelerates it: fifteen functions -- `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer` -- are routed to native vector kernels (`jdk.incubator.vector` on the interpreter and the JVM, WebAssembly `v128` on wasm-GC), and `mean`, `matmul`, `flatten` and `solve` are accelerated with them because they are written in terms of them. Nothing changes in what a program accepts or rejects: an input a kernel cannot handle (a general boxed array, mixed widths, a plain number) simply runs the portable `linalg.lisp` definition instead, with the same result and the same error messages. The only observable difference is the [single-float reduction precision rule](simd-acceleration.md#accelerating-linalg); element-wise results and the full matrix product stay bit-identical.
+`linalg` needs no flag to be correct anywhere, but the [`--simd` flag](simd-acceleration.md) accelerates it: twenty functions -- `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer` and the unary ufuncs `exp`, `sqrt`, `abs`, `negative`, `sign` -- are routed to native vector kernels (`jdk.incubator.vector` on the interpreter and the JVM, WebAssembly `v128` on wasm-GC), and `mean`, `matmul`, `flatten`, `solve`, `square` and `reciprocal` are accelerated with them because they are written in terms of them. Nothing changes in what a program accepts or rejects: an input a kernel cannot handle (a general boxed array, mixed widths, a plain number) simply runs the portable `linalg.lisp` definition instead, with the same result and the same error messages. The only observable difference is the [single-float reduction precision rule](simd-acceleration.md#accelerating-linalg); element-wise results and the full matrix product stay bit-identical.
 
 There is no reason to switch packages for speed: under `--simd`, `linalg` and `vec` land on the same kernels. See [Choosing between vec and linalg](simd-acceleration.md#choosing-between-vec-and-linalg) -- the short version is: write against `linalg` by default, and reach for `vec` only for its `-into` destination-passing loops, a `--no-gc` target (where `linalg` does not compile), or its fail-fast width strictness.
 

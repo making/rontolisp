@@ -64,12 +64,19 @@ final class JvmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_AMIN, "laAmin"), Map.entry(LispNames.LINALG_ARGMAX, "laArgmax"),
 			Map.entry(LispNames.LINALG_ARGMIN, "laArgmin"), Map.entry(LispNames.LINALG_TRACE, "laTrace"),
 			Map.entry(LispNames.LINALG_TRANSPOSE, "laTranspose"), Map.entry(LispNames.LINALG_RESHAPE, "laReshape"),
-			Map.entry(LispNames.LINALG_DOT, "laDot"), Map.entry(LispNames.LINALG_OUTER, "laOuter"));
+			Map.entry(LispNames.LINALG_DOT, "laDot"), Map.entry(LispNames.LINALG_OUTER, "laOuter"),
+			// The element-wise unary ufuncs (todo 109). linalg:square / linalg:reciprocal
+			// are not here: their spliced defuns call linalg:mul / linalg:div, so they
+			// are accelerated transitively, like mean/matmul.
+			Map.entry(LispNames.LINALG_EXP, "laExp"), Map.entry(LispNames.LINALG_SQRT, "laSqrt"),
+			Map.entry(LispNames.LINALG_ABS, "laAbs"), Map.entry(LispNames.LINALG_NEGATIVE, "laNegative"),
+			Map.entry(LispNames.LINALG_SIGN, "laSign"));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
 			LispNames.LINALG_AMAX, LispNames.LINALG_AMIN, LispNames.LINALG_ARGMAX, LispNames.LINALG_ARGMIN,
-			LispNames.LINALG_TRACE, LispNames.LINALG_TRANSPOSE);
+			LispNames.LINALG_TRACE, LispNames.LINALG_TRANSPOSE, LispNames.LINALG_EXP, LispNames.LINALG_SQRT,
+			LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE, LispNames.LINALG_SIGN);
 
 	/**
 	 * Returns whether the given {@code linalg:} member is one this compiler accelerates.

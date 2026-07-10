@@ -314,6 +314,100 @@ class VecSimdTest {
 		assertMatchesScalarOracle(into);
 	}
 
+	// --- element-wise unary ufuncs (todo 109) --------------------------------------
+
+	@Test
+	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
+		for (String member : new String[] { "exp", "sqrt", "abs", "negative", "sign", "reciprocal", "exp-into",
+				"sqrt-into", "abs-into", "negative-into", "sign-into", "reciprocal-into" }) {
+			String form = "(vec:zeros 1) #'vec:" + member;
+			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+	}
+
+	@Test
+	void squareIsAcceleratedTransitivelyThroughMul() {
+		// vec:square's defun body is (vec:mul v v), which resolves to the installed
+		// native -- like mean/norm. So there is no square kernel and no override.
+		assertThat(eval("(vec:zeros 1) #'vec:square", true).print()).isEqualTo("#<lambda>");
+		assertThat(eval("(vec:zeros 1) #'vec:square-into", true).print()).isEqualTo("#<lambda>");
+		assertMatchesScalarOracle("(vec:square (vec:arange 200))");
+		assertMatchesScalarOracle("(vec:square-into (vec:zeros 200 'single-float) (vec:arange 200 'single-float))");
+	}
+
+	@Test
+	void unaryUfuncsMatchTheScalarOracleAtBothSizesAndWidths() {
+		// mixed signs (arange - 100), sizes on both sides of THRESHOLD, both widths.
+		// exp runs over reciprocal's (0, 1] range so the values stay bounded.
+		for (String op : new String[] { "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			for (String n : new String[] { "7", "200" }) {
+				String signed = "(vec:%s (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)))".formatted(op, n,
+						n);
+				if (!op.equals("sqrt")) {
+					assertMatchesScalarOracle(signed);
+				}
+				assertMatchesScalarOracle("(vec:%s (vec:add (vec:arange %s) (vec:ones %s)))".formatted(op, n, n));
+			}
+			assertMatchesScalarOracle(
+					"(vec:%s (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))".formatted(op));
+		}
+		assertMatchesScalarOracle("(vec:exp (vec:reciprocal (vec:add (vec:arange 200) (vec:ones 200))))");
+		assertMatchesScalarOracle("(vec:exp (vec:reciprocal (vec:add (vec:arange 7) (vec:ones 7))))");
+		assertMatchesScalarOracle(
+				"(vec:exp (vec:reciprocal (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
+	}
+
+	@Test
+	void unaryUfuncsMatchTheScalarOracleOnSignedZeroEdges() {
+		// Math.abs / true negation / Math.signum on both paths, so the -0.0 edges agree
+		// with the defun (which is the per-backend contract; the WASM defun's edges
+		// differ from these and its kernels mirror those instead).
+		assertMatchesScalarOracle("(vec:negative #d(0.0 -0.0 1.0))");
+		assertMatchesScalarOracle("(vec:abs #d(-0.0 0.0 -2.5))");
+		assertMatchesScalarOracle("(vec:sign #d(-0.0 0.0 -3.5 3.5))");
+		assertThat(eval("(vec:negative #d(0.0))", true).print()).isEqualTo("#d(-0.0)");
+		assertThat(eval("(vec:sign #d(-0.0))", true).print()).isEqualTo("#d(-0.0)");
+	}
+
+	@Test
+	void unaryIntoKernelsMatchTheirAllocatingSiblingsAndReturnTheDestination() {
+		for (String op : new String[] { "exp", "sqrt", "abs", "negative", "sign", "reciprocal" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertIntoMatchesAllocating(
+						"(vec:" + op + "-into (vec:zeros %s) (vec:add (vec:arange %s) (vec:ones %s)))",
+						"(vec:" + op + " (vec:add (vec:arange %s) (vec:ones %s)))", n);
+			}
+			assertThat(eval("(let ((o (vec:zeros 2))) (eq o (vec:" + op + "-into o #d(1.0 2.0))))", true).print())
+				.as(op)
+				.isEqualTo("t");
+		}
+		assertMatchesScalarOracle(
+				"(vec:sqrt-into (vec:zeros 200 'single-float) (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
+	}
+
+	@Test
+	void aUnaryIntoKernelToleratesAliasingItsDestinationWithTheOperand() {
+		// (vec:sqrt-into v v) -- element i depends only on element i (the add-into
+		// rule), so the in-place update is well-defined at both sizes.
+		for (String n : new String[] { "7", "200" }) {
+			String inPlace = """
+					(let ((v (vec:add (vec:arange %s) (vec:ones %s))))
+					  (vec:sqrt-into v v)
+					  v)
+					""".formatted(n, n);
+			String fresh = "(vec:sqrt (vec:add (vec:arange %s) (vec:ones %s)))".formatted(n, n);
+			assertThat(eval(inPlace, true).print()).isEqualTo(eval(fresh, false).print());
+		}
+	}
+
+	@Test
+	void mixingWidthsInAUnaryIntoKernelIsAnError() {
+		assertThatThrownBy(() -> eval("(vec:sqrt-into (vec:zeros 1) #f(1.0))", true))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("must share an element type");
+	}
+
 	// --- fixed-width contract ----------------------------------------------------
 
 	@Test

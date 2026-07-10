@@ -322,6 +322,63 @@ class LinalgSimdTest {
 		assertThat(eval("(let ((v (linalg:arange 5))) (eq v (linalg:transpose v)))", false).print()).isEqualTo("t");
 	}
 
+	// --- element-wise unary ufuncs (todo 109) -------------------------------------
+
+	@Test
+	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
+		for (String member : new String[] { "exp", "sqrt", "abs", "negative", "sign" }) {
+			String form = "(linalg:zeros 1) #'linalg:" + member;
+			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+		// square/reciprocal are accelerated transitively -- their bodies call
+		// linalg:mul / linalg:div -- so they stay lambdas.
+		assertThat(eval("(linalg:zeros 1) #'linalg:square", true).print()).isEqualTo("#<lambda>");
+		assertThat(eval("(linalg:zeros 1) #'linalg:reciprocal", true).print()).isEqualTo("#<lambda>");
+	}
+
+	@Test
+	void unaryUfuncsMatchTheScalarOracleAtBothSizesWidthsAndRanks() {
+		for (String op : new String[] { "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			// sqrt gets non-negative inputs; the rest a sign-mixed vector.
+			String inner = op.equals("sqrt") ? "(linalg:add %v 1)" : "(linalg:sub %v 100)";
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(linalg:" + op + " " + inner.replace("%v", "(linalg:arange " + n + ")") + ")");
+			}
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4)))");
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:add (linalg:arange 0 200 'single-float) 1))");
+		}
+		// exp over reciprocal's (0, 1] range so the values stay bounded.
+		assertMatchesScalarOracle("(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1)))");
+		assertMatchesScalarOracle("(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 7) 1)))");
+		assertMatchesScalarOracle(
+				"(linalg:exp (linalg:reshape (linalg:reciprocal (linalg:add (linalg:arange 12) 1)) '(3 4)))");
+		assertMatchesScalarOracle(
+				"(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 200 'single-float) 1)))");
+	}
+
+	@Test
+	void unaryUfuncsMatchTheScalarOracleOnSignedZeroEdges() {
+		// Math.abs / true negation / Math.signum on both paths, matching the defun's
+		// own edges (the per-backend contract; wasm's defun edges differ and its
+		// kernels mirror those instead).
+		assertMatchesScalarOracle("(linalg:negative #d(0.0 -0.0 1.0))");
+		assertMatchesScalarOracle("(linalg:abs #d(-0.0 0.0 -2.5))");
+		assertMatchesScalarOracle("(linalg:sign #d(-0.0 0.0 -3.5 3.5))");
+		assertThat(eval("(linalg:negative #d(0.0))", true).print()).isEqualTo("#d(-0.0)");
+	}
+
+	@Test
+	void aGeneralBoxedArrayDeclinesToTheScalarDefunForTheUnaryUfuncs() {
+		// A general #(...) array is not packed, so every unary kernel declines and the
+		// defun answers -- identically on both paths.
+		for (String op : new String[] { "exp", "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			assertMatchesScalarOracle("(linalg:" + op + " #(1 4 9))");
+		}
+		assertThat(eval("(linalg:sqrt #(4 9))", true).print()).isEqualTo("#d(2.0 3.0)");
+	}
+
 	@Test
 	void aRank3OperandDeclinesToTheScalarDefunForTheRank2OnlyMembers() {
 		// transpose/trace/dot are rank <= 2 in linalg.lisp; a rank-3 input must reach the

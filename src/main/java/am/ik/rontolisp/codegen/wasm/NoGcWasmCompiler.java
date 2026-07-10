@@ -2474,7 +2474,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.VEC_ARANGE, LispNames.VEC_AREF, LispNames.VEC_ASET, LispNames.VEC_LENGTH, LispNames.VEC_ADD,
 			LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN,
 			LispNames.VEC_DOT, LispNames.VEC_NORM, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
-			LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO);
+			LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_SQRT, LispNames.VEC_ABS,
+			LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL, LispNames.VEC_SQRT_INTO,
+			LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO,
+			LispNames.VEC_RECIPROCAL_INTO);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
@@ -2487,6 +2490,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// Use the JVM --simd backend (or the interpreter / JVM / wasm-GC scalar path)
 	// instead.
 	private static final Set<String> SIMD_UNSUPPORTED_NO_GC = Set.of(LispNames.VEC_MATVEC, LispNames.VEC_MATVEC_INTO);
+
+	// simd members whose scalar operation this backend cannot lower (todo 109 decision
+	// b): exp needs the software approximation that exists only in the GC backend's
+	// WasmExpCompiler, and signum's float path likewise has no --no-gc lowering. The
+	// arithmetic unary ufuncs (sqrt/abs/square/negative/reciprocal) are supported.
+	private static final Set<String> SIMD_NO_SCALAR_IMPL_NO_GC = Set.of(LispNames.VEC_EXP, LispNames.VEC_EXP_INTO,
+			LispNames.VEC_SIGN, LispNames.VEC_SIGN_INTO);
 
 	// Whether a (resolved) symbol name is a vec: package member, e.g. "vec:dot". vec:
 	// names are always qualified with the package prefix, so a prefix test suffices.
@@ -2512,6 +2522,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
 					+ "' is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1 only;"
 					+ " use the JVM --simd backend or the interpreter / JVM / wasm-GC scalar path");
+		}
+		if (SIMD_NO_SCALAR_IMPL_NO_GC.contains(member)) {
+			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
+					+ "' has no --no-gc lowering (exp/signum exist only on the GC backends);"
+					+ " use the interpreter / JVM / wasm-GC path");
 		}
 		throw new UnsupportedOperationException(
 				"--no-gc: unknown simd operation '" + name + "' in function '" + fnName + "'");
@@ -2545,7 +2560,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// already
 			// holds the right width for both shapes.
 			case LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_ADD_INTO,
-					LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO ->
+					LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_SQRT,
+					LispNames.VEC_ABS, LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL,
+					LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO,
+					LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO ->
 				operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
@@ -2587,6 +2605,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_MUL_INTO ->
 				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, true);
 			case LispNames.VEC_SCALE_INTO -> compileSimdScale(args, fn, true);
+			// The arithmetic unary ufuncs (todo 109): NATIVE IEEE per-element semantics
+			// (this backend has no vec.lisp defun to mirror; see WasmVecLoops.simdMap1).
+			// exp / sign have no --no-gc lowering and were rejected by requireKnownSimd.
+			case LispNames.VEC_SQRT -> compileSimdUnary(args, fn, WasmVecLoops.U_SQRT, false, "vec:sqrt");
+			case LispNames.VEC_ABS -> compileSimdUnary(args, fn, WasmVecLoops.U_ABS, false, "vec:abs");
+			case LispNames.VEC_SQUARE -> compileSimdUnary(args, fn, WasmVecLoops.U_SQUARE, false, "vec:square");
+			case LispNames.VEC_NEGATIVE -> compileSimdUnary(args, fn, WasmVecLoops.U_NEG, false, "vec:negative");
+			case LispNames.VEC_RECIPROCAL -> compileSimdUnary(args, fn, WasmVecLoops.U_RECIP, false, "vec:reciprocal");
+			case LispNames.VEC_SQRT_INTO -> compileSimdUnary(args, fn, WasmVecLoops.U_SQRT, true, "vec:sqrt-into");
+			case LispNames.VEC_ABS_INTO -> compileSimdUnary(args, fn, WasmVecLoops.U_ABS, true, "vec:abs-into");
+			case LispNames.VEC_SQUARE_INTO ->
+				compileSimdUnary(args, fn, WasmVecLoops.U_SQUARE, true, "vec:square-into");
+			case LispNames.VEC_NEGATIVE_INTO ->
+				compileSimdUnary(args, fn, WasmVecLoops.U_NEG, true, "vec:negative-into");
+			case LispNames.VEC_RECIPROCAL_INTO ->
+				compileSimdUnary(args, fn, WasmVecLoops.U_RECIP, true, "vec:reciprocal-into");
 			case LispNames.VEC_SUM -> compileSimdSum(args, fn);
 			case LispNames.VEC_DOT -> compileSimdDot(args, fn);
 			// mean and norm are composites over sum/dot/length -- expand and recompile so
@@ -2771,6 +2805,40 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmVecLoops.simdMap2(w, dp, ap, bp, count, rem, -1, false, simdOp, scalarOp);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
 		return Ty.F64VEC;
+	}
+
+	// (vec:sqrt v) / (vec:abs v) / (vec:square v) / (vec:negative v) /
+	// (vec:reciprocal v) and their -into siblings: element-wise unary into a fresh
+	// vector (or the caller's destination, which MAY alias v -- element i depends only
+	// on element i, the add-into rule). Native IEEE semantics at the operand's own
+	// width; under --simd whole v128 groups plus the usual scalar tail, otherwise a
+	// plain one-element-per-iteration loop -- the two lowerings compute identical
+	// results (every op is exact or correctly rounded per element).
+	private Ty compileSimdUnary(List<LispVal> args, Fn fn, int uop, boolean into, String what) {
+		requireArgc(args, into ? 3 : 2, what, fn);
+		Ty vecTy = packedVecType(args.get(1), fn);
+		boolean single = vecTy == Ty.F32VEC;
+		WasmWriter w = fn.writer;
+		// -into evaluates the destination first (argument 1), then the operand; the
+		// plain kernel allocates the destination after sizing it from the operand.
+		int dstL = into ? compileVecArg(args.get(1), fn, vecTy) : -1;
+		int vL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
+		int count = loadVecCount(fn, vL);
+		int dst = into ? dstL : allocVec(fn, count, vecTy);
+		int vp = fn.allocLocal(Ty.F64VEC);
+		int dp = fn.allocLocal(Ty.F64VEC);
+		dataPtr(w, vL, vp);
+		dataPtr(w, dst, dp);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		if (this.simd) {
+			int trem = single ? fn.allocLocal(Ty.F64VEC) : -1;
+			WasmVecLoops.simdMap1(w, dp, vp, count, rem, trem, single, uop);
+		}
+		else {
+			WasmVecLoops.scalarMap1(w, dp, vp, count, rem, single, uop);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return vecTy;
 	}
 
 	// (vec:scale v s): v * s (scalar broadcast) into a fresh vector. The scalar is

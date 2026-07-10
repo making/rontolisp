@@ -2158,6 +2158,21 @@ public final class LispNames {
 	/** {@code linalg:reshape}: a fresh array of the given shape, row-major elements. */
 	public static final String LINALG_RESHAPE = "reshape";
 
+	/** {@code linalg:exp}: element-wise {@code e^x} (numpy {@code np.exp}). */
+	public static final String LINALG_EXP = "exp";
+
+	/** {@code linalg:sqrt}: element-wise square root (numpy {@code np.sqrt}). */
+	public static final String LINALG_SQRT = "sqrt";
+
+	/** {@code linalg:abs}: element-wise absolute value (numpy {@code np.abs}). */
+	public static final String LINALG_ABS = "abs";
+
+	/** {@code linalg:negative}: element-wise negation (numpy {@code np.negative}). */
+	public static final String LINALG_NEGATIVE = "negative";
+
+	/** {@code linalg:sign}: element-wise {@code signum} (numpy {@code np.sign}). */
+	public static final String LINALG_SIGN = "sign";
+
 	/**
 	 * The {@code vec} package name: portable packed-{@code f64} vector kernels over the
 	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself
@@ -2265,6 +2280,52 @@ public final class LispNames {
 	 * not be {@code eq} to {@code x} (nor to {@code w}); the call signals otherwise.
 	 */
 	public static final String VEC_MATVEC_INTO = "matvec-into";
+
+	// The element-wise unary ufuncs (todo 109 Phase 1). Each has a fresh-vector form and
+	// a destination-passing -into sibling; out MAY alias the operand (element i depends
+	// only on element i, the add-into rule).
+
+	/** {@code vec:exp}: element-wise {@code e^x} into a fresh vector. */
+	public static final String VEC_EXP = "exp";
+
+	/** {@code vec:sqrt}: element-wise square root into a fresh vector. */
+	public static final String VEC_SQRT = "sqrt";
+
+	/** {@code vec:abs}: element-wise absolute value into a fresh vector. */
+	public static final String VEC_ABS = "abs";
+
+	/** {@code vec:square}: element-wise {@code x * x} into a fresh vector. */
+	public static final String VEC_SQUARE = "square";
+
+	/** {@code vec:negative}: element-wise negation into a fresh vector. */
+	public static final String VEC_NEGATIVE = "negative";
+
+	/** {@code vec:sign}: element-wise {@code signum} into a fresh vector. */
+	public static final String VEC_SIGN = "sign";
+
+	/** {@code vec:reciprocal}: element-wise {@code 1 / x} into a fresh vector. */
+	public static final String VEC_RECIPROCAL = "reciprocal";
+
+	/** {@code vec:exp-into}: element-wise {@code e^x} into {@code out}. */
+	public static final String VEC_EXP_INTO = "exp-into";
+
+	/** {@code vec:sqrt-into}: element-wise square root into {@code out}. */
+	public static final String VEC_SQRT_INTO = "sqrt-into";
+
+	/** {@code vec:abs-into}: element-wise absolute value into {@code out}. */
+	public static final String VEC_ABS_INTO = "abs-into";
+
+	/** {@code vec:square-into}: element-wise {@code x * x} into {@code out}. */
+	public static final String VEC_SQUARE_INTO = "square-into";
+
+	/** {@code vec:negative-into}: element-wise negation into {@code out}. */
+	public static final String VEC_NEGATIVE_INTO = "negative-into";
+
+	/** {@code vec:sign-into}: element-wise {@code signum} into {@code out}. */
+	public static final String VEC_SIGN_INTO = "sign-into";
+
+	/** {@code vec:reciprocal-into}: element-wise {@code 1 / x} into {@code out}. */
+	public static final String VEC_RECIPROCAL_INTO = "reciprocal-into";
 
 	/**
 	 * {@code vec:aref} fully qualified: a {@code setf} place (writer {@code vec:aset}).

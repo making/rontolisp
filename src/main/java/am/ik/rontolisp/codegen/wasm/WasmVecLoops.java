@@ -440,6 +440,103 @@ final class WasmVecLoops {
 		}
 	}
 
+	// --- linear-memory unary ufunc bodies (todo 109, --no-gc only) -----------------
+	//
+	// The --no-gc lowering of the arithmetic unary vec: kernels (sqrt / abs / square /
+	// negative / reciprocal + their -into siblings). --no-gc has NO vec.lisp defun to
+	// mirror, so unlike gcMap1's U_NEG / U_ABS (which reproduce the wasm-GC defun's
+	// 0 - x semantics) these use the NATIVE IEEE instructions (f64.neg keeps
+	// (vec:negative #d(0.0)) at -0.0, f64.abs maps -0.0 to 0.0 -- the same edges the
+	// interpreter / JVM defuns produce). U_SQUARE exists only here: on the defun-driven
+	// backends vec:square rides the mul kernels. The v128 and scalar lowerings compute
+	// identical results (every op is exact or correctly rounded per element).
+
+	/** {@code v * v}: the one unary op with no gcMap1 form (square is mul there). */
+	static final int U_SQUARE = 4;
+
+	/**
+	 * {@code dst[i] = uop(v[i])} over v128 lanes plus a scalar tail (the unary sibling of
+	 * {@link #simdMap2}). {@code tremLocal} is used only by the f32x4 remainder loop
+	 * (pass -1 for f64x2).
+	 */
+	static void simdMap1(WasmWriter w, int dp, int vp, int count, int rem, int trem, boolean single, int uop) {
+		openSimdLoop(w, count, rem, single ? 2 : 1);
+		get(w, dp);
+		if (uop == U_RECIP) {
+			// The dividend group goes UNDER the operand: splat(1) / v.
+			splatConstOne(w, single);
+		}
+		get(w, vp);
+		simdLoad(w);
+		switch (uop) {
+			case U_SQRT -> simd(w, single ? Instruction.F32X4_SQRT : Instruction.F64X2_SQRT);
+			case U_ABS -> simd(w, single ? Instruction.F32X4_ABS : Instruction.F64X2_ABS);
+			case U_NEG -> simd(w, single ? Instruction.F32X4_NEG : Instruction.F64X2_NEG);
+			case U_SQUARE -> {
+				get(w, vp);
+				simdLoad(w);
+				simd(w, single ? Instruction.F32X4_MUL : Instruction.F64X2_MUL);
+			}
+			case U_RECIP -> simd(w, single ? Instruction.F32X4_DIV : Instruction.F64X2_DIV);
+			default -> throw new IllegalArgumentException("no linear unary lane op " + uop);
+		}
+		simdStore(w);
+		advancePtr(w, vp, 16);
+		advancePtr(w, dp, 16);
+		closeLoop(w, rem);
+		if (single) {
+			openScalarTailLoop(w, count, trem, 3);
+			emitMap1Element(w, dp, vp, true, uop);
+			advancePtr(w, vp, 4);
+			advancePtr(w, dp, 4);
+			closeLoop(w, trem);
+		}
+		else {
+			openOddTailGuard(w, count);
+			emitMap1Element(w, dp, vp, false, uop);
+			w.write(Instruction.END); // if
+		}
+	}
+
+	/** {@code dst[i] = uop(v[i])} over a plain one-element-per-iteration loop. */
+	static void scalarMap1(WasmWriter w, int dp, int vp, int count, int rem, boolean single, int uop) {
+		int stride = stride(single);
+		openScalarCountLoop(w, count, rem);
+		emitMap1Element(w, dp, vp, single, uop);
+		advancePtr(w, vp, stride);
+		advancePtr(w, dp, stride);
+		closeLoop(w, rem);
+	}
+
+	private static void emitMap1Element(WasmWriter w, int dp, int vp, boolean single, int uop) {
+		int loadOp = single ? Instruction.F32_LOAD : Instruction.F64_LOAD;
+		int storeOp = single ? Instruction.F32_STORE : Instruction.F64_STORE;
+		get(w, dp);
+		if (uop == U_RECIP) {
+			if (single) {
+				f32Const(w, 1.0f);
+			}
+			else {
+				w.write(Instruction.F64_CONST).writeF64(1.0);
+			}
+		}
+		get(w, vp);
+		w.write(loadOp, 0x00, 0x00);
+		switch (uop) {
+			case U_SQRT -> w.write(single ? Instruction.F32_SQRT : Instruction.F64_SQRT);
+			case U_ABS -> w.write(single ? Instruction.F32_ABS : Instruction.F64_ABS);
+			case U_NEG -> w.write(single ? Instruction.F32_NEG : Instruction.F64_NEG);
+			case U_SQUARE -> {
+				get(w, vp);
+				w.write(loadOp, 0x00, 0x00);
+				w.write(single ? Instruction.F32_MUL : Instruction.F64_MUL);
+			}
+			case U_RECIP -> w.write(single ? Instruction.F32_DIV : Instruction.F64_DIV);
+			default -> throw new IllegalArgumentException("no linear unary element op " + uop);
+		}
+		w.write(storeOp, 0x00, 0x00);
+	}
+
 	// --- scalar (v128-free) kernel bodies ----------------------------------------
 	//
 	// One element per iteration, no 0xFD opcode: the lowering a runtime lacking the SIMD
@@ -574,6 +671,126 @@ final class WasmVecLoops {
 		i32Const(w, 1);
 		w.write(Instruction.I32_ADD);
 		set(w, gLocal);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	// --- the unary ufunc lane forms (todo 109) ------------------------------------
+	// The four wasm-lane-safe unary operations, keyed so gcMap1 owns every opcode
+	// choice. Each mirrors the wasm DEFUN's own scalar semantics (the per-backend
+	// bit-identity contract), not java.lang.Math's:
+	//
+	// U_SQRT f64.sqrt is what WasmSqrtCompiler emits; the lane sqrt is correctly
+	// rounded at both widths (f32: the widen-compute-narrow round trip is
+	// exact), so it is bit-identical.
+	// U_NEG the wasm variable-path unary minus is 0 - x (a todo-108 residual:
+	// (- 0.0) is 0.0 here, unlike interpreter/JVM), so the lane form is
+	// sub-from-splat-zero, NOT f64x2.neg.
+	// U_RECIP (/ 1.0 x): div-from-splat-one; f32 lane div is exact by the
+	// 53 >= 2*24+2 double-rounding bound.
+	// U_ABS the wasm abs variable path is `x < 0 ? 0 - x : x` (keeps -0.0), so
+	// the lane form is bitselect(0 - v, v, v < 0), NOT f64x2.abs (which
+	// would map -0.0 to 0.0 and diverge from the defun).
+	//
+	// exp and signum have no lane form at all; their kernels walk elements through
+	// _v_get / _v_set (see WasmVecSimdRuntimeBuilder).
+
+	static final int U_SQRT = 0;
+
+	static final int U_NEG = 1;
+
+	static final int U_RECIP = 2;
+
+	static final int U_ABS = 3;
+
+	/** {@code dst[g] = uop(v[g])} over whole lane groups (unary sibling of gcMap2). */
+	static void gcMap1(WasmWriter w, int gd, int gv, int ngroups, int g, int count, int rem, int old, int cur,
+			boolean single, int uop) {
+		gcSaveLastGroup(w, gd, ngroups, count, rem, old, single);
+		openGroupLoop(w, ngroups, g);
+		get(w, gd);
+		get(w, g);
+		switch (uop) {
+			case U_SQRT -> {
+				groupGet(w, gv, g);
+				simd(w, single ? Instruction.F32X4_SQRT : Instruction.F64X2_SQRT);
+			}
+			case U_NEG -> {
+				splatConstZero(w, single);
+				groupGet(w, gv, g);
+				simd(w, single ? Instruction.F32X4_SUB : Instruction.F64X2_SUB);
+			}
+			case U_RECIP -> {
+				splatConstOne(w, single);
+				groupGet(w, gv, g);
+				simd(w, single ? Instruction.F32X4_DIV : Instruction.F64X2_DIV);
+			}
+			case U_ABS -> {
+				// bitselect picks (0 - v) where the mask (v < 0) is set, v elsewhere.
+				splatConstZero(w, single);
+				groupGet(w, gv, g);
+				simd(w, single ? Instruction.F32X4_SUB : Instruction.F64X2_SUB);
+				groupGet(w, gv, g);
+				groupGet(w, gv, g);
+				splatConstZero(w, single);
+				simd(w, single ? Instruction.F32X4_LT : Instruction.F64X2_LT);
+				simd(w, Instruction.V128_BITSELECT);
+			}
+			default -> throw new IllegalArgumentException("no unary lane op " + uop);
+		}
+		arraySet(w);
+		closeGroupLoop(w, g);
+		gcRestoreLastGroupTail(w, gd, ngroups, rem, old, cur, single);
+	}
+
+	/** Pushes a zero lane group at the given width. */
+	private static void splatConstZero(WasmWriter w, boolean single) {
+		if (single) {
+			f32Const(w, 0.0f);
+			simd(w, Instruction.F32X4_SPLAT);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+			simd(w, Instruction.F64X2_SPLAT);
+		}
+	}
+
+	/** Pushes an all-ones (1.0) lane group at the given width. */
+	private static void splatConstOne(WasmWriter w, boolean single) {
+		if (single) {
+			f32Const(w, 1.0f);
+			simd(w, Instruction.F32X4_SPLAT);
+		}
+		else {
+			w.write(Instruction.F64_CONST).writeF64(1.0);
+			simd(w, Instruction.F64X2_SPLAT);
+		}
+	}
+
+	/**
+	 * Opens a loop over ascending element indices {@code [0, count)}, leaving the cursor
+	 * in {@code iLocal}. Pairs with {@link #closeIndexLoop}. The element-loop counterpart
+	 * of {@link #openGroupLoop} for the kernels that walk {@code _v_get} /
+	 * {@code _v_set}.
+	 */
+	static void openIndexLoop(WasmWriter w, int iLocal, int countLocal) {
+		i32Const(w, 0);
+		set(w, iLocal);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, iLocal);
+		get(w, countLocal);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+	}
+
+	/** Closes an index loop: {@code i++}, branch back, end loop, end block. */
+	static void closeIndexLoop(WasmWriter w, int iLocal) {
+		get(w, iLocal);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, iLocal);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block

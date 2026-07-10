@@ -293,6 +293,37 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertThat(accel("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))")).isEqualTo("t");
 	}
 
+	// --- element-wise unary ufuncs (todo 109) ------------------------------------------
+
+	@Test
+	void unaryUfuncsMatchTheScalarReferenceAtBothSizesWidthsAndRanks() throws Exception {
+		for (String op : new String[] { "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			String inner = op.equals("sqrt") ? "(linalg:add %v 1)" : "(linalg:sub %v 100)";
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " " + inner.replace("%v", "(linalg:arange 7)") + "))");
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " " + inner.replace("%v", "(linalg:arange 200)") + "))");
+			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4))))");
+			assertMatchesScalarReference(
+					"(print (linalg:" + op + " (linalg:add (linalg:arange 0 200 'single-float) 1)))");
+		}
+		// exp over reciprocal's (0, 1] range so the values stay bounded; round because
+		// exp's low digits are not print-stable across sizes.
+		assertMatchesScalarReference(
+				"(print (round (* 1000000 (linalg:sum (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1)))))))");
+		assertMatchesScalarReference(
+				"(print (round (* 1000000 (linalg:sum (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 7) 1)))))))");
+	}
+
+	@Test
+	void unaryUfuncsDeclineGeneralBoxedArraysToTheScalarDefun() throws Exception {
+		for (String op : new String[] { "exp", "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			assertMatchesScalarReference("(print (linalg:" + op + " #(1 4 9)))");
+		}
+		assertThat(accel("(print (linalg:sqrt #(4 9)))")).isEqualTo("#d(2.0 3.0)");
+		assertThat(accel("(print (linalg:square 3))")).isEqualTo("9");
+	}
+
 	@Test
 	void theAcceleratedProgramStillInteroperatesWithThePackedArraySurface() throws Exception {
 		assertMatchesScalarReference("""

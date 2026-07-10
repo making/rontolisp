@@ -111,6 +111,19 @@ public final class LinalgSimd {
 		define(globalEnv, evaluator, LispNames.LINALG_RESHAPE, 2, LinalgSimd::reshape);
 		define(globalEnv, evaluator, LispNames.LINALG_DOT, 2, LinalgSimd::dot);
 		define(globalEnv, evaluator, LispNames.LINALG_OUTER, 2, LinalgSimd::outer);
+		// The named element-wise unary ufuncs (todo 109). linalg:square and
+		// linalg:reciprocal are accelerated transitively -- their defuns call
+		// linalg:mul / linalg:div, which resolve to the natives installed above.
+		define(globalEnv, evaluator, LispNames.LINALG_EXP, 1,
+				args -> unary(args, LinalgSimdKernels::exp, LinalgSimdKernels::expF));
+		define(globalEnv, evaluator, LispNames.LINALG_SQRT, 1,
+				args -> unary(args, LinalgSimdKernels::sqrt, LinalgSimdKernels::sqrtF));
+		define(globalEnv, evaluator, LispNames.LINALG_ABS, 1,
+				args -> unary(args, LinalgSimdKernels::abs, LinalgSimdKernels::absF));
+		define(globalEnv, evaluator, LispNames.LINALG_NEGATIVE, 1,
+				args -> unary(args, LinalgSimdKernels::negative, LinalgSimdKernels::negativeF));
+		define(globalEnv, evaluator, LispNames.LINALG_SIGN, 1,
+				args -> unary(args, LinalgSimdKernels::sign, LinalgSimdKernels::signF));
 	}
 
 	/**
@@ -178,6 +191,18 @@ public final class LinalgSimd {
 			};
 		}
 		return null;
+	}
+
+	/**
+	 * A named element-wise unary ufunc over a packed operand of either width and any
+	 * rank; anything else (a general boxed array, a plain number) declines to the defun.
+	 */
+	private static @Nullable LispVal unary(List<LispVal> args, UnaryD f64, UnaryF f32) {
+		LispFloatArray a = packed(args.get(0));
+		return a == null ? null : switch (a) {
+			case LispDoubleFloatArray x -> like(a, f64.apply(x.data()));
+			case LispSingleFloatArray x -> like(a, f32.apply(x.data()));
+		};
 	}
 
 	// --- reductions -------------------------------------------------------------------
@@ -429,6 +454,20 @@ public final class LinalgSimd {
 	/** The six lane loops of one element-wise operator (two widths x three shapes). */
 	private record Elementwise(ArrayArrayD dd, ArrayArrayF ff, ArrayScalarD ds, ArrayScalarF fs, ScalarArrayD sd,
 			ScalarArrayF sf) {
+	}
+
+	@FunctionalInterface
+	private interface UnaryD {
+
+		double[] apply(double[] x);
+
+	}
+
+	@FunctionalInterface
+	private interface UnaryF {
+
+		float[] apply(float[] x);
+
 	}
 
 	@FunctionalInterface

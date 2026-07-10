@@ -473,6 +473,187 @@ final class JvmSimdVectorTemplate {
 		return out;
 	}
 
+	// --- element-wise unary ufuncs (todo 109) --------------------------------------
+	// exp / sqrt / abs / negative / sign / reciprocal, each with an -into sibling that
+	// writes into the caller's destination (which MAY alias the operand -- element i
+	// depends only on element i, the add-into rule; the guard comment is repeated here
+	// because this call site replaces the vec.lisp defun that carries it). square and
+	// square-into are not kernels: their spliced defuns call vec:mul / vec:mul-into,
+	// whose call sites are intercepted. The oracle is the emap rule -- read widened to
+	// f64, apply, narrow on store. sqrt / abs / neg / 1-over-x have lane forms
+	// bit-identical to that (sqrt and div correctly rounded, abs and neg exact, and the
+	// f32 widen-compute-narrow round trip is exact by the 53 >= 2*24+2 bound); exp and
+	// signum have NO bit-safe lane form (VectorOperators.EXP is not bit-identical to
+	// Math.exp), so they stay de-boxed scalar loops over the same java.lang.Math calls
+	// the compiled defun makes.
+
+	private static final int UOP_EXP = 0;
+
+	private static final int UOP_SQRT = 1;
+
+	private static final int UOP_ABS = 2;
+
+	private static final int UOP_NEG = 3;
+
+	private static final int UOP_SIGN = 4;
+
+	private static final int UOP_RECIP = 5;
+
+	static @Nullable Object simdExp(@Nullable Object v) {
+		return simdUnary(UOP_EXP, v);
+	}
+
+	static @Nullable Object simdSqrt(@Nullable Object v) {
+		return simdUnary(UOP_SQRT, v);
+	}
+
+	static @Nullable Object simdAbs(@Nullable Object v) {
+		return simdUnary(UOP_ABS, v);
+	}
+
+	static @Nullable Object simdNegative(@Nullable Object v) {
+		return simdUnary(UOP_NEG, v);
+	}
+
+	static @Nullable Object simdSign(@Nullable Object v) {
+		return simdUnary(UOP_SIGN, v);
+	}
+
+	static @Nullable Object simdReciprocal(@Nullable Object v) {
+		return simdUnary(UOP_RECIP, v);
+	}
+
+	static @Nullable Object simdExpInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_EXP, out, v);
+	}
+
+	static @Nullable Object simdSqrtInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_SQRT, out, v);
+	}
+
+	static @Nullable Object simdAbsInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_ABS, out, v);
+	}
+
+	static @Nullable Object simdNegativeInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_NEG, out, v);
+	}
+
+	static @Nullable Object simdSignInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_SIGN, out, v);
+	}
+
+	static @Nullable Object simdReciprocalInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_RECIP, out, v);
+	}
+
+	private static @Nullable Object simdUnary(int op, @Nullable Object v) {
+		if (v instanceof float[] fx) {
+			int o = 1 + (int) fx[0];
+			int n = fx.length - o;
+			float[] r = newVecF(n);
+			unaryIntoF(op, r, 2, fx, o, n);
+			return r;
+		}
+		double[] x = (double[]) java.util.Objects.requireNonNull(v);
+		int ox = 1 + (int) x[0];
+		int n = x.length - ox;
+		double[] r = newVec(n);
+		unaryIntoD(op, r, 2, x, ox, n);
+		return r;
+	}
+
+	private static @Nullable Object simdUnaryInto(int op, @Nullable Object out, @Nullable Object v) {
+		if (out instanceof float[] fr) {
+			float[] fx = asFloat(v);
+			int ox = 1 + (int) fx[0];
+			unaryIntoF(op, fr, 1 + (int) fr[0], fx, ox, fx.length - ox);
+			return out;
+		}
+		if (v instanceof float[]) {
+			throw mixedWidth();
+		}
+		double[] r = (double[]) java.util.Objects.requireNonNull(out);
+		double[] x = (double[]) java.util.Objects.requireNonNull(v);
+		int ox = 1 + (int) x[0];
+		unaryIntoD(op, r, 1 + (int) r[0], x, ox, x.length - ox);
+		return out;
+	}
+
+	/** {@code r[or+i] = op(x[ox+i])} over {@code n} elements, lanes where bit-safe. */
+	private static void unaryIntoD(int op, double[] r, int or, double[] x, int ox, int n) {
+		int i = 0;
+		if (n >= THRESHOLD && op != UOP_EXP && op != UOP_SIGN) {
+			int bound = SPECIES.loopBound(n);
+			for (; i < bound; i += SPECIES.length()) {
+				DoubleVector v = DoubleVector.fromArray(SPECIES, x, ox + i);
+				DoubleVector w;
+				if (op == UOP_SQRT) {
+					w = v.lanewise(VectorOperators.SQRT);
+				}
+				else if (op == UOP_ABS) {
+					w = v.abs();
+				}
+				else if (op == UOP_NEG) {
+					w = v.neg();
+				}
+				else {
+					w = DoubleVector.broadcast(SPECIES, 1.0).div(v);
+				}
+				w.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = applyUnary(op, x[ox + i]);
+		}
+	}
+
+	private static void unaryIntoF(int op, float[] r, int or, float[] x, int ox, int n) {
+		int i = 0;
+		if (n >= THRESHOLD && op != UOP_EXP && op != UOP_SIGN) {
+			int bound = FSPECIES.loopBound(n);
+			for (; i < bound; i += FSPECIES.length()) {
+				FloatVector v = FloatVector.fromArray(FSPECIES, x, ox + i);
+				FloatVector w;
+				if (op == UOP_SQRT) {
+					w = v.lanewise(VectorOperators.SQRT);
+				}
+				else if (op == UOP_ABS) {
+					w = v.abs();
+				}
+				else if (op == UOP_NEG) {
+					w = v.neg();
+				}
+				else {
+					w = FloatVector.broadcast(FSPECIES, 1.0f).div(v);
+				}
+				w.intoArray(r, or + i);
+			}
+		}
+		for (; i < n; i++) {
+			r[or + i] = (float) applyUnary(op, x[ox + i]);
+		}
+	}
+
+	private static double applyUnary(int op, double x) {
+		if (op == UOP_EXP) {
+			return Math.exp(x);
+		}
+		if (op == UOP_SQRT) {
+			return Math.sqrt(x);
+		}
+		if (op == UOP_ABS) {
+			return Math.abs(x);
+		}
+		if (op == UOP_NEG) {
+			return -x;
+		}
+		if (op == UOP_SIGN) {
+			return Math.signum(x);
+		}
+		return 1.0 / x;
+	}
+
 	// ================================================================================
 	// linalg: kernels
 	// ================================================================================
@@ -520,6 +701,48 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laDiv(@Nullable Object a, @Nullable Object b) {
 		return laElementwise(OP_DIV, a, b);
+	}
+
+	// The named element-wise unary ufuncs (todo 109): the vec: unary loops at the
+	// operand's own header offset, PARTIAL like every linalg kernel (a general boxed
+	// array or a plain number declines to the defun), and the result keeps the
+	// operand's rank-n header (laNewLike). linalg:square / linalg:reciprocal have no
+	// kernel -- their spliced defuns call linalg:mul / linalg:div.
+
+	static @Nullable Object laExp(@Nullable Object a) {
+		return laUnary(UOP_EXP, a);
+	}
+
+	static @Nullable Object laSqrt(@Nullable Object a) {
+		return laUnary(UOP_SQRT, a);
+	}
+
+	static @Nullable Object laAbs(@Nullable Object a) {
+		return laUnary(UOP_ABS, a);
+	}
+
+	static @Nullable Object laNegative(@Nullable Object a) {
+		return laUnary(UOP_NEG, a);
+	}
+
+	static @Nullable Object laSign(@Nullable Object a) {
+		return laUnary(UOP_SIGN, a);
+	}
+
+	private static @Nullable Object laUnary(int op, @Nullable Object a) {
+		if (a instanceof double[] x) {
+			int off = 1 + (int) x[0];
+			double[] r = laNewLike(x);
+			unaryIntoD(op, r, off, x, off, x.length - off);
+			return r;
+		}
+		if (a instanceof float[] x) {
+			int off = 1 + (int) x[0];
+			float[] r = laNewLikeF(x);
+			unaryIntoF(op, r, off, x, off, x.length - off);
+			return r;
+		}
+		return null;
 	}
 
 	/**

@@ -110,7 +110,36 @@ public final class VecSimd {
 			}
 			throw mixedWidth(name);
 		});
+		installUnary(globalEnv);
 		installInto(globalEnv);
+	}
+
+	/**
+	 * The element-wise unary ufuncs (todo 109): {@code exp}/{@code sqrt}/{@code abs}/
+	 * {@code negative}/{@code sign}/{@code reciprocal}, each with its {@code -into}
+	 * sibling. {@code square}/{@code square-into} are NOT installed -- their
+	 * {@code vec.lisp} bodies call {@code vec:mul}/{@code vec:mul-into}, which resolve
+	 * through the global function namespace to the installed natives, exactly like
+	 * {@code mean}/{@code norm}. An {@code -into} destination MAY alias the operand
+	 * (element {@code i} depends only on element {@code i}, the add-into rule) -- these
+	 * natives replace the scalar {@code vec.lisp} defuns, so that contract is repeated
+	 * here.
+	 */
+	private static void installUnary(Environment globalEnv) {
+		defineUnary(globalEnv, LispNames.VEC_EXP, VecSimdKernels::expInto, VecSimdKernels::expIntoF);
+		defineUnary(globalEnv, LispNames.VEC_SQRT, VecSimdKernels::sqrtInto, VecSimdKernels::sqrtIntoF);
+		defineUnary(globalEnv, LispNames.VEC_ABS, VecSimdKernels::absInto, VecSimdKernels::absIntoF);
+		defineUnary(globalEnv, LispNames.VEC_NEGATIVE, VecSimdKernels::negInto, VecSimdKernels::negIntoF);
+		defineUnary(globalEnv, LispNames.VEC_SIGN, VecSimdKernels::signInto, VecSimdKernels::signIntoF);
+		defineUnary(globalEnv, LispNames.VEC_RECIPROCAL, VecSimdKernels::reciprocalInto,
+				VecSimdKernels::reciprocalIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_EXP_INTO, VecSimdKernels::expInto, VecSimdKernels::expIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_SQRT_INTO, VecSimdKernels::sqrtInto, VecSimdKernels::sqrtIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_ABS_INTO, VecSimdKernels::absInto, VecSimdKernels::absIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_NEGATIVE_INTO, VecSimdKernels::negInto, VecSimdKernels::negIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_SIGN_INTO, VecSimdKernels::signInto, VecSimdKernels::signIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_RECIPROCAL_INTO, VecSimdKernels::reciprocalInto,
+				VecSimdKernels::reciprocalIntoF);
 	}
 
 	/**
@@ -163,6 +192,48 @@ public final class VecSimd {
 			}
 			else {
 				throw mixedWidth(name);
+			}
+			return args.get(0);
+		});
+	}
+
+	/**
+	 * A unary element-wise kernel pair, wrapped as the allocating form: a fresh
+	 * destination of the operand's width and length, written by the same loop the
+	 * {@code -into} form uses (so the two stay bit-identical by construction).
+	 */
+	private static void defineUnary(Environment globalEnv, String name, DoubleKernel1Into f64, FloatKernel1Into f32) {
+		defineFn(globalEnv, name, 1, (fnName, args) -> {
+			LispFloatArray v = array(fnName, args.get(0));
+			return switch (v) {
+				case LispDoubleFloatArray x -> {
+					double[] r = new double[x.data().length];
+					f64.apply(r, x.data());
+					yield vector(r);
+				}
+				case LispSingleFloatArray x -> {
+					float[] r = new float[x.data().length];
+					f32.apply(r, x.data());
+					yield vector(r);
+				}
+			};
+		});
+	}
+
+	/** A unary element-wise -into kernel pair; returns the destination it was given. */
+	private static void defineUnaryInto(Environment globalEnv, String name, DoubleKernel1Into f64,
+			FloatKernel1Into f32) {
+		defineFn(globalEnv, name, 2, (fnName, args) -> {
+			LispFloatArray out = array(fnName, args.get(0));
+			LispFloatArray v = array(fnName, args.get(1));
+			if (out instanceof LispDoubleFloatArray r && v instanceof LispDoubleFloatArray x) {
+				f64.apply(r.data(), x.data());
+			}
+			else if (out instanceof LispSingleFloatArray r && v instanceof LispSingleFloatArray x) {
+				f32.apply(r.data(), x.data());
+			}
+			else {
+				throw mixedWidth(fnName);
 			}
 			return args.get(0);
 		});
@@ -279,6 +350,20 @@ public final class VecSimd {
 	private interface FloatKernel2 {
 
 		float[] apply(float[] a, float[] b);
+
+	}
+
+	@FunctionalInterface
+	private interface DoubleKernel1Into {
+
+		void apply(double[] r, double[] x);
+
+	}
+
+	@FunctionalInterface
+	private interface FloatKernel1Into {
+
+		void apply(float[] r, float[] x);
 
 	}
 
