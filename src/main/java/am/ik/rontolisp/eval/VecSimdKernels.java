@@ -217,9 +217,10 @@ final class VecSimdKernels {
 	// the -into ones the caller's (r MAY alias x -- element i depends only on element i,
 	// the add-into rule). sqrt / abs / neg / 1-over-x have lane forms bit-identical to
 	// the scalar defun (sqrt and div are correctly rounded, abs and neg exact, so the
-	// f32 widen-compute-narrow round trip is exact); exp and signum have NO bit-safe
-	// lane form (VectorOperators.EXP is not bit-identical to Math.exp), so they stay
-	// de-boxed scalar loops calling the same java.lang.Math the interpreter defun does.
+	// f32 widen-compute-narrow round trip is exact); exp / log / tanh / signum have NO
+	// bit-safe lane form (VectorOperators.EXP etc. are not bit-identical to Math.exp),
+	// so they stay de-boxed scalar loops calling the same java.lang.Math the
+	// interpreter defun does.
 
 	static void expInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
@@ -230,6 +231,30 @@ final class VecSimdKernels {
 	static void expIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
 			r[i] = (float) Math.exp(x[i]);
+		}
+	}
+
+	static void logInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.log(x[i]);
+		}
+	}
+
+	static void logIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.log(x[i]);
+		}
+	}
+
+	static void tanhInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.tanh(x[i]);
+		}
+	}
+
+	static void tanhIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.tanh(x[i]);
 		}
 	}
 

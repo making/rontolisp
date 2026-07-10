@@ -123,10 +123,11 @@ final class WasmVecSimdRuntimeBuilder {
 
 	// The element-wise unary ufuncs (todo 109), each with its -into sibling. sqrt /
 	// negative / reciprocal / abs run whole lane groups (WasmVecLoops.gcMap1, mirroring
-	// the wasm defun's own scalar semantics -- see the U_* notes there); exp / sign walk
-	// elements through _v_get / _v_set with the defun's exact f64 sequence (the
-	// WasmExpCompiler Horner approximation, the WasmSignumCompiler (x>0)-(x<0)), so
-	// bit-identity to the scalar path is constructive at both widths.
+	// the wasm defun's own scalar semantics -- see the U_* notes there); exp / log /
+	// tanh / sign walk elements through _v_get / _v_set with the defun's exact f64
+	// sequence (the WasmExpCompiler Horner approximation, the WasmLogCompiler atanh
+	// series, the WasmTanhCompiler clamped exp derivation, the WasmSignumCompiler
+	// (x>0)-(x<0)), so bit-identity to the scalar path is constructive at both widths.
 
 	static final int EXP = 15;
 
@@ -152,10 +153,21 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int RECIPROCAL_INTO = 26;
 
+	// The todo-109 Phase 2 transcendental ufuncs (log / tanh): element loops like exp /
+	// sign, mirroring WasmLogCompiler / WasmTanhCompiler (no lane form exists).
+
+	static final int LOG = 27;
+
+	static final int TANH = 28;
+
+	static final int LOG_INTO = 29;
+
+	static final int TANH_INTO = 30;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 27;
+	static final int FUNC_COUNT = 31;
 
 	/**
 	 * Emits the type index of each function, in emission order (for the function
@@ -168,7 +180,7 @@ final class WasmVecSimdRuntimeBuilder {
 			case V_GET -> WasmLispCompiler.TYPE_V_GET;
 			case V_SET -> WasmLispCompiler.TYPE_V_SET;
 			// One eq param -> eq (sum + the unary ufuncs).
-			case SUM, EXP, SQRT, ABS, NEGATIVE, SIGN, RECIPROCAL -> WasmLispCompiler.TYPE_CALLABLE_BASE;
+			case SUM, EXP, LOG, TANH, SQRT, ABS, NEGATIVE, SIGN, RECIPROCAL -> WasmLispCompiler.TYPE_CALLABLE_BASE;
 			// Three eq params -> eq (the binary -into kernels).
 			case ADD_INTO, SUB_INTO, MUL_INTO, SCALE_INTO, MATVEC_INTO -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
 			// Two eq params -> eq (the binary kernels + the unary -into kernels).
@@ -194,18 +206,22 @@ final class WasmVecSimdRuntimeBuilder {
 			case MUL_INTO -> buildElementwise(Instruction.F64X2_MUL, true, vecBase);
 			case SCALE_INTO -> buildScale(true, vecBase);
 			case MATVEC_INTO -> buildMatvec(true, vecBase);
-			case EXP -> buildUnaryElement(true, false, vecBase);
+			case EXP -> buildUnaryElement(SCALAR_OP_EXP, false, vecBase);
 			case SQRT -> buildUnaryLane(WasmVecLoops.U_SQRT, false, vecBase);
 			case ABS -> buildUnaryLane(WasmVecLoops.U_ABS, false, vecBase);
 			case NEGATIVE -> buildUnaryLane(WasmVecLoops.U_NEG, false, vecBase);
-			case SIGN -> buildUnaryElement(false, false, vecBase);
+			case SIGN -> buildUnaryElement(SCALAR_OP_SIGN, false, vecBase);
 			case RECIPROCAL -> buildUnaryLane(WasmVecLoops.U_RECIP, false, vecBase);
-			case EXP_INTO -> buildUnaryElement(true, true, vecBase);
+			case EXP_INTO -> buildUnaryElement(SCALAR_OP_EXP, true, vecBase);
 			case SQRT_INTO -> buildUnaryLane(WasmVecLoops.U_SQRT, true, vecBase);
 			case ABS_INTO -> buildUnaryLane(WasmVecLoops.U_ABS, true, vecBase);
 			case NEGATIVE_INTO -> buildUnaryLane(WasmVecLoops.U_NEG, true, vecBase);
-			case SIGN_INTO -> buildUnaryElement(false, true, vecBase);
+			case SIGN_INTO -> buildUnaryElement(SCALAR_OP_SIGN, true, vecBase);
 			case RECIPROCAL_INTO -> buildUnaryLane(WasmVecLoops.U_RECIP, true, vecBase);
+			case LOG -> buildUnaryElement(SCALAR_OP_LOG, false, vecBase);
+			case TANH -> buildUnaryElement(SCALAR_OP_TANH, false, vecBase);
+			case LOG_INTO -> buildUnaryElement(SCALAR_OP_LOG, true, vecBase);
+			case TANH_INTO -> buildUnaryElement(SCALAR_OP_TANH, true, vecBase);
 			default -> throw new IllegalArgumentException("no vec: simd helper " + vecFunc);
 		};
 	}
@@ -480,21 +496,56 @@ final class WasmVecSimdRuntimeBuilder {
 		return withLocals(b.toByteArray(), 6, 0, 0, 2, 1, 3);
 	}
 
-	// (vec:exp v) / (vec:sign v) and their -into siblings: an element loop through
-	// _v_get / _v_set (widen on read, compute in f64, narrow on write -- the emap rule),
-	// with the operator emitted as the SAME f64 sequence the boxed defun path uses
-	// (WasmExpCompiler's Horner approximation / WasmSignumCompiler's (x>0)-(x<0)), so
-	// the result is bit-identical to the scalar defun by construction at both widths.
+	// The scalar-sequence unary operators (no lane form exists): each emit helper
+	// consumes an f64 on the stack and leaves the result, using consecutive raw f64
+	// locals starting at the base the caller hands to emitScalarUnaryF64. Shared by
+	// the vec:/linalg: kernels here and NoGcWasmCompiler.compileSimdUnaryF64.
+
+	static final int SCALAR_OP_EXP = 0;
+
+	static final int SCALAR_OP_SIGN = 1;
+
+	static final int SCALAR_OP_LOG = 2;
+
+	static final int SCALAR_OP_TANH = 3;
+
+	/** The number of consecutive f64 locals {@link #emitScalarUnaryF64} needs. */
+	static int scalarOpF64Locals(int scalarOp) {
+		return scalarOp == SCALAR_OP_LOG ? 3 : 2;
+	}
+
+	/**
+	 * Consumes an f64 on the stack and leaves {@code op(x)}, the defun path's exact f64
+	 * sequence, over consecutive raw f64 locals starting at {@code f64Base}.
+	 */
+	static void emitScalarUnaryF64(WasmWriter w, int scalarOp, int f64Base) {
+		switch (scalarOp) {
+			case SCALAR_OP_EXP -> emitExpF64(w, f64Base, f64Base + 1);
+			case SCALAR_OP_SIGN -> emitSignumF64(w, f64Base);
+			case SCALAR_OP_LOG -> emitLogF64(w, f64Base, f64Base + 1, f64Base + 2);
+			case SCALAR_OP_TANH -> emitTanhF64(w, f64Base, f64Base + 1);
+			default -> throw new IllegalArgumentException("no scalar unary op " + scalarOp);
+		}
+	}
+
+	// (vec:exp v) / (vec:log v) / (vec:tanh v) / (vec:sign v) and their -into siblings:
+	// an element loop through _v_get / _v_set (widen on read, compute in f64, narrow on
+	// write -- the emap rule), with the operator emitted as the SAME f64 sequence the
+	// boxed defun path uses (WasmExpCompiler's Horner approximation, WasmLogCompiler's
+	// atanh series, WasmTanhCompiler's clamped exp derivation, WasmSignumCompiler's
+	// (x>0)-(x<0)), so the result is bit-identical to the scalar defun by construction
+	// at both widths.
 	//
-	// i32: count, kind, shift, ng, i. f64: t, acc. eq: vbD, vbV.
-	private static byte[] buildUnaryElement(boolean isExp, boolean into, int vecBase) {
+	// i32: count, kind, shift, ng, i. f64: the op's scratch locals. eq: vbD, vbV.
+	private static byte[] buildUnaryElement(int scalarOp, boolean into, int vecBase) {
 		int params = into ? 2 : 1;
 		int v = into ? 1 : 0;
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, i = params + 4;
-		int t = params + 5, acc = params + 6; // f64
-		int vbD = params + 7, vbV = params + 8; // (ref null eq)
+		int f64Base = params + 5; // f64 scratch
+		int nF64 = scalarOpF64Locals(scalarOp);
+		int vbD = f64Base + nF64, vbV = vbD + 1; // (ref null eq)
 
 		loadHeader(w, v, count, kind, shift, ng);
 		if (into) {
@@ -516,18 +567,13 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.get(w, vbV);
 		WasmVecLoops.get(w, i);
 		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_GET);
-		if (isExp) {
-			emitExpF64(w, t, acc);
-		}
-		else {
-			emitSignumF64(w, t);
-		}
+		emitScalarUnaryF64(w, scalarOp, f64Base);
 		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_SET);
 		w.write(Instruction.DROP);
 		WasmVecLoops.closeIndexLoop(w, i);
 		finish(w, into, count, vbD);
 		w.write(Instruction.END);
-		return withLocals(b.toByteArray(), 5, 2, 0, 0, 2, 0);
+		return withLocals(b.toByteArray(), 5, nF64, 0, 0, 2, 0);
 	}
 
 	/**
@@ -575,6 +621,154 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.F64_LT);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.F64_CONVERT_S_I32);
+	}
+
+	/**
+	 * Consumes an f64 {@code x} on the stack and leaves {@code log(x)}: the exact
+	 * exponent-extraction + atanh-series sequence {@link WasmLogCompiler} emits on the
+	 * boxed defun path, on three raw f64 locals instead of boxed temps ({@code x} is
+	 * reused for {@code s} and {@code m} for {@code u}, exactly as the boxed slots are).
+	 */
+	static void emitLogF64(WasmWriter w, int xLocal, int mLocal, int eLocal) {
+		WasmVecLoops.set(w, xLocal);
+		// The IEEE edges, then the finite positive main path (WasmLogCompiler's order).
+		WasmVecLoops.get(w, xLocal);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.IF, Type.F64.code());
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, Type.F64.code());
+		w.write(Instruction.F64_CONST).writeF64(Double.NEGATIVE_INFINITY);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF, Type.F64.code());
+		w.write(Instruction.F64_CONST).writeF64(Double.NaN);
+		w.write(Instruction.ELSE);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, Type.F64.code());
+		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
+		w.write(Instruction.ELSE);
+		emitLogMainF64(w, xLocal, mLocal, eLocal);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// The finite positive path of emitLogF64; leaves the f64 result on the stack.
+	private static void emitLogMainF64(WasmWriter w, int xLocal, int mLocal, int eLocal) {
+		// e = 0.0; if (x < MIN_NORMAL) { x *= 2^54; e = -54.0 }
+		w.write(Instruction.F64_CONST).writeF64(0.0);
+		WasmVecLoops.set(w, eLocal);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.MIN_NORMAL);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.IF, 0x40);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.SCALE_UP);
+		w.write(Instruction.F64_MUL);
+		WasmVecLoops.set(w, xLocal);
+		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.SCALE_E);
+		WasmVecLoops.set(w, eLocal);
+		w.write(Instruction.END);
+		// e += (f64)((bits(x) >> 52) - 1023)
+		WasmVecLoops.get(w, eLocal);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(52);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1023);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.F64_CONVERT_S_I64);
+		w.write(Instruction.F64_ADD);
+		WasmVecLoops.set(w, eLocal);
+		// m = reinterpret((bits(x) & MANT_MASK) | ONE_BITS), in [1, 2).
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(WasmLogCompiler.MANT_MASK);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(WasmLogCompiler.ONE_BITS);
+		w.write(Instruction.I64_OR);
+		w.write(Instruction.F64_REINTERPRET_I64);
+		WasmVecLoops.set(w, mLocal);
+		// if (m > sqrt(2)) { m *= 0.5; e += 1 }
+		WasmVecLoops.get(w, mLocal);
+		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.SQRT2);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.IF, 0x40);
+		WasmVecLoops.get(w, mLocal);
+		w.write(Instruction.F64_CONST).writeF64(0.5);
+		w.write(Instruction.F64_MUL);
+		WasmVecLoops.set(w, mLocal);
+		WasmVecLoops.get(w, eLocal);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_ADD);
+		WasmVecLoops.set(w, eLocal);
+		w.write(Instruction.END);
+		// s = (m - 1) / (m + 1), reusing xLocal; u = s^2, reusing mLocal.
+		WasmVecLoops.get(w, mLocal);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_SUB);
+		WasmVecLoops.get(w, mLocal);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.F64_DIV);
+		WasmVecLoops.set(w, xLocal);
+		WasmVecLoops.get(w, xLocal);
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_MUL);
+		WasmVecLoops.set(w, mLocal);
+		// Horner over u, then ln(m) = (poly * s) * 2, then + e*ln2.
+		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.HORNER_COEFFS[0]);
+		for (int i = 1; i < WasmLogCompiler.HORNER_COEFFS.length; i++) {
+			WasmVecLoops.get(w, mLocal);
+			w.write(Instruction.F64_MUL);
+			w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.HORNER_COEFFS[i]);
+			w.write(Instruction.F64_ADD);
+		}
+		WasmVecLoops.get(w, xLocal);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		w.write(Instruction.F64_MUL);
+		WasmVecLoops.get(w, eLocal);
+		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.LN2);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_ADD);
+	}
+
+	/**
+	 * Consumes an f64 {@code x} on the stack and leaves {@code tanh(x)}: the exact
+	 * clamped {@code (e^(2x)-1)/(e^(2x)+1)} derivation {@link WasmTanhCompiler} emits on
+	 * the boxed defun path, over the same two raw f64 locals as {@link #emitExpF64}.
+	 */
+	static void emitTanhF64(WasmWriter w, int tLocal, int accLocal) {
+		w.write(Instruction.F64_CONST).writeF64(2.0);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.F64_CONST).writeF64(-WasmTanhCompiler.CLAMP);
+		w.write(Instruction.F64_MAX);
+		w.write(Instruction.F64_CONST).writeF64(WasmTanhCompiler.CLAMP);
+		w.write(Instruction.F64_MIN);
+		emitExpF64(w, tLocal, accLocal);
+		w.write(Instruction.DROP);
+		WasmVecLoops.get(w, accLocal);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_SUB);
+		WasmVecLoops.get(w, accLocal);
+		w.write(Instruction.F64_CONST).writeF64(1.0);
+		w.write(Instruction.F64_ADD);
+		w.write(Instruction.F64_DIV);
 	}
 
 	// --- reductions ----------------------------------------------------------------

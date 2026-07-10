@@ -38,12 +38,13 @@ final class JvmSimdCompiler {
 			// The element-wise unary ufuncs (todo 109). vec:square / vec:square-into are
 			// NOT here: their spliced defuns call vec:mul / vec:mul-into, so they are
 			// accelerated transitively, like mean/norm.
-			Map.entry(LispNames.VEC_EXP, 1), Map.entry(LispNames.VEC_SQRT, 1), Map.entry(LispNames.VEC_ABS, 1),
-			Map.entry(LispNames.VEC_NEGATIVE, 1), Map.entry(LispNames.VEC_SIGN, 1),
-			Map.entry(LispNames.VEC_RECIPROCAL, 1), Map.entry(LispNames.VEC_EXP_INTO, 2),
-			Map.entry(LispNames.VEC_SQRT_INTO, 2), Map.entry(LispNames.VEC_ABS_INTO, 2),
-			Map.entry(LispNames.VEC_NEGATIVE_INTO, 2), Map.entry(LispNames.VEC_SIGN_INTO, 2),
-			Map.entry(LispNames.VEC_RECIPROCAL_INTO, 2));
+			Map.entry(LispNames.VEC_EXP, 1), Map.entry(LispNames.VEC_LOG, 1), Map.entry(LispNames.VEC_TANH, 1),
+			Map.entry(LispNames.VEC_SQRT, 1), Map.entry(LispNames.VEC_ABS, 1), Map.entry(LispNames.VEC_NEGATIVE, 1),
+			Map.entry(LispNames.VEC_SIGN, 1), Map.entry(LispNames.VEC_RECIPROCAL, 1),
+			Map.entry(LispNames.VEC_EXP_INTO, 2), Map.entry(LispNames.VEC_LOG_INTO, 2),
+			Map.entry(LispNames.VEC_TANH_INTO, 2), Map.entry(LispNames.VEC_SQRT_INTO, 2),
+			Map.entry(LispNames.VEC_ABS_INTO, 2), Map.entry(LispNames.VEC_NEGATIVE_INTO, 2),
+			Map.entry(LispNames.VEC_SIGN_INTO, 2), Map.entry(LispNames.VEC_RECIPROCAL_INTO, 2));
 
 	/**
 	 * Returns whether the given {@code simd} package member is one of the vectorizable
@@ -58,9 +59,10 @@ final class JvmSimdCompiler {
 		return List.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_DOT,
 				LispNames.VEC_SUM, LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
 				LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO, LispNames.VEC_EXP,
-				LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN,
-				LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP_INTO, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO,
-				LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO);
+				LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE,
+				LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO,
+				LispNames.VEC_TANH_INTO, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_NEGATIVE_INTO,
+				LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

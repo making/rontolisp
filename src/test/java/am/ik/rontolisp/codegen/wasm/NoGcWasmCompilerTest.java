@@ -899,6 +899,43 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void logAndTanhLowerNativelyOnNoGc() {
+		// todo 109 Phase 2: vec:log / vec:tanh (and -into) reuse the GC backend's
+		// raw-f64 emitters (WasmVecSimdRuntimeBuilder.emitLogF64 / emitTanhF64), so
+		// BOTH lowerings drive the same scalar element loop -- no 0xFD SIMD opcode even
+		// under --simd, and the log mantissa-normalization constant (f64.const sqrt(2),
+		// WasmLogCompiler.SQRT2) appears in the body. The probe avoids vec:sum (whose
+		// --simd lowering IS v128) so 0xFD absence is log/tanh's.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:log-into o v)
+				    (vec:tanh-into o o)
+				    (+ (vec:aref (vec:log v) 0) (vec:aref (vec:tanh o) 1))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		int[] sqrt2 = new int[9];
+		sqrt2[0] = 0x44; // f64.const
+		long bits = Double.doubleToRawLongBits(WasmLogCompiler.SQRT2);
+		for (int i = 0; i < 8; i++) {
+			sqrt2[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
+		}
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			assertThat(containsSequence(code, sqrt2)).as("log SQRT2 constant, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the log/tanh lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sum (vec:tanh-into o (vec:log-into o v)))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("log-into / tanh-into skip the bump allocator").isEqualTo(2);
+	}
+
+	@Test
 	void matvecIntoIsAClearCompileErrorLikeMatvec() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))

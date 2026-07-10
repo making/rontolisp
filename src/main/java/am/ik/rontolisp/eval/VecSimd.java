@@ -115,18 +115,20 @@ public final class VecSimd {
 	}
 
 	/**
-	 * The element-wise unary ufuncs (todo 109): {@code exp}/{@code sqrt}/{@code abs}/
-	 * {@code negative}/{@code sign}/{@code reciprocal}, each with its {@code -into}
-	 * sibling. {@code square}/{@code square-into} are NOT installed -- their
-	 * {@code vec.lisp} bodies call {@code vec:mul}/{@code vec:mul-into}, which resolve
-	 * through the global function namespace to the installed natives, exactly like
-	 * {@code mean}/{@code norm}. An {@code -into} destination MAY alias the operand
-	 * (element {@code i} depends only on element {@code i}, the add-into rule) -- these
-	 * natives replace the scalar {@code vec.lisp} defuns, so that contract is repeated
-	 * here.
+	 * The element-wise unary ufuncs (todo 109): {@code exp}/{@code log}/{@code tanh}/
+	 * {@code sqrt}/{@code abs}/{@code negative}/{@code sign}/{@code reciprocal}, each
+	 * with its {@code -into} sibling. {@code square}/{@code square-into} are NOT
+	 * installed -- their {@code vec.lisp} bodies call
+	 * {@code vec:mul}/{@code vec:mul-into}, which resolve through the global function
+	 * namespace to the installed natives, exactly like {@code mean}/{@code norm}. An
+	 * {@code -into} destination MAY alias the operand (element {@code i} depends only on
+	 * element {@code i}, the add-into rule) -- these natives replace the scalar
+	 * {@code vec.lisp} defuns, so that contract is repeated here.
 	 */
 	private static void installUnary(Environment globalEnv) {
 		defineUnary(globalEnv, LispNames.VEC_EXP, VecSimdKernels::expInto, VecSimdKernels::expIntoF);
+		defineUnary(globalEnv, LispNames.VEC_LOG, VecSimdKernels::logInto, VecSimdKernels::logIntoF);
+		defineUnary(globalEnv, LispNames.VEC_TANH, VecSimdKernels::tanhInto, VecSimdKernels::tanhIntoF);
 		defineUnary(globalEnv, LispNames.VEC_SQRT, VecSimdKernels::sqrtInto, VecSimdKernels::sqrtIntoF);
 		defineUnary(globalEnv, LispNames.VEC_ABS, VecSimdKernels::absInto, VecSimdKernels::absIntoF);
 		defineUnary(globalEnv, LispNames.VEC_NEGATIVE, VecSimdKernels::negInto, VecSimdKernels::negIntoF);
@@ -134,6 +136,8 @@ public final class VecSimd {
 		defineUnary(globalEnv, LispNames.VEC_RECIPROCAL, VecSimdKernels::reciprocalInto,
 				VecSimdKernels::reciprocalIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_EXP_INTO, VecSimdKernels::expInto, VecSimdKernels::expIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_LOG_INTO, VecSimdKernels::logInto, VecSimdKernels::logIntoF);
+		defineUnaryInto(globalEnv, LispNames.VEC_TANH_INTO, VecSimdKernels::tanhInto, VecSimdKernels::tanhIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_SQRT_INTO, VecSimdKernels::sqrtInto, VecSimdKernels::sqrtIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_ABS_INTO, VecSimdKernels::absInto, VecSimdKernels::absIntoF);
 		defineUnaryInto(globalEnv, LispNames.VEC_NEGATIVE_INTO, VecSimdKernels::negInto, VecSimdKernels::negIntoF);

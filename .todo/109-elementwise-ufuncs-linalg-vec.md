@@ -1,6 +1,51 @@
 # 109 — Named element-wise math functions (numpy ufunc parity) for `linalg:` and `vec:`
 
-**Status: PHASE 1 + 1.5 DONE (2026-07-10). Phases 2 and 3 remain.**
+**Status: PHASE 1 + 1.5 DONE; PHASE 2 PARTIAL — `log` + `tanh` DONE (2026-07-10, first
+release), `sin`/`cos`/`tan` + `asin`/`acos`/`atan`/`sinh`/`cosh` remain (second release).
+Phase 3 not started.**
+
+## Phase 2 first release — `log` + `tanh` (DONE 2026-07-10)
+
+The prerequisite WASM software implementations landed first, then the ufunc layer rode
+the Phase 1 recipe unchanged:
+
+- **Scalar builtins**: `WasmLogCompiler` (exponent extraction via
+  `i64.reinterpret_f64` + bit ops — `WasmWriter` gained a 64-bit `writeSignedLeb128(long)`
+  for the mantissa-mask `i64.const`s — mantissa normalized into `(sqrt2/2, sqrt2]`, atanh
+  series `2s(1 + u/3 + ... + u^5/11)`, ~1e-10 relative; denormals pre-scaled by 2^54;
+  NaN/±0/negative/+inf branches match `Math.log`) and `WasmTanhCompiler`
+  (`(e^(2x)-1)/(e^(2x)+1)` over the shared `WasmExpCompiler.emitExpCore`, the doubled
+  argument clamped to ±40 so large inputs saturate to exactly ±1.0 branch-free;
+  `(tanh -0.0)` = `0.0`, the signum-class edge; tiny-x cancellation ~1e-8 relative,
+  documented). Both removed from `BuiltinFunctionWrappers.WASM_UNSUPPORTED`, so
+  `#'log`/`#'tanh` and the compiled `eval` work; constants package-private for the
+  kernel mirrors. ci-spec gained `log-tanh-exact-cross-backend-cases` (log(1), tanh(0),
+  tanh(±25) — integer-exact only).
+- **Defuns**: `linalg:log`/`linalg:tanh` (named emaps), `vec:log`/`vec:tanh` +
+  `-into` siblings; PackageRegistry exports, LispNames constants.
+- **`--simd`**: interpreter (`VecSimdKernels.logInto`/`tanhInto` + F variants,
+  `LinalgSimdKernels.log`/`tanh`), JVM (`UOP_LOG`/`UOP_TANH`, `hasLaneForm` gate — NO
+  lane forms anywhere, de-boxed scalar loops are the ceiling), wasm-GC
+  (`WasmVecSimdRuntimeBuilder` LOG/TANH/LOG_INTO/TANH_INTO, FUNC_COUNT 27 → 31;
+  `WasmLinalgSimdRuntimeBuilder` LOG/TANH, FUNC_COUNT 20 → 22; `userFuncBase()` shift
+  47 → 53; raw-f64 emitters `emitLogF64`/`emitTanhF64` mirror the boxed compilers'
+  exact op order, dispatched via `SCALAR_OP_*`/`emitScalarUnaryF64`), `--no-gc`
+  (`compileSimdUnaryF64` generalized from the `isExp` boolean to the `SCALAR_OP_*`
+  selector; both lowerings emit the identical element loop).
+- Docs en+ja: log/sinh-cosh-tanh/math-backends updated, `linalg-log`/`linalg-tanh`
+  pages + catalog + functions.md rows, simd guide lists + `-into` table (nine unary
+  ufuncs), linear-algebra ufunc list. `.kb/vec.md`/`.kb/linalg-simd.md` counts updated.
+
+## Phase 2 second release — the remaining trig/hyperbolic (NOT STARTED)
+
+`sin`/`cos`/`tan` need real range reduction (payne-hanek-lite or argument folding over
+π/2 quadrants) — deliberately deferred as the design-heavy half. `asin`/`acos`/`atan`
+need their own series/reductions; `sinh`/`cosh` could derive from the software exp like
+tanh (mind overflow at |x| > ~350 where e^x overflows but sinh doesn't... it does too at
+710; the real issue is exp's Taylor accuracy degrading for |t| > ~1, i.e. |x| > 256) but
+were deferred with them. All eight stay in `BuiltinFunctionWrappers.WASM_UNSUPPORTED`
+and interpreter/JVM-only; do NOT add their ufuncs until the wasm scalar exists (the
+"every function behaves identically everywhere" principle).
 
 Phase 1 shipped `exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` in BOTH
 packages (each `vec:` member with its `-into` sibling), intercepted under `--simd` on

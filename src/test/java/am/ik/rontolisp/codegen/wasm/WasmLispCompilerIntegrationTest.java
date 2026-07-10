@@ -865,6 +865,56 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void noGcRunsLogAndTanhUnderBothLowerings() throws Exception {
+		// todo 109 Phase 2: vec:log / vec:tanh (+ -into) reuse the GC backend's raw-f64
+		// emitters (the WasmLogCompiler atanh series, the WasmTanhCompiler clamped exp
+		// derivation), so a --no-gc value equals the wasm-GC backend's exactly at both
+		// widths -- the nontrivial probes are compared against a wasm-GC run, the exact
+		// ones (log(1) = 0, tanh(0) = 0, the tanh saturation) to literals.
+		String wasmGcLogD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:log #d(10.0)) 0))))", false);
+		String wasmGcLogF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:log #f(10.0)) 0))))", false);
+		String wasmGcTanhD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:tanh #d(1.0)) 0))))", false);
+		String wasmGcTanhF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:tanh #f(1.0)) 0))))", false);
+		String source = """
+				(defun logd (i) (truncate (* 1000000 (vec:aref (vec:log #d(10.0)) 0))))
+				(defun logf (i) (truncate (* 1000000 (vec:aref (vec:log #f(10.0)) 0))))
+				(defun logone (i) (truncate (+ 5 (vec:sum (vec:log (vec:ones 3))))))
+				(defun loginto (i)
+				  (let ((v #d(1.0 1.0 1.0 1.0)))
+				    (vec:log-into v v)
+				    (truncate (+ 5 (vec:sum v)))))
+				(defun tanhd (i) (truncate (* 1000000 (vec:aref (vec:tanh #d(1.0)) 0))))
+				(defun tanhf (i) (truncate (* 1000000 (vec:aref (vec:tanh #f(1.0)) 0))))
+				(defun tanhsat (i) (truncate (vec:aref (vec:tanh #d(-25.0 0.0 25.0)) i)))
+				(defun tanhinto (i)
+				  (let ((o (vec:zeros 3)))
+				    (vec:tanh-into o #d(-25.0 0.0 25.0))
+				    (truncate (+ (* 100 (vec:aref o 0)) (* 10 (vec:aref o 1)) (vec:aref o 2)))))
+				(rontolisp:wasm-export 'logd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'logf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'logone :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'loginto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'tanhd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'tanhf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'tanhsat :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'tanhinto :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, source, "logd", "0")).isEqualTo(wasmGcLogD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "logf", "0")).isEqualTo(wasmGcLogF);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "logone", "0")).isEqualTo("5");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "loginto", "0")).isEqualTo("5");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhd", "0")).isEqualTo(wasmGcTanhD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhf", "0")).isEqualTo(wasmGcTanhF);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhsat", "0")).isEqualTo("-1");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhsat", "1")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhsat", "2")).isEqualTo("1");
+			// tanh-into then read back the saturated triple: -100 + 0 + 1.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhinto", "0")).isEqualTo("-99");
+		}
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,
@@ -4362,6 +4412,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void logSoftwareApproximation() throws Exception {
+		// WASM has no native log instruction; it is approximated in f64 (exponent
+		// extraction + an atanh series, relative error ~1e-10), so results match
+		// Math.log up to the printer's six decimal places but not bit-exactly. log(1)
+		// is exactly 0.0.
+		assertThat(compileAndRun("(print (log 1))")).isEqualTo("0.0");
+		assertThat(Double.parseDouble(compileAndRun("(print (log 2))"))).isCloseTo(Math.log(2), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 10.0))"))).isCloseTo(Math.log(10), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 0.9))"))).isCloseTo(Math.log(0.9), within(1e-5));
+		// Both far ends of the exponent range, including a denormal (pre-scaled by 2^54).
+		assertThat(Double.parseDouble(compileAndRun("(print (log 1e300))"))).isCloseTo(Math.log(1e300), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (log 4.9e-324))"))).isCloseTo(Math.log(4.9e-324),
+				within(1e-5));
+		// The IEEE edges match Math.log.
+		assertThat(compileAndRun("(print (log 0.0))")).isEqualTo("-Infinity");
+		assertThat(compileAndRun("(print (log -1.0))")).isEqualTo("NaN");
+		// log as a first-class value over an integer argument.
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'log 10))"))).isCloseTo(Math.log(10),
+				within(1e-5));
+	}
+
+	@Test
+	void tanhSoftwareApproximation() throws Exception {
+		// WASM derives tanh from the software exp -- (e^(2x)-1)/(e^(2x)+1) with the
+		// doubled argument clamped to +/-40 -- so results match Math.tanh up to the
+		// printer's six decimal places but not bit-exactly. tanh(0) is exactly 0.0 and
+		// the clamp saturates large arguments to exactly +/-1.0.
+		assertThat(compileAndRun("(print (tanh 0))")).isEqualTo("0.0");
+		assertThat(Double.parseDouble(compileAndRun("(print (tanh 1.0))"))).isCloseTo(Math.tanh(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tanh -0.5))"))).isCloseTo(Math.tanh(-0.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tanh 0.001))"))).isCloseTo(Math.tanh(0.001), within(1e-5));
+		assertThat(compileAndRun("(print (tanh 25.0))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (tanh -25.0))")).isEqualTo("-1.0");
+		// tanh as a first-class value.
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'tanh 1))"))).isCloseTo(Math.tanh(1),
+				within(1e-5));
+	}
+
+	@Test
 	void sqrt() throws Exception {
 		assertThat(compileAndRun("(print (sqrt 16))")).isEqualTo("4.0");
 		assertThat(compileAndRun("(print (sqrt 25))")).isEqualTo("5.0");
@@ -4478,7 +4567,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void transcendentalFunctionsAreUnsupported() {
-		// sin/cos/tan/exp/log/etc. have no native WASM instruction and are rejected.
+		// sin/cos/tan/asin/acos/atan/sinh/cosh have no native WASM instruction and no
+		// software approximation (yet), so they are rejected (exp/log/tanh have one).
 		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (sin 0))")))
 			.isInstanceOf(UnsupportedOperationException.class);
 	}
@@ -6195,9 +6285,11 @@ class WasmLispCompilerIntegrationTest {
 
 	// The element-wise unary ufuncs (todo 109): every op at lengths on both sides of a
 	// lane-group boundary, both widths (the signed operand is arange - 2, so the sign
-	// mix hits abs/negative/sign), exp over reciprocal's bounded (0, 1] range, the wasm
-	// defun's own signed-zero edges (0 - x negation, abs keeping -0.0, sign mapping
-	// -0.0 to 0.0 -- the kernels mirror THIS backend's defun, not java.lang.Math), and
+	// mix hits abs/negative/sign), exp over reciprocal's bounded (0, 1] range, log over
+	// strictly positive inputs, tanh over the sign mix plus its saturation and -0.0 (0.0
+	// on this backend) edges, the wasm defun's own signed-zero edges (0 - x negation,
+	// abs keeping -0.0, sign mapping -0.0 to 0.0 -- the kernels mirror THIS backend's
+	// defun, not java.lang.Math), and
 	// the -into siblings: destination identity, in-place aliasing (the add-into rule)
 	// and a destination longer than the operand keeping its tail elements.
 	private static final String UNARY_UFUNCS = """
@@ -6210,10 +6302,16 @@ class WasmLispCompilerIntegrationTest {
 			    (print (vec:reciprocal (vec:add (vec:arange n) (vec:ones n))))
 			    (print (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float))))
 			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n) (vec:ones n)))))
-			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float)))))))
+			    (print (vec:exp (vec:reciprocal (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float)))))
+			    (print (vec:log (vec:add (vec:arange n) (vec:ones n))))
+			    (print (vec:log (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float))))
+			    (print (vec:tanh v))
+			    (print (vec:tanh f))))
 			(print (vec:negative #d(0.0 -0.0 1.5)))
 			(print (vec:abs #d(-0.0 0.0 -2.5)))
 			(print (vec:sign #d(-0.0 0.0 -3.5 3.5)))
+			(print (vec:tanh #d(-25.0 -0.0 0.0 25.0)))
+			(print (vec:log #d(1.0 0.5 4096.0)))
 			(let ((o (vec:zeros 5)))
 			  (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0 25.0 36.0))))
 			  (print o)
@@ -6222,7 +6320,9 @@ class WasmLispCompilerIntegrationTest {
 			  (print (vec:abs-into o o))
 			  (print (vec:sign-into o o))
 			  (print (vec:reciprocal-into o (vec:add (vec:arange 5) (vec:ones 5))))
-			  (print (vec:square-into o o)))
+			  (print (vec:square-into o o))
+			  (print (vec:log-into o (vec:add (vec:arange 5) (vec:ones 5))))
+			  (print (vec:tanh-into o o)))
 			(let ((long (vec:scale (vec:ones 7) 9.0)))
 			  (print (vec:sqrt-into long #d(4.0 9.0 16.0)))
 			  (print (vec:reciprocal-into long #d(2.0 4.0)))
@@ -6486,11 +6586,21 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath("(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1))))");
 		assertLinalgMatchesTheScalarPath(
 				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 8 'single-float) 1))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:log (linalg:add (linalg:arange 200) 1)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:log (linalg:add (linalg:arange 0 8 'single-float) 1)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.03)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:tanh (linalg:arange 0 8 'single-float)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #d(-25.0 -0.0 0.0 25.0)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:negative #d(0.0 -0.0 1.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:abs #d(-0.0 0.0 -2.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sign #d(-0.0 0.0 -3.5 3.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sqrt #(4 9)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:abs #(-1 2)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:log #(1 4 9)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #(-1 0 1)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:square 3))");
 	}
 

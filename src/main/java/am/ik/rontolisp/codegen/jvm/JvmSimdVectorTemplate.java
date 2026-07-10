@@ -499,8 +499,20 @@ final class JvmSimdVectorTemplate {
 
 	private static final int UOP_RECIP = 5;
 
+	private static final int UOP_LOG = 6;
+
+	private static final int UOP_TANH = 7;
+
 	static @Nullable Object simdExp(@Nullable Object v) {
 		return simdUnary(UOP_EXP, v);
+	}
+
+	static @Nullable Object simdLog(@Nullable Object v) {
+		return simdUnary(UOP_LOG, v);
+	}
+
+	static @Nullable Object simdTanh(@Nullable Object v) {
+		return simdUnary(UOP_TANH, v);
 	}
 
 	static @Nullable Object simdSqrt(@Nullable Object v) {
@@ -525,6 +537,14 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdExpInto(@Nullable Object out, @Nullable Object v) {
 		return simdUnaryInto(UOP_EXP, out, v);
+	}
+
+	static @Nullable Object simdLogInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_LOG, out, v);
+	}
+
+	static @Nullable Object simdTanhInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_TANH, out, v);
 	}
 
 	static @Nullable Object simdSqrtInto(@Nullable Object out, @Nullable Object v) {
@@ -583,7 +603,7 @@ final class JvmSimdVectorTemplate {
 	/** {@code r[or+i] = op(x[ox+i])} over {@code n} elements, lanes where bit-safe. */
 	private static void unaryIntoD(int op, double[] r, int or, double[] x, int ox, int n) {
 		int i = 0;
-		if (n >= THRESHOLD && op != UOP_EXP && op != UOP_SIGN) {
+		if (n >= THRESHOLD && hasLaneForm(op)) {
 			int bound = SPECIES.loopBound(n);
 			for (; i < bound; i += SPECIES.length()) {
 				DoubleVector v = DoubleVector.fromArray(SPECIES, x, ox + i);
@@ -610,7 +630,7 @@ final class JvmSimdVectorTemplate {
 
 	private static void unaryIntoF(int op, float[] r, int or, float[] x, int ox, int n) {
 		int i = 0;
-		if (n >= THRESHOLD && op != UOP_EXP && op != UOP_SIGN) {
+		if (n >= THRESHOLD && hasLaneForm(op)) {
 			int bound = FSPECIES.loopBound(n);
 			for (; i < bound; i += FSPECIES.length()) {
 				FloatVector v = FloatVector.fromArray(FSPECIES, x, ox + i);
@@ -635,9 +655,21 @@ final class JvmSimdVectorTemplate {
 		}
 	}
 
+	// exp / log / tanh / signum have no lane form bit-identical to java.lang.Math, so
+	// they stay scalar loops (see the section comment above).
+	private static boolean hasLaneForm(int op) {
+		return op == UOP_SQRT || op == UOP_ABS || op == UOP_NEG || op == UOP_RECIP;
+	}
+
 	private static double applyUnary(int op, double x) {
 		if (op == UOP_EXP) {
 			return Math.exp(x);
+		}
+		if (op == UOP_LOG) {
+			return Math.log(x);
+		}
+		if (op == UOP_TANH) {
+			return Math.tanh(x);
 		}
 		if (op == UOP_SQRT) {
 			return Math.sqrt(x);
@@ -711,6 +743,14 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laExp(@Nullable Object a) {
 		return laUnary(UOP_EXP, a);
+	}
+
+	static @Nullable Object laLog(@Nullable Object a) {
+		return laUnary(UOP_LOG, a);
+	}
+
+	static @Nullable Object laTanh(@Nullable Object a) {
+		return laUnary(UOP_TANH, a);
 	}
 
 	static @Nullable Object laSqrt(@Nullable Object a) {

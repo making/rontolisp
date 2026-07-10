@@ -494,6 +494,17 @@ class JvmSimdAccelCompilerTest {
 		assertMatchesScalarReference(
 				"(print (round (* 1000000 (vec:sum (vec:exp (vec:reciprocal (vec:add (vec:arange 200) (vec:ones 200))))))))");
 		assertMatchesScalarReference("(print (vec:exp #d(0.0 1.0)))");
+		// log over strictly positive inputs, tanh over a sign-mixed range (todo 109
+		// Phase 2 -- Math.log / Math.tanh scalar loops on this backend).
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarReference("(print (vec:log (vec:add (vec:arange %s) (vec:ones %s))))".formatted(n, n));
+			assertMatchesScalarReference(
+					"(print (vec:tanh (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.03)))"
+						.formatted(n, n));
+		}
+		assertMatchesScalarReference(
+				"(print (vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
+		assertMatchesScalarReference("(print (vec:tanh (vec:arange 200 'single-float)))");
 	}
 
 	@Test
@@ -511,10 +522,11 @@ class JvmSimdAccelCompilerTest {
 				  (vec:abs-into v v)
 				  (print v))
 				""");
-		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square" }) {
+		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh" }) {
 			assertMatchesScalarReference(
 					"(print (vec:" + op + "-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
 		}
+		assertMatchesScalarReference("(print (vec:log-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
 	}
 
 	@Test

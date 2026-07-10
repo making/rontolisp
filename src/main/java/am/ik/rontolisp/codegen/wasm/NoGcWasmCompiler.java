@@ -2476,9 +2476,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.VEC_DOT, LispNames.VEC_NORM, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
 			LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_SQRT, LispNames.VEC_ABS,
 			LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP,
-			LispNames.VEC_SIGN, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO,
-			LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_EXP_INTO,
-			LispNames.VEC_SIGN_INTO);
+			LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIGN, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO,
+			LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO,
+			LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO, LispNames.VEC_SIGN_INTO);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
@@ -2551,9 +2551,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_ADD_INTO,
 					LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_SQRT,
 					LispNames.VEC_ABS, LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL,
-					LispNames.VEC_EXP, LispNames.VEC_SIGN, LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO,
-					LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO,
-					LispNames.VEC_EXP_INTO, LispNames.VEC_SIGN_INTO ->
+					LispNames.VEC_EXP, LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIGN,
+					LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO,
+					LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_EXP_INTO,
+					LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO, LispNames.VEC_SIGN_INTO ->
 				operandWidth;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
@@ -2597,8 +2598,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_SCALE_INTO -> compileSimdScale(args, fn, true);
 			// The arithmetic unary ufuncs (todo 109): NATIVE IEEE per-element semantics
 			// (this backend has no vec.lisp defun to mirror; see WasmVecLoops.simdMap1).
-			// exp / sign reuse the GC backend's raw-f64 emitters instead (todo 109
-			// Phase 1.5; see compileSimdUnaryF64).
+			// exp / log / tanh / sign reuse the GC backend's raw-f64 emitters instead
+			// (todo 109 Phases 1.5 and 2; see compileSimdUnaryF64).
 			case LispNames.VEC_SQRT -> compileSimdUnary(args, fn, WasmVecLoops.U_SQRT, false, "vec:sqrt");
 			case LispNames.VEC_ABS -> compileSimdUnary(args, fn, WasmVecLoops.U_ABS, false, "vec:abs");
 			case LispNames.VEC_SQUARE -> compileSimdUnary(args, fn, WasmVecLoops.U_SQUARE, false, "vec:square");
@@ -2612,10 +2613,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdUnary(args, fn, WasmVecLoops.U_NEG, true, "vec:negative-into");
 			case LispNames.VEC_RECIPROCAL_INTO ->
 				compileSimdUnary(args, fn, WasmVecLoops.U_RECIP, true, "vec:reciprocal-into");
-			case LispNames.VEC_EXP -> compileSimdUnaryF64(args, fn, true, false, "vec:exp");
-			case LispNames.VEC_SIGN -> compileSimdUnaryF64(args, fn, false, false, "vec:sign");
-			case LispNames.VEC_EXP_INTO -> compileSimdUnaryF64(args, fn, true, true, "vec:exp-into");
-			case LispNames.VEC_SIGN_INTO -> compileSimdUnaryF64(args, fn, false, true, "vec:sign-into");
+			case LispNames.VEC_EXP ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_EXP, false, "vec:exp");
+			case LispNames.VEC_LOG ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_LOG, false, "vec:log");
+			case LispNames.VEC_TANH ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_TANH, false, "vec:tanh");
+			case LispNames.VEC_SIGN ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIGN, false, "vec:sign");
+			case LispNames.VEC_EXP_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_EXP, true, "vec:exp-into");
+			case LispNames.VEC_LOG_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_LOG, true, "vec:log-into");
+			case LispNames.VEC_TANH_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_TANH, true, "vec:tanh-into");
+			case LispNames.VEC_SIGN_INTO ->
+				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIGN, true, "vec:sign-into");
 			case LispNames.VEC_SUM -> compileSimdSum(args, fn);
 			case LispNames.VEC_DOT -> compileSimdDot(args, fn);
 			// mean and norm are composites over sum/dot/length -- expand and recompile so
@@ -2845,7 +2858,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// form anywhere and sign's is not worth one, so BOTH --simd modes drive the same
 	// one-element-per-iteration loop: an f32 element widens on read and narrows on
 	// store (the emap rule). The destination MAY alias v (the add-into rule).
-	private Ty compileSimdUnaryF64(List<LispVal> args, Fn fn, boolean isExp, boolean into, String what) {
+	private Ty compileSimdUnaryF64(List<LispVal> args, Fn fn, int scalarOp, boolean into, String what) {
 		requireArgc(args, into ? 3 : 2, what, fn);
 		Ty vecTy = packedVecType(args.get(1), fn);
 		boolean single = vecTy == Ty.F32VEC;
@@ -2859,8 +2872,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, vL, vp);
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
-		int t = fn.allocLocal(Ty.FLOAT);
-		int acc = isExp ? fn.allocLocal(Ty.FLOAT) : -1;
+		int f64Base = fn.allocLocal(Ty.FLOAT);
+		for (int k = 1; k < WasmVecSimdRuntimeBuilder.scalarOpF64Locals(scalarOp); k++) {
+			fn.allocLocal(Ty.FLOAT);
+		}
 		int stride = single ? 4 : 8;
 		WasmVecLoops.openScalarCountLoop(w, count, rem);
 		WasmVecLoops.get(w, dp);
@@ -2869,12 +2884,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (single) {
 			w.write(Instruction.F64_PROMOTE_F32);
 		}
-		if (isExp) {
-			WasmVecSimdRuntimeBuilder.emitExpF64(w, t, acc);
-		}
-		else {
-			WasmVecSimdRuntimeBuilder.emitSignumF64(w, t);
-		}
+		WasmVecSimdRuntimeBuilder.emitScalarUnaryF64(w, scalarOp, f64Base);
 		if (single) {
 			w.write(Instruction.F32_DEMOTE_F64);
 		}

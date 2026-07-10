@@ -121,6 +121,12 @@
 (defun vec:exp (v)
   (vec::%map1 #'exp v))
 
+(defun vec:log (v)
+  (vec::%map1 #'log v))
+
+(defun vec:tanh (v)
+  (vec::%map1 #'tanh v))
+
 (defun vec:sqrt (v)
   (vec::%map1 #'sqrt v))
 
@@ -184,6 +190,12 @@
 
 (defun vec:exp-into (out v)
   (vec::%map1-into out #'exp v))
+
+(defun vec:log-into (out v)
+  (vec::%map1-into out #'log v))
+
+(defun vec:tanh-into (out v)
+  (vec::%map1-into out #'tanh v))
 
 (defun vec:sqrt-into (out v)
   (vec::%map1-into out #'sqrt v))

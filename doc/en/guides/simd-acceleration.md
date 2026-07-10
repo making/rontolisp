@@ -42,7 +42,7 @@ Access: `vec:aref` reads an element (a `setf` place via `vec:aset`), and `vec:le
 
 Element-wise (a fresh vector): `vec:add`, `vec:sub`, `vec:mul` (Hadamard product) and `vec:scale` (multiply by a scalar).
 
-Element-wise unary, under their numpy ufunc names (a fresh vector): `vec:exp`, `vec:sqrt`, `vec:abs`, `vec:square`, `vec:negative`, `vec:sign` and `vec:reciprocal` (`1 / x`). Each applies the backend's own scalar operation per element, so `vec:exp` on the WASM backends uses their software `exp` approximation (whose low-order digits differ from the JVM's), and the `-0.0` edges of `vec:abs` / `vec:negative` / `vec:sign` follow each backend's `abs` / unary minus / `signum`. On `--no-gc`, `vec:exp` / `vec:sign` run the same software `exp` / `(x>0)-(x<0)` sequences as the other WASM backends, so all seven work everywhere.
+Element-wise unary, under their numpy ufunc names (a fresh vector): `vec:exp`, `vec:log`, `vec:tanh`, `vec:sqrt`, `vec:abs`, `vec:square`, `vec:negative`, `vec:sign` and `vec:reciprocal` (`1 / x`). Each applies the backend's own scalar operation per element, so `vec:exp` / `vec:log` / `vec:tanh` on the WASM backends use their software approximations (whose low-order digits differ from the JVM's), and the `-0.0` edges of `vec:abs` / `vec:negative` / `vec:sign` / `vec:tanh` follow each backend's `abs` / unary minus / `signum` / `tanh`. On `--no-gc`, `vec:exp` / `vec:log` / `vec:tanh` / `vec:sign` run the same software sequences as the other WASM backends, so all nine work everywhere.
 
 Reductions (a scalar): `vec:sum`, `vec:dot`, `vec:mean` and `vec:norm` (the Euclidean norm, `sqrt` of the self-dot).
 
@@ -96,6 +96,8 @@ Every kernel above that returns a vector returns a **fresh** one, so a loop over
 | `(vec:scale v s)` | `(vec:scale-into out v s)` |
 | `(vec:matvec w x)` | `(vec:matvec-into out w x)` |
 | `(vec:exp v)` | `(vec:exp-into out v)` |
+| `(vec:log v)` | `(vec:log-into out v)` |
+| `(vec:tanh v)` | `(vec:tanh-into out v)` |
 | `(vec:sqrt v)` | `(vec:sqrt-into out v)` |
 | `(vec:abs v)` | `(vec:abs-into out v)` |
 | `(vec:square v)` | `(vec:square-into out v)` |
@@ -122,7 +124,7 @@ This is what makes `--no-gc` usable for real numeric loops (see the memory table
 
 ## Hardware acceleration (optional)
 
-The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`, the unary ufuncs `exp` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
+The scalar `vec.lisp` reference is correct on every backend. `--simd` is the single, backend-independent switch that additionally lowers the vectorizable kernels (`add` / `sub` / `mul` / `scale` / `dot` / `sum` / `matvec`, the unary ufuncs `exp` / `log` / `tanh` / `sqrt` / `abs` / `negative` / `sign` / `reciprocal`, and all their `-into` siblings, plus `mean` / `norm` / `square` transitively) to real CPU vector instructions or de-boxed loops. It is opt-in. The element-wise kernels stay byte-for-byte identical to the scalar reference; the reductions sum in a different order, and a single-float reduction also accumulates in single precision, so those can differ from it -- see the two paragraphs on precision below. The same flag accelerates a set of `linalg` functions, listed in the next section.
 
 Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wasm`) and whether you pass `--simd` are **orthogonal** axes:
 
@@ -133,12 +135,12 @@ Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wa
 | wasm-GC (`-o prog.wasm`) | scalar `vec.lisp` | native v128 (`f64x2` / `f32x4`) |
 | `--no-gc` (`-o prog.wasm --no-gc`) | scalar linear-memory loops | native v128 (`f64x2` / `f32x4`) |
 
-- **Interpreter `--simd`**: `rontolisp prog.lisp --simd` runs the same seven kernels on `jdk.incubator.vector` instead of the scalar `vec.lisp` definitions -- no compilation step, and a large `vec:dot` gets several times faster. The native binary has the incubator module baked in and needs no runtime flag. On a plain `java -jar` the module is absent, so the flag falls back to the scalar reference and prints a note; re-run with `java --add-modules jdk.incubator.vector -jar rontolisp.jar prog.lisp --simd` to get the acceleration there. Without `--simd` the interpreter always runs the scalar reference -- it is the cross-backend oracle. The flag has no effect in the REPL.
+- **Interpreter `--simd`**: `rontolisp prog.lisp --simd` runs the same kernels on `jdk.incubator.vector` instead of the scalar `vec.lisp` definitions -- no compilation step, and a large `vec:dot` gets several times faster. The native binary has the incubator module baked in and needs no runtime flag. On a plain `java -jar` the module is absent, so the flag falls back to the scalar reference and prints a note; re-run with `java --add-modules jdk.incubator.vector -jar rontolisp.jar prog.lisp --simd` to get the acceleration there. Without `--simd` the interpreter always runs the scalar reference -- it is the cross-backend oracle. The flag has no effect in the REPL.
 - **JVM `--simd`**: `rontolisp prog.lisp -o Prog.class --simd` routes the kernels to an embedded `jdk.incubator.vector` bridge (a `DoubleVector` for `#d`, a `FloatVector` for `#f`; `vec:matvec` runs that vectorized dot once per matrix row). Running such a class requires the incubator module on the JVM: `java --add-modules jdk.incubator.vector Prog`. Without `--simd` the class runs the scalar reference on any JVM. **Whether the bridge becomes CPU vector instructions is up to the JVM that runs the class.** The Vector API is a normal library that a JVM may or may not compile down to vector instructions, operation by operation; where it does not, it falls back to emulating each lane, which is far slower than the plain scalar loop `--simd` replaced. So `--simd` is not automatically a win on the JVM backend, and the same class can behave very differently on two JVMs. Measure on the JVM you deploy on, with your own data.
 
 There is another reason the JVM backend is hard to predict, and it has nothing to do with SIMD. A compiled Lisp numeric loop boxes every intermediate value -- one `Double` per array element read, per product, per running sum, plus a `Long` per loop counter -- so a scalar `vec:` kernel is bound by allocation and dispatch rather than by arithmetic. How much of that boxing a given JIT eliminates (through escape analysis and inlining) varies enormously between JVMs, so the very same scalar loop can be several times faster on one than on another. What `--simd` does here is sidestep the question: it replaces those kernels with primitive `double[]` / `float[]` loops that never box in the first place.
 - **wasm-GC `--simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float). A packed float array becomes an `(array (mut v128))` of lane groups -- still an ordinary GC object, still reclaimed by the engine's collector, so memory behaves exactly as it does on scalar wasm-GC. The whole `vec:` API (including `vec:matvec` and `vec:from-list` / `vec:to-list`) keeps working, and the results are unchanged. Composes with `--component` and `--optimize`. Run it with `wasmtime run -W gc` as usual -- wasmtime enables the SIMD proposal by default.
-- **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way; `vec:exp` / `vec:sign` have no vector instruction, so they run the same per-element loop in both modes.
+- **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way; `vec:exp` / `vec:log` / `vec:tanh` / `vec:sign` have no vector instruction, so they run the same per-element loop in both modes.
 
 On wasm-GC the speedup is large because `--simd` replaces two things at once: the boxing-heavy scalar `vec.lisp` defun *and* the one-element-at-a-time loop. A `vec:dot` over an 8192-element vector, 20000 iterations, runs in ~10.1 s scalar and ~0.10 s with `--simd` under `wasmtime run -W gc`.
 
@@ -150,9 +152,9 @@ Single-float reductions carry one more caveat. Under `--simd`, an `#f` reduction
 
 ## Accelerating linalg
 
-The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes twenty of its functions to the same kernels:
+The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes twenty-two of its functions to the same kernels:
 
-- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`, and the unary ufuncs `exp`, `sqrt`, `abs`, `negative`, `sign`
+- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`, and the unary ufuncs `exp`, `log`, `tanh`, `sqrt`, `abs`, `negative`, `sign`
 - **accelerated with them**: `mean`, `matmul`, `flatten`, `solve`, `square` and `reciprocal`, each of which is written in terms of the functions above
 - **never accelerated**: `emap` (it applies an arbitrary function to each element), `det`, `inv`, `array-equal` and the constructors
 
@@ -167,7 +169,7 @@ Where `vec` insists on packed arrays of one width, `linalg` accepts far more: ge
 
 The precision rules above carry over, with one exception in linalg's favor:
 
-- **Element-wise operations are bit-identical** to the portable definitions at both widths -- `add` / `sub` / `mul` / `div`, whether against another array or against a scalar, and the unary ufuncs `exp` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` -- and so are `transpose`, `reshape`, `outer`, `trace`, `amax`, `amin`, `argmax` and `argmin`.
+- **Element-wise operations are bit-identical** to the portable definitions at both widths -- `add` / `sub` / `mul` / `div`, whether against another array or against a scalar, and the unary ufuncs `exp` / `log` / `tanh` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` -- and so are `transpose`, `reshape`, `outer`, `trace`, `amax`, `amin`, `argmax` and `argmin`.
 - **Reductions follow the `vec` rule**: `sum`, `mean`, `norm` and the vector and matrix-vector forms of `dot` sum in a different order, and over a single-float array they accumulate in single precision.
 - **The full matrix product is exempt.** `(linalg:dot A B)` and `linalg:matmul` over two matrices accumulate in double at both widths and stay bit-identical to the portable definition. The rule behind all three lines is the same one: an accumulator narrows to the lane element type only when the lanes *are* the axis being summed, and in a matrix product they run across the output row instead.
 

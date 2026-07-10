@@ -51,12 +51,16 @@ final class WasmVecSimdCompiler {
 			// not here: their spliced defuns call vec:mul / vec:mul-into, so they are
 			// accelerated transitively, like mean/norm.
 			Map.entry(LispNames.VEC_EXP, WasmVecSimdRuntimeBuilder.EXP),
+			Map.entry(LispNames.VEC_LOG, WasmVecSimdRuntimeBuilder.LOG),
+			Map.entry(LispNames.VEC_TANH, WasmVecSimdRuntimeBuilder.TANH),
 			Map.entry(LispNames.VEC_SQRT, WasmVecSimdRuntimeBuilder.SQRT),
 			Map.entry(LispNames.VEC_ABS, WasmVecSimdRuntimeBuilder.ABS),
 			Map.entry(LispNames.VEC_NEGATIVE, WasmVecSimdRuntimeBuilder.NEGATIVE),
 			Map.entry(LispNames.VEC_SIGN, WasmVecSimdRuntimeBuilder.SIGN),
 			Map.entry(LispNames.VEC_RECIPROCAL, WasmVecSimdRuntimeBuilder.RECIPROCAL),
 			Map.entry(LispNames.VEC_EXP_INTO, WasmVecSimdRuntimeBuilder.EXP_INTO),
+			Map.entry(LispNames.VEC_LOG_INTO, WasmVecSimdRuntimeBuilder.LOG_INTO),
+			Map.entry(LispNames.VEC_TANH_INTO, WasmVecSimdRuntimeBuilder.TANH_INTO),
 			Map.entry(LispNames.VEC_SQRT_INTO, WasmVecSimdRuntimeBuilder.SQRT_INTO),
 			Map.entry(LispNames.VEC_ABS_INTO, WasmVecSimdRuntimeBuilder.ABS_INTO),
 			Map.entry(LispNames.VEC_NEGATIVE_INTO, WasmVecSimdRuntimeBuilder.NEGATIVE_INTO),
@@ -66,8 +70,8 @@ final class WasmVecSimdCompiler {
 	/** The argument count of each accelerated member's Lisp call form. */
 	private static int arity(String member) {
 		return switch (member) {
-			case LispNames.VEC_SUM, LispNames.VEC_EXP, LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE,
-					LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL ->
+			case LispNames.VEC_SUM, LispNames.VEC_EXP, LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SQRT,
+					LispNames.VEC_ABS, LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN, LispNames.VEC_RECIPROCAL ->
 				1;
 			case LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO,
 					LispNames.VEC_MATVEC_INTO ->

@@ -67,6 +67,27 @@ public final class WasmWriter {
 	}
 
 	/**
+	 * Write a long using signed LEB128 encoding (e.g. an {@code i64.const} immediate
+	 * whose value does not fit in 32 bits).
+	 * @param i the value to write
+	 * @return this instance for chaining
+	 */
+	public WasmWriter writeSignedLeb128(long i) {
+		long value = i;
+		final List<Byte> result = new ArrayList<>();
+		while (true) {
+			final int b = (int) (value & 0x7f);
+			value >>= 7;
+			if ((value == 0 && (b & 0x40) == 0) || (value == -1 && (b & 0x40) != 0)) {
+				result.add((byte) b);
+				break;
+			}
+			result.add((byte) (b | 0x80));
+		}
+		return this.write(result);
+	}
+
+	/**
 	 * Write an integer using unsigned LEB128 encoding.
 	 * @param i the value to write
 	 * @return this instance for chaining

@@ -2161,6 +2161,12 @@ public final class LispNames {
 	/** {@code linalg:exp}: element-wise {@code e^x} (numpy {@code np.exp}). */
 	public static final String LINALG_EXP = "exp";
 
+	/** {@code linalg:log}: element-wise natural log (numpy {@code np.log}). */
+	public static final String LINALG_LOG = "log";
+
+	/** {@code linalg:tanh}: element-wise hyperbolic tangent (numpy {@code np.tanh}). */
+	public static final String LINALG_TANH = "tanh";
+
 	/** {@code linalg:sqrt}: element-wise square root (numpy {@code np.sqrt}). */
 	public static final String LINALG_SQRT = "sqrt";
 
@@ -2288,6 +2294,12 @@ public final class LispNames {
 	/** {@code vec:exp}: element-wise {@code e^x} into a fresh vector. */
 	public static final String VEC_EXP = "exp";
 
+	/** {@code vec:log}: element-wise natural log into a fresh vector. */
+	public static final String VEC_LOG = "log";
+
+	/** {@code vec:tanh}: element-wise hyperbolic tangent into a fresh vector. */
+	public static final String VEC_TANH = "tanh";
+
 	/** {@code vec:sqrt}: element-wise square root into a fresh vector. */
 	public static final String VEC_SQRT = "sqrt";
 
@@ -2308,6 +2320,12 @@ public final class LispNames {
 
 	/** {@code vec:exp-into}: element-wise {@code e^x} into {@code out}. */
 	public static final String VEC_EXP_INTO = "exp-into";
+
+	/** {@code vec:log-into}: element-wise natural log into {@code out}. */
+	public static final String VEC_LOG_INTO = "log-into";
+
+	/** {@code vec:tanh-into}: element-wise hyperbolic tangent into {@code out}. */
+	public static final String VEC_TANH_INTO = "tanh-into";
 
 	/** {@code vec:sqrt-into}: element-wise square root into {@code out}. */
 	public static final String VEC_SQRT_INTO = "sqrt-into";

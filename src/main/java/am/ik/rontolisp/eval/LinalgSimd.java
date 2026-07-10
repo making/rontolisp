@@ -116,6 +116,10 @@ public final class LinalgSimd {
 		// linalg:mul / linalg:div, which resolve to the natives installed above.
 		define(globalEnv, evaluator, LispNames.LINALG_EXP, 1,
 				args -> unary(args, LinalgSimdKernels::exp, LinalgSimdKernels::expF));
+		define(globalEnv, evaluator, LispNames.LINALG_LOG, 1,
+				args -> unary(args, LinalgSimdKernels::log, LinalgSimdKernels::logF));
+		define(globalEnv, evaluator, LispNames.LINALG_TANH, 1,
+				args -> unary(args, LinalgSimdKernels::tanh, LinalgSimdKernels::tanhF));
 		define(globalEnv, evaluator, LispNames.LINALG_SQRT, 1,
 				args -> unary(args, LinalgSimdKernels::sqrt, LinalgSimdKernels::sqrtF));
 		define(globalEnv, evaluator, LispNames.LINALG_ABS, 1,

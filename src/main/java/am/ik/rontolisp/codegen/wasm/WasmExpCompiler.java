@@ -50,10 +50,19 @@ final class WasmExpCompiler {
 		}
 		int tSlot = ctx.allocTemp();
 		int accSlot = ctx.allocTemp();
-
-		// t = x / 256, boxed into tSlot.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.castFloatGetF64(ctx);
+		emitExpCore(ctx, tSlot, accSlot);
+	}
+
+	/**
+	 * Consumes an f64 {@code x} on the stack and leaves the boxed {@code TYPE_FLOAT}
+	 * {@code exp(x)}. Package-private so {@link WasmTanhCompiler} derives {@code tanh}
+	 * from the same approximation (the same arithmetic order the {@code --simd} kernels
+	 * mirror on raw f64 locals via {@code WasmVecSimdRuntimeBuilder.emitExpF64}).
+	 */
+	static void emitExpCore(WasmLispCompiler.Ctx ctx, int tSlot, int accSlot) {
+		// t = x / 256, boxed into tSlot.
 		ctx.writer.write(Instruction.F64_CONST);
 		ctx.writer.writeF64(INV_SCALE);
 		ctx.writer.write(Instruction.F64_MUL);
@@ -90,14 +99,16 @@ final class WasmExpCompiler {
 		ctx.writer.writeSignedLeb128(accSlot);
 	}
 
-	// Boxes the f64 on the stack into a TYPE_FLOAT struct.
-	private static void boxF64(WasmLispCompiler.Ctx ctx) {
+	// Boxes the f64 on the stack into a TYPE_FLOAT struct. Package-private for
+	// WasmTanhCompiler / WasmLogCompiler, which build on the same boxed-temp idiom.
+	static void boxF64(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 	// Loads local[slot] (a TYPE_FLOAT struct) and extracts its f64 field onto the stack.
-	private static void unboxF64Local(WasmLispCompiler.Ctx ctx, int slot) {
+	// Package-private for WasmTanhCompiler / WasmLogCompiler.
+	static void unboxF64Local(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);

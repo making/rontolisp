@@ -1722,6 +1722,22 @@ cases:
       1.0
       0.5
 
+  # log and tanh are native (Math.log/Math.tanh) on the interpreter/JVM and software
+  # approximations on WASM (todo 109 Phase 2), so only values that are exact on every
+  # backend are asserted: log(1) is 0.0, tanh(0) is 0.0, and tanh saturates to exactly
+  # +/-1.0 far inside the WASM clamp.
+  - name: log-tanh-exact-cross-backend-cases
+    source: |
+      (print (log 1))
+      (print (tanh 0))
+      (print (tanh 25.0))
+      (print (tanh -25.0))
+    expected: |
+      0.0
+      0.0
+      1.0
+      -1.0
+
   # Character type and accessors, plus string/number parsing. Every value below is
   # deterministic and identical across the interpreter, JVM and WASM backends.
   - name: characters-and-parsing-cross-backend

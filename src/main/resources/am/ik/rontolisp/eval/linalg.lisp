@@ -353,6 +353,14 @@
   ;; Elementwise e^x (numpy np.exp).
   (linalg:emap (function exp) a))
 
+(defun linalg:log (a)
+  ;; Elementwise natural log (numpy np.log).
+  (linalg:emap (function log) a))
+
+(defun linalg:tanh (a)
+  ;; Elementwise hyperbolic tangent (numpy np.tanh).
+  (linalg:emap (function tanh) a))
+
 (defun linalg:sqrt (a)
   ;; Elementwise square root (numpy np.sqrt).
   (linalg:emap (function sqrt) a))

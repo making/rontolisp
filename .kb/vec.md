@@ -119,27 +119,39 @@ not compile under `--no-gc` at all).
   property the feature exists to buy; `NoGcWasmCompilerTest.intoKernelsCallTheBumpAllocator`
   `OnlyForTheConstructors` pins it structurally (2 `allocVec` sites vs 3).
 
-## Element-wise unary ufuncs (todo 109 Phase 1)
+## Element-wise unary ufuncs (todo 109 Phases 1 and 2)
 
-`exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (+ `-into` siblings) exist in
-BOTH packages under their numpy ufunc names. The design decisions, per backend:
+`exp`/`log`/`tanh`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (+ `-into`
+siblings) exist in BOTH packages under their numpy ufunc names (`log`/`tanh` = Phase 2,
+2026-07-10, which first gave the scalar `log`/`tanh` builtins WASM software
+implementations -- `WasmLogCompiler`: exponent extraction + an atanh series, ~1e-10
+relative; `WasmTanhCompiler`: `(e^(2x)-1)/(e^(2x)+1)` over the software exp with the
+doubled argument clamped to +/-40 so large inputs saturate to exactly +/-1.0; both were
+then removed from `BuiltinFunctionWrappers.WASM_UNSUPPORTED`, and `(tanh -0.0)` is `0.0`
+on wasm like `signum`'s edge). The design decisions, per backend:
 
 - **The oracle is each backend's OWN scalar defun** (the emap rule: read widened to f64,
   apply the backend's scalar op, narrow on store). The scalar ops' edges already diverge
   across backends -- interpreter/JVM use `Math.exp/sqrt/abs/signum` and true negation,
   while wasm's variable-path `abs` is `x < 0 ? 0 - x : x` (keeps `-0.0`), its unary
   minus is `0 - x` (`(- 0.0)` is `0.0`), its `signum` maps `-0.0`/NaN to `0.0`, and its
-  `exp` is the `WasmExpCompiler` software approximation (todo-108 residuals). So each
+  `exp`/`log`/`tanh` are the `WasmExpCompiler`/`WasmLogCompiler`/`WasmTanhCompiler`
+  software approximations (todo-108 residuals). So each
   `--simd` kernel mirrors ITS backend's defun, per-backend bit-identity holds, and
-  cross-backend `-0.0`/NaN/exp-low-digit output stays out of ci-spec.
+  cross-backend `-0.0`/NaN/low-digit output stays out of ci-spec (only the exact probes
+  `(log 1)`/`(tanh 0)`/`(tanh +/-25.0)` are in `log-tanh-exact-cross-backend-cases`).
 - **Lane forms only where they equal the defun**: interpreter/JVM lane-ize sqrt (SQRT,
-  correctly rounded), abs (ABS), negative (NEG) and reciprocal (broadcast(1)/v); exp and
-  sign stay de-boxed scalar loops (`VectorOperators.EXP` is NOT bit-identical to
-  `Math.exp`). wasm-GC lane-izes sqrt (`f64x2/f32x4.sqrt`), negative (sub-from-splat-0),
+  correctly rounded), abs (ABS), negative (NEG) and reciprocal (broadcast(1)/v); exp,
+  log, tanh and sign stay de-boxed scalar loops (`VectorOperators.EXP` etc. are NOT
+  bit-identical to `Math.exp`; the gate is `JvmSimdVectorTemplate.hasLaneForm`). wasm-GC
+  lane-izes sqrt (`f64x2/f32x4.sqrt`), negative (sub-from-splat-0),
   reciprocal (div-from-splat-1) and abs (`bitselect(0 - v, v, v < 0)` -- NOT
-  `f64x2.abs`, which would map `-0.0` to `0.0` and diverge from the wasm defun); exp and
-  sign walk `_v_get`/`_v_set` element loops emitting the defun's exact f64 sequence
-  (`WasmExpCompiler`'s constants are package-private for that). All f32 lane forms are
+  `f64x2.abs`, which would map `-0.0` to `0.0` and diverge from the wasm defun); exp,
+  log, tanh and sign walk `_v_get`/`_v_set` element loops emitting the defun's exact f64
+  sequence (`WasmExpCompiler`/`WasmLogCompiler`/`WasmTanhCompiler`'s constants are
+  package-private for that; the shared raw-f64 emitters are
+  `WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/`emitSignumF64`,
+  dispatched via `SCALAR_OP_*` + `emitScalarUnaryF64`). All f32 lane forms are
   exact by the `53 >= 2*24+2` bound or correct rounding, so `#f` results equal the
   widen-compute-narrow defun bit-for-bit.
 - **`square` and `reciprocal` ride existing kernels where a defun exists**: `vec:square`
@@ -153,14 +165,16 @@ BOTH packages under their numpy ufunc names. The design decisions, per backend:
   (+`-into`) lower natively too (Phase 1.5, 2026-07-10; they were decision-(b) compile
   errors in Phase 1): `NoGcWasmCompiler.compileSimdUnaryF64` drives a one-element-per-
   iteration loop over the SAME raw-f64 emitters the wasm-GC `--simd` kernels use
-  (`WasmVecSimdRuntimeBuilder.emitExpF64`/`emitSignumF64` -- the `WasmExpCompiler`
-  software approximation and the `(x>0)-(x<0)` sign), an f32 element widening on read
+  (`WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/`emitSignumF64` --
+  the software approximations and the `(x>0)-(x<0)` sign; Phase 2 routed `vec:log`/
+  `vec:tanh` (+`-into`) through the same `compileSimdUnaryF64` seam), an f32 element
+  widening on read
   and narrowing on store (the emap rule). exp has no lane form anywhere and sign's is
   not worth one, so BOTH `--simd` modes emit the identical loop (no `0xFD`); values
   equal the wasm-GC backend's exactly and diverge from interpreter/JVM at the same
   edges the wasm scalar builtins already do (exp low digits; sign maps `-0.0`/NaN to
-  `0.0`). The scalar `(exp x)`/`(signum x)` builtins themselves remain unknown on
-  `--no-gc` (only the `vec:` kernels gained the lowering).
+  `0.0`). The scalar `(exp x)`/`(log x)`/`(tanh x)`/`(signum x)` builtins themselves
+  remain unknown on `--no-gc` (only the `vec:` kernels gained the lowering).
 - New v128 opcodes for all this (`f32x4/f64x2.sqrt/abs/neg/lt`, `v128.bitselect`) are in
   `am.ik.wasm.Instruction` AND `WasmTreeShaker.skipSimd` (which throws on unknown 0xFD).
 
@@ -374,9 +388,9 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 ## Acceleration layer 3 — wasm-GC `--simd` native v128 over `(array (mut v128))` (todo-105)
 
-`--simd` on the DEFAULT `.wasm` backend routes the same twenty-four kernels (the seven
-vectorizable ones, the six todo-109 unary ufuncs, and their eleven `-into` siblings) to
-emitted v128 runtime helpers.
+`--simd` on the DEFAULT `.wasm` backend routes the same twenty-eight kernels (the seven
+vectorizable ones, the eight todo-109 unary ufuncs, and their thirteen `-into` siblings)
+to emitted v128 runtime helpers.
 
 The apparent blocker — "`v128.load`/`store` address LINEAR memory, so a packed array must
 leave the GC heap" — is false, and todo-101 shipped on it before todo-105 corrected it. The
@@ -415,7 +429,7 @@ Mechanics:
   declares every extra local of a compiled body as one `(ref null eq)` group, so a defun
   body cannot hold a v128/f64/i32/`(ref null $v128arr)` local. `WasmVecSimdRuntimeBuilder`
   hand-writes the local declarations (`withLocals(i32, f64, f32, v128, eq, v128arr)` — that
-  fixed order is what all the index arithmetic assumes) for 15 functions. One kernel serves
+  fixed order is what all the index arithmetic assumes) for every kernel function. One kernel serves
   both widths by branching on the `kind` field; a mixed-width call traps (`requireSameKind`),
   matching the JVM bridge's hard error. `matvec-into` additionally traps on `ref.eq(out, x)`.
 - **The one place the zero padding is not free: a WRITE.** A whole-group store reaches up to
@@ -454,7 +468,7 @@ Mechanics:
   three of which reject both. (todo-101 guarded only `x`; an adversarial review of todo-105 caught
   it. Pinned by `wasmGcSimdMatvecIntoRejectsADestinationAliasingEitherOperand`.)
 - **Function indices**: `FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1`, then `_v_new`/`_v_get`/
-  `_v_set` + `_vec_add`..`_vec_reciprocal_into` (`FUNC_COUNT` = 27). Emitted ONLY under `--simd`,
+  `_v_set` + `_vec_add`..`_vec_tanh_into` (`FUNC_COUNT` = 31). Emitted ONLY under `--simd`,
   so `FUNC_USER_BASE` becomes dynamic (`WasmLispCompiler.userFuncBase()`, threaded via
   `Ctx.userFuncBase` into `WasmLambdaCompiler` and `WasmRuntimeBuilder.buildDispatchBody` —
   the only three readers). Every fixed `FUNC_*` below it keeps its value, and a
@@ -462,7 +476,7 @@ Mechanics:
 - **Call-site interception**: `WasmVecSimdCompiler.handles/compile` in `WasmExprCompiler.
   compileCons`, gated on `ctx.simd` — the exact shape of `JvmSimdCompiler`. `mean`/`norm` are
   accelerated transitively (their spliced bodies call `sum`/`dot`); `#'vec:dot` still names
-  the scalar defun, as on the JVM. Everything not in the twenty-four keeps running `vec.lisp` over
+  the scalar defun, as on the JVM. Everything not in the twenty-eight keeps running `vec.lisp` over
   the now-grouped surface (`square`/`square-into` are transitive through `mul`).
 - **The rest of the packed surface** branches on `ctx.simd` at compile time (one module, one
   repr): `WasmArrayCompiler.compilePackedMakeVblock`/`emitPackedReadF64Vblock`/

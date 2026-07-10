@@ -587,6 +587,8 @@ final class WasmExprCompiler {
 				case LispNames.GETENV -> WasmGetenvCompiler.compile(cons, ctx);
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.EXP -> WasmExpCompiler.compile(cons, ctx);
+				case LispNames.LOG -> WasmLogCompiler.compile(cons, ctx);
+				case LispNames.TANH -> WasmTanhCompiler.compile(cons, ctx);
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);
 				case LispNames.SIGNUM -> WasmSignumCompiler.compile(cons, ctx);
 				case LispNames.LOGAND -> {

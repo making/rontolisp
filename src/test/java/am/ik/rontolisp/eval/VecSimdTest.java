@@ -318,8 +318,9 @@ class VecSimdTest {
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
-		for (String member : new String[] { "exp", "sqrt", "abs", "negative", "sign", "reciprocal", "exp-into",
-				"sqrt-into", "abs-into", "negative-into", "sign-into", "reciprocal-into" }) {
+		for (String member : new String[] { "exp", "log", "tanh", "sqrt", "abs", "negative", "sign", "reciprocal",
+				"exp-into", "log-into", "tanh-into", "sqrt-into", "abs-into", "negative-into", "sign-into",
+				"reciprocal-into" }) {
 			String form = "(vec:zeros 1) #'vec:" + member;
 			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
@@ -356,6 +357,16 @@ class VecSimdTest {
 		assertMatchesScalarOracle("(vec:exp (vec:reciprocal (vec:add (vec:arange 7) (vec:ones 7))))");
 		assertMatchesScalarOracle(
 				"(vec:exp (vec:reciprocal (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
+		// log over strictly positive inputs, tanh over the signed range (todo 109
+		// Phase 2 -- both are Math.log / Math.tanh scalar loops on this backend).
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarOracle("(vec:log (vec:add (vec:arange %s) (vec:ones %s)))".formatted(n, n));
+			assertMatchesScalarOracle(
+					"(vec:tanh (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.03))".formatted(n,
+							n));
+		}
+		assertMatchesScalarOracle("(vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
+		assertMatchesScalarOracle("(vec:tanh (vec:arange 200 'single-float))");
 	}
 
 	@Test
@@ -372,7 +383,7 @@ class VecSimdTest {
 
 	@Test
 	void unaryIntoKernelsMatchTheirAllocatingSiblingsAndReturnTheDestination() {
-		for (String op : new String[] { "exp", "sqrt", "abs", "negative", "sign", "reciprocal" }) {
+		for (String op : new String[] { "exp", "log", "tanh", "sqrt", "abs", "negative", "sign", "reciprocal" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertIntoMatchesAllocating(
 						"(vec:" + op + "-into (vec:zeros %s) (vec:add (vec:arange %s) (vec:ones %s)))",

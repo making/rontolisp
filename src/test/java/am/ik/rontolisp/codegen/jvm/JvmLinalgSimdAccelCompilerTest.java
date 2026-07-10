@@ -313,11 +313,22 @@ class JvmLinalgSimdAccelCompilerTest {
 				"(print (round (* 1000000 (linalg:sum (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1)))))))");
 		assertMatchesScalarReference(
 				"(print (round (* 1000000 (linalg:sum (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 7) 1)))))))");
+		// log over strictly positive inputs, tanh over a sign-mixed range (todo 109
+		// Phase 2 -- Math.log / Math.tanh scalar loops on this backend).
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarReference("(print (linalg:log (linalg:add (linalg:arange " + n + ") 1)))");
+			assertMatchesScalarReference(
+					"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.03)))");
+		}
+		assertMatchesScalarReference("(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))");
+		assertMatchesScalarReference("(print (linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1)))");
+		assertMatchesScalarReference("(print (linalg:tanh (linalg:arange 0 200 'single-float)))");
 	}
 
 	@Test
 	void unaryUfuncsDeclineGeneralBoxedArraysToTheScalarDefun() throws Exception {
-		for (String op : new String[] { "exp", "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+		for (String op : new String[] { "exp", "log", "tanh", "sqrt", "abs", "square", "negative", "sign",
+				"reciprocal" }) {
 			assertMatchesScalarReference("(print (linalg:" + op + " #(1 4 9)))");
 		}
 		assertThat(accel("(print (linalg:sqrt #(4 9)))")).isEqualTo("#d(2.0 3.0)");
