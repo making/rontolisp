@@ -2510,6 +2510,23 @@ public final class LispNames {
 	public static final String HTTP_HANDLER = "http-handler";
 
 	/**
+	 * The {@code with-arena} macro provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:with-arena () body...)} to name a reclamation boundary: on the
+	 * interpreter, the JVM backend and wasm-GC it expands to a plain {@code progn} (a
+	 * real GC already reclaims), while the {@code --no-gc} backend lowers it to a bump
+	 * heap-pointer mark / body / reset with the body's value (a string or packed float
+	 * array) copied down to the mark. Nothing allocated inside the body may be reachable
+	 * after it, except the body's own value.
+	 */
+	public static final String WITH_ARENA = "with-arena";
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:with-arena}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String WITH_ARENA_QUALIFIED = RONTOLISP_PKG + ":" + WITH_ARENA;
+
+	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used
 	 * as {@code (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...)
 	 * :returns ...)} to declare a host function imported into the compiled WASM module

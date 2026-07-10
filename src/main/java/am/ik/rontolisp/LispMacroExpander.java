@@ -4458,6 +4458,27 @@ public final class LispMacroExpander {
 	private static final String WIFS_RESULT_VAR = "__wifs_result";
 
 	/**
+	 * Expands {@code (rontolisp:with-arena () body...)} into {@code (progn body...)}.
+	 * {@code with-arena} names a reclamation boundary for the {@code --no-gc} WASM
+	 * backend, which lowers it natively to a bump heap-pointer mark / body / reset with
+	 * the body's value copied down to the mark; on the interpreter, the JVM backend and
+	 * wasm-GC a real garbage collector already reclaims, so the boundary is
+	 * observationally a plain {@code progn}. The option list is reserved and must be
+	 * empty. Escape contract (enforced only by the {@code --no-gc} lowering): nothing
+	 * allocated inside the body may be reachable after it, except the body's own value.
+	 * @param cons the with-arena expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithArena(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispNil)) {
+			throw new UnsupportedOperationException(LispNames.WITH_ARENA_QUALIFIED
+					+ " expects an empty option list: (rontolisp:with-arena () body...)");
+		}
+		return prognOrNil(parts.subList(2, parts.size()));
+	}
+
+	/**
 	 * Wraps a macro body in {@code (progn body...)}, or nil for an empty body (a
 	 * body-less progn does not compile).
 	 * @param body the body forms

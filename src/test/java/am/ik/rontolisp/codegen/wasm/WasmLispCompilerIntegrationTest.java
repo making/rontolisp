@@ -550,6 +550,123 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(noGcStringLength(true, program, "band", "30")).isEqualTo(30);
 	}
 
+	// Invokes an export of an already-compiled --no-gc module under a hard linear-memory
+	// cap (wasmtime -W max-memory-size), returning the raw ExecResult so callers can
+	// assert growth (an out-of-bounds trap) as well as flatness (a clean exit).
+	private static ExecResult invokeNoGcWithMemoryCap(byte[] wasmBytes, long capBytes, String function, String... args)
+			throws Exception {
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "-W", "max-memory-size=" + capBytes,
+				"--invoke", function, "/tmp/test.wasm"));
+		command.addAll(List.of(args));
+		return wasmtime.execInContainer(command.toArray(new String[0]));
+	}
+
+	@Test
+	void noGcPrintWritesToStdoutMatchingTheInterpreter() throws Exception {
+		// todo 110: print = prin1 text + a trailing newline (strings quoted), princ =
+		// display text (no quotes, no newline), terpri = a newline -- byte-for-byte the
+		// interpreter's output for every line below. The float lines ride the __ftoa
+		// port of the GC backend's todo-108-hardened printer (NaN / Infinity / -0.0 by
+		// sign bit); a magnitude >= 2^63 prints in the WASM backends' E-notation digit
+		// shape (the interpreter's Double.toString shape differs there -- the known
+		// print-shape divergence of .todo/46, same as the GC backend).
+		String program = """
+				(defun show ()
+				  (print 42)
+				  (print -7)
+				  (print 3.14)
+				  (print -0.0)
+				  (print (/ 0.0 0.0))
+				  (print (/ 1.0 0.0))
+				  (print (/ -1.0 0.0))
+				  (print 9223372036854775808.0)
+				  (print "hello")
+				  (princ "bare")
+				  (terpri)
+				  (print t)
+				  (print nil)
+				  (princ 5)
+				  (terpri)
+				  (print (concatenate 'string "a" (princ-to-string 2.5))))
+				(rontolisp:wasm-export 'show :params '() :returns :void)
+				""";
+		String expected = """
+				42
+				-7
+				3.14
+				-0.0
+				NaN
+				Infinity
+				-Infinity
+				9.223372E18
+				"hello"
+				bare
+				t
+				nil
+				5
+				"a2.5\"""";
+		assertThat(compileNoGcAndInvoke(false, program, "show")).isEqualTo(expected);
+		// The import + __write_stdout funnel survive the tree shaker under --optimize.
+		assertThat(compileNoGcAndInvoke(true, program, "show")).isEqualTo(expected);
+	}
+
+	@Test
+	void noGcPrintLoopKeepsTheHeapFlat() throws Exception {
+		// Each print renders a transient digit string inside an internal heap-pointer
+		// mark/reset bracket, so 20000 prints stay within a 2-page memory cap -- a
+		// leaking bracket would grow past it and trap.
+		String program = """
+				(defun ploop (n)
+				  (dotimes (i n) (print i))
+				  n)
+				(rontolisp:wasm-export 'ploop :params '(:int) :returns :int)
+				""";
+		byte[] wasm = new NoGcWasmCompiler().compile(LispReader.readAllFromString(program));
+		ExecResult result = invokeNoGcWithMemoryCap(wasm, 131072, "ploop", "20000");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout()).startsWith("0\n1\n2\n");
+		assertThat(result.getStdout().trim()).endsWith("19999\n20000");
+	}
+
+	@Test
+	void noGcWithArenaKeepsALoopFlatWhereTheBareLoopGrows() throws Exception {
+		// The todo-104 contract: (with-arena () ...) pops everything allocated inside at
+		// the boundary, so 100000 iterations each building an 8KB vector run under a
+		// 2-page cap; the SAME loop without the arena has no reclamation within one
+		// export call (--no-gc bump-allocates with no free) and traps on the cap.
+		String program = """
+				(defun work (n)
+				  (let ((acc 0.0))
+				    (dotimes (i n)
+				      (rontolisp:with-arena ()
+				        (setq acc (+ acc (vec:sum (vec:ones 1000))))))
+				    acc))
+				(defun grow (n)
+				  (let ((acc 0.0))
+				    (dotimes (i n)
+				      (setq acc (+ acc (vec:sum (vec:ones 1000)))))
+				    acc))
+				(defun escaped (n)
+				  (vec:aref (rontolisp:with-arena () (vec:ones n)) 0))
+				(rontolisp:wasm-export 'work :params '(:int) :returns :float)
+				(rontolisp:wasm-export 'grow :params '(:int) :returns :float)
+				(rontolisp:wasm-export 'escaped :params '(:int) :returns :float)
+				""";
+		byte[] wasm = new NoGcWasmCompiler().compile(LispReader.readAllFromString(program));
+		ExecResult flat = invokeNoGcWithMemoryCap(wasm, 131072, "work", "100000");
+		assertThat(flat.getExitCode()).as("stderr: %s", flat.getStderr()).isZero();
+		assertThat(flat.getStdout().trim()).isEqualTo("100000000");
+		ExecResult grown = invokeNoGcWithMemoryCap(wasm, 131072, "grow", "100000");
+		assertThat(grown.getExitCode()).isNotZero();
+		assertThat(grown.getStderr()).contains("out of bounds");
+		// The body's value escapes the pop: it is copied down to the mark and stays
+		// readable after the arena closes.
+		ExecResult escaped = invokeNoGcWithMemoryCap(wasm, 131072, "escaped", "8");
+		assertThat(escaped.getExitCode()).as("stderr: %s", escaped.getStderr()).isZero();
+		assertThat(escaped.getStdout().trim()).isEqualTo("1");
+	}
+
 	@Test
 	void noGcSupportsStringPrimitives() throws Exception {
 		// The Phase-2b string primitives: length / subseq / string= / char (a character

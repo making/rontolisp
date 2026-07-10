@@ -3645,3 +3645,16 @@ cases:
     expectedByBackend:
       wasm: |
         1500000000000.0
+  # rontolisp:with-arena (todo 104/110): a reclamation boundary the --no-gc WASM
+  # backend lowers to a bump heap-pointer mark/body/reset; on the four standard
+  # backends a real GC already reclaims, so it must be observationally a plain progn
+  # (same value, same side effects).
+  - name: with-arena-is-observationally-a-progn
+    source: |
+      (print (rontolisp:with-arena () 1 2 (+ 1 2)))
+      (print (rontolisp:with-arena () (concatenate 'string "ab" "cd")))
+      (print (rontolisp:with-arena ()))
+    expected: |
+      3
+      "abcd"
+      nil

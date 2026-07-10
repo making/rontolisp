@@ -53,7 +53,10 @@ it exposes the full width with no `wrap`/`extend` conversion.
   scope.
 - The exported function is pure-compute: any I/O (printing, reading, time,
   random, or a top-level I/O form) traps under `--no-wasi` and is otherwise
-  unsupported.
+  unsupported. One exception: under `--no-gc`, `print`/`princ`/`terpri` work
+  through a single `fd_write` import that is added only when the program
+  prints (see
+  [Printing](../../compiling/wasm.md#printing-print--princ--terpri)).
 - The non-GC backend (`--no-gc`) supports `:int`/`:long`/`:float`/`:bool`/`:string`
   but not `:s-expr`, which needs the cons/reader/printer runtime. `:long` is
   `--no-gc`-only: the GC backend rejects it (its integers are `i31ref`, which

@@ -507,6 +507,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalWithArenaIsAPlainProgn() {
+		// rontolisp:with-arena names a reclamation boundary for --no-gc; the interpreter
+		// heap is garbage-collected, so it is observationally a progn.
+		assertThat(eval("(rontolisp:with-arena () 1 2 (+ 1 2))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(rontolisp:with-arena ())")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalWithArenaRejectsANonEmptyOptionList() {
+		assertThatThrownBy(() -> eval("(rontolisp:with-arena (:size 10) 1)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("empty option list");
+	}
+
+	@Test
 	void evalWithOutputToStringDoesNotTouchStandardOutput() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));

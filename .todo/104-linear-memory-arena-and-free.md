@@ -1,5 +1,17 @@
 # 104 — a way to FREE linear memory: `with-arena`, and `__ronto_alloc_mark`/`_reset` on wasm-GC
 
+> **2026-07-10 (later): the `--no-gc` half is DONE**, executed by
+> `.todo/110-nogc-print-io-and-with-arena.md`: `rontolisp:with-arena` is a
+> `LispMacroExpander.expandWithArena` lowering to `progn` on the interpreter /
+> JVM / wasm-GC (ci-spec case `with-arena-is-observationally-a-progn`) and a
+> native mark/body/reset over heap global 0 on `--no-gc`, with the body's
+> string / packed-array value copied down to the mark (steps 1+2 below).
+> Verified flat: `(with-arena () (vec:ones 1000))` x100000 under a 2-page
+> `wasmtime -W max-memory-size` cap where the bare loop traps
+> (`noGcWithArenaKeepsALoopFlatWhereTheBareLoopGrows`). Details:
+> `.kb/no-gc-scalar-wasm.md`. **What remains of this todo is ONLY the wasm-GC
+> string/intern-heap half** (steps 3+4; still unsequenced, reassess value).
+
 **Goal:** give the WASM backends a real reclamation mechanism for the bump-allocated linear heap,
 usable from Lisp (not only from the host across an export boundary).
 

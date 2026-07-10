@@ -196,7 +196,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~1 KB module
 
 ## 非 GC 出力（`--no-gc`）
 
-デフォルトの出力は、上記の最適化されたリアクターであっても、依然として **wasm-GC 対応** のランタイムを必要とします。なぜなら、すべての値が GC ヒープ型（`i31ref`、float 構造体、`(ref eq)`）だからです。代わりに素の **MVP** モジュールを出力するには `--no-gc` を追加します。rec グループなし、`struct`/`array`/`i31` 型なし、`eqref` なし、インポートなしです（プログラムが文字列を使用する場合にのみ素のリニアメモリが追加されます。[後述](#strings)を参照）。これはインポートオブジェクトなしでインスタンス化でき、**`-W gc` なし** で任意の MVP クラスのランタイムで動作します。
+デフォルトの出力は、上記の最適化されたリアクターであっても、依然として **wasm-GC 対応** のランタイムを必要とします。なぜなら、すべての値が GC ヒープ型（`i31ref`、float 構造体、`(ref eq)`）だからです。代わりに素の **MVP** モジュールを出力するには `--no-gc` を追加します。rec グループなし、`struct`/`array`/`i31` 型なし、`eqref` なし、インポートなしです（プログラムが文字列を使用する場合にのみ素のリニアメモリが追加され（[後述](#strings)を参照）、[印字](#printing-print--princ--terpri)する場合にのみ単一の `fd_write` インポートが追加されます）。印字を行わないモジュールはインポートオブジェクトなしでインスタンス化でき、**`-W gc` なし** で任意の MVP クラスのランタイムで動作します。
 
 ```bash
 rontolisp fact.lisp --no-gc --optimize -o fact.wasm
@@ -216,11 +216,14 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
 - 反復とローカルの変更: `dotimes`/`do`/`do*` とその基盤となる `while`/`setq`/`return`、および自由に再代入される let/`do` で束縛された変数。`loop` は cons を生成しない節（数値 `for`、`sum`/`count`/`maximize`/`minimize`、`repeat`/`while`/`until`/`do`/`return`）に限り対象です。`collect`/`append`/`nconc` や `for ... in`/`on` の節はリストを割り当てるため対象外です。
 - 浮動小数点/整数の変換: `float truncate floor ceiling round`。
 - 文字列と文字: 文字列リテラル、文字リテラル、`(concatenate 'string ...)`、`length`、
-  `subseq`、`string=`、`char`、`char-code`/`code-char`、`char=`、および（整数と文字列に
-  対する）`princ-to-string`。独立した文字型はありません。文字はそのコードポイントで
+  `subseq`、`string=`、`char`、`char-code`/`code-char`、`char=`、および（整数、浮動小数点数、
+  文字列に対する）`princ-to-string`。独立した文字型はありません。文字はそのコードポイントで
   表現されるため、ポータブルなイディオム `(char= (char s i) #\x)` や
   `(char-code (char s i))` は他のバックエンドと完全に同じ振る舞いをします。一方、裸の
   `(char s i)` が `:int` 境界を越えるとコードポイントが見えます。
+- 印字: `print`、`princ`、`terpri`（省略可能なストリーム引数なし） —
+  [後述](#printing-print--princ--terpri)を参照。
+- メモリの再利用: [`rontolisp:with-arena`](#reclaiming-from-lisp-rontolispwith-arena)。
 
 ヒープオブジェクトを割り当てるその他のもの（cons/リスト、シンボル、ベクター、ハッシュテーブル、`eval`/`apply`、I/O、`dolist`/リスト反復、自由変数やグローバルへの代入、`&optional`/`&rest`/`&key` のようなラムダリストキーワード — レストリストは cons です）は、その関数を対象外にします。黙ってミスコンパイルするのではなく、これは違反した演算を名指しする **コンパイルエラー** になるため、境界は明示的なままです。
 
@@ -284,6 +287,47 @@ $ node -e '(async () => {
 })()'
 ```
 
+### 印字（`print` / `princ` / `terpri`）
+
+エクスポートされた関数は印字できます。`print`（読み取り可能な形式 + 末尾の改行。文字列は
+引用符付き）、`princ`（表示形式、改行なし）、`terpri`（改行）が対象サブセット内で動作し、
+出力はインタプリタとバイト単位で一致します。
+
+```console
+$ cat show.lisp
+(defun show (n)
+  (print n)
+  (print (* 1.5 n))
+  (print "done"))
+(rontolisp:wasm-export 'show :params '(:int) :returns :void)
+$ rontolisp show.lisp --no-gc -o show.wasm
+$ wasmtime run --invoke show show.wasm 4
+4
+6.0
+"done"
+```
+
+浮動小数点数は GC バックエンドと同じ桁抽出プリンターで印字され、IEEE のエッジ（`NaN`、
+`Infinity`/`-Infinity`、`-0.0`。2^63 以上の大きさは WASM バックエンドの `E` 表記）も
+含みます。数値の `print` はレンダリングの一時文字列を即座に再利用するため、印字ループが
+ヒープを成長させることはありません。
+
+知っておくべきことが 2 つあります。
+
+- **印字するモジュールは 1 つのインポートを持ちます。** `print`/`princ`/`terpri` は単一の
+  `wasi_snapshot_preview1.fd_write` インポートを通じて書き込みます — このインポートは
+  **プログラムが印字する場合にのみ** 追加されるため、印字しないモジュールはゼロインポートと
+  正確なバイト列を保ちます。WASI Preview 1 ホストは `fd_write` を無償で提供します
+  （`wasmtime run`、Node 組み込みの `node:wasi` モジュール）が、印字するモジュールは
+  [マンデルブロのスニペット](#strings)のように空の `{}` インポートオブジェクトでは
+  インスタンス化できなくなります — 素の JavaScript 埋め込みでは
+  `{ wasi_snapshot_preview1: { fd_write } }` を供給する（または `node:wasi` を使う）
+  必要があります。
+- **真偽値はリテラルの場合のみ名前で印字されます。** 値モデルには実行時の真偽値型が
+  ありません: `(print t)` / `(print nil)` は `t` / `nil` を印字しますが、
+  `(print (> a b))` のような*計算された*真偽値は `0`/`1` の整数として印字されます。
+  省略可能なストリーム引数と packed float 配列の印字はコンパイルエラーです。
+
 ### メモリの回収（アリーナ API）
 
 `__ronto_alloc` は解放を行わないバンプアロケータです。そのため、単一のインスタンスを生かし続けてループで呼び出し、毎回新しい入力バッファを確保する **常駐（resident）** ホストは、リニアメモリを際限なく成長させてしまいます。これをフラットに保つ仕組みは 2 つあります。
@@ -325,9 +369,37 @@ node -e '(async () => {
 
 [`count-vowels` の例](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)では、Node と [Endive](https://endive.run)（Java）双方のホストでこのレシピを説明しています。
 
+### Lisp からの再利用（`rontolisp:with-arena`）
+
+上記の 2 つのメカニズムはどちらも **エクスポート境界** で発火します — 1 回の呼び出しの
+*中* では何も解放されません。そのため、毎イテレーション確保するループ（`concatenate
+'string` は新しいバッファを、`vec:zeros`/`vec:ones` は新しいベクタを構築します）は、
+呼び出しの間ずっとヒープを成長させます。
+[`rontolisp:with-arena`](../reference/macros/rontolisp-with-arena.md) はその再利用境界を
+ソース内で名付けます: バンプヒープポインタをスナップショットし、ボディを実行し、ボディが
+確保したすべてをポップします — 残るのはボディ自身の値だけです（文字列や packed float 配列の
+結果はスナップショット位置へコピーダウンされます）。
+
+```lisp
+(defun train (epochs n)
+  (let ((acc 0.0))
+    (dotimes (i epochs)
+      (rontolisp:with-arena ()                    ; everything allocated inside ...
+        (setq acc (+ acc (vec:sum (vec:ones n)))) ; ... is popped here
+        ))
+    acc))
+```
+
+アリーナがあれば 10 万イテレーションでも初期リニアメモリ内に収まります。なければ、同じ
+ループはイテレーションごとにベクタ 1 つ分成長します。エスケープ契約は
+`__ronto_alloc_reset` のものと同じです: **ボディ内で確保されたものは、ボディ自身の値を
+除いて、ボディの後から到達可能であってはなりません。** インタプリタ、JVM バックエンド、
+デフォルト（wasm-GC）出力では、`with-arena` は観測上単なる `progn` です — 実際の
+ガベージコレクタが回収します — ので、同じソースがすべてのバックエンドで動きます。
+
 ### 組み合わせ
 
-`--no-gc` は純粋計算リアクターです。`--no-wasi` と同様に何もインポートせず、各 `rontolisp:wasm-export` 関数をその名前でエクスポートします（そのため I/O はできず、出力を行うトップレベルフォームは拒否されます）。`--optimize` と組み合わせられますが、`--component` とは組み合わせられません（そのパスは wasm-GC に依存します）。JavaScript からの呼び出しは GC リアクターと同じ「インスタンス化してからエクスポートを呼び出す」です（[付録](#appendix-calling-a-module-from-javascript) を参照）。ただしここではモジュールは wasm-GC サポートを必要とせず **任意の** WebAssembly エンジンで動作します。
+`--no-gc` は純粋計算リアクターです。各 `rontolisp:wasm-export` 関数をその名前でエクスポートし、プログラムが[印字](#printing-print--princ--terpri)しない限り何もインポートせず（印字する場合は正確に `fd_write` のみ）、それ以外の I/O は拒否します。`defun` とディレクティブ以外のトップレベルフォームは拒否されます。`--optimize` と組み合わせられますが、`--component` とは組み合わせられません（そのパスは wasm-GC に依存します）。JavaScript からの呼び出しは GC リアクターと同じ「インスタンス化してからエクスポートを呼び出す」です（[付録](#appendix-calling-a-module-from-javascript) を参照）。ただしここではモジュールは wasm-GC サポートを必要とせず **任意の** WebAssembly エンジンで動作します。
 
 ## WASI 0.3 コンポーネント
 

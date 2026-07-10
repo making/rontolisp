@@ -1141,6 +1141,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWithOpenFile(cons), env);
 				case LispNames.WITH_OUTPUT_TO_STRING:
 					return eval(LispMacroExpander.expandWithOutputToString(cons), env);
+				case LispNames.WITH_ARENA_QUALIFIED:
+					// A reclamation boundary for --no-gc; a real GC already reclaims, so
+					// the interpreter runs the body as a plain progn.
+					return eval(LispMacroExpander.expandWithArena(cons), env);
 				case LispNames.WITH_INPUT_FROM_STRING:
 					return eval(LispMacroExpander.expandWithInputFromString(cons), env);
 				case LispNames.PUSHNEW:

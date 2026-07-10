@@ -333,7 +333,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// memory/allocator machinery at all (only when a string literal or a :string
 		// boundary type is present).
 		int internalCount = reachable.size();
-		Mem mem = planMemory(reachable, defuns, exportDecls, internalCount);
+		Mem mem = planMemory(reachable, defuns, exportDecls, internalCount, types);
 
 		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j; the two
 		// memory helpers (when present) occupy N+E and N+E+1.
@@ -626,6 +626,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				return Ty.STRING;
 			}
+			// print/princ return their argument (like the interpreter); terpri yields
+			// nil.
+			case LispNames.PRINT, LispNames.PRINC -> {
+				return typeOf(args.get(1), env, tc);
+			}
+			case LispNames.TERPRI -> {
+				return Ty.INT;
+			}
+			// with-arena yields its body's value (a progn with a reclamation boundary).
+			case LispNames.WITH_ARENA_QUALIFIED -> {
+				Ty last = Ty.INT;
+				for (int i = 2; i < args.size(); i++) {
+					last = typeOf(args.get(i), env, tc);
+				}
+				return last;
+			}
 			// A quoted datum (e.g. a make-array dimension list '(2 3) or an :element-type
 			// 'double-float designator) is not a runtime value on the scalar backend, so
 			// it
@@ -765,12 +781,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * The linear-memory plan for a module. {@code used} is false for a pure-numeric
 	 * program (no strings), in which case no memory/global/data section and no helper
 	 * functions are emitted (so the module stays byte-identical to the original scalar
-	 * output).
+	 * output). {@code printUsed} is true only when a reachable body calls a printing op
+	 * ({@code print}/{@code princ}/{@code terpri}); only then does the module import
+	 * {@code wasi_snapshot_preview1.fd_write} (shifting every function index by
+	 * {@code funcBase} = 1) and emit the {@code __write_stdout} funnel -- a print-free
+	 * program keeps zero imports and stays byte-identical (todo 110, preserving the
+	 * todo-93 adapter-free-component foundation).
 	 *
 	 * @param literals string-literal content to its header address in the data segment
 	 * @param data the static data-segment bytes (laid out from {@code dataBase})
 	 * @param dataBase the memory address at which {@code data} is placed
 	 * @param heapBase the initial bump-allocator pointer (just past the static data)
+	 * @param iovAddr the address of the 16-byte fd_write scratch (iovec at
+	 * {@code iovAddr}, nwritten cell at {@code iovAddr + 8}); 0 when print is unused
+	 * @param funcBase the offset the fd_write import adds to every function index (1 when
+	 * {@code printUsed}, else 0); all stored helper indices already include it
 	 * @param allocIndex the function index of the {@code __alloc} bump allocator
 	 * @param memcpyIndex the function index of the {@code __memcpy} byte-copy helper
 	 * @param streqIndex the function index of the {@code __streq} string-compare helper
@@ -779,21 +804,73 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * arena-snapshot export
 	 * @param resetIndex the function index of the {@code __ronto_alloc_reset}
 	 * arena-restore export
+	 * @param ftoaIndex the function index of the {@code __ftoa} float-to-string helper
+	 * (-1 when no float is rendered)
+	 * @param writeStdoutIndex the function index of the {@code __write_stdout} funnel,
+	 * the sole caller of the fd_write import (-1 when print is unused)
 	 * @param used whether the module uses linear memory at all
+	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
+	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
 	 */
-	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int allocIndex,
-			int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex, boolean used) {
+	private record Mem(Map<String, Integer> literals, byte[] data, int dataBase, int heapBase, int iovAddr,
+			int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex, int markIndex, int resetIndex,
+			int ftoaIndex, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed) {
+
+		/**
+		 * The absolute function index of an internal function / export wrapper given its
+		 * local ordinal (BFS discovery order; wrappers follow the internals). Keeps the
+		 * fd_write import's index shift behind one accessor so no call site hardcodes it.
+		 */
+		int funcIndex(int localOrdinal) {
+			return this.funcBase + localOrdinal;
+		}
+
+		/** The function index of the imported {@code fd_write} (valid iff printUsed). */
+		int fdWriteIndex() {
+			return 0;
+		}
+
 	}
 
 	private static final int STR_DATA_BASE = 8;
 
 	private Mem planMemory(List<String> reachable, Map<String, Defun> defuns, List<WasmExportCompiler.Decl> exportDecls,
-			int internalCount) {
+			int internalCount, Types types) {
 		// Gather every string literal in every reachable body (deterministic order), then
 		// lay each out as a 4-byte-aligned [len:i32 LE][bytes] header.
 		LinkedHashSet<String> literals = new LinkedHashSet<>();
 		for (String name : reachable) {
 			collectLiterals(progn(Objects.requireNonNull(defuns.get(name)).body()), literals);
+		}
+		// Printing (todo 110): print/princ/terpri gate the fd_write import and the
+		// __write_stdout funnel; a rendered FLOAT (print/princ/princ-to-string of a f64)
+		// additionally gates the __ftoa helper. Both add their fixed text fragments to
+		// the literal pool ONLY when used, so a print-free module keeps its exact bytes.
+		boolean printUsed = false;
+		for (String name : reachable) {
+			if (usesPrintOp(progn(Objects.requireNonNull(defuns.get(name)).body()))) {
+				printUsed = true;
+				break;
+			}
+		}
+		boolean ftoaUsed = false;
+		for (String name : reachable) {
+			if (rendersFloat(name, Objects.requireNonNull(defuns.get(name)), types)) {
+				ftoaUsed = true;
+				break;
+			}
+		}
+		if (printUsed) {
+			literals.add("\n");
+			literals.add("\"");
+			literals.add("t");
+			literals.add("nil");
+		}
+		if (ftoaUsed) {
+			// __ftoa returns these header pointers directly for the IEEE specials.
+			literals.add("NaN");
+			literals.add("Infinity");
+			literals.add("-Infinity");
 		}
 		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
@@ -810,6 +887,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			cursor += 4 + bytes.length;
 		}
 		int heapBase = (cursor + 7) & ~7;
+		// The fd_write scratch (iovec + nwritten) sits between the static data and the
+		// bump heap, present only when the module prints.
+		int iovAddr = 0;
+		if (printUsed) {
+			iovAddr = heapBase;
+			heapBase += 16;
+		}
 
 		boolean boundaryString = false;
 		for (WasmExportCompiler.Decl decl : exportDecls) {
@@ -839,8 +923,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
+		// printUsed implies non-empty literals (the "\n" entry), so `used` follows.
 		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
-		int allocIndex = internalCount + exportDecls.size();
+		int funcBase = printUsed ? 1 : 0;
+		int allocIndex = funcBase + internalCount + exportDecls.size();
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
 		int itoaIndex = streqIndex + 1;
@@ -849,8 +935,51 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// fixed-index invariant, so appending is free (nothing renumbers).
 		int markIndex = itoaIndex + 1;
 		int resetIndex = markIndex + 1;
-		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, allocIndex, memcpyIndex, streqIndex,
-				itoaIndex, markIndex, resetIndex, used);
+		// The todo-110 printing helpers append after the arena pair, again gated.
+		int ftoaIndex = ftoaUsed ? resetIndex + 1 : -1;
+		int writeStdoutIndex = printUsed ? (ftoaUsed ? ftoaIndex + 1 : resetIndex + 1) : -1;
+		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, iovAddr, funcBase, allocIndex, memcpyIndex,
+				streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, writeStdoutIndex, used, printUsed, ftoaUsed);
+	}
+
+	/** The printing operators that gate the fd_write import (todo 110). */
+	private static final Set<String> PRINT_OPS = Set.of(LispNames.PRINT, LispNames.PRINC, LispNames.TERPRI);
+
+	private static boolean usesPrintOp(LispVal v) {
+		if (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s && PRINT_OPS.contains(s.name())) {
+				return true;
+			}
+			return usesPrintOp(c.car()) || usesPrintOp(c.cdr());
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the function renders a float to text: a {@code print}/{@code princ}/
+	 * {@code princ-to-string} whose argument's inferred static type is FLOAT. Queried
+	 * against the final (frozen) inference result, so the gate agrees with the type the
+	 * code generator will see at the call site.
+	 */
+	private boolean rendersFloat(String fnName, Defun d, Types types) {
+		Map<String, Ty> env = paramEnv(d, types.params());
+		env.putAll(Objects.requireNonNull(types.locals().get(fnName)));
+		TC tc = new TC(fnName, new HashSet<>(d.params()), types, null, false, new boolean[1]);
+		return rendersFloatWalk(progn(d.body()), env, tc);
+	}
+
+	private boolean rendersFloatWalk(LispVal v, Map<String, Ty> env, TC tc) {
+		if (!(v instanceof LispCons c)) {
+			return false;
+		}
+		if (c.car() instanceof LispSymbol s
+				&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
+			List<LispVal> args = c.toList();
+			if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.FLOAT) {
+				return true;
+			}
+		}
+		return rendersFloatWalk(c.car(), env, tc) || rendersFloatWalk(c.cdr(), env, tc);
 	}
 
 	/** String-producing operators that require linear memory even with no literal. */
@@ -908,19 +1037,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private byte[] assemble(List<String> reachable, List<byte[]> internalBodies,
 			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int internalCount, Types types,
 			Mem mem) {
-		// The two extra function types/bodies for the memory helpers, present only when
-		// the
-		// module uses linear memory.
-		int helperTypeBase = internalCount + exportDecls.size();
+		// The local (non-imported) function count: internals, wrappers, then the six
+		// memory helpers (when memory is used), then __ftoa / __write_stdout (when a
+		// float is rendered / when printing is used; todo 110).
+		int localFuncCount = internalCount + exportDecls.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 1 : 0)
+				+ (mem.printUsed() ? 1 : 0);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm")
 			.writeLittleEndian4(1)
-			// Type section: one function type per function (no dedup needed). Internal
-			// function k: its inferred (i64|f64|i32 ...) -> (i64|f64|i32). Wrapper j: the
-			// host signature. Then, when memory is used, __alloc (i32)->i32 and __memcpy
-			// (i32,i32,i32)->().
+			// Type section: one function type per function (no dedup needed). When the
+			// module prints, type 0 is the imported fd_write's (i32,i32,i32,i32)->i32 and
+			// every local function's type index shifts by funcBase, keeping the function
+			// index = type index correspondence. Internal function k: its inferred
+			// (i64|f64|i32 ...) -> (i64|f64|i32). Wrapper j: the host signature. Then,
+			// when memory is used, the helper types.
 			.writeTypeSection(typeSec -> {
+				if (mem.printUsed()) {
+					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+				}
 				for (String name : reachable) {
 					typeSec.addFunc(wasmParamTypes(name, types), new Type[] { wasmType(returnTy(name, types)) });
 				}
@@ -937,14 +1072,29 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					typeSec.addFunc(new Type[0], new Type[] { Type.I32 });
 					typeSec.addFunc(new Type[] { Type.I32 }, new Type[0]);
 				}
-			})
-			// Function section: function index k uses type index k (1:1).
-			.writeFunction(func -> {
-				int total = helperTypeBase + (mem.used() ? 6 : 0);
-				for (int k = 0; k < total; k++) {
-					func.addFunction(k);
+				if (mem.ftoaUsed()) {
+					// __ftoa (f64) -> i32 (a fresh [len][bytes] string pointer).
+					typeSec.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I32 });
+				}
+				if (mem.printUsed()) {
+					// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
+					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[0]);
 				}
 			});
+		// Import section: exactly the one fd_write, and only when the program prints.
+		// A print-free module keeps zero imports (todo 93's adapter-free foundation).
+		if (mem.printUsed()) {
+			// Type index 0: the fd_write signature was added first above.
+			w.writeImportSection(
+					imports -> imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, 0));
+		}
+		// Function section: local function index (funcBase + k) uses type index
+		// (funcBase + k), mirroring the type-section shift above.
+		w.writeFunction(func -> {
+			for (int k = 0; k < localFuncCount; k++) {
+				func.addFunction(k + mem.funcBase());
+			}
+		});
 		// Memory + global (the bump-allocator heap pointer): emitted only when the module
 		// uses linear memory, so a pure-numeric module stays byte-identical to the
 		// original
@@ -961,7 +1111,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// :string results.
 			.writeExport(exports -> {
 				for (int j = 0; j < exportDecls.size(); j++) {
-					exports.addExport(exportDecls.get(j).exportName(), ExternalKind.FUNCTION, internalCount + j);
+					exports.addExport(exportDecls.get(j).exportName(), ExternalKind.FUNCTION,
+							mem.funcIndex(internalCount + j));
 				}
 				if (mem.used()) {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
@@ -992,6 +1143,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					code.addFunction(itoaBody(mem.allocIndex()));
 					code.addFunction(markBody());
 					code.addFunction(resetBody());
+				}
+				if (mem.ftoaUsed()) {
+					code.addFunction(ftoaBody(mem));
+				}
+				if (mem.printUsed()) {
+					code.addFunction(writeStdoutBody(mem));
 				}
 			});
 		// Data section: the string-literal headers, only when present.
@@ -1255,6 +1412,288 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of());
 	}
 
+	// __ftoa(v f64) -> i32: render the float as a fresh [len][bytes] string, the exact
+	// digit-extraction algorithm of the GC backend's FUNC_PRINT_F64_NO_NL (hardened by
+	// todo 108: NaN/Infinity/-Infinity return their static literal header directly, the
+	// sign is taken from the sign BIT so -0.0 prints "-0.0", magnitudes >= 2^63 divide
+	// into [1, 10) and append an E<exp> suffix) so print/princ-to-string output matches
+	// the GC backend byte for byte. Integer digits go MSD-first over a descending
+	// power of ten (10^18 covers everything below 2^63); the fractional part prints at
+	// least 1 and at most 6 digits, stopping once the residue drops below 1e-7.
+	// Param 0=v; locals 1=p (i32 result), 2=c (i32 write cursor), 3=int64 (i64),
+	// 4=pow (i64), 5=digit (i32), 6=started (i32), 7=frac (f64), 8=exp (i32),
+	// 9=digit_count (i32).
+	private static byte[] ftoaBody(Mem mem) {
+		final int P = 1, C = 2, INT64 = 3, POW = 4, DIGIT = 5, STARTED = 6, FRAC = 7, EXP = 8, COUNT = 9;
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		Runnable getV = () -> w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		Runnable getC = () -> w.write(Instruction.GET_LOCAL).writeSignedLeb128(C);
+		Runnable incC = () -> {
+			getC.run();
+			w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.SET_LOCAL).writeSignedLeb128(C);
+		};
+		// NaN: value != value -> the static "NaN" literal (no allocation).
+		getV.run();
+		getV.run();
+		w.write(Instruction.F64_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(Objects.requireNonNull(mem.literals().get("NaN")));
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// +Infinity / -Infinity: the static literals.
+		getV.run();
+		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(Objects.requireNonNull(mem.literals().get("Infinity")));
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getV.run();
+		w.write(Instruction.F64_CONST).writeF64(Double.NEGATIVE_INFINITY);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(Objects.requireNonNull(mem.literals().get("-Infinity")));
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// p = __alloc(48): 4 header + at most 31 content bytes ('-' + 19 integer digits
+		// + '.' + 6 fraction digits + 'E' + 3 exponent digits); c = p + 4.
+		w.write(Instruction.I32_CONST).writeSignedLeb128(48);
+		w.write(Instruction.CALL).writeSignedLeb128(mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(C);
+		// Negative by the sign BIT (so -0.0 keeps its '-'): write it, then negate.
+		getV.run();
+		w.write(Instruction.I64_REINTERPRET_F64);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF, 0x40);
+		getC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128('-');
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		getV.run();
+		w.write(Instruction.F64_NEG);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.END);
+		// value >= 2^63 cannot go through integer digit extraction: divide into [1, 10)
+		// and remember the decimal exponent (appended as E<exp> at the end).
+		getV.run();
+		w.write(Instruction.F64_CONST).writeF64(0x1p63);
+		w.write(Instruction.F64_GE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getV.run();
+		w.write(Instruction.F64_CONST).writeF64(10.0);
+		w.write(Instruction.F64_LT);
+		w.write(Instruction.BR_IF, 1);
+		getV.run();
+		w.write(Instruction.F64_CONST).writeF64(10.0);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.END); // if >= 2^63
+		// Integer digits MSD-first: int64 = i64(floor(v)); pow = 10^18; emit once a
+		// non-zero digit started (or at the final power, so 0 renders "0").
+		getV.run();
+		w.write(Instruction.F64_FLOOR);
+		w.write(Instruction.I64_TRUNC_S_F64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(INT64);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(1000000000);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(1000000000);
+		w.write(Instruction.I64_MUL);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(INT64);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.I64_DIV_U);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I64_REM_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		getC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I64_DIV_U);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
+		w.write(Instruction.I64_NE);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// frac = v - f64(int64); '.'
+		getV.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(INT64);
+		w.write(Instruction.F64_CONVERT_S_I64);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(FRAC);
+		getC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128('.');
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		// Fraction digits: at least 1, at most 6, stop when the residue < 1e-7.
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.F64_CONST).writeF64(10.0);
+		w.write(Instruction.F64_MUL);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.I32_TRUNC_S_F64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
+		getC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.F64_CONST).writeF64(0.0000001);
+		w.write(Instruction.F64_GT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(6);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// Exponent suffix from the >= 2^63 normalization: 'E' then up to three decimal
+		// digits with leading-zero suppression (exp <= 291 for finite doubles).
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.IF, 0x40);
+		getC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128('E');
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(STARTED);
+		// hundreds
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(100);
+		w.write(Instruction.I32_DIV_U);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.IF, 0x40);
+		getC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.END);
+		// tens
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I32_DIV_U);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I32_REM_U);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		getC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		w.write(Instruction.END);
+		// ones (always written)
+		getC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
+		w.write(Instruction.I32_REM_U);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		incC.run();
+		w.write(Instruction.END); // if exp
+		// Store the length header: p.len = c - p - 4; return p.
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		getC.run();
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.END);
+		// Locals 1..9: p, c (i32), int64, pow (i64), digit, started (i32), frac (f64),
+		// exp, digit_count (i32).
+		return withLocalsRaw(b.toByteArray(), List.of(Type.I32.code(), Type.I32.code(), Type.I64.code(),
+				Type.I64.code(), Type.I32.code(), Type.I32.code(), Type.F64.code(), Type.I32.code(), Type.I32.code()));
+	}
+
+	// __write_stdout(ptr i32, len i32): the ONE funnel through which every printing op
+	// writes -- the sole caller of the imported fd_write (todo 110; the todo-93 seam: a
+	// component variant swaps this implementation, never the print ops). Fills the iov
+	// scratch (iovAddr = ptr/len, iovAddr+8 = nwritten) and writes to fd 1 (stdout).
+	private static byte[] writeStdoutBody(Mem mem) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr());
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr() + 4);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd_write(1, iov, 1, nwritten); drop errno
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr());
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr() + 8);
+		w.write(Instruction.CALL).writeSignedLeb128(mem.fdWriteIndex());
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of());
+	}
+
 	private static Type[] wasmParamTypes(String name, Types types) {
 		Ty[] pt = Objects.requireNonNull(types.params().get(name));
 		Type[] out = new Type[pt.length];
@@ -1396,7 +1835,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				slot += 1;
 			}
 		}
-		w.write(Instruction.CALL).writeSignedLeb128(targetIndex);
+		w.write(Instruction.CALL).writeSignedLeb128(mem.funcIndex(targetIndex));
 		// Unbox the internal result (its inferred return type) back to the host type.
 		Ty ret = returnTy(name, types);
 		switch (decl.returnType()) {
@@ -1641,6 +2080,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.CHAR_CODE, LispNames.CODE_CHAR -> compileCharIdentity(name, args, fn);
 			case LispNames.CHAR_EQ -> compileComparison(cons, args, fn, Instruction.I64_EQ, Instruction.F64_EQ);
 			case LispNames.PRINC_TO_STRING -> compilePrincToString(args, fn);
+			case LispNames.PRINT, LispNames.PRINC -> compilePrintOp(name, args, fn);
+			case LispNames.TERPRI -> compileTerpri(args, fn);
+			case LispNames.WITH_ARENA_QUALIFIED -> compileWithArena(args, fn);
 			case LispNames.LOGAND -> compileBitwise(args, fn, -1L, Instruction.I64_AND);
 			case LispNames.LOGIOR -> compileBitwise(args, fn, 0L, Instruction.I64_OR);
 			case LispNames.LOGXOR -> compileBitwise(args, fn, 0L, Instruction.I64_XOR);
@@ -1675,7 +2117,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		for (int i = 1; i < args.size(); i++) {
 			compileCoerced(args.get(i), fn, paramTypes[i - 1]);
 		}
-		fn.writer.write(Instruction.CALL).writeSignedLeb128(funcIndex);
+		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.funcIndex(funcIndex));
 		return returnTy(name, fn.types);
 	}
 
@@ -3825,8 +4267,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.STRING;
 	}
 
-	// (princ-to-string x): an integer renders via the __itoa helper; a string passes
-	// through unchanged. Floats are not supported (no float printer in scalar mode).
+	// (princ-to-string x): an integer renders via the __itoa helper, a float via the
+	// __ftoa helper (todo 110; the GC backend's digit-extraction algorithm); a string
+	// passes through unchanged.
 	private Ty compilePrincToString(List<LispVal> args, Fn fn) {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException(
@@ -3838,12 +4281,185 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return Ty.STRING;
 		}
 		if (argTy == Ty.FLOAT) {
-			throw new UnsupportedOperationException(
-					"--no-gc: princ-to-string of a float is not supported in '" + fn.fnName + "'");
+			compileCoerced(args.get(1), fn, Ty.FLOAT);
+			fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.ftoaIndex());
+			return Ty.STRING;
 		}
 		compileCoerced(args.get(1), fn, Ty.INT);
 		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.itoaIndex());
 		return Ty.STRING;
+	}
+
+	// (print x) / (princ x): write the rendered text through the __write_stdout funnel
+	// and return the argument, exactly matching the interpreter's semantics (print =
+	// prin1 text + a trailing newline, so strings are quoted; princ = display text, no
+	// quotes, no newline). Rendering an int/float allocates a transient string, so the
+	// emission is bracketed with a heap-pointer mark/reset -- a print loop stays flat by
+	// construction. The value model has no runtime boolean: literal t/nil render by
+	// name like the other backends, but a COMPUTED boolean prints as its 0/1 integer (a
+	// documented --no-gc limitation).
+	private Ty compilePrintOp(String name, List<LispVal> args, Fn fn) {
+		requireArgc(args, 2, name, fn);
+		WasmWriter w = fn.writer;
+		LispVal arg = args.get(1);
+		boolean print = LispNames.PRINT.equals(name);
+		if (arg instanceof LispTrue || arg instanceof LispNil) {
+			emitWriteLiteral(fn, arg instanceof LispTrue ? "t" : "nil");
+			if (print) {
+				emitWriteLiteral(fn, "\n");
+			}
+			i64Const(w, arg instanceof LispTrue ? 1 : 0);
+			return Ty.INT;
+		}
+		Ty t = staticType(arg, fn);
+		switch (t) {
+			case INT, FLOAT -> {
+				int v = fn.allocLocal(t);
+				compileCoerced(arg, fn, t);
+				w.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+				// mark / render / write / reset: the transient digits are reclaimed.
+				int mark = fn.allocLocal(Ty.STRING);
+				w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(mark);
+				int s = fn.allocLocal(Ty.STRING);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+				w.write(Instruction.CALL).writeSignedLeb128(t == Ty.INT ? fn.mem.itoaIndex() : fn.mem.ftoaIndex());
+				w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+				emitWriteString(fn, s);
+				if (print) {
+					emitWriteLiteral(fn, "\n");
+				}
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+				return t;
+			}
+			case STRING -> {
+				// A string argument is passthrough -- nothing allocated, no bracket.
+				// print (prin1 semantics) frames it in quotes; princ writes it bare.
+				int s = fn.allocLocal(Ty.STRING);
+				compileCoerced(arg, fn, Ty.STRING);
+				w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+				if (print) {
+					emitWriteLiteral(fn, "\"");
+				}
+				emitWriteString(fn, s);
+				if (print) {
+					emitWriteLiteral(fn, "\"");
+					emitWriteLiteral(fn, "\n");
+				}
+				w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+				return Ty.STRING;
+			}
+			default -> throw new UnsupportedOperationException("--no-gc: " + name
+					+ " of a packed float array is not supported in '" + fn.fnName + "' (print scalars or strings)");
+		}
+	}
+
+	// (terpri): write a newline, yield nil.
+	private Ty compileTerpri(List<LispVal> args, Fn fn) {
+		requireArgc(args, 1, LispNames.TERPRI, fn);
+		emitWriteLiteral(fn, "\n");
+		i64Const(fn.writer, 0);
+		return Ty.INT;
+	}
+
+	// Writes a static literal's content bytes to stdout via the __write_stdout funnel.
+	private void emitWriteLiteral(Fn fn, String content) {
+		Integer off = fn.mem.literals().get(content);
+		if (off == null) {
+			throw new IllegalStateException("--no-gc: print literal not laid out in '" + fn.fnName + "': " + content);
+		}
+		fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(off + 4);
+		fn.writer.write(Instruction.I32_CONST)
+			.writeSignedLeb128(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
+	}
+
+	// Writes the [len][bytes] string held in the given local to stdout via the
+	// __write_stdout funnel.
+	private void emitWriteString(Fn fn, int strLocal) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		emitStrLen(w, strLocal);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
+	}
+
+	// (rontolisp:with-arena () body...): the todo-104 intra-call free. Snapshot the
+	// bump heap pointer, run the body, then pop everything allocated inside. A scalar
+	// result rides the stack across the pop; a reference result (string / packed float
+	// vector / matrix) is copied DOWN to the mark first (dst <= src, so the
+	// byte-forward __memcpy is a safe memmove) and the heap resumes just past the copy.
+	// Escape contract: nothing allocated inside the body may be reachable after it,
+	// except the body's own value. On a module with no linear memory there is no
+	// allocator, so the body is a plain progn.
+	private Ty compileWithArena(List<LispVal> args, Fn fn) {
+		List<LispVal> body = args.subList(2, args.size());
+		if (!fn.mem.used()) {
+			return compileProgn(body, fn);
+		}
+		WasmWriter w = fn.writer;
+		int mark = fn.allocLocal(Ty.STRING);
+		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(mark);
+		Ty t = compileProgn(body, fn);
+		if (!isRefKind(t)) {
+			// A scalar result: pop the whole arena, the value rides the stack.
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+			return t;
+		}
+		int v = fn.allocLocal(Ty.STRING);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+		int size = fn.allocLocal(Ty.STRING);
+		emitRefByteSize(fn, v, t, size);
+		// v >= mark: allocated inside the arena -- copy down and keep just the value.
+		// v < mark: predates the arena (e.g. a literal or an outer value passed
+		// through) -- pop everything, the pointer stays valid as-is.
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(size);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.memcpyIndex());
+		// heap = (mark + size + 3) & -4 (the same 4-byte rounding as __alloc)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(size);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(-4);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.SET_GLOBAL, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		return t;
+	}
+
+	// Computes the total byte size (header + data) of the reference value in local v
+	// into the given i32 scratch local: a string is 4 + len, a packed vector 4 +
+	// (count << shift), a packed matrix 8 + (rows * cols << shift).
+	private void emitRefByteSize(Fn fn, int v, Ty t, int size) {
+		WasmWriter w = fn.writer;
+		boolean mat = t == Ty.F64MAT || t == Ty.F32MAT;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		if (mat) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+			w.write(Instruction.I32_LOAD, 0x02, 0x04);
+			w.write(Instruction.I32_MUL);
+		}
+		if (t != Ty.STRING) {
+			w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(t));
+			w.write(Instruction.I32_SHL);
+		}
+		w.write(Instruction.I32_CONST).writeSignedLeb128(mat ? 8 : 4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(size);
 	}
 
 	// Pushes the stored length (the i32 header word) of the string whose pointer is in
@@ -4046,6 +4662,31 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		if (LispNames.CONCATENATE.equals(name)) {
 			collectConcatenate(args, bound, defuns, callees, fnName);
+			return;
+		}
+		if (LispNames.PRINT.equals(name) || LispNames.PRINC.equals(name)) {
+			if (args.size() != 2) {
+				throw new UnsupportedOperationException("--no-gc: " + name + " takes exactly one argument in '" + fnName
+						+ "' (the optional stream argument is not supported with --no-gc)");
+			}
+			collectCalls(args.get(1), bound, defuns, callees, fnName);
+			return;
+		}
+		if (LispNames.TERPRI.equals(name)) {
+			if (args.size() != 1) {
+				throw new UnsupportedOperationException("--no-gc: terpri takes no arguments in '" + fnName
+						+ "' (the optional stream argument is not supported with --no-gc)");
+			}
+			return;
+		}
+		if (LispNames.WITH_ARENA_QUALIFIED.equals(name)) {
+			if (args.size() < 2 || !(args.get(1) instanceof LispNil)) {
+				throw new UnsupportedOperationException("--no-gc: " + LispNames.WITH_ARENA_QUALIFIED
+						+ " expects an empty option list in '" + fnName + "': (rontolisp:with-arena () body...)");
+			}
+			for (int i = 2; i < args.size(); i++) {
+				collectCalls(args.get(i), bound, defuns, callees, fnName);
+			}
 			return;
 		}
 		if (LispNames.MAKE_ARRAY.equals(name)) {

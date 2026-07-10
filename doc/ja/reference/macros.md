@@ -48,6 +48,7 @@
 | `nth-value` | `(nth-value n values-form)` | プロデューサの n 番目（0 始まり）の値、なければ nil。`multiple-value-list` の上の `nth` に展開されます |
 | `make-instance` | `(make-instance 'class-name :initarg value ...)` | [`defclass`](special-forms/defclass.md) クラスのインスタンスを生成します(静的 CLOS サブセット)。クラス名はリテラルのクォートされたシンボルでなければなりません |
 | `slot-value` | `(slot-value object 'slot-name)` | [`defclass`](special-forms/defclass.md) インスタンスのスロットを読み取ります。`setf` 可能な place です。スロット名はリテラルのクォートされたシンボルでなければなりません |
+| `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | ボディを実行してその値を返し、非 GC WASM バックエンド(`--no-gc`)のメモリ再利用境界を名付けます。内部で確保されたものは終端でポップされ、ボディの値だけが残ります。他のバックエンドでは実際の GC が回収するため、単なる `progn` です |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

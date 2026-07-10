@@ -181,6 +181,12 @@ final class WasmExprCompiler {
 					WasmTcpCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
+				if (LispNames.WITH_ARENA.equals(qn.member())) {
+					// A reclamation boundary for --no-gc; the wasm-GC heap is
+					// garbage-collected, so the body runs as a plain progn.
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithArena(cons), ctx);
+					return;
+				}
 				if (LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())
 						|| LispNames.TLS_LISTEN_PEM.equals(qn.member())
 						|| LispNames.TLS_LISTEN_P12.equals(qn.member())) {

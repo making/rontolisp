@@ -165,6 +165,12 @@ final class JvmExprCompiler {
 					ctx.emit(Opcode.ACONST_NULL);
 					return;
 				}
+				if (LispNames.WITH_ARENA.equals(qn.member())) {
+					// A reclamation boundary for --no-gc; the JVM heap is
+					// garbage-collected, so the body runs as a plain progn.
+					compileExpr(LispMacroExpander.expandWithArena(cons), ctx, className);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {

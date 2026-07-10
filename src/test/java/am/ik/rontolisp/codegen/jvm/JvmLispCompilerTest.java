@@ -736,6 +736,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void withArenaIsAPlainProgn() throws Exception {
+		// rontolisp:with-arena names a reclamation boundary for --no-gc; the JVM heap is
+		// garbage-collected, so it is observationally a progn.
+		assertThat(compileAndRun("(print (rontolisp:with-arena () 1 2 (+ 1 2)))")).isEqualTo("3");
+		assertThat(compileAndRun("(print (rontolisp:with-arena ()))")).isEqualTo("nil");
+	}
+
+	@Test
 	void withOutputToStringDoesNotTouchStandardOutput() throws Exception {
 		assertThat(compileAndRun("(with-output-to-string (s) (princ \"hidden\" s)) (princ \"visible\")"))
 			.isEqualTo("visible");

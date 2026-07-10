@@ -49,6 +49,7 @@ description and a runnable example you can evaluate in your browser.
 | `nth-value` | `(nth-value n values-form)` | The n-th (0-based) value of the producer, or nil; expands to `nth` over `multiple-value-list` |
 | `make-instance` | `(make-instance 'class-name :initarg value ...)` | Create an instance of a [`defclass`](special-forms/defclass.md) class (static CLOS subset). The class name must be a literal quoted symbol |
 | `slot-value` | `(slot-value object 'slot-name)` | Read a slot of a [`defclass`](special-forms/defclass.md) instance; a `setf`-able place. The slot name must be a literal quoted symbol |
+| `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | Run the body and return its value, naming a memory-reclamation boundary for the non-GC WASM backend (`--no-gc`): everything allocated inside is popped at the end, keeping only the body's value. A plain `progn` on the other backends (a real GC already reclaims) |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

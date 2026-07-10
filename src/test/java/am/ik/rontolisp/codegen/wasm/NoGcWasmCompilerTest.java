@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -407,6 +408,154 @@ class NoGcWasmCompilerTest {
 		assertThat(mark).containsExactly(0x00, 0x23, 0x00, 0x0B);
 		// [locals=0][local.get 0][global.set 0][end]
 		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
+	}
+
+	// --- print / stdout (todo 110)
+	// -------------------------------------------------------
+
+	// The exact import-section payload a printing module must carry: exactly one entry,
+	// (import "wasi_snapshot_preview1" "fd_write" (func (type 0))).
+	private static byte[] fdWriteImportSection() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.write(0x01); // one import
+		byte[] module = "wasi_snapshot_preview1".getBytes(StandardCharsets.UTF_8);
+		out.write(module.length);
+		out.writeBytes(module);
+		byte[] field = "fd_write".getBytes(StandardCharsets.UTF_8);
+		out.write(field.length);
+		out.writeBytes(field);
+		out.write(0x00); // external kind: function
+		out.write(0x00); // type index 0
+		return out.toByteArray();
+	}
+
+	@Test
+	void printGatesTheFdWriteImportOnAndOff() {
+		// The SAME defun with and without the print: only the printing build gains an
+		// import section, and its bytes are exactly the single fd_write entry. This pins
+		// the todo-110 contract in both directions: a print-free program keeps ZERO
+		// imports (the todo-93 adapter-free-component foundation), a printing program
+		// imports exactly wasi_snapshot_preview1.fd_write.
+		byte[] printing = compile("""
+				(defun show (n) (print n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		byte[] silent = compile("""
+				(defun show (n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		assertThat(sections(silent)).doesNotContainKey(2);
+		byte[] importSection = Objects.requireNonNull(sections(printing).get(2));
+		assertThat(importSection).containsExactly(fdWriteImportSection());
+	}
+
+	@Test
+	void printingModuleStillRunsThroughStringMachineryAndExportsWork() {
+		// print of int/float/string/bool literals and princ/terpri all compile; the
+		// module keeps the memory + allocator machinery and the export under its name.
+		byte[] module = compile("""
+				(defun show (n)
+				  (print n)
+				  (print 3.14)
+				  (print "hello")
+				  (princ "bare")
+				  (print t)
+				  (print nil)
+				  (terpri)
+				  n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(2).containsKey(5);
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("show", "memory", "__ronto_alloc",
+				"__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void fdWriteImportShiftsEveryFunctionIndexByOne() {
+		// The import occupies function index 0, so the exported wrapper of the FIRST
+		// program sits one above the print-free build's -- all index math flows through
+		// the Mem.funcIndex accessor.
+		byte[] printing = compile("""
+				(defun show (n) (print n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		byte[] silent = compile("""
+				(defun show (n) (princ-to-string n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		int printingIndex = exportedFuncIndex(Objects.requireNonNull(sections(printing).get(7)), "show");
+		int silentIndex = exportedFuncIndex(Objects.requireNonNull(sections(silent).get(7)), "show");
+		assertThat(printingIndex).isEqualTo(silentIndex + 1);
+	}
+
+	@Test
+	void princToStringOfAFloatNowCompiles() {
+		// todo 110: the __ftoa port lifts the old "no float printer in scalar mode"
+		// error; a float renders through the same digit-extraction algorithm as the GC
+		// backend. No print op is involved, so the module still has ZERO imports.
+		byte[] module = compile("""
+				(defun render (x) (length (princ-to-string x)))
+				(rontolisp:wasm-export 'render :params '(:float) :returns :int)
+				""");
+		assertThat(sections(module)).doesNotContainKey(2).containsKey(5);
+	}
+
+	@Test
+	void printRejectsTheStreamArgumentAndPackedArrays() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (print n 1))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("stream argument");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (terpri 1))
+				(rontolisp:wasm-export 'f :params '() :returns :void)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("stream argument");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (print (vec:ones n)) n)
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("packed float array");
+	}
+
+	// --- with-arena (todo 104 / 110)
+	// -----------------------------------------------------
+
+	@Test
+	void withArenaCompilesForScalarStringAndPackedResults() {
+		// A scalar, a string and a packed-vector result all compile; the module keeps
+		// zero imports (with-arena is pure memory management, no I/O).
+		byte[] module = compile("""
+				(defun s (n)
+				  (rontolisp:with-arena () (+ n 1)))
+				(defun str ()
+				  (rontolisp:with-arena () (concatenate 'string "a" "b")))
+				(defun v (n)
+				  (vec:aref (rontolisp:with-arena () (vec:ones n)) 0))
+				(rontolisp:wasm-export 's :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'str :params '() :returns :string)
+				(rontolisp:wasm-export 'v :params '(:int) :returns :float)
+				""");
+		assertThat(sections(module)).doesNotContainKey(2);
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).contains("s", "str", "v");
+	}
+
+	@Test
+	void withArenaOnAMemorylessModuleIsAPlainProgn() {
+		// No linear memory at all (pure numeric): there is no allocator to mark/reset,
+		// so with-arena is a plain progn and the module stays memoryless.
+		byte[] module = compile("""
+				(defun f (n) (rontolisp:with-arena () (* n n)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""");
+		assertThat(sections(module)).doesNotContainKey(2).doesNotContainKey(5);
+	}
+
+	@Test
+	void withArenaRejectsANonEmptyOptionList() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (rontolisp:with-arena (:size 10) n))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("empty option list");
 	}
 
 	// --- minimal binary parsing helpers ------------------------------------------------

@@ -65,3 +65,4 @@ categories:
       - { slug: make-instance, name: make-instance }
       - { slug: slot-value, name: slot-value }
       - { slug: documentation, name: documentation }
+      - { slug: rontolisp-with-arena, name: "rontolisp:with-arena" }

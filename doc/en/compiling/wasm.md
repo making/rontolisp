@@ -270,8 +270,9 @@ The default output — even the optimized reactor above — still needs a **wasm
 capable** runtime, because every value is a GC heap type (`i31ref`, the float struct,
 `(ref eq)`). Add `--no-gc` to emit a plain **MVP** module instead: no rec group, no
 `struct`/`array`/`i31` type, no `eqref` and no import (a plain linear memory is added only
-when the program uses strings — see [below](#strings)). It instantiates with no import
-object and runs on any MVP-class runtime with **no `-W gc`**:
+when the program uses strings — see [below](#strings) — and the single `fd_write` import
+only when it [prints](#printing-print--princ--terpri)). A print-free module instantiates
+with no import object and runs on any MVP-class runtime with **no `-W gc`**:
 
 ```bash
 rontolisp fact.lisp --no-gc --optimize -o fact.wasm
@@ -306,10 +307,13 @@ subset:
 - float/int conversions: `float truncate floor ceiling round`;
 - strings and characters: string literals, character literals, `(concatenate 'string ...)`,
   `length`, `subseq`, `string=`, `char`, `char-code`/`code-char`, `char=` and
-  `princ-to-string` (of integers and strings). There is no separate character type: a
-  character is represented by its code point, so the portable idioms
+  `princ-to-string` (of integers, floats and strings). There is no separate character
+  type: a character is represented by its code point, so the portable idioms
   `(char= (char s i) #\x)` and `(char-code (char s i))` behave exactly like the other
-  backends, while a bare `(char s i)` crossing an `:int` boundary shows the code.
+  backends, while a bare `(char s i)` crossing an `:int` boundary shows the code;
+- printing: `print`, `princ` and `terpri` (without the optional stream argument) — see
+  [below](#printing-print--princ--terpri);
+- memory reclamation: [`rontolisp:with-arena`](#reclaiming-from-lisp-rontolispwith-arena).
 
 Anything else that would allocate a heap object (cons/list, symbols, vectors,
 hash tables, `eval`/`apply`, I/O, `dolist`/list iteration, a free variable or assignment to
@@ -405,6 +409,45 @@ $ node -e '(async () => {
 })()'
 ```
 
+### Printing (`print` / `princ` / `terpri`)
+
+An exported function can print: `print` (readable form plus a trailing newline, so
+strings come out quoted), `princ` (display form, no newline) and `terpri` (a newline)
+work inside the eligible subset, with output byte-identical to the interpreter:
+
+```console
+$ cat show.lisp
+(defun show (n)
+  (print n)
+  (print (* 1.5 n))
+  (print "done"))
+(rontolisp:wasm-export 'show :params '(:int) :returns :void)
+$ rontolisp show.lisp --no-gc -o show.wasm
+$ wasmtime run --invoke show show.wasm 4
+4
+6.0
+"done"
+```
+
+Floats print through the same digit-extraction printer as the GC backend, including the
+IEEE edges (`NaN`, `Infinity`/`-Infinity`, `-0.0`; a magnitude ≥ 2^63 uses the WASM
+backends' `E`-notation shape). Each `print` of a number renders its text into a
+transient string that is reclaimed immediately, so a print loop does not grow the heap.
+
+Two things to know:
+
+- **A printing module has one import.** `print`/`princ`/`terpri` write through a single
+  `wasi_snapshot_preview1.fd_write` import — added **only when the program prints**, so
+  a print-free module keeps zero imports and its exact bytes. Any WASI Preview 1 host
+  provides `fd_write` for free (`wasmtime run`, Node's built-in `node:wasi` module), but
+  a printing module no longer instantiates with an empty `{}` import object the way the
+  [Mandelbrot snippet](#strings) does — a raw JavaScript embedder must supply
+  `{ wasi_snapshot_preview1: { fd_write } }` (or use `node:wasi`).
+- **Booleans print by literal only.** The value model has no runtime boolean type:
+  `(print t)` / `(print nil)` print `t` / `nil`, but a *computed* boolean such as
+  `(print (> a b))` prints its `0`/`1` integer. The optional stream argument and
+  printing a packed float array are compile errors.
+
 ### Reclaiming memory (the arena API)
 
 `__ronto_alloc` is a bump allocator that never frees, so a **resident** host — one
@@ -461,11 +504,39 @@ The arena is a manual stack, not a garbage collector, so two rules apply:
 The [`count-vowels` example](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)
 walks through this recipe with both a Node and an [Endive](https://endive.run) (Java) host.
 
+### Reclaiming from Lisp (`rontolisp:with-arena`)
+
+Both mechanisms above fire at the **export boundary** — nothing is freed *within* one
+call. A loop that allocates each iteration (`concatenate 'string` builds a fresh buffer,
+`vec:zeros`/`vec:ones` a fresh vector) therefore grows the heap for the duration of the
+call. [`rontolisp:with-arena`](../reference/macros/rontolisp-with-arena.md) names that
+reclamation boundary in the source: it snapshots the bump heap pointer, runs its body,
+and pops everything the body allocated — keeping only the body's own value (a string or
+packed float array result is copied down to the snapshot point):
+
+```lisp
+(defun train (epochs n)
+  (let ((acc 0.0))
+    (dotimes (i epochs)
+      (rontolisp:with-arena ()                    ; everything allocated inside ...
+        (setq acc (+ acc (vec:sum (vec:ones n)))) ; ... is popped here
+        ))
+    acc))
+```
+
+With the arena, a hundred thousand iterations stay within the initial linear memory;
+without it, the same loop grows by one vector per iteration. The escape contract is the
+same as `__ronto_alloc_reset`'s: **nothing allocated inside the body may be reachable
+after it, except the body's own value.** On the interpreter, the JVM backend and the
+default (wasm-GC) output, `with-arena` is observationally a plain `progn` — a real
+garbage collector already reclaims — so the same source runs on every backend.
+
 ### Composition
 
-`--no-gc` is a pure-compute reactor: like `--no-wasi` it imports nothing and exports each
-`rontolisp:wasm-export` function under its name (so it cannot do I/O, and a top-level form
-that prints is rejected). It composes with `--optimize`, but cannot be combined with
+`--no-gc` is a pure-compute reactor: it exports each `rontolisp:wasm-export` function
+under its name, imports nothing unless the program [prints](#printing-print--princ--terpri)
+(then exactly `fd_write`), and rejects any other I/O; top-level forms other than `defun`
+and directives are rejected. It composes with `--optimize`, but cannot be combined with
 `--component` (that path is wasm-GC bound). Calling it from JavaScript is the same
 "instantiate, then call the exports" as a GC reactor — see the
 [appendix](#appendix-calling-a-module-from-javascript) — only here the module runs on
