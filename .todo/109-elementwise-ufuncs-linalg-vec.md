@@ -1,8 +1,54 @@
 # 109 — Named element-wise math functions (numpy ufunc parity) for `linalg:` and `vec:`
 
-**Status: PHASE 1 + 1.5 DONE; PHASE 2 PARTIAL — `log` + `tanh` DONE (2026-07-10, first
-release), `sin`/`cos`/`tan` + `asin`/`acos`/`atan`/`sinh`/`cosh` remain (second release).
-Phase 3 not started.**
+**Status: PHASE 1 + 1.5 DONE; PHASE 2 PARTIAL — `log` + `tanh` DONE (first release) and
+`sin`/`cos`/`tan` DONE (2026-07-10, second release); `asin`/`acos`/`atan` +
+`sinh`/`cosh` remain (third release). Phase 3 not started.**
+
+## Phase 2 second release — `sin` + `cos` + `tan` (DONE 2026-07-10)
+
+The design-heavy half: real range reduction. One `WasmSinCosCompiler` serves all three
+scalar builtins, and the ufunc layer rode the recipe unchanged:
+
+- **Scalar builtins**: `WasmSinCosCompiler` (Cody-Waite reduction: `k = nearest(x *
+  2/pi)`, `r = (x - k*PIO2_1) - k*PIO2_1T` over the fdlibm two-part split of pi/2
+  (~86 bits), quadrant `trunc(k) & 3` selecting the sign/swap (two's-complement `&`
+  handles negative k; |k| < 2^31 after the clamp so `i32.trunc_f64_s` cannot trap);
+  degree-11/12 Taylor polynomials for sin(r)/cos(r) on |r| <= pi/4, Horner over z = r^2;
+  `tan` computes BOTH polynomials from the one reduction and takes `s/c` on even
+  quadrants, `-(c/s)` on odd ones. Accuracy ~1e-11 relative for |x| <= ~1e6 (measured);
+  beyond that the `k*PIO2_1` product rounds and the ABSOLUTE error grows like |x|*2^-53
+  (~6e-8 at 2^30); above |x| > 2^30 a crude 2*pi pre-fold + clamp keeps the result
+  finite and in [-1,1] with no trap but progressively meaningless (documented like
+  exp/log's low-digit divergence). Edges: NaN/+-inf -> NaN; `(sin -0.0)`/`(tan -0.0)` =
+  `0.0` (the reduction's `-0.0 - (-0.0)` = `+0.0`, the signum/tanh-class edge). Exact
+  anchors: sin(0)=0, cos(0)=1, tan(0)=0, sin(pi/2)=1.0, cos(pi)=-1.0. All three removed
+  from `BuiltinFunctionWrappers.WASM_UNSUPPORTED`; constants package-private for the
+  kernel mirror. ci-spec gained `sin-cos-tan-exact-cross-backend-cases`.
+- **Defuns**: `linalg:sin`/`cos`/`tan` (named emaps), `vec:sin`/`cos`/`tan` + `-into`
+  siblings; PackageRegistry exports, LispNames constants.
+- **`--simd`**: interpreter (`VecSimdKernels.sinInto`/`cosInto`/`tanInto` + F variants,
+  `LinalgSimdKernels.sin`/`cos`/`tan`), JVM (`UOP_SIN`/`UOP_COS`/`UOP_TAN`, no lane
+  forms), wasm-GC (ONE raw-f64 mirror `emitSinCosF64` on five f64 locals dispatched by
+  `SCALAR_OP_SIN`/`COS`/`TAN`; vec FUNC_COUNT 31 -> 37, linalg 22 -> 25, `userFuncBase()`
+  shift 53 -> 62; **`WasmLinalgSimdRuntimeBuilder.buildUnary`'s fixed f64 scratch grew
+  3 -> 5 and the later locals shifted** -- the 3-local layout made the 5-local sin/cos
+  ops clobber the v128 locals, caught by wasmtime validation), `--no-gc`
+  (`compileSimdUnaryF64` cases only -- the seam generalized in the first release paid
+  off: zero new lowering code).
+- Docs en+ja: sin-cos-tan/math-backends updated (asin/acos/atan/sinh/cosh remain the
+  "interpreter/JVM only" list), `linalg-sin`/`-cos`/`-tan` pages + catalog +
+  functions.md rows, simd guide lists + `-into` table (twelve unary ufuncs),
+  linear-algebra ufunc list. `.kb/vec.md`/`.kb/linalg-simd.md`/CLAUDE.md counts updated.
+
+## Phase 2 third release — the arc/hyperbolic remainder (NOT STARTED)
+
+`asin`/`acos`/`atan` need their own series/reductions (atan first -- `atan(x) = x`
+series for |x| <= 1, `pi/2 - atan(1/x)` beyond; then `asin(x) = atan(x/sqrt(1-x^2))`,
+`acos = pi/2 - asin`); `sinh`/`cosh` could derive from the software exp like tanh, but
+mind that exp's Taylor accuracy degrades for |t| > ~1 (i.e. |x| > 256) and sinh's
+small-x cancellation -- deferred rather than shipped half-designed. All five stay in
+`BuiltinFunctionWrappers.WASM_UNSUPPORTED` and interpreter/JVM-only; do NOT add their
+ufuncs until the wasm scalar exists.
 
 ## Phase 2 first release — `log` + `tanh` (DONE 2026-07-10)
 
@@ -36,16 +82,13 @@ the Phase 1 recipe unchanged:
   pages + catalog + functions.md rows, simd guide lists + `-into` table (nine unary
   ufuncs), linear-algebra ufunc list. `.kb/vec.md`/`.kb/linalg-simd.md` counts updated.
 
-## Phase 2 second release — the remaining trig/hyperbolic (NOT STARTED)
+## (superseded) Phase 2 second release plan, as filed after the first release
 
 `sin`/`cos`/`tan` need real range reduction (payne-hanek-lite or argument folding over
-π/2 quadrants) — deliberately deferred as the design-heavy half. `asin`/`acos`/`atan`
-need their own series/reductions; `sinh`/`cosh` could derive from the software exp like
-tanh (mind overflow at |x| > ~350 where e^x overflows but sinh doesn't... it does too at
-710; the real issue is exp's Taylor accuracy degrading for |t| > ~1, i.e. |x| > 256) but
-were deferred with them. All eight stay in `BuiltinFunctionWrappers.WASM_UNSUPPORTED`
-and interpreter/JVM-only; do NOT add their ufuncs until the wasm scalar exists (the
-"every function behaves identically everywhere" principle).
+π/2 quadrants) — deliberately deferred as the design-heavy half; shipped 2026-07-10,
+see "Phase 2 second release" above. `asin`/`acos`/`atan`/`sinh`/`cosh` moved to the
+third release (see above; the "every function behaves identically everywhere"
+principle still gates their ufuncs on the wasm scalar).
 
 Phase 1 shipped `exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` in BOTH
 packages (each `vec:` member with its `-into` sibling), intercepted under `--simd` on

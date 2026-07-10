@@ -120,6 +120,12 @@ public final class LinalgSimd {
 				args -> unary(args, LinalgSimdKernels::log, LinalgSimdKernels::logF));
 		define(globalEnv, evaluator, LispNames.LINALG_TANH, 1,
 				args -> unary(args, LinalgSimdKernels::tanh, LinalgSimdKernels::tanhF));
+		define(globalEnv, evaluator, LispNames.LINALG_SIN, 1,
+				args -> unary(args, LinalgSimdKernels::sin, LinalgSimdKernels::sinF));
+		define(globalEnv, evaluator, LispNames.LINALG_COS, 1,
+				args -> unary(args, LinalgSimdKernels::cos, LinalgSimdKernels::cosF));
+		define(globalEnv, evaluator, LispNames.LINALG_TAN, 1,
+				args -> unary(args, LinalgSimdKernels::tan, LinalgSimdKernels::tanF));
 		define(globalEnv, evaluator, LispNames.LINALG_SQRT, 1,
 				args -> unary(args, LinalgSimdKernels::sqrt, LinalgSimdKernels::sqrtF));
 		define(globalEnv, evaluator, LispNames.LINALG_ABS, 1,

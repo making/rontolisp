@@ -217,10 +217,10 @@ final class VecSimdKernels {
 	// the -into ones the caller's (r MAY alias x -- element i depends only on element i,
 	// the add-into rule). sqrt / abs / neg / 1-over-x have lane forms bit-identical to
 	// the scalar defun (sqrt and div are correctly rounded, abs and neg exact, so the
-	// f32 widen-compute-narrow round trip is exact); exp / log / tanh / signum have NO
-	// bit-safe lane form (VectorOperators.EXP etc. are not bit-identical to Math.exp),
-	// so they stay de-boxed scalar loops calling the same java.lang.Math the
-	// interpreter defun does.
+	// f32 widen-compute-narrow round trip is exact); exp / log / tanh / sin / cos / tan
+	// / signum have NO bit-safe lane form (VectorOperators.EXP etc. are not
+	// bit-identical to Math.exp), so they stay de-boxed scalar loops calling the same
+	// java.lang.Math the interpreter defun does.
 
 	static void expInto(double[] r, double[] x) {
 		for (int i = 0; i < x.length; i++) {
@@ -255,6 +255,42 @@ final class VecSimdKernels {
 	static void tanhIntoF(float[] r, float[] x) {
 		for (int i = 0; i < x.length; i++) {
 			r[i] = (float) Math.tanh(x[i]);
+		}
+	}
+
+	static void sinInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.sin(x[i]);
+		}
+	}
+
+	static void sinIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.sin(x[i]);
+		}
+	}
+
+	static void cosInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.cos(x[i]);
+		}
+	}
+
+	static void cosIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.cos(x[i]);
+		}
+	}
+
+	static void tanInto(double[] r, double[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = Math.tan(x[i]);
+		}
+	}
+
+	static void tanIntoF(float[] r, float[] x) {
+		for (int i = 0; i < x.length; i++) {
+			r[i] = (float) Math.tan(x[i]);
 		}
 	}
 

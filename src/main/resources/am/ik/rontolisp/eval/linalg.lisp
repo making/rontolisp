@@ -361,6 +361,18 @@
   ;; Elementwise hyperbolic tangent (numpy np.tanh).
   (linalg:emap (function tanh) a))
 
+(defun linalg:sin (a)
+  ;; Elementwise sine (numpy np.sin).
+  (linalg:emap (function sin) a))
+
+(defun linalg:cos (a)
+  ;; Elementwise cosine (numpy np.cos).
+  (linalg:emap (function cos) a))
+
+(defun linalg:tan (a)
+  ;; Elementwise tangent (numpy np.tan).
+  (linalg:emap (function tan) a))
+
 (defun linalg:sqrt (a)
   ;; Elementwise square root (numpy np.sqrt).
   (linalg:emap (function sqrt) a))

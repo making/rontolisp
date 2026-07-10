@@ -1738,6 +1738,25 @@ cases:
       1.0
       -1.0
 
+  # sin/cos/tan are native (Math.sin/cos/tan) on the interpreter/JVM and a software
+  # Cody-Waite + Taylor approximation on WASM (todo 109 Phase 2 second release), so only
+  # values that are exact on every backend are asserted: the zero anchors, and the two
+  # quadrant anchors sin(pi/2) = 1.0 / cos(pi) = -1.0 (exact on the f64 pi both in
+  # java.lang.Math and in the WASM reduction).
+  - name: sin-cos-tan-exact-cross-backend-cases
+    source: |
+      (print (sin 0))
+      (print (cos 0))
+      (print (tan 0))
+      (print (sin (/ pi 2)))
+      (print (cos pi))
+    expected: |
+      0.0
+      1.0
+      0.0
+      1.0
+      -1.0
+
   # Character type and accessors, plus string/number parsing. Every value below is
   # deterministic and identical across the interpreter, JVM and WASM backends.
   - name: characters-and-parsing-cross-backend

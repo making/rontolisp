@@ -482,10 +482,10 @@ final class JvmSimdVectorTemplate {
 	// whose call sites are intercepted. The oracle is the emap rule -- read widened to
 	// f64, apply, narrow on store. sqrt / abs / neg / 1-over-x have lane forms
 	// bit-identical to that (sqrt and div correctly rounded, abs and neg exact, and the
-	// f32 widen-compute-narrow round trip is exact by the 53 >= 2*24+2 bound); exp and
-	// signum have NO bit-safe lane form (VectorOperators.EXP is not bit-identical to
-	// Math.exp), so they stay de-boxed scalar loops over the same java.lang.Math calls
-	// the compiled defun makes.
+	// f32 widen-compute-narrow round trip is exact by the 53 >= 2*24+2 bound); exp /
+	// log / tanh / sin / cos / tan / signum have NO bit-safe lane form
+	// (VectorOperators.EXP etc. are not bit-identical to Math.exp), so they stay
+	// de-boxed scalar loops over the same java.lang.Math calls the compiled defun makes.
 
 	private static final int UOP_EXP = 0;
 
@@ -503,6 +503,12 @@ final class JvmSimdVectorTemplate {
 
 	private static final int UOP_TANH = 7;
 
+	private static final int UOP_SIN = 8;
+
+	private static final int UOP_COS = 9;
+
+	private static final int UOP_TAN = 10;
+
 	static @Nullable Object simdExp(@Nullable Object v) {
 		return simdUnary(UOP_EXP, v);
 	}
@@ -513,6 +519,18 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdTanh(@Nullable Object v) {
 		return simdUnary(UOP_TANH, v);
+	}
+
+	static @Nullable Object simdSin(@Nullable Object v) {
+		return simdUnary(UOP_SIN, v);
+	}
+
+	static @Nullable Object simdCos(@Nullable Object v) {
+		return simdUnary(UOP_COS, v);
+	}
+
+	static @Nullable Object simdTan(@Nullable Object v) {
+		return simdUnary(UOP_TAN, v);
 	}
 
 	static @Nullable Object simdSqrt(@Nullable Object v) {
@@ -545,6 +563,18 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdTanhInto(@Nullable Object out, @Nullable Object v) {
 		return simdUnaryInto(UOP_TANH, out, v);
+	}
+
+	static @Nullable Object simdSinInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_SIN, out, v);
+	}
+
+	static @Nullable Object simdCosInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_COS, out, v);
+	}
+
+	static @Nullable Object simdTanInto(@Nullable Object out, @Nullable Object v) {
+		return simdUnaryInto(UOP_TAN, out, v);
 	}
 
 	static @Nullable Object simdSqrtInto(@Nullable Object out, @Nullable Object v) {
@@ -655,8 +685,8 @@ final class JvmSimdVectorTemplate {
 		}
 	}
 
-	// exp / log / tanh / signum have no lane form bit-identical to java.lang.Math, so
-	// they stay scalar loops (see the section comment above).
+	// exp / log / tanh / sin / cos / tan / signum have no lane form bit-identical to
+	// java.lang.Math, so they stay scalar loops (see the section comment above).
 	private static boolean hasLaneForm(int op) {
 		return op == UOP_SQRT || op == UOP_ABS || op == UOP_NEG || op == UOP_RECIP;
 	}
@@ -670,6 +700,15 @@ final class JvmSimdVectorTemplate {
 		}
 		if (op == UOP_TANH) {
 			return Math.tanh(x);
+		}
+		if (op == UOP_SIN) {
+			return Math.sin(x);
+		}
+		if (op == UOP_COS) {
+			return Math.cos(x);
+		}
+		if (op == UOP_TAN) {
+			return Math.tan(x);
 		}
 		if (op == UOP_SQRT) {
 			return Math.sqrt(x);
@@ -751,6 +790,18 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object laTanh(@Nullable Object a) {
 		return laUnary(UOP_TANH, a);
+	}
+
+	static @Nullable Object laSin(@Nullable Object a) {
+		return laUnary(UOP_SIN, a);
+	}
+
+	static @Nullable Object laCos(@Nullable Object a) {
+		return laUnary(UOP_COS, a);
+	}
+
+	static @Nullable Object laTan(@Nullable Object a) {
+		return laUnary(UOP_TAN, a);
 	}
 
 	static @Nullable Object laSqrt(@Nullable Object a) {

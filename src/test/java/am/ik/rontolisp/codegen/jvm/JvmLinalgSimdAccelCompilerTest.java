@@ -323,12 +323,21 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))");
 		assertMatchesScalarReference("(print (linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1)))");
 		assertMatchesScalarReference("(print (linalg:tanh (linalg:arange 0 200 'single-float)))");
+		// sin / cos / tan over a sign-mixed range (todo 109 Phase 2 second release --
+		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		for (String op : new String[] { "sin", "cos", "tan" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference("(print (linalg:" + op + " (linalg:sub (linalg:arange " + n + ") 100)))");
+			}
+			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4))))");
+			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:arange 0 200 'single-float)))");
+		}
 	}
 
 	@Test
 	void unaryUfuncsDeclineGeneralBoxedArraysToTheScalarDefun() throws Exception {
-		for (String op : new String[] { "exp", "log", "tanh", "sqrt", "abs", "square", "negative", "sign",
-				"reciprocal" }) {
+		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square", "negative",
+				"sign", "reciprocal" }) {
 			assertMatchesScalarReference("(print (linalg:" + op + " #(1 4 9)))");
 		}
 		assertThat(accel("(print (linalg:sqrt #(4 9)))")).isEqualTo("#d(2.0 3.0)");

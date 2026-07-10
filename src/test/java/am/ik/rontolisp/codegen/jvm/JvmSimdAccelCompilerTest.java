@@ -505,6 +505,16 @@ class JvmSimdAccelCompilerTest {
 		assertMatchesScalarReference(
 				"(print (vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
 		assertMatchesScalarReference("(print (vec:tanh (vec:arange 200 'single-float)))");
+		// sin / cos / tan over a sign-mixed range (todo 109 Phase 2 second release --
+		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		for (String op : new String[] { "sin", "cos", "tan" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference(
+						"(print (vec:%s (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0))))".formatted(op, n,
+								n));
+			}
+			assertMatchesScalarReference("(print (vec:%s (vec:arange 200 'single-float)))".formatted(op));
+		}
 	}
 
 	@Test
@@ -522,7 +532,8 @@ class JvmSimdAccelCompilerTest {
 				  (vec:abs-into v v)
 				  (print v))
 				""");
-		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh" }) {
+		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh", "sin", "cos",
+				"tan" }) {
 			assertMatchesScalarReference(
 					"(print (vec:" + op + "-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
 		}

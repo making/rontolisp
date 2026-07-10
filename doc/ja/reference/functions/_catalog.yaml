@@ -334,6 +334,9 @@ categories:
       - { slug: linalg-exp, name: "linalg:exp" }
       - { slug: linalg-log, name: "linalg:log" }
       - { slug: linalg-tanh, name: "linalg:tanh" }
+      - { slug: linalg-sin, name: "linalg:sin" }
+      - { slug: linalg-cos, name: "linalg:cos" }
+      - { slug: linalg-tan, name: "linalg:tan" }
       - { slug: linalg-sqrt, name: "linalg:sqrt" }
       - { slug: linalg-abs, name: "linalg:abs" }
       - { slug: linalg-square, name: "linalg:square" }

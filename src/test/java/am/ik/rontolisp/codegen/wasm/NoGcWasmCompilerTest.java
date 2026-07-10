@@ -936,6 +936,43 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void sinCosTanLowerNativelyOnNoGc() {
+		// todo 109 Phase 2 second release: vec:sin / vec:cos / vec:tan (and -into)
+		// reuse the GC backend's raw-f64 emitter (WasmVecSimdRuntimeBuilder
+		// .emitSinCosF64), so BOTH lowerings drive the same scalar element loop -- no
+		// 0xFD SIMD opcode even under --simd, and the Cody-Waite reduction constant
+		// (f64.const WasmSinCosCompiler.PIO2_1) appears in the body. The probe avoids
+		// vec:sum (whose --simd lowering IS v128) so 0xFD absence is sin/cos/tan's.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sin-into o v)
+				    (vec:cos-into o o)
+				    (+ (vec:aref (vec:sin v) 0) (vec:aref (vec:cos o) 1) (vec:aref (vec:tan (vec:tan-into o o)) 2))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		int[] pio21 = new int[9];
+		pio21[0] = 0x44; // f64.const
+		long bits = Double.doubleToRawLongBits(WasmSinCosCompiler.PIO2_1);
+		for (int i = 0; i < 8; i++) {
+			pio21[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
+		}
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			assertThat(containsSequence(code, pio21)).as("Cody-Waite PIO2_1 constant, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the sin/cos/tan lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sum (vec:tan-into o (vec:cos-into o (vec:sin-into o v))))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("sin-into / cos-into / tan-into skip the bump allocator").isEqualTo(2);
+	}
+
+	@Test
 	void matvecIntoIsAClearCompileErrorLikeMatvec() {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))

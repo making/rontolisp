@@ -271,9 +271,10 @@ final class LinalgSimdKernels {
 	}
 
 	// --- element-wise unary ufuncs (todo 109) ----------------------------------------
-	// linalg:exp / log / tanh / sqrt / abs / negative / sign are named emaps, so their
-	// oracle is the emap rule: read widened to double, apply the operator, narrow on
-	// store. The loops are DELEGATED to VecSimdKernels' -into forms (one implementation
+	// linalg:exp / log / tanh / sin / cos / tan / sqrt / abs / negative / sign are named
+	// emaps, so their oracle is the emap rule: read widened to double, apply the
+	// operator, narrow on store. The loops are DELEGATED to VecSimdKernels' -into forms
+	// (one implementation
 	// per operation); linalg:square and linalg:reciprocal need no kernel at all -- their
 	// defuns call linalg:mul / linalg:div, which are already intercepted.
 
@@ -310,6 +311,42 @@ final class LinalgSimdKernels {
 	static float[] tanhF(float[] x) {
 		float[] r = new float[x.length];
 		VecSimdKernels.tanhIntoF(r, x);
+		return r;
+	}
+
+	static double[] sin(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.sinInto(r, x);
+		return r;
+	}
+
+	static float[] sinF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.sinIntoF(r, x);
+		return r;
+	}
+
+	static double[] cos(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.cosInto(r, x);
+		return r;
+	}
+
+	static float[] cosF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.cosIntoF(r, x);
+		return r;
+	}
+
+	static double[] tan(double[] x) {
+		double[] r = new double[x.length];
+		VecSimdKernels.tanInto(r, x);
+		return r;
+	}
+
+	static float[] tanF(float[] x) {
+		float[] r = new float[x.length];
+		VecSimdKernels.tanIntoF(r, x);
 		return r;
 	}
 

@@ -55,8 +55,9 @@ Members: `zeros`/`ones`/`arange`/`from-list`/`to-list` (construction; `zeros`/`o
 else the double default — through the `vec::%make` funnel, mirroring the linalg constructors),
 `aref`/`aset`/
 `length` (thin wrappers), `add`/`sub`/`mul`/`scale` (element-wise, fresh vector), the
-unary ufuncs `exp`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (element-wise,
-fresh vector, numpy names -- todo 109; see "Element-wise unary ufuncs" below), `sum`/
+unary ufuncs `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`sqrt`/`abs`/`square`/`negative`/
+`sign`/`reciprocal` (element-wise, fresh vector, numpy names -- todo 109; see
+"Element-wise unary ufuncs" below), `sum`/
 `dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
@@ -67,7 +68,7 @@ rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)`
 ## Destination-passing `-into` kernels (todo-103)
 
 Each vector-returning kernel has an `-into` sibling — `add-into`/`sub-into`/`mul-into`/
-`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (todo 109) —
+`scale-into`/`matvec-into`, plus the unary `exp-into`..`reciprocal-into` (incl. `sin-into`/`cos-into`/`tan-into`; todo 109) —
 that writes into a caller-supplied destination (argument 1, CL's `map-into` order) and
 RETURNS that very value. A unary `-into` destination MAY alias the operand (element i
 depends only on element i, the add-into rule). Reductions have none (they never
@@ -121,9 +122,17 @@ not compile under `--no-gc` at all).
 
 ## Element-wise unary ufuncs (todo 109 Phases 1 and 2)
 
-`exp`/`log`/`tanh`/`sqrt`/`abs`/`square`/`negative`/`sign`/`reciprocal` (+ `-into`
-siblings) exist in BOTH packages under their numpy ufunc names (`log`/`tanh` = Phase 2,
-2026-07-10, which first gave the scalar `log`/`tanh` builtins WASM software
+`exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`sqrt`/`abs`/`square`/`negative`/`sign`/
+`reciprocal` (+ `-into` siblings) exist in BOTH packages under their numpy ufunc names
+(`log`/`tanh` = Phase 2 first release; `sin`/`cos`/`tan` = Phase 2 second release,
+2026-07-10, over the new `WasmSinCosCompiler` software scalars -- Cody-Waite reduction
+`k = nearest(x*2/pi)`, `r = (x - k*pio2_1) - k*pio2_1t` (the fdlibm two-part split),
+quadrant `trunc(k) & 3` sign/swap, degree-11/12 Taylor polynomials; ~1e-11 relative for
+|x| <= ~1e6, absolute error growing like |x|*2^-53 beyond, a 2*pi pre-fold + clamp
+above 2^30 keeps huge args finite but progressively meaningless; NaN/+-inf -> NaN;
+`(sin -0.0)`/`(tan -0.0)` = `0.0`, the signum-class edge; `tan` = the sin/cos ratio
+computed from ONE reduction, error amplified near the poles. The first release gave the
+scalar `log`/`tanh` builtins WASM software
 implementations -- `WasmLogCompiler`: exponent extraction + an atanh series, ~1e-10
 relative; `WasmTanhCompiler`: `(e^(2x)-1)/(e^(2x)+1)` over the software exp with the
 doubled argument clamped to +/-40 so large inputs saturate to exactly +/-1.0; both were
@@ -135,11 +144,14 @@ on wasm like `signum`'s edge). The design decisions, per backend:
   across backends -- interpreter/JVM use `Math.exp/sqrt/abs/signum` and true negation,
   while wasm's variable-path `abs` is `x < 0 ? 0 - x : x` (keeps `-0.0`), its unary
   minus is `0 - x` (`(- 0.0)` is `0.0`), its `signum` maps `-0.0`/NaN to `0.0`, and its
-  `exp`/`log`/`tanh` are the `WasmExpCompiler`/`WasmLogCompiler`/`WasmTanhCompiler`
-  software approximations (todo-108 residuals). So each
+  `exp`/`log`/`tanh`/`sin`/`cos`/`tan` are the `WasmExpCompiler`/`WasmLogCompiler`/
+  `WasmTanhCompiler`/`WasmSinCosCompiler` software approximations (todo-108
+  residuals). So each
   `--simd` kernel mirrors ITS backend's defun, per-backend bit-identity holds, and
   cross-backend `-0.0`/NaN/low-digit output stays out of ci-spec (only the exact probes
-  `(log 1)`/`(tanh 0)`/`(tanh +/-25.0)` are in `log-tanh-exact-cross-backend-cases`).
+  `(log 1)`/`(tanh 0)`/`(tanh +/-25.0)` in `log-tanh-exact-cross-backend-cases` and
+  `(sin 0)`/`(cos 0)`/`(tan 0)`/`(sin (/ pi 2))`/`(cos pi)` in
+  `sin-cos-tan-exact-cross-backend-cases`).
 - **Lane forms only where they equal the defun**: interpreter/JVM lane-ize sqrt (SQRT,
   correctly rounded), abs (ABS), negative (NEG) and reciprocal (broadcast(1)/v); exp,
   log, tanh and sign stay de-boxed scalar loops (`VectorOperators.EXP` etc. are NOT
@@ -147,11 +159,12 @@ on wasm like `signum`'s edge). The design decisions, per backend:
   lane-izes sqrt (`f64x2/f32x4.sqrt`), negative (sub-from-splat-0),
   reciprocal (div-from-splat-1) and abs (`bitselect(0 - v, v, v < 0)` -- NOT
   `f64x2.abs`, which would map `-0.0` to `0.0` and diverge from the wasm defun); exp,
-  log, tanh and sign walk `_v_get`/`_v_set` element loops emitting the defun's exact f64
-  sequence (`WasmExpCompiler`/`WasmLogCompiler`/`WasmTanhCompiler`'s constants are
-  package-private for that; the shared raw-f64 emitters are
-  `WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/`emitSignumF64`,
-  dispatched via `SCALAR_OP_*` + `emitScalarUnaryF64`). All f32 lane forms are
+  log, tanh, sin, cos, tan and sign walk `_v_get`/`_v_set` element loops emitting the
+  defun's exact f64 sequence (`WasmExpCompiler`/`WasmLogCompiler`/`WasmTanhCompiler`/
+  `WasmSinCosCompiler`'s constants are package-private for that; the shared raw-f64
+  emitters are `WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/
+  `emitSinCosF64`/`emitSignumF64`, dispatched via `SCALAR_OP_*` +
+  `emitScalarUnaryF64`). All f32 lane forms are
   exact by the `53 >= 2*24+2` bound or correct rounding, so `#f` results equal the
   widen-compute-narrow defun bit-for-bit.
 - **`square` and `reciprocal` ride existing kernels where a defun exists**: `vec:square`
@@ -165,28 +178,35 @@ on wasm like `signum`'s edge). The design decisions, per backend:
   (+`-into`) lower natively too (Phase 1.5, 2026-07-10; they were decision-(b) compile
   errors in Phase 1): `NoGcWasmCompiler.compileSimdUnaryF64` drives a one-element-per-
   iteration loop over the SAME raw-f64 emitters the wasm-GC `--simd` kernels use
-  (`WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/`emitSignumF64` --
-  the software approximations and the `(x>0)-(x<0)` sign; Phase 2 routed `vec:log`/
-  `vec:tanh` (+`-into`) through the same `compileSimdUnaryF64` seam), an f32 element
+  (`WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/`emitSinCosF64`/
+  `emitSignumF64` -- the software approximations and the `(x>0)-(x<0)` sign; Phase 2
+  routed `vec:log`/`vec:tanh` and then `vec:sin`/`vec:cos`/`vec:tan` (+`-into`) through
+  the same `compileSimdUnaryF64` seam), an f32 element
   widening on read
   and narrowing on store (the emap rule). exp has no lane form anywhere and sign's is
   not worth one, so BOTH `--simd` modes emit the identical loop (no `0xFD`); values
   equal the wasm-GC backend's exactly and diverge from interpreter/JVM at the same
   edges the wasm scalar builtins already do (exp low digits; sign maps `-0.0`/NaN to
-  `0.0`). The scalar `(exp x)`/`(log x)`/`(tanh x)`/`(signum x)` builtins themselves
-  remain unknown on `--no-gc` (only the `vec:` kernels gained the lowering).
+  `0.0`). The scalar `(exp x)`/`(log x)`/`(tanh x)`/`(sin x)`/`(cos x)`/`(tan x)`/
+  `(signum x)` builtins themselves remain unknown on `--no-gc` (only the `vec:` kernels
+  gained the lowering).
 - New v128 opcodes for all this (`f32x4/f64x2.sqrt/abs/neg/lt`, `v128.bitselect`) are in
   `am.ik.wasm.Instruction` AND `WasmTreeShaker.skipSimd` (which throws on unknown 0xFD).
 
 Pinned by the unary-ufunc test blocks in `eval/VecSimdTest`, `eval/LinalgSimdTest`,
 `JvmSimdAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `NoGcWasmCompilerTest`
-(incl. `expAndSignLowerNativelyOnNoGc`: INV_SCALE constant present, no `0xFD` in either
+(incl. `expAndSignLowerNativelyOnNoGc` / `logAndTanhLowerNativelyOnNoGc` /
+`sinCosTanLowerNativelyOnNoGc`: a distinctive f64 constant present, no `0xFD` in either
 mode, `-into` skips the allocator) and `WasmLispCompilerIntegrationTest`
 (`wasmGcSimdUnaryUfuncsAreByteIdenticalToTheScalarPath`,
 `wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath`,
-`noGcRunsUnaryUfuncsUnderBothLowerings`, `noGcRunsExpAndSignUnderBothLowerings` --
-the nontrivial exp probes compare a `--no-gc` run against a wasm-GC run, not a
-hardcoded constant).
+`noGcRunsUnaryUfuncsUnderBothLowerings`, `noGcRunsExpAndSignUnderBothLowerings`,
+`noGcRunsLogAndTanhUnderBothLowerings`, `noGcRunsSinCosTanUnderBothLowerings` --
+the nontrivial probes compare a `--no-gc` run against a wasm-GC run, not a
+hardcoded constant; the scalar-builtin integration tests are
+`logSoftwareApproximation` / `tanhSoftwareApproximation` /
+`sinCosTanSoftwareApproximation`, tolerance 1e-5 = print precision, not
+approximation precision).
 
 ## Acceleration layer 0 — interpreter `--simd` (jdk.incubator.vector), opt-in
 
@@ -388,8 +408,8 @@ pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
 
 ## Acceleration layer 3 — wasm-GC `--simd` native v128 over `(array (mut v128))` (todo-105)
 
-`--simd` on the DEFAULT `.wasm` backend routes the same twenty-eight kernels (the seven
-vectorizable ones, the eight todo-109 unary ufuncs, and their thirteen `-into` siblings)
+`--simd` on the DEFAULT `.wasm` backend routes the same thirty-four kernels (the seven
+vectorizable ones, the eleven todo-109 unary ufuncs, and their sixteen `-into` siblings)
 to emitted v128 runtime helpers.
 
 The apparent blocker — "`v128.load`/`store` address LINEAR memory, so a packed array must
@@ -468,7 +488,7 @@ Mechanics:
   three of which reject both. (todo-101 guarded only `x`; an adversarial review of todo-105 caught
   it. Pinned by `wasmGcSimdMatvecIntoRejectsADestinationAliasingEitherOperand`.)
 - **Function indices**: `FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1`, then `_v_new`/`_v_get`/
-  `_v_set` + `_vec_add`..`_vec_tanh_into` (`FUNC_COUNT` = 31). Emitted ONLY under `--simd`,
+  `_v_set` + `_vec_add`..`_vec_tan_into` (`FUNC_COUNT` = 37). Emitted ONLY under `--simd`,
   so `FUNC_USER_BASE` becomes dynamic (`WasmLispCompiler.userFuncBase()`, threaded via
   `Ctx.userFuncBase` into `WasmLambdaCompiler` and `WasmRuntimeBuilder.buildDispatchBody` —
   the only three readers). Every fixed `FUNC_*` below it keeps its value, and a
@@ -476,7 +496,7 @@ Mechanics:
 - **Call-site interception**: `WasmVecSimdCompiler.handles/compile` in `WasmExprCompiler.
   compileCons`, gated on `ctx.simd` — the exact shape of `JvmSimdCompiler`. `mean`/`norm` are
   accelerated transitively (their spliced bodies call `sum`/`dot`); `#'vec:dot` still names
-  the scalar defun, as on the JVM. Everything not in the twenty-eight keeps running `vec.lisp` over
+  the scalar defun, as on the JVM. Everything not in the thirty-four keeps running `vec.lisp` over
   the now-grouped surface (`square`/`square-into` are transitive through `mul`).
 - **The rest of the packed surface** branches on `ctx.simd` at compile time (one module, one
   repr): `WasmArrayCompiler.compilePackedMakeVblock`/`emitPackedReadF64Vblock`/

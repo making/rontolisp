@@ -318,9 +318,9 @@ class VecSimdTest {
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
-		for (String member : new String[] { "exp", "log", "tanh", "sqrt", "abs", "negative", "sign", "reciprocal",
-				"exp-into", "log-into", "tanh-into", "sqrt-into", "abs-into", "negative-into", "sign-into",
-				"reciprocal-into" }) {
+		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "negative",
+				"sign", "reciprocal", "exp-into", "log-into", "tanh-into", "sin-into", "cos-into", "tan-into",
+				"sqrt-into", "abs-into", "negative-into", "sign-into", "reciprocal-into" }) {
 			String form = "(vec:zeros 1) #'vec:" + member;
 			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
@@ -367,6 +367,15 @@ class VecSimdTest {
 		}
 		assertMatchesScalarOracle("(vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
 		assertMatchesScalarOracle("(vec:tanh (vec:arange 200 'single-float))");
+		// sin / cos / tan over the signed range (todo 109 Phase 2 second release --
+		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		for (String op : new String[] { "sin", "cos", "tan" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle(
+						"(vec:%s (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)))".formatted(op, n, n));
+			}
+			assertMatchesScalarOracle("(vec:%s (vec:arange 200 'single-float))".formatted(op));
+		}
 	}
 
 	@Test
@@ -383,7 +392,8 @@ class VecSimdTest {
 
 	@Test
 	void unaryIntoKernelsMatchTheirAllocatingSiblingsAndReturnTheDestination() {
-		for (String op : new String[] { "exp", "log", "tanh", "sqrt", "abs", "negative", "sign", "reciprocal" }) {
+		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "negative", "sign",
+				"reciprocal" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertIntoMatchesAllocating(
 						"(vec:" + op + "-into (vec:zeros %s) (vec:add (vec:arange %s) (vec:ones %s)))",

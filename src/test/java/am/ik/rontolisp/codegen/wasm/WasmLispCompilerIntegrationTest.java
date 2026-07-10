@@ -915,6 +915,52 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void noGcRunsSinCosTanUnderBothLowerings() throws Exception {
+		// todo 109 Phase 2 second release: vec:sin / vec:cos / vec:tan (+ -into) reuse
+		// the GC backend's raw-f64 emitter (the WasmSinCosCompiler Cody-Waite
+		// reduction), so a --no-gc value equals the wasm-GC backend's exactly at both
+		// widths -- the nontrivial probes are compared against a wasm-GC run, the exact
+		// ones (sin(0) = 0, cos(0) = 1, tan(0) = 0) to literals.
+		String wasmGcSinD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:sin #d(1.0 -2.5 100.0)) 2))))",
+				false);
+		String wasmGcSinF = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:sin #f(1.0 -2.5 100.0)) 1))))",
+				false);
+		String wasmGcCosD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:cos #d(-2.5)) 0))))", false);
+		String wasmGcTanD = compileAndRunVec("(print (truncate (* 1000000 (vec:aref (vec:tan #d(2.0)) 0))))", false);
+		String source = """
+				(defun sind (i) (truncate (* 1000000 (vec:aref (vec:sin #d(1.0 -2.5 100.0)) 2))))
+				(defun sinf (i) (truncate (* 1000000 (vec:aref (vec:sin #f(1.0 -2.5 100.0)) 1))))
+				(defun cosd (i) (truncate (* 1000000 (vec:aref (vec:cos #d(-2.5)) 0))))
+				(defun tand (i) (truncate (* 1000000 (vec:aref (vec:tan #d(2.0)) 0))))
+				(defun zeros (i)
+				  (truncate (+ (vec:aref (vec:sin (vec:zeros 1)) 0)
+				               (vec:sum (vec:cos (vec:zeros 3)))
+				               (vec:aref (vec:tan (vec:zeros 1)) 0))))
+				(defun sininto (i)
+				  (let ((o (vec:zeros 3)))
+				    (vec:sin-into o (vec:zeros 3))
+				    (vec:cos-into o o)
+				    (truncate (vec:sum (vec:tan-into o o)))))
+				(rontolisp:wasm-export 'sind :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sinf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'cosd :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'tand :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'zeros :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sininto :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sind", "0")).isEqualTo(wasmGcSinD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sinf", "0")).isEqualTo(wasmGcSinF);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "cosd", "0")).isEqualTo(wasmGcCosD);
+			assertThat(compileNoGcAndInvoke(false, simd, source, "tand", "0")).isEqualTo(wasmGcTanD);
+			// sin(0) + 3 * cos(0) + tan(0) = 3.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "zeros", "0")).isEqualTo("3");
+			// tan(cos(sin(0))) per element = tan(1); 3 * tan(1) truncates to 4.
+			assertThat(compileNoGcAndInvoke(false, simd, source, "sininto", "0")).isEqualTo("4");
+		}
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,
@@ -4451,6 +4497,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sinCosTanSoftwareApproximation() throws Exception {
+		// WASM has no native trigonometric instruction; sin/cos/tan are approximated in
+		// f64 (Cody-Waite reduction over pi/2 quadrants + Taylor polynomials, relative
+		// error ~1e-11 for |x| up to ~1e6), so results match Math.sin/cos/tan up to the
+		// printer's six decimal places but not bit-exactly. The zero and quadrant
+		// anchors are exact.
+		assertThat(compileAndRun("(print (sin 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (cos 0))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (tan 0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (sin (/ pi 2)))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (cos pi))")).isEqualTo("-1.0");
+		assertThat(Double.parseDouble(compileAndRun("(print (sin 1.0))"))).isCloseTo(Math.sin(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cos -2.5))"))).isCloseTo(Math.cos(-2.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (tan 2.0))"))).isCloseTo(Math.tan(2), within(1e-5));
+		// Every quadrant of the reduction, plus a large argument (|x| up to ~1e6 keeps
+		// full precision; beyond that the low digits diverge, documented like exp's).
+		assertThat(Double.parseDouble(compileAndRun("(print (sin 100.0))"))).isCloseTo(Math.sin(100), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (cos 4.0))"))).isCloseTo(Math.cos(4), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sin -7.5))"))).isCloseTo(Math.sin(-7.5), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (sin 1000000.0))"))).isCloseTo(Math.sin(1e6), within(1e-5));
+		// The IEEE edges: NaN and +/-inf map to NaN, matching Math.sin/cos/tan.
+		assertThat(compileAndRun("(print (sin (/ 0.0 0.0)))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (cos (/ 1.0 0.0)))")).isEqualTo("NaN");
+		assertThat(compileAndRun("(print (tan (/ -1.0 0.0)))")).isEqualTo("NaN");
+		// First-class values over integer arguments.
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'sin 1))"))).isCloseTo(Math.sin(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'cos 1))"))).isCloseTo(Math.cos(1), within(1e-5));
+		assertThat(Double.parseDouble(compileAndRun("(print (funcall #'tan 1))"))).isCloseTo(Math.tan(1), within(1e-5));
+	}
+
+	@Test
 	void sqrt() throws Exception {
 		assertThat(compileAndRun("(print (sqrt 16))")).isEqualTo("4.0");
 		assertThat(compileAndRun("(print (sqrt 25))")).isEqualTo("5.0");
@@ -4567,9 +4644,10 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void transcendentalFunctionsAreUnsupported() {
-		// sin/cos/tan/asin/acos/atan/sinh/cosh have no native WASM instruction and no
-		// software approximation (yet), so they are rejected (exp/log/tanh have one).
-		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (sin 0))")))
+		// asin/acos/atan/sinh/cosh have no native WASM instruction and no software
+		// approximation (yet), so they are rejected (exp/log/tanh/sin/cos/tan have
+		// one).
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (asin 0))")))
 			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
@@ -6287,9 +6365,10 @@ class WasmLispCompilerIntegrationTest {
 	// lane-group boundary, both widths (the signed operand is arange - 2, so the sign
 	// mix hits abs/negative/sign), exp over reciprocal's bounded (0, 1] range, log over
 	// strictly positive inputs, tanh over the sign mix plus its saturation and -0.0 (0.0
-	// on this backend) edges, the wasm defun's own signed-zero edges (0 - x negation,
-	// abs keeping -0.0, sign mapping -0.0 to 0.0 -- the kernels mirror THIS backend's
-	// defun, not java.lang.Math), and
+	// on this backend) edges, sin/cos/tan over the sign mix plus every reduction
+	// quadrant and the -0.0 (0.0 here) edge, the wasm defun's own signed-zero edges
+	// (0 - x negation, abs keeping -0.0, sign mapping -0.0 to 0.0 -- the kernels mirror
+	// THIS backend's defun, not java.lang.Math), and
 	// the -into siblings: destination identity, in-place aliasing (the add-into rule)
 	// and a destination longer than the operand keeping its tail elements.
 	private static final String UNARY_UFUNCS = """
@@ -6306,12 +6385,17 @@ class WasmLispCompilerIntegrationTest {
 			    (print (vec:log (vec:add (vec:arange n) (vec:ones n))))
 			    (print (vec:log (vec:add (vec:arange n 'single-float) (vec:ones n 'single-float))))
 			    (print (vec:tanh v))
-			    (print (vec:tanh f))))
+			    (print (vec:tanh f))
+			    (print (list (vec:sin v) (vec:cos v) (vec:tan v)))
+			    (print (list (vec:sin f) (vec:cos f) (vec:tan f)))))
 			(print (vec:negative #d(0.0 -0.0 1.5)))
 			(print (vec:abs #d(-0.0 0.0 -2.5)))
 			(print (vec:sign #d(-0.0 0.0 -3.5 3.5)))
 			(print (vec:tanh #d(-25.0 -0.0 0.0 25.0)))
 			(print (vec:log #d(1.0 0.5 4096.0)))
+			(print (vec:sin #d(0.0 -0.0 1.0 -2.5 100.0)))
+			(print (vec:cos #d(0.0 1.0 -2.5 100.0)))
+			(print (vec:tan #d(0.0 1.0 -2.5 2.0)))
 			(let ((o (vec:zeros 5)))
 			  (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0 25.0 36.0))))
 			  (print o)
@@ -6322,7 +6406,10 @@ class WasmLispCompilerIntegrationTest {
 			  (print (vec:reciprocal-into o (vec:add (vec:arange 5) (vec:ones 5))))
 			  (print (vec:square-into o o))
 			  (print (vec:log-into o (vec:add (vec:arange 5) (vec:ones 5))))
-			  (print (vec:tanh-into o o)))
+			  (print (vec:tanh-into o o))
+			  (print (vec:sin-into o (vec:sub (vec:arange 5) (vec:scale (vec:ones 5) 2.0))))
+			  (print (vec:cos-into o o))
+			  (print (vec:tan-into o o)))
 			(let ((long (vec:scale (vec:ones 7) 9.0)))
 			  (print (vec:sqrt-into long #d(4.0 9.0 16.0)))
 			  (print (vec:reciprocal-into long #d(2.0 4.0)))
@@ -6594,6 +6681,10 @@ class WasmLispCompilerIntegrationTest {
 				"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.03)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:tanh (linalg:arange 0 8 'single-float)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #d(-25.0 -0.0 0.0 25.0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sin (linalg:sub (linalg:arange 200) 100)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:cos (linalg:reshape (linalg:arange 12) '(3 4))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:tan (linalg:sub (linalg:arange 0 8 'single-float) 4)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sin #d(0.0 -0.0 1.0 -2.5 100.0)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:negative #d(0.0 -0.0 1.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:abs #d(-0.0 0.0 -2.5)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sign #d(-0.0 0.0 -3.5 3.5)))");
@@ -6601,6 +6692,7 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath("(print (linalg:abs #(-1 2)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:log #(1 4 9)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #(-1 0 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sin #(-1 0 1)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:square 3))");
 	}
 

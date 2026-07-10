@@ -181,7 +181,7 @@
 | `getenv` | `(getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。3つのバックエンドすべて。WASMはPreview 1では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます(wasmtimeに `--env`/`-S inherit-env` を渡してください) |
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
-| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVMのみ) |
+| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |
 | `asin` `acos` `atan` | `(atan 0)` | `0.0`(インタプリタ/JVMのみ) |
 | `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0`(`tanh` は全バックエンド -- WASM はソフトウェア近似。`sinh`/`cosh` はインタプリタ/JVMのみ) |
 | `gcd` | `(gcd 12 18)`, `(gcd 24 36 60)` | `6`, `12`(可変長引数。最大公約数、`(gcd)` は `0`) |
@@ -325,6 +325,9 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:exp` | `(linalg:exp (linalg:zeros 3))` | `#d(1.0 1.0 1.0)`(要素ごとの `e^x`) |
 | `linalg:log` | `(linalg:log #(1 1 1))` | `#d(0.0 0.0 0.0)`(要素ごとの自然対数) |
 | `linalg:tanh` | `(linalg:tanh (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの双曲線正接) |
+| `linalg:sin` | `(linalg:sin (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの正弦) |
+| `linalg:cos` | `(linalg:cos (linalg:zeros 3))` | `#d(1.0 1.0 1.0)`(要素ごとの余弦) |
+| `linalg:tan` | `(linalg:tan (linalg:zeros 3))` | `#d(0.0 0.0 0.0)`(要素ごとの正接) |
 | `linalg:sqrt` | `(linalg:sqrt #(4 9 16))` | `#d(2.0 3.0 4.0)`(要素ごとの平方根) |
 | `linalg:abs` | `(linalg:abs #(-3 2 -1))` | `#d(3.0 2.0 1.0)`(要素ごとの絶対値) |
 | `linalg:square` | `(linalg:square #(1 2 3))` | `#d(1.0 4.0 9.0)`(要素ごとの `x * x`) |

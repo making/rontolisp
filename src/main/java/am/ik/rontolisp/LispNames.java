@@ -2167,6 +2167,15 @@ public final class LispNames {
 	/** {@code linalg:tanh}: element-wise hyperbolic tangent (numpy {@code np.tanh}). */
 	public static final String LINALG_TANH = "tanh";
 
+	/** {@code linalg:sin}: element-wise sine (numpy {@code np.sin}). */
+	public static final String LINALG_SIN = "sin";
+
+	/** {@code linalg:cos}: element-wise cosine (numpy {@code np.cos}). */
+	public static final String LINALG_COS = "cos";
+
+	/** {@code linalg:tan}: element-wise tangent (numpy {@code np.tan}). */
+	public static final String LINALG_TAN = "tan";
+
 	/** {@code linalg:sqrt}: element-wise square root (numpy {@code np.sqrt}). */
 	public static final String LINALG_SQRT = "sqrt";
 
@@ -2300,6 +2309,15 @@ public final class LispNames {
 	/** {@code vec:tanh}: element-wise hyperbolic tangent into a fresh vector. */
 	public static final String VEC_TANH = "tanh";
 
+	/** {@code vec:sin}: element-wise sine into a fresh vector. */
+	public static final String VEC_SIN = "sin";
+
+	/** {@code vec:cos}: element-wise cosine into a fresh vector. */
+	public static final String VEC_COS = "cos";
+
+	/** {@code vec:tan}: element-wise tangent into a fresh vector. */
+	public static final String VEC_TAN = "tan";
+
 	/** {@code vec:sqrt}: element-wise square root into a fresh vector. */
 	public static final String VEC_SQRT = "sqrt";
 
@@ -2326,6 +2344,15 @@ public final class LispNames {
 
 	/** {@code vec:tanh-into}: element-wise hyperbolic tangent into {@code out}. */
 	public static final String VEC_TANH_INTO = "tanh-into";
+
+	/** {@code vec:sin-into}: element-wise sine into {@code out}. */
+	public static final String VEC_SIN_INTO = "sin-into";
+
+	/** {@code vec:cos-into}: element-wise cosine into {@code out}. */
+	public static final String VEC_COS_INTO = "cos-into";
+
+	/** {@code vec:tan-into}: element-wise tangent into {@code out}. */
+	public static final String VEC_TAN_INTO = "tan-into";
 
 	/** {@code vec:sqrt-into}: element-wise square root into {@code out}. */
 	public static final String VEC_SQRT_INTO = "sqrt-into";

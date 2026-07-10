@@ -326,7 +326,8 @@ class LinalgSimdTest {
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
-		for (String member : new String[] { "exp", "log", "tanh", "sqrt", "abs", "negative", "sign" }) {
+		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "negative",
+				"sign" }) {
 			String form = "(linalg:zeros 1) #'linalg:" + member;
 			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
@@ -366,6 +367,15 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle("(linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1))");
 		assertMatchesScalarOracle("(linalg:tanh (linalg:reshape (linalg:arange 12) '(3 4)))");
 		assertMatchesScalarOracle("(linalg:tanh (linalg:arange 0 200 'single-float))");
+		// sin / cos / tan over a sign-mixed range (todo 109 Phase 2 second release --
+		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		for (String op : new String[] { "sin", "cos", "tan" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarOracle("(linalg:" + op + " (linalg:sub (linalg:arange " + n + ") 100))");
+			}
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:reshape (linalg:arange 12) '(3 4)))");
+			assertMatchesScalarOracle("(linalg:" + op + " (linalg:arange 0 200 'single-float))");
+		}
 	}
 
 	@Test
@@ -383,8 +393,8 @@ class LinalgSimdTest {
 	void aGeneralBoxedArrayDeclinesToTheScalarDefunForTheUnaryUfuncs() {
 		// A general #(...) array is not packed, so every unary kernel declines and the
 		// defun answers -- identically on both paths.
-		for (String op : new String[] { "exp", "log", "tanh", "sqrt", "abs", "square", "negative", "sign",
-				"reciprocal" }) {
+		for (String op : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "sqrt", "abs", "square", "negative",
+				"sign", "reciprocal" }) {
 			assertMatchesScalarOracle("(linalg:" + op + " #(1 4 9))");
 		}
 		assertThat(eval("(linalg:sqrt #(4 9))", true).print()).isEqualTo("#d(2.0 3.0)");

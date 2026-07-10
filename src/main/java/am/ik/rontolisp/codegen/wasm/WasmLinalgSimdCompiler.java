@@ -79,6 +79,9 @@ final class WasmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_EXP, WasmLinalgSimdRuntimeBuilder.EXP),
 			Map.entry(LispNames.LINALG_LOG, WasmLinalgSimdRuntimeBuilder.LOG),
 			Map.entry(LispNames.LINALG_TANH, WasmLinalgSimdRuntimeBuilder.TANH),
+			Map.entry(LispNames.LINALG_SIN, WasmLinalgSimdRuntimeBuilder.SIN),
+			Map.entry(LispNames.LINALG_COS, WasmLinalgSimdRuntimeBuilder.COS),
+			Map.entry(LispNames.LINALG_TAN, WasmLinalgSimdRuntimeBuilder.TAN),
 			Map.entry(LispNames.LINALG_SQRT, WasmLinalgSimdRuntimeBuilder.SQRT),
 			Map.entry(LispNames.LINALG_ABS, WasmLinalgSimdRuntimeBuilder.ABS),
 			Map.entry(LispNames.LINALG_NEGATIVE, WasmLinalgSimdRuntimeBuilder.NEGATIVE),
@@ -88,8 +91,8 @@ final class WasmLinalgSimdCompiler {
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
 			LispNames.LINALG_AMAX, LispNames.LINALG_AMIN, LispNames.LINALG_ARGMAX, LispNames.LINALG_ARGMIN,
 			LispNames.LINALG_TRACE, LispNames.LINALG_TRANSPOSE, LispNames.LINALG_EXP, LispNames.LINALG_LOG,
-			LispNames.LINALG_TANH, LispNames.LINALG_SQRT, LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE,
-			LispNames.LINALG_SIGN);
+			LispNames.LINALG_TANH, LispNames.LINALG_SIN, LispNames.LINALG_COS, LispNames.LINALG_TAN,
+			LispNames.LINALG_SQRT, LispNames.LINALG_ABS, LispNames.LINALG_NEGATIVE, LispNames.LINALG_SIGN);
 
 	/** Returns whether the given qualified name is a kernel this compiler accelerates. */
 	static boolean handles(String qualifiedName) {

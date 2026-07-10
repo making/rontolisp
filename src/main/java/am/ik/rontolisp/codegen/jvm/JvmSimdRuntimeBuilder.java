@@ -136,6 +136,12 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdLog"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_TANH,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdTanh"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_SIN,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSin"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_COS,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdCos"), cp.addUtf8(unaryDesc))));
+		ops.put(LispNames.VEC_TAN,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdTan"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_SQRT,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSqrt"), cp.addUtf8(unaryDesc))));
 		ops.put(LispNames.VEC_ABS,
@@ -152,6 +158,12 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdLogInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_TANH_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdTanhInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_SIN_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSinInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_COS_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdCosInto"), cp.addUtf8(binaryDesc))));
+		ops.put(LispNames.VEC_TAN_INTO,
+				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdTanInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_SQRT_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSqrtInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_ABS_INTO,
