@@ -201,9 +201,7 @@ WASM componentにコンパイルして (wasmtime 46+。外向きHTTPを許可す
 
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
-wasmtime run -W gc=y -W component-model-async=y \
-  -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-  -S http=y fetch-post.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
 ```
 
 HTTPではなく素のTCPを使う場合 — あるいは *サーバー* 側を実装する場合 —

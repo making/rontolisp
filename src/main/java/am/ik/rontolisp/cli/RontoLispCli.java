@@ -302,8 +302,10 @@ public final class RontoLispCli {
 		this.out.println("  -v, --version      Show version");
 		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
 		this.out.println("                     Lets sources that define functions via load compile as-is");
-		this.out.println("  --component        Emit a WASI 0.2 component (run with: wasmtime run)");
-		this.out.println("                     WASM only; print works, reading/file I/O not yet supported");
+		this.out.println("  --component        Emit a WASI 0.3 component (run with: wasmtime run)");
+		this.out.println("                     WASM only; print/stdin/file I/O work. Scalar (pure-compute)");
+		this.out.println("                     rontolisp:wasm-export functions become typed component");
+		this.out.println("                     exports, callable via wasmtime run --invoke 'name(args)'");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");

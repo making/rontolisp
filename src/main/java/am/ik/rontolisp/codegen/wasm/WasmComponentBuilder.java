@@ -6,12 +6,14 @@ import java.io.UncheckedIOException;
 import java.util.List;
 
 import am.ik.wasm.ComponentWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Wraps a rontolisp core module (compiled in component mode) into a WASI 0.3 (Preview 3)
  * <strong>component</strong> that prints through {@code wasi:cli/stdout@0.3.0} and is
- * runnable with {@code wasmtime run -W component-model-async=y
- * -W component-model-async-stackful=y -W component-model-more-async-builtins=y -W gc=y}.
+ * runnable with {@code wasmtime run -W gc=y -W component-model-more-async-builtins=y}
+ * (wasmtime 46+; the async canonical ABI and stackful lifts are on by default there, only
+ * the synchronous stream/future built-ins the adapter uses are still gated).
  *
  * <p>
  * In WASI 0.3 the {@code wasi:io} package is gone: all byte I/O flows through the
@@ -178,6 +180,67 @@ public final class WasmComponentBuilder {
 	}
 
 	/**
+	 * A scalar {@code rontolisp:wasm-export} function to expose as a component-model
+	 * export (Tier 1: {@code :int}/{@code :float}/{@code :bool}/{@code :void} only). The
+	 * core module core-exports a wrapper under {@code name}; the component aliases it and
+	 * lifts it <strong>synchronously</strong> (a pure-compute scalar export needs no
+	 * memory / realloc / async, unlike the stackful-async {@code run} lift).
+	 *
+	 * @param name the export name (a valid component-model label; honors {@code :as})
+	 * @param paramValTypes the {@code ComponentWriter.VT_*} code of each parameter
+	 * @param resultValType the {@code ComponentWriter.VT_*} result code, or {@code null}
+	 * for no result
+	 */
+	public record FuncExport(String name, List<Integer> paramValTypes, @Nullable Integer resultValType) {
+	}
+
+	/**
+	 * Append the per-export alias / type / lift / export wiring for the scalar
+	 * {@code wasm-export} functions. Emits nothing when {@code funcExports} is empty, so
+	 * an export-free program's component stays byte-identical. The rontolisp core is
+	 * always core instance 3 (mem = 0, adapter = 2); each new index space entry is
+	 * appended after the {@code run} wiring, whose next free indices the caller passes
+	 * in.
+	 * @param c the component writer
+	 * @param funcExports the scalar exports
+	 * @param nextCoreFunc the first free core function index (after the {@code run}
+	 * alias)
+	 * @param nextType the first free component type index
+	 * @param nextComponentFunc the first free component function index (after the
+	 * {@code run} lift)
+	 */
+	private static void appendFuncExports(ComponentWriter c, List<FuncExport> funcExports, int nextCoreFunc,
+			int nextType, int nextComponentFunc) {
+		if (funcExports.isEmpty()) {
+			return;
+		}
+		final List<byte[]> aliases = new java.util.ArrayList<>();
+		final List<byte[]> types = new java.util.ArrayList<>();
+		final List<byte[]> lifts = new java.util.ArrayList<>();
+		final List<byte[]> exports = new java.util.ArrayList<>();
+		for (int i = 0; i < funcExports.size(); i++) {
+			FuncExport e = funcExports.get(i);
+			// Alias the core wrapper export out of the rontolisp instance (3).
+			aliases.add(ComponentWriter.aliasCoreFunc(3, e.name()));
+			// One synchronous scalar function type per export (params p0, p1, ...).
+			final List<String> paramNames = new java.util.ArrayList<>();
+			for (int p = 0; p < e.paramValTypes().size(); p++) {
+				paramNames.add("p" + p);
+			}
+			types.add(ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType()));
+			// Lift the aliased core func (sync, no canonical options -- flat scalars
+			// only).
+			lifts.add(ComponentWriter.canonLift(nextCoreFunc + i, nextType + i));
+			// Export the lifted component func directly under the export name.
+			exports.add(ComponentWriter.exportFunc(e.name(), nextComponentFunc + i));
+		}
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
+		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lifts));
+		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(exports));
+	}
+
+	/**
 	 * Assemble a runnable WASI 0.3 component around the given rontolisp core module.
 	 * @param coreModule the rontolisp core module compiled in component mode (imports its
 	 * memory, imports {@code wasi_snapshot_preview1}, and exports a {@code run} function
@@ -206,14 +269,30 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	public static byte[] build(byte[] coreModule, boolean usesHttp, boolean usesSockets) {
+		return build(coreModule, usesHttp, usesSockets, List.of());
+	}
+
+	/**
+	 * Assemble a runnable WASI 0.3 component around the given rontolisp core module,
+	 * additionally exposing the given scalar {@code rontolisp:wasm-export} functions as
+	 * host-callable component-model exports (synchronous canonical lifts alongside the
+	 * stackful-async {@code wasi:cli/run} export).
+	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param usesHttp whether the program uses {@code rontolisp:fetch}
+	 * @param usesSockets whether the program uses a {@code rontolisp:tcp-*} built-in
+	 * @param funcExports the scalar function exports (empty for none; an empty list
+	 * yields output byte-identical to {@link #build(byte[], boolean, boolean)})
+	 * @return the WASI 0.3 component binary
+	 */
+	public static byte[] build(byte[] coreModule, boolean usesHttp, boolean usesSockets, List<FuncExport> funcExports) {
 		if (usesHttp && usesSockets) {
 			// The compiler rejects this combination before reaching here.
 			throw new UnsupportedOperationException("fetch and tcp sockets cannot be combined in one component yet");
 		}
 		if (usesHttp) {
-			return buildHttp(coreModule);
+			return buildHttp(coreModule, funcExports);
 		}
-		return usesSockets ? buildSock(coreModule) : buildBase(coreModule);
+		return usesSockets ? buildSock(coreModule, funcExports) : buildBase(coreModule, funcExports);
 	}
 
 	/**
@@ -250,9 +329,10 @@ public final class WasmComponentBuilder {
 	/**
 	 * Assemble the base WASI 0.3 component (no {@code rontolisp:fetch}).
 	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param funcExports the scalar {@code wasm-export} functions to lift and export
 	 * @return the WASI 0.3 component binary
 	 */
-	private static byte[] buildBase(byte[] coreModule) {
+	private static byte[] buildBase(byte[] coreModule, List<FuncExport> funcExports) {
 		final ComponentWriter c = new ComponentWriter();
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
 		// 0-11.
@@ -365,6 +445,10 @@ public final class WasmComponentBuilder {
 				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10))));
+		// Scalar wasm-export functions: next free indices after the run wiring are core
+		// func 23 (run = 22), component type 24 (T_RUN_FUNC = 23) and component func 12
+		// (the run lift = 11).
+		appendFuncExports(c, funcExports, 23, T_RUN_FUNC + 1, 12);
 		return c.toByteArray();
 	}
 
@@ -460,9 +544,10 @@ public final class WasmComponentBuilder {
 	 * a reference generated by {@code regen.sh} from {@code uni-http.wit} +
 	 * {@code core-http.wat}.
 	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param funcExports the scalar {@code wasm-export} functions to lift and export
 	 * @return the WASI 0.3 (+ 0.2 http) component binary
 	 */
-	private static byte[] buildHttp(byte[] coreModule) {
+	private static byte[] buildHttp(byte[] coreModule, List<FuncExport> funcExports) {
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + WASI 0.2 http import instances 0-13, component types 0-24.
 		c.writeRaw(IMPORT_BLOCK_HTTP);
@@ -651,6 +736,10 @@ public final class WasmComponentBuilder {
 				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 32))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 15))));
+		// Scalar wasm-export functions: next free indices after the run wiring are core
+		// func 53 (run = 52), component type 46 (H_T_RUN_FUNC = 45) and component func 33
+		// (the run lift = 32).
+		appendFuncExports(c, funcExports, 53, H_T_RUN_FUNC + 1, 33);
 		return c.toByteArray();
 	}
 
@@ -712,9 +801,10 @@ public final class WasmComponentBuilder {
 	 * dump} of a reference generated by {@code regen.sh} from {@code uni-sock.wit} +
 	 * {@code core-sock.wat}.
 	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param funcExports the scalar {@code wasm-export} functions to lift and export
 	 * @return the WASI 0.3 component binary
 	 */
-	private static byte[] buildSock(byte[] coreModule) {
+	private static byte[] buildSock(byte[] coreModule, List<FuncExport> funcExports) {
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + wasi:sockets import instances 0-9, component types 0-12.
 		c.writeRaw(IMPORT_BLOCK_SOCK);
@@ -853,6 +943,10 @@ public final class WasmComponentBuilder {
 				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11))));
+		// Scalar wasm-export functions: next free indices after the run wiring are core
+		// func 34 (run = 33), component type 31 (S_T_SOCK_FUTURE = 30) and component func
+		// 19 (the run lift = 18).
+		appendFuncExports(c, funcExports, 34, S_T_SOCK_FUTURE + 1, 19);
 		return c.toByteArray();
 	}
 

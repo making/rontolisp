@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Parses and compiles {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)}
@@ -354,6 +355,38 @@ final class WasmExportCompiler {
 
 	private static boolean isMemoryType(String type) {
 		return T_STRING.equals(type) || T_S_EXPR.equals(type);
+	}
+
+	/**
+	 * Maps a Tier-1 scalar type designator to its component-model primitive value type
+	 * code for the {@code --component} export path ({@code null} = no result). The
+	 * memory-backed designators ({@code :string}/{@code :s-expr}) and {@code :long} are
+	 * rejected before this is reached.
+	 * @param type the type designator
+	 * @return the {@code ComponentWriter.VT_*} code, or {@code null} for {@code :void}
+	 */
+	static @Nullable Integer componentValType(String type) {
+		return switch (type) {
+			case T_INT -> am.ik.wasm.ComponentWriter.VT_S32;
+			case T_FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
+			case T_BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
+			case T_VOID -> null;
+			default -> throw new UnsupportedOperationException(
+					"rontolisp:wasm-export type " + type + " has no component-model scalar mapping");
+		};
+	}
+
+	/**
+	 * Builds the component-model export description for a Tier-1 scalar declaration.
+	 * @param decl the parsed declaration (scalar types only)
+	 * @return the export description consumed by {@code WasmComponentBuilder}
+	 */
+	static WasmComponentBuilder.FuncExport componentExport(Decl decl) {
+		List<Integer> params = new ArrayList<>();
+		for (String t : decl.paramTypes()) {
+			params.add(componentValType(t));
+		}
+		return new WasmComponentBuilder.FuncExport(decl.exportName(), params, componentValType(decl.returnType()));
 	}
 
 	static void appendWasmTypes(List<Type> types, String type) {

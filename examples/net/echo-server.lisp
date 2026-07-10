@@ -10,8 +10,7 @@
 ;; Run (interpreter):        java -jar $JAR examples/net/echo-server.lisp
 ;; Run (JVM):                java -jar $JAR examples/net/echo-server.lisp -o EchoServer.class && java EchoServer
 ;; Run (WASM component):     java -jar $JAR examples/net/echo-server.lisp -o echo-server.wasm --component && \
-;;                           wasmtime run -W gc=y -W component-model-async=y \
-;;                             -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
+;;                           wasmtime run -W gc=y -W component-model-more-async-builtins=y \
 ;;                             -S tcp=y -S inherit-network=y echo-server.wasm
 ;; Talk to it with:          nc 127.0.0.1 7777   (or examples/net/echo-client.lisp)
 (let ((listener (rontolisp:tcp-listen 7777)))

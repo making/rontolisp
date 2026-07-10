@@ -15,6 +15,16 @@ syntax -- a distinct rontolisp selling point (compact + typed + no experimental
 
 Depends on / after: **#92** (reuse the per-export `canonLift` + type-mapping
 wiring introduced there; this issue is the non-GC, adapter-free variant).
+**#92 Tier 1 is DONE (2026-07-11)** -- the reusable pieces now exist:
+`ComponentWriter.funcTypeScalars` + `VT_F64` (= 0x75, not 0x74!),
+`WasmExportCompiler.componentValType`/`componentExport`, the
+`WasmComponentBuilder.FuncExport` record and the
+`appendFuncExports(c, exports, nextCoreFunc, nextType, nextComponentFunc)`
+section-appending pattern, plus the kebab-label name validation
+(`WasmLispCompiler.COMPONENT_EXPORT_NAME`). This issue's wrap is much simpler
+(no import block / adapter / mem module -- core module 0, instance 0, aliases
+from instance 0). Remember todo-110's `Mem.funcIndex()` accessors for the
+core-export indices.
 
 ## Current state
 

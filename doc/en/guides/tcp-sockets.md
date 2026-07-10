@@ -103,9 +103,7 @@ returns `nil`):
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -W component-model-async=y \
-  -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-  -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 Whichever backend serves, talk to it with any TCP client, for example

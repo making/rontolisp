@@ -57,6 +57,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean simd;
 
+	/**
+	 * The component-model {@code label} grammar (lower-kebab-case words) a component
+	 * export name must match; a Lisp name outside it (e.g. one containing {@code *} or
+	 * {@code %}) must be renamed with {@code :as}.
+	 */
+	private static final java.util.regex.Pattern COMPONENT_EXPORT_NAME = java.util.regex.Pattern
+		.compile("[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*");
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -927,9 +935,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (rontolisp:wasm-export ...) directives: collected here and turned into
 		// host-callable
 		// export
-		// wrappers below. They produce no code in the _start body (Preview 1 only;
-		// ignored
-		// in component mode).
+		// wrappers below. They produce no code in the _start body. In component mode the
+		// scalar wrappers are additionally lifted into component-model exports
+		// (WasmComponentBuilder).
 		List<WasmExportCompiler.Decl> exportDecls = new ArrayList<>();
 		// (rontolisp:wasm-import ...) directives: each becomes a Lisp-callable wrapper
 		// registered like a top-level defun (Preview 1 only; rejected in component
@@ -1278,8 +1286,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		int numDefuns = defuns.size();
 		int numLambdas = lambdaDecls.size();
 
-		// Build host-callable export wrappers (Preview 1 only; ignored in component
-		// mode).
+		// Build host-callable export wrappers (all modes; component mode restricts the
+		// types to Tier-1 scalars and lifts each wrapper into a component-model export).
 		// Each (rontolisp:wasm-export ...) directive becomes a thin wrapper function
 		// appended after
 		// all user defuns and lambdas, exported under its Lisp name with a host-friendly
@@ -1309,7 +1317,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
 			}
 		}
-		if ((!this.component || this.serve) && !exportDecls.isEmpty()) {
+		if (!exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
 			int wrapperTypeIndex = fixedTypeCount();
 			for (WasmExportCompiler.Decl decl : exportDecls) {
@@ -1317,6 +1325,29 @@ public final class WasmLispCompiler implements LispCompiler {
 						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
 					throw new UnsupportedOperationException("rontolisp:wasm-export :long requires --no-gc for '"
 							+ decl.name() + "' (the GC backend represents integers as i31ref, not i64; use :int)");
+				}
+				// Component-model exports (non-serve --component) are Tier 1: scalar
+				// types only, lifted synchronously with no canonical memory. The
+				// memory-backed (ptr,len) designators need a canonical string/list lift
+				// (Tier 2, .todo/92).
+				if (this.component && !this.serve) {
+					if (WasmExportCompiler.usesMemory(decl)) {
+						throw new UnsupportedOperationException("rontolisp:wasm-export :string/:s-expr is not yet"
+								+ " supported with --component for '" + decl.name()
+								+ "' (component exports are scalar-only: :int/:float/:bool/:void)");
+					}
+					if (!COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
+						throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
+								+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
+								+ " \"sum-squared\"); rename it with :as \"kebab-name\"");
+					}
+					// The core module already exports "run" (the lifted wasi:cli/run
+					// entry); a second core export under the same name would make the
+					// module invalid.
+					if ("run".equals(decl.exportName())) {
+						throw new UnsupportedOperationException("rontolisp:wasm-export name 'run' collides with the"
+								+ " component's wasi:cli/run entry; rename it with :as");
+					}
 				}
 				WasmFunctionInfo target = functions.get(decl.name());
 				if (target == null || !userDefinedNames.contains(decl.name())) {
@@ -2134,9 +2165,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						if (memoryHelpers) {
 							exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, allocFuncIndex);
 						}
-						for (ExportPlan p : exportPlans) {
-							exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION, p.funcIndex());
-						}
+					}
+					// Core-export each (rontolisp:wasm-export ...) wrapper: in serve mode
+					// the serve adapter calls %http-dispatch through it; otherwise the
+					// component wrapper (WasmComponentBuilder) aliases it and lifts it
+					// into a host-callable component-model export.
+					for (ExportPlan p : exportPlans) {
+						exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION, p.funcIndex());
 					}
 				}
 				else {
@@ -2357,7 +2392,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
 				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport);
 			}
-			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport);
+			// Lift each scalar wasm-export wrapper into a host-callable component-model
+			// export (synchronous canon lift; WAVE-invokable) alongside wasi:cli/run.
+			List<WasmComponentBuilder.FuncExport> componentExports = new ArrayList<>();
+			for (ExportPlan p : exportPlans) {
+				componentExports.add(WasmExportCompiler.componentExport(p.decl()));
+			}
+			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExports);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}

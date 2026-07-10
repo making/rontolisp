@@ -85,7 +85,7 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 
 制限:
 
-- このディレクティブは Preview 1 コアモジュールにのみ適用されます。`--component` のもとでは no-op です（ラッパーは出力されません）。インタプリタおよび JVM バックエンドでも no-op です（指定されたシンボルを返すだけです）。そのため、同じソースがすべてのバックエンドで動作します。
+- `--component` のもとでは、スカラーエクスポート（`:int`/`:float`/`:bool`/void）は**型付きコンポーネントモデルエクスポート**になります。後述の[コンポーネントモデル関数エクスポート](#component-model-function-exports-wasm-export)を参照してください。`:string`/`:s-expr` はそこではまだサポートされません（コンパイルエラー）。インタプリタおよび JVM バックエンドではこのディレクティブは no-op です（指定されたシンボルを返すだけです）。そのため、同じソースがすべてのバックエンドで動作します。
 - エクスポートできるのはトップレベルの `defun` のみで、宣言されたパラメータ数はそのアリティと一致しなければならず、関数値を受け取ったり返したりする関数は対象外です。
 - エクスポート名はデフォルトで裸の Lisp 名（`fact`）で、`:as` で変更できます。引数の書き方はホストに依存します（`wasmtime --invoke fact module.wasm 5`、`instance.exports.fact(5)` など）。
 - デフォルトでは、モジュールのインスタンス化には依然として 8 つの `wasi_snapshot_preview1` インポートを満たす必要があります。`wasmtime run` はそれらを自動的に提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。それらを除去するには `--no-wasi`（[後述](#no-wasi-reactor-mode)）を追加します。
@@ -407,14 +407,14 @@ node -e '(async () => {
 
 ```bash
 rontolisp hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y hello.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y hello.wasm
 ```
 
 ```
 3
 ```
 
-WASI 0.3 では、すべてのバイト I/O が組み込みのコンポーネントモデルの `stream<u8>` / `future<T>` 型と非同期正準 ABI を通じて流れます。rontolisp は同じ Preview 1 コアモジュールを変更せずに保持し（依然として 8 つの `wasi_snapshot_preview1` 関数をインポートします）、**アダプター** コアモジュールが `stream.new`/`stream.read`/`stream.write` と `future.read` を使ってそれらを WASI 0.3（`wasi:cli`、`wasi:filesystem`、`wasi:clocks`、`wasi:random`）の上に実装します。コンポーネントの `wasi:cli/run@0.3.0` エクスポート（`async func`）は **スタックフル** な非同期エクスポートとしてリフトされるため、同期的な stream/future の組み込みが協調的にブロックし、アダプターは直線的なコードのままになります。3 つの `component-model-async*` フラグがこれらの機能（スタックフル非同期リフト + 同期 stream/future 組み込み）を有効にします。
+WASI 0.3 では、すべてのバイト I/O が組み込みのコンポーネントモデルの `stream<u8>` / `future<T>` 型と非同期正準 ABI を通じて流れます。rontolisp は同じ Preview 1 コアモジュールを変更せずに保持し（依然として 8 つの `wasi_snapshot_preview1` 関数をインポートします）、**アダプター** コアモジュールが `stream.new`/`stream.read`/`stream.write` と `future.read` を使ってそれらを WASI 0.3（`wasi:cli`、`wasi:filesystem`、`wasi:clocks`、`wasi:random`）の上に実装します。コンポーネントの `wasi:cli/run@0.3.0` エクスポート（`async func`）は **スタックフル** な非同期エクスポートとしてリフトされるため、同期的な stream/future の組み込みが協調的にブロックし、アダプターは直線的なコードのままになります。非同期正準 ABI とスタックフルリフトは wasmtime 46 以降でデフォルト有効です。まだフィーチャーゲートの後ろにあるのは同期版 stream/future 組み込みだけで、そのために `-W component-model-more-async-builtins=y` を渡します（wasm-GC コアのための `-W gc=y` も必要です）。
 
 wasmtime の起動コマンドは出力の種類を **選択しません**。`wasmtime run` は wasmtime のデフォルトサブコマンドで、コアモジュールとコンポーネントを自動検出するため、`wasmtime run -W gc` は前のセクションの Preview 1 の `hello.wasm` も同様に実行します。Preview 1 コアモジュールと WASI 0.3 コンポーネントのどちらが生成されるかを決めるのは、コンパイル時の `--component` フラグだけです。（実際の違いは、コンポーネントは実行できるが Preview 1 コアモジュールは実行できないコンポーネント専用ランタイムで現れます。）
 
@@ -430,13 +430,38 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 rontolisp fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . fileio.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.wasm
 # "hello"
 ```
 
+### コンポーネントモデル関数エクスポート（wasm-export）
+
+スカラーの [`rontolisp:wasm-export`](#exporting-lisp-functions) は、さらに正準 ABI を通じて WAVE 構文（`wasmtime run --invoke 'name(args)'`、experimental 警告なし）で呼び出せる**型付きコンポーネントモデルエクスポート**になります。エクスポートは `wasi:cli/run` のコマンドエントリと共存するため、同じコンポーネントは引き続きコマンドとしても実行できます。
+
+```lisp
+(defun sumsquared (a b) (* (+ a b) (+ a b)))
+(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+(print (sumsquared 2 3))
+```
+
+```bash
+rontolisp sumsq.lisp --component -o sumsq.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'sumsquared(2, 3)' sumsq.wasm
+# 25
+wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
+# 25    (the ordinary run export still works)
+```
+
+型付きシグネチャ（`:int` → `s32`、`:float` → `f64`、`:bool` → `bool`、`:returns` 省略 → 結果なし）は任意のコンポーネントホストから見え、`:as` はコアエクスポートと同様にコンポーネントエクスポートも改名します。コンポーネントエクスポートの現在の制限:
+
+- **スカラー型のみ**（`:int`/`:float`/`:bool`/void）。`:string`/`:s-expr` は現時点では `--component` のもとでコンパイルエラーです（これらはリニアメモリ内のポインタ/長さペアとしてコア境界を越えますが、コンポーネントリフトはまだそれを運びません）。
+- **純粋計算のみ**: エクスポートは同期的にリフトされるため、その内部の I/O（`print`、`read`、ファイルアクセス）は実行時に "cannot block a synchronous task" でトラップします。副作用はトップレベル（`run`）に置き、エクスポートは純粋関数にしてください。
+- エクスポート名は lower-kebab-case のコンポーネントモデル名（`sum-squared`）でなければなりません。その文法に合わない Lisp 名に対しては、コンパイラが `:as` での改名を求めます。
+- エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` グローバルを読むエクスポートは未初期化の値を見ることになります（これは Preview 1 の `--invoke` の挙動と同じです）。
+
 コンポーネントモードの注意点と現在の制限:
 
-- WASI 0.3 のコンポーネントモデル非同期サポートを備えたランタイムが必要です。**wasmtime 46 以降**（`-W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y` を渡します）。
+- WASI 0.3 のコンポーネントモデル非同期サポートを備えたランタイムが必要です。**wasmtime 46 以降**（`-W gc=y -W component-model-more-async-builtins=y` を渡します。非同期正準 ABI とスタックフルリフトはそこではデフォルト有効です）。
 - `print`/標準出力、標準入力（`wasi:cli/stdin@0.3.0` を介した `read`、引数 0 個の `read-line`）、およびファイル I/O（`open`、`close`、`write-line`、ストリーム `read-line`、`load`、`with-open-file`）はすべて動作します。ファイルアクセスには `--dir` が必要です（パスは最初の preopen ディレクトリに対して解決されます）。
 - `random` は `wasi:random@0.3.0` から実際のエントロピーを取得します（Preview 1 はホストの `random_get` を使用します）。そのため `(random N)` は実行ごとに異なります。`get-universal-time` / `get-internal-real-time` / `get-internal-run-time` は `wasi:clocks@0.3.0`（`system-clock`/`monotonic-clock`）を読み取り、`getenv` は `wasi:cli/environment@0.3.0` を読み取ります。
 - 送信 HTTP（`rontolisp:fetch` と、プロミス操作 `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep`）はコンポーネントモードで動作し、真の非同期です。`fetch` はリクエストを送信してプロミス（処理中の `wasi:http` レスポンスハンドルをラップした値）を即座に返すため、`await` が各プロミスをブロックする前に複数のリクエストを並行させることができます。プロミス操作自体はどのモードでもコンパイルでき、コンポーネント専用なのは `fetch` だけです。ただし **ハイブリッド** です。基盤の I/O は WASI 0.3 のままですが、fetch 自体は `wasi:http@0.2` + `wasi:io@0.2` をインポートします（非同期の `wasi:http@0.3` はまだ上流に存在しません。`.todo/02-upgrade-fetch-to-wasi-http-0.3.md` を参照）。fetch コンポーネントは非同期フラグに加えて `-S http=y` を付けて実行します。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。

@@ -143,6 +143,24 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void funcTypeScalarsEncoding() {
+		// Golden bytes verified against `wasm-tools dump` of a component whose scalar
+		// wasm-export lifts were validated (component-model + cm-async...) and invoked
+		// with `wasmtime run --invoke 'sumsquared(2, 3)'` (WAVE syntax).
+		// (s32 p0, s32 p1) -> s32 : 40 02 "p0" 7a "p1" 7a 00 7a
+		assertThat(hex(ComponentWriter.funcTypeScalars(List.of("p0", "p1"),
+				List.of(ComponentWriter.VT_S32, ComponentWriter.VT_S32), ComponentWriter.VT_S32)))
+			.isEqualTo("40020270307a0270317a007a");
+		// (f64 p0) -> f64 : f64 is 0x75 (0x74 is char)
+		assertThat(hex(ComponentWriter.funcTypeScalars(List.of("p0"), List.of(ComponentWriter.VT_F64),
+				ComponentWriter.VT_F64)))
+			.isEqualTo("4001027030750075");
+		// (bool p0) -> no result: the named-results form 01 with an empty vec
+		assertThat(hex(ComponentWriter.funcTypeScalars(List.of("p0"), List.of(ComponentWriter.VT_BOOL), null)))
+			.isEqualTo("40010270307f0100");
+	}
+
+	@Test
 	void importsWasiInstanceLowersAndWiresCoreInstance() {
 		final byte[] core = coreModuleUsesRand();
 		final ComponentWriter c = new ComponentWriter();

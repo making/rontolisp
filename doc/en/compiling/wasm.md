@@ -125,9 +125,12 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 
 Limitations:
 
-- The directive applies to the Preview 1 core module only; under `--component` it is a
-  no-op (no wrapper is emitted). On the interpreter and JVM backends it is also a no-op
-  (it just returns the named symbol), so the same source runs on every backend.
+- Under `--component`, scalar exports (`:int`/`:float`/`:bool`/void) become **typed
+  component-model exports** — see
+  [Component-model function exports](#component-model-function-exports-wasm-export)
+  below. `:string`/`:s-expr` are not supported there yet (compile error). On the
+  interpreter and JVM backends the directive is a no-op (it just returns the named
+  symbol), so the same source runs on every backend.
 - Only a top-level `defun` can be exported, the declared parameter count must match its
   arity, and functions that take or return function values are out of scope.
 - The exported name defaults to the bare Lisp name (`fact`) and can be renamed with
@@ -548,14 +551,14 @@ Add `--component` to emit a WASI 0.3 (Preview 3) **component** instead of a Prev
 
 ```bash
 rontolisp hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y hello.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y hello.wasm
 ```
 
 ```
 3
 ```
 
-In WASI 0.3 all byte I/O flows through the built-in component-model `stream<u8>` / `future<T>` types and the async canonical ABI. rontolisp keeps the same Preview 1 core module unchanged — it still imports the eight `wasi_snapshot_preview1` functions — and an **adapter** core module implements them over WASI 0.3 (`wasi:cli`, `wasi:filesystem`, `wasi:clocks`, `wasi:random`) using `stream.new`/`stream.read`/`stream.write` and `future.read`. The component's `wasi:cli/run@0.3.0` export (an `async func`) is lifted as a **stackful** async export, so the synchronous stream/future built-ins block cooperatively and the adapter stays straight-line code. The three `component-model-async*` flags enable those features (stackful async lift + synchronous stream/future built-ins).
+In WASI 0.3 all byte I/O flows through the built-in component-model `stream<u8>` / `future<T>` types and the async canonical ABI. rontolisp keeps the same Preview 1 core module unchanged — it still imports the eight `wasi_snapshot_preview1` functions — and an **adapter** core module implements them over WASI 0.3 (`wasi:cli`, `wasi:filesystem`, `wasi:clocks`, `wasi:random`) using `stream.new`/`stream.read`/`stream.write` and `future.read`. The component's `wasi:cli/run@0.3.0` export (an `async func`) is lifted as a **stackful** async export, so the synchronous stream/future built-ins block cooperatively and the adapter stays straight-line code. The async canonical ABI and the stackful lift are enabled by default in wasmtime 46+; only the synchronous stream/future built-ins are still feature-gated, hence `-W component-model-more-async-builtins=y` (plus `-W gc=y` for the wasm-GC core).
 
 The wasmtime invocation does **not** select the output kind. `wasmtime run` is wasmtime's default subcommand and auto-detects a core module vs a component, so `wasmtime run -W gc` runs the Preview 1 `hello.wasm` from the previous section just as well. Only the `--component` compile flag decides whether a Preview 1 core module or a WASI 0.3 component is produced. (The practical difference shows up on a component-only runtime, which runs the component but not the Preview 1 core module.)
 
@@ -571,13 +574,50 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 rontolisp fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . fileio.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.wasm
 # "hello"
 ```
 
+### Component-model Function Exports (wasm-export)
+
+A scalar [`rontolisp:wasm-export`](#exporting-lisp-functions) additionally becomes a
+**typed component-model export**, callable through the canonical ABI with WAVE syntax
+(`wasmtime run --invoke 'name(args)'`, no experimental warning) — the export co-exists
+with the `wasi:cli/run` command entry, so the same component still runs as a command:
+
+```lisp
+(defun sumsquared (a b) (* (+ a b) (+ a b)))
+(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+(print (sumsquared 2 3))
+```
+
+```bash
+rontolisp sumsq.lisp --component -o sumsq.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'sumsquared(2, 3)' sumsq.wasm
+# 25
+wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
+# 25    (the ordinary run export still works)
+```
+
+The typed signature (`:int` → `s32`, `:float` → `f64`, `:bool` → `bool`, omitted
+`:returns` → no result) is visible to any component host, and `:as` renames the
+component export just like the core one. Current limitations of component exports:
+
+- **Scalar types only** (`:int`/`:float`/`:bool`/void). `:string`/`:s-expr` are a compile
+  error under `--component` for now (they cross the core boundary as pointer/length
+  pairs in linear memory, which the component lift does not carry yet).
+- **Pure compute only**: the export is lifted synchronously, so I/O inside it (`print`,
+  `read`, file access) traps at runtime with "cannot block a synchronous task". Keep
+  side effects in the top level (`run`) and exports as pure functions.
+- The export name must be a lower-kebab-case component-model name (`sum-squared`); for a
+  Lisp name outside that grammar the compiler asks you to rename it with `:as`.
+- Invoking an export does not run the program's top level first, so an export that reads
+  a `defvar`/`defparameter` global would see it uninitialized (this matches the
+  Preview 1 `--invoke` behavior).
+
 Notes and current limitations of component mode:
 
-- Requires a runtime with WASI 0.3 component-model async support: **wasmtime 46+** (pass `-W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y`).
+- Requires a runtime with WASI 0.3 component-model async support: **wasmtime 46+** (pass `-W gc=y -W component-model-more-async-builtins=y`; the async canonical ABI and stackful lifts are on by default there).
 - `print`/stdout, stdin (`read`, 0-argument `read-line`, over `wasi:cli/stdin@0.3.0`), and file I/O (`open`, `close`, `write-line`, stream `read-line`, `load`, `with-open-file`) all work. File access requires `--dir` (paths resolve against the first preopened directory).
 - `random` draws real entropy from `wasi:random@0.3.0` (Preview 1 uses the host's `random_get`), so `(random N)` differs each run. `get-universal-time` / `get-internal-real-time` / `get-internal-run-time` read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `getenv` reads `wasi:cli/environment@0.3.0`.
 - Outgoing HTTP (`rontolisp:fetch` with the `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` promise operations) works in component mode, including true asynchrony: `fetch` sends the request and returns a promise (wrapping the in-flight `wasi:http` response handle) immediately, so several requests can overlap before `await` blocks on each. The promise operations themselves compile in every mode; only `fetch` is component-only. It is a **hybrid**: the base I/O stays WASI 0.3 while fetch itself imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream yet — see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). Run a fetch component with `-S http=y` in addition to the async flags. Non-fetch components do not import `wasi:http`, so they do not need `-S http`.

@@ -1,5 +1,42 @@
 # 92. Host-callable `wasm-export` under `--component` (WASI 0.3 component exports)
 
+## STATUS: Tier 1 DONE (2026-07-11); Tier 2/3 remain
+
+Tier 1 (scalar `:int`/`:float`/`:bool`/void, synchronous `canonLift`) is
+implemented and verified:
+
+- Decisions taken: co-exist with `run` (no reactor `_initialize` needed -- the
+  active data segments seed HEAP_PTR/intern-base at instantiation, so
+  pure-compute exports work without `_start`); NO blob regen (verified: exports
+  are appended programmatically as SEC_ALIAS/SEC_TYPE/SEC_CANON/SEC_EXPORT after
+  the `run` wiring; an export-free program's component is byte-identical,
+  proven by stash dance for base/http/serve/P1 variants).
+- Wiring: `WasmLispCompiler` un-gates the wrapper build + core-exports the
+  wrappers in component mode; `WasmExportCompiler.componentExport` maps
+  designators to `ComponentWriter.VT_*` (NOTE: f64 = 0x75, 0x74 is `char` --
+  the one encoder bug hit); `WasmComponentBuilder.appendFuncExports` emits the
+  per-export sync lift (base next-free indices: core func 23 / type 24 /
+  component func 12; http 53/46/33; sock 34/31/19). New encoder:
+  `ComponentWriter.funcTypeScalars` (+ `VT_F64`), pinned in
+  `ComponentWriterTest`.
+- Validation: `:string`/`:s-expr` and non-kebab export names are clear compile
+  errors (component non-serve only); `:long` keeps the existing GC rejection.
+- Verified: `wasmtime run ... --invoke 'sumsquared(2, 3)'` (WAVE, no
+  experimental warning), all four scalar shapes + `:as` alias + run co-existence
+  in `WasmLispCompilerIntegrationTest`; ci-spec case
+  `wasm-export-directive-does-not-disturb-run`. jco untested (not installed).
+- **Empirical finding (drives Tier 3)**: I/O inside a sync-lifted export traps
+  at runtime with "cannot block a synchronous task" (the adapter's fd_write
+  blocks on `stream.write`, legal only in an async task). So Tier-1 exports are
+  pure-compute by construction; documented in doc/ + `.kb/wasi-component.md`.
+- `--invoke` does not run the top level first: a defvar-reading export sees
+  uninitialized globals (traps on the null deref) -- same as Preview 1
+  `--invoke`; documented.
+
+Remaining: Tier 2 (`:string`/`:s-expr` via canonical string/list lift over
+mem.wasm's realloc + threading `exportNeedsReader` into the component path) and
+Tier 3 (async-lifted I/O exports + generated `.wit`), below.
+
 ## Goal
 
 Let `(rontolisp:wasm-export 'name :params '(...) :returns ...)` produce a

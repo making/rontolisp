@@ -45,9 +45,13 @@ it exposes the full width with no `wrap`/`extend` conversion.
 
 ## Limitations
 
-- Applies to the Preview 1 core module only. Under `--component` it is a no-op
-  (no wrapper is emitted), and on the interpreter and JVM it just returns the
-  named symbol.
+- Under `--component`, a scalar export (`:int`/`:float`/`:bool`/void) becomes a
+  **typed component-model export** callable with WAVE syntax
+  (`wasmtime run --invoke 'name(args)'`); `:string`/`:s-expr` are a compile
+  error there for now, the export must be pure-compute (I/O inside it traps),
+  and its name must be lower-kebab-case (rename with `:as` otherwise). See
+  [Component-model function exports](../../compiling/wasm.md#component-model-function-exports-wasm-export).
+  On the interpreter and JVM the directive just returns the named symbol.
 - Only a top-level `defun` can be exported; the declared parameter count must
   match its arity, and functions that take or return function values are out of
   scope.

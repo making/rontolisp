@@ -37,8 +37,7 @@ src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-too
 Run a generated component with:
 
 ```bash
-wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y \
-             -W component-model-more-async-builtins=y --dir . prog.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . prog.wasm
 ```
 
 ## What the blobs declare, and how to see it
@@ -120,7 +119,7 @@ from a fresh dump, and re-run the test suite. Validate end to end with:
 
 ```bash
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins prog.wasm
-wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . prog.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . prog.wasm
 ```
 
 ## Sockets variant (`rontolisp:tcp-*`) — pure WASI 0.3

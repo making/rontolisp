@@ -205,13 +205,50 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
-	void componentModeIgnoresExportDirective() {
-		// In component mode no wrapper/allocator is emitted (the directive is a no-op).
+	void componentModeLiftsScalarExport() {
+		// A Tier-1 scalar export is core-exported, aliased and canonically lifted into a
+		// component-model export under its name (todo 92); no memory allocator appears.
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun sumsq (a b) (* (+ a b) (+ a b))) (rontolisp:wasm-export 'sumsq"
+					+ " :params '(:int :int) :returns :int) (print \"hi\")");
+		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		assertThat(containsAscii(component, "sumsq")).isTrue();
+		assertThat(containsAscii(component, "__ronto_alloc")).isFalse();
+	}
+
+	@Test
+	void componentModeRejectsMemoryTypedExport() {
+		// :string/:s-expr cross the core boundary as (ptr,len); the canonical
+		// string/list lift is Tier 2 (.todo/92), so the compiler rejects them clearly.
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
 					+ " :returns :string) (print \"hi\")");
-		byte[] component = new WasmLispCompiler(false, true).compile(program);
-		assertThat(containsAscii(component, "__ronto_alloc")).isFalse();
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":string/:s-expr is not yet supported with --component");
+	}
+
+	@Test
+	void componentModeRejectsRunExportName() {
+		// "run" is taken by the lifted wasi:cli/run entry; a second core export under
+		// the same name would make the module invalid.
+		List<LispVal> program = LispReader.readAllFromString(
+				"(defun run-it (a) a) (rontolisp:wasm-export 'run-it :as \"run\" :params '(:int) :returns :int)");
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("collides with the component's wasi:cli/run entry");
+	}
+
+	@Test
+	void componentModeRejectsNonKebabExportName() {
+		// A component export name must fit the component-model label grammar; :as fixes
+		// it.
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun sum*of* (a b) (+ a b)) (rontolisp:wasm-export 'sum*of*"
+					+ " :params '(:int :int) :returns :int)");
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("not a valid component-model export name");
 	}
 
 }

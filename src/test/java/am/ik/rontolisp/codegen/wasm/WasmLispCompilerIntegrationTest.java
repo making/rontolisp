@@ -1438,9 +1438,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
-				"/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "/tmp/test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -1475,13 +1474,93 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("49\n(1 2 3)");
 	}
 
+	// Compiles a (rontolisp:wasm-export ...) program in component mode and calls one
+	// export through the canonical ABI with WAVE syntax: `wasmtime run --invoke
+	// 'name(args)'`. Unlike core-module --invoke this is the supported path, so stderr
+	// must carry no "experimental" warning.
+	private static String compileAndInvokeComponent(String lispCode, String waveInvocation) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "--invoke", waveInvocation, "/tmp/test.component.wasm");
+		assertThat(result.getExitCode())
+			.as("exit code for component invoke %s: %s\nstderr: %s", waveInvocation, lispCode, result.getStderr())
+			.isZero();
+		assertThat(result.getStderr()).as("WAVE invoke on a component is the supported path, no experimental warning")
+			.doesNotContain("experimental");
+		return result.getStdout().trim();
+	}
+
+	private static final String COMPONENT_EXPORT_PROGRAM = """
+			(defun sumsquared (a b) (* (+ a b) (+ a b)))
+			(defun half (x) (/ x 2.0))
+			(defun bigp (n) (> n 100))
+			(defun quiet-square (n) (* n n))
+			(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+			(rontolisp:wasm-export 'half :params '(:float) :returns :float)
+			(rontolisp:wasm-export 'bigp :params '(:int) :returns :bool)
+			(rontolisp:wasm-export 'quiet-square :params '(:int))
+			(print (sumsquared 2 3))
+			""";
+
+	@Test
+	void componentExportScalarFunctionsCallableViaWaveInvoke() throws Exception {
+		// Each Tier-1 scalar type crosses the canonical ABI: :int -> s32, :float -> f64,
+		// :bool -> bool (WAVE prints true/false), omitted :returns -> no result (the
+		// body runs, its value is discarded, nothing is printed). Component exports are
+		// lifted synchronously, so they must be pure-compute: I/O inside one (print)
+		// hits a blocking stream built-in and traps ("cannot block a synchronous task");
+		// I/O-bearing exports need the stackful-async lift (Tier 3, .todo/92).
+		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "sumsquared(2, 3)")).isEqualTo("25");
+		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "half(7.0)")).isEqualTo("3.5");
+		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "bigp(101)")).isEqualTo("true");
+		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "bigp(5)")).isEqualTo("false");
+		// wasmtime prints a void invocation's (absent) result as the empty tuple ().
+		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "quiet-square(6)")).isEqualTo("()");
+	}
+
+	@Test
+	void componentExportCoexistsWithRun() throws Exception {
+		// The wasi:cli/run export (the program's top level) still runs as a command.
+		assertThat(compileAndRunComponent(COMPONENT_EXPORT_PROGRAM)).isEqualTo("25");
+	}
+
+	@Test
+	void componentExportHonorsAsAlias() throws Exception {
+		String program = """
+				(defun sum-sq (a b) (* (+ a b) (+ a b)))
+				(rontolisp:wasm-export 'sum-sq :as "sum-squared" :params '(:int :int) :returns :int)
+				""";
+		assertThat(compileAndInvokeComponent(program, "sum-squared(2, 3)")).isEqualTo("25");
+	}
+
+	@Test
+	void componentExportRejectsMemoryTypes() {
+		// :string/:s-expr cross the core boundary as (ptr,len) in linear memory; the
+		// canonical string/list lift is Tier 2 (.todo/92), so reject clearly for now.
+		assertThatThrownBy(() -> compileAndInvokeComponent("""
+				(defun shout (s) (string-upcase s))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""", "shout(\"hi\")")).hasMessageContaining(":string/:s-expr is not yet supported with --component");
+	}
+
+	@Test
+	void componentExportRejectsNonKebabName() {
+		// A component-model export name must be a lower-kebab-case label; Lisp names
+		// outside that grammar (here *of*) must be renamed with :as.
+		assertThatThrownBy(() -> compileAndInvokeComponent("""
+				(defun sum*of* (a b) (+ a b))
+				(rontolisp:wasm-export 'sum*of* :params '(:int :int) :returns :int)
+				""", "sum*of*(1, 2)")).hasMessageContaining("not a valid component-model export name");
+	}
+
 	private static String compileAndRunComponentWithEnv(String lispCode, String env) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "--env", env,
-				"/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "--env", env, "/tmp/test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -1556,7 +1635,7 @@ class WasmLispCompilerIntegrationTest {
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . test.component.wasm");
+				"cd /tmp && wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -1578,8 +1657,7 @@ class WasmLispCompilerIntegrationTest {
 		byte[] componentBytes = new WasmLispCompiler(false, true, false, false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W component-model-async=y -W component-model-async-stackful=y"
-						+ " -W component-model-more-async-builtins=y serve.wasm >/tmp/serve.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y serve.wasm >/tmp/serve.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8080/hello) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
@@ -1740,7 +1818,7 @@ class WasmLispCompilerIntegrationTest {
 				Transferable.of("(defun sq (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				"/tmp/clib.lisp");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --dir . test.component.wasm");
+				"cd /tmp && wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . test.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("81");
 	}
@@ -1752,7 +1830,7 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				"/tmp/stdin.txt");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime run -W gc=y -W component-model-async=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y /tmp/test.component.wasm < /tmp/stdin.txt");
+				"wasmtime run -W gc=y -W component-model-more-async-builtins=y /tmp/test.component.wasm < /tmp/stdin.txt");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -5222,9 +5300,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/nope\")))";
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-err.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "-S", "http=y",
-				"/tmp/fetch-err.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "-S", "http=y", "/tmp/fetch-err.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("nil");
 	}
@@ -5237,9 +5314,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:fetch \"http://127.0.0.1:1/nope\"))";
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-noflag.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
-				"/tmp/fetch-noflag.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "/tmp/fetch-noflag.component.wasm");
 		assertThat(result.getExitCode()).isNotZero();
 	}
 
@@ -5268,9 +5344,9 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-echo.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "-S", "tcp=y",
-				"-S", "inherit-network=y", "/tmp/tcp-echo.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
+				"/tmp/tcp-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n65\nnil");
 	}
@@ -5282,9 +5358,9 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:tcp-connect \"127.0.0.1\" 1))";
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-refused.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "-S", "tcp=y",
-				"-S", "inherit-network=y", "/tmp/tcp-refused.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
+				"/tmp/tcp-refused.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("nil");
 	}
@@ -5298,9 +5374,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:tcp-listen 0 \"127.0.0.1\"))";
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-noflag.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y",
-				"-W", "component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y",
-				"/tmp/tcp-noflag.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "/tmp/tcp-noflag.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("nil");
 	}
@@ -5360,9 +5435,8 @@ class WasmLispCompilerIntegrationTest {
 			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
-			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y", "-W",
-					"component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", "-S", "http=y",
-					wasm.toString())
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W",
+					"component-model-more-async-builtins=y", "-S", "http=y", wasm.toString())
 				.redirectErrorStream(true)
 				.start();
 			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);

@@ -3,6 +3,7 @@ package am.ik.wasm;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.function.Consumer;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Writer for the WebAssembly <strong>Component Model</strong> binary format.
@@ -75,6 +76,9 @@ public final class ComponentWriter {
 
 	/** Primitive value type code for {@code u64}. */
 	public static final int VT_U64 = 0x77;
+
+	/** Primitive value type code for {@code f64}. */
+	public static final int VT_F64 = 0x75;
 
 	/** Primitive value type code for {@code string}. */
 	public static final int VT_STRING = 0x73;
@@ -176,6 +180,37 @@ public final class ComponentWriter {
 	public static byte[] funcTypeResult(int resultValType) {
 		// 0x40 functype, empty param vector, result-list 0x00 then the value type
 		return enc(w -> w.write(0x40).writeUnsignedLeb128(0).write(0x00).writeSignedLeb128(resultValType - 0x80));
+	}
+
+	/**
+	 * Encode a <strong>synchronous</strong> component function type with the given named
+	 * parameters (each a primitive value type) and an optional single primitive result
+	 * &mdash; the shape of a pure-compute scalar function export.
+	 * @param paramNames the parameter names, in order (must be valid component-model
+	 * labels)
+	 * @param paramValTypes the primitive value type code of each parameter (e.g.
+	 * {@link #VT_S32})
+	 * @param resultValType the result primitive value type code, or {@code null} for no
+	 * result
+	 * @return the encoded function type
+	 */
+	public static byte[] funcTypeScalars(List<String> paramNames, List<Integer> paramValTypes,
+			@Nullable Integer resultValType) {
+		return enc(w -> {
+			w.write(0x40); // functype
+			w.writeUnsignedLeb128(paramNames.size());
+			for (int i = 0; i < paramNames.size(); i++) {
+				plainName(w, paramNames.get(i));
+				w.writeSignedLeb128(paramValTypes.get(i) - 0x80);
+			}
+			if (resultValType == null) {
+				// result list: 0x01 (named-results form) then an empty vec (no results)
+				w.write(0x01).writeUnsignedLeb128(0);
+			}
+			else {
+				w.write(0x00).writeSignedLeb128(resultValType - 0x80);
+			}
+		});
 	}
 
 	/**

@@ -108,9 +108,7 @@ WASM componentにコンパイルして (wasmtime 46+。ネットワークアク�
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -W component-model-async=y \
-  -W component-model-async-stackful=y -W component-model-more-async-builtins=y \
-  -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 どのバックエンドでサーブしていても、任意のTCPクライアント、たとえば

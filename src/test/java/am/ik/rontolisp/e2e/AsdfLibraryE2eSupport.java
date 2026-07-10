@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * <li>WASM Preview 1 ({@link WasmLispCompiler} run under {@code wasmtime} in a
  * container),</li>
  * <li>the WASM component / WASI 0.3 ({@code --component}, run under {@code wasmtime
- * run -W component-model-async}).</li>
+ * run -W gc=y -W component-model-more-async-builtins=y}).</li>
  * </ol>
  *
  * <p>
@@ -166,8 +166,8 @@ abstract class AsdfLibraryE2eSupport {
 		String path = "/tmp/" + artifactName() + (component ? "-component.wasm" : "-p1.wasm");
 		WASMTIME.copyFileToContainer(Transferable.of(wasmBytes), path);
 		ExecResult result = component
-				? WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "component-model-async=y", "-W",
-						"component-model-async-stackful=y", "-W", "component-model-more-async-builtins=y", path)
+				? WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+						"component-model-more-async-builtins=y", path)
 				: WASMTIME.execInContainer("wasmtime", "--wasm", "gc", path);
 		assertThat(result.getExitCode()).as("exit code (component=%s): stderr: %s", component, result.getStderr())
 			.isZero();

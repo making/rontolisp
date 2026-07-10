@@ -3645,6 +3645,19 @@ cases:
     expectedByBackend:
       wasm: |
         1500000000000.0
+  # rontolisp:wasm-export (todo 92): a no-op returning the symbol on the
+  # interpreter/JVM; on WASM Preview 1 it adds a core export, and under
+  # --component it is additionally lifted into a host-callable component-model
+  # export (WAVE-invokable). Either way the program's own top level (run) must
+  # be unaffected -- this pins that output carrying exports still builds and
+  # runs as a command on every backend.
+  - name: wasm-export-directive-does-not-disturb-run
+    source: |
+      (defun ci-sumsq (a b) (* (+ a b) (+ a b)))
+      (rontolisp:wasm-export 'ci-sumsq :params '(:int :int) :returns :int)
+      (print (ci-sumsq 2 3))
+    expected: |
+      25
   # rontolisp:with-arena (todo 104/110): a reclamation boundary the --no-gc WASM
   # backend lowers to a bump heap-pointer mark/body/reset; on the four standard
   # backends a real GC already reclaims, so it must be observationally a plain progn
