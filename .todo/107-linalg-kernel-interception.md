@@ -44,14 +44,16 @@ Three design decisions worth not re-deriving:
 
 ## Left undone
 
-- **wasm-GC `dot` (v.M / M.M), `outer` and `transpose` are element loops, not lane loops.**
-  They go through `_v_get`/`_v_set` (de-boxed, several times faster than the defun, but no
-  v128). A lane form needs the `i8x16.shuffle` row window `WasmVecSimdRuntimeBuilder.
-  emitRowGroup` already has, plus a lane-aligned scratch vblock to accumulate a row into,
-  then a `_v_set` copy-out per element (O(n·p) writes against O(n·m·p) flops — cheap). Worth
-  doing only if a wasm GEMM gets hot.
+- ~~**wasm-GC `dot` (v.M / M.M), `outer` and `transpose` are element loops, not lane
+  loops.**~~ **DONE 2026-07-10** exactly as sketched: the `emitRowGroup` shuffle window +
+  a lane-aligned f64 scratch vblock accumulator + `_v_set` write-out; `outer` writes whole
+  destination groups when rows are lane-aligned, `transpose` runs 2x2 (f64) / 4x4 (f32)
+  register-block shuffles when both dims are aligned; unaligned shapes keep the element
+  loop. Same 15 function indices, new bodies only. Measured (256x256 `#f` GEMM):
+  113 ms -> 8.8 ms (~107x vs the 940 ms scalar defun); v.M 70 -> 5.3 ms, outer 83 -> 3.9 ms,
+  transpose 79 -> 8.0 ms. Numbers + mechanics now in `.kb/linalg-simd.md`.
 - **The residual wasm-GC penalty is intrinsic and is now documented, not fixed.** A linalg
-  program dominated by `emap` / `inv` / `transpose` still pays `_v_get`/`_v_set` under
+  program dominated by `emap` / `inv` still pays `_v_get`/`_v_set` under
   `--simd`. A `v128` can only be read out of an `(array (mut v128))`, never out of an
   `(array (mut f32))`.
   - Un-costed alternative worth one measurement: **keep `(array (mut f64))`/`(array (mut

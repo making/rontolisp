@@ -302,7 +302,7 @@ final class WasmVecSimdRuntimeBuilder {
 	}
 
 	/** Emits one lane body per immediate lane index, selected by {@code laneLocal}. */
-	private interface LaneBody {
+	interface LaneBody {
 
 		void emit(int lane);
 
@@ -310,7 +310,7 @@ final class WasmVecSimdRuntimeBuilder {
 
 	// if (lane == 0) body(0) else if (lane == 1) body(1) else ... else body(n-1).
 	// blockType is the shared result type of every arm (0x40 = void).
-	private static void emitLaneChain(WasmWriter w, int laneLocal, int laneCount, int blockType, LaneBody body) {
+	static void emitLaneChain(WasmWriter w, int laneLocal, int laneCount, int blockType, LaneBody body) {
 		for (int k = 0; k < laneCount - 1; k++) {
 			WasmVecLoops.get(w, laneLocal);
 			if (k == 0) {
@@ -626,7 +626,9 @@ final class WasmVecSimdRuntimeBuilder {
 
 	// Pushes the lane group of row element k*lanes: groups[base+k] when the row is group
 	// aligned, else the i8x16.shuffle window over groups[base+k] and groups[base+k+1].
-	private static void emitRowGroup(WasmWriter w, int gw, int base, int k, int off, boolean single) {
+	// Package-private: the linalg matrix-product kernel reads its B rows through the
+	// same window (todo-107's lane form).
+	static void emitRowGroup(WasmWriter w, int gw, int base, int k, int off, boolean single) {
 		groupGetOffset(w, gw, base, k, 0);
 		if (off == 0) {
 			return;

@@ -47,6 +47,12 @@ linalg computes in `double-float` by default, but it is **width-polymorphic**: i
   (linalg:transpose (linalg:eye 2 'single-float)))        ; => single-float
 ```
 
+## SIMD acceleration
+
+`linalg` needs no flag to be correct anywhere, but the [`--simd` flag](simd-acceleration.md) accelerates it: fifteen functions -- `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer` -- are routed to native vector kernels (`jdk.incubator.vector` on the interpreter and the JVM, WebAssembly `v128` on wasm-GC), and `mean`, `matmul`, `flatten` and `solve` are accelerated with them because they are written in terms of them. Nothing changes in what a program accepts or rejects: an input a kernel cannot handle (a general boxed array, mixed widths, a plain number) simply runs the portable `linalg.lisp` definition instead, with the same result and the same error messages. The only observable difference is the [single-float reduction precision rule](simd-acceleration.md#accelerating-linalg); element-wise results and the full matrix product stay bit-identical.
+
+There is no reason to switch packages for speed: under `--simd`, `linalg` and `vec` land on the same kernels. See [Choosing between vec and linalg](simd-acceleration.md#choosing-between-vec-and-linalg) -- the short version is: write against `linalg` by default, and reach for `vec` only for its `-into` destination-passing loops, a `--no-gc` target (where `linalg` does not compile), or its fail-fast width strictness.
+
 ## First-class functions
 
 linalg functions are ordinary `defun`s, so `#'linalg:norm` and friends work as first-class values wherever a function is expected:

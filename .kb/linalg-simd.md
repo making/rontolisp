@@ -117,11 +117,36 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | the same, array with a **double** scalar | lane loop | `gcBroadcastF64` lane loop |
 | the same, array with a **single** scalar | scalar loop (see below) | `_v_get`/`_v_set` element loop |
 | `sum`, `norm`, `dot` (v.v), `dot` (M.v = GEMV) | lane loop (reuses `VecSimdKernels`) | calls the `vec:` kernels |
-| `dot` (v.M), `dot` (M.M) | `ikj` lane loop over the output row | `_v_get`/`_v_set` `ijk` loop |
-| `outer` | lane loop over the row | `_v_get`/`_v_set` |
+| `dot` (v.M), `dot` (M.M) | `ikj` lane loop over the output row | `ikj` lane loop: shuffle-window b rows into an f64 scratch row, `_v_set` write-out (see below) |
+| `outer` | lane loop over the row | whole destination groups when `m % lanes == 0`, else `_v_get`/`_v_set` |
 | `amax`/`amin`/`argmax`/`argmin`/`trace` | scalar loop | `_v_get` element loop |
-| `transpose` | scalar loop | `_v_get`/`_v_set` |
+| `transpose` | scalar loop | lanes x lanes register-block shuffles when BOTH dims are lane-aligned, else `_v_get`/`_v_set` |
 | `reshape` | `Arrays.copyOf` | whole lane-group copy |
+
+The wasm-GC lane forms for `dot` (v.M / M.M) / `outer` / `transpose` shipped as the todo-107
+follow-up (2026-07-10). The GEMM loop reads each `b` row through the same `i8x16.shuffle`
+window as `vec:matvec` (`WasmVecSimdRuntimeBuilder.emitRowGroup`, promoted package-private)
+and multiply-accumulates whole groups into a lane-aligned **f64 scratch row** (`_v_new(p, 0)`,
+reused and re-zeroed per output row), written out element-wise through `_v_set` -- O(n·p)
+writes against O(n·m·p) flops. At `#f` width each f32x4 window group is widened exactly via
+the new `f64x2.promote_low_f32x4` (`am.ik.wasm.Instruction` 0xFD 0x5F, also added to
+`WasmTreeShaker.skipSimd`), low half directly and high half swapped down by a shuffle; when
+`p % 4` is 1 or 2 the high half's accumulator index reaches the scratch row's sentinel group,
+which exists and is never read back. The window's overhang past a row's end reads REAL
+next-row elements (unlike matvec's zero-padded x) but lands only in accumulator lanes past
+`p`, which the write-out never reads. `transpose` uses two shuffles per 2x2 f64 block and the
+classic eight-shuffle butterfly per 4x4 f32 block. No new function indices: the same 15
+linalg kernels got new bodies, so `userFuncBase()` and every structural pin are untouched.
+
+Measured (M4, wasmtime 46, 9 samples each, non-overlapping; `#f` unless noted):
+
+| wasm-GC | scalar | `--simd` element loop (todo-107) | `--simd` lane form |
+|---|---|---|---|
+| `dot` M.M 256x256 (1 rep) | 924-989 ms | 107-119 ms | **8.7-8.9 ms** |
+| `dot` M.M 256x256 `#d` | 1080-1159 ms | 107-110 ms | **11.4-11.9 ms** |
+| `dot` v.M 1024 . 1024x1024 (10 reps) | 2675-2801 ms | 69-76 ms | **5.3-5.5 ms** |
+| `outer` 1024x1024 (10 reps) | 628-916 ms | 76-89 ms | **3.8-4.8 ms** |
+| `transpose` 1024x1024 (10 reps) | 475-632 ms | 79-82 ms | **8.0-9.5 ms** |
 
 `norm` is **fused**: the oracle spells it `(sqrt (sum (emap square a)))` and allocates an
 intermediate array per call; every kernel computes `sqrt(dot(a, a))` instead.
@@ -299,9 +324,12 @@ i31s. Anything else declines. `flatten` rides on it.
   both ranks, scalar broadcast on both sides, the declined inputs, the f32 probe.
 - `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (14) -- the bridge-embedded dead-flag guard,
   the same byte-identity set, the evaluate-once guard, the library errors still signalling.
-- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), five cases:
+- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), six cases:
   `wasmGcSimdLinalg{ElementWiseAndShapeKernels,ReductionsAndProducts}AreByteIdenticalToThe
-  ScalarPath`, `...DeclinedInputsRunTheScalarDefun`,
+  ScalarPath`, `...LaneProductsMatchTheScalarPathAtEveryRowLaneOffset` (the GEMM / outer /
+  transpose lane forms: every shuffle-offset variant via a 7-column `#f` matrix, the odd-`p`
+  sentinel-group write, aligned vs unaligned outer/transpose, a next-row inf inside the
+  window overhang), `...DeclinedInputsRunTheScalarDefun`,
   `...SingleFloatReductionsAccumulateInSinglePrecision`, `...ComposesWithOptimize`.
 - `WasmLispCompilerTest.simdAppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks`.
 - `ci-spec.yaml` never passes `--simd`, so the cross-backend E2E is unaffected. The component
@@ -313,11 +341,11 @@ i31s. Anything else declines. `flatten` rides on it.
 
 ## Not done
 
-- wasm-GC `dot` (v.M / M.M), `outer` and `transpose` are element loops, not lane loops. A
-  lane form needs the `i8x16.shuffle` row window `WasmVecSimdRuntimeBuilder.emitRowGroup`
-  already has, plus a lane-aligned scratch vblock to accumulate a row into. Worth doing if a
-  wasm GEMM ever gets hot.
-- A linalg program dominated by `emap` / `inv` / `transpose` still pays `_v_get`/`_v_set` on
+- The lane-unaligned `outer` (`m % lanes != 0`) and `transpose` (either dim unaligned)
+  shapes keep the `_v_get`/`_v_set` element loop, as do `amax`/`amin`/`argmax`/`argmin`/
+  `trace` and the single-float scalar broadcast. All still several times faster than the
+  defun; a blended-edge lane form was judged not worth the shuffle bookkeeping.
+- A linalg program dominated by `emap` / `inv` still pays `_v_get`/`_v_set` on
   wasm-GC and stays slower under `--simd` than without it. That penalty is **intrinsic** to
   wasm-GC `--simd`: a `v128` can only be read out of an `(array (mut v128))`, never out of an
   `(array (mut f32))`, so no representation is fast for both lane loops and scalar element

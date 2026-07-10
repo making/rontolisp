@@ -47,6 +47,12 @@ linalg はデフォルトで `double-float` で計算しますが、**幅多相 
   (linalg:transpose (linalg:eye 2 'single-float)))        ; => single-float
 ```
 
+## SIMD アクセラレーション
+
+`linalg` はどこでもフラグなしで正しく動きますが、[`--simd` フラグ](simd-acceleration.md)で加速されます。15 の関数 — `add`・`sub`・`mul`・`div`・`sum`・`norm`・`amax`・`amin`・`argmax`・`argmin`・`trace`・`transpose`・`reshape`・`dot`・`outer` — がネイティブなベクトルカーネル(インタプリタと JVM では `jdk.incubator.vector`、wasm-GC では WebAssembly の `v128`)にルーティングされ、それらを使って書かれている `mean`・`matmul`・`flatten`・`solve` も一緒に加速されます。プログラムが何を受け付け何を拒否するかは一切変わりません。カーネルが扱えない入力(一般の boxed 配列、幅の混在、素の数値)は移植可能な `linalg.lisp` の定義がそのまま実行され、同じ結果と同じエラーメッセージになります。観測可能な違いは[単精度リダクションの精度規則](simd-acceleration.md#linalg-のアクセラレーション)だけで、要素ごとの結果と完全な行列積はビット一致のままです。
+
+速度のためにパッケージを乗り換える理由はありません。`--simd` の下では `linalg` と `vec` は同じカーネルに行き着きます。[vec と linalg の使い分け](simd-acceleration.md#vec-と-linalg-の使い分け)を参照してください — 要約すると: デフォルトでは `linalg` に対して書き、`vec` に手を伸ばすのは `-into` の書き込み先渡しループ・`--no-gc` ターゲット(`linalg` はそこではコンパイルできません)・fail-fast な幅の厳格さが必要なときだけです。
+
 ## 第一級関数
 
 linalg の関数は通常の `defun` なので、`#'linalg:norm` などは関数が期待されるあらゆる場所で第一級の値として動作します。

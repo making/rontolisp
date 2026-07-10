@@ -6,6 +6,21 @@ The `vec` package provides portable packed-`f64` vector kernels: constructors, e
 
 Like the JSON and `linalg` libraries, `vec` is implemented once in Lisp source (`vec.lisp`): the interpreter loads the definitions lazily on the first use of a `vec:` function, and the compile path splices them into the program when it references the package. This scalar definition is the implementation on the interpreter, the JVM compiler and the WASM (wasm-GC) backends, and the correctness oracle for the accelerated paths, so every function behaves identically everywhere.
 
+## Choosing between vec and linalg
+
+`vec` and `linalg` are not two implementations of the same idea. They are two **contracts** over the same packed float arrays -- and under `--simd` they land on the same accelerated kernels, so the choice is never about speed. It is about how a function should behave at the edges:
+
+| | `linalg` | `vec` |
+|---|---|---|
+| accepted inputs | packed arrays, general boxed arrays such as `#(1 2 3)`, plain numbers | packed float arrays only |
+| mixed widths (`#d` with `#f`) | allowed -- both are widened, the first operand's width wins | hard error |
+| scalar operands | broadcast element-wise on either side | only the scalar of `vec:scale` |
+| shapes | rank-n arrays and matrices, descriptive shape errors | rank-1 vectors (plus `vec:matvec`'s rank-2 matrix) |
+| allocation control | every result is a fresh array | `-into` siblings write into a caller-supplied destination |
+| `--no-gc` | does not compile | fully supported (the only vector package there) |
+
+Rule of thumb: **write against `linalg` by default.** It is the broader, numpy-style API, it forgives mixed inputs, and with `--simd` it is accelerated by the same kernels. Reach for `vec` when one of its three exclusives is the point: an allocation-free hot loop (the `-into` kernels), a `--no-gc` target, or the fail-fast strictness that turns a width mistake into an immediate error instead of a silent widening.
+
 ## Data representation
 
 A vector is a rank-1 [packed float array](../reference/data-types.md): the `double-float`-typed, unboxed array that `#d(...)` and `(make-array n :element-type 'double-float)` produce. The built-in `aref` / `length` interoperate with it, and any packed vector built elsewhere can be handed to a `vec` function. Element-wise kernels return a fresh vector; reductions return a scalar `double`.

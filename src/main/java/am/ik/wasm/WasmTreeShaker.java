@@ -485,9 +485,9 @@ public final class WasmTreeShaker {
 			case 0x0C, 0x0D -> p[0] += 16;
 			// f32x4 / f64x2 extract_lane and replace_lane: one lane-index byte.
 			case 0x1F, 0x20, 0x21, 0x22 -> p[0]++;
-			// splat + lane-wise arithmetic (f32x4 / f64x2 add/sub/mul/div/min/max): no
-			// immediate.
-			case 0x13, 0x14, 0xE4, 0xE5, 0xE6, 0xE7, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5 -> {
+			// splat + lane-wise arithmetic (f32x4 / f64x2 add/sub/mul/div/min/max) and
+			// f64x2.promote_low_f32x4: no immediate.
+			case 0x13, 0x14, 0x5F, 0xE4, 0xE5, 0xE6, 0xE7, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5 -> {
 			}
 			default ->
 				throw new IllegalStateException(String.format("WasmTreeShaker: unhandled SIMD opcode 0xFD 0x%X", sub));

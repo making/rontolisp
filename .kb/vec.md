@@ -441,7 +441,7 @@ Mechanics:
   i.e. `--simd` was a 12% PESSIMIZATION for a linalg-only program there. **Fixed by `.todo/107`**
   (2026-07-10): the fifteen accelerated `linalg:` members are intercepted too, and `linalg:add` /
   `linalg:dot` now land on 1 ms, exactly where `vec:add` / `vec:dot` are. The cost is still real for
-  what stays un-intercepted (`emap`, `inv`, `transpose` on wasm-GC): see `.kb/linalg-simd.md`.
+  what stays un-intercepted (`emap`, `inv` on wasm-GC): see `.kb/linalg-simd.md`.
 - Composes with `--optimize` (the shaker's `skipSimd` decodes 0xFD; todo-105 added
   `v128.const`/`i8x16.shuffle`'s 16 immediate bytes and `f32x4`/`f64x2.replace_lane`'s lane
   byte) and `--component` (verified end to end under

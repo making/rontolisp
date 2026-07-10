@@ -6212,6 +6212,61 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void wasmGcSimdLinalgLaneProductsMatchTheScalarPathAtEveryRowLaneOffset() throws Exception {
+		// The v.M / M.M lane loop (and the outer / transpose lane paths) read matrix rows
+		// through the same i8x16.shuffle window as matvec, so every compile-time lane
+		// offset variant must be exercised: a 7-column #f matrix puts row k at offset
+		// (k * 7) mod 4 = 0, 3, 2, 1 and an odd p also drives the f32 high-half
+		// accumulator into the scratch row's sentinel group; the #d sibling covers both
+		// f64 offsets. arange values make any misplaced lane visible.
+		String mk = """
+				(defun mk (r c et) (linalg:reshape (linalg:add (linalg:arange 0 (* r c) et) 0.5) (list r c)))
+				(defun mkv (n et) (linalg:add (linalg:arange 0 n et) 0.25))
+				""";
+		for (String probe : List.of( //
+				"(print (linalg:dot (mk 3 5 'single-float) (mk 5 7 'single-float)))", // off
+																						// 0,3,2,1
+				"(print (linalg:dot (mk 3 5 'double-float) (mk 5 7 'double-float)))", // off
+																						// 0,1
+				"(print (linalg:dot (mk 4 4 'single-float) (mk 4 4 'single-float)))", // aligned
+				"(print (linalg:dot (mk 2 3 'single-float) (mk 3 1 'single-float)))", // p
+																						// %
+																						// 4
+																						// =
+																						// 1
+				"(print (linalg:dot (mk 2 3 'single-float) (mk 3 2 'single-float)))", // p
+																						// %
+																						// 4
+																						// =
+																						// 2
+				"(print (linalg:dot (mk 2 3 'double-float) (mk 3 5 'double-float)))", // p
+																						// %
+																						// 2
+																						// =
+																						// 1
+				"(print (linalg:dot (mkv 5 'single-float) (mk 5 7 'single-float)))", // v.M
+				"(print (linalg:dot (mkv 5 'double-float) (mk 5 7 'double-float)))", //
+				// a next-row inf sits inside the last window of every row-0 group read;
+				// it may only reach the accumulator lanes past p, which are never read
+				"(let ((b (mk 3 3 'double-float))) (setf (aref b 2 0) (/ 1.0 0.0))"
+						+ " (print (linalg:dot (mk 2 3 'double-float) b)))",
+				// outer: group-aligned rows take the lane path, others the element loop
+				"(print (linalg:outer (mkv 3 'single-float) (mkv 8 'single-float)))", //
+				"(print (linalg:outer (mkv 3 'single-float) (mkv 7 'single-float)))", //
+				"(print (linalg:outer (mkv 3 'double-float) (mkv 4 'double-float)))", //
+				"(print (linalg:outer (mkv 3 'double-float) (mkv 5 'double-float)))", //
+				// transpose: the register-block path needs BOTH dims lane-aligned
+				"(print (linalg:transpose (mk 4 8 'single-float)))", // 4x4 blocks
+				"(print (linalg:transpose (mk 8 4 'single-float)))", //
+				"(print (linalg:transpose (mk 5 8 'single-float)))", // r misaligned
+				"(print (linalg:transpose (mk 4 7 'single-float)))", // c misaligned
+				"(print (linalg:transpose (mk 4 6 'double-float)))", // 2x2 blocks
+				"(print (linalg:transpose (mk 3 6 'double-float)))")) { // r misaligned
+			assertLinalgMatchesTheScalarPath(mk + probe);
+		}
+	}
+
+	@Test
 	void wasmGcSimdLinalgDeclinedInputsRunTheScalarDefun() throws Exception {
 		// Each kernel returns a null reference for an input it cannot read; the call site
 		// then invokes the defun. So general (boxed) arrays, mixed widths and plain

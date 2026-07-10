@@ -650,6 +650,13 @@ public interface Instruction {
 	/** {@code f64x2.replace_lane} (0xFD 0x22 lane): write one {@code f64} lane. */
 	int F64X2_REPLACE_LANE = 0x22;
 
+	/**
+	 * {@code f64x2.promote_low_f32x4} (0xFD 0x5F): widen the two low {@code f32} lanes to
+	 * two {@code f64} lanes. The widening is exact -- the lane form of
+	 * {@code f64.promote_f32}.
+	 */
+	int F64X2_PROMOTE_LOW_F32X4 = 0x5F;
+
 	/** {@code f64x2.add} (0xFD 0xF0): lane-wise addition. */
 	int F64X2_ADD = 0xF0;
 
