@@ -45,9 +45,10 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 ## 制限事項
 
 - `--component` では、スカラーエクスポート (`:int`/`:float`/`:bool`/void — `--no-gc`
-  では `:long` も) は WAVE
+  では `:long` と `:string` も) は WAVE
   構文 (`wasmtime run --invoke 'name(args)'`) で呼び出せる**型付き
-  コンポーネントモデルエクスポート**になります。`:string`/`:s-expr` は現時点では
+  コンポーネントモデルエクスポート**になります。GC コンポーネントパスの `:string` と
+  両パスの `:s-expr` は現時点では
   コンパイルエラーで、エクスポートは純粋計算でなければならず (内部の I/O は
   トラップし、`--no-gc --component` では印字はコンパイルエラーです)、名前は
   lower-kebab-case である必要があります (そうでない場合は

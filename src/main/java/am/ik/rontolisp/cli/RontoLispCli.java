@@ -304,8 +304,8 @@ public final class RontoLispCli {
 		this.out.println("                     WASM only; print/stdin/file I/O work. Scalar (pure-compute)");
 		this.out.println("                     rontolisp:wasm-export functions become typed component");
 		this.out.println("                     exports, callable via wasmtime run --invoke 'name(args)'");
-		this.out.println("                     With --no-gc: a compact reactor component (typed scalar");
-		this.out.println("                     exports only, incl. :long; no WASI, no wasm-GC, no flags)");
+		this.out.println("                     With --no-gc: a compact reactor component (typed exports");
+		this.out.println("                     incl. :long and :string; no WASI, no wasm-GC, no flags)");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");

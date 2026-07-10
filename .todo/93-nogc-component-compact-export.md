@@ -1,6 +1,6 @@
 # 93. Compact `--no-gc` + `--component` output (tiny component-model export)
 
-## STATUS: Release 1 DONE (2026-07-11) -- remaining tasks below
+## STATUS: Release 1 + Tier 2 (`:string`) DONE (2026-07-11) -- remaining tasks below
 
 Scalar release complete. `--no-gc --component` emits a **run-less reactor
 component**: the byte-identical MVP core module (core module 0, instance 0, no
@@ -43,17 +43,50 @@ Measured 2026-07-11 (wasmtime 46.0.1 local, jco 1.25.2):
   + cross-links, `rontolisp-wasm-export.md` limitation bullet, CLI usage,
   `.kb/no-gc-scalar-wasm.md`, `.kb/wasi-component.md`, CLAUDE.md.
 
+### Tier 2 (`:string` exports) -- DONE 2026-07-11
+
+Canonical string lift over the module's OWN exported `memory`, all appends
+gated on component mode + a `:string` boundary (scalar-only components and every
+non-component output stay byte-identical -- stash-dance-proven for scalar
+component, `--no-gc` plain/string/string+optimize/`--simd`, component+optimize):
+
+- **Return shape (the MAX_FLAT_RESULTS=1 trap)**: a per-`:string`-returning-export
+  **retptr shim** appended after all existing functions -- forwards params to the
+  untouched two-value wrapper, `__alloc`s an 8-byte `(ptr,len)` record, returns
+  its address; core-exported under the export name in place of the wrapper.
+- **`cabi_realloc`** = `local.get 3; call __alloc` (old/oldsz/align ignored --
+  bump arena, strings are align 1 and __alloc 4-aligns).
+- **Heap reclamation: post-return ADOPTED** (not the todo-88 leak): one shared
+  `cabi_post_<i32|i64|f64|void>` per flat-result signature resets heap global 0
+  to `heapBase` -- nothing in a `--no-gc` instance outlives one call, so no
+  saved-mark global is needed. Verified BOTH hosts call it: wasmtime by an
+  `unreachable`-probe toy component, jco by 200k-call Node loop on the raw core
+  (memory 65536 -> 65536, flat) + `postReturn` present in the transpiled glue.
+- **Lift encoder**: `ComponentWriter.canonLiftMemoryReallocUtf8PostReturn`,
+  options in wasm-tools' canonical order `(memory 0) (realloc N) utf8
+  (post-return M)` -- byte-pinned in `ComponentWriterTest` against a
+  `wasm-tools dump` golden (`000002040300040000050100`).
+- `WasmExportCompiler.componentValType` maps `:string` -> VT_STRING (0x73); the
+  GC component path still rejects `:string` before reaching it. `:s-expr` stays
+  rejected by `validateScalarTypes` (all `--no-gc`).
+- Measured (wasmtime 46.0.1, jco 1.25.2 via npx): 1-string-export component
+  975 bytes (plain core 753), the 3-export count-a/shout/greet program
+  1498 bytes (1218 with `--optimize`). `wasmtime run --invoke
+  'count-a("banana")'` / `'greet("世界")'` work with ZERO flags; UTF-8
+  multi-byte round-trips; `wasm-tools component wit` shows `string`.
+- Tests: `componentStringExportAppendsTheCanonicalStringAbi`,
+  `componentSharesOnePostReturnPerFlatResultSignature`,
+  `componentWithoutStringExportsOmitsTheStringAbi` (NoGcWasmCompilerTest);
+  `noGcComponentStringExportsLiftThroughTheCanonicalAbi` (integration);
+  encoder byte pin (ComponentWriterTest). 3187/0 (2 skipped).
+
 ## Remaining tasks (later phases)
 
-1. **`:string` exports (Tier 2)**: canonical string lift over the module's OWN
-   exported `memory` + a `cabi_realloc`-signature shim wrapping `__ronto_alloc`
-   (4-arg `(old, oldsz, align, newsz)`); utf8 canon options on lift and lower.
-   The `(ptr,len)` core ABI stays available without `--component`.
-2. **print micro-adapter**: a minuscule core module implementing `fd_write` over
+1. **print micro-adapter**: a minuscule core module implementing `fd_write` over
    `wasi:cli/stdout` (adapter-serve-p1 pattern in miniature), swapping only the
    `__write_stdout` funnel implementation (the todo-110 seam). Un-errors print
    under `--no-gc --component`.
-3. **(optional) WIT output** (`.wit` file next to the `.wasm`) so hosts / jco
+2. **(optional) WIT output** (`.wit` file next to the `.wasm`) so hosts / jco
    generate bindings without `wasm-tools component wit`.
 
 ## Non-goal / trade-off (recorded in docs)

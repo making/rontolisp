@@ -126,12 +126,12 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 Limitations:
 
 - Under `--component`, scalar exports (`:int`/`:float`/`:bool`/void — plus `:long`
-  with `--no-gc`) become **typed component-model exports** — see
+  and `:string` with `--no-gc`) become **typed component-model exports** — see
   [Component-model function exports](#component-model-function-exports-wasm-export)
   and [Compact component output](#compact-component-output---no-gc---component)
-  below. `:string`/`:s-expr` are not supported there yet (compile error). On the
-  interpreter and JVM backends the directive is a no-op (it just returns the named
-  symbol), so the same source runs on every backend.
+  below. `:string` on the GC component path and `:s-expr` on both are not supported
+  yet (compile error). On the interpreter and JVM backends the directive is a no-op
+  (it just returns the named symbol), so the same source runs on every backend.
 - Only a top-level `defun` can be exported, the declared parameter count must match its
   arity, and functions that take or return function values are out of scope.
 - The exported name defaults to the bare Lisp name (`fact`) and can be renamed with
@@ -549,7 +549,7 @@ JavaScript is the same "instantiate, then call the exports" as a GC reactor — 
 
 ### Compact Component Output (`--no-gc --component`)
 
-Add `--component` to wrap the same MVP core module as a **WASM component** whose scalar
+Add `--component` to wrap the same MVP core module as a **WASM component** whose
 exports become typed component-model exports, callable through the canonical ABI with
 WAVE syntax. Because the core module has zero imports, the wrap needs no WASI adapter,
 no shared-memory module and no wasm-GC — the whole component stays in the hundreds of
@@ -569,21 +569,39 @@ wasmtime run --invoke 'sumsquared(2, 3)' sumsq.wasm
 
 The typed WIT signature maps `:int` → `s32`, `:long` → `s64` (valid here, unlike the
 GC component path — use it when a value can exceed the 32-bit range), `:float` → `f64`,
-`:bool` → `bool`, and an omitted `:returns` → no result. The component also transpiles
-with jco (`jco transpile`, where `:long` surfaces as a JavaScript BigInt) and runs on
-any component-model host, with no wasm-GC support required.
+`:bool` → `bool`, `:string` → `string`, and an omitted `:returns` → no result. The
+component also transpiles with jco (`jco transpile`, where `:long` surfaces as a
+JavaScript BigInt) and runs on any component-model host, with no wasm-GC support
+required.
+
+A `:string` boundary crosses as a real component-model `string` — no manual pointer
+handling on either side. The host lowers the argument bytes into the module's own
+memory and reads the result back out through the canonical ABI, and the module frees
+every per-call allocation afterwards (a canonical *post-return* function pops the bump
+allocator), so a resident instance stays flat across repeated calls:
+
+```lisp
+;; greet.lisp
+(defun greet (s) (concatenate 'string "Hello, " s))
+(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+```
+
+```bash
+rontolisp greet.lisp --no-gc --component -o greet.wasm
+wasmtime run --invoke 'greet("world")' greet.wasm
+# "Hello, world"
+```
 
 Trade-offs against the plain `--no-gc` output, and current limits:
 
 - A component needs a component-model-capable host; the raw core module runs on **any**
   WebAssembly engine through the plain embedding API. Both outputs stay available —
-  pick per host, and note the component is *not* the default for `--no-gc`.
+  pick per host, and note the component is *not* the default for `--no-gc`. (Without
+  `--component`, a `:string` crosses as the manual `(ptr,len)` core ABI instead.)
 - The component is a pure reactor: there is no `wasi:cli/run` entry (nothing runs at
   the top level), and `print`/`princ`/`terpri` are a compile error under
   `--no-gc --component` (the compact wrap carries no WASI adapter to satisfy the
   `fd_write` import they need).
-- `:string` is a compile error under `--no-gc --component` for now; the `(ptr,len)`
-  string ABI remains available without `--component`.
 - The export name must be a lower-kebab-case component-model name; for a Lisp name
   outside that grammar the compiler asks you to rename it with `:as`.
 - `--optimize` composes: the core module is tree-shaken before the wrap.
@@ -648,7 +666,9 @@ component export just like the core one. Current limitations of component export
 
 - **Scalar types only** (`:int`/`:float`/`:bool`/void). `:string`/`:s-expr` are a compile
   error under `--component` for now (they cross the core boundary as pointer/length
-  pairs in linear memory, which the component lift does not carry yet).
+  pairs in linear memory, which the GC component lift does not carry yet; the
+  [compact `--no-gc` component](#compact-component-output---no-gc---component) does
+  lift `:string`).
 - **Pure compute only**: the export is lifted synchronously, so I/O inside it (`print`,
   `read`, file access) traps at runtime with "cannot block a synchronous task". Keep
   side effects in the top level (`run`) and exports as pure functions.
@@ -788,6 +808,11 @@ console.log(read(...ex.greet(...write('rontolisp'))));     // Hello, rontolisp!
 ```
 Hello, rontolisp!
 ```
+
+With [`--no-gc --component`](#compact-component-output---no-gc---component) the same
+`:string` export instead crosses as a typed component-model `string`, and all of the
+host-side glue above disappears (the canonical ABI does the copying, and a post-return
+function keeps the heap flat).
 
 Richer string functions (`string-upcase`, `subseq`, `string=`, …) are outside the non-GC
 subset; using one means compiling for the wasm-GC backend (`--no-wasi`) instead — the

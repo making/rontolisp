@@ -488,6 +488,35 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo("25");
 	}
 
+	private static final String NO_GC_COMPONENT_STRING_PROGRAM = """
+			(defun count-a (s)
+			  (let ((n 0))
+			    (dotimes (i (length s))
+			      (when (char= (char s i) #\\a)
+			        (setq n (+ n 1))))
+			    n))
+			(defun shout (s) (concatenate 'string s "!!"))
+			(defun greet (s) (concatenate 'string "Hello, " s))
+			(rontolisp:wasm-export 'count-a :params '(:string) :returns :int)
+			(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+			(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+			""";
+
+	@Test
+	void noGcComponentStringExportsLiftThroughTheCanonicalAbi() throws Exception {
+		// :string boundaries under --no-gc --component (todo 93 Tier 2): a string
+		// argument is lowered by the host into the module's own memory via the
+		// cabi_realloc shim, a string result crosses as typed component-model string
+		// through the retptr shim, and the cabi_post_* post-return pops the bump heap
+		// afterwards. Both directions (:string->:int and :string->:string), plus UTF-8
+		// multi-byte content, all with zero wasmtime flags.
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_STRING_PROGRAM, "count-a(\"banana\")")).isEqualTo("3");
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_STRING_PROGRAM, "shout(\"hello\")"))
+			.isEqualTo("\"hello!!\"");
+		assertThat(compileNoGcComponentAndInvoke(NO_GC_COMPONENT_STRING_PROGRAM, "greet(\"世界\")"))
+			.isEqualTo("\"Hello, 世界\"");
+	}
+
 	@Test
 	void noGcComposesWithOptimize() throws Exception {
 		// --no-gc --optimize: the (GC-agnostic) tree shaker runs on the non-GC module

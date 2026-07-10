@@ -368,11 +368,11 @@ final class WasmExportCompiler {
 	}
 
 	/**
-	 * Maps a Tier-1 scalar type designator to its component-model primitive value type
-	 * code for the {@code --component} export path ({@code null} = no result). The
-	 * memory-backed designators ({@code :string}/{@code :s-expr}) are rejected before
-	 * this is reached; {@code :long} (s64) is reachable only from the {@code --no-gc}
-	 * component path (the GC backend rejects {@code :long} outright).
+	 * Maps a type designator to its component-model primitive value type code for the
+	 * {@code --component} export path ({@code null} = no result). {@code :s-expr} is
+	 * rejected before this is reached; {@code :long} (s64) and {@code :string} are
+	 * reachable only from the {@code --no-gc} component path (the GC backend rejects both
+	 * outright).
 	 * @param type the type designator
 	 * @return the {@code ComponentWriter.VT_*} code, or {@code null} for {@code :void}
 	 */
@@ -382,6 +382,7 @@ final class WasmExportCompiler {
 			case T_LONG -> am.ik.wasm.ComponentWriter.VT_S64;
 			case T_FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
 			case T_BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
+			case T_STRING -> am.ik.wasm.ComponentWriter.VT_STRING;
 			case T_VOID -> null;
 			default -> throw new UnsupportedOperationException(
 					"rontolisp:wasm-export type " + type + " has no component-model scalar mapping");

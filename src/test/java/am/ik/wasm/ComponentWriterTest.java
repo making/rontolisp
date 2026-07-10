@@ -120,6 +120,16 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void canonLiftMemoryReallocUtf8PostReturnEncoding() {
+		// Golden bytes from `wasm-tools dump` of a validated string-lifting component:
+		// lift core func 2 against type 0 with the canonical options (memory 0)
+		// (realloc 0) string-encoding=utf8 (post-return 1) -- wasm-tools emits the
+		// options in exactly this order.
+		assertThat(hex(ComponentWriter.canonLiftMemoryReallocUtf8PostReturn(2, 0, 0, 0, 1)))
+			.isEqualTo("000002040300040000050100");
+	}
+
+	@Test
 	void aliasCoreMemoryEncoding() {
 		assertThat(hex(ComponentWriter.aliasCoreMemory(0, "memory"))).isEqualTo("00020100066d656d6f7279");
 	}

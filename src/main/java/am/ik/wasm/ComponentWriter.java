@@ -423,6 +423,38 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a {@code canon lift} with the canonical memory, reallocation, UTF-8
+	 * string-encoding and post-return options (required when the lifted function has a
+	 * {@code string} parameter or result: the host lowers string arguments into the
+	 * callee's memory via {@code cabi_realloc}, reads an indirect string result out of
+	 * it, then calls the post-return function so the callee can reclaim the per-call
+	 * allocations). The option order (memory, realloc, string-encoding, post-return)
+	 * matches the canonical byte sequence {@code wasm-tools} emits.
+	 * @param coreFuncIndex the core function index to lift
+	 * @param typeIndex the component function type index
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
+	 * @param postReturnFuncIndex the core function index of the post-return function (its
+	 * parameters are the lifted core function's flat results)
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLiftMemoryReallocUtf8PostReturn(int coreFuncIndex, int typeIndex, int memoryIndex,
+			int reallocFuncIndex, int postReturnFuncIndex) {
+		return enc(w -> w.write(0x00)
+			.write(0x00)
+			.writeUnsignedLeb128(coreFuncIndex)
+			.writeUnsignedLeb128(4) // four canonical options
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex) // memory
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex) // realloc
+			.write(0x00) // string-encoding utf8
+			.write(0x05)
+			.writeUnsignedLeb128(postReturnFuncIndex) // post-return
+			.writeUnsignedLeb128(typeIndex));
+	}
+
+	/**
 	 * Encode a core instance synthesized from a single function export.
 	 * @param exportName the core function export name
 	 * @param coreFuncIndex the core function index being exported

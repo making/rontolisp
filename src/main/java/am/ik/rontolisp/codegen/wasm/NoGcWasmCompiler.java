@@ -396,31 +396,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			module = am.ik.wasm.WasmTreeShaker.shake(module);
 		}
 		if (this.component) {
-			// Post-stage wrap: the core module above is byte-identical to the
-			// non-component output; the component just aliases + lifts its exports.
-			List<WasmComponentBuilder.FuncExport> componentExports = new ArrayList<>();
-			for (WasmExportCompiler.Decl decl : exportDecls) {
-				componentExports.add(WasmExportCompiler.componentExport(decl));
-			}
-			return NoGcWasmComponentBuilder.build(module, componentExports);
+			// Post-stage wrap: a scalar-only core module is byte-identical to the
+			// non-component output and the component just aliases + lifts its exports; a
+			// :string boundary additionally aliases the canonical string ABI helpers
+			// appended by assemble() above (todo 93 Tier 2).
+			return NoGcWasmComponentBuilder.build(module, exportDecls);
 		}
 		return module;
 	}
 
 	/**
-	 * Validates an export directive against the {@code --component} constraints: scalars
-	 * only ({@code :string} needs the Tier-2 canonical string lift over the module's own
-	 * memory + a realloc shim, {@code .todo/93}) and a lower-kebab-case export name (the
-	 * component-model {@code label} grammar).
+	 * Validates an export directive against the {@code --component} constraints: a
+	 * lower-kebab-case export name (the component-model {@code label} grammar).
+	 * {@code :string} lifts through the canonical string ABI (todo 93 Tier 2);
+	 * {@code :s-expr} is already rejected for every {@code --no-gc} output by
+	 * {@link #validateScalarTypes}.
 	 * @param decl the parsed export directive
 	 */
 	private static void validateComponentExport(WasmExportCompiler.Decl decl) {
-		if (WasmExportCompiler.usesMemory(decl)) {
-			throw new UnsupportedOperationException("rontolisp:wasm-export :string is not yet supported with"
-					+ " --no-gc --component for '" + decl.name()
-					+ "' (component exports are scalar-only: :int/:long/:float/:bool/:void; use --no-gc"
-					+ " without --component for the core-module (ptr,len) string ABI)");
-		}
 		if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
 			throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 					+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
@@ -1120,6 +1113,34 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// float is rendered / when printing is used; todo 110).
 		int localFuncCount = internalCount + exportDecls.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 1 : 0)
 				+ (mem.printUsed() ? 1 : 0);
+		// Canonical string ABI for --component :string exports (todo 93 Tier 2):
+		// cabi_realloc (the host lowers string arguments through it), one retptr shim
+		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
+		// function returns a single i32 pointing at an 8-byte (ptr,len) record instead
+		// of the wrapper's two values), and one cabi_post_* post-return per flat-result
+		// signature (pops the bump heap once the host has copied the results out). All
+		// appended after every existing function -- no index shifts -- and emitted ONLY
+		// under --component with a :string boundary, so both the non-component output
+		// and a scalar-only component's core module stay byte-identical.
+		boolean componentStringAbi = this.component && exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
+		List<Integer> stringReturnDecls = new ArrayList<>();
+		LinkedHashMap<String, @Nullable Type> postKinds = new LinkedHashMap<>();
+		if (componentStringAbi) {
+			for (int j = 0; j < exportDecls.size(); j++) {
+				WasmExportCompiler.Decl decl = exportDecls.get(j);
+				if (WasmExportCompiler.T_STRING.equals(decl.returnType())) {
+					stringReturnDecls.add(j);
+				}
+				if (WasmExportCompiler.usesMemory(decl)) {
+					postKinds.putIfAbsent(NoGcWasmComponentBuilder.postReturnKind(decl), postReturnParamType(decl));
+				}
+			}
+		}
+		int reallocIndex = mem.funcBase() + localFuncCount;
+		int postBase = reallocIndex + 1;
+		int shimBase = postBase + postKinds.size();
+		int totalFuncCount = localFuncCount
+				+ (componentStringAbi ? 1 + postKinds.size() + stringReturnDecls.size() : 0);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm")
@@ -1158,6 +1179,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[0]);
 				}
+				if (componentStringAbi) {
+					// cabi_realloc (old, old-size, align, new-size) -> i32.
+					typeSec.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+					// cabi_post_* (flat results) -> (), one per signature.
+					for (Type paramType : postKinds.values()) {
+						typeSec.addFunc(paramType == null ? new Type[0] : new Type[] { paramType }, new Type[0]);
+					}
+					// Retptr shims: the wrapper's host parameters, a single i32 result.
+					for (int j : stringReturnDecls) {
+						typeSec.addFunc(WasmExportCompiler.paramWasmTypes(exportDecls.get(j)), new Type[] { Type.I32 });
+					}
+				}
 			});
 		// Import section: exactly the one fd_write, and only when the program prints.
 		// A print-free module keeps zero imports (todo 93's adapter-free foundation).
@@ -1169,7 +1202,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Function section: local function index (funcBase + k) uses type index
 		// (funcBase + k), mirroring the type-section shift above.
 		w.writeFunction(func -> {
-			for (int k = 0; k < localFuncCount; k++) {
+			for (int k = 0; k < totalFuncCount; k++) {
 				func.addFunction(k + mem.funcBase());
 			}
 		});
@@ -1189,8 +1222,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// :string results.
 			.writeExport(exports -> {
 				for (int j = 0; j < exportDecls.size(); j++) {
+					// A :string-returning export in component mode is exported as its
+					// retptr shim; the two-value wrapper stays reachable through the
+					// shim's call but is not itself an export.
+					int ordinal = stringReturnDecls.indexOf(j);
 					exports.addExport(exportDecls.get(j).exportName(), ExternalKind.FUNCTION,
-							mem.funcIndex(internalCount + j));
+							ordinal >= 0 ? shimBase + ordinal : mem.funcIndex(internalCount + j));
 				}
 				if (mem.used()) {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
@@ -1202,6 +1239,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// called.
 					exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, mem.markIndex());
 					exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, mem.resetIndex());
+				}
+				if (componentStringAbi) {
+					// The canonical string ABI helpers the component wrap aliases.
+					exports.addExport(NoGcWasmComponentBuilder.CABI_REALLOC, ExternalKind.FUNCTION, reallocIndex);
+					int p = 0;
+					for (String kind : postKinds.keySet()) {
+						exports.addExport(NoGcWasmComponentBuilder.postReturnExportName(kind), ExternalKind.FUNCTION,
+								postBase + p++);
+					}
 				}
 			})
 			// Code section: internal bodies, wrappers, then the memory helpers, matching
@@ -1227,6 +1273,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				if (mem.printUsed()) {
 					code.addFunction(writeStdoutBody(mem));
+				}
+				if (componentStringAbi) {
+					code.addFunction(cabiReallocBody(mem.allocIndex()));
+					for (int p = 0; p < postKinds.size(); p++) {
+						code.addFunction(postReturnBody(mem.heapBase()));
+					}
+					for (int j : stringReturnDecls) {
+						code.addFunction(retptrShimBody(mem.funcIndex(internalCount + j), mem.allocIndex(),
+								WasmExportCompiler.paramSlotCount(exportDecls.get(j))));
+					}
 				}
 			});
 		// Data section: the string-literal headers, only when present.
@@ -1488,6 +1544,82 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.SET_GLOBAL, 0x00);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
+	}
+
+	// --- Canonical string ABI helpers for --component :string exports (todo 93 Tier 2)
+
+	// The core parameter type of the shared cabi_post_* post-return function a
+	// string-involving export's lift references: the lifted core function's single flat
+	// result (a :string result flattens to an i32 return pointer), or none for :void.
+	private static @Nullable Type postReturnParamType(WasmExportCompiler.Decl decl) {
+		return switch (NoGcWasmComponentBuilder.postReturnKind(decl)) {
+			case "i64" -> Type.I64;
+			case "f64" -> Type.F64;
+			case "void" -> null;
+			default -> Type.I32;
+		};
+	}
+
+	// cabi_realloc(old i32, old-size i32, align i32, new-size i32) -> i32: the canonical
+	// ABI reallocation entry point the host calls to lower string arguments into this
+	// module's memory. Over a bump allocator it is just __alloc(new-size): old is never
+	// a live block to preserve (the host lowers each string with old = 0 and an exact
+	// size), and __alloc's 4-byte alignment satisfies the string encoding's align 1.
+	private static byte[] cabiReallocBody(int allocIndex) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.CALL).writeSignedLeb128(allocIndex);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of());
+	}
+
+	// cabi_post_*(flat results) -> (): the canonical ABI post-return function, called by
+	// the host after it has copied the results out of memory. Nothing in a --no-gc
+	// instance outlives one export call (there are no Lisp globals and the host arena
+	// API is not part of the component ABI), so it pops the bump heap all the way back
+	// to its base -- freeing the host-lowered argument strings, the wrapper's internal
+	// copies and the result string -- and a resident instance stays flat. The flat-result
+	// parameters are ignored.
+	private static byte[] postReturnBody(int heapBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(heapBase);
+		w.write(Instruction.SET_GLOBAL, 0x00);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of());
+	}
+
+	// The retptr shim for a :string-returning export: the canonical ABI caps flat
+	// results at one, so the lifted core function must return a single i32 pointing at
+	// an 8-byte (ptr,len) record instead of the wrapper's two values. The shim forwards
+	// its parameters to the untouched wrapper, allocates the record with __alloc (freed
+	// by the post-return above) and stores the pair. Locals: ptr, len, ret (i32 each,
+	// after the host parameter slots).
+	private static byte[] retptrShimBody(int wrapperIndex, int allocIndex, int paramSlots) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int ptr = paramSlots;
+		int len = paramSlots + 1;
+		int ret = paramSlots + 2;
+		for (int s = 0; s < paramSlots; s++) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		}
+		w.write(Instruction.CALL).writeSignedLeb128(wrapperIndex);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ptr);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
+		w.write(Instruction.CALL).writeSignedLeb128(allocIndex);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ptr);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ret);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING));
 	}
 
 	// __ftoa(v f64) -> i32: render the float as a fresh [len][bytes] string, the exact

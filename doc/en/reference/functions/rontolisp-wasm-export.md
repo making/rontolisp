@@ -46,10 +46,11 @@ it exposes the full width with no `wrap`/`extend` conversion.
 ## Limitations
 
 - Under `--component`, a scalar export (`:int`/`:float`/`:bool`/void — plus
-  `:long` with `--no-gc`) becomes a **typed component-model export** callable
-  with WAVE syntax (`wasmtime run --invoke 'name(args)'`); `:string`/`:s-expr`
-  are a compile error there for now, the export must be pure-compute (I/O
-  inside it traps; under `--no-gc --component`, printing is a compile error),
+  `:long` and `:string` with `--no-gc`) becomes a **typed component-model
+  export** callable with WAVE syntax (`wasmtime run --invoke 'name(args)'`);
+  `:string` on the GC component path and `:s-expr` on both are a compile error
+  for now, the export must be pure-compute (I/O inside it traps; under
+  `--no-gc --component`, printing is a compile error),
   and its name must be lower-kebab-case (rename with `:as` otherwise). See
   [Component-model function exports](../../compiling/wasm.md#component-model-function-exports-wasm-export)
   and [Compact component output](../../compiling/wasm.md#compact-component-output---no-gc---component).

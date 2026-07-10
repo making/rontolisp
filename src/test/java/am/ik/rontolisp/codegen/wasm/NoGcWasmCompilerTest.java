@@ -1636,14 +1636,84 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void componentRejectsStringExports() {
-		// :string needs the Tier-2 canonical string lift (module memory + realloc shim);
-		// the core-module (ptr,len) ABI remains available without --component.
-		assertThatThrownBy(() -> compileComponent("""
-				(defun g (s) (length s))
-				(rontolisp:wasm-export 'g :params '(:string) :returns :int)
-				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining(":string is not yet supported with --no-gc --component");
+	void componentStringExportAppendsTheCanonicalStringAbi() {
+		// A :string boundary under --component (todo 93 Tier 2) appends the canonical
+		// string ABI to the core module: cabi_realloc (the host lowers string arguments
+		// through it), the shared cabi_post_i32 post-return, and a retptr shim exported
+		// under the export name (the canonical ABI caps flat results at one, so a
+		// :string result crosses as a single i32 pointing at an 8-byte (ptr,len)
+		// record, not the wrapper's two values). The component lifts with the four
+		// canonical options in wasm-tools order: (memory 0) (realloc 0) utf8
+		// (post-return 1), then type index 0.
+		byte[] component = compileComponent("""
+				(defun shout (s) (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""");
+		byte[] core = Objects.requireNonNull(sections(component).get(1));
+		Map<Integer, byte[]> coreSections = sections(core);
+		byte[] exports = Objects.requireNonNull(coreSections.get(7));
+		assertThat(exportNames(exports)).contains("shout", "memory", "cabi_realloc", "cabi_post_i32");
+		// The post-return pops the bump heap back to its base so a resident instance
+		// stays flat: [locals=0][i32.const heapBase][global.set 0][end].
+		byte[] code = Objects.requireNonNull(coreSections.get(10));
+		byte[] post = functionBody(code, exportedFuncIndex(exports, "cabi_post_i32"));
+		assertThat(post[0]).as("no locals").isEqualTo((byte) 0x00);
+		assertThat(post[1]).as("i32.const").isEqualTo((byte) 0x41);
+		assertThat(post[post.length - 3]).as("global.set").isEqualTo((byte) 0x24);
+		assertThat(post[post.length - 2]).as("global 0").isEqualTo((byte) 0x00);
+		// cabi_realloc delegates to the bump allocator: [locals=0][local.get 3]
+		// [call __ronto_alloc][end].
+		byte[] realloc = functionBody(code, exportedFuncIndex(exports, "cabi_realloc"));
+		assertThat(realloc[0]).isEqualTo((byte) 0x00);
+		assertThat(realloc[1]).isEqualTo((byte) 0x20);
+		assertThat(realloc[2]).isEqualTo((byte) 0x03);
+		assertThat(realloc[3]).isEqualTo((byte) 0x10); // call
+		// The component type section carries the string valtype (0x73) and the canon
+		// section the options vec (04: memory 03 00, realloc 04 00, utf8 00,
+		// post-return 05 01).
+		byte[] componentTypes = Objects.requireNonNull(sections(component).get(7));
+		assertThat(containsSequence(componentTypes, 0x73)).as("string valtype").isTrue();
+		byte[] canon = Objects.requireNonNull(sections(component).get(8));
+		assertThat(containsSequence(canon, 0x04, 0x03, 0x00, 0x04, 0x00, 0x00, 0x05, 0x01))
+			.as("canonical string-lift options")
+			.isTrue();
+	}
+
+	@Test
+	void componentSharesOnePostReturnPerFlatResultSignature() {
+		// One cabi_post_* per flat-result signature, shared across exports: a :string
+		// result and an :int result both flatten to i32 (one cabi_post_i32), :float to
+		// f64, an omitted result to none -- and only one cabi_realloc regardless of how
+		// many exports use strings. A scalar export in the same module lifts optionless
+		// and adds nothing.
+		byte[] component = compileComponent("""
+				(defun shout (s) (concatenate 'string s "!"))
+				(defun count-len (s) (length s))
+				(defun ratio (s) (* 1.5 (length s)))
+				(defun consume (s) (length s))
+				(defun scalar-only (a b) (+ a b))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				(rontolisp:wasm-export 'count-len :params '(:string) :returns :int)
+				(rontolisp:wasm-export 'ratio :params '(:string) :returns :float)
+				(rontolisp:wasm-export 'consume :params '(:string))
+				(rontolisp:wasm-export 'scalar-only :params '(:int :int) :returns :int)
+				""");
+		byte[] core = Objects.requireNonNull(sections(component).get(1));
+		List<String> names = exportNames(Objects.requireNonNull(sections(core).get(7)));
+		assertThat(names).contains("cabi_realloc", "cabi_post_i32", "cabi_post_f64", "cabi_post_void");
+		assertThat(names.stream().filter("cabi_realloc"::equals)).hasSize(1);
+		assertThat(names.stream().filter("cabi_post_i32"::equals)).as("shared by shout and count-len").hasSize(1);
+	}
+
+	@Test
+	void componentWithoutStringExportsOmitsTheStringAbi() {
+		// The string ABI is gated on a :string boundary: a scalar-only component's core
+		// module carries no cabi_* exports (and componentWrapsThePlainCoreModuleVerbatim
+		// pins it byte-identical to the non-component output).
+		byte[] component = compileComponent(COMPONENT_PROGRAM);
+		byte[] core = Objects.requireNonNull(sections(component).get(1));
+		assertThat(exportNames(Objects.requireNonNull(sections(core).get(7)))).doesNotContain("cabi_realloc",
+				"cabi_post_i32", "cabi_post_void");
 	}
 
 	@Test
