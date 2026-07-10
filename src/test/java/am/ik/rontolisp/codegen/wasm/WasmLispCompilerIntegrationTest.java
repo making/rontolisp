@@ -1080,6 +1080,68 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	void noGcRunsMatvecGemvOverTheRank2PackedMatrix() throws Exception {
+		// todo 99: vec:matvec (GEMV) over the rank-2 packed matrix layout
+		// [rows][cols][data], built with (make-array (list d n) :element-type ...) +
+		// two-subscript setf aref, under BOTH lowerings (per-row f64x2/f32x4 dot under
+		// --simd, a v128-free scalar loop otherwise). Expected values are hand-computed
+		// exact integers, verified against the wasm-GC oracle. The f64 shape d=3, n=5
+		// exercises two f64x2 pairs + the odd tail per row; W[r][c] = 10r + c against
+		// x = (1..5) gives y[r] = 150r + 40. row-major-aref reads the same block flat
+		// (element 6 = W[1][1] = 11).
+		String doubles = """
+				(defun gemv (i)
+				  (let ((w (make-array (list 3 5) :element-type 'double-float))
+				        (x #d(1.0 2.0 3.0 4.0 5.0)))
+				    (dotimes (r 3)
+				      (dotimes (c 5)
+				        (setf (aref w r c) (float (+ (* r 10) c)))))
+				    (truncate (aref (vec:matvec w x) i))))
+				(defun gemvinto (i)
+				  (let ((w (make-array (list 3 5) :element-type 'double-float))
+				        (x #d(1.0 2.0 3.0 4.0 5.0))
+				        (o (vec:zeros 3)))
+				    (dotimes (r 3)
+				      (dotimes (c 5)
+				        (setf (aref w r c) (float (+ (* r 10) c)))))
+				    (vec:matvec-into o w x)
+				    (truncate (aref o i))))
+				(defun flat (i)
+				  (let ((w (make-array '(3 5) :element-type 'double-float :initial-element 0.0)))
+				    (setf (aref w 1 1) 11.0)
+				    (truncate (row-major-aref w i))))
+				(rontolisp:wasm-export 'gemv :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'gemvinto :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'flat :params '(:int) :returns :int)
+				""";
+		// The f32 shape d=2, n=6 exercises one f32x4 quad + a 2-element remainder loop
+		// per row; all inputs integer-valued, so f32-throughout is exact. W[r][c] =
+		// 10r + c against x = (1..6): y[0] = 70, y[1] = 10*21 + 70 = 280.
+		String singles = """
+				(defun gemvf (i)
+				  (let ((w (make-array (list 2 6) :element-type 'single-float))
+				        (x #f(1.0 2.0 3.0 4.0 5.0 6.0)))
+				    (dotimes (r 2)
+				      (dotimes (c 6)
+				        (setf (aref w r c) (float (+ (* r 10) c)))))
+				    (truncate (aref (vec:matvec w x) i))))
+				(rontolisp:wasm-export 'gemvf :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemv", "0")).isEqualTo("40");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemv", "1")).isEqualTo("190");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemv", "2")).isEqualTo("340");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemvinto", "2")).isEqualTo("340");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "flat", "6")).isEqualTo("11");
+			assertThat(compileNoGcAndInvoke(false, simd, doubles, "flat", "5")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(false, simd, singles, "gemvf", "0")).isEqualTo("70");
+			assertThat(compileNoGcAndInvoke(false, simd, singles, "gemvf", "1")).isEqualTo("280");
+		}
+		// Composes with the tree shaker (--optimize).
+		assertThat(compileNoGcAndInvoke(true, true, doubles, "gemv", "1")).isEqualTo("190");
+	}
+
 	// Invokes a --no-gc :string-returning export and returns the length component of the
 	// (content-ptr, length) host result. wasmtime prints multi-value results one per
 	// line,

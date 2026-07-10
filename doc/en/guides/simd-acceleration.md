@@ -55,7 +55,7 @@ Reductions (a scalar): `vec:sum`, `vec:dot`, `vec:mean` and `vec:norm` (the Eucl
 (vec:to-list (vec:mul #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))) ; => (4.0 10.0 18.0)
 ```
 
-Matrix times vector (a fresh vector): `vec:matvec` is GEMV -- a rank-2 packed matrix `W` (shape *d* x *n*) times a rank-1 vector `x` of length *n*, giving a length-*d* vector whose *i*-th element is the dot product of row *i* of `W` with `x` (no transpose). It is the workhorse of a neural network's forward pass -- every projection, feed-forward and classifier layer is a `vec:matvec` -- so it is the one kernel run once per matrix row rather than element-wise. The result follows the input width.
+Matrix times vector (a fresh vector): `vec:matvec` is GEMV -- a rank-2 packed matrix `W` (shape *d* x *n*) times a rank-1 vector `x` of length *n*, giving a length-*d* vector whose *i*-th element is the dot product of row *i* of `W` with `x` (no transpose). It is the workhorse of a neural network's forward pass -- every projection, feed-forward and classifier layer is a `vec:matvec` -- so it is the one kernel run once per matrix row rather than element-wise. The result follows the input width. On `--no-gc`, build `W` with `(make-array (list d n) :element-type ...)` plus `setf` of a two-subscript `aref` -- a rank-2 `#d((...))` literal is not supported there, and `x` must be the same width as `W` (the usual `vec` strictness).
 
 ```lisp
 (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)) ; => #d(17.0 39.0)
@@ -134,7 +134,7 @@ All operands must share an element type, and `out` must be at least as long as t
 
 This is what makes `--no-gc` usable for real numeric loops (see the memory table above): with `-into`, peak memory equals the vectors you actually keep alive. Measured on `--no-gc --simd`, accumulating a 65536-element vector 12000 times peaks at 13.7 MB with `vec:add-into`, against 4.31 GB -- and then a trap -- with `vec:add`. On the three garbage-collected targets `-into` changes nothing about correctness; there it is an allocation-rate optimization.
 
-`vec:matvec-into` is unavailable on `--no-gc`, like `vec:matvec`.
+On `--no-gc`, `vec:matvec-into`'s aliasing guard is a WebAssembly trap (an `unreachable` instruction) rather than a Lisp error -- the backend has no error channel -- and it matters most there: a decode loop of GEMVs would otherwise bump-allocate a fresh output vector per step with nothing ever freed.
 
 ## Hardware acceleration (optional)
 
@@ -154,7 +154,7 @@ Which memory model you compile for (`.class`, wasm-GC `.wasm`, or `--no-gc` `.wa
 
 There is another reason the JVM backend is hard to predict, and it has nothing to do with SIMD. A compiled Lisp numeric loop boxes every intermediate value -- one `Double` per array element read, per product, per running sum, plus a `Long` per loop counter -- so a scalar `vec:` kernel is bound by allocation and dispatch rather than by arithmetic. How much of that boxing a given JIT eliminates (through escape analysis and inlining) varies enormously between JVMs, so the very same scalar loop can be several times faster on one than on another. What `--simd` does here is sidestep the question: it replaces those kernels with primitive `double[]` / `float[]` loops that never box in the first place.
 - **wasm-GC `--simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --simd` lowers the `vec:` kernels to WebAssembly fixed-width SIMD (`f64x2.*`, or `f32x4.*` for single-float). A packed float array becomes an `(array (mut v128))` of lane groups -- still an ordinary GC object, still reclaimed by the engine's collector, so memory behaves exactly as it does on scalar wasm-GC. The whole `vec:` API (including `vec:matvec` and `vec:from-list` / `vec:to-list`) keeps working, and the results are unchanged. Composes with `--component` and `--optimize`. Run it with `wasmtime run -W gc` as usual -- wasmtime enables the SIMD proposal by default.
-- **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:from-list` / `vec:to-list` (which need Lisp lists) and `vec:matvec` / `vec:matvec-into` (which need a rank-2 matrix) are unavailable on `--no-gc` either way; `vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh` / `vec:sign` have no vector instruction, so they run the same per-element loop in both modes, as does `vec:clip` (its bounds are full doubles, so each element is compared widened); `vec:maximum` / `vec:minimum` / `vec:relu` vectorize as comparison-mask selects under `--simd` and fall back to scalar compare-and-select loops without it.
+- **`--no-gc --simd` native `v128`**: `rontolisp prog.lisp -o prog.wasm --no-gc --simd` lowers the same kernels over the packed linear-memory block. **Without `--simd`, `--no-gc` emits plain scalar loops** over the byte-identical block -- a v128-free MVP module that runs on a WebAssembly runtime lacking the SIMD proposal, trading away the vectorized speedup for that portability. `vec:matvec` / `vec:matvec-into` run over a rank-2 packed matrix block (`[rows][cols][data]`, built by a rank-2 `make-array`): the per-row dot is the `f64x2` / `f32x4` dot loop under `--simd` and the scalar loop without it. Only `vec:from-list` / `vec:to-list` (which need Lisp lists) remain unavailable on `--no-gc`; `vec:exp` / `vec:log` / `vec:tanh` / `vec:sin` / `vec:cos` / `vec:tan` / `vec:asin` / `vec:acos` / `vec:atan` / `vec:sinh` / `vec:cosh` / `vec:sign` have no vector instruction, so they run the same per-element loop in both modes, as does `vec:clip` (its bounds are full doubles, so each element is compared widened); `vec:maximum` / `vec:minimum` / `vec:relu` vectorize as comparison-mask selects under `--simd` and fall back to scalar compare-and-select loops without it.
 
 On wasm-GC the speedup is large because `--simd` replaces two things at once: the boxing-heavy scalar `vec.lisp` defun *and* the one-element-at-a-time loop. A `vec:dot` over an 8192-element vector, 20000 iterations, runs in ~10.1 s scalar and ~0.10 s with `--simd` under `wasmtime run -W gc`.
 
@@ -201,6 +201,15 @@ rontolisp examples/ml/simd-gemv.lisp --simd
 ```
 
 It prints integer `argmax` indices rather than floats, so the output is identical with and without acceleration -- only the elapsed time changes. On an Apple M4: wasm-GC 467 ms -> 3.9 ms, the interpreter 4.6 s -> 15 ms.
+
+[`examples/ml/simd-gemv-nogc.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/simd-gemv-nogc.lisp) is the same inner loop compiled with `--no-gc`: a pure-compute reactor module whose host invokes the exported `fingerprint` function and reads back the `argmax` integer. Build it with and without `--simd` and invoke both:
+
+```bash
+rontolisp examples/ml/simd-gemv-nogc.lisp -o gemv.wasm --no-gc --simd --optimize
+wasmtime run --invoke fingerprint gemv.wasm 100
+```
+
+Both builds print `85` -- the same dominant direction as every other backend -- and the `-into` kernels keep the never-freed `--no-gc` bump heap at exactly three blocks however many steps run. At 20000 steps the scalar module takes ~600 ms and the `--simd` one ~120 ms.
 
 A row must hold at least 128 elements before the interpreter and JVM kernels vectorize it; below that they run the scalar loop, because filling the vector registers would cost more than it saves. The two WASM backends have no such threshold.
 

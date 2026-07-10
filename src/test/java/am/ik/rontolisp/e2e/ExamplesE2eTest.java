@@ -33,10 +33,11 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * <li><b>RUN</b> ({@code interpreter}/{@code jvm}/{@code wasm}) -- the program runs to
  * completion; we assert it exits 0 and (optionally) that its stdout matches the declared
  * {@code expect}.</li>
- * <li><b>COMPILE</b> ({@code jvm-compile}/{@code wasm-component}/{@code no-gc}) -- for
- * the blocking servers and the host-invoked {@code --no-gc} module, which never return on
- * their own, we only build them and assert the compile succeeds. This still catches
- * broken {@code (load ...)} paths, missing symbols and package errors.</li>
+ * <li><b>COMPILE</b> ({@code jvm-compile}/{@code wasm-component}/{@code no-gc}/
+ * {@code no-gc-simd}) -- for the blocking servers and the host-invoked {@code --no-gc}
+ * module, which never return on their own, we only build them and assert the compile
+ * succeeds. This still catches broken {@code (load ...)} paths, missing symbols and
+ * package errors.</li>
  * </ul>
  * Per-example manifest fields (all optional except {@code path}/{@code backends}):
  * <ul>
@@ -96,7 +97,7 @@ class ExamplesE2eTest {
 	enum Backend {
 
 		// RUN backends run the program; COMPILE backends only build it (see verify()).
-		INTERPRETER, JVM, WASM, JVM_COMPILE, WASM_COMPONENT, NO_GC;
+		INTERPRETER, JVM, WASM, JVM_COMPILE, WASM_COMPONENT, NO_GC, NO_GC_SIMD;
 
 		/**
 		 * The manifest spelling: lower-case with hyphens (e.g. {@code wasm-component}).
@@ -201,6 +202,13 @@ class ExamplesE2eTest {
 				Result compile = exec(work,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--optimize"), flags)), null);
 				assertCompiled(compile, example, "no-gc");
+			}
+			case NO_GC_SIMD -> {
+				Result compile = exec(work,
+						concat(driver,
+								concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--simd", "--optimize"), flags)),
+						null);
+				assertCompiled(compile, example, "no-gc-simd");
 			}
 		}
 	}

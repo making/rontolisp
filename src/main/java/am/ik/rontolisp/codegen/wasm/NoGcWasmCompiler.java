@@ -104,8 +104,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * {@code i32} pointer to a linear-memory header {@code [count:i32 little-endian]
 		 * [count f64 little-endian]}. A distinct reference kind from {@code STRING} even
 		 * though both are {@code i32} pointers -- types are static, so no runtime
-		 * discriminator is needed. Only rank-1 packs here (a rank>=2 array is a clear
-		 * compile error on the scalar backend, which has no rank-n packed layout yet).
+		 * discriminator is needed. Rank-1 only; a rank-2 array is the separate
+		 * {@link #F64MAT} kind (rank >= 3 stays a clear compile error).
 		 */
 		F64VEC,
 		/**
@@ -119,7 +119,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * {@code F64VEC} -- a value cannot be both widths -- so mixing the two is a type
 		 * error (like the other reference kinds).
 		 */
-		F32VEC;
+		F32VEC,
+		/**
+		 * A packed rank-2 {@code f64} matrix: an {@code i32} pointer to a linear-memory
+		 * header {@code [rows:i32 little-endian][cols:i32 little-endian][rows*cols f64
+		 * row-major]}. The dims live in the block header because this backend has no GC
+		 * struct to carry them (the wasm-GC {@code $farray} keeps {@code dims} on the GC
+		 * heap). A distinct kind from {@link #F64VEC}: the rank is static, so a rank-1
+		 * vector keeps its {@code [count][data]} layout byte-identical and no runtime
+		 * rank discriminator is needed. Built only by a rank-2 {@code make-array}; read
+		 * by two-subscript {@code aref}/{@code aset}, flat {@code row-major-aref}/
+		 * {@code %row-major-aset} and the {@code vec:matvec} GEMV kernel (the reason
+		 * rank-2 exists here at all -- see {@code .todo/99}).
+		 */
+		F64MAT,
+		/**
+		 * A packed rank-2 {@code f32} matrix: same {@code [rows][cols][data]} shape as
+		 * {@link #F64MAT} with the 4-byte {@code f32} stride, the matrix analog of
+		 * {@link #F32VEC}.
+		 */
+		F32MAT;
 
 		/**
 		 * The result type when this and another type are combined. {@code INT} doubles as
@@ -151,7 +170,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return switch (this) {
 				case INT -> Type.I64.code();
 				case FLOAT -> Type.F64.code();
-				case STRING, F64VEC, F32VEC -> Type.I32.code();
+				case STRING, F64VEC, F32VEC, F64MAT, F32MAT -> Type.I32.code();
 			};
 		}
 
@@ -618,16 +637,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			// A packed float array literal or (make-array ... :element-type ...) is a
 			// F64VEC (double-float) or F32VEC (single-float), keyed off the :element-type
-			// designator. aref / row-major-aref read a f64 element (a f32 element is
-			// widened
-			// on read); %aset / %row-major-aset return the (coerced) f64 value they
-			// stored.
+			// designator -- or the matrix kind of the same width for a rank-2 dimension
+			// spec. The dimension argument is walked per dimension EXPRESSION (a (list d
+			// n) form must not be walked as a call to the unsupported `list`). aref /
+			// row-major-aref read a f64 element (a f32 element is widened on read); %aset
+			// / %row-major-aset return the (coerced) f64 value they stored.
 			case LispNames.MAKE_ARRAY -> {
-				for (int i = 1; i < args.size(); i++) {
+				List<LispVal> dims = args.size() > 1 ? dimExprs(args.get(1)) : List.of();
+				for (LispVal dim : dims) {
+					typeOf(dim, env, tc);
+				}
+				for (int i = 2; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
-				return isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD)) ? Ty.F32VEC
-						: Ty.F64VEC;
+				boolean single = isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+				if (dims.size() == 2) {
+					return single ? Ty.F32MAT : Ty.F64MAT;
+				}
+				return single ? Ty.F32VEC : Ty.F64VEC;
 			}
 			case LispNames.AREF, LispNames.ROW_MAJOR_AREF, LispNames.ASET, LispNames.ROW_MAJOR_ASET -> {
 				for (int i = 1; i < args.size(); i++) {
@@ -1241,7 +1268,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return switch (ty) {
 			case INT -> Type.I64;
 			case FLOAT -> Type.F64;
-			case STRING, F64VEC, F32VEC -> Type.I32;
+			case STRING, F64VEC, F32VEC, F64MAT, F32MAT -> Type.I32;
 		};
 	}
 
@@ -1518,7 +1545,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// yields "" rather than a string/number type clash. This is what makes the
 		// cond-with-a-`t`-clause expansion (which threads an explicit nil else)
 		// type-check.
-		if ((target == Ty.STRING || target == Ty.F64VEC || target == Ty.F32VEC) && expr instanceof LispNil) {
+		if (isRefKind(target) && expr instanceof LispNil) {
 			fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(0);
 			return;
 		}
@@ -1549,17 +1576,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// A reference kind is an i32 pointer into linear memory (a string or a packed float
-	// vector), never an immediate scalar. It can only coerce to itself, so any mismatch
-	// involving one is a type error.
+	// vector/matrix), never an immediate scalar. It can only coerce to itself, so any
+	// mismatch involving one is a type error.
 	private static boolean isRefKind(Ty ty) {
-		return ty == Ty.STRING || ty == Ty.F64VEC || ty == Ty.F32VEC;
+		return ty == Ty.STRING || ty == Ty.F64VEC || ty == Ty.F32VEC || ty == Ty.F64MAT || ty == Ty.F32MAT;
 	}
 
-	// The element byte-shift for a packed float vector: f64 = 3 (8-byte stride), f32 = 2
-	// (4-byte stride). Used everywhere the packed layout is indexed (allocVec /
+	// Whether a packed kind uses the 4-byte f32 element width (vector or matrix).
+	private static boolean isSingleWidth(Ty ty) {
+		return ty == Ty.F32VEC || ty == Ty.F32MAT;
+	}
+
+	// The element byte-shift for a packed float vector/matrix: f64 = 3 (8-byte stride),
+	// f32 = 2 (4-byte stride). Used everywhere the packed layout is indexed (allocVec /
 	// emitElementAddr / literals / make-array).
 	private static int elemShift(Ty vecTy) {
-		return vecTy == Ty.F32VEC ? 2 : 3;
+		return isSingleWidth(vecTy) ? 2 : 3;
 	}
 
 	private Ty compileCall(LispCons cons, Fn fn) {
@@ -2128,8 +2160,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// A F64VEC is an i32 pointer to a linear-memory header [count:i32 LE][count f64 LE].
 	// #d(...) literals and (make-array n :element-type 'double-float) materialize one;
 	// the
-	// generic aref/%aset/length operate on it. Only rank-1 is supported (a rank>=2 array
-	// has no packed layout on the scalar backend, so it is a clear compile error). The
+	// generic aref/%aset/length operate on it. A rank-2 make-array builds the separate
+	// F64MAT/F32MAT [rows:i32][cols:i32][data] matrix layout instead (todo 99, for
+	// vec:matvec); rank >= 3 stays a clear compile error, as does a rank-2 literal. The
 	// vectorizable vec: kernels (v128) build on this layer -- see .todo/94 Phase 4B.
 
 	private static void requireArgc(List<LispVal> args, int expected, String op, Fn fn) {
@@ -2259,14 +2292,33 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// (aref v i) / (row-major-aref v i) -> the i-th element as a scalar f64 (a f32
 	// element
-	// is widened on read). No bounds check, like the rest of the backend. Rank-1 only, so
-	// exactly one subscript is allowed; more subscripts imply a rank>=2 array, which the
-	// requireArgc(3) check rejects.
+	// is widened on read). No bounds check, like the rest of the backend. On a rank-1
+	// vector exactly one subscript is allowed; on a rank-2 matrix aref takes two
+	// subscripts (row-major (i*cols + j)) and row-major-aref one flat index.
 	private Ty compileAref(String name, List<LispVal> args, Fn fn) {
-		requireArgc(args, 3, name, fn);
-		Ty vecTy = packedVecType(args.get(1), fn);
-		emitElementAddr(args.get(1), args.get(2), fn, vecTy);
-		if (vecTy == Ty.F32VEC) {
+		if (args.size() < 3) {
+			requireArgc(args, 3, name, fn);
+		}
+		Ty t = staticType(args.get(1), fn);
+		boolean single;
+		if (t == Ty.F64MAT || t == Ty.F32MAT) {
+			single = t == Ty.F32MAT;
+			if (LispNames.AREF.equals(name)) {
+				requireArgc(args, 4, name + " on a rank-2 matrix", fn);
+				emitMatElementAddr(args.get(1), args.get(2), args.get(3), fn, t);
+			}
+			else {
+				requireArgc(args, 3, name + " on a rank-2 matrix", fn);
+				emitMatElementAddr(args.get(1), args.get(2), null, fn, t);
+			}
+		}
+		else {
+			requireArgc(args, 3, name, fn);
+			Ty vecTy = packedVecType(args.get(1), fn);
+			single = vecTy == Ty.F32VEC;
+			emitElementAddr(args.get(1), args.get(2), fn, vecTy);
+		}
+		if (single) {
 			fn.writer.write(Instruction.F32_LOAD, 0x00, 0x00);
 			fn.writer.write(Instruction.F64_PROMOTE_F32);
 		}
@@ -2276,24 +2328,74 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.FLOAT;
 	}
 
+	// Emits the i32 address of matrix element (i, j) -- base + 8 + ((i*cols + j) <<
+	// shift), reading cols out of the block header -- or of flat row-major element i
+	// when jExpr is null. The matrix, row and column expressions are evaluated in
+	// argument order.
+	private void emitMatElementAddr(LispVal mat, LispVal iExpr, @Nullable LispVal jExpr, Fn fn, Ty matTy) {
+		WasmWriter w = fn.writer;
+		int base = compileVecArg(mat, fn, matTy);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(base);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
+		w.write(Instruction.I32_ADD);
+		compileCoerced(iExpr, fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		if (jExpr != null) {
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(base);
+			w.write(Instruction.I32_LOAD, 0x02, 0x04); // cols
+			w.write(Instruction.I32_MUL);
+			compileCoerced(jExpr, fn, Ty.INT);
+			w.write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.I32_ADD);
+		}
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(matTy));
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+	}
+
 	// (%aset v i x) / (%row-major-aset v i x) -> store x at element i, returning the
 	// stored
 	// value so a setf place reads back the assigned value. On a f32 vector the value is
 	// narrowed (f32.demote_f64) before the store, and the returned value is the same
 	// f32-round-tripped double (promote(demote(x))) so the read-back matches the other
-	// backends' aset return across widths.
+	// backends' aset return across widths. On a rank-2 matrix %aset takes two subscripts
+	// and %row-major-aset a flat index, like compileAref.
 	private Ty compileAset(String name, List<LispVal> args, Fn fn) {
-		requireArgc(args, 4, name, fn);
+		if (args.size() < 4) {
+			requireArgc(args, 4, name, fn);
+		}
 		WasmWriter w = fn.writer;
-		Ty vecTy = packedVecType(args.get(1), fn);
+		Ty t = staticType(args.get(1), fn);
+		boolean mat = t == Ty.F64MAT || t == Ty.F32MAT;
+		boolean single;
 		int addr = fn.allocLocal(Ty.F64VEC); // i32 element address
 		int val = fn.allocLocal(Ty.FLOAT);
-		emitElementAddr(args.get(1), args.get(2), fn, vecTy);
+		LispVal valueExpr;
+		if (mat) {
+			single = t == Ty.F32MAT;
+			if (LispNames.ASET.equals(name)) {
+				requireArgc(args, 5, name + " on a rank-2 matrix", fn);
+				emitMatElementAddr(args.get(1), args.get(2), args.get(3), fn, t);
+				valueExpr = args.get(4);
+			}
+			else {
+				requireArgc(args, 4, name + " on a rank-2 matrix", fn);
+				emitMatElementAddr(args.get(1), args.get(2), null, fn, t);
+				valueExpr = args.get(3);
+			}
+		}
+		else {
+			requireArgc(args, 4, name, fn);
+			Ty vecTy = packedVecType(args.get(1), fn);
+			single = vecTy == Ty.F32VEC;
+			emitElementAddr(args.get(1), args.get(2), fn, vecTy);
+			valueExpr = args.get(3);
+		}
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(addr);
-		compileCoerced(args.get(3), fn, Ty.FLOAT);
+		compileCoerced(valueExpr, fn, Ty.FLOAT);
 		w.write(Instruction.SET_LOCAL).writeSignedLeb128(val);
 		w.write(Instruction.GET_LOCAL).writeSignedLeb128(addr);
-		if (vecTy == Ty.F32VEC) {
+		if (single) {
 			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
 			w.write(Instruction.F32_DEMOTE_F64);
 			w.write(Instruction.F32_STORE, 0x00, 0x00);
@@ -2312,11 +2414,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// (make-array n :element-type 'double-float | 'single-float [:initial-element x]) ->
 	// a
-	// fresh packed vector of n elements, filled with x (default 0.0). Rank-1 only; an
-	// :element-type is required (the scalar backend has no general array type); the
+	// fresh packed vector of n elements, filled with x (default 0.0). An :element-type is
+	// required (the scalar backend has no general array type); the
 	// fill-pointer/adjustable/displaced options a packed vector cannot represent are hard
 	// errors. A single-float array uses a 4-byte f32 stride and narrows the fill on
-	// store.
+	// store. A rank-2 dimension spec ((list d n) or '(d n)) builds the packed matrix
+	// layout instead (compileMakeMatrix); rank >= 3 stays a clear compile error.
 	private Ty compileMakeArray(List<LispVal> args, Fn fn) {
 		if (args.size() < 2) {
 			throw new UnsupportedOperationException("--no-gc: make-array needs a dimension in '" + fn.fnName + "'");
@@ -2334,8 +2437,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: make-array :fill-pointer / :adjustable / :displaced-to "
 					+ "is not supported on a packed float-vector in '" + fn.fnName + "'");
 		}
+		List<LispVal> dims = dimExprs(args.get(1));
+		if (dims.size() == 2) {
+			return compileMakeMatrix(dims, args, fn, single);
+		}
+		if (dims.size() != 1) {
+			throw new UnsupportedOperationException("--no-gc: a rank-" + dims.size() + " make-array in '" + fn.fnName
+					+ "' is not supported; a packed float array is rank-1 (a vector) or rank-2 (a matrix) here");
+		}
 		Ty vecTy = single ? Ty.F32VEC : Ty.F64VEC;
-		LispVal lengthExpr = requireRank1Dims(args.get(1), fn);
+		LispVal lengthExpr = dims.get(0);
 		WasmWriter w = fn.writer;
 		int count = fn.allocLocal(Ty.F64VEC); // i32 element count
 		compileCoerced(lengthExpr, fn, Ty.INT);
@@ -2389,25 +2500,109 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return vecTy;
 	}
 
-	// A make-array dimension spec must denote a rank-1 length. Accept an integer /
-	// runtime
-	// expression (the length directly) or a quoted single-element list '(n); a longer
-	// literal list is a rank>=2 array, which has no packed layout on this backend.
-	private LispVal requireRank1Dims(LispVal dimsArg, Fn fn) {
+	// The per-dimension expressions of a make-array dimension spec. Accepts an integer /
+	// runtime expression (a rank-1 length directly), a quoted literal list '(d n) (its
+	// elements are plain data), or a (list d n) form (its elements are runtime
+	// expressions). The returned size is the rank; compileMakeArray keys the layout off
+	// it (1 = packed vector, 2 = packed matrix, else a clear compile error).
+	private static List<LispVal> dimExprs(LispVal dimsArg) {
 		LispVal spec = dimsArg;
 		if (spec instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& c.cdr() instanceof LispCons rest) {
 			spec = rest.car();
-		}
-		if (spec instanceof LispCons list) {
-			List<LispVal> dims = list.toList();
-			if (dims.size() != 1) {
-				throw new UnsupportedOperationException("--no-gc: a rank-" + dims.size() + " make-array in '"
-						+ fn.fnName + "' is not supported; only a rank-1 double-float array packs to a f64 vector");
+			if (spec instanceof LispCons list) {
+				return list.toList();
 			}
-			return dims.get(0);
+			return List.of(spec);
 		}
-		return dimsArg;
+		if (spec instanceof LispCons c && c.car() instanceof LispSymbol head && LispNames.LIST.equals(head.name())) {
+			List<LispVal> parts = c.toList();
+			return parts.subList(1, parts.size());
+		}
+		return List.of(dimsArg);
+	}
+
+	// The rank-2 branch of compileMakeArray: (make-array (list d n) :element-type ...)
+	// -> a fresh packed matrix [rows:i32][cols:i32][rows*cols f... row-major], filled
+	// with :initial-element (default 0.0) like the rank-1 path. The 8-byte two-word
+	// header replaces the vector's [count] word; everything below it is the same packed
+	// data the vector layout uses, at the same stride.
+	private Ty compileMakeMatrix(List<LispVal> dims, List<LispVal> args, Fn fn, boolean single) {
+		Ty matTy = single ? Ty.F32MAT : Ty.F64MAT;
+		WasmWriter w = fn.writer;
+		int rows = fn.allocLocal(Ty.F64VEC); // i32 row count
+		compileCoerced(dims.get(0), fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rows);
+		int cols = fn.allocLocal(Ty.F64VEC); // i32 column count
+		compileCoerced(dims.get(1), fn, Ty.INT);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(cols);
+		int total = fn.allocLocal(Ty.F64VEC); // i32 element count rows*cols
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rows);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(total);
+		// dst = __alloc(8 + (total << shift)); mem[dst] = rows; mem[dst+4] = cols
+		int dst = fn.allocLocal(matTy);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(matTy));
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rows);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		// Evaluate the fill value once into a f64 local (:initial-element, default 0.0).
+		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		int fill = fn.allocLocal(Ty.FLOAT);
+		if (init == null) {
+			w.write(Instruction.F64_CONST).writeF64(0.0);
+		}
+		else {
+			compileCoerced(init, fn, Ty.FLOAT);
+		}
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(fill);
+		// for (i = 0; i < total; i++) mem[dst + 8 + (i << shift)] = fill (narrowed for
+		// f32)
+		int i = fn.allocLocal(Ty.F64VEC);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(matTy));
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fill);
+		if (single) {
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.F32_STORE, 0x00, 0x00);
+		}
+		else {
+			w.write(Instruction.F64_STORE, 0x00, 0x00);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return matTy;
 	}
 
 	// The value following a :keyword in a flat argument list (scanning the keyword pairs
@@ -2484,19 +2679,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.VEC_ASIN_INTO, LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO,
 			LispNames.VEC_COSH_INTO, LispNames.VEC_SIGN_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM,
 			LispNames.VEC_RELU, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO,
-			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO);
+			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO, LispNames.VEC_MATVEC, LispNames.VEC_MATVEC_INTO);
 
 	// simd members that exist in the package but need cons lists (which --no-gc lacks),
 	// so
 	// they run only on the portable backends via vec.lisp.
 	private static final Set<String> SIMD_PORTABLE_ONLY = Set.of(LispNames.VEC_FROM_LIST, LispNames.VEC_TO_LIST);
-
-	// simd members that are genuinely unsupported on --no-gc (a clear error, not a typo):
-	// matvec is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1
-	// [count][f...] linear blocks only -- there is no rank-2 layout to read rows from.
-	// Use the JVM --simd backend (or the interpreter / JVM / wasm-GC scalar path)
-	// instead.
-	private static final Set<String> SIMD_UNSUPPORTED_NO_GC = Set.of(LispNames.VEC_MATVEC, LispNames.VEC_MATVEC_INTO);
 
 	// Whether a (resolved) symbol name is a vec: package member, e.g. "vec:dot". vec:
 	// names are always qualified with the package prefix, so a prefix test suffices.
@@ -2518,11 +2706,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
 					+ "' needs Lisp lists and runs on the portable backends only, not --no-gc");
 		}
-		if (SIMD_UNSUPPORTED_NO_GC.contains(member)) {
-			throw new UnsupportedOperationException("--no-gc: '" + name + "' in function '" + fnName
-					+ "' is GEMV over a rank-2 matrix, but --no-gc packed vectors are rank-1 only;"
-					+ " use the JVM --simd backend or the interpreter / JVM / wasm-GC scalar path");
-		}
 		throw new UnsupportedOperationException(
 				"--no-gc: unknown simd operation '" + name + "' in function '" + fnName + "'");
 	}
@@ -2540,10 +2723,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// constructor's width comes from its optional literal element-type
 		// (constructorVecType: 'single-float -> F32VEC, else F64VEC).
 		Ty firstVecWidth = null;
+		Ty[] argTys = new Ty[args.size()];
 		for (int i = 1; i < args.size(); i++) {
-			Ty t = typeOf(args.get(i), env, tc);
-			if (firstVecWidth == null && (t == Ty.F64VEC || t == Ty.F32VEC)) {
-				firstVecWidth = t;
+			argTys[i] = typeOf(args.get(i), env, tc);
+			if (firstVecWidth == null && (argTys[i] == Ty.F64VEC || argTys[i] == Ty.F32VEC)) {
+				firstVecWidth = argTys[i];
 			}
 		}
 		Ty operandWidth = firstVecWidth == null ? Ty.F64VEC : firstVecWidth;
@@ -2568,6 +2752,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO, LispNames.VEC_RELU_INTO,
 					LispNames.VEC_CLIP_INTO ->
 				operandWidth;
+			// matvec's result is a rank-1 vector following x's width (W is a matrix, so
+			// firstVecWidth would miss it); matvec-into returns its destination (arg 1).
+			case LispNames.VEC_MATVEC -> args.size() > 2 && argTys[2] == Ty.F32VEC ? Ty.F32VEC : Ty.F64VEC;
+			case LispNames.VEC_MATVEC_INTO -> args.size() > 1 && argTys[1] == Ty.F32VEC ? Ty.F32VEC : Ty.F64VEC;
 			case LispNames.VEC_LENGTH -> Ty.INT;
 			default -> Ty.FLOAT; // aref, aset, sum, mean, dot, norm
 		};
@@ -2692,6 +2880,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_CLIP_INTO -> compileSimdClip(args, fn, true, "vec:clip-into");
 			case LispNames.VEC_SUM -> compileSimdSum(args, fn);
 			case LispNames.VEC_DOT -> compileSimdDot(args, fn);
+			case LispNames.VEC_MATVEC -> compileSimdMatvec(args, fn, false);
+			case LispNames.VEC_MATVEC_INTO -> compileSimdMatvec(args, fn, true);
 			// mean and norm are composites over sum/dot/length -- expand and recompile so
 			// there is one definition (also matching what the portable vec.lisp does).
 			case LispNames.VEC_MEAN -> compileExpr(simdMeanExpansion(args, fn), fn);
@@ -3146,6 +3336,134 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int sum = fn.allocLocal(Ty.FLOAT);
 		WasmVecLoops.simdDot(w, ap, bp, count, rem, -1, acc, sum, false);
 		return Ty.FLOAT;
+	}
+
+	// (vec:matvec w x) / (vec:matvec-into out w x): GEMV -- y[i] = dot(row i of W, x)
+	// over a rank-2 packed matrix (F64MAT/F32MAT, todo 99) into a rank-1 vector of
+	// length d (fresh, or the caller's destination). One dot kernel run per row: the row
+	// cursor ap restarts at the row pointer rp and the x cursor bp at x's data base each
+	// iteration (the dot emitters clobber their pointer locals), rp advancing by cols
+	// elements per row. Under --simd the per-row dot is the same f64x2/f32x4 lane loop
+	// vec:dot uses (WasmVecLoops.simdDot: an f32 row accumulates in f32 lanes and
+	// promotes once -- the todo-106 single-precision reduction contract); without it the
+	// v128-free scalar loop (WasmVecLoops.scalarDot), so the module stays MVP-clean.
+	// Widths may not mix: x (and out) must be the same width as W, the vec: fail-fast
+	// rule (compileCoerced turns a mismatch into the incompatible-types error). Like the
+	// other backends' matvec-into, out must alias NEITHER x nor w (each output element
+	// folds over all of x) -- checked at runtime by pointer equality, trapping with
+	// `unreachable` (this backend has no error channel), the analog of wasm-GC's ref.eq
+	// trap.
+	private Ty compileSimdMatvec(List<LispVal> args, Fn fn, boolean into) {
+		String what = into ? "vec:matvec-into" : "vec:matvec";
+		requireArgc(args, into ? 4 : 3, what, fn);
+		LispVal wArg = args.get(into ? 2 : 1);
+		Ty matTy = staticType(wArg, fn);
+		if (matTy != Ty.F64MAT && matTy != Ty.F32MAT) {
+			throw new UnsupportedOperationException("--no-gc: " + what + " in function '" + fn.fnName
+					+ "' needs a rank-2 packed matrix W; build it with (make-array (list d n) :element-type ...)");
+		}
+		boolean single = matTy == Ty.F32MAT;
+		Ty vecTy = single ? Ty.F32VEC : Ty.F64VEC;
+		WasmWriter w = fn.writer;
+		// -into evaluates the destination first (it is argument 1), then W and x.
+		int dstL = into ? compileVecArg(args.get(1), fn, vecTy) : -1;
+		int wl = compileVecArg(wArg, fn, matTy);
+		int xl = compileVecArg(args.get(into ? 3 : 2), fn, vecTy);
+		int d = fn.allocLocal(Ty.F64VEC); // i32 row count (rows header word)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(d);
+		int cols = fn.allocLocal(Ty.F64VEC); // i32 column count (cols header word)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(cols);
+		if (into) {
+			// if (out == x || out == w) trap: the aliasing the other backends reject with
+			// an error would silently corrupt the GEMV here.
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dstL);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(xl);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dstL);
+			w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_OR);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+		}
+		int dst = into ? dstL : allocVec(fn, d, vecTy);
+		int rp = fn.allocLocal(Ty.F64VEC); // current row's data pointer
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rp);
+		int xp = fn.allocLocal(Ty.F64VEC); // x's data base (never advanced)
+		dataPtr(w, xl, xp);
+		int dp = fn.allocLocal(Ty.F64VEC); // output element pointer
+		dataPtr(w, dst, dp);
+		int ap = fn.allocLocal(Ty.F64VEC); // per-row cursors the dot emitters clobber
+		int bp = fn.allocLocal(Ty.F64VEC);
+		int rem = fn.allocLocal(Ty.F64VEC);
+		int trem = -1;
+		int acc = -1;
+		int sum;
+		if (this.simd) {
+			trem = single ? fn.allocLocal(Ty.F64VEC) : -1;
+			acc = fn.allocV128Local();
+			sum = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
+		}
+		else {
+			sum = single ? fn.allocF32Local() : fn.allocLocal(Ty.FLOAT);
+		}
+		int rowVal = fn.allocLocal(Ty.FLOAT); // the row's dot result (f64 boundary)
+		int i = fn.allocLocal(Ty.F64VEC); // i32 row index
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(d);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rp);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ap);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(xp);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bp);
+		if (this.simd) {
+			WasmVecLoops.splatZero(w, acc, single);
+			WasmVecLoops.simdDot(w, ap, bp, cols, rem, trem, acc, sum, single);
+		}
+		else {
+			WasmVecLoops.scalarDot(w, ap, bp, cols, rem, sum, single);
+		}
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rowVal);
+		// dst[i] = rowVal (narrowed on a f32 output, like aset)
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rowVal);
+		if (single) {
+			w.write(Instruction.F32_DEMOTE_F64);
+			w.write(Instruction.F32_STORE, 0x00, 0x00);
+		}
+		else {
+			w.write(Instruction.F64_STORE, 0x00, 0x00);
+		}
+		// rp += cols << shift (the next row); dp += one element
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rp);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rp);
+		WasmVecLoops.advancePtr(w, dp, single ? 4 : 8);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		return vecTy;
 	}
 
 	// --- f32x4 (single-float) SIMD kernels ---------------------------------------------
@@ -3811,15 +4129,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// make-array's argument list mixes a dimension expression with :keyword literals (the
 	// :element-type quote, keyword symbols), so only the runtime sub-expressions are
-	// collected: the dimension (unless it is a quoted '(n) literal) and the
-	// :initial-element
-	// value. The other keywords are validated later in compileMakeArray.
+	// collected: the per-dimension expressions (unless the spec is a quoted '(d n)
+	// literal, whose elements are plain data; a (list d n) form's elements ARE walked,
+	// but never the `list` head itself) and the :initial-element value. The other
+	// keywords are validated later in compileMakeArray.
 	private void collectMakeArray(List<LispVal> args, Set<String> bound, Map<String, Defun> defuns, Set<String> callees,
 			String fnName) {
 		if (args.size() >= 2) {
 			LispVal dims = args.get(1);
 			if (!(dims instanceof LispCons c && c.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name()))) {
-				collectCalls(dims, bound, defuns, callees, fnName);
+				for (LispVal dim : dimExprs(dims)) {
+					collectCalls(dim, bound, defuns, callees, fnName);
+				}
 			}
 		}
 		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);

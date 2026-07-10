@@ -65,8 +65,9 @@ composition, so NaN -> lo and inverted bounds -> hi), `sum`/
 `dot`/`mean`/`norm` (reductions, scalar), `matvec` (GEMV — a rank-2 matrix × a rank-1
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
-lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` needs a
-rank-2 matrix, so it is a `--no-gc` compile error too. `(setf (vec:aref v i) x)` →
+lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` runs on
+`--no-gc` too since todo-99, over the rank-2 packed matrix block (see layer 2 below).
+`(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 
 ## Destination-passing `-into` kernels (todo-103)
@@ -118,7 +119,9 @@ not compile under `--no-gc` at all).
   `boolean into` through `compileSimd/ScalarElementwise{,F32}` and
   `compileSimd/ScalarScale{,F32}`: `-into` skips `allocVec` and uses the caller's block as
   `dp` (via the new `compileVecArg`/`loadVecCount` helpers), so the loop bodies are literally
-  unchanged. `matvec-into` joins `matvec` in `SIMD_UNSUPPORTED_NO_GC` (rank-1 blocks only).
+  unchanged. `matvec-into` works on `--no-gc` since todo-99 (`compileSimdMatvec` with
+  `into`); its out-aliases-x/w guard there is a runtime pointer-equality `unreachable` trap
+  (no error channel on the scalar backend), the analog of wasm-GC's `ref.eq` trap.
 - **Measured** (`--no-gc --simd`, 12000 accumulations over a 65536-element vector, macOS
   `/usr/bin/time -l`): `vec:add-into` peaks at 13.7 MB and returns 12000; `vec:add` peaks at
   4.31 GB and then traps (`memory.grow` fails, so the store goes out of bounds). This is the
@@ -400,10 +403,21 @@ passes: `collectCalls` (eligibility: `requireKnownSimd` + walk-args), `typeOf`/`
 `INT`, else `FLOAT`; UNCHANGED by `--simd`, so inference matches either lowering), and
 `compileCall`/`compileSimd`. In v128 mode each kernel branches on the operand's inferred
 width (`packedVecType`): `F64VEC` → the byte-identical `f64x2` path, `F32VEC` → the `f32x4`
-sibling. **`matvec` (GEMV) is the one `vec:` member `--no-gc` rejects** (both modes) — a
-`--no-gc` packed vector is a rank-1 `[count][f...]` linear block with no rank-2 layout to
-read rows from, so `requireKnownSimd` throws via `SIMD_UNSUPPORTED_NO_GC` with a clear error
-pointing to the JVM `--simd` (or interpreter/JVM/wasm-GC scalar) path.
+sibling. **`matvec`/`matvec-into` (GEMV) run here too since todo-99**, over a rank-2 packed
+matrix block: `Ty.F64MAT`/`F32MAT` is a distinct pointer kind to a
+`[rows:i32][cols:i32][rows*cols f... row-major]` header (the dims live in the block because
+this backend has no GC struct to carry them; the rank-1 `[count][data]` layout is untouched,
+byte-identically). A rank-2 `make-array` (`(list d n)` or `'(d n)`, parsed by `dimExprs`)
+builds it via `compileMakeMatrix`; two-subscript `aref`/`%aset` and flat
+`row-major-aref`/`%row-major-aset` index it (`emitMatElementAddr`); rank-2 literals and
+rank >= 3 stay clear compile errors, as do `length`/`vec:length` on a matrix (type error).
+`compileSimdMatvec` runs one dot per row — `WasmVecLoops.simdDot` under `--simd`
+(f64x2/f32x4, the f32 row accumulating in f32 lanes per the todo-106 contract),
+`WasmVecLoops.scalarDot` without (no `0xFD`) — restarting the row cursor from a maintained
+row pointer each iteration (the dot emitters clobber their pointer locals). The result is a
+fresh rank-1 vector of length `rows` in W's width; x (and out) must match W's width
+(mismatch = the incompatible-types error). `matvec-into` skips the `allocVec` and traps
+(`unreachable`, pointer equality) when out aliases x or w.
 
 - **Scalar (no `--simd`, the DEFAULT):** the four vectorizable kernels early-return to
   `compileScalar{Elementwise,Scale,Sum,Dot}`, which set up the same block (arg eval +
@@ -534,8 +548,9 @@ Mechanics:
   sentinel group bounds the final `base+k+1` (`floor(x) + ceil(y) <= ceil(x+y)` puts the max
   index exactly at the sentinel), and the last row group's lanes that OVERHANG into the next
   row are multiplied by `x`'s **zero padding**, so they contribute nothing — the same zero
-  invariant that removes the tail everywhere else. `--no-gc` still cannot do `matvec` (its
-  packed block is rank-1 only). `matvec-into`'s destination may alias NEITHER `x` (each output
+  invariant that removes the tail everywhere else. (`--no-gc` needs none of this: since
+  todo-99 its `matvec` walks a raw row pointer over the rank-2 packed block and keeps its
+  scalar tail — see layer 2.) `matvec-into`'s destination may alias NEITHER `x` (each output
   element folds over all of it) NOR `W` (the row windows keep reading it), so the kernel
   `ref.eq`-traps against both -- matching `vec.lisp`, `JvmSimdVectorTemplate` and `VecSimd`, all
   three of which reject both. (todo-101 guarded only `x`; an adversarial review of todo-105 caught
@@ -752,11 +767,11 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
   `ijk` triple loop as **`ikj`** makes `b`'s rows contiguous AND preserves the summation order, so
   the result is bit-identical rather than merely close. See `.kb/linalg-simd.md`. `vec:matvec`
   (GEMV) is still the mat×vec case llama2's single-token decode needs.
-- `--no-gc` native `f32x4` GEMV: `matvec` is a `--no-gc` compile error today (no rank-2
-  block layout); a native kernel would need explicit dims or a rank-2 `--no-gc` layout.
-  wasm-GC `--simd` already ships GEMV (its `$farray` carries dims), and `.todo/99` should
-  now reuse `WasmVecLoops.simdDot` + the per-row cursor walk from
-  `WasmVecSimdRuntimeBuilder.emitMatvecRows`.
+- `--no-gc` GEMV is **DONE** (`.todo/99`, 2026-07-10): the rank-2 packed matrix block
+  (`F64MAT`/`F32MAT`, `[rows][cols][data]`) + `compileSimdMatvec` driving
+  `WasmVecLoops.simdDot`/`scalarDot` once per row — see layer 2 above. Still out of scope
+  there: rank-2 `#d`/`#f` literals, rank >= 3, `array-dimensions`/`array-dimension` on the
+  matrix (the former needs cons lists), and general (non-packed) rank-2 arrays.
 - A stories15M-scale llama2 demo with real weights. `examples/ml/tiny-llm.lisp` (registered
   2026-07-09) is the real-transformer payoff at toy scale — a 2-layer decoder, 13 GEMVs per
   forward pass, deterministic token ids; what is left is a tokenizer and a weight loader.

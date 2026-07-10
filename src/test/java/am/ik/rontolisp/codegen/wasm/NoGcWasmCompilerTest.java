@@ -620,13 +620,43 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void rank2MakeArrayIsAClearCompileError() {
+	void rank3MakeArrayIsAClearCompileError() {
+		// Rank-2 became the packed matrix layout (todo 99); rank >= 3 still has no packed
+		// layout on this backend.
 		assertThatThrownBy(() -> compile("""
-				(defun f () (aref (make-array '(2 3) :element-type 'double-float) 0))
+				(defun f () (aref (make-array '(2 3 4) :element-type 'double-float) 0))
 				(rontolisp:wasm-export 'f :params '() :returns :float)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rank-2 make-array")
-			.hasMessageContaining("only a rank-1");
+			.hasMessageContaining("rank-3 make-array")
+			.hasMessageContaining("rank-1 (a vector) or rank-2 (a matrix)");
+	}
+
+	@Test
+	void rank2MakeArrayCompilesToThePackedMatrixLayout() {
+		// (make-array (list d n)) builds the [rows][cols][data] packed matrix (todo 99):
+		// two-subscript aref/setf and a flat row-major-aref compile to a plain scalar
+		// module -- linear memory, scalar func types only, no 0xFD SIMD opcode.
+		byte[] module = compile("""
+				(defun f (d)
+				  (let ((w (make-array (list d 3) :element-type 'double-float :initial-element 1.0)))
+				    (setf (aref w 1 2) 5.0)
+				    (+ (aref w 1 2) (row-major-aref w 5))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(sections.get(5)).as("memory section (the matrix lives in linear memory)").isNotNull();
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the scalar module").isFalse();
+		// A quoted literal dimension list builds the same layout (the single-float width
+		// included).
+		byte[] quoted = compile("""
+				(defun f ()
+				  (let ((w (make-array '(2 3) :element-type 'single-float :initial-element 2.0)))
+				    (aref w 1 1)))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""");
+		assertScalarFuncTypes(Objects.requireNonNull(sections(quoted).get(1)));
 	}
 
 	@Test
@@ -1077,13 +1107,93 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void matvecIntoIsAClearCompileErrorLikeMatvec() {
+	void matvecOnARankOneVectorIsAClearCompileError() {
+		// matvec is GEMV over a rank-2 packed matrix (todo 99); passing a rank-1 vector
+		// as W is a clear error, for matvec and matvec-into alike.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (vec:sum (vec:matvec (vec:zeros n) (vec:zeros n))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("vec:matvec")
+			.hasMessageContaining("rank-2 packed matrix");
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("vec:matvec-into")
-			.hasMessageContaining("rank-1 only");
+			.hasMessageContaining("rank-2 packed matrix");
+	}
+
+	@Test
+	void matvecEmitsPerRowV128DotUnderSimdAndScalarLoopsByDefault() {
+		// The GEMV kernel (todo 99) runs one dot per matrix row: under --simd the same
+		// f64x2 lane loop vec:dot uses (splat accumulator 0xFD 0x14, lane multiply 0xFD
+		// 0xF2 (LEB 0xF2 0x01), horizontal extract_lane 0xFD 0x21); without --simd a
+		// v128-free scalar loop, so the module stays MVP-clean.
+		String doubles = """
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'double-float :initial-element 1.0))
+				        (x (vec:ones n)))
+				    (vec:aref (vec:matvec w x) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		byte[] scalar = Objects.requireNonNull(sections(compile(doubles)).get(10));
+		assertThat(containsSequence(scalar, 0xFD)).as("no SIMD prefix in the scalar matvec lowering").isFalse();
+		byte[] simd = Objects.requireNonNull(sections(compileSimd(doubles)).get(10));
+		assertThat(containsSequence(simd, 0xFD, 0x14)).as("f64x2.splat (per-row accumulator)").isTrue();
+		assertThat(containsSequence(simd, 0xFD, 0xF2, 0x01)).as("f64x2.mul (lane multiply-accumulate)").isTrue();
+		assertThat(containsSequence(simd, 0xFD, 0x21)).as("f64x2.extract_lane (horizontal fold)").isTrue();
+		// A single-float matrix drives the f32x4 dot (four lanes) at the f32 stride.
+		String singles = """
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'single-float :initial-element 1.0))
+				        (x (vec:ones n 'single-float)))
+				    (vec:aref (vec:matvec w x) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		byte[] simdF = Objects.requireNonNull(sections(compileSimd(singles)).get(10));
+		assertThat(containsSequence(simdF, 0xFD, 0x13)).as("f32x4.splat (per-row accumulator)").isTrue();
+		assertThat(containsSequence(simdF, 0xFD, 0xE6, 0x01)).as("f32x4.mul (lane multiply-accumulate)").isTrue();
+		assertThat(containsSequence(simdF, 0xFD, 0x1F)).as("f32x4.extract_lane (horizontal fold)").isTrue();
+		assertThat(containsSequence(Objects.requireNonNull(sections(compile(singles)).get(10)), 0xFD))
+			.as("no SIMD prefix in the scalar single-float matvec lowering")
+			.isFalse();
+	}
+
+	@Test
+	void matvecIntoSkipsTheBumpAllocatorAndGuardsAliasing() {
+		// matvec-into writes into the caller's vector: only the matrix + the two
+		// constructors allocate. Its out-aliases-x/w guard is a runtime pointer-equality
+		// trap (i32.or; if; unreachable), the --no-gc analog of the other backends'
+		// error / ref.eq trap -- out MUST NOT alias x or w (each output element folds
+		// over all of x).
+		byte[] module = compile("""
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'double-float :initial-element 1.0))
+				        (x (vec:ones n))
+				        (o (vec:zeros n)))
+				    (vec:matvec-into o w x)
+				    (vec:sum o)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""");
+		assertThat(allocCallCount(module)).as("the matrix + two constructors allocate; matvec-into does not")
+			.isEqualTo(3);
+		byte[] code = Objects.requireNonNull(sections(module).get(10));
+		assertThat(containsSequence(code, 0x72, 0x04, 0x40, 0x00)).as("i32.or; if; unreachable alias trap").isTrue();
+	}
+
+	@Test
+	void matvecWidthMismatchIsATypeError() {
+		// x (and out) must be the same width as W -- the vec: fail-fast rule; a f32
+		// matrix against a f64 vector is the incompatible-types error, not a silent
+		// widening.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'single-float :initial-element 1.0))
+				        (x (vec:ones n)))
+				    (vec:aref (vec:matvec w x) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("incompatible types");
 	}
 
 	/**
