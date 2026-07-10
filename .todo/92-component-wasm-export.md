@@ -1,6 +1,77 @@
 # 92. Host-callable `wasm-export` under `--component` (WASI 0.3 component exports)
 
-## STATUS: Tier 1 DONE (2026-07-11); Tier 2/3 remain
+## STATUS: Tiers 1+2 DONE (2026-07-11); Tier 3 remains
+
+Tier 2 (`:string`/`:s-expr` via the canonical string ABI) is implemented and
+verified -- same UX as todo-93 Tier 2, just with the GC flags:
+`(rontolisp:wasm-export 'greet :params '(:string) :returns :string)` becomes
+`func(p0: string) -> string` and `wasmtime run -W gc=y
+-W component-model-more-async-builtins=y --invoke 'greet("世界")' comp.wasm`
+round-trips the string.
+
+- **Memory identity** (open decision resolved): the GC component's lift uses
+  `(memory 0)` = the shared mem.wasm memory aliased at build start -- the SAME
+  instance the rontolisp core imports (`(import "mem" "memory")`), so the
+  wrapper's `(ptr,len)` and the host-lowered argument bytes share one address
+  space. Confirmed on `wasm-tools print` of a built component.
+- **cabi_realloc** (resolved): mem.wasm's own `cabi_realloc` (core func 0) was
+  NOT reused for the lift -- its bump pointer `$hp` is a private global in the
+  base blob (only mem-http.wat exports `hp`, for the serve reset), so a
+  post-return could never rewind it (would need blob regen), and it has no
+  grow guard. Instead `WasmLispCompiler` appends a `cabi_realloc` to the core
+  module itself that delegates to the existing grow-guarded `__ronto_alloc`
+  (host-lowered argument bytes land in the core's own bump heap) and is
+  core-exported + aliased from instance 3 by `appendFuncExports`.
+- **Retptr shim** (resolved): appended to the core module (todo-93 pattern; no
+  separate core module needed). GC-specific twist: the record is allocated
+  through `cabi_realloc` BEFORE the wrapper call -- the GC wrapper stages its
+  string result at the un-advanced `HEAP_PTR` scratch (`emitStringResult`), so
+  allocating the 8-byte record after the call would overwrite the staged
+  bytes. `MAX_FLAT_RESULTS = 1` applies identically to GC.
+- **Heap reclamation** (resolved): todo-93's "pop to heapBase" is impossible on
+  GC (permanent intern advances + cross-call state), so the post-return is a
+  **per-call saved-mark restore, intern-count-guarded** (the serve-reset
+  pattern): the appended `cabi_realloc` snapshots `HEAP_PTR` + the runtime
+  intern count into the `CABI_MARK_ACTIVE/HEAP/INTERN` cells (160/164/168,
+  zero-initialized = inactive) on its FIRST call of an invocation; `cabi_post_*`
+  restores `HEAP_PTR` only when the intern count is unchanged (interned tokens
+  are permanent heap copies referenced in place -- popping them would dangle
+  the intern records), then clears the mark. A call that interns simply keeps
+  its allocations (ratchet; correctness verified on a resident jco instance
+  mixing `intern` + `:s-expr` reads). Measured flat: jco/Node 23 (JSPI),
+  10k calls with a 100KB `:string` argument = +28MB RSS total (V8-side noise);
+  an unfreed linear heap would be ~1GB. 1M small calls: RSS 69->79MB,
+  JS heapUsed flat at 6MB.
+- **`:s-expr` included** (resolved): lifts as WIT `string` carrying the printed
+  s-expression; rides the exact same ABI (`componentPostReturnKind` maps it to
+  the i32 retptr kind). The only extra wiring was un-gating `exportNeedsReader`
+  for component non-serve (`WasmLispCompiler`) and `componentValType(T_S_EXPR)
+  -> VT_STRING`. Verified: `swap("(1 2)")` -> `"(2 1)"`, `sum-expr("(40 2)")`
+  -> 42, including on a resident jco instance (per-call reader interning
+  ratchets, stays correct).
+- **Index bases** (resolved): the fixed `appendFuncExports` bases (23/24/12,
+  http 53/46/33, sock 34/31/19) are unchanged; when a string export is present
+  the realloc + post-return aliases are inserted BEFORE the per-export aliases
+  (core-func space only; types/lifts/exports stay 1:1 with the export
+  ordinal). Existing Tier-1 tests needed no changes.
+- Byte-identity proven by stash dance across NINE artifact shapes: export-free
+  base/http/sock/serve components + Preview 1, scalar-export-only component +
+  Preview 1, `--no-gc --component` `:string` (todo 93 untouched), Preview 1
+  `:string` module.
+- Verified: wasmtime 46.0.1 `--invoke` for `:string`->`:int`,
+  `:string`->`:string` (UTF-8 multi-byte 世界), no-arg -> `:string`,
+  `:string`->void, `:s-expr` both ways, 120KB string round trip (memory.grow
+  path), co-existence with `run`; http (fetch) and sock variants with a
+  `:string` export validate under `wasm-tools validate`; jco 1.25.2 transpile
+  + Node 23 (`--experimental-wasm-jspi`, JSPI needed for the stackful-async
+  `run` lift, Node 22 lacks it) string round trip.
+- Tests: `WasmExportCompilerTest` (structural: string ABI helpers appear for a
+  :string export, absent otherwise; post-return sharing per signature),
+  `WasmLispCompilerIntegrationTest` (WAVE E2E incl. UTF-8 + `:s-expr` + run
+  co-existence), ci-spec `wasm-export-directive-does-not-disturb-run` extended
+  with a `:string` export.
+
+Remaining: Tier 3 (async-lifted I/O exports + generated `.wit`), below.
 
 Tier 1 (scalar `:int`/`:float`/`:bool`/void, synchronous `canonLift`) is
 implemented and verified:
@@ -33,9 +104,6 @@ implemented and verified:
   uninitialized globals (traps on the null deref) -- same as Preview 1
   `--invoke`; documented.
 
-Remaining: Tier 2 (`:string`/`:s-expr` via canonical string/list lift over
-mem.wasm's realloc + threading `exportNeedsReader` into the component path) and
-Tier 3 (async-lifted I/O exports + generated `.wit`), below.
 
 ## Goal
 
@@ -112,17 +180,17 @@ Caveat to verify: whether the export is callable without `_start`/init having
 run (state init). Pure-compute scalar exports should be fine; if globals need
 seeding, prefer the reactor `_initialize` shape.
 
-## Tier 2 -- string / s-expr exports (the real cost)
+## Tier 2 -- string / s-expr exports (DONE 2026-07-11; see the STATUS record)
 
-`:string`/`:s-expr` cross core as `(ptr, len)`; component `string`/`list<u8>`
-needs canonical lift/lower:
+Original sketch, kept for history. Note the plan's "use mem.wasm's
+`cabi_realloc`" idea was rejected during implementation (un-resettable `$hp`,
+no grow guard) in favor of a core-appended realloc over `__ronto_alloc`.
 
-- Use the memory + `cabi_realloc` already exported by `mem.wasm`; lift/lower via
-  the `canonLower...Utf8` / a `canonLift...Utf8` counterpart.
+- `:string`/`:s-expr` cross core as `(ptr, len)`; component `string` needs the
+  canonical lift options (memory/realloc/utf8/post-return).
 - rontolisp strings are quote-framed bytes / GC strings, so the
-  reader/printer bridge (the `exportNeedsReader` path at
-  `WasmLispCompiler.java:845`) must be threaded into the component path too.
-- Medium effort.
+  reader/printer bridge (the `exportNeedsReader` path) is threaded into the
+  component path too.
 
 ## Tier 3 -- async I/O exports + WIT output
 

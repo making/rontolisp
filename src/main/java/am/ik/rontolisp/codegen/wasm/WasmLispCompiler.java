@@ -779,6 +779,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// -- see FUNC_STR_FRESH). This is what retires the linear string heap leak.
 	static final int STRING_ID_CTR_ADDR = 156;
 
+	// Per-call snapshot cells for the --component canonical string ABI (todo 92 Tier 2):
+	// the appended cabi_realloc saves HEAP_PTR + the runtime intern count on its first
+	// call of an export invocation (ACTIVE flag), and the cabi_post_* post-return
+	// restores HEAP_PTR when the intern count is unchanged (interned tokens are permanent
+	// heap copies that must survive -- same guard as the serve adapter's per-request
+	// reset). Zero-initialized memory means "no mark active"; no data segment needed.
+	static final int CABI_MARK_ACTIVE_ADDR = 160;
+
+	static final int CABI_MARK_HEAP_ADDR = 164;
+
+	static final int CABI_MARK_INTERN_ADDR = 168;
+
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
@@ -976,7 +988,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
-		boolean exportNeedsReader = (!this.component)
+		// Applies to Preview 1 / no-wasi and (since todo 92 Tier 2) component non-serve;
+		// serve mode's synthetic %http-dispatch export is :string-only.
+		boolean exportNeedsReader = !(this.component && this.serve)
 				&& exportDecls.stream().anyMatch(d -> d.paramTypes().contains(WasmExportCompiler.T_S_EXPR));
 		// An :s-expr import result likewise parses host-provided text at runtime.
 		boolean importNeedsReader = importDecls.stream().anyMatch(WasmImportCompiler::needsReader);
@@ -1290,9 +1304,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<byte[]> exportBodies = new ArrayList<>();
 		// Memory-backed exports (:string/:s-expr) need two appended helper functions: the
 		// host-facing bump allocator __ronto_alloc and the _str_from_mem string builder.
-		// They precede the wrappers so the fixed FUNC_* constants are unaffected.
-		boolean exportUsesMemory = (!this.component || this.serve)
-				&& exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
+		// They precede the wrappers so the fixed FUNC_* constants are unaffected. In
+		// component (non-serve) mode the host reaches __ronto_alloc through the appended
+		// cabi_realloc instead of calling it directly (todo 92 Tier 2).
+		boolean exportUsesMemory = exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
 		int exportHelperBase = userFuncBase() + numDefuns + numLambdas;
 		// A :string import result is written into linear memory by the host and boxed
 		// with the same _str_from_mem helper, so it forces the helper pair on too.
@@ -1318,16 +1333,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					throw new UnsupportedOperationException("rontolisp:wasm-export :long requires --no-gc for '"
 							+ decl.name() + "' (the GC backend represents integers as i31ref, not i64; use :int)");
 				}
-				// Component-model exports (non-serve --component) are Tier 1: scalar
-				// types only, lifted synchronously with no canonical memory. The
-				// memory-backed (ptr,len) designators need a canonical string/list lift
-				// (Tier 2, .todo/92).
+				// Component-model exports (non-serve --component): scalars lift
+				// synchronously with no canonical options; :string/:s-expr lift through
+				// the canonical string ABI over the appended cabi_realloc / post-return
+				// / retptr-shim helpers (todo 92 Tier 2).
 				if (this.component && !this.serve) {
-					if (WasmExportCompiler.usesMemory(decl)) {
-						throw new UnsupportedOperationException("rontolisp:wasm-export :string/:s-expr is not yet"
-								+ " supported with --component for '" + decl.name()
-								+ "' (component exports are scalar-only: :int/:float/:bool/:void)");
-					}
 					if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
 						throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 								+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
@@ -1377,6 +1387,42 @@ public final class WasmLispCompiler implements LispCompiler {
 				exportPlans.add(new ExportPlan(decl, target.funcIndex(), wrapperTypeIndex++, wrapperFuncIndex++));
 			}
 		}
+
+		// Canonical string ABI for --component :string/:s-expr exports (todo 92 Tier 2):
+		// cabi_realloc (the host lowers string arguments through it; delegates to
+		// __ronto_alloc and snapshots the CABI_MARK_* cells), one retptr shim per
+		// :string/:s-expr-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
+		// function returns a single i32 pointing at an 8-byte (ptr,len) record instead of
+		// the wrapper's two values), and one cabi_post_* post-return per flat-result
+		// signature (pops the bump heap to the snapshot once the host has copied the
+		// results out, intern-count-guarded). All appended after every existing function
+		// -- no index shifts -- and emitted ONLY under component (non-serve) with a
+		// memory-typed export, so scalar-only components stay byte-identical to Tier 1.
+		boolean componentStringAbi = this.component && !this.serve
+				&& exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
+		List<ExportPlan> retptrShimPlans = new ArrayList<>();
+		// kind -> the post-return's single flat-result core type (null = void result).
+		LinkedHashMap<String, @org.jspecify.annotations.Nullable Type> componentPostKinds = new LinkedHashMap<>();
+		if (componentStringAbi) {
+			for (ExportPlan p : exportPlans) {
+				if (WasmExportCompiler.returnsMemory(p.decl())) {
+					retptrShimPlans.add(p);
+				}
+				if (WasmExportCompiler.usesMemory(p.decl())) {
+					componentPostKinds.putIfAbsent(WasmExportCompiler.componentPostReturnKind(p.decl()),
+							switch (WasmExportCompiler.componentPostReturnKind(p.decl())) {
+								case "f64" -> Type.F64;
+								case "void" -> null;
+								default -> Type.I32;
+							});
+				}
+			}
+		}
+		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size();
+		int abiFuncBase = exportHelperBase + (memoryHelpers ? 2 : 0) + exportPlans.size();
+		int cabiReallocFuncIndex = abiFuncBase;
+		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
+		int retptrShimFuncBase = cabiPostFuncBase + componentPostKinds.size();
 
 		// Host-ABI type entries for the imported functions follow the export wrapper
 		// types; the WasmImportInjector post-pass prepends the matching import entries
@@ -1852,6 +1898,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 					types.addFunc(WasmImportCompiler.hostParamTypes(decl), WasmImportCompiler.hostResultTypes(decl));
 				}
+				// Component string-ABI signatures (todo 92 Tier 2), from abiTypeBase:
+				// cabi_realloc, one cabi_post_* per flat-result signature, then one
+				// retptr shim per :string/:s-expr-returning export (the wrapper's
+				// params, a single i32 return pointer).
+				if (componentStringAbi) {
+					types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
+					for (Type flat : componentPostKinds.values()) {
+						types.addFunc(flat == null ? new Type[0] : new Type[] { flat }, new Type[0]);
+					}
+					for (ExportPlan p : retptrShimPlans) {
+						types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()), new Type[] { Type.I32 });
+					}
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -2097,6 +2156,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (ExportPlan p : exportPlans) {
 					fnDef.addFunction(p.typeIndex());
 				}
+				// Component string-ABI functions (todo 92 Tier 2): cabi_realloc, the
+				// cabi_post_* post-returns, then the retptr shims, matching abiTypeBase.
+				if (componentStringAbi) {
+					int abiType = abiTypeBase;
+					fnDef.addFunction(abiType++);
+					for (int k = 0; k < componentPostKinds.size(); k++) {
+						fnDef.addFunction(abiType++);
+					}
+					for (int k = 0; k < retptrShimPlans.size(); k++) {
+						fnDef.addFunction(abiType++);
+					}
+				}
 			})
 			// Memory section -- in component mode the memory is imported (above), so this
 			// section is empty. 4 pages so getenv can place the environ buffer in page 3
@@ -2161,9 +2232,23 @@ public final class WasmLispCompiler implements LispCompiler {
 					// Core-export each (rontolisp:wasm-export ...) wrapper: in serve mode
 					// the serve adapter calls %http-dispatch through it; otherwise the
 					// component wrapper (WasmComponentBuilder) aliases it and lifts it
-					// into a host-callable component-model export.
+					// into a host-callable component-model export. A :string/:s-expr-
+					// returning export is exported as its retptr shim (the two-value
+					// wrapper stays reachable through the shim's call but is not itself
+					// an export).
 					for (ExportPlan p : exportPlans) {
-						exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION, p.funcIndex());
+						int shim = retptrShimPlans.indexOf(p);
+						exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION,
+								shim >= 0 ? retptrShimFuncBase + shim : p.funcIndex());
+					}
+					// The canonical string ABI helpers the component wrap aliases.
+					if (componentStringAbi) {
+						exports.addExport(WasmExportCompiler.CABI_REALLOC, ExternalKind.FUNCTION, cabiReallocFuncIndex);
+						int k = 0;
+						for (String kind : componentPostKinds.keySet()) {
+							exports.addExport(WasmExportCompiler.cabiPostExportName(kind), ExternalKind.FUNCTION,
+									cabiPostFuncBase + k++);
+						}
 					}
 				}
 				else {
@@ -2345,6 +2430,20 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (byte[] body : exportBodies) {
 					code.addFunction(body);
 				}
+				// Component string-ABI bodies (todo 92 Tier 2), matching the function
+				// section: cabi_realloc, one cabi_post_* per flat-result signature
+				// (identical bodies; the flat params are ignored), then the retptr
+				// shims.
+				if (componentStringAbi) {
+					code.addFunction(WasmExportRuntimeBuilder.buildCabiReallocBody(allocFuncIndex));
+					for (int k = 0; k < componentPostKinds.size(); k++) {
+						code.addFunction(WasmExportRuntimeBuilder.buildCabiPostReturnBody());
+					}
+					for (ExportPlan p : retptrShimPlans) {
+						code.addFunction(WasmExportRuntimeBuilder.buildRetptrShimBody(p.funcIndex(),
+								cabiReallocFuncIndex, WasmExportCompiler.paramSlotCount(p.decl())));
+					}
+				}
 			})
 			// Data section
 			.writeDataSection(data -> {
@@ -2384,13 +2483,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
 				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport);
 			}
-			// Lift each scalar wasm-export wrapper into a host-callable component-model
-			// export (synchronous canon lift; WAVE-invokable) alongside wasi:cli/run.
-			List<WasmComponentBuilder.FuncExport> componentExports = new ArrayList<>();
+			// Lift each wasm-export into a host-callable component-model export
+			// (synchronous canon lift; WAVE-invokable) alongside wasi:cli/run. Scalar
+			// exports lift with no canonical options; :string/:s-expr ones with the
+			// canonical string options over the appended ABI helpers (todo 92 Tier 2).
+			List<WasmExportCompiler.Decl> componentExportDecls = new ArrayList<>();
 			for (ExportPlan p : exportPlans) {
-				componentExports.add(WasmExportCompiler.componentExport(p.decl()));
+				componentExportDecls.add(p.decl());
 			}
-			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExports);
+			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExportDecls);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}

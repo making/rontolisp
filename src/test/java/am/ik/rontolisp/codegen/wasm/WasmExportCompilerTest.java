@@ -206,26 +206,52 @@ class WasmExportCompilerTest {
 
 	@Test
 	void componentModeLiftsScalarExport() {
-		// A Tier-1 scalar export is core-exported, aliased and canonically lifted into a
-		// component-model export under its name (todo 92); no memory allocator appears.
+		// A scalar export is core-exported, aliased and canonically lifted into a
+		// component-model export under its name (todo 92); no memory allocator and none
+		// of the string-ABI helpers appear (cabi_realloc exists in every GC component --
+		// the shared mem module exports one -- so absence is pinned on cabi_post_).
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun sumsq (a b) (* (+ a b) (+ a b))) (rontolisp:wasm-export 'sumsq"
 					+ " :params '(:int :int) :returns :int) (print \"hi\")");
 		byte[] component = new WasmLispCompiler(false, true).compile(program);
 		assertThat(containsAscii(component, "sumsq")).isTrue();
 		assertThat(containsAscii(component, "__ronto_alloc")).isFalse();
+		assertThat(containsAscii(component, "cabi_post_")).isFalse();
 	}
 
 	@Test
-	void componentModeRejectsMemoryTypedExport() {
-		// :string/:s-expr cross the core boundary as (ptr,len); the canonical
-		// string/list lift is Tier 2 (.todo/92), so the compiler rejects them clearly.
+	void componentModeLiftsStringExportThroughCanonicalStringAbi() {
+		// A :string export (todo 92 Tier 2) appends the canonical string ABI helpers to
+		// the core module: the core's own cabi_realloc and the shared per-signature
+		// post-return (here cabi_post_i32 -- a :string result flattens to a single i32
+		// return pointer, so the shim's flat result and a :int result share one kind).
 		List<LispVal> program = LispReader
 			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
 					+ " :returns :string) (print \"hi\")");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true).compile(program))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining(":string/:s-expr is not yet supported with --component");
+		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		assertThat(containsAscii(component, "shout")).isTrue();
+		assertThat(containsAscii(component, "cabi_post_i32")).isTrue();
+	}
+
+	@Test
+	void componentModeStringExportKindsShareOnePostReturnPerSignature() {
+		// Post-returns are shared per flat-result signature: :string + :int returns both
+		// use cabi_post_i32, a :float return adds cabi_post_f64, a :void one
+		// cabi_post_void.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun echo (s) s)
+				(defun measure (s) (length s))
+				(defun ratio (s) 0.5)
+				(defun sink (s) nil)
+				(rontolisp:wasm-export 'echo :params '(:string) :returns :string)
+				(rontolisp:wasm-export 'measure :params '(:string) :returns :int)
+				(rontolisp:wasm-export 'ratio :params '(:string) :returns :float)
+				(rontolisp:wasm-export 'sink :params '(:string) :returns :void)
+				""");
+		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		assertThat(containsAscii(component, "cabi_post_i32")).isTrue();
+		assertThat(containsAscii(component, "cabi_post_f64")).isTrue();
+		assertThat(containsAscii(component, "cabi_post_void")).isTrue();
 	}
 
 	@Test

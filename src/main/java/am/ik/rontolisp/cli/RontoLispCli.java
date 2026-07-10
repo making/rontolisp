@@ -301,9 +301,10 @@ public final class RontoLispCli {
 		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
 		this.out.println("                     Lets sources that define functions via load compile as-is");
 		this.out.println("  --component        Emit a WASI 0.3 component (run with: wasmtime run)");
-		this.out.println("                     WASM only; print/stdin/file I/O work. Scalar (pure-compute)");
-		this.out.println("                     rontolisp:wasm-export functions become typed component");
-		this.out.println("                     exports, callable via wasmtime run --invoke 'name(args)'");
+		this.out.println("                     WASM only; print/stdin/file I/O work. Pure-compute");
+		this.out.println("                     rontolisp:wasm-export functions (incl. :string/:s-expr)");
+		this.out.println("                     become typed component exports, callable via");
+		this.out.println("                     wasmtime run --invoke 'name(args)'");
 		this.out.println("                     With --no-gc: a compact reactor component (typed exports");
 		this.out.println("                     incl. :long and :string; no WASI, no wasm-GC, no flags)");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");

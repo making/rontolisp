@@ -125,12 +125,12 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 
 Limitations:
 
-- Under `--component`, scalar exports (`:int`/`:float`/`:bool`/void — plus `:long`
-  and `:string` with `--no-gc`) become **typed component-model exports** — see
+- Under `--component`, exports become **typed component-model exports**
+  (`:int`/`:float`/`:bool`/void, `:string` → `string`, `:s-expr` → `string` on the GC
+  path, plus `:long` with `--no-gc`) — see
   [Component-model function exports](#component-model-function-exports-wasm-export)
   and [Compact component output](#compact-component-output---no-gc---component)
-  below. `:string` on the GC component path and `:s-expr` on both are not supported
-  yet (compile error). On the interpreter and JVM backends the directive is a no-op
+  below. On the interpreter and JVM backends the directive is a no-op
   (it just returns the named symbol), so the same source runs on every backend.
 - Only a top-level `defun` can be exported, the declared parameter count must match its
   arity, and functions that take or return function values are out of scope.
@@ -141,6 +141,28 @@ Limitations:
   imports satisfied; `wasmtime run` provides them automatically, and a browser host can
   supply no-op stubs for a pure-compute function. Add `--no-wasi`
   ([below](#no-wasi-reactor-mode)) to drop them.
+
+### Export Modes at a Glance
+
+The same `rontolisp:wasm-export` directive compiles into four different output shapes
+depending on the `--no-gc` / `--component` flags. What changes is the host contract,
+not the Lisp source:
+
+| | GC core module (default) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
+| --- | --- | --- | --- | --- |
+| Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y -W component-model-more-async-builtins=y`) or a component host with wasm-GC + JSPI | **any** WebAssembly engine | any component-model host, **no flags** |
+| Export shape | raw core function | typed component-model export (WAVE `--invoke`, jco) | raw core function | typed component-model export (WAVE `--invoke`, jco) |
+| Scalars | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long` (`i64`) | + `:long` (`s64`) |
+| `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
+| `:s-expr` | manual `(ptr,len)` | component-model `string` (printed text) | not supported | not supported |
+| Function body may use | the full language | the full language | the [non-GC subset](#eligible-subset) | the [non-GC subset](#eligible-subset) |
+| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | traps at runtime (synchronous lift) | `print` only (one `fd_write` import) | `print` is a compile error |
+| Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
+| Per-call string memory | host-managed (`__ronto_alloc`) | freed by the canonical post-return (intern-guarded snapshot) | host-managed (`__ronto_alloc` + the `__ronto_alloc_mark`/`__ronto_alloc_reset` arena API; automatic for scalar returns) | freed by the canonical post-return (pops to the heap base) |
+| Typical size | ~100 KB | ~110 KB | hundreds of bytes | hundreds of bytes |
+
+Rule of thumb: pick the column by host first (component host or plain engine), then by
+whether the function body needs the full language (GC) or fits the non-GC subset.
 
 ## Importing Host Functions
 
@@ -660,15 +682,33 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
 # 25    (the ordinary run export still works)
 ```
 
-The typed signature (`:int` → `s32`, `:float` → `f64`, `:bool` → `bool`, omitted
+The typed signature (`:int` → `s32`, `:float` → `f64`, `:bool` → `bool`, `:string` →
+`string`, `:s-expr` → `string` carrying the printed s-expression text, omitted
 `:returns` → no result) is visible to any component host, and `:as` renames the
-component export just like the core one. Current limitations of component exports:
+component export just like the core one.
 
-- **Scalar types only** (`:int`/`:float`/`:bool`/void). `:string`/`:s-expr` are a compile
-  error under `--component` for now (they cross the core boundary as pointer/length
-  pairs in linear memory, which the GC component lift does not carry yet; the
-  [compact `--no-gc` component](#compact-component-output---no-gc---component) does
-  lift `:string`).
+A `:string` boundary crosses as a real component-model `string` — no manual pointer
+handling on either side, the same UX as the
+[compact `--no-gc` component](#compact-component-output---no-gc---component). The host
+lowers the argument bytes into linear memory and reads the result back out through the
+canonical ABI, and the module frees the per-call allocations afterwards (a canonical
+*post-return* function pops the bump allocator), so a resident instance stays flat
+across repeated calls:
+
+```lisp
+;; greet.lisp
+(defun greet (s) (concatenate 'string "Hello, " s))
+(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+```
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("世界")' greet.wasm
+# "Hello, 世界"
+```
+
+Current limitations of component exports:
+
 - **Pure compute only**: the export is lifted synchronously, so I/O inside it (`print`,
   `read`, file access) traps at runtime with "cannot block a synchronous task". Keep
   side effects in the top level (`run`) and exports as pure functions.
@@ -680,8 +720,8 @@ component export just like the core one. Current limitations of component export
 
 For a pure-compute export kit, the compact
 [`--no-gc --component`](#compact-component-output---no-gc---component) variant emits the
-same typed exports (plus `:long` → `s64`) in a component of a few hundred bytes that
-needs no wasmtime flags at all.
+same typed exports (plus `:long` → `s64`, minus `:s-expr`) in a component of a few
+hundred bytes that needs no wasmtime flags at all.
 
 Notes and current limitations of component mode:
 

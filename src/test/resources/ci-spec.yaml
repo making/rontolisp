@@ -3654,10 +3654,14 @@ cases:
   - name: wasm-export-directive-does-not-disturb-run
     source: |
       (defun ci-sumsq (a b) (* (+ a b) (+ a b)))
+      (defun ci-shout (s) (concatenate 'string s "!"))
       (rontolisp:wasm-export 'ci-sumsq :params '(:int :int) :returns :int)
+      (rontolisp:wasm-export 'ci-shout :params '(:string) :returns :string)
       (print (ci-sumsq 2 3))
+      (print (ci-shout "ok"))
     expected: |
       25
+      "ok!"
   # rontolisp:with-arena (todo 104/110): a reclamation boundary the --no-gc WASM
   # backend lowers to a bump heap-pointer mark/body/reset; on the four standard
   # backends a real GC already reclaims, so it must be observationally a plain progn

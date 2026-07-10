@@ -369,10 +369,11 @@ final class WasmExportCompiler {
 
 	/**
 	 * Maps a type designator to its component-model primitive value type code for the
-	 * {@code --component} export path ({@code null} = no result). {@code :s-expr} is
-	 * rejected before this is reached; {@code :long} (s64) and {@code :string} are
-	 * reachable only from the {@code --no-gc} component path (the GC backend rejects both
-	 * outright).
+	 * {@code --component} export path ({@code null} = no result). {@code :long} (s64) is
+	 * reachable only from the {@code --no-gc} component path (the GC backend rejects it
+	 * outright); {@code :string} lifts as {@code string} on both component paths, and
+	 * {@code :s-expr} (GC only) lifts as {@code string} too -- the s-expression crosses
+	 * the boundary as its printed text.
 	 * @param type the type designator
 	 * @return the {@code ComponentWriter.VT_*} code, or {@code null} for {@code :void}
 	 */
@@ -382,7 +383,7 @@ final class WasmExportCompiler {
 			case T_LONG -> am.ik.wasm.ComponentWriter.VT_S64;
 			case T_FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
 			case T_BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
-			case T_STRING -> am.ik.wasm.ComponentWriter.VT_STRING;
+			case T_STRING, T_S_EXPR -> am.ik.wasm.ComponentWriter.VT_STRING;
 			case T_VOID -> null;
 			default -> throw new UnsupportedOperationException(
 					"rontolisp:wasm-export type " + type + " has no component-model scalar mapping");
@@ -390,8 +391,57 @@ final class WasmExportCompiler {
 	}
 
 	/**
-	 * Builds the component-model export description for a Tier-1 scalar declaration.
-	 * @param decl the parsed declaration (scalar types only)
+	 * The canonical-ABI reallocation function's core export name on the GC
+	 * {@code --component} path (todo 92 Tier 2; mirrors
+	 * {@code NoGcWasmComponentBuilder.CABI_REALLOC} on the {@code --no-gc} path).
+	 */
+	static final String CABI_REALLOC = "cabi_realloc";
+
+	/**
+	 * Returns whether the declared return type is memory-backed
+	 * ({@code :string}/{@code :s-expr}), i.e. whether the {@code --component} lift needs
+	 * a return-pointer shim (the canonical ABI caps flat results at one, so a
+	 * {@code (ptr,len)} result must be spilled to a return-area record).
+	 * @param decl the parsed export directive
+	 * @return {@code true} for a {@code :string}/{@code :s-expr} return
+	 */
+	static boolean returnsMemory(Decl decl) {
+		return isMemoryType(decl.returnType());
+	}
+
+	/**
+	 * The flat-result signature of an export's lifted core function on the GC
+	 * {@code --component} path, naming which shared {@code cabi_post_*} post-return
+	 * function its lift uses: a {@code :string}/{@code :s-expr} result flattens to a
+	 * single i32 return pointer, every scalar result keeps its own flat type. Mirrors
+	 * {@code NoGcWasmComponentBuilder.postReturnKind} (todo 93), plus {@code :s-expr}
+	 * which only the GC backend supports.
+	 * @param decl the parsed export directive
+	 * @return the signature key ({@code "i32"}/{@code "f64"}/{@code "void"})
+	 */
+	static String componentPostReturnKind(Decl decl) {
+		return switch (decl.returnType()) {
+			case T_STRING, T_S_EXPR, T_INT, T_BOOL -> "i32";
+			case T_FLOAT -> "f64";
+			case T_VOID -> "void";
+			default -> throw new UnsupportedOperationException(
+					"rontolisp:wasm-export type " + decl.returnType() + " has no component post-return signature");
+		};
+	}
+
+	/**
+	 * The core export name of the shared post-return function for a flat-result
+	 * signature.
+	 * @param kind the signature key from {@link #componentPostReturnKind}
+	 * @return the core export name (e.g. {@code "cabi_post_i32"})
+	 */
+	static String cabiPostExportName(String kind) {
+		return "cabi_post_" + kind;
+	}
+
+	/**
+	 * Builds the component-model export description for a declaration.
+	 * @param decl the parsed declaration
 	 * @return the export description consumed by {@code WasmComponentBuilder}
 	 */
 	static WasmComponentBuilder.FuncExport componentExport(Decl decl) {

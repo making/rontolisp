@@ -1631,14 +1631,62 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvokeComponent(program, "sum-squared(2, 3)")).isEqualTo("25");
 	}
 
+	private static final String COMPONENT_STRING_PROGRAM = """
+			(defun count-a (s)
+			  (let ((n 0))
+			    (dotimes (i (length s))
+			      (when (char= (char s i) #\\a)
+			        (setq n (+ n 1))))
+			    n))
+			(defun shout (s) (concatenate 'string s "!!"))
+			(defun greet (s) (concatenate 'string "Hello, " s))
+			(defun hello () "hi there")
+			(defun sink (s) nil)
+			(rontolisp:wasm-export 'count-a :params '(:string) :returns :int)
+			(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+			(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+			(rontolisp:wasm-export 'hello :params '() :returns :string)
+			(rontolisp:wasm-export 'sink :params '(:string) :returns :void)
+			(print (greet "world"))
+			""";
+
 	@Test
-	void componentExportRejectsMemoryTypes() {
-		// :string/:s-expr cross the core boundary as (ptr,len) in linear memory; the
-		// canonical string/list lift is Tier 2 (.todo/92), so reject clearly for now.
-		assertThatThrownBy(() -> compileAndInvokeComponent("""
-				(defun shout (s) (string-upcase s))
-				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
-				""", "shout(\"hi\")")).hasMessageContaining(":string/:s-expr is not yet supported with --component");
+	void componentExportStringLiftsThroughTheCanonicalStringAbi() throws Exception {
+		// :string boundaries under --component on the GC backend (todo 92 Tier 2): a
+		// string argument is lowered by the host into the shared linear memory via the
+		// core's appended cabi_realloc, the wrapper copies it onto the GC heap, a string
+		// result crosses as a typed component-model string through the retptr shim, and
+		// the cabi_post_* post-return pops the bump heap back to the per-call snapshot.
+		// Both directions (:string->:int and :string->:string), no-arg and :void
+		// shapes, plus UTF-8 multi-byte content -- the same UX as --no-gc --component
+		// (todo 93 Tier 2), just with the GC flags.
+		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "count-a(\"banana\")")).isEqualTo("3");
+		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "shout(\"hello\")")).isEqualTo("\"hello!!\"");
+		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "greet(\"世界\")")).isEqualTo("\"Hello, 世界\"");
+		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "hello()")).isEqualTo("\"hi there\"");
+		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "sink(\"bye\")")).isEqualTo("()");
+	}
+
+	@Test
+	void componentExportStringCoexistsWithRun() throws Exception {
+		// The wasi:cli/run export (the program's top level) still runs as a command
+		// alongside the string-ABI exports.
+		assertThat(compileAndRunComponent(COMPONENT_STRING_PROGRAM)).isEqualTo("\"Hello, world\"");
+	}
+
+	@Test
+	void componentExportSExprLiftsAsString() throws Exception {
+		// :s-expr crosses the component boundary as its printed text (WIT string): the
+		// wrapper parses a parameter with the embedded reader (exportNeedsReader) and
+		// prints a result with prin1-to-string.
+		String program = """
+				(defun swap-pair (p) (list (car (cdr p)) (car p)))
+				(defun sum-expr (e) (+ (car e) (car (cdr e))))
+				(rontolisp:wasm-export 'swap-pair :as "swap" :params '(:s-expr) :returns :s-expr)
+				(rontolisp:wasm-export 'sum-expr :params '(:s-expr) :returns :int)
+				""";
+		assertThat(compileAndInvokeComponent(program, "swap(\"(1 2)\")")).isEqualTo("\"(2 1)\"");
+		assertThat(compileAndInvokeComponent(program, "sum-expr(\"(40 2)\")")).isEqualTo("42");
 	}
 
 	@Test

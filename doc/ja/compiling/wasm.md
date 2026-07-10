@@ -85,10 +85,29 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 
 制限:
 
-- `--component` のもとでは、スカラーエクスポート（`:int`/`:float`/`:bool`/void — `--no-gc` では `:long` と `:string` も）は**型付きコンポーネントモデルエクスポート**になります。後述の[コンポーネントモデル関数エクスポート](#component-model-function-exports-wasm-export)と[コンパクトなコンポーネント出力](#compact-component-output---no-gc---component)を参照してください。GC コンポーネントパスの `:string` と、両パスの `:s-expr` はまだサポートされません（コンパイルエラー）。インタプリタおよび JVM バックエンドではこのディレクティブは no-op です（指定されたシンボルを返すだけです）。そのため、同じソースがすべてのバックエンドで動作します。
+- `--component` のもとでは、エクスポートは**型付きコンポーネントモデルエクスポート**になります（`:int`/`:float`/`:bool`/void、GC パスでは `:string` → `string` と `:s-expr` → `string`、`--no-gc` では加えて `:long`）。後述の[コンポーネントモデル関数エクスポート](#component-model-function-exports-wasm-export)と[コンパクトなコンポーネント出力](#compact-component-output---no-gc---component)を参照してください。インタプリタおよび JVM バックエンドではこのディレクティブは no-op です（指定されたシンボルを返すだけです）。そのため、同じソースがすべてのバックエンドで動作します。
 - エクスポートできるのはトップレベルの `defun` のみで、宣言されたパラメータ数はそのアリティと一致しなければならず、関数値を受け取ったり返したりする関数は対象外です。
 - エクスポート名はデフォルトで裸の Lisp 名（`fact`）で、`:as` で変更できます。引数の書き方はホストに依存します（`wasmtime --invoke fact module.wasm 5`、`instance.exports.fact(5)` など）。
 - デフォルトでは、モジュールのインスタンス化には依然として 8 つの `wasi_snapshot_preview1` インポートを満たす必要があります。`wasmtime run` はそれらを自動的に提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。それらを除去するには `--no-wasi`（[後述](#no-wasi-reactor-mode)）を追加します。
+
+### エクスポートモード早見表
+
+同じ `rontolisp:wasm-export` ディレクティブが、`--no-gc` / `--component` フラグに応じて 4 つの異なる出力形態にコンパイルされます。変わるのはホストとの契約であって、Lisp ソースではありません:
+
+| | GC コアモジュール（デフォルト） | GC `--component` | `--no-gc` コアモジュール | `--no-gc --component` |
+| --- | --- | --- | --- | --- |
+| ホスト要件 | wasm-GC 対応エンジン（`wasmtime -W gc`、Node 22+、現行ブラウザ） | wasmtime 46+（`-W gc=y -W component-model-more-async-builtins=y`）または wasm-GC + JSPI 対応のコンポーネントホスト | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** |
+| エクスポートの形 | 素のコア関数 | 型付きコンポーネントモデルエクスポート（WAVE `--invoke`、jco） | 素のコア関数 | 型付きコンポーネントモデルエクスポート（WAVE `--invoke`、jco） |
+| スカラー | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long`（`i64`） | + `:long`（`s64`） |
+| `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`（正準 ABI） | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`（正準 ABI） |
+| `:s-expr` | 手動の `(ptr,len)` | コンポーネントモデル `string`（印字テキスト） | 非対応 | 非対応 |
+| 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](#eligible-subset) | [非 GC サブセット](#eligible-subset) |
+| エクスポート内の I/O | 動作する（本物の WASI インポート。`--no-wasi` ではトラップ） | 実行時にトラップ（同期リフト） | `print` のみ（単一の `fd_write` インポート） | `print` はコンパイルエラー |
+| プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` とディレクティブのみ | `defun` とディレクティブのみ |
+| 呼び出しごとの文字列メモリ | ホスト管理（`__ronto_alloc`） | 正準 post-return が解放（intern ガード付きスナップショット） | ホスト管理（`__ronto_alloc` + `__ronto_alloc_mark`/`__ronto_alloc_reset` アリーナ API。スカラー返り値では自動） | 正準 post-return が解放（ヒープ底まで巻き戻し） |
+| 典型サイズ | 〜100 KB | 〜110 KB | 数百バイト | 数百バイト |
+
+目安: まずホスト（コンポーネントホストか素のエンジンか）で列を選び、次に関数本体が言語全機能（GC）を必要とするか非 GC サブセットに収まるかで選びます。
 
 ## ホスト関数のインポート
 
@@ -475,7 +494,7 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
 
 ### コンポーネントモデル関数エクスポート（wasm-export）
 
-スカラーの [`rontolisp:wasm-export`](#exporting-lisp-functions) は、さらに正準 ABI を通じて WAVE 構文（`wasmtime run --invoke 'name(args)'`、experimental 警告なし）で呼び出せる**型付きコンポーネントモデルエクスポート**になります。エクスポートは `wasi:cli/run` のコマンドエントリと共存するため、同じコンポーネントは引き続きコマンドとしても実行できます。
+[`rontolisp:wasm-export`](#exporting-lisp-functions) は、さらに正準 ABI を通じて WAVE 構文（`wasmtime run --invoke 'name(args)'`、experimental 警告なし）で呼び出せる**型付きコンポーネントモデルエクスポート**になります。エクスポートは `wasi:cli/run` のコマンドエントリと共存するため、同じコンポーネントは引き続きコマンドとしても実行できます。
 
 ```lisp
 (defun sumsquared (a b) (* (+ a b) (+ a b)))
@@ -491,14 +510,29 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
 # 25    (the ordinary run export still works)
 ```
 
-型付きシグネチャ（`:int` → `s32`、`:float` → `f64`、`:bool` → `bool`、`:returns` 省略 → 結果なし）は任意のコンポーネントホストから見え、`:as` はコアエクスポートと同様にコンポーネントエクスポートも改名します。コンポーネントエクスポートの現在の制限:
+型付きシグネチャ（`:int` → `s32`、`:float` → `f64`、`:bool` → `bool`、`:string` → `string`、`:s-expr` → 印字された S 式テキストを運ぶ `string`、`:returns` 省略 → 結果なし）は任意のコンポーネントホストから見え、`:as` はコアエクスポートと同様にコンポーネントエクスポートも改名します。
 
-- **スカラー型のみ**（`:int`/`:float`/`:bool`/void）。`:string`/`:s-expr` は現時点では `--component` のもとでコンパイルエラーです（これらはリニアメモリ内のポインタ/長さペアとしてコア境界を越えますが、GC コンポーネントリフトはまだそれを運びません。[コンパクトな `--no-gc` コンポーネント](#compact-component-output---no-gc---component)は `:string` をリフトします）。
+`:string` 境界は本物のコンポーネントモデル `string` として越えます — どちら側にも手動のポインタ処理はなく、[コンパクトな `--no-gc` コンポーネント](#compact-component-output---no-gc---component)と同じ使い勝手です。ホストは引数のバイト列を正準 ABI を通じてリニアメモリへローワリングし、結果を読み出します。その後モジュールは呼び出しごとの確保を解放する（正準 *post-return* 関数がバンプアロケータをポップする）ため、常駐インスタンスは繰り返し呼び出しでもフラットに保たれます:
+
+```lisp
+;; greet.lisp
+(defun greet (s) (concatenate 'string "Hello, " s))
+(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+```
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("世界")' greet.wasm
+# "Hello, 世界"
+```
+
+コンポーネントエクスポートの現在の制限:
+
 - **純粋計算のみ**: エクスポートは同期的にリフトされるため、その内部の I/O（`print`、`read`、ファイルアクセス）は実行時に "cannot block a synchronous task" でトラップします。副作用はトップレベル（`run`）に置き、エクスポートは純粋関数にしてください。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名（`sum-squared`）でなければなりません。その文法に合わない Lisp 名に対しては、コンパイラが `:as` での改名を求めます。
 - エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` グローバルを読むエクスポートは未初期化の値を見ることになります（これは Preview 1 の `--invoke` の挙動と同じです）。
 
-純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](#compact-component-output---no-gc---component) が同じ型付きエクスポート（加えて `:long` → `s64`）を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。
+純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](#compact-component-output---no-gc---component) が同じ型付きエクスポート（加えて `:long` → `s64`、ただし `:s-expr` なし）を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。
 
 コンポーネントモードの注意点と現在の制限:
 
