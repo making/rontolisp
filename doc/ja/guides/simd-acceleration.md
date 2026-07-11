@@ -61,7 +61,7 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)) ; => #d(17.0 39.0)
 ```
 
-[`ml/nn-vec.lisp` の例](https://github.com/making/rontolisp/blob/main/examples/ml/nn-vec.lisp)は、単精度の順伝播を `vec:matvec` で組み立てた小さな XOR ネットワークです。
+[`ml/nn-vec.lisp` の例](https://github.com/making/rontolisp/blob/develop/examples/ml/nn-vec.lisp)は、単精度の順伝播を `vec:matvec` で組み立てた小さな XOR ネットワークです。
 
 ## メモリ: ベクトルはどこに置かれ、何が回収するのか
 

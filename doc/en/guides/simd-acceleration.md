@@ -61,7 +61,7 @@ Matrix times vector (a fresh vector): `vec:matvec` is GEMV -- a rank-2 packed ma
 (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)) ; => #d(17.0 39.0)
 ```
 
-The [`ml/nn-vec.lisp` example](https://github.com/making/rontolisp/blob/main/examples/ml/nn-vec.lisp) is a small XOR network whose single-float forward pass is built from `vec:matvec`.
+The [`ml/nn-vec.lisp` example](https://github.com/making/rontolisp/blob/develop/examples/ml/nn-vec.lisp) is a small XOR network whose single-float forward pass is built from `vec:matvec`.
 
 ## Memory: where vectors live, and what reclaims them
 
