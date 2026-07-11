@@ -2,6 +2,14 @@
 > `define-condition` is a parsed no-op and `make-condition` expands to its
 > `:format-control` value (so `(error (make-condition ...))` signals with the
 > intended message). The real condition system remains below.
+>
+> **Update 2026-07-11:** the concrete engineering plan now lives in
+> `.todo/116-error-handling-foundation.md` (unwind-protect + typed conditions
+> + handler-case, grounded in the current codebase: the CLOS static subset
+> exists now, class-v50 exception tables need only `ByteCodeWriter` emission
+> support, WASM catching is gated out for v1). This file stays as the
+> API-surface catalog; the "Implementation approach" section below is
+> superseded.
 
 # Condition system (`handler-case`, `handler-bind`, `restart-case`, `restart-bind`, `invoke-restart`, `invoke-restart-interactively`, `signal`, `error` (done), `warn`, `cerror`, `abort`, `continue`, `break`, `make-condition`, `condition-type`, `simple-condition`, `simple-error`, `simple-warning`, `style-warning`, `serious-condition`, `warning`, `condition`, `storage-condition`, `program`, `control`, `serious-condition`, `error` (condition class))
 
