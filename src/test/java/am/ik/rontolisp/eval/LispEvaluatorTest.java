@@ -4879,6 +4879,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgDiffAndGradient() {
+		// numpy calculus parity: diff = the n-th discrete difference along the last
+		// axis (numpy's own docs example), gradient = second-order central
+		// differences with first-order one-sided ends, over a uniform scalar
+		// spacing or a non-uniform coordinate vector (exact for quadratics:
+		// f = x^2 sampled at x = (0 1 3) differentiates to exactly 2x). Both
+		// preserve the input width like every other linalg transform.
+		LispVal result = evalMulti("""
+				(list (linalg:diff #(1 2 4 7 0))
+				      (linalg:diff #(1 2 4 7 0) 2)
+				      (linalg:diff #2A((1 3 6) (0 5 6)))
+				      (linalg:diff #(5))
+				      (linalg:gradient #(0 1 4 9 16))
+				      (linalg:gradient #(0 1 4 9 16) 2)
+				      (linalg:gradient #(0 1 9) #(0 1 3))
+				      (array-element-type (linalg:diff (linalg:arange 0 4 'single-float)))
+				      (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
+				""");
+		assertThat(result.print()).isEqualTo("(#d(1.0 2.0 3.0 -7.0) #d(1.0 1.0 -10.0) #d((2.0 3.0) (5.0 1.0)) #d()"
+				+ " #d(1.0 2.0 4.0 6.0 7.0) #d(0.5 1.0 2.0 3.0 3.5) #d(1.0 2.0 4.0) single-float single-float)");
+		assertThatThrownBy(() -> eval("(linalg:gradient #(1))"))
+			.hasMessageContaining("linalg: gradient needs at least 2 samples");
+		assertThatThrownBy(() -> eval("(linalg:gradient #2A((1 2) (3 4)))"))
+			.hasMessageContaining("linalg: gradient expects a vector");
+		assertThatThrownBy(() -> eval("(linalg:gradient #(0 2 6) #(0 1))"))
+			.hasMessageContaining("linalg: gradient coordinates must match the sample length");
+		assertThatThrownBy(() -> eval("(linalg:diff #(1 2) -1)"))
+			.hasMessageContaining("linalg: diff order must be non-negative");
+	}
+
+	@Test
 	void rowMajorArefReadsAndWritesFlat() {
 		LispVal result = evalMulti("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

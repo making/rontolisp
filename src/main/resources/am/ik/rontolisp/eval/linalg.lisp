@@ -26,8 +26,9 @@
 ;;
 ;; Internal helpers use the linalg::%la- prefix. An array is walked with a
 ;; flat row-major index k via row-major-aref, so the elementwise operations
-;; (add/sub/mul/div/emap/reductions/reshape/array-equal) work for any rank;
-;; dot/matmul/outer/det/inv/solve/trace/transpose stay defined for rank <= 2.
+;; (add/sub/mul/div/emap/reductions/reshape/array-equal) and diff work for any
+;; rank; dot/matmul/outer/det/inv/solve/trace/transpose stay defined for
+;; rank <= 2, and gradient for vectors only.
 
 ;; --- internal helpers --------------------------------------------------------
 
@@ -188,6 +189,26 @@
                 ((>= k m))
               (setq acc (+ acc (* (aref a i k) (aref b k j)))))
             (setf (aref out i j) acc)))))))
+
+(defun linalg::%la-diff-1 (a)
+  ;; One first-difference step along the last axis: out[..., i] =
+  ;; a[..., i+1] - a[..., i]. The last axis is row-major-contiguous, so one
+  ;; flat double loop (rows x within-row) handles every rank. An axis of
+  ;; length 0 or 1 differences to length 0 (numpy's clamp, not an error).
+  (let* ((d (array-dimensions a))
+         (rd (reverse d))
+         (c (car rd))
+         (w (max 0 (- c 1)))
+         (out (linalg::%la-make (reverse (cons w (cdr rd))) 0.0
+                                (linalg::%la-etype a)))
+         (rows (if (= c 0) 0 (/ (array-total-size a) c))))
+    (do ((i 0 (+ i 1)))
+        ((>= i rows) out)
+      (do ((j 0 (+ j 1)))
+          ((>= j w))
+        (setf (row-major-aref out (+ (* i w) j))
+              (- (row-major-aref a (+ (* i c) j 1))
+                 (row-major-aref a (+ (* i c) j))))))))
 
 ;; --- constructors ------------------------------------------------------------
 
@@ -545,6 +566,75 @@
     (do ((i 0 (+ i 1)))
         ((>= i n) acc)
       (setq acc (+ acc (aref a i i))))))
+
+;; --- calculus (numpy diff / gradient) -----------------------------------------
+
+(defun linalg:diff (a &optional n)
+  ;; The n-th discrete difference along the last axis (numpy np.diff):
+  ;; out[..., i] = a[..., i+1] - a[..., i], applied n times (default 1); each
+  ;; step shortens the last axis by one (clamped at 0, like numpy). Works for
+  ;; any rank; the result is a fresh packed array of a's width (so n = 0
+  ;; returns a packed COPY, where numpy returns the input itself).
+  (let ((times (if n n 1)))
+    (when (< times 0)
+      (error "linalg: diff order must be non-negative"))
+    (if (= times 0)
+        (linalg::%la-copy a)
+        (let ((out (linalg::%la-diff-1 a)))
+          (do ((k 1 (+ k 1)))
+              ((>= k times) out)
+            (setq out (linalg::%la-diff-1 out)))))))
+
+(defun linalg:gradient (f &optional x)
+  ;; The numerical derivative of a vector of samples (numpy np.gradient):
+  ;; second-order central differences at interior points, first-order
+  ;; one-sided differences at the two ends (numpy's default edge_order 1),
+  ;; so the result has the SAME length as f (unlike diff). x is an optional
+  ;; uniform sample spacing (a number, default 1) or a coordinate vector of
+  ;; the same length as f (non-uniform spacing, numpy's exact interior
+  ;; formula). Vectors only -- numpy's rank-2 gradient returns one array per
+  ;; axis, which has no lite representation here. Needs at least 2 samples.
+  (let ((d (array-dimensions f)))
+    (when (cdr d)
+      (error "linalg: gradient expects a vector"))
+    (let ((n (car d)))
+      (when (< n 2)
+        (error "linalg: gradient needs at least 2 samples"))
+      (let ((out (linalg::%la-like f)))
+        (if (or (null x) (numberp x))
+            (let ((h (if x x 1)))
+              ;; Uniform spacing: (f[i+1] - f[i-1]) / 2h, numpy's fast path
+              ;; (bit-identical to it, not the general formula below with
+              ;; hs = hd, whose extra multiplies could round differently).
+              (setf (aref out 0) (/ (- (aref f 1) (aref f 0)) h))
+              (setf (aref out (- n 1))
+                    (/ (- (aref f (- n 1)) (aref f (- n 2))) h))
+              (do ((i 1 (+ i 1)))
+                  ((>= i (- n 1)) out)
+                (setf (aref out i)
+                      (/ (- (aref f (+ i 1)) (aref f (- i 1))) (* 2 h)))))
+            (progn
+              (unless (= (length x) n)
+                (error "linalg: gradient coordinates must match the sample length"))
+              (setf (aref out 0)
+                    (/ (- (aref f 1) (aref f 0)) (- (aref x 1) (aref x 0))))
+              (setf (aref out (- n 1))
+                    (/ (- (aref f (- n 1)) (aref f (- n 2)))
+                       (- (aref x (- n 1)) (aref x (- n 2)))))
+              (do ((i 1 (+ i 1)))
+                  ((>= i (- n 1)) out)
+                ;; numpy's second-order interior formula for non-uniform
+                ;; spacing, exact for quadratics: with hs = x[i] - x[i-1]
+                ;; and hd = x[i+1] - x[i],
+                ;; (hs^2 f[i+1] + (hd^2 - hs^2) f[i] - hd^2 f[i-1])
+                ;;   / (hs hd (hs + hd)).
+                (let ((hs (- (aref x i) (aref x (- i 1))))
+                      (hd (- (aref x (+ i 1)) (aref x i))))
+                  (setf (aref out i)
+                        (/ (- (+ (* hs hs (aref f (+ i 1)))
+                                 (* (- (* hd hd) (* hs hs)) (aref f i)))
+                              (* hd hd (aref f (- i 1))))
+                           (* hs hd (+ hs hd))))))))))))
 
 ;; --- linear algebra ----------------------------------------------------------
 

@@ -155,7 +155,8 @@ public final class PackageRegistry {
 			"from-list", "to-list", "shape", "size", "reshape", "flatten", "transpose", "add", "sub", "mul", "div",
 			"emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm", "trace", "det",
 			"inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
-			"cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum", "clip", "relu");
+			"cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum", "clip", "relu",
+			"diff", "gradient");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 

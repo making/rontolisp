@@ -363,6 +363,8 @@ categories:
       - { slug: linalg-argmin, name: "linalg:argmin" }
       - { slug: linalg-norm, name: "linalg:norm" }
       - { slug: linalg-trace, name: "linalg:trace" }
+      - { slug: linalg-diff, name: "linalg:diff" }
+      - { slug: linalg-gradient, name: "linalg:gradient" }
       - { slug: linalg-det, name: "linalg:det" }
       - { slug: linalg-inv, name: "linalg:inv" }
       - { slug: linalg-solve, name: "linalg:solve" }

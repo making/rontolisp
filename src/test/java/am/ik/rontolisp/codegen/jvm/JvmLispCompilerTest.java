@@ -4906,6 +4906,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLinalgDiffAndGradient() throws Exception {
+		// numpy calculus parity: diff = n-th discrete difference along the last axis
+		// (numpy's docs example values), gradient = second-order central differences
+		// with first-order one-sided ends over a uniform scalar spacing or a
+		// non-uniform coordinate vector. All sample values differentiate exactly,
+		// so the printed doubles are identical on every backend.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:diff #(1 2 4 7 0)))
+				(print (linalg:diff #(1 2 4 7 0) 2))
+				(print (linalg:diff #2A((1 3 6) (0 5 6))))
+				(print (linalg:gradient #(0 1 4 9 16)))
+				(print (linalg:gradient #(0 1 4 9 16) 2))
+				(print (linalg:gradient #(0 1 9) #(0 1 3)))
+				(print (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
+				""")).isEqualTo("#d(1.0 2.0 3.0 -7.0)\n#d(1.0 1.0 -10.0)\n#d((2.0 3.0) (5.0 1.0))\n"
+				+ "#d(1.0 2.0 4.0 6.0 7.0)\n#d(0.5 1.0 2.0 3.0 3.5)\n#d(1.0 2.0 4.0)\nsingle-float");
+	}
+
+	@Test
 	void compileAndRunLinalgSingleFloatWidthPolymorphism() throws Exception {
 		// todo-97: linalg is width-polymorphic -- a constructor opts into single-float
 		// (#f) with a trailing element-type, and every transform PRESERVES the input

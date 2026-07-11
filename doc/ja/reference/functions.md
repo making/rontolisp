@@ -354,6 +354,8 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` |
 | `linalg:norm` | `(linalg:norm #(3 4))` | `5.0`(ユークリッド / フロベニウスノルム) |
 | `linalg:trace` | `(linalg:trace #2A((1 2) (3 4)))` | `5`(正方行列のみ) |
+| `linalg:diff` | `(linalg:diff #(1 2 4 7 0))` | `#d(1.0 2.0 3.0 -7.0)`(最後の軸に沿った n 階の離散差分。省略可能な階数、デフォルト 1) |
+| `linalg:gradient` | `(linalg:gradient #(0 1 4 9 16))` | `#d(1.0 2.0 4.0 6.0 7.0)`(中心差分。入力と同じ長さ。省略可能なスカラー間隔または座標ベクタ) |
 | `linalg:det` | `(linalg:det #2A((1 2) (3 4)))` | `-2.0`(浮動小数点。特異行列は微小値になることがある) |
 | `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#d((0.25 0.0) (-0.125 0.25))`(特異行列ではエラーを通知します) |
 | `linalg:solve` | `(linalg:solve a b)` | `a . x = b` の解(`b` はベクタまたは行列) |

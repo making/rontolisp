@@ -2,17 +2,18 @@
 
 One hand-written Lisp-source library, `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`,
 following the `json.lisp` pattern (see `json.md`) so a single implementation
-runs identically on all backends. 40 exported functions (constructors `zeros`/
+runs identically on all backends. 56 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
-`add`/`sub`/`mul`/`div`/`emap`, products `dot`/`matmul`/`outer`, reductions,
-and floating-point Gaussian-elimination `det`/`inv`/`solve`) over the built-in
-arrays. The library computes in packed float (speed over exactness), **double by
+`add`/`sub`/`mul`/`div`/`emap` + named ufuncs, products `dot`/`matmul`/`outer`,
+reductions, calculus `diff`/`gradient`, and floating-point Gaussian-elimination
+`det`/`inv`/`solve`) over the built-in arrays. The library computes in packed float (speed over exactness), **double by
 default** but **width-polymorphic** (`.todo/97`): a constructor opts into packed
 single-float (`#f`) with a trailing `element-type` argument, and every transform
 PRESERVES its input width (see "Single-float / width polymorphism" below).
 Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
-walk elements via `row-major-aref`, so they work for any rank; `dot`/`matmul`/
-`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for rank <= 2.
+walk elements via `row-major-aref`, so they work for any rank (`diff` too);
+`dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for
+rank <= 2, and `gradient` for vectors only.
 
 ## API quick reference (enough to write linalg programs)
 
@@ -54,6 +55,8 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:argmax v)` / `(linalg:argmin v)` | index in a VECTOR (first on ties) |
 | `(linalg:norm a)` | Euclidean / Frobenius norm (a float, via sqrt) |
 | `(linalg:trace a)` | main-diagonal sum; square matrices only |
+| `(linalg:diff a)` / `(diff a n)` | n-th discrete difference along the last axis (numpy np.diff; default n = 1, each step shortens the last axis by one, clamped at 0); any rank; n = 0 returns a packed copy |
+| `(linalg:gradient f)` / `(gradient f spacing)` | numerical derivative of a VECTOR of samples (numpy np.gradient): second-order central differences inside, first-order one-sided at the ends, same length as f; spacing = a uniform scalar (default 1) or a same-length coordinate vector (non-uniform, numpy's exact interior formula); needs >= 2 samples |
 | `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
 
@@ -121,7 +124,8 @@ Twenty members -- `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `a
 `negative` `sign` (todo 109) -- are intercepted under `--simd` on the interpreter, the
 JVM and wasm-GC, reusing the `vec:` lane loops. `mean`/`matmul`/`flatten`/`solve`/
 `square`/`reciprocal` ride along through the `sum`/`dot`/`reshape`/`mul`/`div` their
-bodies call. `emap`, `det`, `inv` and `array-equal` are never intercepted.
+bodies call. `emap`, `det`, `inv`, `array-equal`, `diff` and `gradient` are never
+intercepted.
 
 **linalg.lisp stays the oracle and is never rewritten to suit a kernel.** Each kernel is a
 PARTIAL function: it returns null for an input it does not handle -- a general (boxed)

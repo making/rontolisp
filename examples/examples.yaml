@@ -162,6 +162,11 @@ examples:
       contains:
         - "Training XOR (2-4-1 network, vec + linalg)..."
         - "Predictions after training:"
+  - path: ml/numerical-calculus.lisp
+    backends: [interpreter, jvm, wasm]
+    note: numpy-style diff/gradient (linalg calculus) -- every sample is a polynomial at integer coordinates, so the differences are exact and the output byte-identical on every backend
+    expect:
+      file: .expected/numerical-calculus.txt
   - path: ml/simd-dot.lisp
     backends: [interpreter, jvm, wasm]
     note: the minimal --simd showcase -- one vec:dot over 1024 doubles, 4000 times. The vector is 0.0..1023.0, so the dot is an exact integer and every partial sum is exactly representable; lane-order folding therefore cannot change it. The elapsed-time line is not checked. Run it a second time with --simd - interpreter 2.59 s -> 2.3 ms, wasm-GC 273 -> 2.4 ms
