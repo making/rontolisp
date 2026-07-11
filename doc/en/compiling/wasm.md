@@ -405,16 +405,22 @@ component still runs as a command:
 ```lisp
 (defun sumsquared (a b) (* (+ a b) (+ a b)))
 (rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
-(print (sumsquared 2 3))
+(print (sumsquared 10 10))
 ```
 
 ```bash
 rontolisp sumsq.lisp --component -o sumsq.wasm
 wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'sumsquared(2, 3)' sumsq.wasm
-# 25
+# 25    (the export's return value, rendered by wasmtime)
 wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
-# 25    (the ordinary run export still works)
+# 400    (the ordinary run entry executes the top-level program)
 ```
+
+The two commands print different things: `--invoke` calls **only** the named
+export — the top-level program (the `wasi:cli/run` entry) does not run — and
+the `25` is wasmtime rendering the export's return value in WAVE syntax, not
+output from `print`. The plain `run` executes the top-level program instead,
+so the `400` is the output of `(print (sumsquared 10 10))`.
 
 The typed signature (`:int` → `s32`, `:float` → `f64`, `:bool` → `bool`,
 `:string` → `string`, `:s-expr` → `string` carrying the printed s-expression

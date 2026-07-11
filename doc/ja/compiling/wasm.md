@@ -231,16 +231,18 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
 ```lisp
 (defun sumsquared (a b) (* (+ a b) (+ a b)))
 (rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
-(print (sumsquared 2 3))
+(print (sumsquared 10 10))
 ```
 
 ```bash
 rontolisp sumsq.lisp --component -o sumsq.wasm
 wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'sumsquared(2, 3)' sumsq.wasm
-# 25
+# 25    (the export's return value, rendered by wasmtime)
 wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
-# 25    (the ordinary run export still works)
+# 400    (the ordinary run entry executes the top-level program)
 ```
+
+2 つのコマンドは異なるものを表示します: `--invoke` は名前付きエクスポート**だけ**を呼び出し、トップレベルのプログラム(`wasi:cli/run` エントリ)は実行されません — `25` は wasmtime がエクスポートの戻り値を WAVE 構文でレンダリングしたものであり、`print` の出力ではありません。素の `run` は代わりにトップレベルのプログラムを実行するため、`400` は `(print (sumsquared 10 10))` の出力です。
 
 型付きシグネチャ(`:int` → `s32`、`:float` → `f64`、`:bool` → `bool`、`:string` → `string`、`:s-expr` → 印字された S 式テキストを運ぶ `string`、`:returns` 省略 → 結果なし)は任意のコンポーネントホストから見え、`:as` はコア側と同様にコンポーネントエクスポートの名前を変更します。
 
