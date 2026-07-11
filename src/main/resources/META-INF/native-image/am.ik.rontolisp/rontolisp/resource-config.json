@@ -15,6 +15,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.NoGcWasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.bin"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.NoGcWasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.wasm"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmJavaRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate\\.class"

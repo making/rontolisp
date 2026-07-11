@@ -1,6 +1,6 @@
 # rontolisp:wasm-export
 
-`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type)`
+`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type :async t)`
 
 WebAssembly コアモジュールへコンパイルする際に、トップレベルの `defun` を
 ホストから呼び出し可能にし、その引数と戻り値の WASM 境界型を宣言します。これは
@@ -24,6 +24,11 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   引数なしを意味します。
 - `:returns` — 戻り値の境界型指定子。省略、`nil`、`'()`、`:void` の場合は void の
   戻り値 (Lisp の戻り値は破棄される) を宣言します。
+- `:async` — `t` の場合、`--component` でエクスポートを**非同期**のコンポーネント
+  モデル関数としてリフトします。これにより内部の I/O (`print`、`rontolisp:fetch`
+  など) がトラップせず動作します。デフォルトは `nil` (同期・純粋計算のリフト)
+  です。意味を持つのは `--component` のみで、Preview 1 / `--no-wasi` のコア
+  エクスポートは無視し、`--no-gc --component` は拒否します。
 
 型指定子と境界表現は次のとおりです。
 
@@ -49,8 +54,12 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   コンポーネントモデルエクスポート**になります:
   `:int`/`:float`/`:bool`/void に加えて、`:string` と `:s-expr` は
   コンポーネントモデルの `string` として渡ります (`--no-gc` ではさらに `:long`。
-  ただし `:s-expr` はありません)。エクスポートは純粋計算でなければならず (内部の
-  I/O はトラップし、`--no-gc --component` では印字はコンパイルエラーです)、名前は
+  ただし `:s-expr` はありません)。同期 (デフォルト) のエクスポートは純粋計算で
+  なければならず、内部の I/O はトラップします。印字や fetch を行うエクスポート
+  には `:async t` を宣言してください。`--no-gc --component` では `:async` は
+  拒否されますが、印字は同期エクスポートの中でそのまま動作します (プログラムが
+  印字するときだけ配線される、組み込みの WASI 0.2 stdio マイクロアダプタを
+  通じて)。エクスポート名は
   lower-kebab-case である必要があります (そうでない場合は
   `:as` で改名します)。
   [コンポーネントモデル関数エクスポート](../../compiling/wasm.md#component-model-function-exports-wasm-export)
@@ -59,11 +68,11 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 - エクスポートできるのはトップレベルの `defun` のみで、宣言した引数の数はその
   アリティと一致しなければなりません。また関数値を引数や戻り値とする関数は対象外
   です。
-- エクスポートされる関数は純粋計算です。あらゆる I/O (出力、入力、時刻、乱数、
-  トップレベルの I/O フォーム) は `--no-wasi` ではトラップし、それ以外ではサポート
-  されません。1 つ例外があります: `--no-gc` では `print`/`princ`/`terpri` が、
-  プログラムが印字する場合にのみ追加される単一の `fd_write` インポートを通じて
-  動作します
+- `--component` 以外では、エクスポートされる関数は純粋計算です。あらゆる I/O
+  (出力、入力、時刻、乱数、トップレベルの I/O フォーム) は `--no-wasi` では
+  トラップし、それ以外ではサポートされません。1 つ例外があります: `--no-gc` では
+  `print`/`princ`/`terpri` が、プログラムが印字する場合にのみ追加される単一の
+  `fd_write` インポートを通じて動作します
   ([印字](../../compiling/wasm.md#printing-print--princ--terpri)を参照)。
 - 非 GC バックエンド (`--no-gc`) は `:int`/`:long`/`:float`/`:bool`/`:string` を
   サポートしますが、cons/リーダ/プリンタのランタイムを必要とする `:s-expr` は

@@ -255,6 +255,74 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void parsesAsyncOption() {
+		// :async t marks the component lift async (todo 92 Tier 3); default is sync.
+		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int :async t)").async()).isTrue();
+		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int :async nil)").async()).isFalse();
+		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int)").async()).isFalse();
+	}
+
+	@Test
+	void rejectsNonBooleanAsyncValue() {
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int :async :yes)"))
+			.hasMessageContaining(":async expects t or nil");
+	}
+
+	@Test
+	void componentModeLiftsAsyncExportWithAsyncFuncType() {
+		// An :async t export lifts against an async function type (tag 0x43, the run
+		// shape) instead of the sync 0x40 form -- the ONLY byte difference, so I/O inside
+		// the export blocks cooperatively instead of trapping. The core module and the
+		// rest of the component wiring are unchanged.
+		String defun = "(defun noisy (a b) (print (+ a b)) (+ a b))";
+		List<LispVal> syncProgram = LispReader.readAllFromString(
+				defun + " (rontolisp:wasm-export 'noisy :params '(:int :int) :returns :int) (print \"hi\")");
+		List<LispVal> asyncProgram = LispReader.readAllFromString(
+				defun + " (rontolisp:wasm-export 'noisy :params '(:int :int) :returns :int :async t) (print \"hi\")");
+		byte[] sync = new WasmLispCompiler(false, true).compile(syncProgram);
+		byte[] async = new WasmLispCompiler(false, true).compile(asyncProgram);
+		// (s32 p0, s32 p1) -> s32 golden bytes, sync (0x40...) vs async (0x43...); see
+		// ComponentWriterTest.asyncFuncTypeScalarsEncoding.
+		byte[] syncType = hexBytes("40020270307a0270317a007a");
+		byte[] asyncType = hexBytes("43020270307a0270317a007a");
+		assertThat(indexOf(sync, syncType)).isNotNegative();
+		assertThat(indexOf(sync, asyncType)).isNegative();
+		assertThat(indexOf(async, asyncType)).isNotNegative();
+		assertThat(indexOf(async, syncType)).isNegative();
+		assertThat(async).hasSameSizeAs(sync);
+	}
+
+	@Test
+	void asyncNilComponentIsByteIdenticalToOmittedAsync() {
+		String defun = "(defun sumsq (a b) (* (+ a b) (+ a b)))";
+		byte[] omitted = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
+				defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int) (print \"hi\")"));
+		byte[] explicitNil = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(defun
+				+ " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int :async nil) (print \"hi\")"));
+		assertThat(explicitNil).isEqualTo(omitted);
+	}
+
+	private static byte[] hexBytes(String hex) {
+		byte[] out = new byte[hex.length() / 2];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+		}
+		return out;
+	}
+
+	private static int indexOf(byte[] haystack, byte[] needle) {
+		outer: for (int i = 0; i <= haystack.length - needle.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (haystack[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			return i;
+		}
+		return -1;
+	}
+
+	@Test
 	void componentModeRejectsRunExportName() {
 		// "run" is taken by the lifted wasi:cli/run entry; a second core export under
 		// the same name would make the module invalid.

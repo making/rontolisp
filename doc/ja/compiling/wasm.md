@@ -102,7 +102,7 @@ new TextDecoder().decode(new Uint8Array(mem.buffer, rptr, rlen)); // => ("c" "b"
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`（正準 ABI） | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`（正準 ABI） |
 | `:s-expr` | 手動の `(ptr,len)` | コンポーネントモデル `string`（印字テキスト） | 非対応 | 非対応 |
 | 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](#eligible-subset) | [非 GC サブセット](#eligible-subset) |
-| エクスポート内の I/O | 動作する（本物の WASI インポート。`--no-wasi` ではトラップ） | 実行時にトラップ（同期リフト） | `print` のみ（単一の `fd_write` インポート） | `print` はコンパイルエラー |
+| エクスポート内の I/O | 動作する（本物の WASI インポート。`--no-wasi` ではトラップ） | 実行時にトラップ（同期リフト） | `print` のみ（単一の `fd_write` インポート） | `print` のみ（組み込みの WASI 0.2 stdio ブリッジ） |
 | プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` とディレクティブのみ | `defun` とディレクティブのみ |
 | 呼び出しごとの文字列メモリ | ホスト管理（`__ronto_alloc`） | 正準 post-return が解放（intern ガード付きスナップショット） | ホスト管理（`__ronto_alloc` + `__ronto_alloc_mark`/`__ronto_alloc_reset` アリーナ API。スカラー返り値では自動） | 正準 post-return が解放（ヒープ底まで巻き戻し） |
 | 典型サイズ | 〜100 KB | 〜110 KB | 数百バイト | 数百バイト |
@@ -422,7 +422,7 @@ node -e '(async () => {
 
 ### コンパクトなコンポーネント出力（`--no-gc --component`）
 
-`--component` を追加すると、同じ MVP コアモジュールが、エクスポートを型付きコンポーネントモデルエクスポートとして公開する **WASM コンポーネント** としてラップされ、正準 ABI を通じて WAVE 構文で呼び出せるようになります。コアモジュールはインポートを 1 つも持たないため、このラップには WASI アダプターも共有メモリモジュールも wasm-GC も不要です。小さなプログラムならコンポーネント全体が数百バイトに収まり、**wasmtime の追加フラグを一切必要とせずに** 動作します。
+`--component` を追加すると、同じ MVP コアモジュールが、エクスポートを型付きコンポーネントモデルエクスポートとして公開する **WASM コンポーネント** としてラップされ、正準 ABI を通じて WAVE 構文で呼び出せるようになります。印字しないコアモジュールはインポートを 1 つも持たないため、このラップには WASI アダプターも共有メモリモジュールも wasm-GC も不要です。小さなプログラムならコンポーネント全体が数百バイトに収まり、**wasmtime の追加フラグを一切必要とせずに** 動作します。
 
 ```lisp
 ;; sumsq.lisp
@@ -452,10 +452,21 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 # "Hello, world"
 ```
 
+[印字](#printing-print--princ--terpri)もここで動作します。印字するプログラムには組み込みの **print マイクロアダプタ** が付きます — コアの単一の `fd_write` インポートを WASI 0.2 stdio（`wasi:cli/stdout` と、`wasi:io/streams` の*同期的な* `blocking-write-and-flush`）の上に実装する 3 つの小さな固定コアモジュールで、プログラムが印字するときだけ配線されます。エクスポートは通常の同期リフトのまま、フラグゼロという性質も維持され（ホストは 0.2 stdio をデフォルトで提供します）、印字出力はインタプリタとバイト単位で一致します — 先の `show.lisp` を使うと:
+
+```bash
+rontolisp show.lisp --no-gc --component -o show.wasm
+wasmtime run --invoke 'show(4)' show.wasm
+# 4
+# 6.0
+# "done"
+# ()
+```
+
 素の `--no-gc` 出力とのトレードオフと現在の制限:
 
 - コンポーネントにはコンポーネントモデル対応のホストが必要です。素のコアモジュールは素の埋め込み API を通じて **任意の** WebAssembly エンジンで動作します。両方の出力が引き続き利用可能なので、ホストに応じて選んでください。コンポーネントは `--no-gc` のデフォルトでは *ありません*。（`--component` なしの場合、`:string` は代わりに手動の `(ptr,len)` コア ABI として境界を越えます。）
-- コンポーネントは純粋なリアクターです。`wasi:cli/run` エントリはなく（トップレベルでは何も実行されません）、`print`/`princ`/`terpri` は `--no-gc --component` のもとではコンパイルエラーです（コンパクトなラップは、それらが必要とする `fd_write` インポートを満たす WASI アダプターを持ちません）。
+- コンポーネントは純粋なリアクターです。`wasi:cli/run` エントリはなく（トップレベルでは何も実行されません）。エクスポート内の印字は上記のマイクロアダプタを通じて動作しますが、それ以外の I/O は通常どおり `--no-gc` サブセットの外です。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法に合わない Lisp 名に対しては、コンパイラが `:as` での改名を求めます。
 - `--optimize` と組み合わせられます。コアモジュールはラップの前にツリーシェイクされます。
 
@@ -526,9 +537,31 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("�
 # "Hello, 世界"
 ```
 
+デフォルトではエクスポートは**同期的に**リフトされ、純粋計算でなければなりません。その内部の I/O（`print`、`read`、`rontolisp:fetch`、ファイルアクセス）は実行時に "cannot block a synchronous task" でトラップします。**`:async t`** を宣言するとエクスポートは非同期関数型に対してリフトされ（`run` エントリと同じスタックフル非同期の形）、内部の I/O が動作します。`wasmtime --invoke` は非同期エクスポートもまったく同じように呼び出せます:
+
+```lisp
+;; status.lisp
+(defun fetch-status (url)
+  (print "fetching")
+  (getf (rontolisp:await (rontolisp:fetch url)) :status))
+(rontolisp:wasm-export 'fetch-status :params '(:string) :returns :int :async t)
+```
+
+```bash
+rontolisp status.lisp --component -o status.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y \
+  --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
+# "fetching"
+# 204
+```
+
+コンポーネントの WIT レベルの契約では、`:async t` エクスポートは `async func` になります（例えば jco は Promise を返す関数として型付けし、同期エクスポートは普通の関数のままです）。同期と非同期のエクスポートは 1 つのコンポーネント内で自由に混在でき、`:async` は `:string`/`:s-expr` を含むすべての境界型と組み合わせられます。`:async` エクスポートを持たないプログラムの出力はバイト単位で同一です。
+
 コンポーネントエクスポートの現在の制限:
 
-- **純粋計算のみ**: エクスポートは同期的にリフトされるため、その内部の I/O（`print`、`read`、ファイルアクセス）は実行時に "cannot block a synchronous task" でトラップします。副作用はトップレベル（`run`）に置き、エクスポートは純粋関数にしてください。
+- **同期**（デフォルト）エクスポートは純粋計算のみです。内部の I/O は実行時に "cannot block a synchronous task" でトラップします。印字や fetch など I/O を行うエクスポートは `:async t` をオプトインし、純粋計算のエクスポートは同期のままにしてください。
+- `:async` が意味を持つのはここだけです。Preview 1 / `--no-wasi` のコアエクスポートは無視し（そこでは I/O をホストが直接提供します）、`--no-gc --component` は拒否します（コンパクトなリアクターコンポーネントには非同期アダプタがありません）。
+- jco（1.25.2）は `:async t` エクスポートをトランスパイルして非同期として型付けしますが、まだ呼び出せません — 生成されるドライバはコールバック方式の非同期タスクを前提としており、スタックフル非同期エクスポートは上流で未実装です（トランスパイルされた `run` の呼び出しと同じギャップです）。非同期エクスポートの検証済みパスは `wasmtime run --invoke` で、同期エクスポートは両方で動作します。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名（`sum-squared`）でなければなりません。その文法に合わない Lisp 名に対しては、コンパイラが `:as` での改名を求めます。
 - エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` グローバルを読むエクスポートは未初期化の値を見ることになります（これは Preview 1 の `--invoke` の挙動と同じです）。
 

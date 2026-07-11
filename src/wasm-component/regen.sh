@@ -51,6 +51,12 @@ PY
 
 echo "== core modules =="
 wasm-tools parse mem.wat          -o "$OUT/mem.wasm"
+wasm-tools parse shim-nogc-print.wat   -o "$OUT/shim-nogc-print.wasm"
+wasm-tools parse bridge-nogc-print.wat -o "$OUT/bridge-nogc-print.wasm"
+wasm-tools parse fixup-nogc-print.wat  -o "$OUT/fixup-nogc-print.wasm"
+wasm-tools validate "$OUT/shim-nogc-print.wasm"
+wasm-tools validate "$OUT/bridge-nogc-print.wasm"
+wasm-tools validate "$OUT/fixup-nogc-print.wasm"
 wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
 wasm-tools parse mem-http.wat     -o "$OUT/mem-http.wasm"
 wasm-tools parse adapter-http.wat -o "$OUT/adapter-http.wasm"
@@ -102,7 +108,15 @@ wasm-tools component new embedded-serve-http.wasm -o uni-serve-http.wasm
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-serve-http.wasm
 slice_import_block uni-serve-http.wasm "$OUT/import-block-serve-http.bin"
 
-rm -f core.wasm embedded.wasm uni.wasm core-http.wasm embedded-http.wasm uni-http.wasm \
+echo "== unified import block (--no-gc print micro-adapter: todo 93) =="
+wasm-tools parse core-nogc-print.wat -o core-nogc-print.wasm
+wasm-tools component embed . core-nogc-print.wasm -o embedded-nogc-print.wasm --world uni-nogc-print
+wasm-tools component new embedded-nogc-print.wasm -o uni-nogc-print.wasm
+wasm-tools validate -f component-model uni-nogc-print.wasm
+slice_import_block uni-nogc-print.wasm "$OUT/import-block-nogc-print.bin"
+
+rm -f core-nogc-print.wasm embedded-nogc-print.wasm uni-nogc-print.wasm \
+      core.wasm embedded.wasm uni.wasm core-http.wasm embedded-http.wasm uni-http.wasm \
       core-sock.wasm embedded-sock.wasm uni-sock.wasm \
       core-serve.wasm embedded-serve.wasm uni-serve.wasm \
       core-serve-http.wasm embedded-serve-http.wasm uni-serve-http.wasm

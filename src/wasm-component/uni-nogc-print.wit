@@ -1,0 +1,23 @@
+package local:uni;
+
+// The import surface for the compact --no-gc --component output WHEN THE PROGRAM PRINTS
+// (todo 93 remaining task 1: the print micro-adapter). A print-free --no-gc component
+// imports NOTHING (the adapter-free reactor wrap); a printing one needs exactly the two
+// WASI 0.2 stdio interfaces below so a tiny bridge core module can implement the core's
+// single wasi_snapshot_preview1.fd_write import over
+// output-stream.blocking-write-and-flush -- a plain synchronous host function, legal
+// inside a sync-lifted export (the adapter-serve-p1.wat precedent), and default-provided
+// by wasmtime with ZERO flags. WASI 0.3 streams were rejected for this seam: they are
+// async-task-only and would force async lifts + -W component-model-more-async-builtins=y
+// on every printing component.
+//
+// fd 1 only: --no-gc rejects every other I/O op at compile time (print/princ/terpri are
+// the whole printing surface), so wasi:cli/stderr would be dead weight in the block.
+//
+// The interface order fixes the component import-instance indices
+// NoGcWasmComponentBuilder assumes (wasi:io/error is dependency-hoisted first); append
+// new interfaces LAST and re-derive the constants from a fresh `wasm-tools dump`.
+world uni-nogc-print {
+  import wasi:cli/stdout@0.2.0;
+  import wasi:io/streams@0.2.0;
+}

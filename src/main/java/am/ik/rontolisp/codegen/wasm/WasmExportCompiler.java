@@ -92,8 +92,15 @@ final class WasmExportCompiler {
 	 * @param exportName the WASM export name ({@code :as} alias, default the Lisp name)
 	 * @param paramTypes the declared parameter type designators, in order
 	 * @param returnType the declared return type designator
+	 * @param async whether the {@code --component} lift uses an <strong>async</strong>
+	 * function type ({@code :async t}, todo 92 Tier 3): the export runs as a stackful
+	 * async task, so I/O inside it (print, fetch, ...) blocks cooperatively instead of
+	 * trapping. Only meaningful on the GC {@code --component} (non-serve) path; ignored
+	 * on Preview 1 / {@code --no-wasi} (core exports whose I/O the host provides
+	 * directly) and rejected under {@code --no-gc --component} (the adapter-free reactor
+	 * has no async machinery)
 	 */
-	record Decl(String name, String exportName, List<String> paramTypes, String returnType) {
+	record Decl(String name, String exportName, List<String> paramTypes, String returnType, boolean async) {
 	}
 
 	/**
@@ -128,6 +135,7 @@ final class WasmExportCompiler {
 		String exportName = null;
 		List<String> params = null;
 		String returns = null;
+		boolean async = false;
 		int i = 2;
 		while (i < items.size()) {
 			String keyword = keywordName(items.get(i), form);
@@ -139,6 +147,7 @@ final class WasmExportCompiler {
 				case ":as" -> exportName = exportAlias(value, form);
 				case ":params" -> params = quotedTypeList(value, form);
 				case ":returns" -> returns = returnDesignator(value, form);
+				case ":async" -> async = booleanOption(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-export option " + keyword + " in " + form.print());
 			}
@@ -146,7 +155,7 @@ final class WasmExportCompiler {
 		}
 		// Omitted :returns (like nil / '() / :void) means a void result.
 		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName,
-				params == null ? List.of() : params, returns == null ? T_VOID : returns);
+				params == null ? List.of() : params, returns == null ? T_VOID : returns, async);
 	}
 
 	// The host-facing default export name is the symbol's bare member name; a package
@@ -155,6 +164,23 @@ final class WasmExportCompiler {
 	private static String unqualifiedMember(String name) {
 		var qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
 		return qn == null ? name : qn.member();
+	}
+
+	// An :async value is the literal t or nil (leniently also a quoted one).
+	private static boolean booleanOption(LispVal value, LispCons form) {
+		LispVal v = value;
+		if (v instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest) {
+			v = rest.car();
+		}
+		if (v instanceof am.ik.rontolisp.LispNil) {
+			return false;
+		}
+		if (v instanceof am.ik.rontolisp.LispTrue || (v instanceof LispSymbol sym && "t".equals(sym.name()))) {
+			return true;
+		}
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export :async expects t or nil in " + form.print() + ", got: " + value.print());
 	}
 
 	// An :as value is a string literal (or, leniently, a quoted symbol) naming the WASM
@@ -449,7 +475,8 @@ final class WasmExportCompiler {
 		for (String t : decl.paramTypes()) {
 			params.add(componentValType(t));
 		}
-		return new WasmComponentBuilder.FuncExport(decl.exportName(), params, componentValType(decl.returnType()));
+		return new WasmComponentBuilder.FuncExport(decl.exportName(), params, componentValType(decl.returnType()),
+				decl.async());
 	}
 
 	static void appendWasmTypes(List<Type> types, String type) {

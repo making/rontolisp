@@ -142,6 +142,24 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void aliasCoreTableEncoding() {
+		// Golden bytes from `wasm-tools dump` of a --no-gc --component printing
+		// component: alias of the shim's "$imports" funcref table out of core instance
+		// 0 (sort core table = 00 01, target core instance export = 01).
+		assertThat(hex(ComponentWriter.aliasCoreTable(0, "$imports"))).isEqualTo("000101000824696d706f727473");
+	}
+
+	@Test
+	void coreInstanceFromExportsWithMixedSorts() {
+		// Golden bytes from `wasm-tools dump` of the same component: the fixup-argument
+		// instance {"$imports" = core table 0, "fd_write" = core func 2} -- per-export
+		// core sort bytes (table = 01, func = 00), unlike the funcs-only encoder.
+		assertThat(hex(ComponentWriter.coreInstanceFromExports(List.of("$imports", "fd_write"),
+				List.of(ComponentWriter.CORE_SORT_TABLE, ComponentWriter.CORE_SORT_FUNC), List.of(0, 2))))
+			.isEqualTo("0102" + "0824696d706f7274730100" + "0866645f77726974650002");
+	}
+
+	@Test
 	void commandRunExportEncoders() {
 		// result<_,_> defined type, func ()->result, instance from func, instance export
 		assertThat(hex(ComponentWriter.definedResultVoid())).isEqualTo("6a0000");
@@ -221,6 +239,25 @@ class ComponentWriterTest {
 	void asyncFuncTypeEncoding() {
 		// async func () -> (result type 6) = 43 00 00 06 (vs the non-async 0x40 form)
 		assertThat(hex(ComponentWriter.asyncFuncTypeResultType(6))).isEqualTo("43000006");
+	}
+
+	@Test
+	void asyncFuncTypeScalarsEncoding() {
+		// The async counterpart of funcTypeScalars (todo 92 Tier 3): the sync golden
+		// bytes with the functype tag flipped 0x40 -> 0x43. Verified against `wasm-tools
+		// print` of a component whose async-typed export was invoked with `wasmtime run
+		// --invoke 'noisy-add(20, 22)'` (I/O inside the export works; text form
+		// `(func async (param "p0" s32) ...)` round-trips through `wasm-tools parse`).
+		assertThat(hex(ComponentWriter.asyncFuncTypeScalars(List.of("p0", "p1"),
+				List.of(ComponentWriter.VT_S32, ComponentWriter.VT_S32), ComponentWriter.VT_S32)))
+			.isEqualTo("43020270307a0270317a007a");
+		// (string p0) -> string, the :async :string shape
+		assertThat(hex(ComponentWriter.asyncFuncTypeScalars(List.of("p0"), List.of(ComponentWriter.VT_STRING),
+				ComponentWriter.VT_STRING)))
+			.isEqualTo("4301027030730073");
+		// (s32 p0) -> no result: the named-results form 01 with an empty vec
+		assertThat(hex(ComponentWriter.asyncFuncTypeScalars(List.of("p0"), List.of(ComponentWriter.VT_S32), null)))
+			.isEqualTo("43010270307a0100");
 	}
 
 	@Test

@@ -221,9 +221,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code canon lift} ({@link NoGcWasmComponentBuilder}), callable with
 	 * {@code wasmtime run --invoke 'name(args)'} and no extra flags. The wrap is a pure
 	 * post stage -- the core module inside the component is byte-identical to the
-	 * non-component output -- but it narrows the surface: printing ({@code fd_write}) and
-	 * the {@code :string} boundary type are compile errors, and export names must match
-	 * the component-model {@code label} grammar.
+	 * non-component output (a printing program's single {@code fd_write} import is
+	 * satisfied by the fixed print micro-adapter modules the wrap wires in) -- but it
+	 * narrows the surface: export names must match the component-model {@code label}
+	 * grammar and {@code :async} is rejected.
 	 */
 	private final boolean component;
 
@@ -268,8 +269,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * to scalar linear-memory loops that need no SIMD proposal.
 	 * @param component when {@code true}, wrap the module as a reactor-style WASM
 	 * component whose scalar exports are typed component-model exports (the CLI's
-	 * {@code --no-gc --component}); printing and {@code :string} boundary types become
-	 * compile errors and export names must be lower-kebab-case
+	 * {@code --no-gc --component}); export names must be lower-kebab-case and
+	 * {@code :async} is rejected
 	 */
 	public NoGcWasmCompiler(boolean optimize, boolean simd, boolean component) {
 		this.optimize = optimize;
@@ -368,17 +369,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// boundary type is present).
 		int internalCount = reachable.size();
 		Mem mem = planMemory(reachable, defuns, exportDecls, internalCount, types);
-		// The component wrap is adapter-free -- the whole point of the compact output is
-		// a zero-import core module -- so a program that prints (the one thing that
-		// pulls in the fd_write import, todo 110) is a clear compile error here; a
-		// later phase can supply a micro-adapter implementing fd_write over
-		// wasi:cli/stdout by swapping the __write_stdout funnel (.todo/93).
-		if (this.component && mem.printUsed()) {
-			throw new UnsupportedOperationException(
-					"print/princ/terpri are not supported with --no-gc --component (the compact component"
-							+ " wrap has no WASI adapter for the fd_write import); drop the printing or use"
-							+ " --no-gc without --component");
-		}
 
 		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j; the two
 		// memory helpers (when present) occupy N+E and N+E+1.
@@ -396,11 +386,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			module = am.ik.wasm.WasmTreeShaker.shake(module);
 		}
 		if (this.component) {
-			// Post-stage wrap: a scalar-only core module is byte-identical to the
-			// non-component output and the component just aliases + lifts its exports; a
-			// :string boundary additionally aliases the canonical string ABI helpers
-			// appended by assemble() above (todo 93 Tier 2).
-			return NoGcWasmComponentBuilder.build(module, exportDecls);
+			// Post-stage wrap: the core module is byte-identical to the non-component
+			// output and the component just aliases + lifts its exports; a :string
+			// boundary additionally aliases the canonical string ABI helpers appended by
+			// assemble() above (todo 93 Tier 2), and a printing program (todo 93 print
+			// micro-adapter) wires the fixed shim/bridge/fixup modules implementing the
+			// fd_write import over WASI 0.2 stdio.
+			return NoGcWasmComponentBuilder.build(module, exportDecls, mem.printUsed());
 		}
 		return module;
 	}
@@ -418,6 +410,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 					+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
 					+ " \"sum-squared\"); rename it with :as \"kebab-name\"");
+		}
+		// :async (todo 92 Tier 3) is the GC component's stackful-async lift; the compact
+		// reactor component has no async machinery (and nothing to block on -- printing
+		// goes through the synchronous WASI 0.2 blocking-write-and-flush, every other
+		// I/O op is a compile error), so an :async request is a clear error rather than
+		// a silently-sync export.
+		if (decl.async()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-export :async is not supported with --no-gc"
+					+ " --component for '" + decl.name() + "' (the compact reactor component has no async adapter;"
+					+ " use the default GC backend's --component output)");
 		}
 	}
 

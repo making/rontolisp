@@ -518,6 +518,49 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcComponentPrintWorksInsideSyncExportsViaTheMicroAdapter() throws Exception {
+		// The todo-93 print micro-adapter: print/princ/terpri inside a sync-lifted
+		// export write to stdout through the fixed WASI 0.2 stdio bridge (the core's
+		// fd_write import over output-stream.blocking-write-and-flush, a plain
+		// synchronous host function) with ZERO wasmtime flags -- interpreter-identical
+		// print output ahead of the WAVE-printed return value. A :string export (with
+		// its heap-popping post-return) composes in the same component.
+		String program = """
+				(defun show (n)
+				  (print "hello")
+				  (princ n)
+				  (terpri)
+				  (* n 2))
+				(defun shout (s)
+				  (princ "loud")
+				  (terpri)
+				  (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""";
+		assertThat(compileNoGcComponentAndInvoke(program, "show(21)")).isEqualTo("\"hello\"\n21\n42");
+		assertThat(compileNoGcComponentAndInvoke(program, "shout(\"hey\")")).isEqualTo("loud\n\"hey!\"");
+	}
+
+	@Test
+	void noGcComponentPrintCrossesTheBridgeChunkCap() throws Exception {
+		// One princ larger than the bridge's 4096-byte blocking-write-and-flush cap
+		// (its per-call maximum) crosses intact through the chunking loop.
+		String program = """
+				(defun spam ()
+				  (let ((s "0123456789abcdef"))
+				    (dotimes (i 4)
+				      (setq s (concatenate 'string s s s s)))
+				    (princ s)
+				    (length s)))
+				(rontolisp:wasm-export 'spam :params '() :returns :int)
+				""";
+		String out = compileNoGcComponentAndInvoke(program, "spam()");
+		// 16 * 4^4 = 4096 printed characters, then wasmtime appends the return value.
+		assertThat(out).hasSize(4100).endsWith("0123456789abcdef4096");
+	}
+
+	@Test
 	void noGcComposesWithOptimize() throws Exception {
 		// --no-gc --optimize: the (GC-agnostic) tree shaker runs on the non-GC module
 		// too,
@@ -1605,9 +1648,10 @@ class WasmLispCompilerIntegrationTest {
 		// Each Tier-1 scalar type crosses the canonical ABI: :int -> s32, :float -> f64,
 		// :bool -> bool (WAVE prints true/false), omitted :returns -> no result (the
 		// body runs, its value is discarded, nothing is printed). Component exports are
-		// lifted synchronously, so they must be pure-compute: I/O inside one (print)
-		// hits a blocking stream built-in and traps ("cannot block a synchronous task");
-		// I/O-bearing exports need the stackful-async lift (Tier 3, .todo/92).
+		// lifted synchronously by default, so they must be pure-compute: I/O inside one
+		// (print) hits a blocking stream built-in and traps ("cannot block a synchronous
+		// task"); an I/O-bearing export opts into the stackful-async lift with :async t
+		// (todo 92 Tier 3, componentAsyncExportAllowsIoInside).
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "sumsquared(2, 3)")).isEqualTo("25");
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "half(7.0)")).isEqualTo("3.5");
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "bigp(101)")).isEqualTo("true");
@@ -1687,6 +1731,59 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		assertThat(compileAndInvokeComponent(program, "swap(\"(1 2)\")")).isEqualTo("\"(2 1)\"");
 		assertThat(compileAndInvokeComponent(program, "sum-expr(\"(40 2)\")")).isEqualTo("42");
+	}
+
+	private static final String COMPONENT_ASYNC_PROGRAM = """
+			(defun noisy-add (a b)
+			  (print (+ a b))
+			  (+ a b))
+			(defun shout (s)
+			  (print s)
+			  (concatenate 'string s "!"))
+			(defun pure-add (a b) (+ a b))
+			(rontolisp:wasm-export 'noisy-add :params '(:int :int) :returns :int :async t)
+			(rontolisp:wasm-export 'shout :params '(:string) :returns :string :async t)
+			(rontolisp:wasm-export 'pure-add :params '(:int :int) :returns :int)
+			(print "top")
+			""";
+
+	@Test
+	void componentAsyncExportAllowsIoInside() throws Exception {
+		// Tier 3: an :async t export lifts against an async function type (the stackful
+		// run shape), so print inside it writes through the adapter's blocking stream
+		// built-ins instead of trapping with "cannot block a synchronous task". The
+		// invoke output is the print's line followed by the WAVE-rendered result.
+		assertThat(compileAndInvokeComponent(COMPONENT_ASYNC_PROGRAM, "noisy-add(20, 22)")).isEqualTo("42\n42");
+	}
+
+	@Test
+	void componentAsyncStringExportAllowsIoInside() throws Exception {
+		// :async composes with the Tier 2 canonical string ABI unchanged (the async-typed
+		// lift keeps the memory/realloc/utf8/post-return options): the argument crosses
+		// in, the print inside runs, and the result crosses back through the retptr shim.
+		assertThat(compileAndInvokeComponent(COMPONENT_ASYNC_PROGRAM, "shout(\"世界\")")).isEqualTo("\"世界\"\n\"世界!\"");
+	}
+
+	@Test
+	void componentAsyncExportCoexistsWithSyncExportsAndRun() throws Exception {
+		// Sync and async exports mix freely in one component, and wasi:cli/run still
+		// runs the top level as a command.
+		assertThat(compileAndInvokeComponent(COMPONENT_ASYNC_PROGRAM, "pure-add(1, 2)")).isEqualTo("3");
+		assertThat(compileAndRunComponent(COMPONENT_ASYNC_PROGRAM)).isEqualTo("\"top\"");
+	}
+
+	@Test
+	void componentSyncExportWithIoStillTraps() throws Exception {
+		// Without :async the lift stays synchronous and I/O inside the export traps --
+		// pinned so the :async opt-in stays meaningful (and the trap message stays
+		// discoverable).
+		List<LispVal> program = LispReader.readAllFromString(COMPONENT_ASYNC_PROGRAM.replace(":async t", ":async nil"));
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "--invoke", "noisy-add(20, 22)", "/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).isNotZero();
+		assertThat(result.getStderr()).contains("cannot block a synchronous task");
 	}
 
 	@Test
@@ -5592,6 +5689,98 @@ class WasmLispCompilerIntegrationTest {
 				.contains("\"POST:hi\"")
 				.contains("\"POST:two\"")
 				.contains("\"POST:one\"");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "RONTOLISP_HTTP_E2E", matches = "1")
+	void componentFetchWithRuntimeBuiltUrls(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir)
+			throws Exception {
+		// Regression: the fetch call site used to read a string's field 0 (its identity
+		// id) as a linear-memory pointer, which holds the right bytes only for the FIRST
+		// runtime-built string (the id counter and the heap scratch both start at
+		// heapBase). With TWO runtime-built URLs the first fetch silently used the
+		// second URL's bytes. The URL/body staging now copies through _str_to_mem.
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/a", exchange -> {
+			byte[] body = "route-a".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.createContext("/b", exchange -> {
+			byte[] body = "route-b".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			String base = "http://127.0.0.1:" + server.getAddress().getPort();
+			String program = "(let ((u1 (concatenate 'string \"" + base + "\" \"/a\"))"
+					+ "      (u2 (concatenate 'string \"" + base + "\" \"/b\")))"
+					+ "  (print (getf (rontolisp:await (rontolisp:fetch u1)) :body))"
+					+ "  (print (getf (rontolisp:await (rontolisp:fetch u2)) :body)))"
+					// a runtime-built request body must be staged too
+					+ " (let ((body (concatenate 'string \"pay\" \"load\")))"
+					+ "   (print (getf (rontolisp:await (rontolisp:fetch \"" + base
+					+ "/a\" (list :method \"POST\" :body body))) :status)))";
+			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+			java.nio.file.Path wasm = tempDir.resolve("fetch-fresh-urls.component.wasm");
+			java.nio.file.Files.write(wasm, componentBytes);
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W",
+					"component-model-more-async-builtins=y", "-S", "http=y", wasm.toString())
+				.redirectErrorStream(true)
+				.start();
+			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+			p.waitFor();
+			assertThat(out).contains("\"route-a\"").contains("\"route-b\"").contains("200");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "RONTOLISP_HTTP_E2E", matches = "1")
+	void componentFetchInsideAsyncExport(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir)
+			throws Exception {
+		// Tier 3 payoff: fetch inside an :async t export works under `wasmtime run
+		// --invoke` (the export runs as a stackful async task, so the adapter's blocking
+		// wasi:http machinery is legal; the URL argument is a runtime-built string
+		// crossing the canonical string ABI).
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/ping", exchange -> {
+			byte[] body = "pong".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/ping";
+			String program = """
+					(defun fetch-body (url)
+					  (print "fetching")
+					  (getf (rontolisp:await (rontolisp:fetch url)) :body))
+					(rontolisp:wasm-export 'fetch-body :params '(:string) :returns :string :async t)
+					""";
+			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+			java.nio.file.Path wasm = tempDir.resolve("fetch-export.component.wasm");
+			java.nio.file.Files.write(wasm, componentBytes);
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W",
+					"component-model-more-async-builtins=y", "-S", "http=y", "--invoke", "fetch-body(\"" + url + "\")",
+					wasm.toString())
+				.redirectErrorStream(true)
+				.start();
+			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+			p.waitFor();
+			assertThat(out).contains("\"fetching\"").contains("\"pong\"");
 		}
 		finally {
 			server.stop(0);

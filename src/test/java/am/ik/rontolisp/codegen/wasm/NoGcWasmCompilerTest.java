@@ -575,6 +575,25 @@ class NoGcWasmCompilerTest {
 		return false;
 	}
 
+	// All payloads of the given section id, in order. A printing component carries
+	// several sections of one id (four core-module sections, interleaved alias/canon/
+	// instance sections), which the map-shaped sections() helper cannot represent.
+	private static List<byte[]> sectionPayloads(byte[] binary, int sectionId) {
+		List<byte[]> result = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < binary.length) {
+			int id = binary[p[0]++] & 0xFF;
+			int size = readUleb(binary, p);
+			byte[] payload = new byte[size];
+			System.arraycopy(binary, p[0], payload, 0, size);
+			p[0] += size;
+			if (id == sectionId) {
+				result.add(payload);
+			}
+		}
+		return result;
+	}
+
 	// Splits a module into a map of section id -> section payload bytes (skipping the
 	// 8-byte header). Assumes at most one of each non-custom section, which holds here.
 	private static Map<Integer, byte[]> sections(byte[] module) {
@@ -1624,15 +1643,80 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void componentRejectsPrint() {
-		// todo-110 Release-1 decision: printing pulls in the fd_write import, and the
-		// compact wrap has no WASI adapter to satisfy it -- a clear compile error until
-		// a micro-adapter phase lands (.todo/93).
-		assertThatThrownBy(() -> compileComponent("""
+	void componentPrintWiresTheMicroAdapter() {
+		// A printing program under --no-gc --component (the todo-93 print
+		// micro-adapter) is no longer a compile error: the wrap prepends the WASI 0.2
+		// stdio import block and wires three fixed core modules -- a funcref-table shim,
+		// the bridge implementing the core's single fd_write import over
+		// output-stream.blocking-write-and-flush (a plain synchronous host function, so
+		// the exports stay sync lifts), and the fixup whose element segment closes the
+		// shim indirection. The embedded core module stays byte-identical to the plain
+		// --no-gc printing output.
+		String program = """
 				(defun f (n) (print n) n)
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
-				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("print/princ/terpri are not supported with --no-gc --component");
+				""";
+		byte[] plain = compile(program);
+		byte[] component = compileComponent(program);
+		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
+		String text = new String(component, StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("wasi:io/error@0.2.0", "wasi:io/streams@0.2.0", "wasi:cli/stdout@0.2.0");
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).as("core + shim + bridge + fixup").hasSize(4);
+		assertThat(coreModules.get(0)).isEqualTo(plain);
+		// The shim exports the fixup's patch target: the "$imports" funcref table.
+		assertThat(new String(coreModules.get(1), StandardCharsets.ISO_8859_1)).contains("$imports", "fd_write");
+		// The fixed machinery adds O(hundreds of bytes) to the scalar baseline: the
+		// whole printing component of a tiny program stays around 2 KB.
+		assertThat(component.length).as("printing component size").isLessThan(2560);
+	}
+
+	@Test
+	void componentPrintFreeProgramsCarryNoneOfThePrintMachinery() {
+		// The micro-adapter is gated on the fd_write import (mem.printUsed): a
+		// print-free component keeps the single embedded core module and no import
+		// section (componentWrapsThePlainCoreModuleVerbatim pins the full adapter-free
+		// shape; this pins the gate from the print side).
+		byte[] component = compileComponent(COMPONENT_PROGRAM);
+		assertThat(sectionPayloads(component, 1)).hasSize(1);
+		assertThat(new String(component, StandardCharsets.ISO_8859_1)).doesNotContain("wasi:cli/stdout@0.2.0");
+	}
+
+	@Test
+	void componentPrintComposesWithStringExports() {
+		// Print + :string in one component: the canonical string ABI (todo 93 Tier 2)
+		// lifts over the core's own memory, which the print wiring has already aliased
+		// as core memory 0 -- so exactly ONE memory alias exists, and the core module
+		// carries the cabi_* exports next to its fd_write import.
+		String program = """
+				(defun shout (s) (print "in") (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).hasSize(4);
+		byte[] core = coreModules.get(0);
+		assertThat(exportNames(Objects.requireNonNull(sections(core).get(7)))).contains("shout", "memory",
+				"cabi_realloc", "cabi_post_i32");
+		// An alias-core-memory entry is [00 02] (sort core memory) [01] (instance
+		// export) [01] (the core instance) then the name "memory"; the string lift
+		// reuses the print wiring's alias instead of adding a second one.
+		int memoryAliases = 0;
+		for (byte[] aliasSection : sectionPayloads(component, 6)) {
+			if (containsSequence(aliasSection, 0x00, 0x02, 0x01, 0x01, 0x06, 'm', 'e', 'm', 'o', 'r', 'y')) {
+				memoryAliases++;
+			}
+		}
+		assertThat(memoryAliases).as("exactly one core-memory alias section hit").isEqualTo(1);
+		// The string-involving lift keeps its four canonical options: (memory 0)
+		// (realloc ...) utf8 (post-return ...).
+		boolean stringLift = false;
+		for (byte[] canonSection : sectionPayloads(component, 8)) {
+			if (containsSequence(canonSection, 0x04, 0x03, 0x00, 0x04)) {
+				stringLift = true;
+			}
+		}
+		assertThat(stringLift).as("canonical string-lift options present").isTrue();
 	}
 
 	@Test
@@ -1725,6 +1809,18 @@ class NoGcWasmCompilerTest {
 				(rontolisp:wasm-export 'sum_squared :params '(:int) :returns :int)
 				""")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("not a valid component-model export name");
+	}
+
+	@Test
+	void componentRejectsAsyncExport() {
+		// :async (todo 92 Tier 3) is the GC component's stackful-async lift; the
+		// adapter-free reactor component has no async machinery, so it is a clear error
+		// here rather than a silently-sync export.
+		assertThatThrownBy(() -> compileComponent("""
+				(defun add2 (a b) (+ a b))
+				(rontolisp:wasm-export 'add2 :params '(:long :long) :returns :long :async t)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":async is not supported with --no-gc --component");
 	}
 
 	@Test

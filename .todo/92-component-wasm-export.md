@@ -1,6 +1,90 @@
 # 92. Host-callable `wasm-export` under `--component` (WASI 0.3 component exports)
 
-## STATUS: Tiers 1+2 DONE (2026-07-11); Tier 3 remains
+## STATUS: Tiers 1+2+3 DONE (2026-07-11); only the optional `.wit` output remains
+
+Tier 3 (`:async t` I/O exports) is implemented and verified: print and fetch
+inside a component export work under `wasmtime run --invoke` instead of
+trapping. Pure-compute exports stay sync (byte-identical output).
+
+- **Open decisions taken**:
+  - Selection = an explicit **`:async t` directive option**, NOT automatic I/O
+    call-graph detection: funcall/apply route through the arity dispatchers, so
+    a conservative reachability analysis would flip nearly every export async
+    and silently break the sync byte-identity guarantee; explicit opt-in also
+    matches the WIT contract (the author declares `async func`).
+  - WIT visibility / callability was measured FIRST via a wasm-tools
+    print -> sed -> parse round trip on a Tier-2 component (before any Java
+    change): flipping ONLY the export functype to `(func async ...)` makes
+    wasmtime 46 run the export as a stackful async task -- print inside works,
+    `--invoke` renders the result normally, run co-exists, `wasm-tools
+    validate` (cm-async flags) passes.
+  - `:string` x async: the premise "async lifts have no post-return" turned out
+    NOT to apply -- this is a stackful lift via the async TYPE with plain sync
+    canonical options (like `run`), not a `canon lift async` callback lift, so
+    wasmtime accepts and calls the Tier-2
+    memory/realloc/utf8/**post-return** options unchanged. The CABI_MARK
+    saved-mark reclamation needed NO replacement.
+  - Slicing collapsed: scalar and `:string` async both ride one mechanism (the
+    async flag on the Decl + one async type encoder), implemented together.
+- **Implementation** (deliberately small): `WasmExportCompiler.Decl` gained an
+  `async` flag (`:async t/nil`, quoted forms accepted; anything else = clear
+  error), `ComponentWriter.asyncFuncTypeScalars` encodes the async functype
+  (tag 0x43; sync golden bytes with the tag flipped, pinned in
+  `ComponentWriterTest`), `WasmComponentBuilder.appendFuncExports` picks the
+  async type per export. The CORE MODULE is untouched by `:async` -- the
+  component type section is the only byte difference. Preview 1 / `--no-wasi`
+  / plain `--no-gc` ignore the option; `--no-gc --component` rejects it
+  (`NoGcWasmCompiler.validateComponentExport`: no async adapter in the
+  reactor); serve unaffected.
+- **fetch call-site bug found + fixed en route** (blocking fetch-in-export):
+  `WasmFetchCompiler` read the URL/body string's field 0 as a linear pointer,
+  but since the [[27]] GC-string redesign that id is an IDENTITY (counter for
+  runtime-built strings) -- only the accidentally-aligned FIRST fresh string
+  worked (two fresh URLs = silent wrong-URL fetch, demonstrated 204/200 swap;
+  an export's `_str_from_mem` argument never worked). Now the call site stages
+  URL + body via `_str_to_mem` into heap scratch (new fixed cells
+  `FETCH_URL_PTR/LEN_ADDR`, `FETCH_REQ_BODY_PTR/LEN_ADDR` at 0x4001C-0x40028),
+  ADVANCES HEAP_PTR past the copies so `_fetch_ser_headers`' scratch cannot
+  clobber them, and pops it after `fetch-start` returns. Headers were already
+  staged correctly. This changes the bytes of every fetch-using component
+  (bug fix); export-free non-fetch shapes stay byte-identical.
+- **Byte identity** proven by stash dance across ELEVEN shapes: export-free
+  base/sock/serve components + Preview 1, scalar-export component + Preview 1,
+  `:string` component + Preview 1, `--no-gc --component` `:string` -- all
+  byte-identical; the http and serve+fetch components differ exactly by the
+  fetch staging fix (verified semantically: run 204, serve+fetch curl 204,
+  POST body/header round trips).
+- **Verified** (wasmtime 46.0.1): `--invoke` on an `:async t` scalar export
+  with print inside ("42\n42"), `:async` `:string` with print (UTF-8 世界
+  round trip), fetch(:string url)->:int inside an async export with
+  `-S http=y` (httpbin 204 + local-server E2E), sync+async mixed in one
+  component, run co-existence, sync-export-with-I/O still traps (pinned),
+  `:async nil` byte-identical to omitted.
+- **jco 1.25.2 / Node 23.7 (JSPI)**: transpile works and TYPES the async
+  export correctly (`noisyMul(p0, p1): Promise<number>` vs sync
+  `pureAdd(...): number`; needs `@bytecodealliance/preview3-shim`), sync
+  exports still call fine, but CALLING an async export fails upstream: jco's
+  generated `_driverLoop` assumes callback-style async ("failed to unpack
+  callback result ... invalid async return value [13]" -- the flat result
+  misread as a callback code); stackful async exports are unimplemented in
+  jco. Same gap family as printing inside a transpiled `run`
+  (`FutureReadableEnd is not defined`, reproduced on an UNCHANGED Tier-2-shape
+  component). wasmtime `--invoke` is the documented path for async exports.
+- Tests: `ComponentWriterTest.asyncFuncTypeScalarsEncoding`,
+  `WasmExportCompilerTest` (parse, async-vs-sync type bytes, `:async nil`
+  identity), `NoGcWasmCompilerTest.componentRejectsAsyncExport`,
+  `WasmLispCompilerIntegrationTest.componentAsyncExport*` +
+  `componentSyncExportWithIoStillTraps` +
+  `componentFetchWithRuntimeBuiltUrls` + `componentFetchInsideAsyncExport`
+  (last two opt-in `RONTOLISP_HTTP_E2E=1`), ci-spec
+  `wasm-export-directive-does-not-disturb-run` extended with an `:async`
+  export.
+
+Remaining (optional): emit a generated `.wit` world so hosts / jco can
+generate bindings without introspecting the component; revisit jco once
+stackful async exports land upstream.
+
+## Historical record: Tiers 1+2 (DONE 2026-07-11)
 
 Tier 2 (`:string`/`:s-expr` via the canonical string ABI) is implemented and
 verified -- same UX as todo-93 Tier 2, just with the GC flags:

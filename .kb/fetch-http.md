@@ -72,6 +72,19 @@ literal = compile error; runtime-computed = GET). The 0x60000/0x70000 response b
 are shared scratch, safe because the core copies them into GC values before the next
 `fetch-await`. Regenerating/re-wiring follows `src/wasm-component/README.md`.
 
+**URL/body staging (fixed 2026-07-11, with todo 92 Tier 3)**: the fetch call site
+stages the URL and request-body bytes into the linear heap via `_str_to_mem` before
+calling `fetch-start` (fixed cells `FETCH_URL_PTR/LEN_ADDR` + `FETCH_REQ_BODY_PTR/LEN_ADDR`
+at 0x4001C-0x40028; HEAP_PTR is advanced past the copies so `_fetch_ser_headers`' own
+HEAP_PTR scratch cannot clobber them, then popped after the call). It previously read the
+string struct's field 0 as a linear pointer — an IDENTITY id since the wasm-GC string
+redesign ([[27]]), valid only by accident for the FIRST runtime-built string (id counter
+and heap scratch both start at heapBase), so a program building two strings before
+fetching silently requested the wrong URL, and a `wasm-export` argument (`_str_from_mem`,
+always fresh) never worked. Header strings were already staged correctly
+(`emitWriteField`). Regression pinned by `componentFetchWithRuntimeBuiltUrls`
+(opt-in `RONTOLISP_HTTP_E2E=1`).
+
 **Browser playground**: truly async. The Web Image runtime runs inside a Web Worker
 (`web/ronto-worker.js`); the web-profile substitution
 (`src/web/java/.../eval/Target_HttpSupport.java`) calls `BrowserHttp.start`, which posts

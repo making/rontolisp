@@ -1,6 +1,6 @@
 # rontolisp:wasm-export
 
-`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type)`
+`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type :async t)`
 
 Marks a top-level `defun` as host-callable when compiling to a WebAssembly core
 module, declaring the WASM-boundary types of its parameters and result. It is a
@@ -25,6 +25,11 @@ source runs on every backend. See
   `nil` or `'()` means no arguments.
 - `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or
   `:void` declares a void result (the Lisp return value is discarded).
+- `:async` — `t` lifts the export as an **async** component-model function under
+  `--component`, so I/O inside it (`print`, `rontolisp:fetch`, ...) works instead
+  of trapping. Defaults to `nil` (a synchronous, pure-compute lift). Meaningful
+  only under `--component`: Preview 1 / `--no-wasi` core exports ignore it, and
+  `--no-gc --component` rejects it.
 
 The type designators and their boundary representations are:
 
@@ -48,21 +53,23 @@ it exposes the full width with no `wrap`/`extend` conversion.
 - Under `--component`, an export becomes a **typed component-model export**
   callable with WAVE syntax (`wasmtime run --invoke 'name(args)'`):
   `:int`/`:float`/`:bool`/void, `:string` and `:s-expr` as component-model
-  `string` (plus `:long` with `--no-gc`, which has no `:s-expr`). The export
-  must be pure-compute (I/O inside it traps; under `--no-gc --component`,
-  printing is a compile error),
-  and its name must be lower-kebab-case (rename with `:as` otherwise). See
+  `string` (plus `:long` with `--no-gc`, which has no `:s-expr`). A sync
+  (default) export must be pure-compute — I/O inside it traps; declare
+  `:async t` when the export prints or fetches. Under `--no-gc --component`,
+  `:async` is rejected but printing works in the sync export itself, through a
+  built-in WASI 0.2 stdio micro-adapter wired in only when the program prints.
+  The export name must be lower-kebab-case (rename with `:as` otherwise). See
   [Component-model function exports](../../compiling/wasm.md#component-model-function-exports-wasm-export)
   and [Compact component output](../../compiling/wasm.md#compact-component-output---no-gc---component).
   On the interpreter and JVM the directive just returns the named symbol.
 - Only a top-level `defun` can be exported; the declared parameter count must
   match its arity, and functions that take or return function values are out of
   scope.
-- The exported function is pure-compute: any I/O (printing, reading, time,
-  random, or a top-level I/O form) traps under `--no-wasi` and is otherwise
-  unsupported. One exception: under `--no-gc`, `print`/`princ`/`terpri` work
-  through a single `fd_write` import that is added only when the program
-  prints (see
+- Outside `--component`, the exported function is pure-compute: any I/O
+  (printing, reading, time, random, or a top-level I/O form) traps under
+  `--no-wasi` and is otherwise unsupported. One exception: under `--no-gc`,
+  `print`/`princ`/`terpri` work through a single `fd_write` import that is
+  added only when the program prints (see
   [Printing](../../compiling/wasm.md#printing-print--princ--terpri)).
 - The non-GC backend (`--no-gc`) supports `:int`/`:long`/`:float`/`:bool`/`:string`
   but not `:s-expr`, which needs the cons/reader/printer runtime. `:long` is

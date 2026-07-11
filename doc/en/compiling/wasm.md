@@ -156,7 +156,7 @@ not the Lisp source:
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
 | `:s-expr` | manual `(ptr,len)` | component-model `string` (printed text) | not supported | not supported |
 | Function body may use | the full language | the full language | the [non-GC subset](#eligible-subset) | the [non-GC subset](#eligible-subset) |
-| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | traps at runtime (synchronous lift) | `print` only (one `fd_write` import) | `print` is a compile error |
+| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | traps at runtime (synchronous lift) | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.2 stdio bridge) |
 | Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
 | Per-call string memory | host-managed (`__ronto_alloc`) | freed by the canonical post-return (intern-guarded snapshot) | host-managed (`__ronto_alloc` + the `__ronto_alloc_mark`/`__ronto_alloc_reset` arena API; automatic for scalar returns) | freed by the canonical post-return (pops to the heap base) |
 | Typical size | ~100 KB | ~110 KB | hundreds of bytes | hundreds of bytes |
@@ -573,9 +573,10 @@ JavaScript is the same "instantiate, then call the exports" as a GC reactor — 
 
 Add `--component` to wrap the same MVP core module as a **WASM component** whose
 exports become typed component-model exports, callable through the canonical ABI with
-WAVE syntax. Because the core module has zero imports, the wrap needs no WASI adapter,
-no shared-memory module and no wasm-GC — the whole component stays in the hundreds of
-bytes for a small program and runs with **no extra wasmtime flags at all**:
+WAVE syntax. A print-free core module has zero imports, so the wrap needs no WASI
+adapter, no shared-memory module and no wasm-GC — the whole component stays in the
+hundreds of bytes for a small program and runs with **no extra wasmtime flags at
+all**:
 
 ```lisp
 ;; sumsq.lisp
@@ -614,6 +615,23 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 # "Hello, world"
 ```
 
+[Printing](#printing-print--princ--terpri) works here too: a program that prints gets a
+built-in **print micro-adapter** — three tiny fixed core modules that implement the
+core's single `fd_write` import over WASI 0.2 stdio (`wasi:cli/stdout` plus
+`wasi:io/streams`' *synchronous* `blocking-write-and-flush`), wired in only when the
+program prints. The exports stay ordinary sync lifts, the zero-flag property is kept
+(hosts provide 0.2 stdio by default), and the print output is byte-identical to the
+interpreter — with the earlier `show.lisp`:
+
+```bash
+rontolisp show.lisp --no-gc --component -o show.wasm
+wasmtime run --invoke 'show(4)' show.wasm
+# 4
+# 6.0
+# "done"
+# ()
+```
+
 Trade-offs against the plain `--no-gc` output, and current limits:
 
 - A component needs a component-model-capable host; the raw core module runs on **any**
@@ -621,9 +639,8 @@ Trade-offs against the plain `--no-gc` output, and current limits:
   pick per host, and note the component is *not* the default for `--no-gc`. (Without
   `--component`, a `:string` crosses as the manual `(ptr,len)` core ABI instead.)
 - The component is a pure reactor: there is no `wasi:cli/run` entry (nothing runs at
-  the top level), and `print`/`princ`/`terpri` are a compile error under
-  `--no-gc --component` (the compact wrap carries no WASI adapter to satisfy the
-  `fd_write` import they need).
+  the top level). Printing inside an export works through the micro-adapter above;
+  every other I/O stays outside the `--no-gc` subset as usual.
 - The export name must be a lower-kebab-case component-model name; for a Lisp name
   outside that grammar the compiler asks you to rename it with `:as`.
 - `--optimize` composes: the core module is tree-shaken before the wrap.
@@ -707,11 +724,48 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("�
 # "Hello, 世界"
 ```
 
+By default an export is lifted **synchronously** and must be pure-compute: I/O inside
+it (`print`, `read`, `rontolisp:fetch`, file access) traps at runtime with "cannot
+block a synchronous task". Declare the export async with **`:async t`** to lift it
+against an async function type instead — the same stackful-async shape as the `run`
+entry — and I/O inside it works. `wasmtime --invoke` calls an async export exactly the
+same way:
+
+```lisp
+;; status.lisp
+(defun fetch-status (url)
+  (print "fetching")
+  (getf (rontolisp:await (rontolisp:fetch url)) :status))
+(rontolisp:wasm-export 'fetch-status :params '(:string) :returns :int :async t)
+```
+
+```bash
+rontolisp status.lisp --component -o status.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y \
+  --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
+# "fetching"
+# 204
+```
+
+In the component's WIT-level contract an `:async t` export is an `async func` (for
+example, jco types it as a Promise-returning function, while a sync export stays a
+plain function). Sync and async exports mix freely in one component, `:async` composes
+with every boundary type including `:string`/`:s-expr`, and a program without `:async`
+exports produces byte-identical output.
+
 Current limitations of component exports:
 
-- **Pure compute only**: the export is lifted synchronously, so I/O inside it (`print`,
-  `read`, file access) traps at runtime with "cannot block a synchronous task". Keep
-  side effects in the top level (`run`) and exports as pure functions.
+- A **sync** (default) export is pure-compute only: I/O inside it traps at runtime with
+  "cannot block a synchronous task". Opt into `:async t` when the export prints,
+  fetches, or otherwise does I/O; keep pure-compute exports sync.
+- `:async` is meaningful only here: Preview 1 / `--no-wasi` core exports ignore it (the
+  host provides I/O directly there), and `--no-gc --component` rejects it (the compact
+  reactor component has no async adapter).
+- jco (1.25.2) transpiles an `:async t` export and types it as async, but cannot call
+  it yet — its generated driver assumes callback-style async tasks, and stackful async
+  exports are not implemented upstream (the same gap as calling the transpiled `run`).
+  `wasmtime run --invoke` is the verified path for async exports; sync exports work on
+  both.
 - The export name must be a lower-kebab-case component-model name (`sum-squared`); for a
   Lisp name outside that grammar the compiler asks you to rename it with `:as`.
 - Invoking an export does not run the program's top level first, so an export that reads

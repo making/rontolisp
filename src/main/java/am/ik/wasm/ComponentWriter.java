@@ -310,6 +310,23 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode an alias that projects a table export out of a core instance into the core
+	 * table index space (used to reach a funcref-table shim's {@code $imports} table for
+	 * the fixup module of the wit-component adapter pattern).
+	 * @param coreInstanceIndex the core instance index
+	 * @param exportName the core table export name
+	 * @return the encoded alias entry
+	 */
+	public static byte[] aliasCoreTable(int coreInstanceIndex, String exportName) {
+		return enc(w -> {
+			w.write(0x00).write(0x01); // sort: core table
+			w.write(0x01).writeUnsignedLeb128(coreInstanceIndex); // target: core instance
+																	// export
+			plainName(w, exportName);
+		});
+	}
+
+	/**
 	 * Encode a {@code canon lower} of a component function into a core function, with no
 	 * canonical options.
 	 * @param funcIndex the component function index to lower
@@ -478,6 +495,35 @@ public final class ComponentWriter {
 				plainName(w, exportNames.get(i));
 				w.write(0x00).writeUnsignedLeb128(coreFuncIndices.get(i)); // core sort
 																			// func, index
+			}
+		});
+	}
+
+	/** Core sort code for a function, as used by {@link #coreInstanceFromExports}. */
+	public static final int CORE_SORT_FUNC = 0x00;
+
+	/** Core sort code for a table, as used by {@link #coreInstanceFromExports}. */
+	public static final int CORE_SORT_TABLE = 0x01;
+
+	/**
+	 * Encode a core instance synthesized from exports of mixed core sorts (e.g. a table
+	 * plus a function, the argument instance of a wit-component fixup module).
+	 * @param exportNames the core export names (in order)
+	 * @param coreSorts the core sort code of each export ({@link #CORE_SORT_FUNC} /
+	 * {@link #CORE_SORT_TABLE} / ...)
+	 * @param indices the index of each export within its sort's core index space
+	 * @return the encoded core instance entry
+	 */
+	public static byte[] coreInstanceFromExports(List<String> exportNames, List<Integer> coreSorts,
+			List<Integer> indices) {
+		return enc(w -> {
+			w.write(0x01); // from-exports
+			w.writeUnsignedLeb128(exportNames.size());
+			for (int i = 0; i < exportNames.size(); i++) {
+				plainName(w, exportNames.get(i));
+				w.write(coreSorts.get(i)).writeUnsignedLeb128(indices.get(i)); // core
+																				// sort,
+																				// index
 			}
 		});
 	}
@@ -669,6 +715,42 @@ public final class ComponentWriter {
 	 */
 	public static byte[] asyncFuncTypeResultType(int resultTypeIndex) {
 		return enc(w -> w.write(0x43).writeUnsignedLeb128(0).write(0x00).writeSignedLeb128(resultTypeIndex));
+	}
+
+	/**
+	 * Encode an <strong>async</strong> component function type with the given named
+	 * parameters (each a primitive value type) and an optional single primitive result
+	 * (component func type tag {@code 0x43}) &mdash; the async counterpart of
+	 * {@link #funcTypeScalars}. Lifting a core function with the ordinary
+	 * {@link #canonLift} (or the string-ABI variant) against this type produces a
+	 * stackful async export whose flat core signature is identical to the sync one, but
+	 * which runs as an async task &mdash; so blocking stream/future built-ins (I/O)
+	 * suspend cooperatively instead of trapping with "cannot block a synchronous task".
+	 * @param paramNames the parameter names, in order (must be valid component-model
+	 * labels)
+	 * @param paramValTypes the primitive value type code of each parameter (e.g.
+	 * {@link #VT_S32})
+	 * @param resultValType the result primitive value type code, or {@code null} for no
+	 * result
+	 * @return the encoded async function type
+	 */
+	public static byte[] asyncFuncTypeScalars(List<String> paramNames, List<Integer> paramValTypes,
+			@Nullable Integer resultValType) {
+		return enc(w -> {
+			w.write(0x43); // async functype
+			w.writeUnsignedLeb128(paramNames.size());
+			for (int i = 0; i < paramNames.size(); i++) {
+				plainName(w, paramNames.get(i));
+				w.writeSignedLeb128(paramValTypes.get(i) - 0x80);
+			}
+			if (resultValType == null) {
+				// result list: 0x01 (named-results form) then an empty vec (no results)
+				w.write(0x01).writeUnsignedLeb128(0);
+			}
+			else {
+				w.write(0x00).writeSignedLeb128(resultValType - 0x80);
+			}
+		});
 	}
 
 	// Canonical built-in option list carrying only the canonical memory (the shape every

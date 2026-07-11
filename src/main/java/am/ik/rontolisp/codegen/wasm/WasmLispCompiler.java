@@ -820,6 +820,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// handle. Component mode only.
 	static final int SOCK_FD_ADDR = 0x40018;
 
+	// fetch request staging cells: the (ptr,len) of the URL and request-body bytes the
+	// fetch call site copies into the linear heap via _str_to_mem before calling
+	// fetch-start (a string's field 0 is an IDENTITY id, not a linear offset, since the
+	// [[27]] GC-string redesign -- runtime-built strings have no linear bytes at their
+	// id, so the bytes must be staged explicitly). The staging advances HEAP_PTR so the
+	// header serialization's own scratch cannot clobber it, and pops it back after
+	// fetch-start returns. Component mode only.
+	static final int FETCH_URL_PTR_ADDR = 0x4001C;
+
+	static final int FETCH_URL_LEN_ADDR = 0x40020;
+
+	static final int FETCH_REQ_BODY_PTR_ADDR = 0x40024;
+
+	static final int FETCH_REQ_BODY_LEN_ADDR = 0x40028;
+
 	static final int REQ_HDR_BUF = 0x40100;
 
 	// Minimum base address of the growable runtime intern table (8-byte (offset,len)

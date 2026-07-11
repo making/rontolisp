@@ -188,6 +188,39 @@ When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-
 over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http.wit`, regenerate, and
 re-derive the `buildHttp` constants — the rontolisp core's `http.fetch` seam stays unchanged.
 
+## `--no-gc --component` print micro-adapter — pure WASI 0.2
+
+A **printing** program under `--no-gc --component` (todo 93 remaining task 1) gets a
+fourth, minimal blob set. A print-free `--no-gc` component embeds nothing from this
+directory (the adapter-free reactor wrap); a printing one needs exactly the two WASI
+0.2 stdio interfaces so a tiny bridge can implement the core's single
+`wasi_snapshot_preview1.fd_write` import:
+
+```
+src/wasm-component/
+  uni-nogc-print.wit  core-nogc-print.wat            (import block sources)
+  shim-nogc-print.wat  bridge-nogc-print.wat  fixup-nogc-print.wat
+
+src/main/resources/.../component/
+  import-block-nogc-print.bin
+  shim-nogc-print.wasm  bridge-nogc-print.wasm  fixup-nogc-print.wasm
+```
+
+`uni-nogc-print.wit` (world `uni-nogc-print`) imports only `wasi:cli/stdout@0.2.0` and
+`wasi:io/streams@0.2.0` (`wasi:io/error` is dependency-hoisted first, so the block
+declares import instances 0-2 and component types 0-4). `bridge-nogc-print.wat` is the
+adapter-serve-p1 `fd_write` pattern in miniature: fd 1 only (`--no-gc` rejects every
+other I/O at compile time, so fd 2 / `wasi:cli/stderr` would be dead weight), chunked
+through the *synchronous* `blocking-write-and-flush` — so the component's exports stay
+sync lifts and the zero-flag property is preserved (0.2 stdio is default-provided by
+wasmtime and jco). The bridge reads the iovec out of the CORE's own exported memory
+while the core imports `fd_write` from the bridge; `shim-nogc-print.wat` (a funcref
+table + a forwarding `fd_write`, instantiated first) and `fixup-nogc-print.wat` (an
+element segment patching the real `fd_write` into the table, instantiated last) break
+that cycle — the same shim/fixup shape wit-component generates for the analogous
+lowering cycle — keeping the printing core module byte-identical to the plain
+`--no-gc` output. `NoGcWasmComponentBuilder` wires everything programmatically.
+
 ## Serve variant (`rontolisp:http-handler`) — pure WASI 0.2
 
 A program using `rontolisp:http-handler` compiles to the serve variant: a

@@ -30,9 +30,11 @@ import org.jspecify.annotations.Nullable;
  * {@code :method} (a statically-unknown method, e.g. one computed at runtime, is treated
  * as GET, and a statically-known unsupported method is rejected at compile time). The
  * {@code :body} value (a request body string) <em>is</em> resolved at runtime: it is read
- * out of the options property list and its bytes are passed straight to the adapter. A
- * request that cannot be started (e.g. a malformed URL) returns {@code nil} instead of a
- * promise, matching the nil-on-failure convention of this backend.
+ * out of the options property list and its bytes are staged into the linear heap (via
+ * {@code _str_to_mem}, like the URL and each header string -- a string's bytes live on
+ * the GC heap and its field 0 is an identity id, not a linear offset). A request that
+ * cannot be started (e.g. a malformed URL) returns {@code nil} instead of a promise,
+ * matching the nil-on-failure convention of this backend.
  */
 final class WasmFetchCompiler {
 
@@ -78,23 +80,58 @@ final class WasmFetchCompiler {
 		call(w, WasmLispCompiler.FUNC_FETCH_PLIST_GET);
 		setLocal(w, reqBodyTmp);
 
+		// Stage the URL (and request body) bytes into the linear heap via _str_to_mem: a
+		// string's bytes live on the GC heap and its field 0 is an identity id, NOT a
+		// linear offset (a runtime-built string has no linear bytes at its id at all).
+		// Each staging records the unquoted (ptr,len) in a fixed cell pair and ADVANCES
+		// HEAP_PTR past the copy, so the header serialization below (which stages each
+		// header string at the then-current HEAP_PTR scratch) cannot clobber it; the
+		// pointer is popped back once fetch-start has consumed the buffers.
+		// FETCH_URL_PTR = HEAP_PTR + 1 (content pointer, past the staged opening quote)
+		i32(w, WasmLispCompiler.FETCH_URL_PTR_ADDR);
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// FETCH_URL_LEN = _str_to_mem(url, HEAP_PTR) - 2 (strip both quotes)
+		i32(w, WasmLispCompiler.FETCH_URL_LEN_ADDR);
+		getLocal(w, urlTmp);
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// HEAP_PTR = FETCH_URL_PTR + FETCH_URL_LEN + 1 (past the closing quote)
+		advanceHeapPast(w, WasmLispCompiler.FETCH_URL_PTR_ADDR, WasmLispCompiler.FETCH_URL_LEN_ADDR);
+		// Request body: nil -> (0, 0); otherwise stage it the same way above the URL.
+		getLocal(w, reqBodyTmp);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		storeCellI32(w, WasmLispCompiler.FETCH_REQ_BODY_PTR_ADDR, 0);
+		storeCellI32(w, WasmLispCompiler.FETCH_REQ_BODY_LEN_ADDR, 0);
+		w.write(Instruction.ELSE);
+		i32(w, WasmLispCompiler.FETCH_REQ_BODY_PTR_ADDR);
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, WasmLispCompiler.FETCH_REQ_BODY_LEN_ADDR);
+		getLocal(w, reqBodyTmp);
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		advanceHeapPast(w, WasmLispCompiler.FETCH_REQ_BODY_PTR_ADDR, WasmLispCompiler.FETCH_REQ_BODY_LEN_ADDR);
+		w.write(Instruction.END);
+
 		// http.fetch-start(method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, REQ_HDR_BUF,
 		// reqHdrLen, handleOut)
 		i32(w, methodDisc);
-		getLocal(w, urlTmp);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD); // urlPtr = offset + 1 (skip opening quote)
-		getLocal(w, urlTmp);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
-		i32(w, 2);
-		w.write(Instruction.I32_SUB); // urlLen = length - 2 (strip quotes)
-		// reqBodyPtr / reqBodyLen: nil body -> (0, 0), otherwise (offset+1, length-2) to
-		// strip the rontolisp string's surrounding quotes.
-		emitStrPtr(w, reqBodyTmp);
-		emitStrLen(w, reqBodyTmp);
+		loadCell(w, WasmLispCompiler.FETCH_URL_PTR_ADDR);
+		loadCell(w, WasmLispCompiler.FETCH_URL_LEN_ADDR);
+		loadCell(w, WasmLispCompiler.FETCH_REQ_BODY_PTR_ADDR);
+		loadCell(w, WasmLispCompiler.FETCH_REQ_BODY_LEN_ADDR);
 		i32(w, WasmLispCompiler.REQ_HDR_BUF);
 		// reqHdrLen = _fetch_ser_headers(_fetch_plist_get(options, :headers))
 		getLocal(w, optTmp);
@@ -103,6 +140,13 @@ final class WasmFetchCompiler {
 		call(w, WasmLispCompiler.FUNC_FETCH_SER_HDRS);
 		i32(w, WasmLispCompiler.FETCH_HANDLE_ADDR);
 		call(w, WasmLispCompiler.FUNC_FETCH_START);
+		// Pop the URL/body staging (the adapter has copied the buffers into wasi:http
+		// resources); the errno stays on the stack across the stores.
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		loadCell(w, WasmLispCompiler.FETCH_URL_PTR_ADDR);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// On a non-zero errno (e.g. a malformed URL) the adapter has not written the
 		// handle, so yield nil instead of a promise. Otherwise the promise is a
 		// TYPE_PROMISE root struct (kind 0) holding the in-flight handle boxed as an i31
@@ -145,37 +189,30 @@ final class WasmFetchCompiler {
 		};
 	}
 
-	// Pushes the raw byte pointer of the rontolisp string in (ref null eq) local slot,
-	// stripping the opening quote: nil -> 0, otherwise string.offset + 1.
-	private static void emitStrPtr(WasmWriter w, int slot) {
-		getLocal(w, slot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x7F); // result i32
-		i32(w, 0);
-		w.write(Instruction.ELSE);
-		getLocal(w, slot);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.END);
+	// Pushes mem[addr] (a fixed i32 cell).
+	private static void loadCell(WasmWriter w, int addr) {
+		i32(w, addr);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 	}
 
-	// Pushes the byte length of the rontolisp string in (ref null eq) local slot,
-	// dropping
-	// the surrounding quotes: nil -> 0, otherwise string.length - 2.
-	private static void emitStrLen(WasmWriter w, int slot) {
-		getLocal(w, slot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x7F); // result i32
-		i32(w, 0);
-		w.write(Instruction.ELSE);
-		getLocal(w, slot);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
-		i32(w, 2);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.END);
+	// mem[addr] = value (an i32 constant).
+	private static void storeCellI32(WasmWriter w, int addr, int value) {
+		i32(w, addr);
+		i32(w, value);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+	}
+
+	// HEAP_PTR = mem[ptrCell] + mem[lenCell] + 1: advances the bump pointer past a
+	// quote-framed staging whose content (ptr,len) cells were just written (base =
+	// ptr - 1, total = len + 2).
+	private static void advanceHeapPast(WasmWriter w, int ptrCell, int lenCell) {
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		loadCell(w, ptrCell);
+		loadCell(w, lenCell);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 	}
 
 	// Returns the :method value if it can be determined statically from the options form
@@ -224,17 +261,6 @@ final class WasmFetchCompiler {
 	private static void call(WasmWriter w, int func) {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(func);
-	}
-
-	private static void refCast(WasmWriter w, int heapType) {
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(heapType);
-	}
-
-	private static void structGet(WasmWriter w, int type, int field) {
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
 	}
 
 }

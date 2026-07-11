@@ -3655,13 +3655,18 @@ cases:
     source: |
       (defun ci-sumsq (a b) (* (+ a b) (+ a b)))
       (defun ci-shout (s) (concatenate 'string s "!"))
+      (defun ci-noisy (n) (print n) n)
       (rontolisp:wasm-export 'ci-sumsq :params '(:int :int) :returns :int)
       (rontolisp:wasm-export 'ci-shout :params '(:string) :returns :string)
+      (rontolisp:wasm-export 'ci-noisy :params '(:int) :returns :int :async t)
       (print (ci-sumsq 2 3))
       (print (ci-shout "ok"))
+      (print (ci-noisy 7))
     expected: |
       25
       "ok!"
+      7
+      7
   # rontolisp:with-arena (todo 104/110): a reclamation boundary the --no-gc WASM
   # backend lowers to a bump heap-pointer mark/body/reset; on the four standard
   # backends a real GC already reclaims, so it must be observationally a plain progn

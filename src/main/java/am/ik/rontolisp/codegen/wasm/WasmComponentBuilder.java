@@ -182,17 +182,21 @@ public final class WasmComponentBuilder {
 	/**
 	 * A {@code rontolisp:wasm-export} function to expose as a component-model export. The
 	 * core module core-exports a wrapper under {@code name}; the component aliases it and
-	 * lifts it <strong>synchronously</strong> (a pure-compute export needs no async,
-	 * unlike the stackful-async {@code run} lift). A scalar export lifts with no
+	 * lifts it <strong>synchronously</strong> by default (a pure-compute export needs no
+	 * async, unlike the stackful-async {@code run} lift). A scalar export lifts with no
 	 * canonical options; a {@code :string}/{@code :s-expr}-involving one with the
-	 * canonical string options (todo 92 Tier 2).
+	 * canonical string options (todo 92 Tier 2). An {@code :async t} export (todo 92 Tier
+	 * 3) instead lifts against an <strong>async</strong> function type &mdash; the same
+	 * stackful-async shape as {@code run}, with an identical flat core signature &mdash;
+	 * so I/O inside it blocks cooperatively instead of trapping.
 	 *
 	 * @param name the export name (a valid component-model label; honors {@code :as})
 	 * @param paramValTypes the {@code ComponentWriter.VT_*} code of each parameter
 	 * @param resultValType the {@code ComponentWriter.VT_*} result code, or {@code null}
 	 * for no result
+	 * @param async whether to lift against an async function type ({@code :async t})
 	 */
-	public record FuncExport(String name, List<Integer> paramValTypes, @Nullable Integer resultValType) {
+	public record FuncExport(String name, List<Integer> paramValTypes, @Nullable Integer resultValType, boolean async) {
 	}
 
 	/**
@@ -259,12 +263,17 @@ public final class WasmComponentBuilder {
 			// :string/:s-expr-returning export's core export is its retptr shim.
 			aliases.add(ComponentWriter.aliasCoreFunc(3, e.name()));
 			int func = coreFunc++;
-			// One synchronous function type per export (params p0, p1, ...).
+			// One function type per export (params p0, p1, ...): synchronous by
+			// default; an :async t export (todo 92 Tier 3) gets the async counterpart
+			// (tag 0x43), which turns the lift below into a stackful async export (the
+			// run shape) with the same flat core signature -- the ONLY byte difference
+			// an :async export introduces.
 			final List<String> paramNames = new java.util.ArrayList<>();
 			for (int p = 0; p < e.paramValTypes().size(); p++) {
 				paramNames.add("p" + p);
 			}
-			types.add(ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType()));
+			types.add(e.async() ? ComponentWriter.asyncFuncTypeScalars(paramNames, e.paramValTypes(), e.resultValType())
+					: ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType()));
 			if (WasmExportCompiler.usesMemory(decl)) {
 				// String-involving export: lift with the canonical string options over
 				// the shared memory (core memory 0).
