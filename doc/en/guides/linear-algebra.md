@@ -1,6 +1,6 @@
 # Vectors & Matrices (linalg)
 
-The `linalg` package provides a numpy-style API for vectors and matrices: constructors, shape manipulation, elementwise arithmetic, products, reductions, and linear algebra (determinant, inverse, linear solving).
+The `linalg` package provides a numpy-style API for vectors and matrices: constructors, shape manipulation, elementwise arithmetic, products, reductions, discrete calculus (differences and numerical derivatives), and linear algebra (determinant, inverse, linear solving).
 
 Like the JSON library, `linalg` is implemented once in Lisp source (`linalg.lisp`): the interpreter loads the definitions lazily on the first use of a `linalg:` function, and the compile path splices them into the program when it references the package. There is no per-backend code, so every function behaves identically on the interpreter, the JVM compiler, WASM Preview 1 and the WASM component.
 
@@ -38,6 +38,21 @@ The frequent per-element operations also exist under their numpy ufunc names: [`
 (linalg:sqrt #(4 9 16))         ; => #d(2.0 3.0 4.0)
 (linalg:square #2A((1 2) (3 4))) ; => #d((1.0 4.0) (9.0 16.0))
 ```
+
+## Discrete calculus
+
+[`linalg:diff`](../reference/functions/linalg-diff.md) and [`linalg:gradient`](../reference/functions/linalg-gradient.md) are numpy's discrete-calculus pair (`np.diff` / `np.gradient`). `diff` takes the n-th discrete difference along the last axis (default 1): each step shortens that axis by one, and a matrix differences within each row. `gradient` estimates the derivative of a vector of samples with second-order central differences (first-order one-sided at the two ends), so the result keeps the input's length; the optional second argument is either a uniform sample spacing (a number, default 1) or a coordinate vector of the same length for non-uniformly spaced samples. Both preserve the input's width like every other linalg transform. The arithmetic is floating point as usual, but sample values that differentiate exactly -- polynomials read at integer coordinates, like every example below -- print identically on every backend.
+
+```lisp
+(linalg:diff #(1 2 4 7 0))          ; => #d(1.0 2.0 3.0 -7.0)
+(linalg:diff #(1 2 4 7 0) 2)        ; => #d(1.0 1.0 -10.0)
+(linalg:diff #2A((1 3 6) (0 5 6)))  ; => #d((2.0 3.0) (5.0 1.0))
+(linalg:gradient #(0 1 4 9 16))     ; => #d(1.0 2.0 4.0 6.0 7.0)
+(linalg:gradient #(0 1 4 9 16) 2)   ; => #d(0.5 1.0 2.0 3.0 3.5)
+(linalg:gradient #(0 1 9) #(0 1 3)) ; => #d(1.0 2.0 4.0)
+```
+
+The gradient of `#(0 1 4 9 16)` -- the parabola `y = x^2` sampled at `x = 0..4` -- recovers the true derivative `2x` exactly at the interior points (central differences are exact for quadratics; the two ends are first-order estimates), and the coordinate-vector form stays exact even for the unevenly spaced samples on the last line. [`examples/ml/numerical-calculus.lisp`](https://github.com/making/rontolisp/blob/develop/examples/ml/numerical-calculus.lisp) works these ideas through a projectile-motion walkthrough.
 
 ## Single-float precision
 
