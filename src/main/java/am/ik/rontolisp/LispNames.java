@@ -2679,6 +2679,16 @@ public final class LispNames {
 	 */
 	public static final String LOAD_SYSTEM = "load-system";
 
+	/**
+	 * {@code %read-eval} -- the internal marker the tolerant reader wraps a {@code #.}
+	 * read-time-eval datum in ({@code #.datum} lexes to {@code (%read-eval datum)}), so
+	 * {@code .asd} consumers ({@code eval.AsdfSystems}) can resolve the datum against the
+	 * file's top-level {@code defparameter} bindings (the cl-postgres
+	 * {@code (:file #.*string-file*)} idiom). Never appears in evaluated/compiled ASTs:
+	 * only the {@code .asd} reading path tolerates {@code #.} at all.
+	 */
+	public static final String READ_EVAL = "%read-eval";
+
 	/** The canonical qualified spelling of {@code asdf:defsystem}. */
 	public static final String ASDF_DEFSYSTEM = ASDF_PKG + ":" + DEFSYSTEM;
 

@@ -94,6 +94,29 @@ public final class LispReader {
 		return result;
 	}
 
+	/**
+	 * Returns whether {@code tokens} parse cleanly as a sequence of expressions. The
+	 * tolerant lexer uses this to validate a re-lexed {@code #.} datum before wrapping it
+	 * in a {@code %read-eval} marker: a datum that lexes but does not parse (e.g. an
+	 * unquote outside a backquote) must fall back to the skipped-with-warning placeholder
+	 * instead of poisoning the whole file's token stream.
+	 * @param tokens the tokens to validate
+	 * @param features the active reader features
+	 * @return {@code true} if the tokens parse as complete expressions
+	 */
+	static boolean parsesAsExpressions(List<Token> tokens, Features features) {
+		try {
+			LispReader reader = new LispReader(tokens, features);
+			while (reader.pos < reader.tokens.size()) {
+				reader.readExpr();
+			}
+			return true;
+		}
+		catch (LispReadException ex) {
+			return false;
+		}
+	}
+
 	private LispVal readExpr() {
 		if (this.pos >= this.tokens.size()) {
 			throw new LispReadException("Unexpected end of input");

@@ -16,18 +16,24 @@ layer cl-postgres uses (`socket-connect` + `:element-type '(unsigned-byte 8)`
 `public.lisp` select the usocket path under rontolisp's feature set. This todo
 is everything ABOVE the socket.
 
-## Empirical state (2026-07-11, cl-postgres 1.33.11 / postmodern-20260101-git)
+## Empirical state (2026-07-12)
 
-`(ql:quickload "cl-postgres")` downloads and extracts fine, then dies at the
-FIRST gate:
+**M1 (the `.asd` front-end) is merged on develop**: the verbatim
+cl-postgres.asd parses (defparameter env, `#.*string-file*` resolves to
+"strings-ascii", the usocket/sb-bsd-sockets `:feature` clauses drop). Pinned
+by `AsdfSystemsTest.parsesTheClPostgresAsdHeaderShape`.
 
-```
-cl-postgres.asd: unsupported form in .asd file (only defsystem, defpackage
-and in-package are recognized): (defparameter *unicode* nil)
-```
+**Everything after M1 is parked on the `cl-postgres-wip` branch** (adoption
+undecided): the M2 crypto shim systems (md5/ironclad/cl-base64/uax-15 over
+the java: bridge, + cl-ppcre/alexandria reference shims), and the M4 pre-work
+batch (source-file `#.` read-time eval via ReadTimeEvaluator, the
+find-package fold, defgeneric inline `:method`, `with-standard-io-syntax`,
+`encode-universal-time`). With that branch, cl-postgres loads through
+interpret.lisp on the interpreter and stops at the todo-116 Phase 2 gate
+(`defmethod: unknown specializer bad-char-error` -- define-condition classes).
+The `.todo/116` error-handling foundation is being tackled first, on develop.
 
-(after two `warning: skipping unsupported #. read-time-eval form` for the
-`#.*string-file*` component names). Iterate with the cached copy in
+Iterate with the cached copy in
 `~/.rontolisp/quicklisp/software/postmodern-*/cl-postgres/`.
 
 ## Blocker inventory (grep counts over cl-postgres/*.lisp)
@@ -99,9 +105,10 @@ and in-package are recognized): (defparameter *unicode* nil)
 
 ## Suggested milestones
 
-- **M1 (front-end)**: .asd defparameter/`#.`/`:feature` support → the
-  cl-postgres system graph parses and file loading starts. Pin with an
-  AsdfSystemsTest case over the verbatim cl-postgres.asd header shape.
+- **M1 (front-end)**: DONE 2026-07-11, merged on develop -- .asd
+  defparameter/`#.`/`:feature` support; the cl-postgres system graph parses
+  and file loading starts. Pinned by AsdfSystemsTest over the verbatim
+  cl-postgres.asd header shape.
 - **M2 (deps)**: built-in shim systems "md5"/"ironclad"/"cl-base64"/"uax-15"
   (BuiltinSystems entries + JDK-backed built-ins, usocket pattern) →
   `:depends-on` chain resolves without network beyond the postmodern tarball.

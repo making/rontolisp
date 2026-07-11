@@ -2,9 +2,11 @@ package am.ik.rontolisp.eval;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -12,6 +14,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.reader.Features;
@@ -107,10 +110,14 @@ public final class AsdfSystems {
 	 * forms (any package spelling) become {@link LispSystem}s whose component files
 	 * resolve against the {@code .asd} file's directory, {@code in-package} and
 	 * {@code defpackage} forms are skipped (the file is never evaluated, so the
-	 * system-definition package header idiom does not matter), and any other form is a
-	 * hard error naming the file. A {@code #.} read-time-eval form (the
-	 * ASDF-version-guard idiom) is skipped with a warning instead of erroring, and
-	 * {@code #+}/{@code #-} conditionals are evaluated against {@code features}.
+	 * system-definition package header idiom does not matter), a top-level
+	 * {@code defparameter} of a pure literal/conditional value is evaluated into a
+	 * parse-time data environment (the cl-postgres {@code *string-file*} idiom), and any
+	 * other form is a hard error naming the file. A {@code #.} read-time-eval datum
+	 * (wrapped in a {@code %read-eval} marker by the tolerant reader) is resolved against
+	 * that environment; an unresolvable one is skipped with a warning (the
+	 * ASDF-version-guard idiom). {@code #+}/{@code #-} conditionals are evaluated against
+	 * {@code features}.
 	 * @param source the {@code .asd} source text
 	 * @param asdPath the resolved path of the {@code .asd} file (for the base directory
 	 * and error messages)
@@ -120,25 +127,161 @@ public final class AsdfSystems {
 	public static List<LispSystem> parseAsdSource(String source, String asdPath, Features features) {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
+		Map<String, LispVal> parameters = new HashMap<>();
 		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
-			// A skipped #. read-time-eval form leaves a nil placeholder (so it does not
-			// shift plist/alist pairing inside a defsystem option); a top-level one is an
-			// ASDF version guard and is simply ignored.
+			// A #. datum the lexer could not re-lex leaves a nil placeholder (so it does
+			// not shift plist/alist pairing inside a defsystem option); a top-level one
+			// is an ASDF version guard and is simply ignored.
 			if (form instanceof LispNil) {
+				continue;
+			}
+			if (isReadEvalMarker(form)) {
+				// A top-level #. form (an ASDF version guard) has side effects the data
+				// parse cannot perform; ignore it.
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
 				continue;
 			}
+			if (operatorMemberIs(form, LispNames.DEFPARAMETER)) {
+				defineParameter(form, parameters, asdPath);
+				continue;
+			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
-				systems.add(parseDefsystem(form, baseDir, features));
+				systems.add(parseDefsystem(substituteReadEval(form, parameters), baseDir, features));
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
-					+ ", " + LispNames.DEFPACKAGE + " and " + LispNames.IN_PACKAGE + " are recognized): "
-					+ form.print());
+					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + " and " + LispNames.DEFPARAMETER
+					+ " are recognized): " + form.print());
 		}
 		return systems;
+	}
+
+	/**
+	 * Evaluates a top-level {@code (defparameter NAME VALUE [DOC])} in a {@code .asd}
+	 * file into the parse-time data environment. The value must be pure data the mini
+	 * evaluator supports ({@link #evalDataForm}); anything else is a hard error naming
+	 * the file, like any other unsupported {@code .asd} form.
+	 */
+	private static void defineParameter(LispVal form, Map<String, LispVal> parameters, String asdPath) {
+		List<LispVal> items = ((LispCons) form).toList();
+		if ((items.size() != 3 && items.size() != 4) || !(items.get(1) instanceof LispSymbol nameSym)) {
+			throw new IllegalStateException(asdPath + ": " + LispNames.DEFPARAMETER
+					+ " in a .asd file expects (defparameter NAME VALUE): " + form.print());
+		}
+		try {
+			parameters.put(symbolName(nameSym), evalDataForm(items.get(2), parameters));
+		}
+		catch (IllegalStateException ex) {
+			throw new IllegalStateException(asdPath + ": " + LispNames.DEFPARAMETER + " " + nameSym.name() + ": "
+					+ ex.getMessage() + " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not"
+					+ " over earlier defparameters)");
+		}
+	}
+
+	/**
+	 * The mini evaluator for {@code .asd} parse-time data: literals evaluate to
+	 * themselves, a symbol reads an earlier {@code defparameter} (keywords are
+	 * self-evaluating), and {@code quote}/{@code if}/{@code or}/{@code and}/{@code not}
+	 * are supported -- exactly enough for the cl-postgres header
+	 * {@code (defparameter *string-file* (if *unicode* ...))} shape. Anything else throws
+	 * (deny by default; the {@code .asd} is never really evaluated).
+	 */
+	private static LispVal evalDataForm(LispVal form, Map<String, LispVal> parameters) {
+		if (form instanceof LispSymbol sym) {
+			if (sym.isKeyword()) {
+				return sym;
+			}
+			LispVal value = parameters.get(symbolName(sym));
+			if (value == null) {
+				throw new IllegalStateException("undefined variable " + sym.name());
+			}
+			return value;
+		}
+		if (!(form instanceof LispCons cons)) {
+			// Literals (strings, numbers, t, nil) evaluate to themselves.
+			return form;
+		}
+		if (!(cons.car() instanceof LispSymbol op)) {
+			throw new IllegalStateException("unsupported form " + form.print());
+		}
+		List<LispVal> items = cons.toList();
+		switch (op.name()) {
+			case LispNames.QUOTE -> {
+				return items.get(1);
+			}
+			case "if" -> {
+				if (items.size() != 3 && items.size() != 4) {
+					throw new IllegalStateException("unsupported form " + form.print());
+				}
+				boolean test = !(evalDataForm(items.get(1), parameters) instanceof LispNil);
+				if (test) {
+					return evalDataForm(items.get(2), parameters);
+				}
+				return items.size() == 4 ? evalDataForm(items.get(3), parameters) : LispNil.INSTANCE;
+			}
+			case "not" -> {
+				if (items.size() != 2) {
+					throw new IllegalStateException("unsupported form " + form.print());
+				}
+				return evalDataForm(items.get(1), parameters) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			case "or" -> {
+				LispVal result = LispNil.INSTANCE;
+				for (int i = 1; i < items.size(); i++) {
+					result = evalDataForm(items.get(i), parameters);
+					if (!(result instanceof LispNil)) {
+						return result;
+					}
+				}
+				return result;
+			}
+			case "and" -> {
+				LispVal result = LispTrue.INSTANCE;
+				for (int i = 1; i < items.size(); i++) {
+					result = evalDataForm(items.get(i), parameters);
+					if (result instanceof LispNil) {
+						return result;
+					}
+				}
+				return result;
+			}
+			default -> throw new IllegalStateException("unsupported form " + form.print());
+		}
+	}
+
+	/**
+	 * Replaces every {@code (%read-eval datum)} marker in a defsystem form with the
+	 * datum's parse-time value: a reference to an earlier {@code defparameter} or any
+	 * value the mini evaluator supports. An unresolvable datum degrades to the old
+	 * behavior -- a warning and a nil placeholder -- so a {@code #.} version guard buried
+	 * in ignored metadata does not fail the whole {@code .asd}.
+	 */
+	private static LispVal substituteReadEval(LispVal form, Map<String, LispVal> parameters) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (isReadEvalMarker(cons)) {
+			List<LispVal> items = cons.toList();
+			if (items.size() == 2) {
+				try {
+					return evalDataForm(items.get(1), parameters);
+				}
+				catch (IllegalStateException ex) {
+					// fall through to the placeholder
+				}
+			}
+			System.err.println("warning: skipping unsupported #. read-time-eval form: "
+					+ (items.size() == 2 ? items.get(1).print() : cons.print()));
+			return LispNil.INSTANCE;
+		}
+		return new LispCons(substituteReadEval(cons.car(), parameters), substituteReadEval(cons.cdr(), parameters));
+	}
+
+	private static boolean isReadEvalMarker(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.READ_EVAL.equals(op.name());
 	}
 
 	/**
@@ -190,7 +333,10 @@ public final class AsdfSystems {
 				}
 				case ":depends-on" -> {
 					for (LispVal dep : properList(LispNames.ASDF_DEFSYSTEM + " " + name + " :depends-on", value)) {
-						dependsOn.add(designator(":depends-on", dep));
+						String depName = dependencyName(name, dep, features);
+						if (depName != null) {
+							dependsOn.add(depName);
+						}
 					}
 				}
 				case ":serial" -> serial = !(value instanceof LispNil);
@@ -233,6 +379,39 @@ public final class AsdfSystems {
 		}
 		throw new IllegalStateException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found (tried: "
 				+ String.join(", ", tried) + "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY");
+	}
+
+	/**
+	 * Resolves one {@code :depends-on} entry to a system name, or {@code null} when the
+	 * entry is dropped. A plain entry is a literal designator; a
+	 * {@code (:feature FEATURE-EXPR DEPENDENCY-DEF)} entry contributes its dependency
+	 * only when the feature expression is satisfied (this is how cl-postgres gates its
+	 * {@code usocket} dependency to non-builtin-socket implementations -- under
+	 * rontolisp's feature set such clauses are typically dropped). A surviving
+	 * {@code (:require MODULE)} (an implementation-provided module) is a hard error:
+	 * there is nothing to load it from.
+	 */
+	@Nullable private static String dependencyName(String systemName, LispVal dep, Features features) {
+		if (dep instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.isProperList()) {
+			if (":feature".equals(op.name())) {
+				List<LispVal> items = cons.toList();
+				if (items.size() != 3) {
+					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
+							+ " :depends-on (:feature ...) expects (:feature FEATURE-EXPR DEPENDENCY-DEF): "
+							+ dep.print());
+				}
+				if (!features.isEnabled(items.get(1))) {
+					return null;
+				}
+				return dependencyName(systemName, items.get(2), features);
+			}
+			if (":require".equals(op.name())) {
+				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
+						+ " :depends-on (:require ...) is not supported (implementation-provided modules do not"
+						+ " exist here): " + dep.print());
+			}
+		}
+		return designator(":depends-on", dep);
 	}
 
 	/**

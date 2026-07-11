@@ -4,9 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Tokenizer for Lisp source code. Besides tokenizing, the lexer resolves the read-time
@@ -15,8 +17,9 @@ import am.ik.rontolisp.LispVal;
  * active {@link Features} -- a failing guard skips the following form at the raw
  * character level, so a skipped form may use syntax the reader does not support.
  * {@code #.} read-time evaluation is not supported and is a clear error; in the tolerant
- * mode used for {@code .asd} files it is skipped with a warning instead (the
- * version-guard idiom).
+ * mode used for {@code .asd} files the datum is wrapped in a {@code (%read-eval datum)}
+ * marker for the consumer to resolve (or, when it uses unsupported syntax, skipped with a
+ * warning -- the version-guard idiom).
  */
 public final class LispLexer {
 
@@ -108,13 +111,26 @@ public final class LispLexer {
 				if (!this.tolerateReadEval) {
 					throw new LispReadException("#. read-time evaluation is not supported");
 				}
-				System.err.println("warning: skipping unsupported #. read-time-eval form");
 				this.pos += 2;
+				int datumStart = this.pos;
 				skipDatum();
-				// Leave a nil placeholder so the surrounding structure is preserved: a
-				// skipped #. inside a plist/alist (e.g. an .asd :long-description value)
-				// must not shift the remaining key/value pairing.
-				tokens.add(new Token.SymbolToken("nil"));
+				// Re-lex the skipped datum and wrap it in a (%read-eval datum) marker so
+				// the .asd consumer (AsdfSystems) can resolve it against the file's
+				// defparameter bindings (the (:file #.*string-file*) idiom). A datum
+				// using syntax the lexer does not support falls back to a nil
+				// placeholder, preserving the surrounding structure (a skipped #. inside
+				// a plist/alist must not shift the remaining key/value pairing).
+				List<Token> datumTokens = tryTokenizeReadEvalDatum(this.input.substring(datumStart, this.pos));
+				if (datumTokens == null) {
+					System.err.println("warning: skipping unsupported #. read-time-eval form");
+					tokens.add(new Token.SymbolToken("nil"));
+				}
+				else {
+					tokens.add(new Token.LeftParen());
+					tokens.add(new Token.SymbolToken(LispNames.READ_EVAL));
+					tokens.addAll(datumTokens);
+					tokens.add(new Token.RightParen());
+				}
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
 				tokens.add(readChar());
@@ -552,6 +568,22 @@ public final class LispLexer {
 			}
 		}
 		throw new LispReadException("Unterminated block comment");
+	}
+
+	// Re-lexes a #. datum that was skipped at the raw character level. Returns null when
+	// the datum uses syntax the lexer does not support (the caller falls back to the nil
+	// placeholder) or lexes to nothing (a fully #+/#- suppressed datum).
+	@Nullable private List<Token> tryTokenizeReadEvalDatum(String datum) {
+		try {
+			List<Token> datumTokens = new LispLexer(datum, this.features, this.tolerateReadEval).tokenize();
+			if (datumTokens.isEmpty() || !LispReader.parsesAsExpressions(datumTokens, this.features)) {
+				return null;
+			}
+			return datumTokens;
+		}
+		catch (LispReadException ex) {
+			return null;
+		}
 	}
 
 	// Skips one datum at the raw character level, without tokenizing it, so a form

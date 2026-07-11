@@ -278,4 +278,86 @@ class AsdfSystemsTest {
 			.hasMessageContaining("b/lib.asd");
 	}
 
+	@Test
+	void parsesTheClPostgresAsdHeaderShape() {
+		// The verbatim cl-postgres.asd header shape (todo-115 M1): defpackage +
+		// in-package, #+/#- conditional defparameters feeding #. component names, and
+		// (:feature ...) clauses inside :depends-on. Under rontolisp's feature set
+		// *unicode* is nil, so #.*string-file* resolves to "strings-ascii".
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defpackage :cl-postgres-system
+				  (:use :common-lisp :asdf))
+				(in-package :cl-postgres-system)
+
+				(defparameter *unicode*
+				  #+(or sb-unicode unicode ics openmcl-unicode-strings abcl) t
+				  #-(or sb-unicode unicode ics openmcl-unicode-strings abcl) nil)
+				(defparameter *string-file* (if *unicode* "strings-utf-8" "strings-ascii"))
+
+				(defsystem "cl-postgres"
+				  :description "Low-level client library for PostgreSQL"
+				  :author "Marijn Haverbeke <marijnh@gmail.com>"
+				  :license "zlib"
+				  :version "1.33.11"
+				  :depends-on ("md5" "split-sequence" "ironclad" "cl-base64" "uax-15"
+				                     (:feature (:or :allegro :ccl :clisp :genera
+				                                :armedbear :cmucl :lispworks :ecl)
+				                               "usocket")
+				                     (:feature :sbcl (:require :sb-bsd-sockets)))
+				  :components
+				  ((:module "cl-postgres"
+				    :components ((:file "package")
+				                 (:file "trivial-utf-8" :depends-on ("package"))
+				                 (:file #.*string-file*
+				                  :depends-on ("package" "trivial-utf-8"))
+				                 (:file "communicate"
+				                  :depends-on (#.*string-file*))))))""", "proj/cl-postgres.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		AsdfSystems.LispSystem system = systems.get(0);
+		assertThat(system.name()).isEqualTo("cl-postgres");
+		// The usocket clause is feature-gated to implementations without built-in
+		// sockets and the (:require ...) clause to sbcl; both drop here.
+		assertThat(system.dependsOn()).containsExactly("md5", "split-sequence", "ironclad", "cl-base64", "uax-15");
+		assertThat(system.files()).containsExactly("cl-postgres/package.lisp", "cl-postgres/trivial-utf-8.lisp",
+				"cl-postgres/strings-ascii.lisp", "cl-postgres/communicate.lisp");
+	}
+
+	@Test
+	void featureDependencyContributesWhenEnabled() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :depends-on ("base" (:feature :rontolisp "extra") (:feature :sbcl "sbcl-only")))""");
+		assertThat(system.dependsOn()).containsExactly("base", "extra");
+	}
+
+	@Test
+	void requireDependencyIsAHardError() {
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :depends-on ((:require :sb-bsd-sockets)))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("(:require ...) is not supported");
+	}
+
+	@Test
+	void asdDefparameterWithAnImpureValueIsAHardError() {
+		// Deny by default: the .asd is never really evaluated, so a defparameter value
+		// outside the pure-data mini evaluator fails the parse instead of guessing.
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defparameter *when* (get-universal-time))", "lib.asd",
+				Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("lib.asd")
+			.hasMessageContaining("defparameter")
+			.hasMessageContaining("pure data");
+	}
+
+	@Test
+	void unresolvableReadEvalInIgnoredMetadataDegradesToNil() {
+		// A #. in ignored metadata (the :version read-file indirection) must not fail
+		// the parse: it degrades to the old warn-and-nil placeholder.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defsystem :lib
+				  :version #.(uiop:read-file-form "version.sexp")
+				  :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+	}
+
 }

@@ -552,11 +552,21 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readReadEvalSkippedInTolerantMode() {
-		// A skipped #. leaves a nil placeholder so it cannot shift the surrounding
-		// structure (e.g. plist/alist pairing inside an .asd option); consumers that
-		// treat top-level forms (AsdfSystems) ignore a bare nil.
-		List<LispVal> result = LispReader.readAllSkippingReadEval("#.(+ 1 2) 42", Features.INTERPRETER);
+	void readReadEvalWrappedInMarkerInTolerantMode() {
+		// A readable #. datum is wrapped in a (%read-eval datum) marker for the .asd
+		// consumer (AsdfSystems) to resolve against the file's defparameter bindings.
+		List<LispVal> result = LispReader.readAllSkippingReadEval("#.*string-file* 42", Features.INTERPRETER);
+		assertThat(result).containsExactly(LispReader.readFromString("(%read-eval *string-file*)"),
+				new LispInteger(42));
+	}
+
+	@Test
+	void readReadEvalUnparsableDatumSkippedInTolerantMode() {
+		// A #. datum that does not parse (here an unquote outside a backquote) falls
+		// back to a nil placeholder so it cannot shift the surrounding structure (e.g.
+		// plist/alist pairing inside an .asd option); consumers that treat top-level
+		// forms (AsdfSystems) ignore a bare nil.
+		List<LispVal> result = LispReader.readAllSkippingReadEval("#.,foo 42", Features.INTERPRETER);
 		assertThat(result).containsExactly(LispNil.INSTANCE, new LispInteger(42));
 	}
 

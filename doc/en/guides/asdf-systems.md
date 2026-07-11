@@ -103,12 +103,17 @@ below.
 
 ## What is (and is not) supported
 
-- `.asd` files are parsed as **data**: only `defsystem` (bare or
-  `asdf:`-qualified) and `in-package` forms (skipped) may appear. `#+`/`#-`
-  feature conditionals work (evaluated against the target backend's features,
-  see [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)),
-  and a `#.` read-time-eval form — the ASDF-version-guard idiom — is skipped
-  with a warning instead of being the usual read error.
+- `.asd` files are parsed as **data**: `defsystem` (bare or
+  `asdf:`-qualified), `in-package`/`defpackage` forms (skipped), and top-level
+  `defparameter`s of pure literal/conditional values (evaluated into a
+  parse-time environment) may appear. `#+`/`#-` feature conditionals work
+  (evaluated against the target backend's features, see
+  [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)),
+  a `#.` read-time-eval form is resolved against those `defparameter`s (the
+  `(:file #.*string-file*)` idiom) — an unresolvable one, like an ASDF
+  version guard, is skipped with a warning — and a `:depends-on` entry may be
+  `(:feature EXPR DEP)`, contributing its dependency only when the feature
+  expression holds.
 - `defsystem` supports the metadata options (ignored), `:depends-on`,
   `:serial` and `:components` with `:file`/`:module`/`:static-file` entries;
   a component may carry `:if-feature expr`, which drops the component's files
