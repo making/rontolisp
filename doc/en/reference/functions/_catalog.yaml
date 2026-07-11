@@ -306,6 +306,7 @@ categories:
       - { slug: rontolisp-tcp-listen, name: "rontolisp:tcp-listen" }
       - { slug: rontolisp-tcp-accept, name: "rontolisp:tcp-accept" }
       - { slug: rontolisp-tcp-local-port, name: "rontolisp:tcp-local-port" }
+      - { slug: rontolisp-tcp-addresses, name: "rontolisp:tcp-local-address rontolisp:tcp-peer-address rontolisp:tcp-peer-port" }
       - { slug: rontolisp-tls-connect, name: "rontolisp:tls-connect" }
       - { slug: rontolisp-tls-listen, name: "rontolisp:tls-listen" }
       - { slug: rontolisp-tls-listen-pem, name: "rontolisp:tls-listen-pem" }
@@ -383,3 +384,10 @@ categories:
   - title: "ql Package (Quicklisp)"
     functions:
       - { slug: ql-quickload, name: "ql:quickload" }
+  - title: "usocket Package (usocket-compatible sockets)"
+    functions:
+      - { slug: usocket-socket-connect, name: "usocket:socket-connect" }
+      - { slug: usocket-socket-listen, name: "usocket:socket-listen" }
+      - { slug: usocket-socket-accept, name: "usocket:socket-accept" }
+      - { slug: usocket-socket-stream, name: "usocket:socket-stream usocket:socket-close" }
+      - { slug: usocket-accessors, name: "usocket:get-local-port usocket:get-local-address usocket:get-local-name usocket:get-peer-address usocket:get-peer-port usocket:get-peer-name" }

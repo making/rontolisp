@@ -70,6 +70,18 @@ final class WasmTcpCompiler {
 				// errno (not a socket handle) yields nil.
 				emitFdOrNil(w);
 			}
+			case LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT -> {
+				// The address/peer accessors are not wired through the sockets adapter:
+				// they evaluate the handle and yield nil -- the WASM failure convention
+				// (fetch, tcp errors). NOT a compile error: usocket.lisp splices whole,
+				// so an unconditional error here would break every usocket program on
+				// the component target even when these accessors are never called.
+				requireArgs(member, args, 1, 1);
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				w.write(Instruction.DROP);
+				w.write(Instruction.REF_NULL);
+				w.writeHeapType(Type.EQ.code());
+			}
 			default -> throw new UnsupportedOperationException("Unknown tcp built-in: " + member);
 		}
 	}

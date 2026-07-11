@@ -47,6 +47,12 @@ class JvmLispCompilerTest {
 		return compileAndRun(am.ik.rontolisp.eval.UrlLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
+	// usocket tests pre-process with UsocketLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunUsocket(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
 	private String compileAndRun(List<LispVal> program) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
@@ -3918,7 +3924,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -4152,6 +4158,81 @@ class JvmLispCompilerTest {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-local-port 1 2)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("tcp-local-port expects 1 arguments");
+	}
+
+	@Test
+	void compileAndRunTcpAddressAccessorsOnLoopback() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (print (rontolisp:tcp-local-address listener))
+				  (print (rontolisp:tcp-peer-address client))
+				  (print (= (rontolisp:tcp-peer-port client) port))
+				  (print (rontolisp:tcp-peer-address server))
+				  (close server)
+				  (close client)
+				  (close listener))
+				""")).isEqualTo("\"127.0.0.1\"\n\"127.0.0.1\"\nt\n\"127.0.0.1\"");
+	}
+
+	@Test
+	void compileTcpAddressAccessorsRejectWrongArgCount() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-peer-address)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-peer-address expects 1 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-peer-port 1 2)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-peer-port expects 1 arguments");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-local-address)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-local-address expects 1 arguments");
+	}
+
+	@Test
+	void compileAndRunUsocketEchoOverLoopback() throws Exception {
+		// The Postmodern (cl-postgres) shape on the compiled backend: socket-connect
+		// with :element-type, socket-stream, stream I/O, socket-close.
+		assertThat(compileAndRunUsocket("""
+				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
+				  (write-line "hello" (usocket:socket-stream client))
+				  (let* ((server (usocket:socket-accept listener))
+				         (line (read-line (usocket:socket-stream server))))
+				    (usocket:socket-close server)
+				    (usocket:socket-close client)
+				    (usocket:socket-close listener)
+				    (print line)))
+				""")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunUsocketAddressAccessors() throws Exception {
+		assertThat(compileAndRunUsocket("""
+				(let* ((listener (usocket:socket-listen usocket:*wildcard-host* 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port))
+				       (server (usocket:socket-accept listener)))
+				  (print (usocket:get-peer-address client))
+				  (print (= (usocket:get-peer-port client) port))
+				  (print (usocket:get-peer-name server))
+				  (usocket:socket-close server)
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener))
+				""")).isEqualTo("\"127.0.0.1\"\nt\n\"127.0.0.1\"");
+	}
+
+	@Test
+	void compileAndRunUsocketWithMacrosEchoOverLoopback() throws Exception {
+		assertThat(compileAndRunUsocket("""
+				(usocket:with-socket-listener (listener "127.0.0.1" 0)
+				  (usocket:with-client-socket (client stream "127.0.0.1" (usocket:get-local-port listener))
+				    (write-line "ping" stream)
+				    (usocket:with-connected-socket (server (usocket:socket-accept listener))
+				      (print (read-line server)))))
+				""")).isEqualTo("\"ping\"");
 	}
 
 	@Test

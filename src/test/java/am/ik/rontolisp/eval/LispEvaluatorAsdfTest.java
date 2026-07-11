@@ -56,6 +56,43 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void loadSystemResolvesBuiltinUsocketWithoutAnAsdFile() {
+		// "usocket" is a built-in system (BuiltinSystems): no usocket.asd is looked
+		// up -- the empty loader would throw FileNotFoundException if it were.
+		String output = run("""
+				(asdf:load-system "usocket")
+				(print usocket:*wildcard-host*)
+				(print (usocket:socket-stream 42))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\"0.0.0.0\"").contains("42");
+	}
+
+	@Test
+	void quickloadResolvesBuiltinUsocketWithoutDownloading() {
+		// A built-in system short-circuits before the QuicklispClient is even
+		// created, so no network or cache is touched.
+		String output = run("""
+				(ql:quickload :usocket)
+				(print (usocket:socket-stream 7))
+				""", Map.of(), List.of());
+		assertThat(output).contains("7");
+	}
+
+	@Test
+	void dependsOnBuiltinUsocketLoadsTheShimFirst() {
+		String output = run("(asdf:load-system \"net-lib\") (print (net-lib:stream-of 9))", Map.of(//
+				"net-lib.asd", """
+						(defsystem :net-lib
+						  :depends-on ("usocket")
+						  :components ((:file "net")))""", //
+				"net.lisp", """
+						(defpackage :net-lib (:use :cl) (:export :stream-of))
+						(in-package :net-lib)
+						(defun stream-of (s) (usocket:socket-stream s))"""), List.of());
+		assertThat(output).contains("9");
+	}
+
+	@Test
 	void loadSystemAcceptsAComputedNameAtRuntime() {
 		String output = run("""
 				(defvar *sys* "my-lib")

@@ -27,7 +27,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- WASM GC-backend strings as `$str_bytes` arrays (HEAP_PTR as a stack pointer, `_str_fresh` counter ids, `_str_to_mem`/`_write_str_gc` bridges) -- retires the linear string heap leak
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
-- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets and `rontolisp:tls-connect`/`tls-listen` (stream-handle integration + the wasi:sockets component variant)
+- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets, `rontolisp:tls-connect`/`tls-listen` (stream-handle integration + the wasi:sockets component variant) and the `usocket` compatibility shim (usocket.lisp + the built-in ASDF system)
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify` Lisp-source library + splice
 - [linalg.md](linalg.md) -- `linalg` package (numpy-style vector/matrix ops) Lisp-source library + the standard array functions
 - [vec.md](vec.md) -- `vec` package + the packed float-array type and its four `--simd` acceleration layers

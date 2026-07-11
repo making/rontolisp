@@ -265,6 +265,78 @@ class LoadInlinerTest {
 		assertThat(runMain(classBytes, "TestPkgLeak")).isEqualTo("42");
 	}
 
+	// --- built-in systems (BuiltinSystems: "usocket") ---
+
+	private static long countUsocketSocketConnectDefuns(List<LispVal> program) {
+		return program.stream()
+			.map(LispVal::print)
+			.filter(printed -> printed.startsWith("(defun usocket:socket-connect "))
+			.count();
+	}
+
+	@Test
+	void loadSystemSplicesBuiltinUsocketWithoutAnAsdFile() {
+		// "usocket" is a built-in system: the embedded library is spliced, no
+		// usocket.asd is looked up (the empty file map would throw if it were), and a
+		// duplicate load-system is a no-op.
+		List<LispVal> result = inline("""
+				(asdf:load-system "usocket")
+				(asdf:load-system "usocket")
+				(print (usocket:socket-stream 42))
+				""", Map.of());
+		assertThat(countUsocketSocketConnectDefuns(result)).isEqualTo(1);
+		assertThat(result.getLast().print()).isEqualTo("(print (usocket:socket-stream 42))");
+	}
+
+	@Test
+	void dependsOnBuiltinUsocketSplicesTheShimBeforeTheComponents() {
+		List<LispVal> result = inline("(asdf:load-system :net-lib)", Map.of(//
+				"net-lib.asd", """
+						(defsystem :net-lib
+						  :depends-on ("usocket")
+						  :components ((:file "net")))""", //
+				"net.lisp", "(defun stream-of (s) (usocket:socket-stream s))"));
+		assertThat(countUsocketSocketConnectDefuns(result)).isEqualTo(1);
+		List<String> printed = result.stream().map(LispVal::print).toList();
+		// The shim precedes the dependent component file.
+		assertThat(printed.indexOf("(defun stream-of (s) (usocket:socket-stream s))"))
+			.isGreaterThan(printed.indexOf("(defparameter usocket:*wildcard-host* \"0.0.0.0\")"));
+	}
+
+	@Test
+	void usocketProcessDoesNotSpliceASecondCopyAfterTheBuiltinSystemHook() {
+		// A program that both load-systems usocket AND references usocket symbols
+		// directly: the LoadInliner splices the library, and the outer
+		// UsocketLibrary.process pre-pass must detect that and not prepend a second
+		// copy (the dedup guard).
+		List<LispVal> result = am.ik.rontolisp.eval.UsocketLibrary.process(inline("""
+				(asdf:load-system "usocket")
+				(print (usocket:socket-stream 42))
+				""", Map.of()));
+		assertThat(countUsocketSocketConnectDefuns(result)).isEqualTo(1);
+	}
+
+	@Test
+	void quickloadBuiltinUsocketSkipsTheDownloader(@TempDir Path home) {
+		// The dist knows nothing about usocket, so reaching the downloader would
+		// throw; the built-in check must short-circuit before it.
+		List<LispVal> result = LoadInliner.inline(
+				LispReader.readAllFromString("(ql:quickload :usocket) (print (usocket:socket-stream 1))"),
+				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
+				quicklispClient(home, "(defun mylib-answer () 42)"));
+		assertThat(countUsocketSocketConnectDefuns(result)).isEqualTo(1);
+	}
+
+	@Test
+	void builtinUsocketProgramCompilesAndRunsOnJvm() throws Exception {
+		List<LispVal> program = UserMacroExpander.expand(inline("""
+				(asdf:load-system "usocket")
+				(print (usocket:socket-stream 42))
+				""", Map.of()));
+		byte[] classBytes = new JvmLispCompiler("TestUsocketSystem").compile(program);
+		assertThat(runMain(classBytes, "TestUsocketSystem")).isEqualTo("42");
+	}
+
 	// --- ql:quickload (compile-time download + asdf splice) ---
 
 	private static final String QL_MYLIB_URL = "http://fake.quicklisp/archive/mylib-1.0.tar.gz";

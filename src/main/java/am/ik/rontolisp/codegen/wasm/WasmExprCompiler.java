@@ -177,7 +177,10 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
-						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())) {
+						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
+						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())
+						|| LispNames.TCP_PEER_ADDRESS.equals(qn.member())
+						|| LispNames.TCP_PEER_PORT.equals(qn.member())) {
 					WasmTcpCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
@@ -203,6 +206,29 @@ final class WasmExprCompiler {
 							+ " is not supported on the WASM backend (TLS is interpreter/JVM only); use the interpreter or the JVM backend");
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.
+			}
+			// The usocket with-* convenience macros are built-in LispMacroExpander
+			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
+			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
+				switch (qn.member()) {
+					case LispNames.USOCKET_WITH_CLIENT_SOCKET -> {
+						compileExpr(LispMacroExpander.expandUsocketWithClientSocket(cons), ctx);
+						return;
+					}
+					case LispNames.USOCKET_WITH_CONNECTED_SOCKET, LispNames.USOCKET_WITH_SERVER_SOCKET -> {
+						compileExpr(LispMacroExpander.expandUsocketWithConnectedSocket(cons), ctx);
+						return;
+					}
+					case LispNames.USOCKET_WITH_SOCKET_LISTENER -> {
+						compileExpr(LispMacroExpander.expandUsocketWithSocketListener(cons), ctx);
+						return;
+					}
+					default -> {
+						// Other usocket: members (the usocket.lisp defuns) fall through
+						// to
+						// the ordinary qualified-call path.
+					}
+				}
 			}
 			switch (sym.name()) {
 				case LispNames.ADD ->

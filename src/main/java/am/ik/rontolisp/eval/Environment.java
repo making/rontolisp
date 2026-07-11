@@ -2745,6 +2745,45 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(port);
 		}));
+		String tcpLocalAddressName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_ADDRESS);
+		env.defineFunction(tcpLocalAddressName, new LispFunction(tcpLocalAddressName, args -> {
+			requireArgCount(LispNames.TCP_LOCAL_ADDRESS, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.TCP_LOCAL_ADDRESS + " expects a socket or listener handle");
+			}
+			Closeable entry = streams.get(handle.value());
+			String address = (entry == null) ? null : SocketSupport.localAddress(entry);
+			if (address == null) {
+				throw new LispEvalException(LispNames.TCP_LOCAL_ADDRESS + " expects a socket or listener handle");
+			}
+			return new LispString(address);
+		}));
+		String tcpPeerAddressName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_ADDRESS);
+		env.defineFunction(tcpPeerAddressName, new LispFunction(tcpPeerAddressName, args -> {
+			requireArgCount(LispNames.TCP_PEER_ADDRESS, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.TCP_PEER_ADDRESS + " expects a connected socket handle");
+			}
+			Closeable entry = streams.get(handle.value());
+			String address = (entry == null) ? null : SocketSupport.peerAddress(entry);
+			if (address == null) {
+				throw new LispEvalException(LispNames.TCP_PEER_ADDRESS + " expects a connected socket handle");
+			}
+			return new LispString(address);
+		}));
+		String tcpPeerPortName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_PORT);
+		env.defineFunction(tcpPeerPortName, new LispFunction(tcpPeerPortName, args -> {
+			requireArgCount(LispNames.TCP_PEER_PORT, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)) {
+				throw new LispEvalException(LispNames.TCP_PEER_PORT + " expects a connected socket handle");
+			}
+			Closeable entry = streams.get(handle.value());
+			long port = (entry == null) ? -1 : SocketSupport.peerPort(entry);
+			if (port < 0) {
+				throw new LispEvalException(LispNames.TCP_PEER_PORT + " expects a connected socket handle");
+			}
+			return new LispInteger(port);
+		}));
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			try {
 				// (read) reads from stdin; (read stream) reads from an open input

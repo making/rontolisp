@@ -161,6 +161,62 @@ PKCS12 キーストアファイルを受け取り(自己署名キーストアを
   (close listener))
 ```
 
+## usocket 互換シム
+
+既存の Common Lisp のネットワークコードは、処理系固有のソケット API では
+なく [usocket](https://github.com/usocket/usocket) ポータビリティ
+ライブラリに対して書かれていることがほとんどです。rontolisp は
+`rontolisp:tcp-*` 組み込みの上でそのコア API を再現する組み込みの
+`usocket` パッケージを備えているため、そうしたコードがより少ない変更で
+動きます -- Postmodern の cl-postgres ソケット層
+(`:element-type '(unsigned-byte 8)` 付きの `socket-connect` +
+`socket-stream`)はそのまま動きます:
+
+```lisp
+(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+       (port (usocket:get-local-port listener))
+       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
+  (write-line "hello" (usocket:socket-stream client))
+  (let* ((server (usocket:socket-accept listener))
+         (line (read-line (usocket:socket-stream server))))
+    (usocket:socket-close server)
+    (usocket:socket-close client)
+    (usocket:socket-close listener)
+    line)) ; => "hello"
+```
+
+rontolisp のソケットはストリームハンドルそのものなので、対応は直接的です:
+`usocket:socket-stream` は恒等関数、`usocket:socket-close` は `close`、
+`usocket:socket-listen` はホストが先の引数順を `rontolisp:tcp-listen` に
+変換します。`usocket:*wildcard-host*`(`"0.0.0.0"`)と
+`usocket:*auto-port*`(`0`)は usocket と同じように動き、`get-local-*` /
+`get-peer-*` アクセサでポートとアドレスを読み戻せます。`with-*` 便利マクロ
+([`with-client-socket` / `with-connected-socket` / `with-server-socket` /
+`with-socket-listener`](../reference/macros/usocket-with-macros.md))は
+本体の前後でソケットを束縛して閉じます。パッケージは最初の使用時に
+ロードされ、組み込み ASDF システム `"usocket"` でもあります:
+`(asdf:load-system "usocket")`、`(ql:quickload :usocket)`、サードパーティ
+`.asd` の `:depends-on ("usocket")` はいずれもネットワークに触れずに
+解決されます。
+
+シムの制限(意図的なものです -- rontolisp のソケットモデルは lite です):
+
+- **TCP のみ。** `:protocol :datagram`(UDP)はエラーを通知し、
+  `socket-send` / `socket-receive` / `socket-shutdown` は存在しません。
+- **コンディションシステムなし。** `usocket:socket-error` などの
+  コンディション型はデータシンボルとしてのみ存在します。接続失敗はエラーを
+  通知し(インタープリタ/JVM)、または `nil` を返します(WASM
+  コンポーネント)。usocket コンディションに対する `handler-case` は
+  非対応です。
+- **`wait-for-input` と `socket-server` は存在しません**(読み込みは
+  ブロックします。accept ループは自分で書いてください)。
+- **`with-*` マクロが閉じるのは正常終了時のみ**(`unwind-protect` は
+  ありません)。互換性のためのキーワード引数(`:element-type`、
+  `:timeout`、`:nodelay`、`:reuse-address` など)は受理して無視します。
+- **バックエンド**: インタープリタと JVM はフル対応。WASM は tcp 組み込みと
+  同じくコンポーネント専用で、アドレス系・peer 系アクセサは `nil` を
+  返します。
+
 ## その他のサンプル
 
 [`examples/` ディレクトリ](https://github.com/making/rontolisp/tree/develop/examples)

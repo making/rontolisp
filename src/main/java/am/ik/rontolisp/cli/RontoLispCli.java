@@ -31,6 +31,7 @@ import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
+import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -226,9 +227,10 @@ public final class RontoLispCli {
 		// The whole frontend reads with the target backend's feature set, so
 		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code.
 		Features features = outputFile.endsWith(".wasm") ? Features.WASM : Features.JVM;
-		List<LispVal> program = LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary
-			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
-					SourceLoader.fileSystem(), baseDir, systemPath, features))))));
+		List<LispVal> program = UsocketLibrary
+			.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary
+				.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
+						SourceLoader.fileSystem(), baseDir, systemPath, features)))))));
 		// Splice the Lisp-source vec library (the scalar reference over the packed
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and

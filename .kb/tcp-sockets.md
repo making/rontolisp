@@ -1,13 +1,15 @@
-# TCP sockets (`rontolisp:tcp-*`) and TLS (`rontolisp:tls-*`)
+# TCP sockets (`rontolisp:tcp-*`), TLS (`rontolisp:tls-*`) and the usocket shim
 
-Four `rontolisp`-package built-ins — `tcp-connect` (host port), `tcp-listen`
-(port &optional host), `tcp-accept` (listener), `tcp-local-port` (handle) —
-plus the encrypted variants `tls-connect` (host port &optional :insecure
-value), `tls-listen` (keystore password port &optional host) and
-`tls-listen-pem` (cert-file key-file port &optional host; all three
-interpreter/JVM only, see below), that return **bidirectional stream handles in the same handle space
-as file streams**, so the standard stream built-ins (`read-line`,
-`write-line`, `read-byte`, `write-byte`, `close`) work on sockets unchanged. Blocking,
+Seven `rontolisp`-package built-ins — `tcp-connect` (host port), `tcp-listen`
+(port &optional host), `tcp-accept` (listener), `tcp-local-port` (handle),
+plus the address accessors `tcp-local-address` (handle) / `tcp-peer-address`
+(handle) / `tcp-peer-port` (handle) — plus the encrypted variants
+`tls-connect` (host port &optional :insecure value), `tls-listen` (keystore
+password port &optional host) and `tls-listen-pem` (cert-file key-file port
+&optional host; all three interpreter/JVM only, see below), that return
+**bidirectional stream handles in the same handle space as file streams**, so
+the standard stream built-ins (`read-line`, `write-line`, `read-byte`,
+`write-byte`, `close`) work on sockets unchanged. Blocking,
 synchronous API (no promises). Reads are byte-at-a-time (no readahead buffer
 is held between calls) and writes go out immediately (`write-line` flushes per
 line, unlike buffered file writers) on every backend. `read-line` returns
@@ -184,18 +186,87 @@ hosts wasi:sockets and gates it by permission: without the flags the component
 instantiates and socket calls return errors → `nil`
 (`componentTcpWithoutNetworkFlagsReturnsNil`).
 
+## The address accessors (`tcp-local-address` / `tcp-peer-address` / `tcp-peer-port`)
+
+Added for the usocket shim's `get-local-*`/`get-peer-*`. Interpreter:
+`SocketSupport.localAddress`/`peerAddress`/`peerPort` (null/-1 for a
+wrong-kind entry → `Environment` signals). JVM: `JvmSocketRuntimeBuilder`'s
+`_tcpLocalAddress`/`_tcpPeerAddress`/`_tcpPeerPort` — the address returners
+quote-frame the string (the `_sockReadLine` `"\"".concat(...)` tail). WASM:
+**component mode compiles them to drop-the-handle-push-nil, NOT an error** —
+usocket.lisp splices whole and every spliced defun body compiles eagerly, so a
+TLS-style unconditional compile error would break every usocket program on the
+component target; Preview 1 errors through the shared `WasmTcpCompiler` gate
+like the other tcp built-ins.
+
+## The usocket shim (`usocket` package, `usocket.lisp` + `UsocketLibrary`)
+
+A usocket-compatible API over the tcp built-ins, targeting the surface
+Postmodern's cl-postgres uses (`socket-connect` + `:element-type` +
+`socket-stream`). The linalg/vec Lisp-source-library pattern:
+`src/main/resources/am/ik/rontolisp/eval/usocket.lisp` (canonical package
+shape, resolver fixed point pinned by
+`PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`) +
+`eval/UsocketLibrary` (cached `forms()`, Walker detection, `process()`
+splice). Key mechanics:
+
+- **A socket IS its handle**: `socket-stream` = identity, `socket-close` =
+  `close`; `socket-listen` flips usocket's host-first order onto `tcp-listen`
+  and must OMIT the host argument for the wildcard case (`tcp-listen` rejects
+  an explicit nil host). `socket-connect` rejects `:protocol :datagram`;
+  every entry point takes `&key ... &allow-other-keys` and ignores the
+  compatibility knobs.
+- **Variables** `usocket:*wildcard-host*`/`*auto-port*` are library
+  defparameters, so `LispEvaluator.evalSymbolRef` has a variable-read
+  lazy-load hook in addition to the `resolveFunction` one (a program whose
+  FIRST usocket reference is a variable read; function-call-first programs
+  work through the function hook because `evalCons` resolves the function
+  before evaluating arguments). `boundp`/`symbol-value` are NOT hooked (lite
+  edge).
+- **`get-local-name`/`get-peer-name`** end in a literal `(values address
+  port)`, which flows through the multiple-values tier's user-function
+  channel, so `multiple-value-bind` receives both values on every backend.
+- **The four `with-*` macros** (`with-client-socket`, `with-connected-socket`,
+  `with-server-socket` (alias), `with-socket-listener`) are built-in
+  `LispMacroExpander.expandUsocketWith*` expansions (the
+  `rontolisp:with-arena` pattern: dispatched on the qualified name in
+  `LispEvaluator.evalCons` + `Jvm/WasmExprCompiler`, registered only as
+  usocket package externals, no CL_MACROS entry). No `unwind-protect` exists,
+  so the expansion closes on normal exit only (`let` + result-var + close;
+  documented limitation).
+- **Built-in ASDF system**: `eval/BuiltinSystems` maps `"usocket"` →
+  `UsocketLibrary::forms`. `LoadInliner.spliceSystem` splices the forms (NOT
+  mark-only — an `:import-from :usocket` + bare-name consumer would evade the
+  Walker, which runs before `PackageResolver`) and the quickload branch skips
+  `downloadQuicklisp`; the interpreter's `loadSystem`/`quickload` short-circuit
+  to `ensureUsocketLoaded()`. `UsocketLibrary.process` has a dedup guard
+  (skip when the program already carries `(defun usocket:socket-connect ...)`)
+  so the outer pre-pass never prepends a second copy after the LoadInliner
+  hook spliced one.
+- **Chain wiring**: `RontoLispCli` (outermost `UsocketLibrary.process`),
+  `RontoPlayground` (both compile paths), corpus tests,
+  `AsdfLibraryE2eSupport`, native-image `resource-config.json`.
+- **Not reproduced** (rontolisp has no substrate): UDP
+  (`socket-send`/`socket-receive`), `socket-shutdown`, `wait-for-input`,
+  `socket-server`, and the condition hierarchy — `usocket:socket-error` &c
+  are registered as data symbols only (no condition system / `handler-case`).
+
 ## Pinning tests
 
-`LispEvaluatorTest#tcp*`, `JvmLispCompilerTest#compileAndRunTcp*` /
-`#compileTcpRejectsWrongArgCount`, `WasmLispCompilerTest#tcp*` /
+`LispEvaluatorTest#tcp*` / `#usocket*`, `JvmLispCompilerTest#compileAndRunTcp*`
+/ `#compileTcpRejectsWrongArgCount` / `#compileAndRunUsocket*`,
+`WasmLispCompilerTest#tcp*` / `#usocket*` /
 `#fetchAndTcpInOneComponentProgramIsCompileError`,
-`WasmLispCompilerIntegrationTest#componentTcp*` (a full loopback echo runs
-deterministically inside the wasmtime container — no opt-in env var needed).
-The self-contained single-threaded echo choreography (listen 0 →
-tcp-local-port → connect → write → accept → read) never deadlocks because the
-connection waits in the listen backlog and small payloads sit in kernel/stream
-buffers. The rontolisp introspection list includes the four names — updating
-it touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
+`WasmLispCompilerIntegrationTest#componentTcp*` / `#componentUsocket*` (a full
+loopback echo runs deterministically inside the wasmtime container — no opt-in
+env var needed), `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`,
+`LoadInlinerTest` (built-in system splice/dedup/quickload-skip) and
+`LispEvaluatorAsdfTest` (built-in system on the interpreter). The
+self-contained single-threaded echo choreography (listen 0 → tcp-local-port →
+connect → write → accept → read) never deadlocks because the connection waits
+in the listen backlog and small payloads sit in kernel/stream buffers. The
+rontolisp introspection list includes the seven tcp names — updating it
+touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
 `WasmLispCompilerIntegrationTest`, `ci-spec.yaml` and the
 `rontolisp-list-functions` / `packages` doc pages.
 

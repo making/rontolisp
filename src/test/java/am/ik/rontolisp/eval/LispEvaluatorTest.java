@@ -3906,7 +3906,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 	}
 
 	@Test
@@ -3950,7 +3950,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 	}
 
 	@Test
@@ -4217,6 +4217,170 @@ class LispEvaluatorTest {
 				(setq h (open "/dev/null" :input))
 				(rontolisp:tcp-local-port h)
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a socket or listener handle");
+	}
+
+	@Test
+	void tcpAddressAccessorsOnLoopback() {
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener))
+				       (result (list (rontolisp:tcp-local-address listener)
+				                     (rontolisp:tcp-peer-address client)
+				                     (rontolisp:tcp-peer-port client)
+				                     (rontolisp:tcp-peer-address server))))
+				  (close server)
+				  (close client)
+				  (close listener)
+				  result)
+				""";
+		LispVal result = eval(program);
+		assertThat(result.print()).isEqualTo("(\"127.0.0.1\" \"127.0.0.1\" " + portOf(result) + " \"127.0.0.1\")");
+	}
+
+	private static long portOf(LispVal accessorResult) {
+		// The third element of the tcpAddressAccessorsOnLoopback result list: the
+		// ephemeral server port the client is connected to.
+		LispCons cons = (LispCons) accessorResult;
+		LispCons rest = (LispCons) ((LispCons) cons.cdr()).cdr();
+		return ((LispInteger) rest.car()).value();
+	}
+
+	@Test
+	void tcpAddressAccessorArgumentValidation() {
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-peer-address 12345)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a connected socket handle");
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-peer-port 12345)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a connected socket handle");
+		assertThatThrownBy(() -> eval("(rontolisp:tcp-local-address 12345)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("expects a socket or listener handle");
+		// A listener is not a connected socket, so the peer accessors reject it.
+		assertThatThrownBy(() -> evalMulti("""
+				(setq l (rontolisp:tcp-listen 0 "127.0.0.1"))
+				(rontolisp:tcp-peer-address l)
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects a connected socket handle");
+	}
+
+	@Test
+	void usocketEchoOverLoopback() {
+		// The Postmodern (cl-postgres) shape: socket-connect with :element-type,
+		// socket-stream, stream I/O, socket-close. Same single-threaded loopback
+		// choreography as the tcp tests.
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
+				  (write-line "hello" (usocket:socket-stream client))
+				  (let* ((server (usocket:socket-accept listener))
+				         (line (read-line (usocket:socket-stream server))))
+				    (usocket:socket-close server)
+				    (usocket:socket-close client)
+				    (usocket:socket-close listener)
+				    line))
+				""";
+		assertThat(eval(program)).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void usocketAddressAccessors() {
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port))
+				       (server (usocket:socket-accept listener))
+				       (result (list (usocket:get-peer-address client)
+				                     (= (usocket:get-peer-port client) port)
+				                     (usocket:get-local-address listener)
+				                     (usocket:get-peer-name server))))
+				  (usocket:socket-close server)
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener)
+				  result)
+				""";
+		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" t \"127.0.0.1\" \"127.0.0.1\")");
+	}
+
+	@Test
+	void usocketWildcardHostListens() {
+		String program = """
+				(let* ((listener (usocket:socket-listen usocket:*wildcard-host* 0))
+				       (port (usocket:get-local-port listener)))
+				  (usocket:socket-close listener)
+				  (> port 0))
+				""";
+		assertThat(eval(program)).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void usocketVariableFirstReferenceLoadsLibrary() {
+		// The program's FIRST usocket reference is a variable read, not a function
+		// call: the evalSymbolRef lazy-load hook must fire.
+		assertThat(eval("usocket:*wildcard-host*")).isEqualTo(new LispString("0.0.0.0"));
+	}
+
+	@Test
+	void usocketSocketConnectRejectsDatagram() {
+		assertThatThrownBy(() -> eval("(usocket:socket-connect \"127.0.0.1\" 9 :protocol :datagram)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("UDP");
+	}
+
+	@Test
+	void usocketGetLocalNameSuppliesBothValuesToMultipleValueBind() {
+		// The literal (values ...) tail flows through the multiple-values tier's
+		// user-function channel, so both the address and the port come through.
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener)))
+				  (multiple-value-bind (addr p) (usocket:get-local-name listener)
+				    (usocket:socket-close listener)
+				    (list addr (= p port))))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" t)");
+	}
+
+	@Test
+	void usocketWithMacrosEchoOverLoopback() {
+		// with-socket-listener + with-client-socket + with-connected-socket compose;
+		// each closes its handle on normal exit (lite: no unwind-protect, so a body
+		// error would leak -- documented).
+		String program = """
+				(usocket:with-socket-listener (listener "127.0.0.1" 0)
+				  (usocket:with-client-socket (client stream "127.0.0.1" (usocket:get-local-port listener)
+				                               :element-type '(unsigned-byte 8))
+				    (write-line "ping" stream)
+				    (usocket:with-connected-socket (server (usocket:socket-accept listener))
+				      (read-line server))))
+				""";
+		assertThat(eval(program)).isEqualTo(new LispString("ping"));
+	}
+
+	@Test
+	void usocketWithConnectedSocketClosesOnNormalExit() {
+		// After the body, the socket handle is closed: a subsequent read-line on it
+		// signals instead of blocking.
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (client (usocket:socket-connect "127.0.0.1" (usocket:get-local-port listener)))
+				       (kept nil))
+				  (usocket:with-connected-socket (server (usocket:socket-accept listener))
+				    (setq kept server))
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener)
+				  (read-line kept))
+				""";
+		assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void usocketWithServerSocketIsAliasOfWithConnectedSocket() {
+		String program = """
+				(let ((listener (usocket:socket-listen "127.0.0.1" 0)))
+				  (usocket:with-server-socket (l listener)
+				    (> (usocket:get-local-port l) 0)))
+				""";
+		assertThat(eval(program)).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test

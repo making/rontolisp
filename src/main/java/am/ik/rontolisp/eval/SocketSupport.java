@@ -335,6 +335,50 @@ final class SocketSupport {
 	}
 
 	/**
+	 * Returns the local/bound IP address of a socket or listener handle, or {@code null}
+	 * for any other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the local IP address string, or null if the entry is not a TCP handle
+	 */
+	static @Nullable String localAddress(Closeable entry) {
+		if (entry instanceof ServerSocket listener) {
+			InetAddress address = listener.getInetAddress();
+			return (address == null) ? null : address.getHostAddress();
+		}
+		if (entry instanceof Socket socket) {
+			return socket.getLocalAddress().getHostAddress();
+		}
+		return null;
+	}
+
+	/**
+	 * Returns the remote IP address of a connected socket handle, or {@code null} for a
+	 * listener or any other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the peer IP address string, or null if the entry is not a connected socket
+	 */
+	static @Nullable String peerAddress(Closeable entry) {
+		if (entry instanceof Socket socket) {
+			InetAddress address = socket.getInetAddress();
+			return (address == null) ? null : address.getHostAddress();
+		}
+		return null;
+	}
+
+	/**
+	 * Returns the remote port of a connected socket handle, or {@code -1} for a listener
+	 * or any other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the peer port number, or -1 if the entry is not a connected socket
+	 */
+	static long peerPort(Closeable entry) {
+		if (entry instanceof Socket socket) {
+			return socket.getPort();
+		}
+		return -1;
+	}
+
+	/**
 	 * Reads one line from a socket: bytes up to a {@code \n} (exclusive, with one
 	 * trailing {@code \r} stripped for CRLF parity with {@code BufferedReader.readLine}),
 	 * decoded as UTF-8. Reads byte-at-a-time so no readahead is lost between calls.

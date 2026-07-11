@@ -20,9 +20,9 @@ public final class PackageIntrospection {
 			LispNames.HTTP_HANDLER, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.LIST_FUNCTIONS,
 			LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.PROMISEP, LispNames.QUERY_PARAM,
 			LispNames.QUERY_PARAMS, LispNames.TCP_ACCEPT, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
-			LispNames.TCP_LOCAL_PORT, LispNames.THEN, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN,
-			LispNames.TLS_LISTEN_PEM, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.URL_PATH,
-			LispNames.URL_QUERY, LispNames.VERSION);
+			LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_LOCAL_PORT, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT,
+			LispNames.THEN, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.URL_DECODE,
+			LispNames.URL_ENCODE, LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.VERSION);
 
 	/**
 	 * The functions owned by the {@code java} interop package, sorted alphabetically.

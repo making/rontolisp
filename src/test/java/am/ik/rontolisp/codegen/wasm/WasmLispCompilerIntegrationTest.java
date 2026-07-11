@@ -5481,7 +5481,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -5590,6 +5590,34 @@ class WasmLispCompilerIntegrationTest {
 				"/tmp/tcp-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n65\nnil");
+	}
+
+	@Test
+	void componentUsocketEchoOverLoopback() throws Exception {
+		// The usocket shim (usocket.lisp, spliced by UsocketLibrary.process like the
+		// CLI pre-pass) over the same loopback choreography as componentTcpLoopbackEcho.
+		// The address accessors are not wired on the component target and print nil.
+		String program = """
+				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
+				  (write-line "hello" (usocket:socket-stream client))
+				  (let* ((server (usocket:socket-accept listener))
+				         (line (read-line (usocket:socket-stream server))))
+				    (print line)
+				    (print (usocket:get-peer-address server))
+				    (usocket:socket-close server)
+				    (usocket:socket-close client)
+				    (usocket:socket-close listener)))
+				""";
+		List<LispVal> spliced = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(program));
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/usocket-echo.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
+				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
+				"/tmp/usocket-echo.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\nnil");
 	}
 
 	@Test

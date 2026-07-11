@@ -6,6 +6,7 @@ import java.net.Socket;
 
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Web Image substitution for {@link SocketSupport}. The browser playground compiles the
@@ -59,6 +60,21 @@ final class Target_SocketSupport {
 
 	@Substitute
 	static long localPort(Closeable entry) {
+		return -1;
+	}
+
+	@Substitute
+	static @Nullable String localAddress(Closeable entry) {
+		return null;
+	}
+
+	@Substitute
+	static @Nullable String peerAddress(Closeable entry) {
+		return null;
+	}
+
+	@Substitute
+	static long peerPort(Closeable entry) {
 		return -1;
 	}
 

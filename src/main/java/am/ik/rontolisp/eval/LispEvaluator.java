@@ -64,6 +64,8 @@ public final class LispEvaluator {
 
 	private boolean urlLibraryLoaded = false;
 
+	private boolean usocketLibraryLoaded = false;
+
 	/**
 	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
 	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
@@ -795,6 +797,12 @@ public final class LispEvaluator {
 	 * auto-download step in front.
 	 */
 	private void quickload(String name) {
+		// A built-in system ("usocket") is satisfied by the embedded library: no
+		// download, no cache, no QuicklispClient.
+		if (BuiltinSystems.isBuiltin(name)) {
+			loadSystem(name);
+			return;
+		}
 		if (this.quicklispClient == null) {
 			this.quicklispClient = QuicklispClient.createDefault();
 		}
@@ -822,6 +830,15 @@ public final class LispEvaluator {
 		if (this.loadingSystems.contains(name)) {
 			throw new LispEvalException("Circular system :depends-on detected: "
 					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
+		}
+		if (BuiltinSystems.isBuiltin(name)) {
+			// A system rontolisp provides itself (e.g. "usocket"): evaluate the embedded
+			// library through its lazy-load path instead of locating a NAME.asd.
+			if (LispNames.USOCKET_PKG.equals(name)) {
+				ensureUsocketLoaded();
+			}
+			this.loadedSystems.add(name);
+			return;
 		}
 		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
 		if (system == null) {
@@ -999,7 +1016,33 @@ public final class LispEvaluator {
 		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
 			return this.dynamicBindings.get(name);
 		}
-		return env.lookup(name);
+		LispVal value = env.lookupOrNull(name);
+		if (value == null && !this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
+			// The usocket library also exports variables (usocket:*wildcard-host*), so a
+			// program whose FIRST usocket reference is a variable read must trigger the
+			// same lazy load as a function resolution.
+			ensureUsocketLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null) {
+			throw new LispEvalException("The variable " + name + " is unbound");
+		}
+		return value;
+	}
+
+	/**
+	 * Evaluates the usocket library definitions ({@code usocket.lisp}) into the global
+	 * environment once; shared by the function/variable lazy-load hooks and the built-in
+	 * ASDF system {@code "usocket"} ({@code asdf:load-system}/{@code ql:quickload}).
+	 */
+	private void ensureUsocketLoaded() {
+		if (this.usocketLibraryLoaded) {
+			return;
+		}
+		this.usocketLibraryLoaded = true;
+		for (LispVal form : UsocketLibrary.forms()) {
+			eval(form, this.globalEnv);
+		}
 	}
 
 	private LispVal evalCons(LispCons cons, Environment env) {
@@ -1145,6 +1188,13 @@ public final class LispEvaluator {
 					// A reclamation boundary for --no-gc; a real GC already reclaims, so
 					// the interpreter runs the body as a plain progn.
 					return eval(LispMacroExpander.expandWithArena(cons), env);
+				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
+					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
+				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
+				case LispNames.USOCKET_WITH_SERVER_SOCKET_QUALIFIED:
+					return eval(LispMacroExpander.expandUsocketWithConnectedSocket(cons), env);
+				case LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED:
+					return eval(LispMacroExpander.expandUsocketWithSocketListener(cons), env);
 				case LispNames.WITH_INPUT_FROM_STRING:
 					return eval(LispMacroExpander.expandWithInputFromString(cons), env);
 				case LispNames.PUSHNEW:
@@ -1825,6 +1875,16 @@ public final class LispEvaluator {
 			for (LispVal form : UrlLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
+		// The usocket package (usocket.lisp, the usocket-compatible shim over the
+		// rontolisp:tcp-* built-ins) loads the same way on the first resolution of a
+		// usocket:-qualified function.
+		if (!this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
+			ensureUsocketLoaded();
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 			if (loaded != null) {
 				return loaded;

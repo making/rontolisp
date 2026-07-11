@@ -104,6 +104,21 @@ final class JvmTcpCompiler {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				invoke(ctx, ctx.tcpLocalPortHelper, member);
 			}
+			case LispNames.TCP_LOCAL_ADDRESS -> {
+				requireArgs(member, args, 1, 1);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				invoke(ctx, ctx.tcpLocalAddressHelper, member);
+			}
+			case LispNames.TCP_PEER_ADDRESS -> {
+				requireArgs(member, args, 1, 1);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				invoke(ctx, ctx.tcpPeerAddressHelper, member);
+			}
+			case LispNames.TCP_PEER_PORT -> {
+				requireArgs(member, args, 1, 1);
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				invoke(ctx, ctx.tcpPeerPortHelper, member);
+			}
 			default -> throw new UnsupportedOperationException("Unknown tcp built-in: " + member);
 		}
 	}

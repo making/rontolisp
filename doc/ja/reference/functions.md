@@ -258,6 +258,9 @@
 | `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | リスニングTCPソケットをバインドしてリスナーハンドルを返します。ポート `0` は空きエフェメラルポートを選びます |
 | `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | クライアント接続を待ちます (ブロッキング)。双方向ストリームハンドルを返します |
 | `rontolisp:tcp-local-port` | `(rontolisp:tcp-local-port listener)` | リスナーまたはソケットが実際にバインドされているローカルポート |
+| `rontolisp:tcp-local-address` | `(rontolisp:tcp-local-address listener)` | リスナーまたはソケットがバインドされているローカルIPアドレス（文字列） |
+| `rontolisp:tcp-peer-address` | `(rontolisp:tcp-peer-address sock)` | 接続済みソケットのリモートIPアドレス（文字列） |
+| `rontolisp:tcp-peer-port` | `(rontolisp:tcp-peer-port sock)` | 接続済みソケットのリモートポート |
 | `rontolisp:tls-connect` | `(rontolisp:tls-connect "example.com" 443)` | 暗号化（TLS）クライアント接続を開きます。`tcp-connect` と同じ種類のストリームハンドルを返します |
 | `rontolisp:tls-listen` | `(rontolisp:tls-listen "server.p12" "changeit" 8443)` | PKCS12キーストアから暗号化リスニングソケットをバインドします。`tcp-accept` で受け付けます |
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | PEMの証明書／鍵ファイルから暗号化リスニングソケットをバインドします |
@@ -277,12 +280,12 @@
 [HTTPサーバガイド](../guides/http-handler.md)を、バックエンドのサポートと制限は
 [http-handler](functions/rontolisp-http-handler.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（JavaScriptの `JSON.parse`/`JSON.stringify` 相当。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](functions/rontolisp-json-parse.md) と
-[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。tcp関数（`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`）は素のTCPソケットを開き、そのハンドルには標準のストリーム関数（`read-line` / `write-line` / `read-byte` / `write-byte` / `close`）がそのまま使えます。echoサーバーの実例は
+[json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。tcp関数（`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` および[アドレスアクセサ](functions/rontolisp-tcp-addresses.md)）は素のTCPソケットを開き、そのハンドルには標準のストリーム関数（`read-line` / `write-line` / `read-byte` / `write-byte` / `close`）がそのまま使えます。echoサーバーの実例は
 [TCPソケットガイド](../guides/tcp-sockets.md)を、バックエンドのサポートと制限は
 [tcp-connect](functions/rontolisp-tcp-connect.md)、
 [tcp-listen](functions/rontolisp-tcp-listen.md)、
 [tcp-accept](functions/rontolisp-tcp-accept.md)、
-[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
+[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-パッケージの関数)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
 [tls-connect](functions/rontolisp-tls-connect.md)、
 [tls-listen](functions/rontolisp-tls-listen.md)、
 [tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export` と `rontolisp:wasm-import`
@@ -397,3 +400,40 @@ Quicklisp ディストリビューションからシステムをローカルキ�
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
 | `ql:quickload` | `(ql:quickload "split-sequence")` | Quicklisp からシステム (とその依存) をダウンロードし、`~/.rontolisp/quicklisp` にキャッシュしてロードする。ロードしたシステム名のリストを返す |
+## usocket パッケージの関数
+
+`usocket` パッケージは、[usocket](https://github.com/usocket/usocket) API を
+`rontolisp:tcp-*` 組み込みの上で再現する互換シムです。Postmodern の
+cl-postgres ソケット層のような既存の Common Lisp ネットワークコードが、
+より少ない変更で動きます。**Common Lisp の一部ではありません**。シンボルは
+`usocket:` 修飾子付きで参照します。このシムではソケットはストリームハンドル
+そのものなので、`socket-stream` は恒等関数で、標準のストリーム関数が
+ソケットにそのまま使えます。パッケージは最初の使用時にロードされ、組み込み
+ASDF システム `"usocket"` でもあります(`asdf:load-system`、`ql:quickload`、
+`:depends-on ("usocket")` をダウンロードなしで充足)。対応は TCP のみ --
+UDP(`socket-send` / `socket-receive`)、`wait-for-input`、`socket-server`、
+コンディション階層(`handler-case` での `usocket:socket-error`)は
+非対応です。変数 `usocket:*wildcard-host*`(`"0.0.0.0"`)と
+`usocket:*auto-port*`(`0`)が提供されます。全体像と制限の一覧は
+[TCPソケットガイド](../guides/tcp-sockets.md#usocket-互換シム)を参照して
+ください。
+
+| 関数 | 例 | 結果 |
+|----------|---------|--------|
+| `usocket:socket-connect` | `(usocket:socket-connect "localhost" 5432 :element-type '(unsigned-byte 8))` | ブロッキングTCP接続を開く。`:protocol :datagram` はエラー、他のオプションは受理して無視 |
+| `usocket:socket-listen` | `(usocket:socket-listen usocket:*wildcard-host* usocket:*auto-port*)` | リスニングTCPソケットをバインド(usocket流にホストが先) |
+| `usocket:socket-accept` | `(usocket:socket-accept listener)` | クライアント接続を待つ(ブロッキング) |
+| `usocket:socket-stream` | `(read-line (usocket:socket-stream sock))` | ソケットのストリーム(このシムでは恒等関数) |
+| `usocket:socket-close` | `(usocket:socket-close sock)` | ソケットまたはリスナーを閉じる |
+| `usocket:get-local-port` | `(usocket:get-local-port listener)` | ローカルにバインドされたポート(エフェメラルポートの読み戻し) |
+| `usocket:get-local-address` | `(usocket:get-local-address listener)` | ローカルにバインドされたIPアドレス(文字列) |
+| `usocket:get-peer-address` | `(usocket:get-peer-address sock)` | 接続済みソケットのリモートIPアドレス |
+| `usocket:get-peer-port` | `(usocket:get-peer-port sock)` | 接続済みソケットのリモートポート |
+| `usocket:get-local-name` | `(usocket:get-local-name sock)` | ローカルのアドレスとポートを `(values address port)` で返す |
+| `usocket:get-peer-name` | `(usocket:get-peer-name sock)` | リモートのアドレスとポートを `(values address port)` で返す |
+
+`with-*` 便利マクロ(`usocket:with-client-socket` / `with-connected-socket` /
+`with-server-socket` / `with-socket-listener`)は
+[マクロページ](macros.md)に一覧があり、
+[リファレンスページ](macros/usocket-with-macros.md)で説明しています。
+ソケットを閉じるのは正常終了時のみです(`unwind-protect` はありません)。

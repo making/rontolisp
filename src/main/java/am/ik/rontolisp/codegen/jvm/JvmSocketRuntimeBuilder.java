@@ -68,6 +68,18 @@ final class JvmSocketRuntimeBuilder {
 
 	static final String TCP_LOCAL_PORT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String TCP_LOCAL_ADDRESS_METHOD = "_tcpLocalAddress";
+
+	static final String TCP_LOCAL_ADDRESS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String TCP_PEER_ADDRESS_METHOD = "_tcpPeerAddress";
+
+	static final String TCP_PEER_ADDRESS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String TCP_PEER_PORT_METHOD = "_tcpPeerPort";
+
+	static final String TCP_PEER_PORT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	private static final String ADD_STREAM_METHOD = "_addStream";
 
 	private static final String ADD_STREAM_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -187,6 +199,16 @@ final class JvmSocketRuntimeBuilder {
 	private final MethodrefConstant socketGetLocalPort;
 
 	private final MethodrefConstant serverSocketGetLocalPort;
+
+	private final MethodrefConstant socketGetLocalAddress;
+
+	private final MethodrefConstant socketGetInetAddress;
+
+	private final MethodrefConstant socketGetPort;
+
+	private final MethodrefConstant serverSocketGetInetAddress;
+
+	private final MethodrefConstant inetGetHostAddress;
 
 	private final MethodrefConstant serverSocketAccept;
 
@@ -326,6 +348,16 @@ final class JvmSocketRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("getLocalPort"), cp.addUtf8("()I")));
 		this.serverSocketGetLocalPort = cp.addMethodref(this.serverSocketClass,
 				cp.addNameAndType(cp.addUtf8("getLocalPort"), cp.addUtf8("()I")));
+		this.socketGetLocalAddress = cp.addMethodref(this.socketClass,
+				cp.addNameAndType(cp.addUtf8("getLocalAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
+		this.socketGetInetAddress = cp.addMethodref(this.socketClass,
+				cp.addNameAndType(cp.addUtf8("getInetAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
+		this.socketGetPort = cp.addMethodref(this.socketClass,
+				cp.addNameAndType(cp.addUtf8("getPort"), cp.addUtf8("()I")));
+		this.serverSocketGetInetAddress = cp.addMethodref(this.serverSocketClass,
+				cp.addNameAndType(cp.addUtf8("getInetAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
+		this.inetGetHostAddress = cp.addMethodref(inetAddressClass,
+				cp.addNameAndType(cp.addUtf8("getHostAddress"), cp.addUtf8("()Ljava/lang/String;")));
 		this.serverSocketAccept = cp.addMethodref(this.serverSocketClass,
 				cp.addNameAndType(cp.addUtf8("accept"), cp.addUtf8("()Ljava/net/Socket;")));
 		this.socketClose = cp.addMethodref(this.socketClass, cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
@@ -381,6 +413,12 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildTcpAccept()));
 		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_PORT_METHOD), cp.addUtf8(TCP_LOCAL_PORT_DESC), 3, 2,
 				builder.buildTcpLocalPort()));
+		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_ADDRESS_METHOD), cp.addUtf8(TCP_LOCAL_ADDRESS_DESC), 3, 2,
+				builder.buildTcpLocalAddress()));
+		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_ADDRESS_METHOD), cp.addUtf8(TCP_PEER_ADDRESS_DESC), 3, 2,
+				builder.buildTcpPeerAddress()));
+		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_PORT_METHOD), cp.addUtf8(TCP_PEER_PORT_DESC), 3, 2,
+				builder.buildTcpPeerPort()));
 		methods.add(new SocketMethod(cp.addUtf8(ADD_STREAM_METHOD), cp.addUtf8(ADD_STREAM_DESC), 3, 3,
 				builder.buildAddStream()));
 		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC), 7, 6,
@@ -769,6 +807,91 @@ final class JvmSocketRuntimeBuilder {
 		emitBoxLong(code);
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * {@code _tcpLocalAddress(Object handle) -> String}. Returns the local/bound IP
+	 * address of a listener or socket entry, quote-framed like every runtime string.
+	 */
+	private List<Integer> buildTcpLocalAddress() {
+		// Slots: 0=handle, 1=entry
+		List<Integer> code = new ArrayList<>();
+		emitLoadStreamEntry(code, 0);
+		code.add(Opcode.ASTORE_1);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.serverSocketClass.index());
+		int ifSockPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// "\"".concat(((ServerSocket) entry).getInetAddress().getHostAddress()) + "\""
+		emitLdc(code, this.quoteStr.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.serverSocketClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.serverSocketGetInetAddress.index());
+		emitHostAddressReturn(code);
+		patchBranch(code, ifSockPos, code.size());
+		emitLdc(code, this.quoteStr.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketGetLocalAddress.index());
+		emitHostAddressReturn(code);
+		return code;
+	}
+
+	/**
+	 * {@code _tcpPeerAddress(Object handle) -> String}. Returns the remote IP address of
+	 * a connected socket entry, quote-framed like every runtime string.
+	 */
+	private List<Integer> buildTcpPeerAddress() {
+		// Slots: 0=handle, 1=entry
+		List<Integer> code = new ArrayList<>();
+		emitLoadStreamEntry(code, 0);
+		code.add(Opcode.ASTORE_1);
+		emitLdc(code, this.quoteStr.index());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketGetInetAddress.index());
+		emitHostAddressReturn(code);
+		return code;
+	}
+
+	/**
+	 * {@code _tcpPeerPort(Object handle) -> Long}. Returns the remote port of a connected
+	 * socket entry.
+	 */
+	private List<Integer> buildTcpPeerPort() {
+		List<Integer> code = new ArrayList<>();
+		emitLoadStreamEntry(code, 0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketGetPort.index());
+		emitBoxLong(code);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * Emits the shared tail of the address accessors: with the opening quote string and
+	 * an {@code InetAddress} on the stack, appends
+	 * {@code .getHostAddress()}-concat-closing-quote and returns.
+	 */
+	private void emitHostAddressReturn(List<Integer> code) {
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inetGetHostAddress.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringConcat.index());
+		emitLdc(code, this.quoteStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringConcat.index());
+		code.add(Opcode.ARETURN);
 	}
 
 	/**

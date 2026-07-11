@@ -293,6 +293,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_ADDRESS))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_ADDRESS))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_PEER_PORT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN))
 				|| programUsesSymbol(program,
@@ -312,6 +317,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant tcpLocalPortHelperMethod = usesSockets ? cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_DESC)))
+				: null;
+		MethodrefConstant tcpLocalAddressHelperMethod = usesSockets ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_ADDRESS_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_ADDRESS_DESC)))
+				: null;
+		MethodrefConstant tcpPeerAddressHelperMethod = usesSockets ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_ADDRESS_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_ADDRESS_DESC)))
+				: null;
+		MethodrefConstant tcpPeerPortHelperMethod = usesSockets
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_PORT_METHOD),
+						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_PORT_DESC)))
 				: null;
 		MethodrefConstant tlsConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_METHOD),
@@ -605,6 +622,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tcpListenHelper(tcpListenHelperMethod)
 			.tcpAcceptHelper(tcpAcceptHelperMethod)
 			.tcpLocalPortHelper(tcpLocalPortHelperMethod)
+			.tcpLocalAddressHelper(tcpLocalAddressHelperMethod)
+			.tcpPeerAddressHelper(tcpPeerAddressHelperMethod)
+			.tcpPeerPortHelper(tcpPeerPortHelperMethod)
 			.tlsConnectHelper(tlsConnectHelperMethod)
 			.tlsListenHelper(tlsListenHelperMethod)
 			.tlsListenP12Helper(tlsListenP12HelperMethod)
@@ -1880,6 +1900,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant tcpLocalPortHelper;
 
+		final @Nullable MethodrefConstant tcpLocalAddressHelper;
+
+		final @Nullable MethodrefConstant tcpPeerAddressHelper;
+
+		final @Nullable MethodrefConstant tcpPeerPortHelper;
+
 		final @Nullable MethodrefConstant tlsConnectHelper;
 
 		final @Nullable MethodrefConstant tlsListenHelper;
@@ -2070,6 +2096,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tcpListenHelper = builder.tcpListenHelper;
 			this.tcpAcceptHelper = builder.tcpAcceptHelper;
 			this.tcpLocalPortHelper = builder.tcpLocalPortHelper;
+			this.tcpLocalAddressHelper = builder.tcpLocalAddressHelper;
+			this.tcpPeerAddressHelper = builder.tcpPeerAddressHelper;
+			this.tcpPeerPortHelper = builder.tcpPeerPortHelper;
 			this.tlsConnectHelper = builder.tlsConnectHelper;
 			this.tlsListenHelper = builder.tlsListenHelper;
 			this.tlsListenP12Helper = builder.tlsListenP12Helper;
@@ -2168,6 +2197,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant tcpAcceptHelper;
 
 			private @Nullable MethodrefConstant tcpLocalPortHelper;
+
+			private @Nullable MethodrefConstant tcpLocalAddressHelper;
+
+			private @Nullable MethodrefConstant tcpPeerAddressHelper;
+
+			private @Nullable MethodrefConstant tcpPeerPortHelper;
 
 			private @Nullable MethodrefConstant tlsConnectHelper;
 
@@ -2400,6 +2435,21 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder tcpAcceptHelper(@Nullable MethodrefConstant tcpAcceptHelper) {
 				this.tcpAcceptHelper = tcpAcceptHelper;
+				return this;
+			}
+
+			Builder tcpLocalAddressHelper(@Nullable MethodrefConstant tcpLocalAddressHelper) {
+				this.tcpLocalAddressHelper = tcpLocalAddressHelper;
+				return this;
+			}
+
+			Builder tcpPeerAddressHelper(@Nullable MethodrefConstant tcpPeerAddressHelper) {
+				this.tcpPeerAddressHelper = tcpPeerAddressHelper;
+				return this;
+			}
+
+			Builder tcpPeerPortHelper(@Nullable MethodrefConstant tcpPeerPortHelper) {
+				this.tcpPeerPortHelper = tcpPeerPortHelper;
 				return this;
 			}
 

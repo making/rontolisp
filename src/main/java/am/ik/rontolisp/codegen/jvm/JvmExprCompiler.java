@@ -142,6 +142,8 @@ final class JvmExprCompiler {
 				}
 				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
+						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())
+						|| LispNames.TCP_PEER_ADDRESS.equals(qn.member()) || LispNames.TCP_PEER_PORT.equals(qn.member())
 						|| LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())
 						|| LispNames.TLS_LISTEN_P12.equals(qn.member())) {
 					JvmTcpCompiler.compile(qn.member(), cons, ctx, className);
@@ -176,6 +178,29 @@ final class JvmExprCompiler {
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {
 				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
+			}
+			// The usocket with-* convenience macros are built-in LispMacroExpander
+			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
+			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
+				switch (qn.member()) {
+					case LispNames.USOCKET_WITH_CLIENT_SOCKET -> {
+						compileExpr(LispMacroExpander.expandUsocketWithClientSocket(cons), ctx, className);
+						return;
+					}
+					case LispNames.USOCKET_WITH_CONNECTED_SOCKET, LispNames.USOCKET_WITH_SERVER_SOCKET -> {
+						compileExpr(LispMacroExpander.expandUsocketWithConnectedSocket(cons), ctx, className);
+						return;
+					}
+					case LispNames.USOCKET_WITH_SOCKET_LISTENER -> {
+						compileExpr(LispMacroExpander.expandUsocketWithSocketListener(cons), ctx, className);
+						return;
+					}
+					default -> {
+						// Other usocket: members (the usocket.lisp defuns) fall through
+						// to
+						// the ordinary qualified-call path.
+					}
+				}
 			}
 			// --vec: route the six vectorizable vec: kernels to the embedded Vector API
 			// bridge instead of the scalar vec.lisp defun. Only when the runtime was

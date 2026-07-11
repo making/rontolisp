@@ -1,6 +1,6 @@
 # Packages
 
-rontolisp has a small namespace (package) system with six built-in packages, plus [user-defined packages via `defpackage`](#user-defined-packages-defpackage):
+rontolisp has a small namespace (package) system with a set of built-in packages, plus [user-defined packages via `defpackage`](#user-defined-packages-defpackage):
 
 - **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
 - **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
@@ -9,6 +9,7 @@ rontolisp has a small namespace (package) system with six built-in packages, plu
 - **`java`** — Java interop by reflection, usable only under the JVM interpreter (`java -jar rontolisp.jar`), not the compilers or the native binary. It does **not** use `cl`. It owns `new`, `call`, `static`, `field` and `proxy`; see the [Java interop guide](../guides/java-interop.md).
 - **`asdf`** — a limited, API-compatible subset of ASDF (system definitions): `defsystem` and `load-system`. It does **not** use `cl`. See the [Systems guide](../guides/asdf-systems.md).
 - **`ql`** — a limited, API-compatible subset of Quicklisp: `quickload` downloads a system from the real Quicklisp distribution and loads it through the `asdf` subset. `quicklisp` is a built-in nickname. It does **not** use `cl`. See the [Systems guide](../guides/asdf-systems.md#downloading-with-quickload).
+- **`usocket`** — a [usocket](https://github.com/usocket/usocket)-compatible shim over the `rontolisp:tcp-*` socket built-ins (`usocket:socket-connect`, `usocket:socket-listen`, ...), implemented once in Lisp source; also registered as the built-in ASDF system `"usocket"`. It does **not** use `cl`. See the [TCP Sockets guide](../guides/tcp-sockets.md#the-usocket-compatible-shim).
 
 A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`). The standard Common Lisp names `common-lisp` and `common-lisp-user` are built-in **nicknames** for `cl` and `cl-user`, so portable `(:use #:common-lisp)` clauses and `common-lisp:car` references resolve; user packages can register their own nicknames with the `defpackage` `:nicknames` clause.
 
@@ -128,7 +129,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
+; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```

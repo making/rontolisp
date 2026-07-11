@@ -157,6 +157,60 @@ and
   (close listener))
 ```
 
+## The usocket-compatible shim
+
+Existing Common Lisp networking code is usually written against the
+[usocket](https://github.com/usocket/usocket) portability library rather than
+an implementation's own socket API. rontolisp ships a built-in `usocket`
+package reproducing its core API over the `rontolisp:tcp-*` built-ins, so such
+code runs with fewer changes -- Postmodern's cl-postgres socket layer
+(`socket-connect` with `:element-type '(unsigned-byte 8)` + `socket-stream`)
+works verbatim:
+
+```lisp
+(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+       (port (usocket:get-local-port listener))
+       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
+  (write-line "hello" (usocket:socket-stream client))
+  (let* ((server (usocket:socket-accept listener))
+         (line (read-line (usocket:socket-stream server))))
+    (usocket:socket-close server)
+    (usocket:socket-close client)
+    (usocket:socket-close listener)
+    line)) ; => "hello"
+```
+
+The mapping is direct because a rontolisp socket IS its stream handle:
+`usocket:socket-stream` is the identity function, `usocket:socket-close` is
+`close`, and `usocket:socket-listen` flips the host-first argument order onto
+`rontolisp:tcp-listen`. `usocket:*wildcard-host*` (`"0.0.0.0"`) and
+`usocket:*auto-port*` (`0`) work as in usocket, the `get-local-*` /
+`get-peer-*` accessors read ports and addresses back, and the `with-*`
+convenience macros
+([`with-client-socket` / `with-connected-socket` / `with-server-socket` /
+`with-socket-listener`](../reference/macros/usocket-with-macros.md)) bind and
+close sockets around a body. The package loads on first use, and it is also
+the built-in ASDF system `"usocket"`: `(asdf:load-system "usocket")`,
+`(ql:quickload :usocket)` and a third-party `.asd`'s
+`:depends-on ("usocket")` all resolve to it without touching the network.
+
+Limitations of the shim (deliberate -- rontolisp's socket model is lite):
+
+- **TCP only.** `:protocol :datagram` (UDP) signals an error, and
+  `socket-send` / `socket-receive` / `socket-shutdown` do not exist.
+- **No condition system.** `usocket:socket-error` and the other condition
+  types exist as data symbols only; a connection failure signals an error
+  (interpreter/JVM) or returns `nil` (WASM component), and `handler-case`
+  over usocket conditions is not supported.
+- **`wait-for-input` and `socket-server` do not exist** (reads block; write
+  your own accept loop).
+- **The `with-*` macros close on normal exit only** (there is no
+  `unwind-protect`), and the compatibility keyword arguments
+  (`:element-type`, `:timeout`, `:nodelay`, `:reuse-address`, ...) are
+  accepted and ignored.
+- **Backends**: interpreter and JVM are full; WASM is component-only like the
+  tcp built-ins, and the address/peer accessors return `nil` there.
+
 ## More examples
 
 The [`examples/` directory](https://github.com/making/rontolisp/tree/develop/examples)

@@ -4478,6 +4478,115 @@ public final class LispMacroExpander {
 		return prognOrNil(parts.subList(2, parts.size()));
 	}
 
+	private static final String USOCKET_SOCKET_CONNECT_QUALIFIED = LispNames.USOCKET_PKG + ":"
+			+ LispNames.USOCKET_SOCKET_CONNECT;
+
+	private static final String USOCKET_SOCKET_STREAM_QUALIFIED = LispNames.USOCKET_PKG + ":socket-stream";
+
+	private static final String USOCKET_SOCKET_CLOSE_QUALIFIED = LispNames.USOCKET_PKG + ":socket-close";
+
+	private static final String USOCKET_SOCKET_LISTEN_QUALIFIED = LispNames.USOCKET_PKG + ":socket-listen";
+
+	private static final String USOCKET_RESULT_VAR = "__usocket_result";
+
+	/**
+	 * Expands {@code (usocket:with-client-socket (socket stream host port
+	 * connect-args...) body...)} into a {@code let*} that connects, binds {@code socket}
+	 * and (when the {@code stream} variable is not {@code nil}) its stream, runs the body
+	 * and closes the socket on normal exit. Lite semantics shared by all the usocket
+	 * {@code with-*} macros: rontolisp has no {@code unwind-protect}, so an error in the
+	 * body leaks the handle (usocket proper closes it on any exit).
+	 * @param cons the with-client-socket expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketWithClientSocket(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
+			throw new UnsupportedOperationException(LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED
+					+ " expects (socket-var stream-var host port connect-args...)");
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() < 4 || !(specParts.get(0) instanceof LispSymbol socketVar)) {
+			throw new UnsupportedOperationException(LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED
+					+ " expects (socket-var stream-var host port connect-args...)");
+		}
+		LispVal streamSpec = specParts.get(1);
+		List<LispVal> connectCall = new java.util.ArrayList<>();
+		connectCall.add(new LispSymbol(USOCKET_SOCKET_CONNECT_QUALIFIED));
+		connectCall.addAll(specParts.subList(2, specParts.size()));
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(socketVar, listToCons(connectCall))));
+		if (streamSpec instanceof LispSymbol streamVar) {
+			bindings.add(listToCons(List.of(streamVar, callOf(USOCKET_SOCKET_STREAM_QUALIFIED, socketVar))));
+		}
+		else if (!(streamSpec instanceof LispNil)) {
+			throw new UnsupportedOperationException(LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED
+					+ " expects a stream variable (or nil), got: " + streamSpec.print());
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings),
+				closeAfterBody(socketVar, parts.subList(2, parts.size()))));
+	}
+
+	/**
+	 * Expands {@code (usocket:with-connected-socket (var socket-form) body...)} (and its
+	 * alias {@code usocket:with-server-socket}) into a {@code let} that binds {@code var}
+	 * to the socket, runs the body and closes it on normal exit.
+	 * @param cons the with-connected-socket / with-server-socket expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketWithConnectedSocket(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		String name = parts.get(0).print();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
+			throw new UnsupportedOperationException(name + " expects (var socket-form)");
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() != 2 || !(specParts.get(0) instanceof LispSymbol var)) {
+			throw new UnsupportedOperationException(name + " expects (var socket-form)");
+		}
+		LispVal bindings = new LispCons(listToCons(List.of(var, specParts.get(1))), LispNil.INSTANCE);
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), bindings, closeAfterBody(var, parts.subList(2, parts.size()))));
+	}
+
+	/**
+	 * Expands {@code (usocket:with-socket-listener (var host port listen-args...)
+	 * body...)} into a {@code let} that listens, binds {@code var}, runs the body and
+	 * closes the listener on normal exit.
+	 * @param cons the with-socket-listener expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketWithSocketListener(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
+			throw new UnsupportedOperationException(
+					LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED + " expects (var host port listen-args...)");
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() < 3 || !(specParts.get(0) instanceof LispSymbol var)) {
+			throw new UnsupportedOperationException(
+					LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED + " expects (var host port listen-args...)");
+		}
+		List<LispVal> listenCall = new java.util.ArrayList<>();
+		listenCall.add(new LispSymbol(USOCKET_SOCKET_LISTEN_QUALIFIED));
+		listenCall.addAll(specParts.subList(1, specParts.size()));
+		LispVal bindings = new LispCons(listToCons(List.of(var, listToCons(listenCall))), LispNil.INSTANCE);
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), bindings, closeAfterBody(var, parts.subList(2, parts.size()))));
+	}
+
+	/**
+	 * Builds the shared tail of the usocket {@code with-*} expansions:
+	 * {@code (let ((__usocket_result (progn body...))) (usocket:socket-close var)
+	 * __usocket_result)}.
+	 */
+	private static LispVal closeAfterBody(LispSymbol var, List<LispVal> body) {
+		LispSymbol result = new LispSymbol(USOCKET_RESULT_VAR);
+		LispVal innerBindings = new LispCons(listToCons(List.of(result, prognOrNil(body))), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings,
+				callOf(USOCKET_SOCKET_CLOSE_QUALIFIED, var), result));
+	}
+
 	/**
 	 * Wraps a macro body in {@code (progn body...)}, or nil for an empty body (a
 	 * body-less progn does not compile).

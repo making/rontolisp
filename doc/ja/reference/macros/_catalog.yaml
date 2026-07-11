@@ -66,3 +66,4 @@ categories:
       - { slug: slot-value, name: slot-value }
       - { slug: documentation, name: documentation }
       - { slug: rontolisp-with-arena, name: "rontolisp:with-arena" }
+      - { slug: usocket-with-macros, name: "usocket:with-client-socket usocket:with-connected-socket usocket:with-server-socket usocket:with-socket-listener" }

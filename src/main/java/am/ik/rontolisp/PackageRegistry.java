@@ -187,6 +187,40 @@ public final class PackageRegistry {
 
 	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
 
+	/**
+	 * The functions exported by the {@code usocket} package (a usocket-compatible shim
+	 * over the {@code rontolisp:tcp-*} built-ins), implemented in {@code usocket.lisp}
+	 * (see {@code UsocketLibrary}). Plain strings, like {@code linalg}: no evaluator or
+	 * compiler dispatches on them (only the {@code with-*} macros below are dispatched
+	 * on, by their qualified names).
+	 */
+	private static final Set<String> USOCKET_FUNCTIONS = Set.of(LispNames.USOCKET_SOCKET_CONNECT, "socket-listen",
+			"socket-accept", "socket-close", "socket-stream", "get-local-port", "get-local-address", "get-local-name",
+			"get-peer-port", "get-peer-address", "get-peer-name");
+
+	/**
+	 * The macros exported by the {@code usocket} package: built-in
+	 * {@code LispMacroExpander} expansions dispatched on their qualified names (the
+	 * {@code rontolisp:with-arena} pattern), not {@code usocket.lisp} defuns.
+	 */
+	private static final Set<String> USOCKET_MACROS = Set.of(LispNames.USOCKET_WITH_CLIENT_SOCKET,
+			LispNames.USOCKET_WITH_CONNECTED_SOCKET, LispNames.USOCKET_WITH_SERVER_SOCKET,
+			LispNames.USOCKET_WITH_SOCKET_LISTENER);
+
+	/**
+	 * The variables exported by the {@code usocket} package ({@code usocket.lisp}
+	 * defparameters), plus the usocket condition-type names. rontolisp has no condition
+	 * system, so the condition names resolve as plain data symbols only (e.g.
+	 * {@code 'usocket:socket-error}) -- {@code handler-case} over them is not supported.
+	 */
+	private static final Set<String> USOCKET_VARIABLES = Set.of("*wildcard-host*", "*auto-port*", "socket-condition",
+			"socket-error", "connection-refused-error", "connection-aborted-error", "connection-reset-error",
+			"timeout-error", "address-in-use-error", "ns-error");
+
+	private static final Set<String> USOCKET_EXTERNALS = union(USOCKET_FUNCTIONS, USOCKET_MACROS, USOCKET_VARIABLES);
+
+	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
+
 	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
 
 	private static final List<String> CL_MACRO_NAMES = sorted(CL_MACROS);
@@ -222,7 +256,8 @@ public final class PackageRegistry {
 						LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH,
 						LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT, LispNames.WITH_ARENA,
 						LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
-						LispNames.TCP_LOCAL_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
+						LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
+						LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
 						LispNames.TLS_LISTEN_P12))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
@@ -235,6 +270,11 @@ public final class PackageRegistry {
 		// not
 		// use cl; every function is external.
 		define(new LispPackage(LispNames.VEC_PKG, List.of(), new HashSet<>(VEC_FUNCTIONS)));
+		// A usocket-compatible shim over the rontolisp:tcp-* built-ins, implemented once
+		// in usocket.lisp (UsocketLibrary) and spliced/loaded on demand like linalg; the
+		// with-* macros are built-in LispMacroExpander expansions. Does not use cl; every
+		// registered symbol is external.
+		define(new LispPackage(LispNames.USOCKET_PKG, List.of(), new HashSet<>(USOCKET_EXTERNALS)));
 		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
 		// run on the JVM interpreter only -- the compilers cannot lower them.
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
@@ -302,6 +342,24 @@ public final class PackageRegistry {
 	 */
 	public static List<String> vecFunctionNames() {
 		return VEC_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code usocket} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> usocketFunctionNames() {
+		return USOCKET_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns every name exported by the {@code usocket} package (functions, macros and
+	 * variables), for the bare-name usage detection in {@code UsocketLibrary}.
+	 * @return the exported names
+	 */
+	public static Set<String> usocketExportedNames() {
+		return USOCKET_EXTERNALS;
 	}
 
 	@SafeVarargs

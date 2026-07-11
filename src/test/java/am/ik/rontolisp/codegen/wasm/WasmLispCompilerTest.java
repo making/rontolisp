@@ -108,6 +108,62 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void tcpAddressAccessorsInPreview1ModeAreCompileErrors() {
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-peer-address 0)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-peer-port 0)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+		assertThatThrownBy(() -> compile("(rontolisp:tcp-local-address 0)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+	}
+
+	@Test
+	void tcpAddressAccessorsCompileToNilInComponentMode() {
+		// Not wired through the sockets adapter: they compile (drop the handle, yield
+		// nil) so a spliced usocket.lisp works on the component target even though the
+		// accessors themselves report nothing there.
+		assertThat(compileComponent("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (client (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port listener))))
+				  (print (rontolisp:tcp-peer-address client))
+				  (print (rontolisp:tcp-peer-port client))
+				  (print (rontolisp:tcp-local-address listener)))
+				""")).isNotEmpty();
+		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-peer-address 1 2)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("tcp-peer-address expects 1 arguments");
+	}
+
+	@Test
+	void usocketSpliceIsCompileErrorInPreview1Mode() {
+		// The usocket shim (usocket.lisp, spliced by UsocketLibrary.process) calls
+		// rontolisp:tcp-connect in its defun bodies, so a Preview 1 build fails with
+		// the existing component-only tcp error -- the same behavior as direct tcp use.
+		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary
+			.process(LispReader.readAllFromString("(print (usocket:socket-stream 1))"));
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(program))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("component");
+	}
+
+	@Test
+	void usocketSpliceCompilesInComponentMode() {
+		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString("""
+				(usocket:with-socket-listener (listener "127.0.0.1" 0)
+				  (usocket:with-client-socket (client stream "127.0.0.1" (usocket:get-local-port listener)
+				                               :element-type '(unsigned-byte 8))
+				    (write-line "hi" stream)
+				    (usocket:with-connected-socket (server (usocket:socket-accept listener))
+				      (print (read-line server))
+				      (print (usocket:get-peer-address server)))))
+				"""));
+		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+	}
+
+	@Test
 	void tlsConnectIsCompileErrorInBothWasmModes() {
 		// Unlike the plain tcp built-ins there is no component fallback: wasmtime hosts
 		// no TLS for WASI 0.3 components, so the tls built-ins are interpreter/JVM only.

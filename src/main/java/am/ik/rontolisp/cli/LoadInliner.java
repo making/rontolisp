@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.eval.AsdfSystems;
+import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.QuicklispClient;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
@@ -198,8 +199,12 @@ public final class LoadInliner {
 					// the extracted .asd directories on the search path, then splice it
 					// in
 					// exactly like asdf:load-system -- so the JVM/WASM compilers see the
-					// component files natively and the runtime never fetches.
-					downloadQuicklisp(name, ctx);
+					// component files natively and the runtime never fetches. A built-in
+					// system (e.g. "usocket") skips the download; spliceSystem satisfies
+					// it from the embedded library.
+					if (!BuiltinSystems.isBuiltin(name)) {
+						downloadQuicklisp(name, ctx);
+					}
 					spliceSystem(name, out, ctx, baseDir);
 					out.add(quotedSymbol(name));
 				}
@@ -312,6 +317,16 @@ public final class LoadInliner {
 		if (ctx.loadingSystems().contains(name)) {
 			throw new IllegalStateException("Circular system :depends-on detected: "
 					+ String.join(" -> ", ctx.loadingSystems()) + " -> " + name);
+		}
+		if (BuiltinSystems.isBuiltin(name)) {
+			// A system rontolisp provides itself (e.g. "usocket"): splice the embedded
+			// library instead of locating a NAME.asd. Splice rather than just mark
+			// loaded -- a dependent library may reach the package through defpackage
+			// :import-from + bare names, which the UsocketLibrary.process Walker
+			// (running before PackageResolver) cannot detect.
+			out.addAll(BuiltinSystems.forms(name));
+			ctx.loadedSystems().add(name);
+			return;
 		}
 		AsdfSystems.LispSystem system = ctx.systems().get(name);
 		if (system == null) {

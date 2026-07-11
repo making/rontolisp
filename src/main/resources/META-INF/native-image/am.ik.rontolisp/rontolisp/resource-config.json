@@ -60,6 +60,12 @@
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UsocketLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/usocket\\.lisp"
       }
     ]
   }

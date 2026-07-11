@@ -2039,6 +2039,29 @@ public final class LispNames {
 	public static final String TCP_LOCAL_PORT = "tcp-local-port";
 
 	/**
+	 * The {@code tcp-local-address} function provided by the {@code rontolisp} package.
+	 * Returns the local/bound IP address of a listener or socket handle as a string.
+	 * Interpreter and JVM backends only for a real value; the WASM component backend
+	 * returns {@code nil}.
+	 */
+	public static final String TCP_LOCAL_ADDRESS = "tcp-local-address";
+
+	/**
+	 * The {@code tcp-peer-address} function provided by the {@code rontolisp} package.
+	 * Returns the remote IP address of a connected socket handle as a string. Interpreter
+	 * and JVM backends only for a real value; the WASM component backend returns
+	 * {@code nil}.
+	 */
+	public static final String TCP_PEER_ADDRESS = "tcp-peer-address";
+
+	/**
+	 * The {@code tcp-peer-port} function provided by the {@code rontolisp} package.
+	 * Returns the remote port number of a connected socket handle. Interpreter and JVM
+	 * backends only for a real value; the WASM component backend returns {@code nil}.
+	 */
+	public static final String TCP_PEER_PORT = "tcp-peer-port";
+
+	/**
 	 * The {@code tls-connect} function provided by the {@code rontolisp} package. Opens a
 	 * blocking TCP connection to {@code host} and {@code port}, performs a TLS handshake
 	 * (the server certificate is validated against the JDK default trust store and the
@@ -2488,6 +2511,72 @@ public final class LispNames {
 	 * {@code vec:aset} fully qualified: the {@code setf} writer for {@code vec:aref}.
 	 */
 	public static final String VEC_QUALIFIED_ASET = VEC_PKG + ":" + VEC_ASET;
+
+	/**
+	 * The {@code usocket} package name (a usocket-compatible shim over the
+	 * {@code rontolisp:tcp-*} built-ins). Like {@code linalg}/{@code vec} it is
+	 * implemented once in rontolisp itself ({@code usocket.lisp}, see
+	 * {@code UsocketLibrary}) so a single implementation runs on every backend; the
+	 * exported names live in {@code PackageRegistry#usocketFunctionNames()}. The four
+	 * {@code with-*} convenience macros are built-in {@code LispMacroExpander} expansions
+	 * (the {@code rontolisp:with-arena} pattern), not library defuns.
+	 */
+	public static final String USOCKET_PKG = "usocket";
+
+	/**
+	 * {@code usocket:socket-connect}: the shim's TCP client entry point. Named as a
+	 * constant because {@code UsocketLibrary}'s dedup guard checks whether a program
+	 * already defines it (the ASDF built-in-system hook may have spliced the library
+	 * before the generic {@code process()} pass runs).
+	 */
+	public static final String USOCKET_SOCKET_CONNECT = "socket-connect";
+
+	/**
+	 * The {@code usocket:with-client-socket} macro:
+	 * {@code (with-client-socket (socket stream host port &rest connect-args) body...)}
+	 * connects, binds {@code socket} and its stream, runs the body and closes the socket
+	 * on normal exit (lite: no {@code unwind-protect}, so an error in the body leaks the
+	 * handle).
+	 */
+	public static final String USOCKET_WITH_CLIENT_SOCKET = "with-client-socket";
+
+	/** The canonical package-qualified spelling of {@code usocket:with-client-socket}. */
+	public static final String USOCKET_WITH_CLIENT_SOCKET_QUALIFIED = USOCKET_PKG + ":" + USOCKET_WITH_CLIENT_SOCKET;
+
+	/**
+	 * The {@code usocket:with-connected-socket} macro:
+	 * {@code (with-connected-socket (var socket-form) body...)} binds {@code var}, runs
+	 * the body and closes the socket on normal exit.
+	 */
+	public static final String USOCKET_WITH_CONNECTED_SOCKET = "with-connected-socket";
+
+	/**
+	 * The canonical package-qualified spelling of {@code usocket:with-connected-socket}.
+	 */
+	public static final String USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED = USOCKET_PKG + ":"
+			+ USOCKET_WITH_CONNECTED_SOCKET;
+
+	/**
+	 * The {@code usocket:with-server-socket} macro: same expansion as
+	 * {@code usocket:with-connected-socket} (usocket aliases the two).
+	 */
+	public static final String USOCKET_WITH_SERVER_SOCKET = "with-server-socket";
+
+	/** The canonical package-qualified spelling of {@code usocket:with-server-socket}. */
+	public static final String USOCKET_WITH_SERVER_SOCKET_QUALIFIED = USOCKET_PKG + ":" + USOCKET_WITH_SERVER_SOCKET;
+
+	/**
+	 * The {@code usocket:with-socket-listener} macro:
+	 * {@code (with-socket-listener (var host port &rest listen-args) body...)} listens,
+	 * binds {@code var}, runs the body and closes the listener on normal exit.
+	 */
+	public static final String USOCKET_WITH_SOCKET_LISTENER = "with-socket-listener";
+
+	/**
+	 * The canonical package-qualified spelling of {@code usocket:with-socket-listener}.
+	 */
+	public static final String USOCKET_WITH_SOCKET_LISTENER_QUALIFIED = USOCKET_PKG + ":"
+			+ USOCKET_WITH_SOCKET_LISTENER;
 
 	/**
 	 * The {@code wasm-export} directive provided by the {@code rontolisp} package. Used
