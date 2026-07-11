@@ -78,10 +78,7 @@ public final class RontoLispCli {
 		List<String> systemPath = systemPath(options.get("--system-path"), System.getenv("RONTOLISP_SOURCE_REGISTRY"));
 
 		if (!options.containsNoKey()) {
-			if (options.contains("--simd")) {
-				warn("--simd has no effect in the REPL; pass a source file to accelerate its vec:/linalg: kernels.");
-			}
-			repl(systemPath);
+			repl(systemPath, options.contains("--simd"));
 			return;
 		}
 
@@ -128,9 +125,12 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void repl(List<String> systemPath) {
+	private void repl(List<String> systemPath, boolean simd) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
+		if (simd) {
+			enableSimd(evaluator);
+		}
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
 			JLineRepl.run(evaluator, this.out, buffer);
@@ -178,23 +178,27 @@ public final class RontoLispCli {
 		buffer.setLength(0);
 	}
 
+	// --simd on the interpreter (file or REPL) routes the vec: and linalg: kernels to
+	// jdk.incubator.vector. The native binary bakes the module in; a plain
+	// `java -jar` does not, so probe and fall back to the scalar reference with a
+	// note instead of failing. One probe covers both: the two kernel classes live in
+	// the same incubator module.
+	private static void enableSimd(LispEvaluator evaluator) {
+		if (VecSimd.available()) {
+			evaluator.setSimd(true);
+		}
+		else {
+			warn("--simd: jdk.incubator.vector is unavailable, running the scalar vec:/linalg: kernels; "
+					+ "re-run with `java --add-modules jdk.incubator.vector -jar ...`, or use the native binary.");
+		}
+	}
+
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, boolean simd) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
-		// --simd on the interpreter routes the vec: and linalg: kernels to
-		// jdk.incubator.vector. The native binary bakes the module in; a plain
-		// `java -jar` does not, so probe and fall back to the scalar reference with a
-		// note instead of failing. One probe covers both: the two kernel classes live in
-		// the same incubator module.
 		if (simd) {
-			if (VecSimd.available()) {
-				evaluator.setSimd(true);
-			}
-			else {
-				warn("--simd: jdk.incubator.vector is unavailable, running the scalar vec:/linalg: kernels; "
-						+ "re-run with `java --add-modules jdk.incubator.vector -jar ...`, or use the native binary.");
-			}
+			enableSimd(evaluator);
 		}
 		List<LispVal> exprs = LispReader.readAllFromString(source);
 		for (LispVal expr : exprs) {
@@ -321,15 +325,16 @@ public final class RontoLispCli {
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");
 		this.out.println("                     ineligible (cons/string/I/O/...) functions are a compile error.");
 		this.out.println("                     Scalar vec: loops by default; add --simd for native v128.");
+		this.out.println("                     Packed vec: arrays are bump-allocated and never freed; reclaim");
+		this.out.println("                     with rontolisp:with-arena or use the -into kernels in hot loops.");
 		this.out.println("                     Add --component for a compact typed component-model wrap.");
 		this.out.println("  --simd             Accelerate the vec: and linalg: kernels with hardware SIMD");
 		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
 		this.out.println("                     java --add-modules jdk.incubator.vector). WASM (.wasm, both");
 		this.out.println("                     wasm-GC and --no-gc): emit native v128 (f64x2/f32x4). On wasm-GC");
-		this.out.println("                     this also moves packed float arrays into a bump-allocated linear");
-		this.out.println("                     arena that nothing frees, so prefer the vec: -into kernels in hot");
-		this.out.println("                     loops. Interpreter: run the vec: kernels on the Vector API (baked");
-		this.out.println("                     into the native binary; on java -jar add");
+		this.out.println("                     packed float arrays stay GC-managed (v128 lane groups), so memory");
+		this.out.println("                     behaves as without --simd. Interpreter/REPL: run the vec: kernels");
+		this.out.println("                     on the Vector API (baked into the native binary; on java -jar add");
 		this.out.println("                     --add-modules jdk.incubator.vector, else it falls back to scalar).");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");

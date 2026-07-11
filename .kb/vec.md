@@ -313,9 +313,11 @@ is the cross-backend byte-identity oracle, and `ci-spec.yaml` never passes `--si
   function namespace. These two methods are the ONLY callers of `VecSimdKernels`.
 - `LispEvaluator.setSimd(true)` → `VecSimd.install(globalEnv)` right after the `vec.lisp`
   forms are evaluated in `resolveFunction`'s lazy-load hook.
-- `RontoLispCli.interpret` threads `--simd`, probing `VecSimd.available()` first: absent
-  module → a one-line note + the scalar reference (a graceful fallback, unlike the compiled
-  `.class`'s hard `NoClassDefFoundError` dead-flag guard). `--simd` in the REPL warns.
+- `RontoLispCli.interpret` and `RontoLispCli.repl` both thread `--simd` through the shared
+  `enableSimd` helper, probing `VecSimd.available()` first: absent module → a one-line note +
+  the scalar reference (a graceful fallback, unlike the compiled `.class`'s hard
+  `NoClassDefFoundError` dead-flag guard). So `rontolisp --simd` accelerates the REPL too —
+  the interception is evaluator-level (`setSimd` + the lazy-load hook), not file-path-specific.
 - **Native binary**: the `native` profile passes `--add-modules jdk.incubator.vector` +
   `-H:+VectorAPISupport` (build-time only; the binary needs no runtime flag). Without the
   latter the Vector API falls back to per-lane emulation 6-32x SLOWER than scalar, so it is

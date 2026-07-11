@@ -32,6 +32,21 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void replWithSimdInterceptsVecKernels() {
+		// A vec.lisp defun prints as #<lambda>; the installed Vector API kernel prints
+		// as #<function vec:dot>. The surefire JVM has jdk.incubator.vector on the
+		// module path, so VecSimd.available() is true here.
+		String output = runCli("(vec:dot #d(1.0) #d(1.0)) #'vec:dot\n", "--simd");
+		assertThat(output).contains("#<function vec:dot>");
+	}
+
+	@Test
+	void replWithoutSimdKeepsScalarVecKernels() {
+		String output = runCli("(vec:dot #d(1.0) #d(1.0)) #'vec:dot\n");
+		assertThat(output).contains("#<lambda>").doesNotContain("#<function vec:dot>");
+	}
+
+	@Test
 	void interpretFile() throws Exception {
 		Path file = tempDir.resolve("test.lisp");
 		Files.writeString(file, "(print (+ 1 2))");
