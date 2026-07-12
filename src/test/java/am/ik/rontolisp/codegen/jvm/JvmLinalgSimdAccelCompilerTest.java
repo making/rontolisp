@@ -211,9 +211,25 @@ class JvmLinalgSimdAccelCompilerTest {
 	}
 
 	@Test
+	void broadcastPairsFallBackToTheScalarDefun() throws Exception {
+		// Two arrays of different-but-broadcastable shapes are an input the kernel
+		// declines; the defun runs the numpy broadcast walk, at both widths.
+		assertThat(accel("(print (linalg:mul #2A((1 2) (3 4)) #d(10.0 20.0)))"))
+			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
+		assertMatchesScalarReference(
+				"(print (linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3)))");
+		assertMatchesScalarReference("(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
+				+ " (linalg:arange 0 2 'single-float)))");
+		assertThat(accel("(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))"))
+			.isEqualTo("single-float");
+	}
+
+	@Test
 	void aShapeMismatchStillSignalsTheLibraryError() throws Exception {
 		// The kernel declines, the defun signals -- so the message is not duplicated.
-		assertThatThrownBy(() -> accel("(print (linalg:add #d(1.0) #d(1.0 2.0)))")).rootCause()
+		// (1) vs (2) broadcasts since the numpy rules landed, so the non-broadcastable
+		// (2) vs (3) is the mismatch case now.
+		assertThatThrownBy(() -> accel("(print (linalg:add #d(1.0 2.0) #d(1.0 2.0 3.0)))")).rootCause()
 			.hasMessageContaining("linalg: shape mismatch");
 		assertThatThrownBy(() -> accel("(print (linalg:trace #d((1.0 2.0 3.0) (4.0 5.0 6.0))))")).rootCause()
 			.hasMessageContaining("square matrix");
@@ -424,7 +440,9 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertThat(accel("(print (linalg:maximum #(1 5 3) #(4 2 3)))")).isEqualTo("#d(4.0 5.0 3.0)");
 		assertMatchesScalarReference("(print (linalg:minimum #d(1.0 5.0) #f(4.0 2.0)))");
 		assertThat(accel("(print (linalg:maximum 2 3))")).isEqualTo("3");
-		assertThatThrownBy(() -> accel("(print (linalg:maximum #d(1.0) #d(1.0 2.0)))"))
+		// A broadcastable pair declines to the defun, which broadcasts it.
+		assertThat(accel("(print (linalg:maximum #d(1.0) #d(1.0 2.0)))")).isEqualTo("#d(1.0 2.0)");
+		assertThatThrownBy(() -> accel("(print (linalg:maximum #d(1.0 2.0) #d(1.0 2.0 3.0)))"))
 			.hasStackTraceContaining("linalg: shape mismatch");
 	}
 

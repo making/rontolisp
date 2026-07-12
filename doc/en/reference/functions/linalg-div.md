@@ -2,7 +2,7 @@
 
 `(linalg:div a b)`
 
-Divides `a` by `b` elementwise, returning a fresh packed double-float array. Either operand may be a scalar, which is broadcast over the other operand's shape; two array operands must have equal shapes (a mismatch signals an error).
+Divides `a` by `b` elementwise, returning a fresh packed float array. The operands broadcast by numpy's rules, exactly as [`linalg:add`](linalg-add.md) describes: a scalar broadcasts over the other operand's shape, and two arrays of different shapes broadcast along their trailing axes when each aligned extent pair is equal or contains a 1.
 
 ```lisp
 (linalg:div #(1 2 3) 2) ; => #d(0.5 1.0 1.5)

@@ -6611,9 +6611,10 @@ class WasmLispCompilerIntegrationTest {
 				(print (linalg:inv (linalg:from-list '((4 0) (2 4)))))
 				(print (linalg:solve (linalg:from-list '((4 0) (2 4))) (linalg:from-list '(8 8))))
 				(print (funcall #'linalg:argmax (linalg:from-list '(1 9 3))))
+				(print (linalg:ndim (linalg:from-list '((1 2) (3 4)))))
 				""")).isEqualTo("#d((1.0 0.0) (0.0 1.0))\n#d(2.0 4.0 6.0 8.0)\n#d((0.0 1.0 2.0) (3.0 4.0 5.0))\n"
 				+ "#d(11.0 12.0 13.0)\n32.0\n#d((19.0 22.0) (43.0 50.0))\n2.5\n5.0\n-2.0\n"
-				+ "#d((0.25 0.0) (-0.125 0.25))\n#d(2.0 1.0)\n1");
+				+ "#d((0.25 0.0) (-0.125 0.25))\n#d(2.0 1.0)\n1\n2");
 	}
 
 	@Test
@@ -6632,6 +6633,22 @@ class WasmLispCompilerIntegrationTest {
 				(print (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
 				""")).isEqualTo("#d(1.0 2.0 3.0 -7.0)\n#d(1.0 1.0 -10.0)\n#d((2.0 3.0) (5.0 1.0))\n"
 				+ "#d(1.0 2.0 4.0 6.0 7.0)\n#d(0.5 1.0 2.0 3.0 3.5)\n#d(1.0 2.0 4.0)\nsingle-float");
+	}
+
+	@Test
+	void linalgNumpyStyleBroadcastingWorksInPreview1Mode() throws Exception {
+		// Same program as the JVM compileAndRunLinalgNumpyStyleBroadcasting case:
+		// trailing axes align, an axis of extent 1 (or a missing leading axis)
+		// stretches, and the result keeps the FIRST array operand's width.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:mul #2A((1 2) (3 4)) #(10 20)))
+				(print (linalg:add #2A((1 2) (3 4)) #2A((100) (200))))
+				(print (linalg:sub #(1 2) #d(1.0)))
+				(print (linalg:maximum #2A((1 5) (4 2)) #(3 3)))
+				(print (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20)))
+				(print (linalg:div #3A(((2.0 4.0) (6.0 8.0))) #(2 4)))
+				""")).isEqualTo("#d((10.0 40.0) (30.0 80.0))\n#d((101.0 102.0) (203.0 204.0))\n#d(0.0 1.0)\n"
+				+ "#d((3.0 5.0) (4.0 3.0))\n#f((10.0 40.0) (30.0 80.0))\n#d(((1.0 1.0) (3.0 2.0)))");
 	}
 
 	@Test

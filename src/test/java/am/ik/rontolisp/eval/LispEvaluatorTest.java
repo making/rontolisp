@@ -5312,6 +5312,56 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgNumpyStyleBroadcasting() {
+		// numpy general broadcasting: trailing axes align, and an axis of length 1
+		// (or a missing leading axis) stretches over the other operand's extent.
+		// The result width keeps the FIRST array operand's element type, like the
+		// mixed-width rule.
+		LispVal result = evalMulti("""
+				(list (linalg:mul #2A((1 2) (3 4)) #(10 20))
+				      (linalg:add #2A((1 2) (3 4)) #2A((100) (200)))
+				      (linalg:add #2A((0) (10) (20)) #(1 2 3))
+				      (linalg:sub #(1 2) #d(1.0))
+				      (linalg:maximum #2A((1 5) (4 2)) #(3 3))
+				      (linalg:minimum #(9 0) #2A((5) (1)))
+				      (linalg:div #3A(((2.0 4.0) (6.0 8.0))) #(2 4)))
+				""");
+		assertThat(result.print()).isEqualTo("(#d((10.0 40.0) (30.0 80.0))"
+				+ " #d((101.0 102.0) (203.0 204.0)) #d((1.0 2.0 3.0) (11.0 12.0 13.0) (21.0 22.0 23.0))"
+				+ " #d(0.0 1.0) #d((3.0 5.0) (4.0 3.0)) #d((5.0 0.0) (1.0 0.0)) #d(((1.0 1.0) (3.0 2.0))))");
+	}
+
+	@Test
+	void linalgBroadcastingPreservesTheFirstOperandWidth() {
+		LispVal result = evalMulti("""
+				(list (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20))
+				      (array-element-type (linalg:mul #(10 20) (linalg:ones '(2 2) 'single-float))))
+				""");
+		assertThat(result.print()).isEqualTo("(#f((10.0 40.0) (30.0 80.0)) double-float)");
+	}
+
+	@Test
+	void linalgNdim() {
+		// numpy's np.ndim: 0 for a plain number, else the array's rank.
+		LispVal result = evalMulti("""
+				(list (linalg:ndim 3.0)
+				      (linalg:ndim #(1 2 3))
+				      (linalg:ndim #2A((1 2) (3 4)))
+				      (linalg:ndim (linalg:reshape (linalg:arange 8) '(2 2 2))))
+				""");
+		assertThat(result.print()).isEqualTo("(0 1 2 3)");
+	}
+
+	@Test
+	void linalgBroadcastIncompatibleShapesStillSignal() {
+		// Neither axis is 1, so numpy would refuse these too.
+		assertThatThrownBy(() -> eval("(linalg:add #d(1.0 2.0) #d(1.0 2.0 3.0))"))
+			.hasMessageContaining("linalg: shape mismatch");
+		assertThatThrownBy(() -> eval("(linalg:add (linalg:zeros '(2 3)) (linalg:zeros '(3 2)))"))
+			.hasMessageContaining("linalg: shape mismatch");
+	}
+
+	@Test
 	void linalgSingleFloatWidthPolymorphism() {
 		// todo-97: a linalg constructor opts into single-float (#f) with a trailing
 		// element-type (double stays the default), and every transform PRESERVES the

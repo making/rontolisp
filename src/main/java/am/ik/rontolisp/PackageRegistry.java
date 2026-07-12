@@ -153,11 +153,11 @@ public final class PackageRegistry {
 	 * only as Lisp-source defuns -- no evaluator or compiler dispatches on them.
 	 */
 	private static final Set<String> LINALG_FUNCTIONS = Set.of("zeros", "ones", "full", "eye", "arange", "linspace",
-			"from-list", "to-list", "shape", "size", "reshape", "flatten", "transpose", "add", "sub", "mul", "div",
-			"emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm", "trace", "det",
-			"inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
-			"cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum", "clip", "relu",
-			"diff", "gradient");
+			"from-list", "to-list", "shape", "ndim", "size", "reshape", "flatten", "transpose", "add", "sub", "mul",
+			"div", "emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm", "trace",
+			"det", "inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan",
+			"sinh", "cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum", "clip",
+			"relu", "diff", "gradient");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 

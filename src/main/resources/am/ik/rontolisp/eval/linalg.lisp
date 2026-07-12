@@ -57,27 +57,99 @@
   ;; A fresh zero-filled packed array with the same shape AND width as a.
   (linalg::%la-make (array-dimensions a) 0.0 (linalg::%la-etype a)))
 
+(defun linalg::%la-bcast-shape (dx dy)
+  ;; The numpy broadcast shape of two dims lists: trailing axes align, and a
+  ;; pair agrees when the extents are equal or either is 1 (a missing leading
+  ;; axis counts as 1); the output extent is the larger one. Any other
+  ;; disagreement is the shape-mismatch error.
+  (let ((out nil))
+    (do ((px (reverse dx) (cdr px))
+         (py (reverse dy) (cdr py)))
+        ((and (null px) (null py)) out)
+      (let ((a (if px (car px) 1))
+            (b (if py (car py) 1)))
+        (unless (or (= a b) (= a 1) (= b 1))
+          (error "linalg: shape mismatch"))
+        (setq out (cons (max a b) out))))))
+
+(defun linalg::%la-bcast-strides (d od)
+  ;; Row-major strides of the dims-d operand aligned to the broadcast shape od,
+  ;; INNERMOST-FIRST, with 0 on every stretched axis (extent 1 or missing) so
+  ;; the odometer walk in %la-bcast-loop re-reads the same element across it.
+  (let ((acc 1)
+        (out nil))
+    (do ((pd (reverse d) (cdr pd))
+         (po (reverse od) (cdr po)))
+        ((null po) (reverse out))
+      (let ((n (if pd (car pd) 1)))
+        (setq out (cons (if (= n 1) 0 acc) out))
+        (setq acc (* acc n))))))
+
+(defun linalg::%la-zero-counters (n)
+  ;; A fresh list of n zeros: the odometer counters, rplaca-mutated in place.
+  (let ((out nil))
+    (do ((i 0 (+ i 1)))
+        ((>= i n) out)
+      (setq out (cons 0 out)))))
+
+(defun linalg::%la-bcast-loop (%la-op %la-x %la-y od)
+  ;; The general broadcast walk over the output shape od: out's flat row-major
+  ;; index advances by 1 while each operand's flat index follows its stride-0-
+  ;; padded strides through an odometer carry from the innermost axis out --
+  ;; O(1) amortized per element, no per-element division. The result keeps the
+  ;; FIRST operand's width, like the equal-shape mixed-width rule.
+  (let* ((rdims (reverse od))
+         (rsx (linalg::%la-bcast-strides (array-dimensions %la-x) od))
+         (rsy (linalg::%la-bcast-strides (array-dimensions %la-y) od))
+         (out (linalg::%la-make od 0.0 (linalg::%la-etype %la-x)))
+         (n (array-total-size out))
+         (idx (linalg::%la-zero-counters (length od)))
+         (ox 0)
+         (oy 0))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) out)
+      (setf (row-major-aref out k)
+            (funcall %la-op (row-major-aref %la-x ox) (row-major-aref %la-y oy)))
+      (do ((pc idx (cdr pc))
+           (pd rdims (cdr pd))
+           (psx rsx (cdr psx))
+           (psy rsy (cdr psy))
+           (carry t))
+          ((or (null pc) (not carry)))
+        (rplaca pc (+ (car pc) 1))
+        (setq ox (+ ox (car psx)))
+        (setq oy (+ oy (car psy)))
+        (if (< (car pc) (car pd))
+            (setq carry nil)
+            (progn (rplaca pc 0)
+                   (setq ox (- ox (* (car pd) (car psx))))
+                   (setq oy (- oy (* (car pd) (car psy))))))))))
+
 (defun linalg::%la-bcast (%la-op %la-x %la-y)
   ;; Applies the binary function %la-op elementwise, broadcasting a scalar
-  ;; operand over the other operand's shape. Array operands must have equal
-  ;; shapes. The parameters keep their %la- names from when the compiled
-  ;; backends resolved a captured name against a same-named user global
-  ;; (fixed 2026-07-03); the prefix is harmless and stays.
+  ;; operand over the other operand's shape and two arrays of different shapes
+  ;; by the numpy rules (%la-bcast-shape). Equal shapes keep the flat loop --
+  ;; the path the --simd kernels mirror; a broadcast pair is an input those
+  ;; kernels decline, so it always runs here. The parameters keep their %la-
+  ;; names from when the compiled backends resolved a captured name against a
+  ;; same-named user global (fixed 2026-07-03); the prefix is harmless and stays.
   (cond ((and (numberp %la-x) (numberp %la-y)) (funcall %la-op %la-x %la-y))
         ((numberp %la-x)
          (linalg:emap (lambda (v) (funcall %la-op %la-x v)) %la-y))
         ((numberp %la-y)
          (linalg:emap (lambda (v) (funcall %la-op v %la-y)) %la-x))
-        (t (progn
-             (unless (equal (array-dimensions %la-x) (array-dimensions %la-y))
-               (error "linalg: shape mismatch"))
-             (let ((n (array-total-size %la-x))
-                   (out (linalg::%la-like %la-x)))
-               (do ((k 0 (+ k 1)))
-                   ((>= k n) out)
-                 (setf (row-major-aref out k)
-                       (funcall %la-op (row-major-aref %la-x k)
-                                (row-major-aref %la-y k)))))))))
+        ((equal (array-dimensions %la-x) (array-dimensions %la-y))
+         (let ((n (array-total-size %la-x))
+               (out (linalg::%la-like %la-x)))
+           (do ((k 0 (+ k 1)))
+               ((>= k n) out)
+             (setf (row-major-aref out k)
+                   (funcall %la-op (row-major-aref %la-x k)
+                            (row-major-aref %la-y k))))))
+        (t (linalg::%la-bcast-loop %la-op %la-x %la-y
+                                   (linalg::%la-bcast-shape
+                                    (array-dimensions %la-x)
+                                    (array-dimensions %la-y))))))
 
 (defun linalg::%la-reduce (f a init)
   ;; Folds f over every element of a (row-major), starting from init.
@@ -305,6 +377,13 @@
 (defun linalg:shape (a)
   ;; The dimension sizes as a list: (n) for a vector, (rows cols) for a matrix.
   (array-dimensions a))
+
+(defun linalg:ndim (a)
+  ;; The number of dimensions (numpy's np.ndim): 0 for a plain number, else the
+  ;; array's rank.
+  (if (numberp a)
+      0
+      (length (array-dimensions a))))
 
 (defun linalg:size (a)
   ;; The total element count.

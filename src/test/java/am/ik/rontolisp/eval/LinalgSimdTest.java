@@ -213,7 +213,9 @@ class LinalgSimdTest {
 		assertThat(eval("(linalg:minimum #d(1.0 5.0) #f(4.0 2.0))", true).print()).isEqualTo("#d(1.0 2.0)");
 		assertThat(eval("(linalg:maximum 2 3)", true).print()).isEqualTo("3");
 		assertThat(eval("(linalg:minimum 1/3 1/2)", true).print()).isEqualTo("1/3");
-		assertThatThrownBy(() -> eval("(linalg:maximum #d(1.0) #d(1.0 2.0))", true))
+		// A broadcastable pair declines to the defun, which broadcasts it.
+		assertThat(eval("(linalg:maximum #d(1.0) #d(1.0 2.0))", true).print()).isEqualTo("#d(1.0 2.0)");
+		assertThatThrownBy(() -> eval("(linalg:maximum #d(1.0 2.0) #d(1.0 2.0 3.0))", true))
 			.hasMessageContaining("linalg: shape mismatch");
 	}
 
@@ -244,9 +246,26 @@ class LinalgSimdTest {
 	}
 
 	@Test
+	void broadcastPairsFallBackToTheScalarDefun() {
+		// Two arrays of different-but-broadcastable shapes are an input the kernels
+		// decline; the defun runs the numpy broadcast walk, at both widths.
+		assertThat(
+				eval("(linalg:mul (linalg:reshape (linalg:from-list '(1 2 3 4)) '(2 2)) #d(10.0 20.0))", true).print())
+			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
+		assertMatchesScalarOracle("(linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3))");
+		assertMatchesScalarOracle("(linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
+				+ " (linalg:arange 0 2 'single-float))");
+		assertThat(
+				eval("(array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0)))", true).print())
+			.isEqualTo("single-float");
+	}
+
+	@Test
 	void aShapeMismatchStillSignalsTheLibraryError() {
 		// The kernels decline, the defun signals -- so the message is not duplicated.
-		assertThatThrownBy(() -> eval("(linalg:add #d(1.0) #d(1.0 2.0))", true))
+		// (1) vs (2) broadcasts since the numpy rules landed, so the non-broadcastable
+		// (2) vs (3) is the mismatch case now.
+		assertThatThrownBy(() -> eval("(linalg:add #d(1.0 2.0) #d(1.0 2.0 3.0))", true))
 			.hasMessageContaining("linalg: shape mismatch");
 		assertThatThrownBy(() -> eval("(linalg:trace #d((1.0 2.0 3.0) (4.0 5.0 6.0)))", true))
 			.hasMessageContaining("expects a square matrix");

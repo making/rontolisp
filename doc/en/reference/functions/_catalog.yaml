@@ -323,6 +323,7 @@ categories:
       - { slug: linalg-from-list, name: "linalg:from-list" }
       - { slug: linalg-to-list, name: "linalg:to-list" }
       - { slug: linalg-shape, name: "linalg:shape" }
+      - { slug: linalg-ndim, name: "linalg:ndim" }
       - { slug: linalg-size, name: "linalg:size" }
       - { slug: linalg-reshape, name: "linalg:reshape" }
       - { slug: linalg-flatten, name: "linalg:flatten" }

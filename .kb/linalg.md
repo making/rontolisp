@@ -40,11 +40,11 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:linspace start stop n)` | n evenly spaced values inclusive (packed double-float) |
 | `(linalg:from-list lst)` | flat list -> vector; list of equal-length rows -> matrix |
 | `(linalg:to-list a)` | inverse of from-list |
-| `(linalg:shape a)` / `(linalg:size a)` | dims list `(n)` or `(rows cols)` / total element count |
+| `(linalg:shape a)` / `(linalg:ndim a)` / `(linalg:size a)` | dims list `(n)` or `(rows cols)` / number of dimensions (0 for a plain number, numpy np.ndim) / total element count |
 | `(linalg:reshape a shape)` | row-major copy; error if sizes differ |
 | `(linalg:flatten a)` | rank-1 row-major copy |
 | `(linalg:transpose a)` | matrix transpose; a vector is returned unchanged |
-| `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise; a scalar operand on either side broadcasts; two arrays must have equal shapes; `mul` is Hadamard (NOT matrix product); results are packed double-float arrays |
+| `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise with numpy broadcasting: a scalar operand on either side, and two arrays of different shapes along their trailing axes (extents equal or 1, missing leading axis = 1; anything else = the shape-mismatch error); result keeps the first array operand's width; `mul` is Hadamard (NOT matrix product) |
 | `(linalg:emap f a)` | fresh array with f applied to every element |
 | `(linalg:exp a)` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` | named elementwise unary ufuncs (numpy parity, todo 109): `emap` of the obvious scalar op (`square` = `mul a a`, `reciprocal` = `div 1 a`); unlike `emap` they are `--simd`-interceptable |
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
@@ -60,8 +60,8 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
 
-Gotchas when writing programs: no numpy-style row/column broadcasting (scalar
-only); `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` are
+Gotchas when writing programs:
+`dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` are
 rank <= 2 only (everything else is rank-generic); results are fresh arrays
 (inputs are never mutated);
 because linalg now computes in double-float, non-terminating results print at
@@ -186,8 +186,16 @@ benchmarks and the `-0.0` cross-backend footgun: **`.kb/linalg-simd.md`**.
   were deleted when rank-n arrays landed), which is what makes the elementwise
   ops rank-generic.
 - Not supported: `--no-gc` (arrays), runtime `eval` of linalg forms (the
-  emitted eval runtime has no array ops), broadcasting between different
-  non-scalar shapes (numpy-style row/column broadcast).
+  emitted eval runtime has no array ops).
+- numpy general broadcasting between arrays of different shapes landed
+  2026-07-12: `%la-bcast` dispatches equal shapes to the (unchanged) flat loop
+  and everything else to `%la-bcast-loop`, an odometer walk over stride lists
+  (`%la-bcast-strides` pads a stretched/missing axis with stride 0;
+  `%la-bcast-shape` aligns trailing axes -- extents equal or 1 -- and signals
+  the same "linalg: shape mismatch" otherwise). The result keeps the FIRST
+  array operand's width, like the mixed-width rule. The --simd kernels are
+  untouched: a broadcast pair has unequal dims, which every kernel already
+  declines, so it falls back to the defun (see `.kb/linalg-simd.md`).
 
 ## Standard array functions added alongside
 

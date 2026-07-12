@@ -316,6 +316,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:from-list` | `(linalg:from-list '((1 2) (3 4)))` | `#d((1.0 2.0) (3.0 4.0))`(フラットなリストからはベクタ) |
 | `linalg:to-list` | `(linalg:to-list (linalg:eye 2))` | `((1.0 0.0) (0.0 1.0))` |
 | `linalg:shape` | `(linalg:shape #2A((1 2 3) (4 5 6)))` | `(2 3)` |
+| `linalg:ndim` | `(linalg:ndim #2A((1 2) (3 4)))` | `2`(次元数。数値なら 0) |
 | `linalg:size` | `(linalg:size (linalg:eye 3))` | `9`(要素の総数) |
 | `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#d((0.0 1.0 2.0) (3.0 4.0 5.0))`(行優先。サイズは一致が必要) |
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#d(1.0 0.0 0.0 1.0)` |

@@ -2223,6 +2223,8 @@ cases:
         (print (linalg:from-list '((1 2) (3 4))))
         (print (linalg:to-list (linalg:from-list '((1 2) (3 4)))))
         (print (linalg:shape (linalg:from-list '((1 2 3) (4 5 6)))))
+        (print (linalg:ndim (linalg:from-list '((1 2 3) (4 5 6)))))
+        (print (linalg:ndim 5))
         (print (linalg:reshape (linalg:arange 6) (list 2 3)))
         (print (linalg:transpose (linalg:from-list '((1 2 3) (4 5 6)))))
         (print (linalg:add (linalg:from-list '(1 2 3)) 10))
@@ -2259,6 +2261,8 @@ cases:
       #d((1.0 2.0) (3.0 4.0))
       ((1.0 2.0) (3.0 4.0))
       (2 3)
+      2
+      0
       #d((0.0 1.0 2.0) (3.0 4.0 5.0))
       #d((1.0 4.0) (2.0 5.0) (3.0 6.0))
       #d(11.0 12.0 13.0)
@@ -2283,6 +2287,31 @@ cases:
       28.0
       7.0
       t
+
+  # linalg numpy-style broadcasting: two arrays of different shapes align their
+  # trailing axes, and an axis of extent 1 (or a missing leading axis) stretches
+  # over the other operand's extent. The result keeps the FIRST array operand's
+  # width, matching the mixed-width rule. All values here are exact, so the
+  # printed floats are byte-identical on all four backends.
+  - name: linalg-broadcasting-cross-backend
+    source: |
+      (defun ci-linalg-broadcast ()
+        (print (linalg:mul #2A((1 2) (3 4)) #(10 20)))
+        (print (linalg:add #2A((1 2) (3 4)) #2A((100) (200))))
+        (print (linalg:add #2A((0) (10) (20)) #(1 2 3)))
+        (print (linalg:sub #(1 2) #d(1.0)))
+        (print (linalg:maximum #2A((1 5) (4 2)) #(3 3)))
+        (print (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20)))
+        (print (linalg:div #3A(((2.0 4.0) (6.0 8.0))) #(2 4))))
+      (ci-linalg-broadcast)
+    expected: |
+      #d((10.0 40.0) (30.0 80.0))
+      #d((101.0 102.0) (203.0 204.0))
+      #d((1.0 2.0 3.0) (11.0 12.0 13.0) (21.0 22.0 23.0))
+      #d(0.0 1.0)
+      #d((3.0 5.0) (4.0 3.0))
+      #f((10.0 40.0) (30.0 80.0))
+      #d(((1.0 1.0) (3.0 2.0)))
 
   # linalg calculus (numpy diff/gradient parity): diff is the n-th discrete
   # difference along the last axis; gradient is second-order central differences

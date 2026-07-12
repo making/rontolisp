@@ -65,7 +65,12 @@ also accept:
 - **mixed widths** -- NOT an error here (unlike `vec:`): the defun widens both operands and
   keeps the *first* one's width,
 - a scalar operand on either side, and two plain numbers,
-- mismatched shapes, which it turns into a specific `error` message.
+- arrays of DIFFERENT shapes: since 2026-07-12 the defun broadcasts them by the numpy
+  rules (`%la-bcast-loop`, see `.kb/linalg.md`) and signals the specific shape-mismatch
+  `error` only when no broadcast fits. Every element-wise kernel already declined an
+  unequal-dims pair, so the kernels needed NO change -- a broadcast pair simply falls
+  back to the defun (an optimization opportunity, not a correctness issue; a lane form
+  for the common matrix-row broadcast could be added later behind the same decline).
 
 Reproducing all of that in each kernel would duplicate the library. So **every kernel is a
 partial function: it answers "declined" for an input it does not handle, and the call site

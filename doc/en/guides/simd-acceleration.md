@@ -14,7 +14,7 @@ Like the JSON and `linalg` libraries, `vec` is implemented once in Lisp source (
 |---|---|---|
 | accepted inputs | packed arrays, general boxed arrays such as `#(1 2 3)`, plain numbers | packed float arrays only |
 | mixed widths (`#d` with `#f`) | allowed -- both are widened, the first operand's width wins | hard error |
-| scalar operands | broadcast element-wise on either side | only the scalar of `vec:scale` |
+| broadcasting | numpy rules -- a scalar on either side, and arrays of different shapes along their trailing axes | only the scalar of `vec:scale` |
 | shapes | rank-n arrays and matrices, descriptive shape errors | rank-1 vectors (plus `vec:matvec`'s rank-2 matrix) |
 | allocation control | every result is a fresh array | `-into` siblings write into a caller-supplied destination |
 | `--no-gc` | does not compile | fully supported (the only vector package there) |
@@ -179,7 +179,7 @@ There is no separate flag and nothing to opt into per function: compile or run w
 (linalg:emap #'sqrt #d(1.0 4.0 9.0))                ; => #d(1.0 2.0 3.0)
 ```
 
-Where `vec` insists on packed arrays of one width, `linalg` accepts far more: general boxed arrays such as `#(1 2 3)`, two operands of different widths, plain numbers, and shapes that do not conform (which signal an error). A kernel handles only the packed, same-width, conforming case. **For everything else the portable `linalg.lisp` definition runs instead**, over the very same argument values -- same result, same error message, each argument form still evaluated exactly once. So `--simd` never changes what a linalg program accepts or rejects; it only makes the common case faster.
+Where `vec` insists on packed arrays of one width, `linalg` accepts far more: general boxed arrays such as `#(1 2 3)`, two operands of different widths, plain numbers, arrays of different shapes (broadcast by the numpy rules), and shapes that fit no broadcast (which signal an error). A kernel handles only the packed, same-width, equal-shape case. **For everything else the portable `linalg.lisp` definition runs instead**, over the very same argument values -- same result, same broadcast, same error message, each argument form still evaluated exactly once. So `--simd` never changes what a linalg program accepts or rejects; it only makes the common case faster.
 
 The precision rules above carry over, with one exception in linalg's favor:
 
