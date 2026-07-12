@@ -1,0 +1,2 @@
+# Decompressed MNIST idx files (~55 MB), fetched by ./download-mnist.sh
+dataset/*-ubyte

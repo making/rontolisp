@@ -9,6 +9,7 @@ The programs are grouped by theme, one directory per group:
 | --- | --- |
 | [`console/`](console) | Algorithms and console I/O — pure, cross-backend |
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`) |
+| [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch06, ported |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
 | [`rainbow/`](browser/rainbow), [`wasm-browser/`](browser/wasm-browser), [`webgl-*/`](browser/webgl-common), [`minesweeper/`](browser/minesweeper), [`hiragana/`](browser/hiragana) | Browser demos (compile to WASM, run in a page) |
@@ -58,6 +59,22 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`deep-digits.lisp`](ml/deep-digits.lisp) | A small deep neural network, numpy-style: a 15 -> 16 -> 16 -> 10 leaky-ReLU MLP classifying 5x3 pixel digit bitmaps, trained by full-batch matrix backpropagation (`linalg:matmul`/`transpose`/`emap`) with 1/t learning-rate decay -- fully deterministic (fixed-seed LCG init, no transcendental functions, integer-scaled loss output), so all backends print identical output |
 | [`numerical-calculus.lisp`](ml/numerical-calculus.lisp) | Discrete calculus with `linalg:diff` and `linalg:gradient` (numpy's `np.diff`/`np.gradient`): Fibonacci differences, the constant second difference of the squares, per-row matrix differences, projectile velocity/acceleration recovered from height samples, and derivative estimates at unit, scalar and non-uniform coordinate spacing -- every sample is a polynomial at integer coordinates, so the results are exact and byte-identical on every backend |
 | [`heat3d.lisp`](ml/heat3d.lisp) | Heat diffusion in a 5x5x5 voxel grid with rank-3 arrays: 3-subscript `make-array`/`aref`, the `#nA` printed syntax, `row-major-aref` flat scans (with flat-index decoding and `array-row-major-index`), rank-generic `linalg` operations (`reshape`/`add`/`sum`/`amax`/`array-equal`) over rank-3 tensors, and exact rational arithmetic that conserves the total heat as *exactly* 1000 on every backend |
+
+## Deep Learning from Scratch — `deep-learning-from-scratch/`
+
+A chapter-by-chapter port of the MIT-licensed sample code of the book *Deep
+Learning from Scratch* (ゼロから作るDeep Learning, O'Reilly Japan) by Koki
+Saitoh — ch02 perceptrons through ch06 training techniques (optimizers,
+weight initialization, Batch Normalization, Dropout, weight decay,
+hyperparameter search), with the book's `common/` library rebuilt on the
+`linalg:` package (axis reductions, the seeded `linalg:randn`/`choice` RNG,
+`take-rows`/`gather`/`one-hot` indexing) and CLOS layer classes
+(`forward`/`backward` generics). MNIST scripts need a one-time
+`./download-mnist.sh`; every script runs on all four backends from that
+directory (WASM needs `--dir .`), and `--simd` speeds the training runs up
+without changing a byte of their output (everything is `#d` double-float).
+See [`deep-learning-from-scratch/README.md`](deep-learning-from-scratch/README.md)
+for the per-program table and `.todo/117` for the ch07-ch08 CNN follow-up.
 
 ## Networking, HTTP & services — `net/`
 

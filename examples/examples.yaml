@@ -199,6 +199,112 @@ examples:
         - "prompt:    (3 14 1 5)"
         - "generated: (39 27 23 18 42 7 5 39 27)"
 
+  # --- deep-learning-from-scratch: the book, ported (see its README.md) -------
+  # The data-free scripts print byte-identically on every backend (weights come
+  # from the seeded linalg RNG; the exp-using ones round through truncate or a
+  # bucketed histogram, which the WASM exp approximation cannot flip). The
+  # MNIST scripts read dataset/*-ubyte (a one-time ./download-mnist.sh) and
+  # ch03/sample-weight.bin relative to the example root, which the throwaway
+  # test workdir does not have -- so they get compile-only legs; run them
+  # manually per the README.
+  - path: deep-learning-from-scratch/ch02/and-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-and-gate.txt
+  - path: deep-learning-from-scratch/ch02/nand-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-nand-gate.txt
+  - path: deep-learning-from-scratch/ch02/or-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-or-gate.txt
+  - path: deep-learning-from-scratch/ch02/xor-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-xor-gate.txt
+  - path: deep-learning-from-scratch/ch03/activation-functions.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-activation-functions.txt
+  - path: deep-learning-from-scratch/ch03/mnist-show.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch03/neuralnet-mnist.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/t10k-*-ubyte + ch03/sample-weight.bin
+  - path: deep-learning-from-scratch/ch03/neuralnet-mnist-batch.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/t10k-*-ubyte + ch03/sample-weight.bin
+  - path: deep-learning-from-scratch/ch04/gradient-1d.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-gradient-1d.txt
+  - path: deep-learning-from-scratch/ch04/gradient-2d.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-gradient-2d.txt
+  - path: deep-learning-from-scratch/ch04/gradient-method.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-gradient-method.txt
+  - path: deep-learning-from-scratch/ch04/gradient-simplenet.lisp
+    backends: [interpreter, jvm]
+    note: the numerical dW passes through exp/log (softmax loss), whose last printed digits differ on WASM
+    expect:
+      contains:
+        - "loss:"
+        - "dW:"
+  - path: deep-learning-from-scratch/ch04/train-neuralnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh); ~2 min interpreted, seconds under --simd
+  - path: deep-learning-from-scratch/ch05/buy-apple.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-buy-apple.txt
+  - path: deep-learning-from-scratch/ch05/buy-apple-orange.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-buy-apple-orange.txt
+  - path: deep-learning-from-scratch/ch05/gradient-check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the correctness gate of the CLOS layer library -- backprop must match central differences
+    expect:
+      file: .expected/dlfs-gradient-check.txt
+  - path: deep-learning-from-scratch/ch05/train-neuralnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/optimizer-compare-naive.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-optimizer-compare-naive.txt
+  - path: deep-learning-from-scratch/ch06/optimizer-compare-mnist.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/weight-init-activation-histogram.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-weight-init-activation-histogram.txt
+  - path: deep-learning-from-scratch/ch06/weight-init-compare.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/batch-norm-gradient-check.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-batch-norm-gradient-check.txt
+  - path: deep-learning-from-scratch/ch06/batch-norm-test.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/overfit-weight-decay.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/overfit-dropout.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/hyperparameter-optimization.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp
     backends: [no-gc]
