@@ -614,8 +614,9 @@
 (defun linalg:transpose (a &optional axes)
   ;; With no axes, the transpose of a matrix; a vector is returned unchanged
   ;; (like numpy). With an axes list (numpy x.transpose(1 0 2)), the rank-n
-  ;; axis permutation: out-dims[k] = dims[axes[k]]. Only the 1-argument
-  ;; matrix form is --simd-intercepted; an axes call always runs here.
+  ;; axis permutation: out-dims[k] = dims[axes[k]]. Both call forms are
+  ;; --simd-intercepted (the axes form since the todo-117 follow-up); a
+  ;; non-permutation axes argument declines to this defun's error.
   (if axes
       (linalg::%la-transpose-axes a axes)
       (let ((d (array-dimensions a)))

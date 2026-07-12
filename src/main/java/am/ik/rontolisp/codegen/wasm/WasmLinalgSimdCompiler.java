@@ -139,6 +139,25 @@ final class WasmLinalgSimdCompiler {
 	}
 
 	/**
+	 * The members whose &optional axis forms have their own kernel (todo 117 follow-up):
+	 * transpose takes an axes permutation, sum/amax/amin an axis plus keepdims,
+	 * argmax/argmin an axis. A call supplying MORE arguments than {@link #arity} but at
+	 * most {@code params} routes to this kernel (missing trailing optionals padded with a
+	 * null ref = nil); on decline the surplus locals are linked into the variadic defun's
+	 * rest list.
+	 */
+	private record Extended(int offset, int params) {
+	}
+
+	private static final Map<String, Extended> EXTENDED = Map.of(LispNames.LINALG_TRANSPOSE,
+			new Extended(WasmLinalgSimdRuntimeBuilder.TRANSPOSE_AXES, 2), LispNames.LINALG_SUM,
+			new Extended(WasmLinalgSimdRuntimeBuilder.SUM_AXIS, 3), LispNames.LINALG_AMAX,
+			new Extended(WasmLinalgSimdRuntimeBuilder.AMAX_AXIS, 3), LispNames.LINALG_AMIN,
+			new Extended(WasmLinalgSimdRuntimeBuilder.AMIN_AXIS, 3), LispNames.LINALG_ARGMAX,
+			new Extended(WasmLinalgSimdRuntimeBuilder.ARGMAX_AXIS, 2), LispNames.LINALG_ARGMIN,
+			new Extended(WasmLinalgSimdRuntimeBuilder.ARGMIN_AXIS, 2));
+
+	/**
 	 * The member's canonical qualified spelling: a {@code %}-prefixed member is an
 	 * internal symbol and carries the double colon ({@code linalg::%la-im2col}), which is
 	 * how the spliced defun is keyed in {@code ctx.functions}.
@@ -150,22 +169,27 @@ final class WasmLinalgSimdCompiler {
 
 	static void compile(String qualifiedName, LispCons cons, WasmLispCompiler.Ctx ctx) {
 		String member = member(qualifiedName);
-		int offset = Objects.requireNonNull(KERNELS.get(member));
 		int arity = arity(member);
 		List<LispVal> args = cons.toList();
+		int supplied = args.size() - 1;
+		Extended ext = supplied > arity ? EXTENDED.get(member) : null;
+		boolean extendedCall = ext != null && supplied <= ext.params();
+		int offset = ext != null && extendedCall ? ext.offset() : Objects.requireNonNull(KERNELS.get(member));
+		int kernelParams = ext != null && extendedCall ? ext.params() : arity;
 		String qualified = qualifiedName(member);
 		WasmLispCompiler.WasmFunctionInfo defun = ctx.functions.get(qualified);
-		if (defun == null || args.size() != arity + 1
-				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity) {
+		if (defun == null || (supplied != arity && !extendedCall)
+				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
+				|| (extendedCall && !defun.variadic())) {
 			// No spliced linalg.lisp to fall back to, a call with more arguments than
-			// the kernel handles (e.g. an axis argument), or a defun whose required
-			// count no longer matches: the ordinary direct-call path handles all three.
+			// any kernel handles, or a defun whose required count no longer matches:
+			// the ordinary direct-call path handles all three.
 			WasmFunctionCallCompiler.compileDefault(qualified, cons, ctx);
 			return;
 		}
 		// Evaluate each argument exactly once, into a local both branches read.
-		int[] slots = new int[arity];
-		for (int i = 0; i < arity; i++) {
+		int[] slots = new int[supplied];
+		for (int i = 0; i < supplied; i++) {
 			WasmExprCompiler.compileExpr(args.get(i + 1), ctx);
 			slots[i] = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
@@ -173,6 +197,11 @@ final class WasmLinalgSimdCompiler {
 		}
 		int result = ctx.allocTemp();
 		loadAll(ctx, slots);
+		// A missing trailing &optional (e.g. keepdims) is padded with null = nil.
+		for (int i = supplied; i < kernelParams; i++) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.linalgFuncBase() + offset);
 		ctx.writer.write(Instruction.SET_LOCAL);
@@ -185,12 +214,30 @@ final class WasmLinalgSimdCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		loadAll(ctx, slots);
+		for (int i = 0; i < arity; i++) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(slots[i]);
+		}
 		if (defun.variadic()) {
 			// A defun with an &optional/&rest lambda list takes a trailing rest
-			// parameter; an empty rest list is a null reference.
+			// parameter: the surplus locals are linked into a cons list through the
+			// result local (an empty rest list is a null reference).
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(result);
+			for (int k = supplied - 1; k >= arity; k--) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slots[k]);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(result);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(result);
+			}
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(result);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(defun.funcIndex());

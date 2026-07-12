@@ -43,21 +43,31 @@ The core ch07/ch08 port landed 2026-07-12 (this todo's original scope):
   88.5s -> 67.0s, so im2col was only ~24% of it. The rest is the item
   below.
 - **The residual interpreter `--simd` bottleneck = declined shapes of
-  already-intercepted members** (measured 2026-07-13 at the SimpleConvNet
-  shapes, per call): `(linalg:transpose x '(0 3 1 2))` on (10 30 24 24)
-  = 375 ms (the 2-arg axes form declines every transpose kernel by the
-  arity guards), `(linalg:mul one-hot flat)` on (43200 4) x (43200 1)
-  = 515 ms (a broadcast pair, declined by dims-equal), `(linalg:argmax
-  col 1)` / `(linalg:amax col 1)` on (43200 4) = ~150 ms each (axis
-  calls route to the variadic defun). Every conv/pool forward AND
-  backward pays several of these, which is where the remaining ~65s
-  goes -- `linalg:one-hot` itself is cheap (17 ms). Closing the gap
-  means kernels for (a) the rank-n axes-permutation transpose, (b) the
-  matrix-row/column broadcast shapes of the elementwise ops (the decline
-  the `.kb/linalg-simd.md` broadcast note already flags as an
-  optimization opportunity), and (c) the axis-1 reductions -- each a
-  deliberate extension of the intercepted-call-shape surface across all
-  three backends, so it deserves its own todo/design pass.
+  already-intercepted members**: DONE 2026-07-13 (the declined-shape
+  follow-up). All three shape families are intercepted on all three
+  `--simd` backends: (a) the rank-n axes-permutation transpose
+  (`(linalg:transpose x '(0 3 1 2))`, 375 ms -> 2 ms per call at the
+  SimpleConvNet (10 30 24 24) shape), (b) the general same-width numpy
+  broadcast behind the element-wise ops incl. maximum/minimum
+  (`(linalg:mul one-hot flat)` on (43200 4) x (43200 1), 515 ms ->
+  3 ms), and (c) the axis(+keepdims) forms of sum/amax/amin and the
+  axis forms of argmax/argmin (~150 ms -> ~1 ms each). Mechanics: the
+  interpreter natives take an arity RANGE, the JVM/wasm call sites grew
+  extended (multi-arity) forms whose declines rest-package the surplus
+  temps; wasm adds seven emitted functions (BCAST..ARGMIN_AXIS, FUNC_COUNT
+  34 -> 41, `userFuncBase()` shift 89 -> 96). All the new kernels are
+  scalar folds/odometer walks mirroring the defuns exactly, so they are
+  bit-identical at both widths (the axis folds do NOT follow the
+  lane-reduction contract). See `.kb/linalg-simd.md`. Result: ch07
+  train-convnet interpreter `--simd` 67.1 s -> 21.7 s (jar,
+  output byte-identical), wasm-P1 `--simd` 35 s -> 4.0 s, JVM `--simd`
+  0.6 s. The next tier of the remaining ~20 s (interpreter, measured at
+  the CNN shapes per call): the comparison masks are UN-intercepted
+  members -- `(linalg:greater big 0)` on 172,800 elements = 137 ms (one
+  per relu forward), `take-rows` = 94 ms/batch, `one-hot` = 32 ms --
+  candidates for a later member-set extension (greater/greater-equal/
+  less/less-equal/equal + take-rows/gather/one-hot); the rest is layer
+  plumbing/CLOS dispatch with no single dominant shape.
 - **The pretrained-params scripts**: ch07 `apply_filter.py`/
   `visualize_filter.py`, ch08 `misclassified_mnist.py` +
   `half_float_network.py` need `params.pkl`/`deep_convnet_params.pkl`

@@ -212,9 +212,10 @@ class JvmLinalgSimdAccelCompilerTest {
 	}
 
 	@Test
-	void broadcastPairsFallBackToTheScalarDefun() throws Exception {
-		// Two arrays of different-but-broadcastable shapes are an input the kernel
-		// declines; the defun runs the numpy broadcast walk, at both widths.
+	void broadcastPairsRunTheBcastKernelAndMatchTheScalarReference() throws Exception {
+		// Two same-width arrays of different-but-broadcastable shapes run the general
+		// numpy odometer kernel since the todo-117 follow-up (laBcastDD/laBcastFF);
+		// a boxed or mixed-width pair still declines to the defun.
 		assertThat(accel("(print (linalg:mul #2A((1 2) (3 4)) #d(10.0 20.0)))"))
 			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
 		assertMatchesScalarReference(
@@ -223,26 +224,87 @@ class JvmLinalgSimdAccelCompilerTest {
 				+ " (linalg:arange 0 2 'single-float)))");
 		assertThat(accel("(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))"))
 			.isEqualTo("single-float");
+		// The row and column shapes of the CNN layers, a rank-3 pair, and the strict
+		// comparison selects through the same kernel.
+		assertMatchesScalarReference("(print (linalg:mul (linalg:reshape (linalg:arange 8) '(4 2))"
+				+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1))))");
+		assertMatchesScalarReference("(print (linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
+				+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1)))");
+		assertMatchesScalarReference("(print (linalg:add (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
+				+ " (linalg:reshape (linalg:arange 0 2 'single-float) '(2 1))))");
+		assertMatchesScalarReference("(print (linalg:maximum (linalg:reshape (linalg:arange 6) '(2 3))"
+				+ " (linalg:from-list '(2.0 4.0 1.0))))");
+		assertThat(accel("(print (linalg:maximum #d((0.0 -0.0)) #d(-0.0 0.0)))")).isEqualTo("#d((-0.0 0.0))");
 	}
 
 	@Test
-	void axisArgumentsRouteToTheVariadicScalarDefun() throws Exception {
-		// The intercepted reductions gained &optional axis/keepdims lambda lists, so
-		// their spliced defuns are VARIADIC now: an axis call routes to the ordinary
-		// direct-call path (compileDefault), while a 1-arg call still hits the kernel
-		// whose decline branch passes an empty rest list to the variadic defun -- the
-		// bytecode-shape regression of the &optional change.
+	void axisFormsRunTheAxisKernelsAndMatchTheScalarReference() throws Exception {
+		// The axis forms are intercepted since the todo-117 follow-up: an axis call
+		// routes to the extended bridge kernel (laSumAxis &c, a 2-argument call padded
+		// with null for the missing keepdims), whose folds mirror %la-fold-axis /
+		// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
+		// decline branch passes an empty rest list to the variadic defun.
 		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 0))")).isEqualTo("#d(5.0 7.0 9.0)");
 		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 1 t))")).isEqualTo("#d((6.0) (15.0))");
 		assertMatchesScalarReference("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
 		assertMatchesScalarReference("(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
 		assertMatchesScalarReference("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
+		assertMatchesScalarReference("(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) -1))");
+		assertMatchesScalarReference("(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t))");
+		assertMatchesScalarReference(
+				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0))");
+		assertMatchesScalarReference(
+				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1))");
+		assertMatchesScalarReference("(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) 0))");
+		// The fold's strict comparison: the accumulator wins ties (first element).
+		assertThat(accel("(print (linalg:amax #d((-0.0 0.0)) 1))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1))")).isEqualTo("#d(-1.0 -2.0)");
 		// 1-arg calls over a general (boxed) array exercise the decline branch itself.
 		assertThat(accel("(print (linalg:sum #(1 2 3)))")).isEqualTo("6");
 		assertThat(accel("(print (linalg:argmax #(1 9 3)))")).isEqualTo("1");
 		assertThat(accel("(print (linalg:amin #(4 2 9)))")).isEqualTo("2");
 		// reshape keeps its fixed arity 2; a -1 extent declines inside the kernel.
 		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
+	}
+
+	@Test
+	void transposeAxesMatchesTheScalarReference() throws Exception {
+		// The 2-argument axes form routes to laTransposeAxes; a bad permutation and a
+		// nil axes argument decline to the defun (rest-packaged into the variadic
+		// call), which errors or runs its plain-transpose branch.
+		assertMatchesScalarReference(
+				"(print (linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 3 1 2)))");
+		assertMatchesScalarReference(
+				"(print (linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 2 3 1)))");
+		assertMatchesScalarReference("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) '(1 0)))");
+		assertMatchesScalarReference("(print (linalg:transpose (linalg:arange 3) '(0)))");
+		assertMatchesScalarReference(
+				"(print (linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
+						+ " 'single-float) '(2 2 2)) '(2 0 1)))");
+		assertMatchesScalarReference("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) nil))");
+		assertThatThrownBy(() -> accel("(print (linalg:transpose #d((1.0 2.0)) '(0 0)))")).rootCause()
+			.hasMessageContaining("permutation");
+	}
+
+	@Test
+	void anAxisArgumentFormIsEvaluatedExactlyOnceEvenWhenTheExtendedKernelDeclines() throws Exception {
+		// The extended call site shares the evaluate-once temps: a declined axis call
+		// (a general boxed array) reloads them into the rest list rather than
+		// recompiling the argument forms.
+		String declined = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) 0)
+				(print (linalg:sum #2A((1 2) (3 4)) (bump)))
+				(print *n*)
+				""";
+		assertThat(accel(declined)).isEqualTo(scalar(declined));
+		String accepted = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) 1)
+				(print (linalg:amax #d((1.0 9.0) (7.0 2.0)) (bump)))
+				(print *n*)
+				""";
+		assertThat(accel(accepted)).isEqualTo(scalar(accepted));
 	}
 
 	@Test

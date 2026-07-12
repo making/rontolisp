@@ -83,20 +83,77 @@ class LinalgSimdTest {
 	}
 
 	@Test
-	void axisArgumentsFallBackToTheScalarDefun() {
-		// The intercepted reductions gained &optional axis/keepdims lambda lists; the
-		// native's args.size() == arity guard routes any multi-arg call to
-		// applyGlobal over the (now variadic) defun, and the 1-arg kernel path is
-		// unchanged.
+	void axisFormsRunTheFoldKernelsAndMatchTheScalarOracle() {
+		// The axis forms of sum/amax/amin/argmax/argmin (and transpose's axes form) are
+		// intercepted since the todo-117 follow-up: the natives accept an arity RANGE,
+		// and the fold kernels mirror %la-fold-axis / %la-argfold-axis exactly (double
+		// accumulation, the defun's seeds and strict comparisons), so every axis result
+		// is bit-identical to the oracle at both widths.
 		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
 		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) 1)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) -1)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:arange 5) 0)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:arange 5) 0 t)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0)");
 		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
+		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 1 t)");
 		assertMatchesScalarOracle("(linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1)");
 		assertMatchesScalarOracle("(linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t)");
+		assertMatchesScalarOracle("(linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1)");
+		assertMatchesScalarOracle("(linalg:amax (linalg:arange 5) 0)");
 		assertMatchesScalarOracle("(linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1)");
 		assertMatchesScalarOracle("(linalg:argmin (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
+		assertMatchesScalarOracle("(linalg:argmax (linalg:from-list '(3.0 9.0 2.0)) 0)");
+		assertMatchesScalarOracle("(linalg:argmin (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) -1)");
 		assertMatchesScalarOracle("(linalg:reshape (linalg:arange 12) '(3 -1))");
 		assertThat(eval("(linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 0)", true).print()).isEqualTo("#d(5.0 7.0 9.0)");
+		// A vector without keepdims reduces to the scalar itself; argmax to the index.
+		assertThat(eval("(linalg:sum #f(0.5 0.25) 0)", true).print()).isEqualTo("0.75");
+		assertThat(eval("(linalg:argmax #d(3.0 9.0 2.0) 0)", true).print()).isEqualTo("1");
+	}
+
+	@Test
+	void axisFoldsKeepTheOracleStrictComparisonAndSeedSemantics() {
+		// The fold's (if (> x acc) x acc) lets the ACCUMULATOR win ties and NaN -- the
+		// opposite of the element-wise select -- and the seed is the first element
+		// along the axis, so an all-negative axis never answers 0.
+		assertThat(eval("(linalg:amax #d((-0.0 0.0)) 1)", true).print()).isEqualTo("#d(-0.0)");
+		assertThat(eval("(linalg:amin #d((0.0 -0.0)) 1)", true).print()).isEqualTo("#d(0.0)");
+		assertThat(eval("(linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1)", true).print()).isEqualTo("#d(-1.0 -2.0)");
+		assertThat(eval("(linalg:argmax #d((-0.0 0.0) (0.0 -0.0)) 1)", true).print()).isEqualTo("#d(0.0 0.0)");
+		assertMatchesScalarOracle("(linalg:amax #d((-0.0 0.0)) 1)");
+		assertMatchesScalarOracle("(linalg:amin #d((0.0 -0.0)) 1)");
+	}
+
+	@Test
+	void axisFormDeclinedInputsRunTheScalarDefun() {
+		// A nil axis is the defun's no-axis path; a general boxed array, an
+		// out-of-range axis and an empty axis decline too (the defun signals its own
+		// errors for the latter two).
+		assertMatchesScalarOracle("(linalg:sum #d((1.0 2.0)) nil)");
+		assertMatchesScalarOracle("(linalg:sum #2A((1 2) (3 4)) 0)");
+		assertMatchesScalarOracle("(linalg:argmax #(1 9 2) 0)");
+		assertThatThrownBy(() -> eval("(linalg:sum #d((1.0 2.0)) 2)", true)).hasMessageContaining("axis out of range");
+		assertThatThrownBy(() -> eval("(linalg:amax (linalg:zeros '(2 0)) 1)", true))
+			.hasMessageContaining("reduction of an empty axis");
+	}
+
+	@Test
+	void transposeAxesMatchesTheScalarOracle() {
+		// The 2-argument axes form (%la-transpose-axes) is a pure permutation copy.
+		assertMatchesScalarOracle("(linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 3 1 2))");
+		assertMatchesScalarOracle("(linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 2 3 1))");
+		assertMatchesScalarOracle("(linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) '(1 0))");
+		assertMatchesScalarOracle("(linalg:transpose (linalg:arange 3) '(0))");
+		assertMatchesScalarOracle(
+				"(linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
+						+ " 'single-float) '(2 2 2)) '(2 0 1))");
+		// A bad permutation declines, so the defun's own error still signals.
+		assertThatThrownBy(() -> eval("(linalg:transpose #d((1.0 2.0)) '(0 0))", true))
+			.hasMessageContaining("permutation");
+		assertThatThrownBy(() -> eval("(linalg:transpose #d((1.0 2.0)) '(0))", true))
+			.hasMessageContaining("permutation");
 	}
 
 	// --- element-wise: array with array -------------------------------------------
@@ -263,9 +320,12 @@ class LinalgSimdTest {
 	}
 
 	@Test
-	void broadcastPairsFallBackToTheScalarDefun() {
-		// Two arrays of different-but-broadcastable shapes are an input the kernels
-		// decline; the defun runs the numpy broadcast walk, at both widths.
+	void broadcastPairsRunTheBcastKernelAndMatchTheScalarOracle() {
+		// Two same-width arrays of different-but-broadcastable shapes run the general
+		// numpy odometer kernel since the todo-117 follow-up -- every element computed
+		// in double and narrowed only into a single-float result, %la-bcast-loop's own
+		// rule, so bit-identical at both widths. A mixed-width broadcast still declines
+		// to the defun.
 		assertThat(
 				eval("(linalg:mul (linalg:reshape (linalg:from-list '(1 2 3 4)) '(2 2)) #d(10.0 20.0))", true).print())
 			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
@@ -275,6 +335,23 @@ class LinalgSimdTest {
 		assertThat(
 				eval("(array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0)))", true).print())
 			.isEqualTo("single-float");
+		// The row and column shapes of the CNN layers, and a rank-3 vs rank-2 pair.
+		assertMatchesScalarOracle("(linalg:sub (linalg:reshape (linalg:arange 6) '(2 3))"
+				+ " (linalg:reshape (linalg:from-list '(100.0 200.0)) '(2 1)))");
+		assertMatchesScalarOracle("(linalg:mul (linalg:reshape (linalg:arange 8) '(4 2))"
+				+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1)))");
+		assertMatchesScalarOracle("(linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
+				+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1))");
+		assertMatchesScalarOracle("(linalg:mul (linalg:reshape (linalg:arange 3) '(3 1)) (linalg:arange 1 3))");
+		assertMatchesScalarOracle("(linalg:add (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
+				+ " (linalg:reshape (linalg:arange 0 2 'single-float) '(2 1)))");
+		// The comparison selects broadcast through the same kernel: the strict select,
+		// second operand wins the -0.0/0.0 tie.
+		assertMatchesScalarOracle("(linalg:maximum (linalg:reshape (linalg:from-list '(1.0 5.0 3.0 2.0)) '(2 2))"
+				+ " (linalg:from-list '(2.0 4.0)))");
+		assertMatchesScalarOracle("(linalg:minimum (linalg:reshape (linalg:from-list '(1.0 5.0 3.0 2.0)) '(2 2))"
+				+ " (linalg:reshape (linalg:from-list '(2.0 4.0)) '(2 1)))");
+		assertThat(eval("(linalg:maximum #d((0.0 -0.0)) #d(-0.0 0.0))", true).print()).isEqualTo("#d((-0.0 0.0))");
 	}
 
 	@Test

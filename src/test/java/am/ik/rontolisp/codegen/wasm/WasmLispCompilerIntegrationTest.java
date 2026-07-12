@@ -7461,21 +7461,70 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void wasmGcSimdLinalgAxisArgumentsRouteToTheVariadicScalarDefun() throws Exception {
-		// The intercepted reductions gained &optional axis/keepdims lambda lists, so
-		// their spliced defuns are VARIADIC now: an axis call routes to the ordinary
-		// direct-call path, while a 1-arg call still hits the kernel whose decline
-		// branch passes an extra null rest to the variadic defun -- the wasm
-		// type-shape regression of the &optional change.
+	void wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath() throws Exception {
+		// The axis forms are intercepted since the todo-117 follow-up: an axis call
+		// routes to the SUM_AXIS/AMAX_AXIS/ARGMAX_AXIS kernels (a 2-argument call
+		// padded with a null keepdims), whose folds mirror %la-fold-axis /
+		// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
+		// decline branch passes an extra null rest to the variadic defun, and a
+		// declined AXIS call links the surplus locals into the rest list.
 		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) -1))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:arange 5) 0))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
-		// 1-arg over a general (boxed) array exercises the decline branch itself.
+		assertLinalgMatchesTheScalarPath("(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) 0))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1))");
+		// The fold's strict comparison: the accumulator (first element) wins ties, and
+		// an all-negative axis never answers 0.
+		assertThat(compileAndRunVec("(print (linalg:amax #d((-0.0 0.0)) 1))", true)).isEqualTo("#d(-0.0)");
+		assertThat(compileAndRunVec("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1))", true))
+			.isEqualTo("#d(-1.0 -2.0)");
+		// 1-arg over a general (boxed) array exercises the decline branch itself; an
+		// axis call over one exercises the extended decline's rest packaging.
 		assertLinalgMatchesTheScalarPath("(print (linalg:sum #(1 2 3)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:argmax #(1 9 3)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum #2A((1 2) (3 4)) 0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum #d((1.0 2.0)) nil))");
 		// reshape keeps its fixed arity 2; a -1 extent declines inside the kernel.
 		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
+	}
+
+	@Test
+	void wasmGcSimdLinalgBroadcastAndTransposeAxesMatchTheScalarPath() throws Exception {
+		// The general numpy broadcast (BCAST, reached from the element-wise kernels'
+		// unequal-dims branch) and the rank-n axes permutation (TRANSPOSE_AXES), both
+		// vget/_v_set element walks -- widen, compute in f64, narrow on store, the
+		// oracle's own rule, so byte-identical at both widths.
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:mul (linalg:reshape (linalg:arange 8) '(4 2))"
+				+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1))))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
+				+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
+				+ " (linalg:arange 0 2 'single-float)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:maximum (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:from-list '(2.0 4.0 1.0))))");
+		assertThat(compileAndRunVec("(print (linalg:maximum #d((0.0 -0.0)) #d(-0.0 0.0)))", true))
+			.isEqualTo("#d((-0.0 0.0))");
+		// A mixed-width broadcast still declines to the defun (first operand's width).
+		assertLinalgMatchesTheScalarPath(
+				"(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 3 1 2)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) '(1 0)))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
+						+ " 'single-float) '(2 2 2)) '(2 0 1)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:transpose (linalg:arange 3) '(0)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) nil))");
 	}
 
 	@Test

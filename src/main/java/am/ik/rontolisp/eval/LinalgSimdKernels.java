@@ -1014,4 +1014,300 @@ final class LinalgSimdKernels {
 		return img;
 	}
 
+	// --- declined-shape follow-up (todo 117): broadcast / axes transpose / axis folds
+	// Pure scalar loops mirroring the linalg.lisp defuns element for element -- no
+	// lanes. Every element is read widened to double, the operation runs in double,
+	// and only a store into a single-float result narrows -- the oracle's own
+	// widen-compute-narrow round trip -- so all of these are bit-identical at both
+	// widths, unlike the lane reductions. The odometer walks are %la-bcast-loop's.
+
+	static final int BOP_ADD = 0;
+
+	static final int BOP_SUB = 1;
+
+	static final int BOP_MUL = 2;
+
+	static final int BOP_DIV = 3;
+
+	/** The strict select {@code (if (> x y) x y)}: the SECOND operand wins ties/NaN. */
+	static final int BOP_MAX = 4;
+
+	static final int BOP_MIN = 5;
+
+	private static double applyBinary(int op, double a, double b) {
+		return switch (op) {
+			case BOP_ADD -> a + b;
+			case BOP_SUB -> a - b;
+			case BOP_MUL -> a * b;
+			case BOP_DIV -> a / b;
+			case BOP_MAX -> a > b ? a : b;
+			default -> a < b ? a : b;
+		};
+	}
+
+	/**
+	 * Row-major strides of the dims-{@code d} operand aligned to the broadcast shape
+	 * {@code od}, with 0 on every stretched axis (extent 1 or missing) so the odometer
+	 * re-reads the same element across it -- {@code %la-bcast-strides} verbatim.
+	 */
+	private static int[] bcastStrides(int[] d, int[] od) {
+		int[] s = new int[od.length];
+		int acc = 1;
+		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
+			int n = i >= 0 ? d[i] : 1;
+			s[k] = n == 1 ? 0 : acc;
+			acc *= n;
+		}
+		return s;
+	}
+
+	/**
+	 * The general numpy broadcast walk of {@code %la-bcast-loop}: the output's flat
+	 * row-major index advances by 1 while each operand's flat index follows its
+	 * stride-0-padded strides through an odometer carry from the innermost axis out. The
+	 * caller has already validated the broadcast shape {@code od}.
+	 */
+	static double[] bcast(int op, double[] x, int[] dx, double[] y, int[] dy, int[] od) {
+		int rank = od.length;
+		int[] sx = bcastStrides(dx, od);
+		int[] sy = bcastStrides(dy, od);
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		double[] out = new double[total];
+		int[] idx = new int[rank];
+		int ox = 0;
+		int oy = 0;
+		for (int k = 0; k < total; k++) {
+			out[k] = applyBinary(op, x[ox], y[oy]);
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				ox += sx[a];
+				oy += sy[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				ox -= od[a] * sx[a];
+				oy -= od[a] * sy[a];
+			}
+		}
+		return out;
+	}
+
+	static float[] bcastF(int op, float[] x, int[] dx, float[] y, int[] dy, int[] od) {
+		int rank = od.length;
+		int[] sx = bcastStrides(dx, od);
+		int[] sy = bcastStrides(dy, od);
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		float[] out = new float[total];
+		int[] idx = new int[rank];
+		int ox = 0;
+		int oy = 0;
+		for (int k = 0; k < total; k++) {
+			out[k] = (float) applyBinary(op, x[ox], y[oy]);
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				ox += sx[a];
+				oy += sy[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				ox -= od[a] * sx[a];
+				oy -= od[a] * sy[a];
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The rank-n axis permutation of {@code %la-transpose-axes}: output axis {@code k}
+	 * draws from input axis {@code axes[k]}, the source flat index following the permuted
+	 * row-major strides through the same odometer walk. A pure copy, so trivially
+	 * bit-identical. The caller has already validated the permutation.
+	 */
+	static double[] transposeAxes(double[] x, int[] dims, int[] axes) {
+		int rank = dims.length;
+		int[] strides = new int[rank];
+		int acc = 1;
+		for (int i = rank - 1; i >= 0; i--) {
+			strides[i] = acc;
+			acc *= dims[i];
+		}
+		int[] od = new int[rank];
+		int[] os = new int[rank];
+		for (int k = 0; k < rank; k++) {
+			od[k] = dims[axes[k]];
+			os[k] = strides[axes[k]];
+		}
+		double[] out = new double[x.length];
+		int[] idx = new int[rank];
+		int src = 0;
+		for (int k = 0; k < out.length; k++) {
+			out[k] = x[src];
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				src += os[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				src -= od[a] * os[a];
+			}
+		}
+		return out;
+	}
+
+	static float[] transposeAxesF(float[] x, int[] dims, int[] axes) {
+		int rank = dims.length;
+		int[] strides = new int[rank];
+		int acc = 1;
+		for (int i = rank - 1; i >= 0; i--) {
+			strides[i] = acc;
+			acc *= dims[i];
+		}
+		int[] od = new int[rank];
+		int[] os = new int[rank];
+		for (int k = 0; k < rank; k++) {
+			od[k] = dims[axes[k]];
+			os[k] = strides[axes[k]];
+		}
+		float[] out = new float[x.length];
+		int[] idx = new int[rank];
+		int src = 0;
+		for (int k = 0; k < out.length; k++) {
+			out[k] = x[src];
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				src += os[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				src -= od[a] * os[a];
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The oracle's {@code %la-fold-axis} over the flat index
+	 * {@code (o * axlen + j) * inner + i}. {@link #BOP_ADD} folds from the defun's
+	 * {@code 0} seed with {@code j} from 0; {@link #BOP_MAX} / {@link #BOP_MIN} seed from
+	 * the first element along the axis and fold the defun's {@code (if (> x acc) x acc)}
+	 * -- the ACCUMULATOR wins ties/NaN, the opposite of the element-wise select -- with
+	 * {@code j} from 1 (the caller declines an empty axis). Always accumulates in
+	 * {@code double}: an axis fold is NOT a lane reduction, so the oracle's boxed double
+	 * arithmetic is mirrored exactly at both widths and the result is bit-identical.
+	 */
+	static double[] foldAxis(int op, double[] x, int axlen, int outer, int inner) {
+		double[] out = new double[outer * inner];
+		for (int o = 0; o < outer; o++) {
+			for (int i = 0; i < inner; i++) {
+				int base = o * axlen * inner + i;
+				double acc;
+				int j0;
+				if (op == BOP_ADD) {
+					acc = 0.0;
+					j0 = 0;
+				}
+				else {
+					acc = x[base];
+					j0 = 1;
+				}
+				for (int j = j0; j < axlen; j++) {
+					double v = x[base + j * inner];
+					if (op == BOP_ADD) {
+						acc += v;
+					}
+					else if (op == BOP_MAX ? v > acc : v < acc) {
+						acc = v;
+					}
+				}
+				out[o * inner + i] = acc;
+			}
+		}
+		return out;
+	}
+
+	static double[] foldAxisF(int op, float[] x, int axlen, int outer, int inner) {
+		double[] out = new double[outer * inner];
+		for (int o = 0; o < outer; o++) {
+			for (int i = 0; i < inner; i++) {
+				int base = o * axlen * inner + i;
+				double acc;
+				int j0;
+				if (op == BOP_ADD) {
+					acc = 0.0;
+					j0 = 0;
+				}
+				else {
+					acc = x[base];
+					j0 = 1;
+				}
+				for (int j = j0; j < axlen; j++) {
+					double v = x[base + j * inner];
+					if (op == BOP_ADD) {
+						acc += v;
+					}
+					else if (op == BOP_MAX ? v > acc : v < acc) {
+						acc = v;
+					}
+				}
+				out[o * inner + i] = acc;
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The oracle's {@code %la-argfold-axis}: the per-slice index of the first element
+	 * winning the strict comparison along the axis. Returns the indices as doubles -- the
+	 * defun fills a packed DOUBLE array of index values at any input width.
+	 */
+	static double[] argFoldAxis(boolean max, double[] x, int axlen, int outer, int inner) {
+		double[] out = new double[outer * inner];
+		for (int o = 0; o < outer; o++) {
+			for (int i = 0; i < inner; i++) {
+				int base = o * axlen * inner + i;
+				double best = x[base];
+				int bi = 0;
+				for (int j = 1; j < axlen; j++) {
+					double v = x[base + j * inner];
+					if (max ? v > best : v < best) {
+						best = v;
+						bi = j;
+					}
+				}
+				out[o * inner + i] = bi;
+			}
+		}
+		return out;
+	}
+
+	static double[] argFoldAxisF(boolean max, float[] x, int axlen, int outer, int inner) {
+		double[] out = new double[outer * inner];
+		for (int o = 0; o < outer; o++) {
+			for (int i = 0; i < inner; i++) {
+				int base = o * axlen * inner + i;
+				double best = x[base];
+				int bi = 0;
+				for (int j = 1; j < axlen; j++) {
+					double v = x[base + j * inner];
+					if (max ? v > best : v < best) {
+						best = v;
+						bi = j;
+					}
+				}
+				out[o * inner + i] = bi;
+			}
+		}
+		return out;
+	}
+
 }

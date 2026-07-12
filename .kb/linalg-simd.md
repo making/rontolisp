@@ -11,7 +11,7 @@ Three backends, one per interception mechanism:
 |---|---|---|
 | interpreter (`prog.lisp --simd`) | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` (jdk.incubator.vector) |
 | JVM (`-o Prog.class --simd`) | `codegen/jvm/JvmLinalgSimdCompiler` (call site) | `JvmSimdVectorTemplate.la*` (the one embedded bridge) |
-| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (30 emitted functions) |
+| wasm-GC (`-o prog.wasm --simd`) | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (41 emitted functions) |
 
 `--no-gc` is out of scope: `linalg:` cannot compile there at all (`linalg::%la-make` uses
 `&optional`, and `--no-gc` has no general array type).
@@ -65,12 +65,15 @@ also accept:
 - **mixed widths** -- NOT an error here (unlike `vec:`): the defun widens both operands and
   keeps the *first* one's width,
 - a scalar operand on either side, and two plain numbers,
-- arrays of DIFFERENT shapes: since 2026-07-12 the defun broadcasts them by the numpy
-  rules (`%la-bcast-loop`, see `.kb/linalg.md`) and signals the specific shape-mismatch
-  `error` only when no broadcast fits. Every element-wise kernel already declined an
-  unequal-dims pair, so the kernels needed NO change -- a broadcast pair simply falls
-  back to the defun (an optimization opportunity, not a correctness issue; a lane form
-  for the common matrix-row broadcast could be added later behind the same decline).
+- arrays of DIFFERENT shapes: the defun broadcasts them by the numpy rules
+  (`%la-bcast-loop`, see `.kb/linalg.md`) and signals the specific shape-mismatch
+  `error` only when no broadcast fits. Since the todo-117 declined-shape follow-up
+  (2026-07-13) a SAME-width broadcast pair is handled by the kernels themselves: the
+  element-wise kernels' unequal-dims branch runs the general numpy odometer walk
+  (`bcast`/`laBcastDD`/the wasm `BCAST` helper) -- every element read widened to
+  double, computed in double, narrowed only by a store into a single-float result,
+  which is `%la-bcast`'s own emap rule, so bit-identical at both widths. A MIXED-width
+  or incompatible pair still declines (the defun widens / signals).
 
 Reproducing all of that in each kernel would duplicate the library. So **every kernel is a
 partial function: it answers "declined" for an input it does not handle, and the call site
@@ -94,15 +97,23 @@ Two consequences worth remembering:
   decline.
 - **An intercepted member may be VARIADIC** (the deep-learning-from-scratch port gave
   `sum`/`mean`/`amax`/`amin`/`argmax`/`argmin` `&optional axis` lambda lists, which
-  `LambdaLists` desugars to a trailing `&rest` parameter): a call with more arguments than
-  the kernel arity routes to the ordinary direct-call path (never intercepted), and the
-  1-arg decline branch pushes an EMPTY rest (`ACONST_NULL` on the JVM, `ref.null eq` on
-  wasm) before invoking the defun -- both compilers also verify the defun's required count
-  still matches the kernel arity and bail to `compileDefault` otherwise. The interpreter
-  needs nothing: its `args.size() == arity` guard falls through to `applyGlobal`, which
-  binds the rest list normally. Pinned by `axisArgumentsRouteToTheVariadicScalarDefun`
-  (JVM), `wasmGcSimdLinalgAxisArgumentsRouteToTheVariadicScalarDefun` (wasm) and
-  `axisArgumentsFallBackToTheScalarDefun` (interpreter).
+  `LambdaLists` desugars to a trailing `&rest` parameter), and since the todo-117
+  declined-shape follow-up six of them have EXTENDED (multi-arity) call sites:
+  `transpose` at 2 args (`laTransposeAxes` / `TRANSPOSE_AXES`), `sum`/`amax`/`amin` at
+  2-3 args (`laSumAxis` &c / `SUM_AXIS` &c; a missing keepdims is padded with
+  null = nil at the call site), `argmax`/`argmin` at 2 args. A call beyond a member's
+  maximum arity still routes to the ordinary direct-call path. The decline branches
+  package the rest list from the SAME temps: the base arity pushes an EMPTY rest
+  (`ACONST_NULL` on the JVM, `ref.null eq` on wasm), an extended call links the surplus
+  temps into a cons chain (`Object[2]` cells on the JVM, `struct.new $cons` on wasm) --
+  both compilers also verify the defun's required count still matches the base arity
+  (and, for an extended call, that the defun is variadic) and bail to `compileDefault`
+  otherwise. The interpreter needs only the arity-RANGE guard in `LinalgSimd.define`;
+  a declined call falls through to `applyGlobal`, which binds the rest list normally.
+  Pinned by `axisFormsRunTheAxisKernelsAndMatchTheScalarReference` +
+  `anAxisArgumentFormIsEvaluatedExactlyOnceEvenWhenTheExtendedKernelDeclines` (JVM),
+  `wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath` (wasm) and
+  `axisFormsRunTheFoldKernelsAndMatchTheScalarOracle` (interpreter).
 
 ## The intercepted set (34 members)
 
@@ -134,6 +145,21 @@ positive filter/stride, non-negative pad, and both padded extents `h + 2*pad - f
 the kernel. The JVM bridge descriptors are built per arity now (5/6 `Object` params),
 and the wasm kernels use the always-present `TYPE_CALLABLE_BASE + 4` / `+ 5` function
 types, so no new type entries were needed.
+
+**The declined-shape follow-up (2026-07-13)** closed the three shapes that still ran
+the boxed defuns under `--simd` (at the SimpleConvNet sizes they were ~97% of the
+residual ch07 train time on the interpreter): the general numpy BROADCAST between two
+same-width packed arrays (reached from the element-wise kernels' unequal-dims branch,
+`maximum`/`minimum` included), `transpose`'s rank-n AXES form, and the AXIS forms of
+`sum`/`amax`/`amin` (axis + keepdims) and `argmax`/`argmin` (axis). The member set is
+unchanged (still 34); what grew is the set of intercepted CALL SHAPES (the multi-arity
+call sites above) and the wasm function block (34 -> 41: `BCAST`, `TRANSPOSE_AXES`,
+`SUM_AXIS`, `AMAX_AXIS`, `AMIN_AXIS`, `ARGMAX_AXIS`, `ARGMIN_AXIS`). All of them are
+deliberately SCALAR walks (odometer copies and folds, `_v_get`/`_v_set` element loops
+on wasm): the win is de-boxing, and scalar double arithmetic is what makes them
+bit-identical (below). Declines: a nil/non-integer/out-of-range axis, an empty axis
+(the vector `sum` of an empty axis would need the defun's INTEGER 0), a non-permutation
+axes list, a mixed-width or non-broadcastable pair, any general boxed operand.
 
 Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
 `matmul` (calls `dot`), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
@@ -171,6 +197,9 @@ compiled defun pays, and on the interpreter it removes the whole tree-walking lo
 | `exp`/`log`/`tanh`/`sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/`sign` (unary, todo 109) | de-boxed scalar loop (the same `java.lang.Math` call) | `_v_get`/`_v_set` element loop emitting the defun's f64 sequence |
 | `transpose` | scalar loop | lanes x lanes register-block shuffles when BOTH dims are lane-aligned, else `_v_get`/`_v_set` |
 | `reshape` | `Arrays.copyOf` | whole lane-group copy |
+| same-width broadcast pair (any op) | scalar odometer walk | `BCAST` `_v_get`/`_v_set` odometer walk (op as an i31 selector) |
+| `transpose` with axes | scalar odometer copy | `TRANSPOSE_AXES` `_v_get`/`_v_set` odometer copy |
+| `sum`/`amax`/`amin`/`argmax`/`argmin` with axis | scalar fold loops | `*_AXIS` `_v_get`/`_v_set` fold loops |
 
 The wasm-GC lane forms for `dot` (v.M / M.M) / `outer` / `transpose` shipped as the todo-107
 follow-up (2026-07-10). The GEMM loop reads each `b` row through the same `i8x16.shuffle`
@@ -236,6 +265,18 @@ Only reductions move, and exactly as todo-106 already specified for `vec:`.
   narrows once per output element.)
 - **`trace`, `amax`, `amin`, `argmax`, `argmin`** are bit-identical: they read elements
   widened to `double`, exactly as the defun does.
+- **The declined-shape follow-up kernels are ALL bit-identical at both widths.** The
+  broadcast and the axes transpose read widened, compute in double and narrow only on a
+  single-float store (`%la-bcast-loop`'s own rule; the transpose is a pure copy). The
+  AXIS folds do NOT follow the lane-reduction contract: `(linalg:sum a 0)` accumulates
+  in f64 from the defun's `0` seed in the defun's own order (an axis fold is a scalar
+  loop, not a lane reduction -- only the no-axis `sum`/`dot`/`matvec` lanes reduce), and
+  the `amax`/`amin` folds mirror `(if (> x acc) x acc)` -- the ACCUMULATOR wins
+  ties/NaN, the opposite of the element-wise select, so `(linalg:amax #d((-0.0 0.0)) 1)`
+  is `#d(-0.0)` while `(linalg:maximum #d(-0.0) #d(0.0))` is `#d(0.0)`. A vector
+  reduced without keepdims returns the boxed f64 accumulator itself (never narrowed,
+  even for an `#f` input), and the axis `argmax`/`argmin` results are packed DOUBLE
+  arrays at any input width -- both exactly as the defuns answer.
 - **`ikj` is not just faster, it is bit-identical at double width.** The oracle's naive `ijk`
   reads `b[k][j]` with stride `p`, which no lane loop can follow. Rewriting it as `ikj` makes
   `b[k][*]` a contiguous row AND visits `k` in the same increasing order into the same
@@ -333,9 +374,16 @@ call sites) -- exactly as any `vec:` program does. `(print (+ 1 2))` does not.
 
 ### wasm-GC
 
-Thirty-four standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
+Forty-one standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
 + 55` (the vec: block is 55 with the todo-109 kernels and `-into` siblings), emitted only
-under `--simd`; `userFuncBase()` now shifts by 89. `WasmLispCompilerTest.simd
+under `--simd`; `userFuncBase()` now shifts by 96. The last seven are the declined-shape
+follow-up helpers (`BCAST` .. `ARGMIN_AXIS`); `BCAST` takes its op as an i31 (the
+3-eq-param `TYPE_CALLABLE_BASE + 2` type, always present) and is called from the six
+element-wise kernels' unequal-dims branch, the others from the extended call sites. The
+odometer/fold scratch (dims copies, strides, counters, permutations) lives in fresh
+`$hash_buckets` i31 arrays -- kernels cannot hold extra typed local groups beyond the
+fixed `withLocals` order, and rank-sized arrays are allocation-trivial next to the walk
+itself. `WasmLispCompilerTest.simd
 AppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks` pins the delta -- it is the
 only structural guard that a build WITHOUT `--simd` stays byte-identical to one that never
 knew the flag. **Update it, never weaken it.**
@@ -370,19 +418,24 @@ i31s. Anything else declines. `flatten` rides on it.
 
 ## Verification
 
-- `eval/LinalgSimdTest` (22) -- interception guard (`#'linalg:add` is `#<function
+- `eval/LinalgSimdTest` (39) -- interception guard (`#'linalg:add` is `#<function
   linalg:add>` under `--simd`, `#<lambda>` without; `emap`/`inv`/`det`/`solve`/`array-equal`/
   `mean`/`matmul`/`flatten` stay `#<lambda>`), byte-identity vs the oracle at both widths and
-  both ranks, scalar broadcast on both sides, the declined inputs, the f32 probe.
-- `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (14) -- the bridge-embedded dead-flag guard,
-  the same byte-identity set, the evaluate-once guard, the library errors still signalling.
-- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), six cases:
+  both ranks, scalar broadcast on both sides, the declined inputs, the f32 probe, and the
+  declined-shape follow-up (broadcast pairs, transpose axes, axis folds incl. the strict
+  tie/seed semantics and the declined axis inputs).
+- `codegen/jvm/JvmLinalgSimdAccelCompilerTest` (25) -- the bridge-embedded dead-flag guard,
+  the same byte-identity set, the evaluate-once guards (base AND extended call sites), the
+  library errors still signalling, the axis/broadcast/transpose-axes shapes.
+- `codegen/wasm/WasmLispCompilerIntegrationTest` (Docker + wasmtime), eight cases:
   `wasmGcSimdLinalg{ElementWiseAndShapeKernels,ReductionsAndProducts}AreByteIdenticalToThe
   ScalarPath`, `...LaneProductsMatchTheScalarPathAtEveryRowLaneOffset` (the GEMM / outer /
   transpose lane forms: every shuffle-offset variant via a 7-column `#f` matrix, the odd-`p`
   sentinel-group write, aligned vs unaligned outer/transpose, a next-row inf inside the
   window overhang), `...DeclinedInputsRunTheScalarDefun`,
-  `...SingleFloatReductionsAccumulateInSinglePrecision`, `...ComposesWithOptimize`.
+  `...SingleFloatReductionsAccumulateInSinglePrecision`, `...ComposesWithOptimize`,
+  `...AxisFormsRunTheAxisKernelsAndMatchTheScalarPath`,
+  `...BroadcastAndTransposeAxesMatchTheScalarPath`.
 - `WasmLispCompilerTest.simdAppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks`.
 - `ci-spec.yaml` never passes `--simd`, so the cross-backend E2E is unaffected. The component
   leg (`--component --simd`) and `--optimize` were verified by hand and by the integration

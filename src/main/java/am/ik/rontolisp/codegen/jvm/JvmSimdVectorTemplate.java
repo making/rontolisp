@@ -1146,7 +1146,10 @@ final class JvmSimdVectorTemplate {
 	private static @Nullable Object laElementwise(int op, @Nullable Object a, @Nullable Object b) {
 		if (a instanceof double[] x) {
 			if (b instanceof double[] y) {
-				return laSameDims(x, y) ? laEwDD(op, x, y) : null;
+				// Two same-width arrays of different shapes broadcast by the numpy
+				// rules (todo 117 follow-up); an incompatible pair declines so the
+				// defun signals its own shape-mismatch error.
+				return laSameDims(x, y) ? laEwDD(op, x, y) : laBcastDD(op, x, y);
 			}
 			if (b instanceof float[]) {
 				return null;
@@ -1156,7 +1159,7 @@ final class JvmSimdVectorTemplate {
 		}
 		if (a instanceof float[] x) {
 			if (b instanceof float[] y) {
-				return laSameDims(x, y) ? laEwFF(op, x, y) : null;
+				return laSameDims(x, y) ? laEwFF(op, x, y) : laBcastFF(op, x, y);
 			}
 			if (b instanceof double[]) {
 				return null;
@@ -1882,6 +1885,453 @@ final class JvmSimdVectorTemplate {
 		m[1] = rows;
 		m[2] = cols;
 		return m;
+	}
+
+	// --- declined-shape follow-up (todo 117): broadcast / axes transpose / axis folds
+	// Pure scalar loops mirroring the linalg.lisp defuns element for element -- no
+	// lanes. Every element is read widened to double, the operation runs in double, and
+	// only a store into a single-float result narrows (the oracle's widen-compute-narrow
+	// round trip), so all of these are bit-identical at both widths. The odometer walks
+	// are %la-bcast-loop's own.
+
+	/** The dims of a packed operand's in-array header, as an {@code int[]}. */
+	private static int[] laDims(@Nullable Object a) {
+		int rank = laRank(a);
+		int[] d = new int[rank];
+		for (int i = 0; i < rank; i++) {
+			d[i] = laDim(a, i);
+		}
+		return d;
+	}
+
+	/**
+	 * The numpy broadcast shape of two dims arrays ({@code %la-bcast-shape}): trailing
+	 * axes align, a pair agrees when equal or either is 1, the output extent is the
+	 * larger. Returns {@code null} (decline) on any other disagreement or an output too
+	 * large for one Java array.
+	 */
+	private static int @Nullable [] laBcastShape(int[] dx, int[] dy) {
+		int rank = Math.max(dx.length, dy.length);
+		int[] od = new int[rank];
+		long total = 1;
+		for (int k = 0; k < rank; k++) {
+			int i = dx.length - rank + k;
+			int j = dy.length - rank + k;
+			int a = i >= 0 ? dx[i] : 1;
+			int b = j >= 0 ? dy[j] : 1;
+			if (a != b && a != 1 && b != 1) {
+				return null;
+			}
+			od[k] = Math.max(a, b);
+			total *= od[k];
+			if (!laSizeFits(total + 1 + rank)) {
+				return null;
+			}
+		}
+		return od;
+	}
+
+	/**
+	 * Row-major strides of the dims-{@code d} operand aligned to the broadcast shape
+	 * {@code od}, with 0 on every stretched axis (extent 1 or missing) so the odometer
+	 * re-reads the same element across it -- {@code %la-bcast-strides} verbatim.
+	 */
+	private static int[] laBcastStrides(int[] d, int[] od) {
+		int[] s = new int[od.length];
+		int acc = 1;
+		for (int k = od.length - 1, i = d.length - 1; k >= 0; k--, i--) {
+			int n = i >= 0 ? d[i] : 1;
+			s[k] = n == 1 ? 0 : acc;
+			acc *= n;
+		}
+		return s;
+	}
+
+	/**
+	 * The general numpy broadcast walk of {@code %la-bcast-loop}: the output's flat
+	 * row-major index advances by 1 while each operand's flat index follows its
+	 * stride-0-padded strides through an odometer carry from the innermost axis out.
+	 */
+	private static double @Nullable [] laBcastDD(int op, double[] x, double[] y) {
+		int[] dx = laDims(x);
+		int[] dy = laDims(y);
+		int[] od = laBcastShape(dx, dy);
+		if (od == null) {
+			return null;
+		}
+		int rank = od.length;
+		int[] sx = laBcastStrides(dx, od);
+		int[] sy = laBcastStrides(dy, od);
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		double[] r = new double[1 + rank + total];
+		r[0] = rank;
+		for (int k = 0; k < rank; k++) {
+			r[1 + k] = od[k];
+		}
+		int off = 1 + rank;
+		int x0 = 1 + dx.length;
+		int y0 = 1 + dy.length;
+		int[] idx = new int[rank];
+		int ox = 0;
+		int oy = 0;
+		for (int k = 0; k < total; k++) {
+			r[off + k] = laApply(op, x[x0 + ox], y[y0 + oy]);
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				ox += sx[a];
+				oy += sy[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				ox -= od[a] * sx[a];
+				oy -= od[a] * sy[a];
+			}
+		}
+		return r;
+	}
+
+	private static float @Nullable [] laBcastFF(int op, float[] x, float[] y) {
+		int[] dx = laDims(x);
+		int[] dy = laDims(y);
+		int[] od = laBcastShape(dx, dy);
+		if (od == null) {
+			return null;
+		}
+		int rank = od.length;
+		int[] sx = laBcastStrides(dx, od);
+		int[] sy = laBcastStrides(dy, od);
+		int total = 1;
+		for (int d : od) {
+			total *= d;
+		}
+		float[] r = new float[1 + rank + total];
+		r[0] = rank;
+		for (int k = 0; k < rank; k++) {
+			r[1 + k] = od[k];
+		}
+		int off = 1 + rank;
+		int x0 = 1 + dx.length;
+		int y0 = 1 + dy.length;
+		int[] idx = new int[rank];
+		int ox = 0;
+		int oy = 0;
+		for (int k = 0; k < total; k++) {
+			r[off + k] = (float) laApply(op, x[x0 + ox], y[y0 + oy]);
+			for (int a = rank - 1; a >= 0; a--) {
+				idx[a]++;
+				ox += sx[a];
+				oy += sy[a];
+				if (idx[a] < od[a]) {
+					break;
+				}
+				idx[a] = 0;
+				ox -= od[a] * sx[a];
+				oy -= od[a] * sy[a];
+			}
+		}
+		return r;
+	}
+
+	/**
+	 * The axes form of {@code linalg:transpose} ({@code %la-transpose-axes}): a rank-n
+	 * axis permutation, a pure copy so trivially bit-identical. The axes argument must be
+	 * a proper list of integers forming a permutation of {@code 0..rank-1}; anything else
+	 * -- nil (the defun's plain-transpose branch), a bare integer, a bad permutation (the
+	 * defun's error) -- declines.
+	 */
+	static @Nullable Object laTransposeAxes(@Nullable Object a, @Nullable Object axes) {
+		if (!laPacked(a)) {
+			return null;
+		}
+		int rank = laRank(a);
+		int[] perm = laPermutation(axes, rank);
+		if (perm == null) {
+			return null;
+		}
+		int[] dims = laDims(a);
+		int[] strides = new int[rank];
+		int acc = 1;
+		for (int i = rank - 1; i >= 0; i--) {
+			strides[i] = acc;
+			acc *= dims[i];
+		}
+		int[] od = new int[rank];
+		int[] os = new int[rank];
+		for (int k = 0; k < rank; k++) {
+			od[k] = dims[perm[k]];
+			os[k] = strides[perm[k]];
+		}
+		int off = 1 + rank;
+		int total = laTotal(a);
+		if (a instanceof float[] x) {
+			float[] r = new float[x.length];
+			r[0] = rank;
+			for (int k = 0; k < rank; k++) {
+				r[1 + k] = od[k];
+			}
+			int[] idx = new int[rank];
+			int src = 0;
+			for (int k = 0; k < total; k++) {
+				r[off + k] = x[off + src];
+				for (int i = rank - 1; i >= 0; i--) {
+					idx[i]++;
+					src += os[i];
+					if (idx[i] < od[i]) {
+						break;
+					}
+					idx[i] = 0;
+					src -= od[i] * os[i];
+				}
+			}
+			return r;
+		}
+		double[] x = laDoubles(a);
+		double[] r = new double[x.length];
+		r[0] = rank;
+		for (int k = 0; k < rank; k++) {
+			r[1 + k] = od[k];
+		}
+		int[] idx = new int[rank];
+		int src = 0;
+		for (int k = 0; k < total; k++) {
+			r[off + k] = x[off + src];
+			for (int i = rank - 1; i >= 0; i--) {
+				idx[i]++;
+				src += os[i];
+				if (idx[i] < od[i]) {
+					break;
+				}
+				idx[i] = 0;
+				src -= od[i] * os[i];
+			}
+		}
+		return r;
+	}
+
+	/** A proper cons list of integers forming a permutation of {@code 0..rank-1}. */
+	private static int @Nullable [] laPermutation(@Nullable Object axes, int rank) {
+		int[] out = new int[rank];
+		boolean[] seen = new boolean[rank];
+		int count = 0;
+		Object cursor = axes;
+		while (cursor instanceof Object[] cell && cell.length == 2) {
+			if (count >= rank || !(cell[0] instanceof Long l)) {
+				return null;
+			}
+			long v = l;
+			if (v < 0 || v >= rank || seen[(int) v]) {
+				return null;
+			}
+			seen[(int) v] = true;
+			out[count++] = (int) v;
+			cursor = cell[1];
+		}
+		return cursor == null && count == rank ? out : null;
+	}
+
+	/**
+	 * Normalizes a possibly negative integer axis argument against the rank
+	 * ({@code %la-norm-axis}); a non-integer or out-of-range axis declines.
+	 */
+	private static @Nullable Integer laAxis(@Nullable Object v, int rank) {
+		if (!(v instanceof Long l)) {
+			return null;
+		}
+		long ax = l < 0 ? l + rank : l;
+		return ax >= 0 && ax < rank ? Integer.valueOf((int) ax) : null;
+	}
+
+	/** The dims with the axis dropped -- or kept as extent 1 ({@code %la-axis-shape}). */
+	private static int[] laAxisShape(int[] d, int ax, boolean keep) {
+		int[] od = new int[keep ? d.length : d.length - 1];
+		int k = 0;
+		for (int i = 0; i < d.length; i++) {
+			if (i != ax) {
+				od[k++] = d[i];
+			}
+			else if (keep) {
+				od[k++] = 1;
+			}
+		}
+		return od;
+	}
+
+	static @Nullable Object laSumAxis(@Nullable Object a, @Nullable Object axis, @Nullable Object keepdims) {
+		return laFoldAxis(OP_ADD, a, axis, keepdims);
+	}
+
+	static @Nullable Object laAmaxAxis(@Nullable Object a, @Nullable Object axis, @Nullable Object keepdims) {
+		return laFoldAxis(OP_MAX, a, axis, keepdims);
+	}
+
+	static @Nullable Object laAminAxis(@Nullable Object a, @Nullable Object axis, @Nullable Object keepdims) {
+		return laFoldAxis(OP_MIN, a, axis, keepdims);
+	}
+
+	/**
+	 * The axis form of {@code sum}/{@code amax}/{@code amin} ({@code %la-fold-axis}) over
+	 * the flat index {@code (o * axlen + j) * inner + i}. {@code OP_ADD} folds from the
+	 * defun's {@code 0} seed with {@code j} from 0; {@code OP_MAX} / {@code OP_MIN} seed
+	 * from the first element along the axis and fold the defun's
+	 * {@code (if (> x acc) x acc)} -- the ACCUMULATOR wins ties/NaN, the opposite of the
+	 * element-wise select -- with {@code j} from 1. Always accumulates in {@code double}:
+	 * an axis fold is NOT a lane reduction, so the oracle's boxed double arithmetic is
+	 * mirrored exactly at both widths. An empty axis declines (the defun errors for
+	 * amax/amin and returns an INTEGER 0 for a keepdims-less vector sum); a vector
+	 * without keepdims reduces to the scalar accumulator itself.
+	 */
+	private static @Nullable Object laFoldAxis(int op, @Nullable Object a, @Nullable Object axisv,
+			@Nullable Object keepdims) {
+		if (!laPacked(a)) {
+			return null;
+		}
+		int rank = laRank(a);
+		Integer axi = laAxis(axisv, rank);
+		if (axi == null) {
+			return null;
+		}
+		int ax = axi;
+		int[] d = laDims(a);
+		int axlen = d[ax];
+		if (axlen == 0) {
+			return null;
+		}
+		int outer = 1;
+		int inner = 1;
+		for (int i = 0; i < ax; i++) {
+			outer *= d[i];
+		}
+		for (int i = ax + 1; i < d.length; i++) {
+			inner *= d[i];
+		}
+		int off = 1 + rank;
+		double[] acc = new double[outer * inner];
+		for (int o = 0; o < outer; o++) {
+			for (int i = 0; i < inner; i++) {
+				int base = o * axlen * inner + i;
+				double s;
+				int j0;
+				if (op == OP_ADD) {
+					s = 0.0;
+					j0 = 0;
+				}
+				else {
+					s = laAt(a, off + base);
+					j0 = 1;
+				}
+				for (int j = j0; j < axlen; j++) {
+					double v = laAt(a, off + base + j * inner);
+					if (op == OP_ADD) {
+						s += v;
+					}
+					else if (op == OP_MAX ? v > s : v < s) {
+						s = v;
+					}
+				}
+				acc[o * inner + i] = s;
+			}
+		}
+		boolean keep = keepdims != null;
+		int[] od = laAxisShape(d, ax, keep);
+		if (od.length == 0) {
+			return acc[0];
+		}
+		// The result keeps the input's width (%la-etype): a store into a single-float
+		// out narrows each accumulator once, the defun's own final store.
+		if (a instanceof float[]) {
+			float[] r = new float[1 + od.length + acc.length];
+			r[0] = od.length;
+			for (int k = 0; k < od.length; k++) {
+				r[1 + k] = od[k];
+			}
+			for (int k = 0; k < acc.length; k++) {
+				r[1 + od.length + k] = (float) acc[k];
+			}
+			return r;
+		}
+		double[] r = new double[1 + od.length + acc.length];
+		r[0] = od.length;
+		for (int k = 0; k < od.length; k++) {
+			r[1 + k] = od[k];
+		}
+		System.arraycopy(acc, 0, r, 1 + od.length, acc.length);
+		return r;
+	}
+
+	/** One element of a packed operand's flat store, widened to {@code double}. */
+	private static double laAt(@Nullable Object a, int flat) {
+		return a instanceof float[] f ? f[flat] : ((double[]) java.util.Objects.requireNonNull(a))[flat];
+	}
+
+	static @Nullable Object laArgmaxAxis(@Nullable Object a, @Nullable Object axis) {
+		return laArgFoldAxis(true, a, axis);
+	}
+
+	static @Nullable Object laArgminAxis(@Nullable Object a, @Nullable Object axis) {
+		return laArgFoldAxis(false, a, axis);
+	}
+
+	/**
+	 * The axis form of {@code argmax}/{@code argmin} ({@code %la-argfold-axis}): the
+	 * per-slice index of the first element winning the strict comparison along the axis,
+	 * the axis always dropped. A vector reduces to the integer index itself; a higher
+	 * rank fills a packed DOUBLE array of index values at any input width.
+	 */
+	private static @Nullable Object laArgFoldAxis(boolean max, @Nullable Object a, @Nullable Object axisv) {
+		if (!laPacked(a)) {
+			return null;
+		}
+		int rank = laRank(a);
+		Integer axi = laAxis(axisv, rank);
+		if (axi == null) {
+			return null;
+		}
+		int ax = axi;
+		int[] d = laDims(a);
+		int axlen = d[ax];
+		if (axlen == 0) {
+			return null;
+		}
+		int outer = 1;
+		int inner = 1;
+		for (int i = 0; i < ax; i++) {
+			outer *= d[i];
+		}
+		for (int i = ax + 1; i < d.length; i++) {
+			inner *= d[i];
+		}
+		int off = 1 + rank;
+		double[] idx = new double[outer * inner];
+		for (int o = 0; o < outer; o++) {
+			for (int i = 0; i < inner; i++) {
+				int base = o * axlen * inner + i;
+				double best = laAt(a, off + base);
+				int bi = 0;
+				for (int j = 1; j < axlen; j++) {
+					double v = laAt(a, off + base + j * inner);
+					if (max ? v > best : v < best) {
+						best = v;
+						bi = j;
+					}
+				}
+				idx[o * inner + i] = bi;
+			}
+		}
+		int[] od = laAxisShape(d, ax, false);
+		if (od.length == 0) {
+			return (long) idx[0];
+		}
+		double[] r = new double[1 + od.length + idx.length];
+		r[0] = od.length;
+		for (int k = 0; k < od.length; k++) {
+			r[1 + k] = od[k];
+		}
+		System.arraycopy(idx, 0, r, 1 + od.length, idx.length);
+		return r;
 	}
 
 	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) -------------------

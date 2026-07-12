@@ -85,27 +85,29 @@ public final class LinalgSimd {
 	 * @param evaluator the evaluator used to apply a captured scalar defun on fallback
 	 */
 	public static void install(Environment globalEnv, LispEvaluator evaluator) {
-		Elementwise add = new Elementwise(LinalgSimdKernels::add, LinalgSimdKernels::addF, LinalgSimdKernels::addScalar,
-				LinalgSimdKernels::addScalarF, (s, x) -> LinalgSimdKernels.addScalar(x, s),
-				(s, x) -> LinalgSimdKernels.addScalarF(x, s));
-		Elementwise sub = new Elementwise(LinalgSimdKernels::sub, LinalgSimdKernels::subF, LinalgSimdKernels::subScalar,
-				LinalgSimdKernels::subScalarF, LinalgSimdKernels::subFrom, LinalgSimdKernels::subFromF);
-		Elementwise mul = new Elementwise(LinalgSimdKernels::mul, LinalgSimdKernels::mulF, LinalgSimdKernels::mulScalar,
-				LinalgSimdKernels::mulScalarF, (s, x) -> LinalgSimdKernels.mulScalar(x, s),
-				(s, x) -> LinalgSimdKernels.mulScalarF(x, s));
-		Elementwise div = new Elementwise(LinalgSimdKernels::div, LinalgSimdKernels::divF, LinalgSimdKernels::divScalar,
-				LinalgSimdKernels::divScalarF, LinalgSimdKernels::divFrom, LinalgSimdKernels::divFromF);
+		Elementwise add = new Elementwise(LinalgSimdKernels.BOP_ADD, LinalgSimdKernels::add, LinalgSimdKernels::addF,
+				LinalgSimdKernels::addScalar, LinalgSimdKernels::addScalarF,
+				(s, x) -> LinalgSimdKernels.addScalar(x, s), (s, x) -> LinalgSimdKernels.addScalarF(x, s));
+		Elementwise sub = new Elementwise(LinalgSimdKernels.BOP_SUB, LinalgSimdKernels::sub, LinalgSimdKernels::subF,
+				LinalgSimdKernels::subScalar, LinalgSimdKernels::subScalarF, LinalgSimdKernels::subFrom,
+				LinalgSimdKernels::subFromF);
+		Elementwise mul = new Elementwise(LinalgSimdKernels.BOP_MUL, LinalgSimdKernels::mul, LinalgSimdKernels::mulF,
+				LinalgSimdKernels::mulScalar, LinalgSimdKernels::mulScalarF,
+				(s, x) -> LinalgSimdKernels.mulScalar(x, s), (s, x) -> LinalgSimdKernels.mulScalarF(x, s));
+		Elementwise div = new Elementwise(LinalgSimdKernels.BOP_DIV, LinalgSimdKernels::div, LinalgSimdKernels::divF,
+				LinalgSimdKernels::divScalar, LinalgSimdKernels::divScalarF, LinalgSimdKernels::divFrom,
+				LinalgSimdKernels::divFromF);
 
 		// The comparison-select ufuncs (todo 109 Phase 3) share the elementwise
 		// dispatch: same three %la-bcast shapes, same decline protocol. linalg:clip
 		// and linalg:relu are accelerated transitively -- their defuns compose
 		// linalg:maximum / linalg:minimum (the square / reciprocal pattern).
-		Elementwise maximum = new Elementwise(LinalgSimdKernels::maximum, LinalgSimdKernels::maximumF,
-				LinalgSimdKernels::maxScalar, LinalgSimdKernels::maxScalarF, LinalgSimdKernels::maxFrom,
-				LinalgSimdKernels::maxFromF);
-		Elementwise minimum = new Elementwise(LinalgSimdKernels::minimum, LinalgSimdKernels::minimumF,
-				LinalgSimdKernels::minScalar, LinalgSimdKernels::minScalarF, LinalgSimdKernels::minFrom,
-				LinalgSimdKernels::minFromF);
+		Elementwise maximum = new Elementwise(LinalgSimdKernels.BOP_MAX, LinalgSimdKernels::maximum,
+				LinalgSimdKernels::maximumF, LinalgSimdKernels::maxScalar, LinalgSimdKernels::maxScalarF,
+				LinalgSimdKernels::maxFrom, LinalgSimdKernels::maxFromF);
+		Elementwise minimum = new Elementwise(LinalgSimdKernels.BOP_MIN, LinalgSimdKernels::minimum,
+				LinalgSimdKernels::minimumF, LinalgSimdKernels::minScalar, LinalgSimdKernels::minScalarF,
+				LinalgSimdKernels::minFrom, LinalgSimdKernels::minFromF);
 
 		define(globalEnv, evaluator, LispNames.LINALG_ADD, 2, args -> elementwise(add, args));
 		define(globalEnv, evaluator, LispNames.LINALG_SUB, 2, args -> elementwise(sub, args));
@@ -113,14 +115,18 @@ public final class LinalgSimd {
 		define(globalEnv, evaluator, LispNames.LINALG_DIV, 2, args -> elementwise(div, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MAXIMUM, 2, args -> elementwise(maximum, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MINIMUM, 2, args -> elementwise(minimum, args));
-		define(globalEnv, evaluator, LispNames.LINALG_SUM, 1, LinalgSimd::sum);
+		// The axis forms (todo 117 follow-up): sum/amax/amin also take (a axis
+		// keepdims), argmax/argmin (v axis), transpose (a axes) -- each handled by a
+		// scalar fold/permutation kernel when the axis argument is an exact integer
+		// (a permutation list for transpose), declined to the defun otherwise.
+		define(globalEnv, evaluator, LispNames.LINALG_SUM, 1, 3, LinalgSimd::sum);
 		define(globalEnv, evaluator, LispNames.LINALG_NORM, 1, LinalgSimd::norm);
-		define(globalEnv, evaluator, LispNames.LINALG_AMAX, 1, args -> extremum(args, true));
-		define(globalEnv, evaluator, LispNames.LINALG_AMIN, 1, args -> extremum(args, false));
-		define(globalEnv, evaluator, LispNames.LINALG_ARGMAX, 1, args -> argExtremum(args, true));
-		define(globalEnv, evaluator, LispNames.LINALG_ARGMIN, 1, args -> argExtremum(args, false));
+		define(globalEnv, evaluator, LispNames.LINALG_AMAX, 1, 3, args -> extremum(args, true));
+		define(globalEnv, evaluator, LispNames.LINALG_AMIN, 1, 3, args -> extremum(args, false));
+		define(globalEnv, evaluator, LispNames.LINALG_ARGMAX, 1, 2, args -> argExtremum(args, true));
+		define(globalEnv, evaluator, LispNames.LINALG_ARGMIN, 1, 2, args -> argExtremum(args, false));
 		define(globalEnv, evaluator, LispNames.LINALG_TRACE, 1, LinalgSimd::trace);
-		define(globalEnv, evaluator, LispNames.LINALG_TRANSPOSE, 1, LinalgSimd::transpose);
+		define(globalEnv, evaluator, LispNames.LINALG_TRANSPOSE, 1, 2, LinalgSimd::transpose);
 		define(globalEnv, evaluator, LispNames.LINALG_RESHAPE, 2, LinalgSimd::reshape);
 		define(globalEnv, evaluator, LispNames.LINALG_DOT, 2, LinalgSimd::dot);
 		define(globalEnv, evaluator, LispNames.LINALG_OUTER, 2, LinalgSimd::outer);
@@ -171,6 +177,11 @@ public final class LinalgSimd {
 	 */
 	private static void define(Environment globalEnv, LispEvaluator evaluator, String member, int arity,
 			Kernel kernel) {
+		define(globalEnv, evaluator, member, arity, arity, kernel);
+	}
+
+	private static void define(Environment globalEnv, LispEvaluator evaluator, String member, int minArity,
+			int maxArity, Kernel kernel) {
 		// A %-prefixed member is an internal symbol, whose canonical qualified spelling
 		// carries the double colon (linalg::%la-im2col).
 		String qualified = member.startsWith("%") ? LispNames.LINALG_PKG + "::" + member
@@ -180,7 +191,7 @@ public final class LinalgSimd {
 			throw new IllegalStateException("linalg.lisp must be loaded before " + qualified + " can be accelerated");
 		}
 		globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
-			if (args.size() == arity) {
+			if (args.size() >= minArity && args.size() <= maxArity) {
 				LispVal fast = kernel.apply(args);
 				if (fast != null) {
 					return fast;
@@ -205,7 +216,10 @@ public final class LinalgSimd {
 		LispFloatArray b = packed(bv);
 		if (a != null && b != null) {
 			if (!Arrays.equals(a.dims(), b.dims())) {
-				return null;
+				// Two same-width arrays of different shapes broadcast by the numpy
+				// rules (todo 117 follow-up); an incompatible pair declines so the
+				// defun signals its own shape-mismatch error.
+				return bcast(op.bop(), a, b);
 			}
 			if (a instanceof LispDoubleFloatArray x && b instanceof LispDoubleFloatArray y) {
 				return like(a, op.dd().apply(x.data(), y.data()));
@@ -246,9 +260,61 @@ public final class LinalgSimd {
 		};
 	}
 
+	/**
+	 * The general numpy broadcast of two same-width packed arrays of different shapes,
+	 * mirroring {@code %la-bcast-loop} (every element computed in double, narrowed only
+	 * by a store into a single-float result -- bit-identical at both widths). Mixed
+	 * widths and incompatible shapes decline.
+	 */
+	private static @Nullable LispVal bcast(int bop, LispFloatArray a, LispFloatArray b) {
+		int[] od = bcastShape(a.dims(), b.dims());
+		if (od == null) {
+			return null;
+		}
+		if (a instanceof LispDoubleFloatArray x && b instanceof LispDoubleFloatArray y) {
+			return new LispDoubleFloatArray(LinalgSimdKernels.bcast(bop, x.data(), a.dims(), y.data(), b.dims(), od),
+					od);
+		}
+		if (a instanceof LispSingleFloatArray x && b instanceof LispSingleFloatArray y) {
+			return new LispSingleFloatArray(LinalgSimdKernels.bcastF(bop, x.data(), a.dims(), y.data(), b.dims(), od),
+					od);
+		}
+		return null;
+	}
+
+	/**
+	 * The numpy broadcast shape of two dims arrays ({@code %la-bcast-shape}): trailing
+	 * axes align, a pair agrees when equal or either is 1, the output extent is the
+	 * larger. Returns {@code null} (decline) on any other disagreement or an output too
+	 * large for one Java array.
+	 */
+	private static int @Nullable [] bcastShape(int[] dx, int[] dy) {
+		int rank = Math.max(dx.length, dy.length);
+		int[] od = new int[rank];
+		long total = 1;
+		for (int k = 0; k < rank; k++) {
+			int i = dx.length - rank + k;
+			int j = dy.length - rank + k;
+			int a = i >= 0 ? dx[i] : 1;
+			int b = j >= 0 ? dy[j] : 1;
+			if (a != b && a != 1 && b != 1) {
+				return null;
+			}
+			od[k] = Math.max(a, b);
+			total *= od[k];
+			if (!sizeFits(total)) {
+				return null;
+			}
+		}
+		return od;
+	}
+
 	// --- reductions -------------------------------------------------------------------
 
 	private static @Nullable LispVal sum(List<LispVal> args) {
+		if (args.size() > 1) {
+			return foldAxis(LinalgSimdKernels.BOP_ADD, args);
+		}
 		LispFloatArray a = nonEmpty(args.get(0));
 		return a == null ? null : new LispDouble(switch (a) {
 			case LispDoubleFloatArray x -> LinalgSimdKernels.sum(x.data());
@@ -265,6 +331,9 @@ public final class LinalgSimd {
 	}
 
 	private static @Nullable LispVal extremum(List<LispVal> args, boolean max) {
+		if (args.size() > 1) {
+			return foldAxis(max ? LinalgSimdKernels.BOP_MAX : LinalgSimdKernels.BOP_MIN, args);
+		}
 		LispFloatArray a = nonEmpty(args.get(0));
 		return a == null ? null : new LispDouble(switch (a) {
 			case LispDoubleFloatArray x -> max ? LinalgSimdKernels.amax(x.data()) : LinalgSimdKernels.amin(x.data());
@@ -272,8 +341,62 @@ public final class LinalgSimd {
 		});
 	}
 
+	/**
+	 * The axis form of {@code sum}/{@code amax}/{@code amin} ({@code %la-fold-axis}): the
+	 * axis argument must be an exact in-range integer (a nil axis, a non-integer, out of
+	 * range -- all decline), the axis is dropped from the result or kept as extent 1
+	 * under a non-nil keepdims, and a vector without keepdims reduces to the scalar
+	 * accumulator itself. An empty axis declines (the defun errors for amax/amin and
+	 * returns an INTEGER 0 for a keepdims-less vector sum).
+	 */
+	private static @Nullable LispVal foldAxis(int op, List<LispVal> args) {
+		LispFloatArray a = packed(args.get(0));
+		if (a == null) {
+			return null;
+		}
+		Integer axis = normAxis(args.get(1), a.rank());
+		if (axis == null) {
+			return null;
+		}
+		boolean keep = args.size() == 3 && !(args.get(2) instanceof LispNil);
+		int[] d = a.dims();
+		int axlen = d[axis];
+		if (axlen == 0) {
+			return null;
+		}
+		int outer = 1;
+		int inner = 1;
+		for (int i = 0; i < axis; i++) {
+			outer *= d[i];
+		}
+		for (int i = axis + 1; i < d.length; i++) {
+			inner *= d[i];
+		}
+		double[] acc = switch (a) {
+			case LispDoubleFloatArray x -> LinalgSimdKernels.foldAxis(op, x.data(), axlen, outer, inner);
+			case LispSingleFloatArray x -> LinalgSimdKernels.foldAxisF(op, x.data(), axlen, outer, inner);
+		};
+		int[] od = axisShape(d, axis, keep);
+		if (od.length == 0) {
+			return new LispDouble(acc[0]);
+		}
+		if (a instanceof LispSingleFloatArray) {
+			// The result keeps the input's width (%la-etype): narrow each accumulator
+			// once, the defun's own store into a single-float out.
+			float[] out = new float[acc.length];
+			for (int i = 0; i < out.length; i++) {
+				out[i] = (float) acc[i];
+			}
+			return new LispSingleFloatArray(out, od);
+		}
+		return new LispDoubleFloatArray(acc, od);
+	}
+
 	/** {@code argmax}/{@code argmin} are vector-only in linalg.lisp (they use length). */
 	private static @Nullable LispVal argExtremum(List<LispVal> args, boolean max) {
+		if (args.size() == 2) {
+			return argFoldAxis(args, max);
+		}
 		LispFloatArray a = nonEmpty(args.get(0));
 		if (a == null || a.rank() != 1) {
 			return null;
@@ -284,6 +407,72 @@ public final class LinalgSimd {
 			case LispSingleFloatArray x ->
 				max ? LinalgSimdKernels.argmaxF(x.data()) : LinalgSimdKernels.argminF(x.data());
 		});
+	}
+
+	/**
+	 * The axis form of {@code argmax}/{@code argmin} ({@code %la-argfold-axis}): the axis
+	 * is always dropped, a vector reduces to the integer index itself and a higher rank
+	 * fills a packed DOUBLE array of index values at any input width.
+	 */
+	private static @Nullable LispVal argFoldAxis(List<LispVal> args, boolean max) {
+		LispFloatArray a = packed(args.get(0));
+		if (a == null) {
+			return null;
+		}
+		Integer axis = normAxis(args.get(1), a.rank());
+		if (axis == null) {
+			return null;
+		}
+		int[] d = a.dims();
+		int axlen = d[axis];
+		if (axlen == 0) {
+			return null;
+		}
+		int outer = 1;
+		int inner = 1;
+		for (int i = 0; i < axis; i++) {
+			outer *= d[i];
+		}
+		for (int i = axis + 1; i < d.length; i++) {
+			inner *= d[i];
+		}
+		double[] idx = switch (a) {
+			case LispDoubleFloatArray x -> LinalgSimdKernels.argFoldAxis(max, x.data(), axlen, outer, inner);
+			case LispSingleFloatArray x -> LinalgSimdKernels.argFoldAxisF(max, x.data(), axlen, outer, inner);
+		};
+		int[] od = axisShape(d, axis, false);
+		if (od.length == 0) {
+			return new LispInteger((long) idx[0]);
+		}
+		return new LispDoubleFloatArray(idx, od);
+	}
+
+	/**
+	 * Normalizes a possibly negative integer axis against the rank
+	 * ({@code %la-norm-axis}); a non-integer or out-of-range axis declines.
+	 */
+	private static @Nullable Integer normAxis(LispVal v, int rank) {
+		Integer i = smallInt(v);
+		if (i == null) {
+			return null;
+		}
+		int ax = i < 0 ? i + rank : i;
+		return ax >= 0 && ax < rank ? Integer.valueOf(ax) : null;
+	}
+
+	/** The dims with the axis dropped -- or kept as extent 1 ({@code %la-axis-shape}). */
+	private static int[] axisShape(int[] d, int ax, boolean keep) {
+		int[] od = new int[keep ? d.length : d.length - 1];
+		int k = 0;
+		for (int i = 0; i < d.length; i++) {
+			if (i != ax) {
+				od[k++] = d[i];
+			}
+			else if (keep) {
+				od[k++] = 1;
+			}
+		}
+		return od;
 	}
 
 	private static @Nullable LispVal trace(List<LispVal> args) {
@@ -301,6 +490,9 @@ public final class LinalgSimd {
 	// --- shape ------------------------------------------------------------------------
 
 	private static @Nullable LispVal transpose(List<LispVal> args) {
+		if (args.size() == 2) {
+			return transposeAxes(args);
+		}
 		LispFloatArray a = packed(args.get(0));
 		if (a == null || a.rank() > 2) {
 			return null;
@@ -316,6 +508,53 @@ public final class LinalgSimd {
 			case LispDoubleFloatArray x -> new LispDoubleFloatArray(LinalgSimdKernels.transpose(x.data(), r, c), dims);
 			case LispSingleFloatArray x -> new LispSingleFloatArray(LinalgSimdKernels.transposeF(x.data(), r, c), dims);
 		};
+	}
+
+	/**
+	 * The axes form of {@code linalg:transpose} ({@code %la-transpose-axes}): a rank-n
+	 * axis permutation, a pure copy. The axes argument must be a proper list of exact
+	 * integers forming a permutation of {@code 0..rank-1}; anything else -- nil (the
+	 * defun's plain-transpose branch), a bare integer, a bad permutation (the defun's
+	 * error) -- declines.
+	 */
+	private static @Nullable LispVal transposeAxes(List<LispVal> args) {
+		LispFloatArray a = packed(args.get(0));
+		if (a == null) {
+			return null;
+		}
+		int rank = a.rank();
+		int[] axes = permutation(args.get(1), rank);
+		if (axes == null) {
+			return null;
+		}
+		int[] od = new int[rank];
+		for (int k = 0; k < rank; k++) {
+			od[k] = a.dims()[axes[k]];
+		}
+		return switch (a) {
+			case LispDoubleFloatArray x ->
+				new LispDoubleFloatArray(LinalgSimdKernels.transposeAxes(x.data(), a.dims(), axes), od);
+			case LispSingleFloatArray x ->
+				new LispSingleFloatArray(LinalgSimdKernels.transposeAxesF(x.data(), a.dims(), axes), od);
+		};
+	}
+
+	/** A proper list of exact integers forming a permutation of {@code 0..rank-1}. */
+	private static int @Nullable [] permutation(LispVal value, int rank) {
+		int[] axes = new int[rank];
+		boolean[] seen = new boolean[rank];
+		int count = 0;
+		LispVal cursor = value;
+		while (cursor instanceof LispCons cons) {
+			Integer ax = smallInt(cons.car());
+			if (count >= rank || ax == null || ax < 0 || ax >= rank || seen[ax]) {
+				return null;
+			}
+			seen[ax] = true;
+			axes[count++] = ax;
+			cursor = cons.cdr();
+		}
+		return cursor instanceof LispNil && count == rank ? axes : null;
 	}
 
 	private static @Nullable LispVal reshape(List<LispVal> args) {
@@ -605,9 +844,12 @@ public final class LinalgSimd {
 
 	}
 
-	/** The six lane loops of one element-wise operator (two widths x three shapes). */
-	private record Elementwise(ArrayArrayD dd, ArrayArrayF ff, ArrayScalarD ds, ArrayScalarF fs, ScalarArrayD sd,
-			ScalarArrayF sf) {
+	/**
+	 * The six lane loops of one element-wise operator (two widths x three shapes), plus
+	 * its {@code LinalgSimdKernels.BOP_*} code for the general broadcast walk.
+	 */
+	private record Elementwise(int bop, ArrayArrayD dd, ArrayArrayF ff, ArrayScalarD ds, ArrayScalarF fs,
+			ScalarArrayD sd, ScalarArrayF sf) {
 	}
 
 	@FunctionalInterface

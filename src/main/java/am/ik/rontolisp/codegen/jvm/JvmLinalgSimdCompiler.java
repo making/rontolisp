@@ -124,6 +124,33 @@ final class JvmLinalgSimdCompiler {
 	}
 
 	/**
+	 * The members whose &optional axis forms have their own bridge kernel (todo 117
+	 * follow-up): transpose takes an axes permutation, sum/amax/amin an axis plus
+	 * keepdims, argmax/argmin an axis. A call supplying MORE arguments than
+	 * {@link #arity} but at most {@code params} routes to this bridge method (missing
+	 * trailing optionals padded with null = nil); on decline the surplus temps are
+	 * packaged into the variadic defun's rest list.
+	 */
+	record Extended(String bridgeMethod, int params) {
+	}
+
+	private static final Map<String, Extended> EXTENDED = Map.of(LispNames.LINALG_TRANSPOSE,
+			new Extended("laTransposeAxes", 2), LispNames.LINALG_SUM, new Extended("laSumAxis", 3),
+			LispNames.LINALG_AMAX, new Extended("laAmaxAxis", 3), LispNames.LINALG_AMIN, new Extended("laAminAxis", 3),
+			LispNames.LINALG_ARGMAX, new Extended("laArgmaxAxis", 2), LispNames.LINALG_ARGMIN,
+			new Extended("laArgminAxis", 2));
+
+	/** The extended (axis-form) kernel of the given member, or {@code null}. */
+	static @org.jspecify.annotations.Nullable Extended extended(String member) {
+		return EXTENDED.get(member);
+	}
+
+	/** The ops-map key of a member's extended bridge registration. */
+	static String extendedKey(String member) {
+		return qualifiedName(member) + "#ext";
+	}
+
+	/**
 	 * The member's canonical qualified spelling: a {@code %}-prefixed member is an
 	 * internal symbol and carries the double colon ({@code linalg::%la-im2col}), which is
 	 * how the spliced defun is keyed in {@code ctx.functions} and how the program
@@ -143,11 +170,15 @@ final class JvmLinalgSimdCompiler {
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
 		List<LispVal> args = cons.toList();
 		int arity = arity(member);
-		if (defun == null || args.size() != arity + 1
-				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity) {
+		int supplied = args.size() - 1;
+		Extended ext = supplied > arity ? EXTENDED.get(member) : null;
+		boolean extendedCall = ext != null && supplied <= ext.params();
+		if (defun == null || (supplied != arity && !extendedCall)
+				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
+				|| (extendedCall && !defun.variadic())) {
 			// No spliced linalg.lisp to fall back to, a call with more arguments than
-			// the kernel handles (e.g. an axis argument), or a defun whose required
-			// count no longer matches: the ordinary direct-call path handles all three.
+			// any kernel handles, or a defun whose required count no longer matches:
+			// the ordinary direct-call path handles all three.
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
@@ -155,27 +186,59 @@ final class JvmLinalgSimdCompiler {
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
 		// Evaluate each argument exactly once, into a temp both branches read.
-		int[] slots = new int[arity];
-		for (int i = 0; i < arity; i++) {
+		int[] slots = new int[supplied];
+		for (int i = 0; i < supplied; i++) {
 			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
 			slots[i] = ctx.allocTemp();
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i]);
 		}
 		loadAll(ctx, slots);
+		if (extendedCall && ext != null) {
+			// A missing trailing &optional (e.g. keepdims) is padded with null = nil.
+			for (int i = supplied; i < ext.params(); i++) {
+				ctx.emit(Opcode.ACONST_NULL);
+			}
+		}
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(qualified)).index());
+		ctx.emitU2(Objects.requireNonNull(ops.get(extendedCall ? extendedKey(member) : qualified)).index());
 		// if (result != null) goto end; else run the scalar defun over the same temps.
 		ctx.emit(Opcode.DUP);
 		int branchPos = ctx.code.size();
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
 		ctx.emit(Opcode.POP);
-		loadAll(ctx, slots);
+		for (int i = 0; i < arity; i++) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(slots[i]);
+		}
 		if (defun.variadic()) {
 			// A defun with an &optional/&rest lambda list takes a trailing rest
-			// parameter; an empty rest list is compiled nil (null).
+			// parameter: the surplus temps are linked into a cons list (an empty rest
+			// list is compiled nil, null), newest link first.
+			int restSlot = ctx.allocTemp();
 			ctx.emit(Opcode.ACONST_NULL);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(restSlot);
+			for (int k = supplied - 1; k >= arity; k--) {
+				ctx.emit(Opcode.ICONST_2);
+				ctx.emit(Opcode.ANEWARRAY);
+				ctx.emitU2(ctx.objectClass.index());
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.ICONST_0);
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[k]);
+				ctx.emit(Opcode.AASTORE);
+				ctx.emit(Opcode.DUP);
+				ctx.emit(Opcode.ICONST_1);
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(restSlot);
+				ctx.emit(Opcode.AASTORE);
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(restSlot);
+			}
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(restSlot);
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(defun.methodref().index());
