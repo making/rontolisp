@@ -317,6 +317,7 @@ categories:
       - { slug: linalg-zeros, name: "linalg:zeros" }
       - { slug: linalg-ones, name: "linalg:ones" }
       - { slug: linalg-full, name: "linalg:full" }
+      - { slug: linalg-zeros-like, name: "linalg:zeros-like" }
       - { slug: linalg-eye, name: "linalg:eye" }
       - { slug: linalg-arange, name: "linalg:arange" }
       - { slug: linalg-linspace, name: "linalg:linspace" }
@@ -371,6 +372,20 @@ categories:
       - { slug: linalg-inv, name: "linalg:inv" }
       - { slug: linalg-solve, name: "linalg:solve" }
       - { slug: linalg-array-equal, name: "linalg:array-equal" }
+      - { slug: linalg-equal, name: "linalg:equal" }
+      - { slug: linalg-greater, name: "linalg:greater" }
+      - { slug: linalg-greater-equal, name: "linalg:greater-equal" }
+      - { slug: linalg-less, name: "linalg:less" }
+      - { slug: linalg-less-equal, name: "linalg:less-equal" }
+      - { slug: linalg-take-rows, name: "linalg:take-rows" }
+      - { slug: linalg-gather, name: "linalg:gather" }
+      - { slug: linalg-one-hot, name: "linalg:one-hot" }
+      - { slug: linalg-seed, name: "linalg:seed" }
+      - { slug: linalg-rand, name: "linalg:rand" }
+      - { slug: linalg-randn, name: "linalg:randn" }
+      - { slug: linalg-uniform, name: "linalg:uniform" }
+      - { slug: linalg-choice, name: "linalg:choice" }
+      - { slug: linalg-permutation, name: "linalg:permutation" }
   - title: "java Package (JVM only)"
     functions:
       - { slug: java-new, name: "java:new" }

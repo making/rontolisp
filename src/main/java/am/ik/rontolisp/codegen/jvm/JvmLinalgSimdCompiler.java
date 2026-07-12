@@ -123,9 +123,11 @@ final class JvmLinalgSimdCompiler {
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
 		List<LispVal> args = cons.toList();
 		int arity = arity(member);
-		if (defun == null || args.size() != arity + 1) {
-			// No spliced linalg.lisp to fall back to (or a bad arity): let the ordinary
-			// direct-call path raise the usual compile error.
+		if (defun == null || args.size() != arity + 1
+				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity) {
+			// No spliced linalg.lisp to fall back to, a call with more arguments than
+			// the kernel handles (e.g. an axis argument), or a defun whose required
+			// count no longer matches: the ordinary direct-call path handles all three.
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
@@ -150,6 +152,11 @@ final class JvmLinalgSimdCompiler {
 		ctx.emitU2(0);
 		ctx.emit(Opcode.POP);
 		loadAll(ctx, slots);
+		if (defun.variadic()) {
+			// A defun with an &optional/&rest lambda list takes a trailing rest
+			// parameter; an empty rest list is compiled nil (null).
+			ctx.emit(Opcode.ACONST_NULL);
+		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(defun.methodref().index());
 		JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());

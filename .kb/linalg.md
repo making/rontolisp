@@ -41,7 +41,8 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:from-list lst)` | flat list -> vector; list of equal-length rows -> matrix |
 | `(linalg:to-list a)` | inverse of from-list |
 | `(linalg:shape a)` / `(linalg:ndim a)` / `(linalg:size a)` | dims list `(n)` or `(rows cols)` / number of dimensions (0 for a plain number, numpy np.ndim) / total element count |
-| `(linalg:reshape a shape)` | row-major copy; error if sizes differ |
+| `(linalg:reshape a shape)` | row-major copy; error if sizes differ; ONE extent may be `-1` and is inferred from the element count (numpy), a bare `-1` flattens |
+| `(linalg:zeros-like a)` | fresh zero array with a's shape AND width |
 | `(linalg:flatten a)` | rank-1 row-major copy |
 | `(linalg:transpose a)` | matrix transpose; a vector is returned unchanged |
 | `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise with numpy broadcasting: a scalar operand on either side, and two arrays of different shapes along their trailing axes (extents equal or 1, missing leading axis = 1; anything else = the shape-mismatch error); result keeps the first array operand's width; `mul` is Hadamard (NOT matrix product) |
@@ -50,15 +51,38 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:dot a b)` | numpy dispatch: vec.vec -> scalar, mat.vec / vec.mat -> vector, mat.mat -> matrix product; scalar operand multiplies elementwise |
 | `(linalg:matmul a b)` | matrix product (also mat.vec); rejects scalar operands |
 | `(linalg:outer u v)` | outer product (inputs flattened first) |
-| `(linalg:sum a)` / `(linalg:mean a)` | sum / mean over all elements (a reduction follows the element type: a packed/float array reduces to a double, a plain integer array to an integer/ratio) |
-| `(linalg:amax a)` / `(linalg:amin a)` | largest / smallest element; error on empty |
-| `(linalg:argmax v)` / `(linalg:argmin v)` | index in a VECTOR (first on ties) |
+| `(linalg:sum a &optional axis keepdims)` / `(linalg:mean ...)` | no axis: over all elements (a reduction follows the element type: a packed/float array reduces to a double, a plain integer array to an integer/ratio; non-nil keepdims wraps the scalar in an all-ones-shape array). Integer axis (negative counts from the end): reduce along that axis, axis dropped -- kept as extent 1 under keepdims; a vector without keepdims reduces to the scalar itself. Any rank (row-major outer x axis x inner fold) |
+| `(linalg:amax a &optional axis keepdims)` / `(linalg:amin ...)` | largest / smallest element, whole-array or along an axis (same rules as sum); strict-comparison fold (first wins ties, NaN never replaces the seed); error on an empty array or axis |
+| `(linalg:argmax v &optional axis)` / `(linalg:argmin ...)` | no axis: index in a VECTOR (first on ties). With an axis: per-slice indices, axis dropped; rank >= 2 results are a packed DOUBLE array of index values (no integer arrays in linalg; `(= 3.0 3)` holds), a vector reduces to the integer index |
 | `(linalg:norm a)` | Euclidean / Frobenius norm (a float, via sqrt) |
 | `(linalg:trace a)` | main-diagonal sum; square matrices only |
 | `(linalg:diff a)` / `(diff a n)` | n-th discrete difference along the last axis (numpy np.diff; default n = 1, each step shortens the last axis by one, clamped at 0); any rank; n = 0 returns a packed copy |
 | `(linalg:gradient f)` / `(gradient f spacing)` | numerical derivative of a VECTOR of samples (numpy np.gradient): second-order central differences inside, first-order one-sided at the ends, same length as f; spacing = a uniform scalar (default 1) or a same-length coordinate vector (non-uniform, numpy's exact interior formula); needs >= 2 samples |
 | `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
+| `(linalg:equal a b)` / `greater` / `greater-equal` / `less` / `less-equal` | elementwise comparison as a 0.0/1.0 MASK of the first array operand's width (numpy `==`/`>`/`>=`/`<`/`<=`); scalars and broadcasting via `%la-bcast`; multiply by the mask where numpy would boolean-index (relu grad, dropout) |
+| `(linalg:take-rows a idx)` | axis-0 slices selected by an index vector (numpy `x[mask]` / `np.take(a, idx, axis=0)`); ANY rank >= 1 (whole-slab copies, so rank-4 batches work); indices truncate, may repeat |
+| `(linalg:gather a idx)` | per-row elements `a[i, idx[i]]` of a matrix (numpy `y[np.arange(n), t]`) as a vector |
+| `(linalg:one-hot idx n &optional element-type)` | `(length idx) x n` matrix, row i = 1.0 at column `idx[i]` |
+| `(linalg:seed n)` | reset the shared RNG deterministically; returns n |
+| `(linalg:rand shape &optional element-type)` / `(linalg:randn ...)` / `(linalg:uniform lo hi shape ...)` | uniform [0,1) / standard normal / uniform [lo,hi) arrays from the seeded generator |
+| `(linalg:choice n size)` / `(linalg:permutation n)` | size indices in [0,n) with replacement (np.random.choice default) / Fisher-Yates shuffle of 0..n-1; both packed double vectors of integer values |
+
+## Seeded RNG (the np.random analog; deep-learning-from-scratch port)
+
+The generator is **Wichmann-Hill**: three small multiplicative congruential
+generators (`defparameter linalg::%la-rng-s1/-s2/-s3`, moduli 30269/30307/30323)
+combined into one uniform double, period ~6.95e12. Every intermediate stays
+below 2^23 (inside the WASM i31 range) and each draw is exact integer
+arithmetic plus IEEE `+ - * /` on exact operands, so **a seeded sequence is
+bit-identical on all four backends** -- weight init and mini-batch sampling in
+the examples reproduce exactly everywhere. `randn` is **Irwin-Hall** (sum of 12
+uniforms minus 6), NOT Box-Muller: WASM's `log`/`cos` are polynomial
+approximations that would break the cross-backend identity, while `+`/`-`
+cannot; the tails clip at +/- 6 sigma (fine for weight init, not a
+distribution-exact `np.random.randn`). `linalg:seed` discards ~10 draws after
+setting the state so nearby seeds decorrelate. There is deliberately no
+dependence on the builtin `(random n)` (unseedable, backend-dependent).
 
 Gotchas when writing programs:
 `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` are

@@ -1746,11 +1746,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	/** The forms whose value is an integer whatever their argument types. */
+	private static final java.util.Set<String> INTEGER_VALUED_FORMS = java.util.Set.of(LispNames.ROUND,
+			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING);
+
 	static boolean containsDouble(LispVal val) {
 		if (val instanceof LispDouble) {
 			return true;
 		}
 		if (val instanceof LispCons cons) {
+			// A rounding form yields an integer whatever its argument types, so a
+			// double literal inside it must not drag the ENCLOSING arithmetic onto
+			// the double path: (- 0 (round (* v 100.0))) is integer work.
+			if (cons.car() instanceof LispSymbol head && INTEGER_VALUED_FORMS.contains(head.name())) {
+				return false;
+			}
 			for (LispVal element : cons.toList()) {
 				if (containsDouble(element)) {
 					return true;

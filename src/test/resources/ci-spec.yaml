@@ -2338,6 +2338,67 @@ cases:
       #d(1.0 2.0 4.0)
       single-float
 
+  # The deep-learning-from-scratch additions: numpy axis/keepdims reductions,
+  # reshape -1 inference, the seeded Wichmann-Hill RNG (exact integer + IEEE
+  # double arithmetic, so a seeded sequence is bit-identical on every backend;
+  # the gaussian draws are pinned through truncate), and the
+  # indexing/selection/comparison helpers. All values are exact doubles. Kept
+  # lean on purpose: the whole ci-spec corpus compiles into ONE class
+  # (JvmClassShakerCorpusTest) whose constant pool is near the 65535
+  # class-format ceiling -- see .todo/118. The wider per-function coverage
+  # lives in the LispEvaluatorTest / compiler / SIMD unit tests.
+  - name: linalg-axis-rng-indexing-cross-backend
+    source: |
+      (defun ci-linalg-axis ()
+        (let ((m (linalg:from-list '((1 2 3) (4 5 6)))))
+          (print (linalg:sum m 0))
+          (print (linalg:amax m -1 t))
+          (print (linalg:argmax m 1))
+          (print (linalg:sum (linalg:reshape (linalg:arange 12) '(3 -1)) 1))
+          (print (linalg:take-rows m #(1 0)))
+          (print (linalg:gather m #(2 0)))
+          (print (linalg:one-hot #(1 0) 3))
+          (print (linalg:greater m 3))
+          (print (linalg:zeros-like (linalg:ones 2 'single-float)))
+          (linalg:seed 42)
+          (print (linalg:choice 60000 4))
+          (linalg:seed 9)
+          (print (linalg:permutation 10))
+          (linalg:seed 7)
+          (print (linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:randn 4)))))
+      (ci-linalg-axis)
+    expected: |
+      #d(5.0 7.0 9.0)
+      #d((3.0) (6.0))
+      #d(2.0 2.0)
+      #d(6.0 22.0 38.0)
+      #d((4.0 5.0 6.0) (1.0 2.0 3.0))
+      #d(3.0 4.0)
+      #d((0.0 1.0 0.0) (1.0 0.0 0.0))
+      #d((0.0 0.0 0.0) (1.0 1.0 1.0))
+      #f(0.0 0.0)
+      #d(26833.0 11120.0 29256.0 22347.0)
+      #d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)
+      #d(284.0 -21.0 221.0 -1653.0)
+
+  # A fixed-decimal ~f of a NEGATIVE value: the format expansion computes the
+  # magnitude as (- 0 (round (* v 10^places))), and the compile-time double-path
+  # classifier (containsDouble) must NOT descend into the rounding form -- a
+  # round/truncate/floor/ceiling result is an integer whatever its argument
+  # types, and dragging the enclosing subtraction onto the double path rendered
+  # "-500.00.0" for -5.0 on the compiled backends.
+  - name: format-fixed-decimal-negative-cross-backend
+    source: |
+      (defun ci-format-neg ()
+        (format t "~,4f ~6,1f ~,2f~%" -1.25 -5.0 3.75)
+        (print (- 0 (round (* -5.0 100.0))))
+        (print (+ 1 (floor 2.5))))
+      (ci-format-neg)
+    expected: |
+      -1.2500   -5.0 3.75
+      500
+      3
+
   # length is a sequence operation: it returns the element count of a vector (rank-1
   # array) just as for a list or string. A rank-2 array is not a sequence, so length
   # signals an error on it (not covered here, since the cases share one program).

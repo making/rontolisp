@@ -159,6 +159,129 @@
         ((>= k n) acc)
       (setq acc (funcall f acc (row-major-aref a k))))))
 
+(defun linalg::%la-norm-axis (d axis)
+  ;; Normalizes a possibly negative axis against the dims list d (numpy's
+  ;; axis + rank rule) and errors when out of range.
+  (let* ((rank (length d))
+         (ax (if (< axis 0) (+ axis rank) axis)))
+    (unless (and (>= ax 0) (< ax rank))
+      (error "linalg: axis out of range"))
+    ax))
+
+(defun linalg::%la-head-size (d ax)
+  ;; The product of the dims-list entries before axis ax.
+  (let ((acc 1))
+    (do ((p d (cdr p))
+         (k 0 (+ k 1)))
+        ((>= k ax) acc)
+      (setq acc (* acc (car p))))))
+
+(defun linalg::%la-tail-size (d ax)
+  ;; The product of the dims-list entries after axis ax.
+  (let ((acc 1))
+    (do ((p d (cdr p))
+         (k 0 (+ k 1)))
+        ((null p) acc)
+      (when (> k ax)
+        (setq acc (* acc (car p)))))))
+
+(defun linalg::%la-axis-shape (d ax keepdims)
+  ;; The dims list with axis ax dropped -- or kept as extent 1 under keepdims.
+  ;; nil (rank 0) when a vector's only axis is dropped: the caller returns the
+  ;; reduced scalar itself in that case.
+  (let ((out nil))
+    (do ((p (reverse d) (cdr p))
+         (k (- (length d) 1) (- k 1)))
+        ((null p) out)
+      (cond ((/= k ax) (setq out (cons (car p) out)))
+            (keepdims (setq out (cons 1 out)))))))
+
+(defun linalg::%la-ones-shape (d)
+  ;; A dims list of all 1s with d's length (numpy's keepdims shape of a full
+  ;; no-axis reduction).
+  (let ((out nil))
+    (do ((p d (cdr p)))
+        ((null p) out)
+      (setq out (cons 1 out)))))
+
+(defun linalg::%la-wrap-scalar (a val keepdims)
+  ;; The keepdims wrapping of a full (no-axis) reduction: the scalar itself,
+  ;; or under a non-nil keepdims an all-ones-shape array holding it (numpy).
+  (if keepdims
+      (linalg:full (linalg::%la-ones-shape (array-dimensions a)) val
+                   (linalg::%la-etype a))
+      val))
+
+(defun linalg::%la-fold-axis (a ax f init keepdims)
+  ;; Reduces axis ax (already normalized) of a with the binary fold f over a
+  ;; row-major outer x axis x inner walk: out[o, i] folds f over a[o, j, i].
+  ;; init seeds the fold; a nil init seeds from the first element along the
+  ;; axis instead (the amax/amin rule) and errors on an empty axis. The axis
+  ;; is dropped from the result -- kept with extent 1 under keepdims -- and a
+  ;; vector without keepdims reduces to the scalar itself (numpy). Any-rank
+  ;; via the flat index (o * axlen + j) * inner + i.
+  (let* ((d (array-dimensions a))
+         (axlen (nth ax d))
+         (inner (linalg::%la-tail-size d ax))
+         (outer (linalg::%la-head-size d ax))
+         (od (linalg::%la-axis-shape d ax keepdims)))
+    (when (and (null init) (= axlen 0))
+      (error "linalg: reduction of an empty axis"))
+    (if (null od)
+        (let ((acc (if init init (aref a 0))))
+          (do ((j (if init 0 1) (+ j 1)))
+              ((>= j axlen) acc)
+            (setq acc (funcall f acc (aref a j)))))
+        (let ((out (linalg::%la-make od 0.0 (linalg::%la-etype a))))
+          (do ((o 0 (+ o 1)))
+              ((>= o outer) out)
+            (do ((i 0 (+ i 1)))
+                ((>= i inner))
+              (let ((base (+ (* o axlen inner) i))
+                    (acc init))
+                (unless acc
+                  (setq acc (row-major-aref a base)))
+                (do ((j (if init 0 1) (+ j 1)))
+                    ((>= j axlen))
+                  (setq acc (funcall f acc (row-major-aref a (+ base (* j inner))))))
+                (setf (row-major-aref out (+ (* o inner) i)) acc))))))))
+
+(defun linalg::%la-argfold-axis (a ax cmp)
+  ;; The per-slice index of the first element winning the strict comparison
+  ;; cmp along axis ax (already normalized); the axis is dropped. A vector
+  ;; reduces to the integer index itself; higher ranks fill a packed DOUBLE
+  ;; array of index values (linalg arrays have no integer width, and indices
+  ;; are exact in a double). Errors on an empty axis.
+  (let* ((d (array-dimensions a))
+         (axlen (nth ax d))
+         (inner (linalg::%la-tail-size d ax))
+         (outer (linalg::%la-head-size d ax))
+         (od (linalg::%la-axis-shape d ax nil)))
+    (when (= axlen 0)
+      (error "linalg: reduction of an empty axis"))
+    (if (null od)
+        (let ((best (aref a 0)) (bi 0))
+          (do ((j 1 (+ j 1)))
+              ((>= j axlen) bi)
+            (when (funcall cmp (aref a j) best)
+              (setq best (aref a j))
+              (setq bi j))))
+        (let ((out (linalg::%la-make od 0.0 'double-float)))
+          (do ((o 0 (+ o 1)))
+              ((>= o outer) out)
+            (do ((i 0 (+ i 1)))
+                ((>= i inner))
+              (let* ((base (+ (* o axlen inner) i))
+                     (best (row-major-aref a base))
+                     (bi 0))
+                (do ((j 1 (+ j 1)))
+                    ((>= j axlen))
+                  (let ((x (row-major-aref a (+ base (* j inner)))))
+                    (when (funcall cmp x best)
+                      (setq best x)
+                      (setq bi j))))
+                (setf (row-major-aref out (+ (* o inner) i)) bi))))))))
+
 (defun linalg::%la-copy (a)
   ;; A fresh array with the same shape and elements as a.
   (linalg:emap (lambda (x) x) a))
@@ -298,6 +421,10 @@
   ;; 'single-float for #f).
   (linalg::%la-make shape value element-type))
 
+(defun linalg:zeros-like (a)
+  ;; A zero-filled array with a's shape AND width (numpy np.zeros_like).
+  (linalg::%la-like a))
+
 (defun linalg:eye (n &optional element-type)
   ;; The n-by-n identity matrix (double by default; 'single-float for #f).
   (let ((m (linalg::%la-make (list n n) 0.0 element-type)))
@@ -389,11 +516,36 @@
   ;; The total element count.
   (array-total-size a))
 
+(defun linalg::%la-infer-shape (shape total)
+  ;; Resolves a -1 extent in a reshape shape (at most one, numpy style)
+  ;; against the total element count; a bare -1 flattens.
+  (if (numberp shape)
+      (if (= shape -1) total shape)
+      (let ((known 1)
+            (minus 0))
+        (do ((p shape (cdr p)))
+            ((null p))
+          (if (= (car p) -1)
+              (setq minus (+ minus 1))
+              (setq known (* known (car p)))))
+        (cond ((= minus 0) shape)
+              ((> minus 1) (error "linalg: reshape allows at most one -1"))
+              ((or (= known 0) (/= (mod total known) 0))
+               (error "linalg: reshape size mismatch"))
+              (t (let ((inferred (/ total known))
+                       (out nil))
+                   (do ((p (reverse shape) (cdr p)))
+                       ((null p) out)
+                     (setq out (cons (if (= (car p) -1) inferred (car p))
+                                     out)))))))))
+
 (defun linalg:reshape (a shape)
   ;; A fresh array with the given shape and the same row-major elements (same
-  ;; width as a: a #f reshapes to #f, a #d to #d).
-  (let* ((out (linalg::%la-make shape 0.0 (linalg::%la-etype a)))
-         (n (array-total-size a)))
+  ;; width as a: a #f reshapes to #f, a #d to #d). One extent may be -1 and is
+  ;; inferred from the element count (numpy); a bare -1 shape flattens.
+  (let* ((n (array-total-size a))
+         (out (linalg::%la-make (linalg::%la-infer-shape shape n) 0.0
+                                (linalg::%la-etype a))))
     (unless (= n (array-total-size out))
       (error "linalg: reshape size mismatch"))
     (do ((k 0 (+ k 1)))
@@ -578,61 +730,96 @@
 
 ;; --- reductions --------------------------------------------------------------
 
-(defun linalg:sum (a)
-  ;; The sum of every element.
-  (linalg::%la-reduce #'+ a 0))
+(defun linalg:sum (a &optional axis keepdims)
+  ;; With no axis, the sum of every element: a scalar, or under a non-nil
+  ;; keepdims an all-ones-shape array holding it (numpy). With an integer
+  ;; axis (negative counts from the end), the sums along that axis: the axis
+  ;; is dropped from the result -- kept with extent 1 under keepdims -- and a
+  ;; vector without keepdims reduces to the scalar itself.
+  (if (null axis)
+      (linalg::%la-wrap-scalar a (linalg::%la-reduce #'+ a 0) keepdims)
+      (linalg::%la-fold-axis a (linalg::%la-norm-axis (array-dimensions a) axis)
+                             #'+ 0 keepdims)))
 
-(defun linalg:mean (a)
-  ;; The arithmetic mean of every element.
-  (/ (linalg:sum a) (linalg:size a)))
+(defun linalg:mean (a &optional axis keepdims)
+  ;; The arithmetic mean, of every element (no axis) or along an axis (the
+  ;; same axis/keepdims rules as linalg:sum). The no-axis total stays a
+  ;; 1-argument linalg:sum call so that call site keeps its --simd kernel.
+  (if (null axis)
+      (linalg::%la-wrap-scalar a (/ (linalg:sum a) (linalg:size a)) keepdims)
+      (let ((ax (linalg::%la-norm-axis (array-dimensions a) axis)))
+        (linalg:div (linalg:sum a ax keepdims)
+                    (nth ax (array-dimensions a))))))
 
-(defun linalg:amax (a)
-  ;; The largest element.
-  (let ((n (array-total-size a)))
-    (when (= n 0)
-      (error "linalg: amax of an empty array"))
-    (let ((best (row-major-aref a 0)))
-      (do ((k 1 (+ k 1)))
-          ((>= k n) best)
-        (let ((x (row-major-aref a k)))
-          (when (> x best)
-            (setq best x)))))))
+(defun linalg:amax (a &optional axis keepdims)
+  ;; The largest element, of the whole array (no axis) or along an integer
+  ;; axis (the same axis/keepdims rules as linalg:sum; strict-comparison
+  ;; fold, so the first element wins ties and a NaN never replaces the seed).
+  ;; Errors on an empty array or axis.
+  (if (null axis)
+      (let ((n (array-total-size a)))
+        (when (= n 0)
+          (error "linalg: amax of an empty array"))
+        (let ((best (row-major-aref a 0)))
+          (do ((k 1 (+ k 1)))
+              ((>= k n) (linalg::%la-wrap-scalar a best keepdims))
+            (let ((x (row-major-aref a k)))
+              (when (> x best)
+                (setq best x))))))
+      (linalg::%la-fold-axis a (linalg::%la-norm-axis (array-dimensions a) axis)
+                             (lambda (acc x) (if (> x acc) x acc)) nil keepdims)))
 
-(defun linalg:amin (a)
-  ;; The smallest element.
-  (let ((n (array-total-size a)))
-    (when (= n 0)
-      (error "linalg: amin of an empty array"))
-    (let ((best (row-major-aref a 0)))
-      (do ((k 1 (+ k 1)))
-          ((>= k n) best)
-        (let ((x (row-major-aref a k)))
-          (when (< x best)
-            (setq best x)))))))
+(defun linalg:amin (a &optional axis keepdims)
+  ;; The smallest element, of the whole array (no axis) or along an integer
+  ;; axis; the linalg:amax rules with the comparison flipped.
+  (if (null axis)
+      (let ((n (array-total-size a)))
+        (when (= n 0)
+          (error "linalg: amin of an empty array"))
+        (let ((best (row-major-aref a 0)))
+          (do ((k 1 (+ k 1)))
+              ((>= k n) (linalg::%la-wrap-scalar a best keepdims))
+            (let ((x (row-major-aref a k)))
+              (when (< x best)
+                (setq best x))))))
+      (linalg::%la-fold-axis a (linalg::%la-norm-axis (array-dimensions a) axis)
+                             (lambda (acc x) (if (< x acc) x acc)) nil keepdims)))
 
-(defun linalg:argmax (v)
-  ;; The index of the largest element of a vector (first on ties).
-  (let ((n (length v)))
-    (when (= n 0)
-      (error "linalg: argmax of an empty vector"))
-    (let ((best (aref v 0)) (bi 0))
-      (do ((i 1 (+ i 1)))
-          ((>= i n) bi)
-        (when (> (aref v i) best)
-          (setq best (aref v i))
-          (setq bi i))))))
+(defun linalg:argmax (v &optional axis)
+  ;; With no axis: the index of the largest element of a vector (first on
+  ;; ties). With an integer axis (negative counts from the end): the
+  ;; per-slice indices along that axis, the axis dropped; a rank >= 2 result
+  ;; is a packed DOUBLE array of index values (linalg arrays have no integer
+  ;; width; (= 3.0 3) still holds for comparisons), a vector reduces to the
+  ;; integer index itself.
+  (if (null axis)
+      (let ((n (length v)))
+        (when (= n 0)
+          (error "linalg: argmax of an empty vector"))
+        (let ((best (aref v 0)) (bi 0))
+          (do ((i 1 (+ i 1)))
+              ((>= i n) bi)
+            (when (> (aref v i) best)
+              (setq best (aref v i))
+              (setq bi i)))))
+      (linalg::%la-argfold-axis v (linalg::%la-norm-axis (array-dimensions v) axis)
+                                (function >))))
 
-(defun linalg:argmin (v)
-  ;; The index of the smallest element of a vector (first on ties).
-  (let ((n (length v)))
-    (when (= n 0)
-      (error "linalg: argmin of an empty vector"))
-    (let ((best (aref v 0)) (bi 0))
-      (do ((i 1 (+ i 1)))
-          ((>= i n) bi)
-        (when (< (aref v i) best)
-          (setq best (aref v i))
-          (setq bi i))))))
+(defun linalg:argmin (v &optional axis)
+  ;; The index of the smallest element; the linalg:argmax rules with the
+  ;; comparison flipped.
+  (if (null axis)
+      (let ((n (length v)))
+        (when (= n 0)
+          (error "linalg: argmin of an empty vector"))
+        (let ((best (aref v 0)) (bi 0))
+          (do ((i 1 (+ i 1)))
+              ((>= i n) bi)
+            (when (< (aref v i) best)
+              (setq best (aref v i))
+              (setq bi i)))))
+      (linalg::%la-argfold-axis v (linalg::%la-norm-axis (array-dimensions v) axis)
+                                (function <))))
 
 (defun linalg:norm (a)
   ;; The Euclidean (L2 / Frobenius) norm.
@@ -797,3 +984,179 @@
             (unless (if (and (numberp x) (numberp y)) (= x y) (equal x y))
               (setq ok nil)))))
       nil))
+
+;; --- elementwise comparisons (0/1 masks) ---------------------------------------
+;; numpy's ==, >, >=, <, <= produce boolean arrays; here each is a 0.0/1.0
+;; mask of the first array operand's width (multiply by the mask where numpy
+;; would boolean-index). Scalar operands and broadcasting follow %la-bcast.
+
+(defun linalg:equal (a b)
+  ;; Elementwise numeric equality as a 0.0/1.0 mask; either operand may be a
+  ;; scalar. (One boolean for the whole array is linalg:array-equal.)
+  (linalg::%la-bcast (lambda (x y) (if (= x y) 1 0)) a b))
+
+(defun linalg:greater (a b)
+  ;; Elementwise a > b as a 0.0/1.0 mask; either operand may be a scalar.
+  (linalg::%la-bcast (lambda (x y) (if (> x y) 1 0)) a b))
+
+(defun linalg:greater-equal (a b)
+  ;; Elementwise a >= b as a 0.0/1.0 mask; either operand may be a scalar.
+  (linalg::%la-bcast (lambda (x y) (if (>= x y) 1 0)) a b))
+
+(defun linalg:less (a b)
+  ;; Elementwise a < b as a 0.0/1.0 mask; either operand may be a scalar.
+  (linalg::%la-bcast (lambda (x y) (if (< x y) 1 0)) a b))
+
+(defun linalg:less-equal (a b)
+  ;; Elementwise a <= b as a 0.0/1.0 mask; either operand may be a scalar.
+  (linalg::%la-bcast (lambda (x y) (if (<= x y) 1 0)) a b))
+
+;; --- indexing / selection ------------------------------------------------------
+
+(defun linalg:take-rows (a idx)
+  ;; The axis-0 slices of a selected by the index vector idx (numpy's
+  ;; x[batch-mask] / np.take(a, idx, axis=0)), as a fresh array of a's width.
+  ;; Whole slabs are copied row-major, so any rank >= 1 works (a rank-4 batch
+  ;; extraction included); index values are truncated to integers, and the
+  ;; same index may appear more than once.
+  (let* ((d (array-dimensions a))
+         (slab (linalg::%la-tail-size d 0))
+         (m (length idx))
+         (out (linalg::%la-make (cons m (cdr d)) 0.0 (linalg::%la-etype a))))
+    (do ((i 0 (+ i 1)))
+        ((>= i m) out)
+      (let ((src (* (truncate (aref idx i)) slab))
+            (dst (* i slab)))
+        (do ((k 0 (+ k 1)))
+            ((>= k slab))
+          (setf (row-major-aref out (+ dst k))
+                (row-major-aref a (+ src k))))))))
+
+(defun linalg:gather (a idx)
+  ;; The per-row elements a[i, idx[i]] of a matrix (numpy's
+  ;; y[np.arange(n), t] fancy-indexing idiom) as a vector of a's width;
+  ;; index values are truncated to integers.
+  (let ((d (array-dimensions a)))
+    (unless (and (cdr d) (null (cdr (cdr d))))
+      (error "linalg: gather expects a matrix"))
+    (let ((n (car d)))
+      (unless (= n (length idx))
+        (error "linalg: gather index length must match the rows"))
+      (let ((out (linalg::%la-make n 0.0 (linalg::%la-etype a))))
+        (do ((i 0 (+ i 1)))
+            ((>= i n) out)
+          (setf (aref out i) (aref a i (truncate (aref idx i)))))))))
+
+(defun linalg:one-hot (idx n &optional element-type)
+  ;; The (length idx) x n one-hot matrix: row i holds 1.0 in column idx[i]
+  ;; (truncated to an integer) and 0.0 elsewhere (double by default;
+  ;; 'single-float for #f).
+  (let* ((m (length idx))
+         (out (linalg::%la-make (list m n) 0.0 element-type)))
+    (do ((i 0 (+ i 1)))
+        ((>= i m) out)
+      (setf (aref out i (truncate (aref idx i))) 1))))
+
+;; --- random numbers (the np.random analog; seeded, backend-identical) ---------
+;; A Wichmann-Hill generator: three small multiplicative congruential
+;; generators combined into one uniform double. Every intermediate stays
+;; below 2^23 -- inside the WASM i31 integer range -- and each draw is exact
+;; integer arithmetic plus IEEE +-*/ on exact operands, so a seeded sequence
+;; is bit-identical on every backend (period ~6.95e12). Gaussians use
+;; Irwin-Hall (the sum of 12 uniforms minus 6), NOT Box-Muller: log/cos are
+;; polynomial approximations on WASM and would break the cross-backend
+;; identity, while +/- cannot. The tails clip at +/- 6 sigma -- fine for
+;; weight initialization, but not a distribution-exact np.random.randn.
+
+(defparameter linalg::%la-rng-s1 100)
+
+(defparameter linalg::%la-rng-s2 200)
+
+(defparameter linalg::%la-rng-s3 300)
+
+(defun linalg::%la-rng-next ()
+  ;; The next uniform double in [0, 1).
+  (setq linalg::%la-rng-s1 (mod (* 171 linalg::%la-rng-s1) 30269))
+  (setq linalg::%la-rng-s2 (mod (* 172 linalg::%la-rng-s2) 30307))
+  (setq linalg::%la-rng-s3 (mod (* 170 linalg::%la-rng-s3) 30323))
+  (let ((u (+ (/ linalg::%la-rng-s1 30269.0)
+              (/ linalg::%la-rng-s2 30307.0)
+              (/ linalg::%la-rng-s3 30323.0))))
+    ;; frac(u) for u in [0, 3), by compares only (no float mod needed).
+    (if (>= u 2.0)
+        (- u 2.0)
+        (if (>= u 1.0) (- u 1.0) u))))
+
+(defun linalg::%la-rng-int (n)
+  ;; A uniform integer in [0, n).
+  (let ((i (floor (* (linalg::%la-rng-next) n))))
+    (if (>= i n) (- n 1) i)))
+
+(defun linalg:seed (n)
+  ;; Resets the generator deterministically from a non-negative integer seed,
+  ;; then discards a few draws so nearby seeds decorrelate. Returns n. The
+  ;; same seed reproduces the same rand/randn/uniform/choice/permutation
+  ;; sequence on every backend.
+  (setq linalg::%la-rng-s1 (+ 1 (mod n 30268)))
+  (setq linalg::%la-rng-s2 (+ 1 (mod (+ n 12345) 30306)))
+  (setq linalg::%la-rng-s3 (+ 1 (mod (+ n 6789) 30322)))
+  (do ((k 0 (+ k 1)))
+      ((>= k 10))
+    (linalg::%la-rng-next))
+  n)
+
+(defun linalg:rand (shape &optional element-type)
+  ;; An array of uniform [0, 1) draws (np.random.rand, but with a shape
+  ;; designator like linalg:zeros; double by default, 'single-float for #f).
+  (let* ((out (linalg::%la-make shape 0.0 element-type))
+         (n (array-total-size out)))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) out)
+      (setf (row-major-aref out k) (linalg::%la-rng-next)))))
+
+(defun linalg:randn (shape &optional element-type)
+  ;; An array of standard-normal draws via Irwin-Hall (np.random.randn, but
+  ;; with a shape designator; see the section comment for the distribution
+  ;; caveat).
+  (let* ((out (linalg::%la-make shape 0.0 element-type))
+         (n (array-total-size out)))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) out)
+      (let ((acc 0.0))
+        (do ((j 0 (+ j 1)))
+            ((>= j 12))
+          (setq acc (+ acc (linalg::%la-rng-next))))
+        (setf (row-major-aref out k) (- acc 6.0))))))
+
+(defun linalg:uniform (lo hi shape &optional element-type)
+  ;; An array of uniform draws in [lo, hi) (np.random.uniform, but with a
+  ;; required shape designator).
+  (let* ((out (linalg::%la-make shape 0.0 element-type))
+         (n (array-total-size out))
+         (span (- hi lo)))
+    (do ((k 0 (+ k 1)))
+        ((>= k n) out)
+      (setf (row-major-aref out k) (+ lo (* span (linalg::%la-rng-next)))))))
+
+(defun linalg:choice (n size)
+  ;; size uniform indices in [0, n), WITH replacement (np.random.choice's
+  ;; default for an integer argument): a packed double vector of integer
+  ;; values, the mini-batch sampling idiom.
+  (let ((out (linalg::%la-make size 0.0 nil)))
+    (do ((k 0 (+ k 1)))
+        ((>= k size) out)
+      (setf (aref out k) (linalg::%la-rng-int n)))))
+
+(defun linalg:permutation (n)
+  ;; The integers 0..n-1 in a Fisher-Yates shuffle (np.random.permutation of
+  ;; an integer): a packed double vector.
+  (let ((out (linalg::%la-make n 0.0 nil)))
+    (do ((i 0 (+ i 1)))
+        ((>= i n))
+      (setf (aref out i) i))
+    (do ((i (- n 1) (- i 1)))
+        ((< i 1) out)
+      (let* ((j (linalg::%la-rng-int (+ i 1)))
+             (tmp (aref out i)))
+        (setf (aref out i) (aref out j))
+        (setf (aref out j) tmp)))))

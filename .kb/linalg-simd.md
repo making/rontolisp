@@ -92,6 +92,17 @@ Two consequences worth remembering:
 - **The tree shakers need no new root**: the emitted call site has an ordinary call edge to
   both the kernel and the scalar defun, so the defun stays reachable wherever a kernel can
   decline.
+- **An intercepted member may be VARIADIC** (the deep-learning-from-scratch port gave
+  `sum`/`mean`/`amax`/`amin`/`argmax`/`argmin` `&optional axis` lambda lists, which
+  `LambdaLists` desugars to a trailing `&rest` parameter): a call with more arguments than
+  the kernel arity routes to the ordinary direct-call path (never intercepted), and the
+  1-arg decline branch pushes an EMPTY rest (`ACONST_NULL` on the JVM, `ref.null eq` on
+  wasm) before invoking the defun -- both compilers also verify the defun's required count
+  still matches the kernel arity and bail to `compileDefault` otherwise. The interpreter
+  needs nothing: its `args.size() == arity` guard falls through to `applyGlobal`, which
+  binds the rest list normally. Pinned by `axisArgumentsRouteToTheVariadicScalarDefun`
+  (JVM), `wasmGcSimdLinalgAxisArgumentsRouteToTheVariadicScalarDefun` (wasm) and
+  `axisArgumentsFallBackToTheScalarDefun` (interpreter).
 
 ## The intercepted set (32 members)
 

@@ -41,6 +41,40 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 (linalg:add #2A((1 2) (3 4)) #2A((100) (200))) ; => #d((101.0 102.0) (203.0 204.0))
 ```
 
+## 軸に沿った還元
+
+還元関数 [`linalg:sum`](../reference/functions/linalg-sum.md)、[`linalg:mean`](../reference/functions/linalg-mean.md)、[`linalg:amax`](../reference/functions/linalg-amax.md)、[`linalg:amin`](../reference/functions/linalg-amin.md) は省略可能な整数 `axis`(負は numpy 流に末尾から数える)を取り、配列全体ではなくその軸に沿って還元します。結果からその軸は除去されますが、省略可能な `keepdims` フラグが非 nil のときは長さ 1 の軸として保持されます — 入力にそのままブロードキャストで戻せる形状で、バッチ softmax が行ごとの最大値を引くのに使うのはこの形です。[`linalg:argmax`](../reference/functions/linalg-argmax.md) と [`linalg:argmin`](../reference/functions/linalg-argmin.md) も同じ axis 引数を取り、スライスごとの index を返します(行列に対しては packed double 配列 — linalg 配列に整数幅はありません)。[`linalg:reshape`](../reference/functions/linalg-reshape.md) は 1 つの `-1` extent を受け付け、要素数から推論します。
+
+```lisp
+(linalg:sum #2A((1 2 3) (4 5 6)) 0)    ; => #d(5.0 7.0 9.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) 1)    ; => #d(6.0 15.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) -1 t) ; => #d((6.0) (15.0))
+(linalg:mean #2A((1 2 3) (4 5 6)) 0)   ; => #d(2.5 3.5 4.5)
+(linalg:argmax #2A((1 9 3) (7 5 6)) 1) ; => #d(1.0 0.0)
+(linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))) ; => (3 4)
+```
+
+## インデックス操作・選択・マスク
+
+[`linalg:take-rows`](../reference/functions/linalg-take-rows.md) は index ベクタで axis-0 スライスを選択し(numpy の `x[mask]`、任意 rank)、[`linalg:gather`](../reference/functions/linalg-gather.md) は行ごとに 1 要素を取り出し(`y[np.arange(n), t]`)、[`linalg:one-hot`](../reference/functions/linalg-one-hot.md) はラベル行列を作ります。要素ごとの比較 [`linalg:equal`](../reference/functions/linalg-equal.md)、[`linalg:greater`](../reference/functions/linalg-greater.md)、[`linalg:greater-equal`](../reference/functions/linalg-greater-equal.md)、[`linalg:less`](../reference/functions/linalg-less.md)、[`linalg:less-equal`](../reference/functions/linalg-less-equal.md) は 0.0/1.0 のマスクを返します(スカラー被演算子とブロードキャスト対応)。numpy が boolean index する場面では、マスクを掛け算してください。[`linalg:zeros-like`](../reference/functions/linalg-zeros-like.md) は同じ形状・同じ幅のゼロ配列を確保します。
+
+```lisp
+(linalg:take-rows #2A((10 11) (20 21) (30 31)) #(2 0)) ; => #d((30.0 31.0) (10.0 11.0))
+(linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))      ; => #d(12.0 20.0)
+(linalg:one-hot #(1 0) 3)   ; => #d((0.0 1.0 0.0) (1.0 0.0 0.0))
+(linalg:greater #(1 5 3) 2) ; => #d(0.0 1.0 1.0)
+```
+
+## 乱数
+
+`np.random` に相当する乱数はシード可能で、バックエンド間で決定的です。[`linalg:seed`](../reference/functions/linalg-seed.md) は Wichmann-Hill 生成器をリセットし、その draw は正確な整数演算と IEEE double 演算だけで構成されるため、シード済みの [`linalg:rand`](../reference/functions/linalg-rand.md)、[`linalg:randn`](../reference/functions/linalg-randn.md)、[`linalg:uniform`](../reference/functions/linalg-uniform.md)、[`linalg:choice`](../reference/functions/linalg-choice.md)、[`linalg:permutation`](../reference/functions/linalg-permutation.md) の列は interpreter・JVM・両 WASM ターゲットで bit-identical です — 重み初期化とミニバッチ抽出がどこでも正確に再現されます。`randn` は Box-Muller ではなく Irwin-Hall(一様乱数 12 個の和)を使います(Box-Muller の `log`/`cos` は WASM で発散するため)。そのため裾は 6σ でクリップされます。初期化には十分ですが、分布が `np.random.randn` と厳密に一致するわけではありません。
+
+```lisp
+(linalg:seed 42)         ; => 42
+(linalg:choice 60000 4)  ; => #d(26833.0 11120.0 29256.0 22347.0)
+(linalg:permutation 5)   ; => #d(3.0 4.0 0.0 2.0 1.0)
+```
+
 ## 離散微積分
 
 [`linalg:diff`](../reference/functions/linalg-diff.md) と [`linalg:gradient`](../reference/functions/linalg-gradient.md) は numpy の離散微積分ペア(`np.diff` / `np.gradient`)です。`diff` は最後の軸に沿った n 階の離散差分(デフォルト 1)を取ります。1 ステップごとにその軸が 1 つ短くなり、行列は各行内で差分されます。`gradient` はサンプル値のベクタの微分を、2 次精度の中心差分(両端は 1 次精度の片側差分)で推定するため、結果は入力と同じ長さになります。省略可能な第 2 引数には、一様なサンプル間隔(数値、デフォルト 1)か、非一様なサンプルのための同じ長さの座標ベクタを渡せます。どちらも他の linalg 変換と同様に入力の幅を保持します。算術は通常どおり浮動小数点ですが、厳密に微分できるサンプル値 — 以下の例のような、整数座標で読んだ多項式 — はすべてのバックエンドで同一に印字されます。

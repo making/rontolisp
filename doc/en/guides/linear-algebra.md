@@ -41,6 +41,40 @@ The frequent per-element operations also exist under their numpy ufunc names: [`
 (linalg:add #2A((1 2) (3 4)) #2A((100) (200))) ; => #d((101.0 102.0) (203.0 204.0))
 ```
 
+## Reductions along an axis
+
+The reductions [`linalg:sum`](../reference/functions/linalg-sum.md), [`linalg:mean`](../reference/functions/linalg-mean.md), [`linalg:amax`](../reference/functions/linalg-amax.md) and [`linalg:amin`](../reference/functions/linalg-amin.md) take an optional integer `axis` (negative counts from the end, numpy style) and reduce along that axis instead of over the whole array: the axis is dropped from the result, or kept as extent 1 when the optional `keepdims` flag is non-nil -- the shape that broadcasts back over the input, which is how a batch softmax subtracts its row maxima. [`linalg:argmax`](../reference/functions/linalg-argmax.md) and [`linalg:argmin`](../reference/functions/linalg-argmin.md) take the same axis argument and return per-slice indices (a packed double array for matrices, since linalg arrays have no integer width). [`linalg:reshape`](../reference/functions/linalg-reshape.md) accepts one `-1` extent and infers it from the element count.
+
+```lisp
+(linalg:sum #2A((1 2 3) (4 5 6)) 0)    ; => #d(5.0 7.0 9.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) 1)    ; => #d(6.0 15.0)
+(linalg:sum #2A((1 2 3) (4 5 6)) -1 t) ; => #d((6.0) (15.0))
+(linalg:mean #2A((1 2 3) (4 5 6)) 0)   ; => #d(2.5 3.5 4.5)
+(linalg:argmax #2A((1 9 3) (7 5 6)) 1) ; => #d(1.0 0.0)
+(linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))) ; => (3 4)
+```
+
+## Indexing, selection and masks
+
+[`linalg:take-rows`](../reference/functions/linalg-take-rows.md) selects axis-0 slices by an index vector (numpy's `x[mask]`, any rank), [`linalg:gather`](../reference/functions/linalg-gather.md) picks one element per row (`y[np.arange(n), t]`), and [`linalg:one-hot`](../reference/functions/linalg-one-hot.md) builds a label matrix. The elementwise comparisons [`linalg:equal`](../reference/functions/linalg-equal.md), [`linalg:greater`](../reference/functions/linalg-greater.md), [`linalg:greater-equal`](../reference/functions/linalg-greater-equal.md), [`linalg:less`](../reference/functions/linalg-less.md) and [`linalg:less-equal`](../reference/functions/linalg-less-equal.md) return 0.0/1.0 masks (with scalar operands and broadcasting): multiply by a mask where numpy would boolean-index. [`linalg:zeros-like`](../reference/functions/linalg-zeros-like.md) allocates a zero array of the same shape and width.
+
+```lisp
+(linalg:take-rows #2A((10 11) (20 21) (30 31)) #(2 0)) ; => #d((30.0 31.0) (10.0 11.0))
+(linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))      ; => #d(12.0 20.0)
+(linalg:one-hot #(1 0) 3)   ; => #d((0.0 1.0 0.0) (1.0 0.0 0.0))
+(linalg:greater #(1 5 3) 2) ; => #d(0.0 1.0 1.0)
+```
+
+## Random numbers
+
+The `np.random` analog is seeded and cross-backend deterministic: [`linalg:seed`](../reference/functions/linalg-seed.md) resets a Wichmann-Hill generator whose draws are exact integer and IEEE double arithmetic, so a seeded sequence of [`linalg:rand`](../reference/functions/linalg-rand.md), [`linalg:randn`](../reference/functions/linalg-randn.md), [`linalg:uniform`](../reference/functions/linalg-uniform.md), [`linalg:choice`](../reference/functions/linalg-choice.md) and [`linalg:permutation`](../reference/functions/linalg-permutation.md) is bit-identical on the interpreter, the JVM and both WASM targets -- weight initialization and mini-batch sampling reproduce exactly everywhere. `randn` uses the Irwin-Hall sum of twelve uniforms rather than Box-Muller (whose `log`/`cos` would diverge on WASM), so its tails clip at six standard deviations; fine for initialization, but not a distribution-exact `np.random.randn`.
+
+```lisp
+(linalg:seed 42)         ; => 42
+(linalg:choice 60000 4)  ; => #d(26833.0 11120.0 29256.0 22347.0)
+(linalg:permutation 5)   ; => #d(3.0 4.0 0.0 2.0 1.0)
+```
+
 ## Discrete calculus
 
 [`linalg:diff`](../reference/functions/linalg-diff.md) and [`linalg:gradient`](../reference/functions/linalg-gradient.md) are numpy's discrete-calculus pair (`np.diff` / `np.gradient`). `diff` takes the n-th discrete difference along the last axis (default 1): each step shortens that axis by one, and a matrix differences within each row. `gradient` estimates the derivative of a vector of samples with second-order central differences (first-order one-sided at the two ends), so the result keeps the input's length; the optional second argument is either a uniform sample spacing (a number, default 1) or a coordinate vector of the same length for non-uniformly spaced samples. Both preserve the input's width like every other linalg transform. The arithmetic is floating point as usual, but sample values that differentiate exactly -- polynomials read at integer coordinates, like every example below -- print identically on every backend.

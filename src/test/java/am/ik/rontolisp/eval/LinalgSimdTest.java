@@ -82,6 +82,23 @@ class LinalgSimdTest {
 		}
 	}
 
+	@Test
+	void axisArgumentsFallBackToTheScalarDefun() {
+		// The intercepted reductions gained &optional axis/keepdims lambda lists; the
+		// native's args.size() == arity guard routes any multi-arg call to
+		// applyGlobal over the (now variadic) defun, and the 1-arg kernel path is
+		// unchanged.
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
+		assertMatchesScalarOracle("(linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t)");
+		assertMatchesScalarOracle("(linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
+		assertMatchesScalarOracle("(linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1)");
+		assertMatchesScalarOracle("(linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t)");
+		assertMatchesScalarOracle("(linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1)");
+		assertMatchesScalarOracle("(linalg:argmin (linalg:reshape (linalg:arange 6) '(2 3)) 0)");
+		assertMatchesScalarOracle("(linalg:reshape (linalg:arange 12) '(3 -1))");
+		assertThat(eval("(linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 0)", true).print()).isEqualTo("#d(5.0 7.0 9.0)");
+	}
+
 	// --- element-wise: array with array -------------------------------------------
 
 	@Test

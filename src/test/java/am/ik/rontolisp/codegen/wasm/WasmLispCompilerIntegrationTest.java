@@ -6077,6 +6077,46 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileLinalgAxisReductionsAndRandom() throws Exception {
+		// The deep-learning-from-scratch additions: numpy axis/keepdims reductions,
+		// reshape -1 inference, the seeded Wichmann-Hill RNG (bit-identical on every
+		// backend), and the indexing/selection/comparison helpers. Same program and
+		// expectation as the JVM compileAndRunLinalgAxisReductionsAndRandom case.
+		assertThat(compileAndRunLinalg("""
+				(defparameter *m* (linalg:from-list '((1 2 3) (4 5 6))))
+				(print (linalg:sum *m* 0))
+				(print (linalg:sum *m* -1 t))
+				(print (linalg:mean *m* 0))
+				(print (linalg:amax *m* 1))
+				(print (linalg:amin *m* 0 t))
+				(print (linalg:argmax *m* 1))
+				(print (linalg:argmin *m* 0))
+				(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) 1))
+				(print (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))))
+				(linalg:seed 42)
+				(print (linalg:choice 60000 4))
+				(linalg:seed 9)
+				(print (linalg:permutation 10))
+				(linalg:seed 1)
+				(print (linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:rand '(2 2))))
+				(linalg:seed 7)
+				(print (linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:randn 4)))
+				(print (linalg:take-rows *m* #(1 0)))
+				(print (linalg:gather *m* #(2 0)))
+				(print (linalg:one-hot #(1 0 2) 3))
+				(print (linalg:greater *m* 3))
+				(print (linalg:equal (linalg:argmax *m* 1) #(2 2)))
+				(print (linalg:zeros-like (linalg:ones 2 'single-float)))
+				""")).isEqualTo("#d(5.0 7.0 9.0)\n#d((6.0) (15.0))\n#d(2.5 3.5 4.5)\n#d(3.0 6.0)\n#d((1.0 2.0 3.0))\n"
+				+ "#d(2.0 2.0)\n#d(0.0 0.0 0.0)\n#d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0))\n(3 4)\n"
+				+ "#d(26833.0 11120.0 29256.0 22347.0)\n#d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)\n"
+				+ "#d((317.0 637.0) (949.0 376.0))\n#d(284.0 -21.0 221.0 -1653.0)\n"
+				+ "#d((4.0 5.0 6.0) (1.0 2.0 3.0))\n#d(3.0 4.0)\n"
+				+ "#d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0))\n#d((0.0 0.0 0.0) (1.0 1.0 1.0))\n"
+				+ "#d(1.0 1.0)\n#f(0.0 0.0)");
+	}
+
+	@Test
 	void compileRankThreeArrayRefSetAndPrint() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
@@ -7392,6 +7432,24 @@ class WasmLispCompilerIntegrationTest {
 		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(2 3 2)))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
 		assertLinalgMatchesTheScalarPath("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
+	}
+
+	@Test
+	void wasmGcSimdLinalgAxisArgumentsRouteToTheVariadicScalarDefun() throws Exception {
+		// The intercepted reductions gained &optional axis/keepdims lambda lists, so
+		// their spliced defuns are VARIADIC now: an axis call routes to the ordinary
+		// direct-call path, while a 1-arg call still hits the kernel whose decline
+		// branch passes an extra null rest to the variadic defun -- the wasm
+		// type-shape regression of the &optional change.
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
+		// 1-arg over a general (boxed) array exercises the decline branch itself.
+		assertLinalgMatchesTheScalarPath("(print (linalg:sum #(1 2 3)))");
+		assertLinalgMatchesTheScalarPath("(print (linalg:argmax #(1 9 3)))");
+		// reshape keeps its fixed arity 2; a -1 extent declines inside the kernel.
+		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
 	}
 
 	@Test

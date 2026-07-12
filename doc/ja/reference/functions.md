@@ -310,6 +310,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:zeros` | `(linalg:zeros 3)`, `(linalg:zeros '(2 2))` | `#d(0.0 0.0 0.0)`、`#d((0.0 0.0) (0.0 0.0))`(shapeは整数または `(rows cols)` のリスト) |
 | `linalg:ones` | `(linalg:ones '(2 2))` | `#d((1.0 1.0) (1.0 1.0))` |
 | `linalg:full` | `(linalg:full '(2 2) 7)` | `#d((7.0 7.0) (7.0 7.0))` |
+| `linalg:zeros-like` | `(linalg:zeros-like #2A((1 2) (3 4)))` | `#d((0.0 0.0) (0.0 0.0))`(入力と同じ形状・同じ要素幅のゼロ配列) |
 | `linalg:eye` | `(linalg:eye 2)` | `#d((1.0 0.0) (0.0 1.0))`(単位行列) |
 | `linalg:arange` | `(linalg:arange 5)`, `(linalg:arange 2 10 2)` | `#d(0.0 1.0 2.0 3.0 4.0)`、`#d(2.0 4.0 6.0 8.0)`(stopは含まない。stepは負も可) |
 | `linalg:linspace` | `(linalg:linspace 0 1 5)` | `#d(0.0 0.25 0.5 0.75 1.0)`(両端を含むn等分の値) |
@@ -318,7 +319,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:shape` | `(linalg:shape #2A((1 2 3) (4 5 6)))` | `(2 3)` |
 | `linalg:ndim` | `(linalg:ndim #2A((1 2) (3 4)))` | `2`(次元数。数値なら 0) |
 | `linalg:size` | `(linalg:size (linalg:eye 3))` | `9`(要素の総数) |
-| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#d((0.0 1.0 2.0) (3.0 4.0 5.0))`(行優先。サイズは一致が必要) |
+| `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#d((0.0 1.0 2.0) (3.0 4.0 5.0))`(行優先。extent 1 つに -1 可、要素数から推論) |
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#d(1.0 0.0 0.0 1.0)` |
 | `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#d((1.0 4.0) (2.0 5.0) (3.0 6.0))`(ベクタはそのまま返します) |
 | `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#d(11.0 12.0 13.0)`(要素ごと。スカラーのオペランドはブロードキャスト) |
@@ -350,12 +351,12 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:dot` | `(linalg:dot v1 v2)` | numpyスタイルのディスパッチ: ベクタ.ベクタはスカラー、行列.ベクタ / ベクタ.行列はベクタ、行列.行列は行列積 |
 | `linalg:matmul` | `(linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8)))` | `#d((19.0 22.0) (43.0 50.0))`(行列積) |
 | `linalg:outer` | `(linalg:outer #(1 2) #(3 4 5))` | `#d((3.0 4.0 5.0) (6.0 8.0 10.0))`(外積) |
-| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。packed 配列なら double) |
-| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。packed 配列なら double) |
-| `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9`(最大の要素) |
-| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2`(最小の要素) |
-| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1`(ベクタのみ。同値の場合は最初のインデックス) |
-| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1` |
+| `linalg:sum` | `(linalg:sum #2A((1 2) (3 4)))` | `10`(リダクションは要素の型に従う。省略可能な axis / keepdims で軸ごとの還元) |
+| `linalg:mean` | `(linalg:mean #(1 2 3 4))` | `5/2`(リダクションは要素の型に従う。省略可能な axis / keepdims) |
+| `linalg:amax` | `(linalg:amax #2A((1 9) (3 4)))` | `9`(最大の要素。省略可能な axis / keepdims) |
+| `linalg:amin` | `(linalg:amin #(5 2 8))` | `2`(最小の要素。省略可能な axis / keepdims) |
+| `linalg:argmax` | `(linalg:argmax #(1 9 3))` | `1`(同値の場合は最初のインデックス。省略可能な axis で軸ごとのインデックス) |
+| `linalg:argmin` | `(linalg:argmin #(5 2 8))` | `1`(省略可能な axis) |
 | `linalg:norm` | `(linalg:norm #(3 4))` | `5.0`(ユークリッド / フロベニウスノルム) |
 | `linalg:trace` | `(linalg:trace #2A((1 2) (3 4)))` | `5`(正方行列のみ) |
 | `linalg:diff` | `(linalg:diff #(1 2 4 7 0))` | `#d(1.0 2.0 3.0 -7.0)`(最後の軸に沿った n 階の離散差分。省略可能な階数、デフォルト 1) |
@@ -364,6 +365,20 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:inv` | `(linalg:inv #2A((4 0) (2 4)))` | `#d((0.25 0.0) (-0.125 0.25))`(特異行列ではエラーを通知します) |
 | `linalg:solve` | `(linalg:solve a b)` | `a . x = b` の解(`b` はベクタまたは行列) |
 | `linalg:array-equal` | `(linalg:array-equal (linalg:eye 2) #2A((1 0) (0 1)))` | `t`(同じ形状かつ数値的に等しい要素。配列自体は `eq` でしか比較できません) |
+| `linalg:equal` | `(linalg:equal #(1 5 3) #(2 5 1))` | `#d(0.0 1.0 0.0)`(要素ごとの数値等値を 0.0/1.0 マスクで。スカラー可) |
+| `linalg:greater` | `(linalg:greater #(1 5 3) 2)` | `#d(0.0 1.0 1.0)`(要素ごとの `a > b` マスク。スカラー可) |
+| `linalg:greater-equal` | `(linalg:greater-equal #(1 5 3) #(2 5 1))` | `#d(0.0 1.0 1.0)`(要素ごとの `a >= b` マスク) |
+| `linalg:less` | `(linalg:less #(1 5 3) #(2 5 1))` | `#d(1.0 0.0 0.0)`(要素ごとの `a < b` マスク) |
+| `linalg:less-equal` | `(linalg:less-equal #(1 5 3) #(2 5 1))` | `#d(1.0 1.0 0.0)`(要素ごとの `a <= b` マスク) |
+| `linalg:take-rows` | `(linalg:take-rows #2A((10 11 12) (20 21 22) (30 31 32)) #(2 0))` | `#d((30.0 31.0 32.0) (10.0 11.0 12.0))`(インデックスベクタで選んだ axis-0 スライス) |
+| `linalg:gather` | `(linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))` | `#d(12.0 20.0)`(行ごとの `a[i, idx[i]]`) |
+| `linalg:one-hot` | `(linalg:one-hot #(1 0 2) 3)` | `#d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0))`(one-hot 行列) |
+| `linalg:seed` | `(linalg:seed 42)` | `42`(共有乱数生成器を決定的に初期化。シード済み列は全バックエンドで bit-identical) |
+| `linalg:rand` | `(linalg:rand 4)` | 一様 [0, 1) の乱数配列(shape は `linalg:zeros` と同じ指定) |
+| `linalg:randn` | `(linalg:randn 4)` | 標準正規の乱数配列(Irwin-Hall。裾は ±6σ でクリップ) |
+| `linalg:uniform` | `(linalg:uniform -2.0 2.0 4)` | `[lo, hi)` の一様乱数配列 |
+| `linalg:choice` | `(linalg:choice 60000 4)` | `[0, n)` の一様インデックスを size 個(復元抽出。ミニバッチ抽出向け) |
+| `linalg:permutation` | `(linalg:permutation 10)` | 0..n-1 のシャッフル(Fisher-Yates) |
 
 ## java パッケージの関数
 

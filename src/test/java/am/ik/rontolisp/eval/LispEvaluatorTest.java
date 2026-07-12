@@ -5411,6 +5411,140 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgAxisReductions() {
+		// numpy axis semantics (todo: deep-learning-from-scratch port): an integer
+		// axis (negative counts from the end) reduces along that axis with the axis
+		// dropped, keepdims keeps it as extent 1, and a vector without keepdims
+		// reduces to the scalar itself. A no-axis reduction with keepdims wraps the
+		// scalar in an all-ones-shape array.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:from-list '((1 2 3) (4 5 6))))
+				(list (linalg:sum *m* 0) (linalg:sum *m* 1) (linalg:sum *m* -1)
+				      (linalg:sum *m* 1 t) (linalg:sum *m* nil t)
+				      (linalg:mean *m* 0) (linalg:amax *m* 1) (linalg:amin *m* 0 t)
+				      (linalg:sum #(1 2 3) 0) (linalg:sum #(1 2 3) 0 t)
+				      (array-element-type (linalg:sum (linalg:ones '(2 2) 'single-float) 0)))
+				""");
+		assertThat(result.print()).isEqualTo("(#d(5.0 7.0 9.0) #d(6.0 15.0) #d(6.0 15.0)"
+				+ " #d((6.0) (15.0)) #d((21.0)) #d(2.5 3.5 4.5) #d(3.0 6.0) #d((1.0 2.0 3.0))"
+				+ " 6 #d(6.0) single-float)");
+		// Rank-3 middle axis: out[o, i] folds over a[o, j, i].
+		LispVal rank3 = evalMulti("""
+				(defparameter *c* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+				(list (linalg:shape (linalg:sum *c* 1)) (linalg:shape (linalg:sum *c* 1 t))
+				      (linalg:sum *c* 1))
+				""");
+		assertThat(rank3.print()).isEqualTo("((2 4) (2 1 4) #d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0)))");
+		assertThatThrownBy(() -> eval("(linalg:sum #(1 2 3) 1)")).hasMessageContaining("linalg: axis out of range");
+		assertThatThrownBy(() -> eval("(linalg:amax (linalg:zeros '(0 3)) 0)"))
+			.hasMessageContaining("linalg: reduction of an empty axis");
+	}
+
+	@Test
+	void linalgArgmaxArgminAxis() {
+		// With an axis, argmax/argmin return per-slice indices: a packed DOUBLE
+		// array for rank >= 2 (linalg arrays have no integer width), the integer
+		// index itself for a vector; first wins ties, like the no-axis form.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:from-list '((1 9 3) (7 5 6))))
+				(list (linalg:argmax *m* 1) (linalg:argmax *m* 0) (linalg:argmax *m* -1)
+				      (linalg:argmin *m* 1) (linalg:argmax #(3 1 2) 0)
+				      (linalg:argmax (linalg:from-list '((2 2) (1 1))) 1))
+				""");
+		assertThat(result.print()).isEqualTo("(#d(1.0 0.0) #d(1.0 0.0 1.0) #d(1.0 0.0) #d(0.0 1.0) 0 #d(0.0 0.0))");
+	}
+
+	@Test
+	void linalgReshapeInfersMinusOne() {
+		// numpy's -1 extent: inferred from the element count (at most one); a bare
+		// -1 shape flattens.
+		LispVal result = evalMulti("""
+				(list (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1)))
+				      (linalg:shape (linalg:reshape (linalg:arange 12) '(-1 6)))
+				      (linalg:shape (linalg:reshape (linalg:reshape (linalg:arange 6) '(2 3)) -1)))
+				""");
+		assertThat(result.print()).isEqualTo("((3 4) (2 6) (6))");
+		assertThatThrownBy(() -> eval("(linalg:reshape (linalg:arange 12) '(-1 -1))"))
+			.hasMessageContaining("linalg: reshape allows at most one -1");
+		assertThatThrownBy(() -> eval("(linalg:reshape (linalg:arange 12) '(5 -1))"))
+			.hasMessageContaining("linalg: reshape size mismatch");
+	}
+
+	@Test
+	void linalgSeededRandomIsDeterministic() {
+		// The Wichmann-Hill generator: linalg:seed makes rand/randn/uniform/choice/
+		// permutation reproducible, and every draw is exact integer + IEEE
+		// arithmetic, so the sequence is bit-identical on every backend.
+		LispVal result = evalMulti("""
+				(linalg:seed 42)
+				(defparameter *c1* (linalg:choice 60000 4))
+				(linalg:seed 42)
+				(defparameter *c2* (linalg:choice 60000 4))
+				(linalg:seed 9)
+				(defparameter *p* (linalg:permutation 10))
+				(linalg:seed 1)
+				(defparameter *r* (linalg:rand '(2 2)))
+				(linalg:seed 7)
+				(defparameter *g* (linalg:randn 3))
+				(linalg:seed 3)
+				(defparameter *u* (linalg:uniform -2.0 2.0 100))
+				(list (linalg:array-equal *c1* *c2*) *c1*
+				      (linalg:sum *p*)
+				      (linalg:emap (lambda (x) (truncate (* 1024 x))) *r*)
+				      (linalg:emap (lambda (x) (truncate (* 1024 x))) *g*)
+				      (and (>= (linalg:amin *u*) -2.0) (< (linalg:amax *u*) 2.0))
+				      (array-element-type (linalg:rand 3 'single-float))
+				      (linalg:shape (linalg:randn '(2 3))))
+				""");
+		assertThat(result.print()).isEqualTo("(t #d(26833.0 11120.0 29256.0 22347.0) 45.0"
+				+ " #d((317.0 637.0) (949.0 376.0)) #d(284.0 -21.0 221.0) t single-float (2 3))");
+	}
+
+	@Test
+	void linalgIndexingSelection() {
+		// take-rows = numpy x[batch-mask] (any rank, whole axis-0 slabs), gather =
+		// y[np.arange(n), t], one-hot builds the (len idx) x n label matrix.
+		LispVal result = evalMulti("""
+				(defparameter *m* (linalg:from-list '((10 11 12) (20 21 22) (30 31 32))))
+				(list (linalg:take-rows *m* #(2 0 2))
+				      (linalg:take-rows (linalg:arange 5) #(4 0))
+				      (linalg:shape (linalg:take-rows (linalg:reshape (linalg:arange 24) '(4 3 2)) #(1 3)))
+				      (linalg:gather *m* #(2 0 1))
+				      (linalg:one-hot #(1 0 2) 3)
+				      (array-element-type (linalg:one-hot #(0) 2 'single-float))
+				      (array-element-type (linalg:take-rows (linalg:ones '(2 2) 'single-float) #(0))))
+				""");
+		assertThat(result.print()).isEqualTo(
+				"(#d((30.0 31.0 32.0) (10.0 11.0 12.0) (30.0 31.0 32.0))" + " #d(4.0 0.0) (2 3 2) #d(12.0 20.0 31.0)"
+						+ " #d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0)) single-float single-float)");
+		assertThatThrownBy(() -> eval("(linalg:gather #(1 2 3) #(0))"))
+			.hasMessageContaining("linalg: gather expects a matrix");
+		assertThatThrownBy(() -> eval("(linalg:gather (linalg:zeros '(2 2)) #(0))"))
+			.hasMessageContaining("linalg: gather index length must match the rows");
+	}
+
+	@Test
+	void linalgElementwiseComparisonsAndZerosLike() {
+		// The comparison masks are 0.0/1.0 arrays over %la-bcast, so scalars and
+		// numpy broadcasting come for free; zeros-like preserves shape AND width.
+		LispVal result = evalMulti("""
+				(list (linalg:equal #(1 5 3) #(2 5 1))
+				      (linalg:greater #(1 5 3) #(2 5 1))
+				      (linalg:greater-equal #(1 5 3) #(2 5 1))
+				      (linalg:less #(1 5 3) #(2 5 1))
+				      (linalg:less-equal #(1 5 3) #(2 5 1))
+				      (linalg:greater #(1 5 3) 2)
+				      (linalg:equal #2A((1 2) (3 4)) #(1 4))
+				      (linalg:zeros-like #2A((1 2) (3 4)))
+				      (array-element-type (linalg:zeros-like (linalg:ones 2 'single-float)))
+				      (linalg:sum (linalg:equal (linalg:argmax (linalg:from-list '((0.1 0.8) (0.9 0.1))) 1) #(1 1))))
+				""");
+		assertThat(result.print()).isEqualTo("(#d(0.0 1.0 0.0) #d(0.0 0.0 1.0) #d(0.0 1.0 1.0)"
+				+ " #d(1.0 0.0 0.0) #d(1.0 1.0 0.0) #d(0.0 1.0 1.0) #d((1.0 0.0) (0.0 1.0))"
+				+ " #d((0.0 0.0) (0.0 0.0)) single-float 1.0)");
+	}
+
+	@Test
 	void rowMajorArefReadsAndWritesFlat() {
 		LispVal result = evalMulti("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

@@ -166,7 +166,11 @@ public final class FreeVarAnalyzer {
 								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DOLIST -> collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						case LispNames.DOTIMES -> collectFreeVars(LispMacroExpander.expandDotimes(cons), boundVars,
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DO -> collectFreeVars(LispMacroExpander.expandDo(cons), boundVars,
+								knownFunctions, globals, specialNames, freeVars);
+						case LispNames.DO_STAR -> collectFreeVars(LispMacroExpander.expandDoStar(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.LOOP -> collectFreeVars(LispMacroExpander.expandLoop(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
@@ -349,6 +353,10 @@ public final class FreeVarAnalyzer {
 							// skip
 						}
 						case LispNames.LET_STAR -> collectCapturedVars(LispMacroExpander.expandLetStar(cons), localVars,
+								knownFunctions, captured, insideLambda);
+						case LispNames.DOTIMES -> collectCapturedVars(LispMacroExpander.expandDotimes(cons), localVars,
+								knownFunctions, captured, insideLambda);
+						case LispNames.DO_STAR -> collectCapturedVars(LispMacroExpander.expandDoStar(cons), localVars,
 								knownFunctions, captured, insideLambda);
 						case LispNames.DOLIST -> collectCapturedVars(LispMacroExpander.expandDolist(cons), localVars,
 								knownFunctions, captured, insideLambda);

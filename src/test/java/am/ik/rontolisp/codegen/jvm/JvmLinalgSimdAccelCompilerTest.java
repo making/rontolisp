@@ -225,6 +225,26 @@ class JvmLinalgSimdAccelCompilerTest {
 	}
 
 	@Test
+	void axisArgumentsRouteToTheVariadicScalarDefun() throws Exception {
+		// The intercepted reductions gained &optional axis/keepdims lambda lists, so
+		// their spliced defuns are VARIADIC now: an axis call routes to the ordinary
+		// direct-call path (compileDefault), while a 1-arg call still hits the kernel
+		// whose decline branch passes an empty rest list to the variadic defun -- the
+		// bytecode-shape regression of the &optional change.
+		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 0))")).isEqualTo("#d(5.0 7.0 9.0)");
+		assertThat(accel("(print (linalg:sum #d((1.0 2.0 3.0) (4.0 5.0 6.0)) 1 t))")).isEqualTo("#d((6.0) (15.0))");
+		assertMatchesScalarReference("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
+		assertMatchesScalarReference("(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
+		assertMatchesScalarReference("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
+		// 1-arg calls over a general (boxed) array exercise the decline branch itself.
+		assertThat(accel("(print (linalg:sum #(1 2 3)))")).isEqualTo("6");
+		assertThat(accel("(print (linalg:argmax #(1 9 3)))")).isEqualTo("1");
+		assertThat(accel("(print (linalg:amin #(4 2 9)))")).isEqualTo("2");
+		// reshape keeps its fixed arity 2; a -1 extent declines inside the kernel.
+		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
+	}
+
+	@Test
 	void aShapeMismatchStillSignalsTheLibraryError() throws Exception {
 		// The kernel declines, the defun signals -- so the message is not duplicated.
 		// (1) vs (2) broadcasts since the numpy rules landed, so the non-broadcastable

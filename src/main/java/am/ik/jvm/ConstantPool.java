@@ -169,8 +169,14 @@ public final class ConstantPool {
 	/**
 	 * Serialize this constant pool to a byte array.
 	 * @return the serialized bytes
+	 * @throws IllegalStateException when the pool exceeds the class-format limit of 65535
+	 * entries (the u2 count would silently wrap, producing a corrupt class)
 	 */
 	public byte[] toByteArray() {
+		if (this.size + 1 > 0xFFFF) {
+			throw new IllegalStateException("constant pool overflow: " + this.size
+					+ " entries exceed the JVM class-format limit of 65534; split the program");
+		}
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		final ByteCodeWriter out = new ByteCodeWriter(stream);
 		out.writeU2(this.size + 1);

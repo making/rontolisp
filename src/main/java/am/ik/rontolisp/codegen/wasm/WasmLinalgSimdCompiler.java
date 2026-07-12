@@ -137,9 +137,11 @@ final class WasmLinalgSimdCompiler {
 		List<LispVal> args = cons.toList();
 		String qualified = PackageRegistry.qualify(LispNames.LINALG_PKG, member);
 		WasmLispCompiler.WasmFunctionInfo defun = ctx.functions.get(qualified);
-		if (defun == null || args.size() != arity + 1) {
-			// No spliced linalg.lisp to fall back to (or a bad arity): let the ordinary
-			// direct-call path raise the usual compile error.
+		if (defun == null || args.size() != arity + 1
+				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity) {
+			// No spliced linalg.lisp to fall back to, a call with more arguments than
+			// the kernel handles (e.g. an axis argument), or a defun whose required
+			// count no longer matches: the ordinary direct-call path handles all three.
 			WasmFunctionCallCompiler.compileDefault(qualified, cons, ctx);
 			return;
 		}
@@ -166,6 +168,12 @@ final class WasmLinalgSimdCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		loadAll(ctx, slots);
+		if (defun.variadic()) {
+			// A defun with an &optional/&rest lambda list takes a trailing rest
+			// parameter; an empty rest list is a null reference.
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(defun.funcIndex());
 		ctx.writer.write(Instruction.SET_LOCAL);
