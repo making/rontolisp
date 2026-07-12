@@ -370,18 +370,34 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int internalCount = reachable.size();
 		Mem mem = planMemory(reachable, defuns, exportDecls, internalCount, types);
 
-		// Internal functions occupy indices 0..N-1; wrapper j occupies N + j; the two
-		// memory helpers (when present) occupy N+E and N+E+1.
+		// Internal functions occupy indices 0..N-1; the emitted wrappers follow in
+		// export-directive order; the memory helpers (when present) come after the
+		// wrappers. An export whose host signature already matches the internal
+		// function exactly and needs no heap reset is a pure pass-through: no wrapper
+		// is emitted and the export names the internal function directly.
 		List<byte[]> internalBodies = new ArrayList<>();
 		for (String name : reachable) {
 			internalBodies.add(compileDefunBody(Objects.requireNonNull(defuns.get(name)), name, types, index, mem));
 		}
 		List<byte[]> wrapperBodies = new ArrayList<>();
-		for (WasmExportCompiler.Decl decl : exportDecls) {
-			wrapperBodies.add(compileWrapperBody(decl, Objects.requireNonNull(index.get(decl.name())), types, mem));
+		int[] wrapperOrdinals = new int[exportDecls.size()];
+		int[] exportOrdinals = new int[exportDecls.size()];
+		for (int j = 0; j < exportDecls.size(); j++) {
+			WasmExportCompiler.Decl decl = exportDecls.get(j);
+			int target = Objects.requireNonNull(index.get(decl.name()));
+			if (isPassThroughExport(decl, types, mem)) {
+				wrapperOrdinals[j] = -1;
+				exportOrdinals[j] = target;
+			}
+			else {
+				wrapperOrdinals[j] = wrapperBodies.size();
+				exportOrdinals[j] = internalCount + wrapperBodies.size();
+				wrapperBodies.add(compileWrapperBody(decl, target, types, mem));
+			}
 		}
 
-		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, internalCount, types, mem);
+		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, wrapperOrdinals, exportOrdinals,
+				internalCount, types, mem);
 		if (this.optimize) {
 			module = am.ik.wasm.WasmTreeShaker.shake(module);
 		}
@@ -999,6 +1015,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// printUsed implies non-empty literals (the "\n" entry), so `used` follows.
 		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
 		int funcBase = printUsed ? 1 : 0;
+		// Helper indices assume one wrapper per export directive. That holds whenever
+		// the helpers exist: pass-through wrapper elision requires !used, and a module
+		// with used == false emits none of these helpers.
 		int allocIndex = funcBase + internalCount + exportDecls.size();
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
@@ -1108,12 +1127,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// --- Module assembly ---------------------------------------------------------------
 
 	private byte[] assemble(List<String> reachable, List<byte[]> internalBodies,
-			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int internalCount, Types types,
-			Mem mem) {
-		// The local (non-imported) function count: internals, wrappers, then the six
-		// memory helpers (when memory is used), then __ftoa / __write_stdout (when a
-		// float is rendered / when printing is used; todo 110).
-		int localFuncCount = internalCount + exportDecls.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 1 : 0)
+			List<WasmExportCompiler.Decl> exportDecls, List<byte[]> wrapperBodies, int[] wrapperOrdinals,
+			int[] exportOrdinals, int internalCount, Types types, Mem mem) {
+		// The local (non-imported) function count: internals, the emitted wrappers
+		// (pass-through exports have none and name their internal function directly),
+		// then the six memory helpers (when memory is used), then __ftoa /
+		// __write_stdout (when a float is rendered / when printing is used; todo 110).
+		// A memory-using module emits a wrapper for EVERY export (the heap reset /
+		// marshalling), so the helper indices planned in planMemory over
+		// exportDecls.size() stay correct.
+		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 1 : 0)
 				+ (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports (todo 93 Tier 2):
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
@@ -1160,7 +1183,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				for (String name : reachable) {
 					typeSec.addFunc(wasmParamTypes(name, types), new Type[] { wasmType(returnTy(name, types)) });
 				}
-				for (WasmExportCompiler.Decl decl : exportDecls) {
+				for (int j = 0; j < exportDecls.size(); j++) {
+					if (wrapperOrdinals[j] < 0) {
+						continue; // pass-through: no wrapper, no host type
+					}
+					WasmExportCompiler.Decl decl = exportDecls.get(j);
 					typeSec.addFunc(WasmExportCompiler.paramWasmTypes(decl), WasmExportCompiler.resultWasmTypes(decl));
 				}
 				if (mem.used()) {
@@ -1218,7 +1245,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						init -> init.write(Instruction.I32_CONST).writeSignedLeb128(mem.heapBase())));
 		}
 		w
-			// Export section: each directive exports its wrapper under its :as alias
+			// Export section: each directive exports its wrapper (or, for a
+			// pass-through, the internal function itself) under its :as alias
 			// (default: the function name). When memory is used, also export the linear
 			// memory and the bump allocator so a host can write :string inputs and read
 			// :string results.
@@ -1229,7 +1257,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// shim's call but is not itself an export.
 					int ordinal = stringReturnDecls.indexOf(j);
 					exports.addExport(exportDecls.get(j).exportName(), ExternalKind.FUNCTION,
-							ordinal >= 0 ? shimBase + ordinal : mem.funcIndex(internalCount + j));
+							ordinal >= 0 ? shimBase + ordinal : mem.funcIndex(exportOrdinals[j]));
 				}
 				if (mem.used()) {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
@@ -1282,8 +1310,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						code.addFunction(postReturnBody(mem.heapBase()));
 					}
 					for (int j : stringReturnDecls) {
-						code.addFunction(retptrShimBody(mem.funcIndex(internalCount + j), mem.allocIndex(),
-								WasmExportCompiler.paramSlotCount(exportDecls.get(j))));
+						code.addFunction(retptrShimBody(mem.funcIndex(internalCount + wrapperOrdinals[j]),
+								mem.allocIndex(), WasmExportCompiler.paramSlotCount(exportDecls.get(j))));
 					}
 				}
 			});
@@ -1944,6 +1972,38 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		coerce(w, bodyTy, returnTy(name, types));
 		w.write(Instruction.END);
 		return withLocalsRaw(bodyStream.toByteArray(), fn.extraLocalTypes);
+	}
+
+	/**
+	 * Whether an export needs no wrapper at all: every parameter and the return value
+	 * cross the host boundary in the internal representation unchanged ({@code :long}
+	 * over an inferred i64, {@code :float} over an inferred f64) and the module has no
+	 * linear memory (a memory-using module's scalar-return wrapper must reset the bump
+	 * heap, todo 88, and its {@code :string} boundaries marshal). Such an export names
+	 * the internal function directly instead of an identity wrapper that would only
+	 * forward its arguments.
+	 * @param decl the parsed export directive
+	 * @param types the inferred internal types
+	 * @param mem the memory plan
+	 * @return true when the export can name the internal function directly
+	 */
+	private static boolean isPassThroughExport(WasmExportCompiler.Decl decl, Types types, Mem mem) {
+		if (mem.used()) {
+			return false;
+		}
+		Ty[] internalParams = Objects.requireNonNull(types.params().get(decl.name()));
+		for (int p = 0; p < decl.paramTypes().size(); p++) {
+			String hostType = decl.paramTypes().get(p);
+			Ty internal = internalParams[p];
+			boolean identity = (WasmExportCompiler.T_LONG.equals(hostType) && internal == Ty.INT)
+					|| (WasmExportCompiler.T_FLOAT.equals(hostType) && internal == Ty.FLOAT);
+			if (!identity) {
+				return false;
+			}
+		}
+		Ty ret = returnTy(decl.name(), types);
+		return (WasmExportCompiler.T_LONG.equals(decl.returnType()) && ret == Ty.INT)
+				|| (WasmExportCompiler.T_FLOAT.equals(decl.returnType()) && ret == Ty.FLOAT);
 	}
 
 	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {

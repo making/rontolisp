@@ -104,20 +104,81 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void longBoundaryKeepsTheHostSignatureI64WithNoWrapOrExtend() {
+	void longBoundaryExportsTheInternalFunctionDirectly() {
 		// :long pins both the internal i64 representation AND the host boundary to i64,
-		// so
-		// the wrapper signature is (i64,i64)->i64 -- identical to the internal function,
-		// unlike :int which is (i32,...)->i32 with wrap/extend in the wrapper.
-		List<int[][]> types = funcTypes(Objects.requireNonNull(sections(compile("""
+		// so a wrapper would be a pure pass-through (get_local*n; call; end). No wrapper
+		// is emitted: the export names the internal function itself.
+		byte[] module = compile("""
 				(defun sumsquared (a b) (* (+ a b) (+ a b)))
 				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
-				""")).get(1)));
-		// type 0 = internal, type 1 = wrapper; both (i64,i64) -> i64.
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections.get(1)));
+		// Exactly one function in the module: the internal (i64,i64) -> i64.
+		assertThat(types).hasSize(1);
 		assertThat(types.get(0)[0]).containsExactly(0x7E, 0x7E); // i64,i64 params
 		assertThat(types.get(0)[1]).containsExactly(0x7E); // i64 result
-		assertThat(types.get(1)[0]).containsExactly(0x7E, 0x7E); // i64,i64 host params
-		assertThat(types.get(1)[1]).containsExactly(0x7E); // i64 host result
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(1);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "sumsquared")).isEqualTo(0);
+	}
+
+	@Test
+	void floatBoundaryExportsTheInternalFunctionDirectly() {
+		// :float pins f64 on both sides, so the same pass-through elision applies.
+		byte[] module = compile("""
+				(defun area (r) (* 3.14159 (* r r)))
+				(rontolisp:wasm-export 'area :params '(:float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1)))).hasSize(1);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "area")).isEqualTo(0);
+	}
+
+	@Test
+	void mixedBoundariesElideOnlyThePassThroughWrapper() {
+		// sumsquared (:long -> :long) is a pass-through and exports the internal
+		// function; fact (:int -> :int) needs wrap/extend marshalling and keeps its
+		// wrapper, which is the sole function after the internals.
+		byte[] module = compile("""
+				(defun sumsquared (a b) (* (+ a b) (+ a b)))
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] exports = Objects.requireNonNull(sections.get(7));
+		// 2 internals + 1 wrapper (fact's); sumsquared -> internal 0, fact -> wrapper 2.
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(3);
+		assertThat(exportedFuncIndex(exports, "sumsquared")).isEqualTo(0);
+		assertThat(exportedFuncIndex(exports, "fact")).isEqualTo(2);
+	}
+
+	@Test
+	void longBoundaryOverAFloatResultKeepsTheTruncatingWrapper() {
+		// The internal return type is inferred f64, so the :long boundary needs an
+		// i64.trunc_f64_s conversion -- the wrapper stays.
+		byte[] module = compile("""
+				(defun half (a) (/ (float a) 2.0))
+				(rontolisp:wasm-export 'half :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(2);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "half")).isEqualTo(1);
+	}
+
+	@Test
+	void memoryUsingModuleKeepsTheHeapResetWrapperForALongExport() {
+		// A string literal makes the module use linear memory, so a scalar-return
+		// export must keep its wrapper for the bump-heap reset (todo 88) even when the
+		// host signature matches the internal one exactly.
+		byte[] module = compile("""
+				(defun withlit (a) (+ a (length "hello")))
+				(rontolisp:wasm-export 'withlit :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "withlit"));
+		assertThat(containsGlobalReset(wrapper)).as("memory-using :long export keeps the heap-reset wrapper").isTrue();
 	}
 
 	@Test
