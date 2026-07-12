@@ -2,12 +2,12 @@
 
 A rontolisp port of [the sample code of the book **"Deep Learning from
 Scratch"** (ゼロから作るDeep Learning, O'Reilly Japan) by Koki Saitoh](https://github.com/oreilly-japan/deep-learning-from-scratch) —
-chapters 2-6: perceptrons, MNIST inference, numerical gradients,
-backpropagation through class-based layers, and the training techniques
+chapters 2-8: perceptrons, MNIST inference, numerical gradients,
+backpropagation through class-based layers, the training techniques
 chapter (optimizers, weight initialization, Batch Normalization, Dropout,
-weight decay, hyperparameter search). The original code is MIT-licensed
-(see [LICENSE.md](LICENSE.md)); chapters 7-8 (CNNs) are a follow-up
-(`.todo/117`).
+weight decay, hyperparameter search), and the CNN chapters (im2col
+convolution/pooling layers, SimpleConvNet, the ch08 deep network). The
+original code is MIT-licensed (see [LICENSE.md](LICENSE.md)).
 
 The port maps numpy to the `linalg:` package (axis reductions, broadcasting,
 `linalg:randn`/`choice` seeded RNG, `take-rows`/`gather`/`one-hot`
@@ -82,10 +82,23 @@ prints) can differ in their last digits on WASM.
 | ch06 `overfit_weight_decay.py` | `ch06/overfit-weight-decay.lisp` | 300-image overfitting; L2 decay caps it |
 | ch06 `overfit_dropout.py` | `ch06/overfit-dropout.lisp` | The same, tamed by Dropout |
 | ch06 `hyperparameter_optimization.py` | `ch06/hyperparameter-optimization.lisp` | Random search over lr / weight decay |
+| ch07 `simple_convnet.py` | `ch07/simple-convnet.lisp` | Conv-Relu-Pool-Affine-Relu-Affine over im2col |
+| ch07 `gradient_check.py` | `ch07/gradient-check.lisp` | Convolution/Pooling backprop, verified (< 1e-6) |
+| ch07 `train_convnet.py` | `ch07/train-convnet.lisp` | Training the SimpleConvNet with Adam |
+| ch08 `deep_convnet.py` | `ch08/deep-convnet.lisp` | The 16-16/32-32/64-64 pyramid, He init, Dropout |
+| ch08 `train_deepnet.py` | `ch08/train-deepnet.lisp` | Training the deep CNN (smoke-scale defaults) |
 
 Shared library files mirror the book's `common/`: `functions.lisp`
 (softmax, cross-entropy, ...), `gradient.lisp` (numerical gradients),
-`layers.lisp` (CLOS layers incl. BatchNormalization and Dropout),
-`optimizer.lisp` (SGD/Momentum/Nesterov/AdaGrad/RMSprop/Adam),
-`multi-layer-net.lisp`, `multi-layer-net-extend.lisp`, `trainer.lisp`, and
-`dataset/mnist.lisp` (the idx / binary-weight loaders).
+`layers.lisp` (CLOS layers incl. Convolution/Pooling, BatchNormalization
+and Dropout), `util.lisp` (im2col/col2im), `optimizer.lisp`
+(SGD/Momentum/Nesterov/AdaGrad/RMSprop/Adam), `multi-layer-net.lisp`,
+`multi-layer-net-extend.lisp`, `trainer.lisp`, and `dataset/mnist.lisp`
+(the idx / binary-weight loaders).
+
+The CNN scripts are the heavy ones: a convolution forward is ~100x an
+MLP's arithmetic, and while im2col turns it into `linalg:matmul` (which
+`--simd` accelerates), the im2col unfold itself runs as scalar Lisp
+loops. `ch07/train-convnet.lisp` at its scaled-down defaults is ~5
+minutes interpreted, ~90 seconds under `--simd`, and ~2 seconds compiled
+to the JVM.

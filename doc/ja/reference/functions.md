@@ -322,6 +322,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:reshape` | `(linalg:reshape (linalg:arange 6) '(2 3))` | `#d((0.0 1.0 2.0) (3.0 4.0 5.0))`(行優先。extent 1 つに -1 可、要素数から推論) |
 | `linalg:flatten` | `(linalg:flatten (linalg:eye 2))` | `#d(1.0 0.0 0.0 1.0)` |
 | `linalg:transpose` | `(linalg:transpose #2A((1 2 3) (4 5 6)))` | `#d((1.0 4.0) (2.0 5.0) (3.0 6.0))`(ベクタはそのまま返します) |
+| `linalg:pad` | `(linalg:pad #(1 2) 1)` | `#d(0.0 1.0 2.0 0.0)`(定数 0 のパディング。リストで軸ごとの `(before after)` ペアを指定) |
 | `linalg:add` | `(linalg:add #(1 2 3) 10)` | `#d(11.0 12.0 13.0)`(要素ごと。スカラーのオペランドはブロードキャスト) |
 | `linalg:sub` | `(linalg:sub #(5 5) 1)` | `#d(4.0 4.0)` |
 | `linalg:mul` | `(linalg:mul m1 m2)` | アダマール積(要素ごとの積)。行列積ではありません |

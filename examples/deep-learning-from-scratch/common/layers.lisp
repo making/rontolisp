@@ -9,10 +9,10 @@
 ;;   loss-forward / loss-backward.
 ;;
 ;; Accessor names are class-prefixed because CLOS accessors are plain
-;; defuns here (globally unique names required). Convolution/Pooling stay
-;; with ch07 (see .todo/117).
+;; defuns here (globally unique names required).
 
 (load "functions.lisp")
+(load "util.lisp")
 
 (defvar *train-p* t)
 
@@ -122,6 +122,110 @@
 
 (defmethod backward ((layer dropout) dout)
   (linalg:mul dout (dropout-mask layer)))
+
+;; --- Convolution (ch07) ----------------------------------------------------------
+
+(defclass convolution ()
+  ((w :initarg :w :accessor conv-w)         ; (FN C FH FW), SHARED with params
+   (b :initarg :b :accessor conv-b)         ; (FN)
+   (stride :initarg :stride :initform 1 :accessor conv-stride)
+   (pad :initarg :pad :initform 0 :accessor conv-pad)
+   (x :initform nil :accessor conv-x)
+   (col :initform nil :accessor conv-col)
+   (col-w :initform nil :accessor conv-col-w)
+   (dw :initform nil :accessor conv-dw)
+   (db :initform nil :accessor conv-db)))
+
+(defmethod forward ((layer convolution) x)
+  ;; im2col turns the convolution into one (N*oh*ow, C*FH*FW) x
+  ;; (C*FH*FW, FN) matrix product; the result folds back to NCHW through
+  ;; reshape + transpose like the book.
+  (let* ((wd (linalg:shape (conv-w layer)))
+         (fn (car wd))
+         (fh (nth 2 wd))
+         (fw (nth 3 wd))
+         (xd (linalg:shape x))
+         (n (car xd))
+         (h (nth 2 xd))
+         (w (nth 3 xd))
+         (stride (conv-stride layer))
+         (pad (conv-pad layer))
+         (out-h (+ 1 (floor (- (+ h (* 2 pad)) fh) stride)))
+         (out-w (+ 1 (floor (- (+ w (* 2 pad)) fw) stride)))
+         (col (im2col x fh fw stride pad))
+         (col-w (linalg:transpose (linalg:reshape (conv-w layer) (list fn -1))))
+         (out (linalg:add (linalg:matmul col col-w) (conv-b layer))))
+    (setf (conv-x layer) x)
+    (setf (conv-col layer) col)
+    (setf (conv-col-w layer) col-w)
+    (linalg:transpose (linalg:reshape out (list n out-h out-w -1)) '(0 3 1 2))))
+
+(defmethod backward ((layer convolution) dout)
+  ;; dout (N FN oh ow) -> (N*oh*ow, FN); dW/db fall out of the matrix
+  ;; product's transposes, and dx scatters back through col2im.
+  (let* ((wd (linalg:shape (conv-w layer)))
+         (fn (car wd))
+         (c (nth 1 wd))
+         (fh (nth 2 wd))
+         (fw (nth 3 wd))
+         (dout2 (linalg:reshape (linalg:transpose dout '(0 2 3 1)) (list -1 fn))))
+    (setf (conv-db layer) (linalg:sum dout2 0))
+    (setf (conv-dw layer)
+          (linalg:reshape
+           (linalg:transpose
+            (linalg:matmul (linalg:transpose (conv-col layer)) dout2))
+           (list fn c fh fw)))
+    (col2im (linalg:matmul dout2 (linalg:transpose (conv-col-w layer)))
+            (linalg:shape (conv-x layer)) fh fw
+            (conv-stride layer) (conv-pad layer))))
+
+;; --- Pooling (ch07) --------------------------------------------------------------
+
+(defclass pooling ()
+  ((pool-h :initarg :pool-h :accessor pool-h)
+   (pool-w :initarg :pool-w :accessor pool-w)
+   (stride :initarg :stride :initform 1 :accessor pool-stride)
+   (pad :initarg :pad :initform 0 :accessor pool-pad)
+   (x :initform nil :accessor pool-x)
+   (arg-max :initform nil :accessor pool-arg-max)))
+
+(defmethod forward ((layer pooling) x)
+  ;; Max pooling over the im2col unfold: reshaping the (N*oh*ow, C*ph*pw)
+  ;; matrix to (-1, ph*pw) makes each row one window of one channel, so
+  ;; the max and its argmax are per-row axis-1 reductions (the book).
+  (let* ((xd (linalg:shape x))
+         (n (car xd))
+         (c (nth 1 xd))
+         (h (nth 2 xd))
+         (w (nth 3 xd))
+         (ph (pool-h layer))
+         (pw (pool-w layer))
+         (stride (pool-stride layer))
+         (out-h (+ 1 (floor (- h ph) stride)))
+         (out-w (+ 1 (floor (- w pw) stride)))
+         (col (linalg:reshape (im2col x ph pw stride (pool-pad layer))
+                              (list -1 (* ph pw))))
+         (am (linalg:argmax col 1))
+         (out (linalg:amax col 1)))
+    (setf (pool-x layer) x)
+    (setf (pool-arg-max layer) am)
+    (linalg:transpose (linalg:reshape out (list n out-h out-w c)) '(0 3 1 2))))
+
+(defmethod backward ((layer pooling) dout)
+  ;; The book scatters dout into a zero (size, pool-size) matrix at each
+  ;; window's cached argmax (dmax[np.arange(size), argmax] = dout);
+  ;; multiplying the argmax one-hot matrix by the dout column is the same
+  ;; scatter without mutation (the loss-backward pattern).
+  (let* ((dd (linalg:shape dout))
+         (n (car dd))
+         (oh (nth 2 dd))
+         (ow (nth 3 dd))
+         (pool-size (* (pool-h layer) (pool-w layer)))
+         (flat (linalg:reshape (linalg:transpose dout '(0 2 3 1)) (list -1 1)))
+         (dmax (linalg:mul (linalg:one-hot (pool-arg-max layer) pool-size) flat))
+         (dcol (linalg:reshape dmax (list (* n oh ow) -1))))
+    (col2im dcol (linalg:shape (pool-x layer)) (pool-h layer) (pool-w layer)
+            (pool-stride layer) (pool-pad layer))))
 
 ;; --- BatchNormalization ---------------------------------------------------------
 

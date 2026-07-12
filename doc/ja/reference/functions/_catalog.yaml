@@ -329,6 +329,7 @@ categories:
       - { slug: linalg-reshape, name: "linalg:reshape" }
       - { slug: linalg-flatten, name: "linalg:flatten" }
       - { slug: linalg-transpose, name: "linalg:transpose" }
+      - { slug: linalg-pad, name: "linalg:pad" }
       - { slug: linalg-add, name: "linalg:add" }
       - { slug: linalg-sub, name: "linalg:sub" }
       - { slug: linalg-mul, name: "linalg:mul" }

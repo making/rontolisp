@@ -2,7 +2,7 @@
 
 One hand-written Lisp-source library, `src/main/resources/am/ik/rontolisp/eval/linalg.lisp`,
 following the `json.lisp` pattern (see `json.md`) so a single implementation
-runs identically on all backends. 56 exported functions (constructors `zeros`/
+runs identically on all backends. 57 exported functions (constructors `zeros`/
 `ones`/`full`/`eye`/`arange`/`linspace`/`from-list`, shape ops, broadcasting
 `add`/`sub`/`mul`/`div`/`emap` + named ufuncs, products `dot`/`matmul`/`outer`,
 reductions, calculus `diff`/`gradient`, and floating-point Gaussian-elimination
@@ -44,7 +44,8 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:reshape a shape)` | row-major copy; error if sizes differ; ONE extent may be `-1` and is inferred from the element count (numpy), a bare `-1` flattens |
 | `(linalg:zeros-like a)` | fresh zero array with a's shape AND width |
 | `(linalg:flatten a)` | rank-1 row-major copy |
-| `(linalg:transpose a)` | matrix transpose; a vector is returned unchanged |
+| `(linalg:transpose a &optional axes)` | matrix transpose; a vector is returned unchanged. With an axes list (numpy `x.transpose(0 3 1 2)`): the rank-n axis permutation, out-dims[k] = dims[axes[k]] (each axis named exactly once); only the 1-arg matrix form is `--simd`-intercepted |
+| `(linalg:pad a pads)` | constant-0 padding (numpy np.pad's default mode): pads = one `(before after)` pair per axis, or a single non-negative integer for both sides of every axis; keeps a's width |
 | `(linalg:add a b)` / `sub` / `mul` / `div` | elementwise with numpy broadcasting: a scalar operand on either side, and two arrays of different shapes along their trailing axes (extents equal or 1, missing leading axis = 1; anything else = the shape-mismatch error); result keeps the first array operand's width; `mul` is Hadamard (NOT matrix product) |
 | `(linalg:emap f a)` | fresh array with f applied to every element |
 | `(linalg:exp a)` / `sqrt` / `abs` / `square` / `negative` / `sign` / `reciprocal` | named elementwise unary ufuncs (numpy parity, todo 109): `emap` of the obvious scalar op (`square` = `mul a a`, `reciprocal` = `div 1 a`); unlike `emap` they are `--simd`-interceptable |
@@ -84,9 +85,20 @@ distribution-exact `np.random.randn`). `linalg:seed` discards ~10 draws after
 setting the state so nearby seeds decorrelate. There is deliberately no
 dependence on the builtin `(random n)` (unseedable, backend-dependent).
 
+Internal (non-exported, todo-117): `linalg::%la-im2col x fh fw stride pad`
+((N C H W) -> (N*oh*ow, C*fh*fw) window unfold) and `linalg::%la-col2im col
+dims fh fw stride pad` (its scatter-add adjoint) back the
+deep-learning-from-scratch CNN examples (`examples/deep-learning-from-scratch/
+common/util.lisp` wraps them as the book's `im2col`/`col2im`). numpy has no
+im2col either, so they stay `%la-` internal; both are direct index arithmetic
+(no pad copy / 6-D scratch / transpose materialized) and rank-4 only. They are
+NOT `--simd`-intercepted (scalar loops; the convolution matrix product they
+feed IS, via `matmul`).
+
 Gotchas when writing programs:
-`dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` are
-rank <= 2 only (everything else is rank-generic); results are fresh arrays
+`dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace` and 1-arg `transpose` are
+rank <= 2 only (the axes form of `transpose` and everything else is
+rank-generic); results are fresh arrays
 (inputs are never mutated);
 because linalg now computes in double-float, non-terminating results print at
 fewer significant digits on WASM than on the JVM, so cross-backend-deterministic

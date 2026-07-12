@@ -92,6 +92,15 @@
         ((>= i n) out)
       (setq out (cons 0 out)))))
 
+(defun linalg::%la-strides (dims)
+  ;; The row-major strides of a dims list, aligned with it (innermost = 1).
+  (let ((acc 1)
+        (out nil))
+    (do ((p (reverse dims) (cdr p)))
+        ((null p) out)
+      (setq out (cons acc out))
+      (setq acc (* acc (car p))))))
+
 (defun linalg::%la-bcast-loop (%la-op %la-x %la-y od)
   ;; The general broadcast walk over the output shape od: out's flat row-major
   ;; index advances by 1 while each operand's flat index follows its stride-0-
@@ -556,19 +565,122 @@
   ;; The elements of a as a fresh rank-1 vector (row-major).
   (linalg:reshape a (linalg:size a)))
 
-(defun linalg:transpose (a)
-  ;; The transpose of a matrix; a vector is returned unchanged (like numpy).
-  (let ((d (array-dimensions a)))
-    (if (cdr d)
-        (let* ((r (car d))
-               (c (car (cdr d)))
-               (m (linalg::%la-make (list c r) 0.0 (linalg::%la-etype a))))
-          (do ((i 0 (+ i 1)))
-              ((>= i r) m)
-            (do ((j 0 (+ j 1)))
-                ((>= j c))
-              (setf (aref m j i) (aref a i j)))))
-        a)))
+(defun linalg::%la-transpose-axes (a axes)
+  ;; The rank-n axis permutation behind linalg:transpose's axes form (numpy
+  ;; x.transpose(0 3 1 2)): output axis k draws from input axis (nth k axes),
+  ;; so out-dims[k] = dims[axes[k]] and the source flat index follows the
+  ;; permuted row-major strides through the %la-bcast-loop odometer walk (no
+  ;; per-element division).
+  (let* ((d (array-dimensions a))
+         (rank (length d))
+         (sx (linalg::%la-strides d))
+         (seen (linalg::%la-zero-counters rank))
+         (od nil)
+         (os nil))
+    (unless (= (length axes) rank)
+      (error "linalg: transpose axes must be a permutation of the axes"))
+    (do ((p (reverse axes) (cdr p)))
+        ((null p))
+      (let ((ax (car p)))
+        (unless (and (numberp ax) (>= ax 0) (< ax rank))
+          (error "linalg: transpose axes must be a permutation of the axes"))
+        (let ((cell (nthcdr ax seen)))
+          (unless (= (car cell) 0)
+            (error "linalg: transpose axes must be a permutation of the axes"))
+          (rplaca cell 1))
+        (setq od (cons (nth ax d) od))
+        (setq os (cons (nth ax sx) os))))
+    (let* ((out (linalg::%la-make od 0.0 (linalg::%la-etype a)))
+           (n (array-total-size out))
+           (rdims (reverse od))
+           (rstrides (reverse os))
+           (idx (linalg::%la-zero-counters rank))
+           (src 0))
+      (do ((k 0 (+ k 1)))
+          ((>= k n) out)
+        (setf (row-major-aref out k) (row-major-aref a src))
+        (do ((pc idx (cdr pc))
+             (pd rdims (cdr pd))
+             (ps rstrides (cdr ps))
+             (carry t))
+            ((or (null pc) (not carry)))
+          (rplaca pc (+ (car pc) 1))
+          (setq src (+ src (car ps)))
+          (if (< (car pc) (car pd))
+              (setq carry nil)
+              (progn (rplaca pc 0)
+                     (setq src (- src (* (car pd) (car ps)))))))))))
+
+(defun linalg:transpose (a &optional axes)
+  ;; With no axes, the transpose of a matrix; a vector is returned unchanged
+  ;; (like numpy). With an axes list (numpy x.transpose(1 0 2)), the rank-n
+  ;; axis permutation: out-dims[k] = dims[axes[k]]. Only the 1-argument
+  ;; matrix form is --simd-intercepted; an axes call always runs here.
+  (if axes
+      (linalg::%la-transpose-axes a axes)
+      (let ((d (array-dimensions a)))
+        (if (cdr d)
+            (let* ((r (car d))
+                   (c (car (cdr d)))
+                   (m (linalg::%la-make (list c r) 0.0 (linalg::%la-etype a))))
+              (do ((i 0 (+ i 1)))
+                  ((>= i r) m)
+                (do ((j 0 (+ j 1)))
+                    ((>= j c))
+                  (setf (aref m j i) (aref a i j)))))
+            a))))
+
+(defun linalg:pad (a pads)
+  ;; Zero padding (numpy np.pad's default constant-0 mode): pads is a list of
+  ;; (before after) pairs, one per axis -- or a single non-negative integer
+  ;; applied to both sides of every axis. Returns a fresh array of a's width;
+  ;; the input is copied into the interior through an odometer walk like
+  ;; %la-bcast-loop.
+  (let* ((d (array-dimensions a))
+         (rank (length d))
+         (pp (if (numberp pads)
+                 (let ((out nil))
+                   (do ((k 0 (+ k 1)))
+                       ((>= k rank) out)
+                     (setq out (cons (list pads pads) out))))
+                 pads)))
+    (unless (= (length pp) rank)
+      (error "linalg: pad expects one (before after) pair per axis"))
+    (let ((od nil))
+      (do ((pd (reverse d) (cdr pd))
+           (pq (reverse pp) (cdr pq)))
+          ((null pd))
+        (let ((b (car (car pq)))
+              (f (car (cdr (car pq)))))
+          (unless (and (numberp b) (numberp f) (>= b 0) (>= f 0))
+            (error "linalg: pad widths must be non-negative"))
+          (setq od (cons (+ (car pd) b f) od))))
+      (let* ((out (linalg::%la-make od 0.0 (linalg::%la-etype a)))
+             (so (linalg::%la-strides od))
+             (n (array-total-size a))
+             (rdims (reverse d))
+             (rstrides (reverse so))
+             (idx (linalg::%la-zero-counters rank))
+             (dst 0))
+        ;; Start dst at the all-before corner of the output.
+        (do ((pq pp (cdr pq))
+             (ps so (cdr ps)))
+            ((null pq))
+          (setq dst (+ dst (* (car (car pq)) (car ps)))))
+        (do ((k 0 (+ k 1)))
+            ((>= k n) out)
+          (setf (row-major-aref out dst) (row-major-aref a k))
+          (do ((pc idx (cdr pc))
+               (pd rdims (cdr pd))
+               (ps rstrides (cdr ps))
+               (carry t))
+              ((or (null pc) (not carry)))
+            (rplaca pc (+ (car pc) 1))
+            (setq dst (+ dst (car ps)))
+            (if (< (car pc) (car pd))
+                (setq carry nil)
+                (progn (rplaca pc 0)
+                       (setq dst (- dst (* (car pd) (car ps))))))))))))
 
 ;; --- elementwise arithmetic (scalar broadcasting) ----------------------------
 
@@ -1056,6 +1168,89 @@
     (do ((i 0 (+ i 1)))
         ((>= i m) out)
       (setf (aref out i (truncate (aref idx i))) 1))))
+
+;; --- CNN window unfolding (im2col / col2im) ------------------------------------
+;; Internal rank-4 helpers behind the convolution examples (Deep Learning from
+;; Scratch, common/util.py): numpy has no im2col either, so these stay %la-
+;; internal rather than exported API. Both are direct index arithmetic --
+;; equivalent to the book's pad + strided-slice + 6-D transpose composition,
+;; without materializing the scratch tensors.
+
+(defun linalg::%la-im2col (x fh fw stride pad)
+  ;; Unfolds the rank-4 NCHW array x into the (N*out-h*out-w, C*fh*fw) matrix
+  ;; whose row (n, oh, ow) holds the fh x fw window of every channel at that
+  ;; output position: column index = (c, fy, fx). A window element that falls
+  ;; in the zero padding stays 0.0. Width follows x.
+  (let* ((d (array-dimensions x))
+         (n (car d))
+         (c (car (cdr d)))
+         (h (car (cdr (cdr d))))
+         (w (car (cdr (cdr (cdr d)))))
+         (oh (+ 1 (floor (- (+ h (* 2 pad)) fh) stride)))
+         (ow (+ 1 (floor (- (+ w (* 2 pad)) fw) stride)))
+         (out (linalg::%la-make (list (* n oh ow) (* c fh fw)) 0.0
+                                (linalg::%la-etype x)))
+         (dst 0))
+    (do ((ni 0 (+ ni 1)))
+        ((>= ni n) out)
+      (do ((yo 0 (+ yo 1)))
+          ((>= yo oh))
+        (do ((xo 0 (+ xo 1)))
+            ((>= xo ow))
+          (do ((ci 0 (+ ci 1)))
+              ((>= ci c))
+            (do ((fy 0 (+ fy 1)))
+                ((>= fy fh))
+              (let ((iy (- (+ (* yo stride) fy) pad)))
+                (if (and (>= iy 0) (< iy h))
+                    (let ((base (* (+ (* (+ (* ni c) ci) h) iy) w))
+                          (ix0 (- (* xo stride) pad)))
+                      (do ((fx 0 (+ fx 1)))
+                          ((>= fx fw))
+                        (let ((ix (+ ix0 fx)))
+                          (when (and (>= ix 0) (< ix w))
+                            (setf (row-major-aref out dst)
+                                  (row-major-aref x (+ base ix))))
+                          (setq dst (+ dst 1)))))
+                    ;; The whole filter row fell in the padding: skip it.
+                    (setq dst (+ dst fw)))))))))))
+
+(defun linalg::%la-col2im (col dims fh fw stride pad)
+  ;; The im2col adjoint: scatter-ADDS the (N*out-h*out-w, C*fh*fw) matrix col
+  ;; back into a fresh zero rank-4 NCHW array of the given dims (overlapping
+  ;; windows accumulate, the convolution backward pass); elements that fell
+  ;; in the zero padding are dropped. Width follows col.
+  (let* ((n (car dims))
+         (c (car (cdr dims)))
+         (h (car (cdr (cdr dims))))
+         (w (car (cdr (cdr (cdr dims)))))
+         (oh (+ 1 (floor (- (+ h (* 2 pad)) fh) stride)))
+         (ow (+ 1 (floor (- (+ w (* 2 pad)) fw) stride)))
+         (img (linalg::%la-make dims 0.0 (linalg::%la-etype col)))
+         (src 0))
+    (do ((ni 0 (+ ni 1)))
+        ((>= ni n) img)
+      (do ((yo 0 (+ yo 1)))
+          ((>= yo oh))
+        (do ((xo 0 (+ xo 1)))
+            ((>= xo ow))
+          (do ((ci 0 (+ ci 1)))
+              ((>= ci c))
+            (do ((fy 0 (+ fy 1)))
+                ((>= fy fh))
+              (let ((iy (- (+ (* yo stride) fy) pad)))
+                (if (and (>= iy 0) (< iy h))
+                    (let ((base (* (+ (* (+ (* ni c) ci) h) iy) w))
+                          (ix0 (- (* xo stride) pad)))
+                      (do ((fx 0 (+ fx 1)))
+                          ((>= fx fw))
+                        (let ((ix (+ ix0 fx)))
+                          (when (and (>= ix 0) (< ix w))
+                            (setf (row-major-aref img (+ base ix))
+                                  (+ (row-major-aref img (+ base ix))
+                                     (row-major-aref col src))))
+                          (setq src (+ src 1)))))
+                    (setq src (+ src fw)))))))))))
 
 ;; --- random numbers (the np.random analog; seeded, backend-identical) ---------
 ;; A Wichmann-Hill generator: three small multiplicative congruential

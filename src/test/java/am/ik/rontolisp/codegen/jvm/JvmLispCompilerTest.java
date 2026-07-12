@@ -5285,6 +5285,33 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunLinalgTransposeAxesPadIm2col() throws Exception {
+		// The ch07 CNN additions (todo-117): transpose with an axes list (rank-n
+		// permutation; the 2-argument call declines the --simd transpose kernel),
+		// np.pad's constant-0 mode, and the internal rank-4 %la-im2col/%la-col2im
+		// pair behind the convolution examples.
+		assertThat(compileAndRunLinalg("""
+				(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+				(print (linalg:shape (linalg:transpose *x* '(1 0 2))))
+				(print (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0)))
+				(print (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*))
+				(print (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2))))
+				(print (linalg:pad #(1 2) 1))
+				(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
+				(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
+				(print *col*)
+				(print (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*))
+				(print (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0))
+				(print (array-element-type (linalg:transpose (linalg:ones '(2 2 2) 'single-float) '(2 1 0))))
+				(print (array-element-type (linalg:pad (linalg:ones 2 'single-float) 1)))
+				""")).isEqualTo("(3 2 4)\n#d((1.0 3.0) (2.0 4.0))\nt\n"
+				+ "#d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
+				+ " (0.0 0.0 0.0 0.0 0.0 0.0))\n#d(0.0 1.0 2.0 0.0)\n"
+				+ "#d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))\nt\n"
+				+ "#d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))\nsingle-float\nsingle-float");
+	}
+
+	@Test
 	void compileAndRunLinalgRankThreeElementwise() throws Exception {
 		assertThat(compileAndRunLinalg("""
 				(defparameter *c* (linalg:reshape (linalg:arange 8) '(2 2 2)))

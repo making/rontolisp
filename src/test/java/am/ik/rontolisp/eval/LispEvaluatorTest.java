@@ -5524,6 +5524,42 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void linalgTransposeAxesPadIm2col() {
+		// The ch07 CNN additions (todo-117): transpose with an axes list = numpy
+		// x.transpose(1 0 2) (rank-n permutation), pad = np.pad's constant-0 mode,
+		// and the internal rank-4 %la-im2col / %la-col2im pair (window unfold and
+		// its scatter-add adjoint) behind the convolution examples.
+		LispVal result = evalMulti("""
+				(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+				(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
+				(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
+				(list (linalg:shape (linalg:transpose *x* '(1 0 2)))
+				      (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0))
+				      (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*)
+				      (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2)))
+				      (linalg:pad #(1 2) 1)
+				      *col*
+				      (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*)
+				      (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0)
+				      (array-element-type (linalg:transpose (linalg:ones '(2 2 2) 'single-float) '(2 1 0)))
+				      (array-element-type (linalg:pad (linalg:ones 2 'single-float) 1)))
+				""");
+		assertThat(result.print()).isEqualTo("((3 2 4) #d((1.0 3.0) (2.0 4.0)) t"
+				+ " #d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
+				+ " (0.0 0.0 0.0 0.0 0.0 0.0)) #d(0.0 1.0 2.0 0.0)"
+				+ " #d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0)) t"
+				+ " #d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0)))) single-float single-float)");
+		assertThatThrownBy(() -> eval("(linalg:transpose (linalg:zeros '(2 3)) '(0 0))"))
+			.hasMessageContaining("linalg: transpose axes must be a permutation");
+		assertThatThrownBy(() -> eval("(linalg:transpose (linalg:zeros '(2 3)) '(0))"))
+			.hasMessageContaining("linalg: transpose axes must be a permutation");
+		assertThatThrownBy(() -> eval("(linalg:pad (linalg:zeros '(2 2)) '((1 1)))"))
+			.hasMessageContaining("linalg: pad expects one (before after) pair per axis");
+		assertThatThrownBy(() -> eval("(linalg:pad #(1 2) -1)"))
+			.hasMessageContaining("linalg: pad widths must be non-negative");
+	}
+
+	@Test
 	void linalgElementwiseComparisonsAndZerosLike() {
 		// The comparison masks are 0.0/1.0 arrays over %la-bcast, so scalars and
 		// numpy broadcasting come for free; zeros-like preserves shape AND width.

@@ -304,6 +304,17 @@ examples:
   - path: deep-learning-from-scratch/ch06/hyperparameter-optimization.lisp
     backends: [jvm-compile, wasm-component]
     note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch07/gradient-check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the correctness gate of the Convolution/Pooling layers (im2col/col2im backprop)
+    expect:
+      file: .expected/dlfs-convnet-gradient-check.txt
+  - path: deep-learning-from-scratch/ch07/train-convnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch08/train-deepnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
 
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp

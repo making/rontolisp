@@ -1,54 +1,49 @@
-# Deep Learning from Scratch: ch07-ch08 (CNN) port
+# Deep Learning from Scratch: ch07-ch08 (CNN) follow-ups
 
-The MLP chapters (ch02-ch06) of ゼロから作るDeep Learning are ported under
-`examples/deep-learning-from-scratch/` (see its README.md; the linalg axis
-reductions / seeded RNG / indexing helpers, the CLOS layer library and the
-MNIST idx loader all landed with that work). This todo is the follow-up:
-ch07 (SimpleConvNet: im2col/col2im, Convolution and Pooling layers) and
-ch08 (DeepConvNet, `awesome_net`, misclassified-MNIST, the float16 note).
+The core ch07/ch08 port landed 2026-07-12 (this todo's original scope):
 
-## Missing linalg pieces (the gap analysis, ch07/ch08 column)
+- linalg additions: `linalg:transpose` optional axes list (rank-n
+  permutation, odometer walk; the 2-arg call declines every `--simd`
+  transpose kernel by the existing arity guards), public `linalg:pad`
+  (constant-0, per-axis `(before after)` pairs or one integer), and the
+  internal rank-4 `linalg::%la-im2col`/`%la-col2im` pair (option (a) of
+  the original analysis: direct index arithmetic, no pad copy / 6-D
+  scratch / transpose materialized; width-preserving). Unit tests in all
+  three suites + the `linalg-transpose-axes-pad-im2col-cross-backend`
+  ci-spec case; doc pages en/ja incl. the curated functions.md rows.
+- `common/util.lisp` (book-shaped `im2col`/`col2im` wrappers),
+  `convolution` + `pooling` CLOS layers in `common/layers.lisp` (pooling
+  backward = one-hot x dout-column instead of the book's fancy-index
+  scatter -- no `linalg:scatter!` was needed),
+  `ch07/simple-convnet.lisp` + `gradient-check.lisp` (synthetic 10x10,
+  filter-num 3, weight-init-std 0.1 -- 0.01-scale activations pollute the
+  NUMERICAL side via ReLU-kink/argmax flips at h = 1e-4) +
+  `train-convnet.lisp`, `ch08/deep-convnet.lisp` + `train-deepnet.lisp`.
+  examples.yaml: gradient-check = RUN x3 with .expected; train scripts =
+  jvm-compile + wasm-component like the other MNIST readers.
+- Verified: gradient-check byte-identical on interpreter/--simd/JVM/WASM
+  P1/component; train-convnet output identical on interpreter (292s),
+  --simd (88s), JVM (2.2s), WASM P1 run (35s).
 
-The book's CNN code needs, beyond what landed:
+## Remaining
 
-- **`linalg:transpose` with an axes argument** (numpy
-  `x.transpose(0, 3, 1, 2)`): im2col permutes a 6-D scratch tensor with
-  `transpose(0, 4, 5, 1, 2, 3)`, Convolution/Pooling flip NCHW <-> NHWC.
-  The existing rank-2 transpose stays the 1-arg behavior; an optional axes
-  list generalizes it (row-major odometer walk like `%la-bcast-loop`, or
-  the simpler per-element multi-index remap).
-- **`linalg:pad`** (numpy `np.pad(x, [(0,0) (0,0) (p,p) (p,p)])`,
-  constant-0 mode is all the book uses).
-- **Strided window read/accumulate**: im2col's
-  `img[:, :, y:y_max:stride, x:x_max:stride]` slice read and col2im's
-  `+=` slice accumulate. Options: (a) a dedicated
-  `linalg::%la-im2col`/`%la-col2im` pair in linalg.lisp (rank-4 only, the
-  pragmatic choice -- numpy has no im2col either, but the loops are pure
-  index arithmetic and slow interpreted); (b) generic
-  `linalg:slice`/`slice-set!` with strides (bigger API, reusable).
-- Already covered by the ch02-ch06 work (rank-generic): axis reductions
-  (`amax`/`argmax` along axis 1 for Pooling), `take-rows` (rank-4 batch
-  extraction), `reshape -1`, `zeros-like`.
-
-## Port shape
-
-- `common/layers.lisp` gains `convolution` and `pooling` CLOS classes
-  (forward caches col/col-w/argmax like the book; backward scatters
-  through col2im). The one new scatter (`dmax[arange(size), argmax] = dout`
-  in Pooling backward) can stay functional via `one-hot`-style
-  construction or motivate a `linalg:scatter!` -- decide then (scatter was
-  deliberately left out of the ch02-ch06 work).
-- `ch07/simple-convnet.lisp` + `train-convnet.lisp` + `gradient-check.lisp`
-  (small synthetic check like ch05/ch06's); `ch08/deep-convnet.lisp` +
-  `train-deepnet.lisp`. `params.pkl` / `deep_convnet_params.pkl` re-export
-  through `tools/export-sample-weight.py`'s RLW1 format (it already
-  handles n-dim arrays; add a key-order argument).
-- Runtime: a CNN forward is ~100x the MLP's. The interpreter leg is only
-  practical under `--simd`; scale train subsets down hard (im2col turns
-  conv into `linalg:matmul`, which IS `--simd`-intercepted, so the heavy
-  lifting is already accelerated; im2col itself would run as scalar Lisp
-  loops -- measure, and consider kernel interception per `.todo/107` if it
-  dominates).
+- **im2col `--simd` interception** (the measured bottleneck): im2col/
+  col2im run as scalar Lisp loops and dominate the accelerated runs --
+  ch07 train is 88s under interpreter `--simd` vs 2.2s on the JVM, so
+  ~97% of the accelerated interpreter time is the unfold, not the
+  matmul. An `eval.LinalgSimd`-style native for `%la-im2col`/`%la-col2im`
+  (and the JVM/wasm-GC call-site equivalents per `.todo/107`) would close
+  most of that gap. Kernels are pure index arithmetic -- no lanes needed,
+  just compiled loops.
+- **The pretrained-params scripts**: ch07 `apply_filter.py`/
+  `visualize_filter.py`, ch08 `misclassified_mnist.py` +
+  `half_float_network.py` need `params.pkl`/`deep_convnet_params.pkl`
+  re-exported through `tools/export-sample-weight.py`'s RLW1 format (it
+  already handles n-dim arrays; add a key-order argument, W1 b1 W2 b2 ...)
+  plus a `load-params` into the net classes; the plots would become ASCII
+  like ch03 mnist-show. The half-float chapter maps naturally onto packed
+  `#f` (`'single-float` constructors) -- linalg is already
+  width-polymorphic end to end.
 
 ## Deferred items parked here from the ch02-ch06 work
 
@@ -60,9 +55,9 @@ The book's CNN code needs, beyond what landed:
   files (~55 MB, gitignored) -- maybe gate on their presence with an
   assumption-skip like the wasmtime check.
 - **Full-scale runs**: the training scripts' defaults are scaled down
-  (500-image subsets, small hidden sizes, few epochs). Book-fidelity
-  settings are documented in each header; nothing blocks running them
-  under `--simd`/JVM other than patience.
+  (100-image subsets, one epoch for the CNNs). Book-fidelity settings are
+  documented in each header; nothing blocks running them under
+  `--simd`/JVM other than patience (and the im2col item above).
 - **WASM exp/log parity**: loss prints still differ in their last digits
   on WASM (the known polynomial-approximation drift). If a later todo
   makes WASM's exp/log bit-identical, the two `contains:`-checked examples
