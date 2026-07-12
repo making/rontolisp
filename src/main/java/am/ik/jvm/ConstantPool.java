@@ -4,14 +4,25 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * JVM class file constant pool builder.
+ * JVM class file constant pool builder. Entries are deduplicated by their serialized
+ * bytes: adding the same constant twice returns the first entry instead of appending a
+ * duplicate. Because a composite entry (Class/String/NameAndType/refs) embeds the u2
+ * indexes of its already-deduplicated components, structural sharing falls out naturally
+ * -- two {@code Methodref}s to the same method are byte-identical and collapse to one
+ * entry. Duplicates are legal in the class format, so this is purely a size optimization,
+ * but a decisive one: without it a large generated class wastes roughly half its pool on
+ * repeats and can cross the 65535 class-format ceiling.
  */
 public final class ConstantPool {
 
 	private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+	private final Map<ByteBuffer, Constant> dedup = new HashMap<>();
 
 	private int size = 0;
 
@@ -20,23 +31,39 @@ public final class ConstantPool {
 	}
 
 	/**
-	 * Add a constant entry to the pool.
+	 * Add a constant entry to the pool, returning the existing entry when an identical
+	 * one was added before.
 	 * @param constantType the type of the constant
 	 * @param constantDef a consumer that writes the constant data
 	 * @return the constant entry
 	 */
 	public Constant add(ConstantType constantType, Consumer<ByteCodeWriter> constantDef) {
+		return add(constantType, constantDef, false);
+	}
+
+	private Constant add(ConstantType constantType, Consumer<ByteCodeWriter> constantDef, boolean twoSlots) {
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		final ByteCodeWriter out = new ByteCodeWriter(stream);
 		out.write(constantType.value());
 		constantDef.accept(out);
+		byte[] bytes = stream.toByteArray();
+		Constant existing = this.dedup.get(ByteBuffer.wrap(bytes));
+		if (existing != null) {
+			return existing;
+		}
 		try {
-			this.out.write(stream.toByteArray());
+			this.out.write(bytes);
 		}
 		catch (IOException e) {
 			throw new UncheckedIOException(e);
 		}
-		return new Constant(++this.size, constantType, stream.toByteArray());
+		Constant constant = new Constant(++this.size, constantType, bytes);
+		if (twoSlots) {
+			// Long and double constants take two constant pool entries
+			this.size++;
+		}
+		this.dedup.put(ByteBuffer.wrap(bytes), constant);
+		return constant;
 	}
 
 	/**
@@ -133,13 +160,10 @@ public final class ConstantPool {
 	 * @return the long constant entry
 	 */
 	public LongConstant addLong(long value) {
-		LongConstant longConstant = new LongConstant(this.add(ConstantType.LONG, o -> {
+		return new LongConstant(this.add(ConstantType.LONG, o -> {
 			o.writeU4((int) (value >>> 32));
 			o.writeU4((int) value);
-		}));
-		// Long constants take two constant pool entries
-		this.size++;
-		return longConstant;
+		}, true));
 	}
 
 	/**
@@ -148,14 +172,13 @@ public final class ConstantPool {
 	 * @return the double constant entry
 	 */
 	public DoubleConstant addDouble(double value) {
+		// Key by the serialized bits (doubleToLongBits), so -0.0 and 0.0 stay distinct
+		// entries and every NaN shares the canonical bit pattern it serializes to.
 		long bits = Double.doubleToLongBits(value);
-		DoubleConstant doubleConstant = new DoubleConstant(this.add(ConstantType.DOUBLE, o -> {
+		return new DoubleConstant(this.add(ConstantType.DOUBLE, o -> {
 			o.writeU4((int) (bits >>> 32));
 			o.writeU4((int) bits);
-		}));
-		// Double constants take two constant pool entries
-		this.size++;
-		return doubleConstant;
+		}, true));
 	}
 
 	/**

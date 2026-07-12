@@ -25,6 +25,7 @@ import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
@@ -94,7 +95,7 @@ public final class RontoLispCli {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
-					options.contains("--no-gc"), options.contains("--simd"));
+					options.contains("--no-gc"), options.contains("--simd"), options.contains("--no-prune"));
 		}
 		else {
 			interpret(source, baseDir, systemPath, options.contains("--simd"));
@@ -208,7 +209,8 @@ public final class RontoLispCli {
 	}
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
-			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd) {
+			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
+			boolean noPrune) {
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -238,6 +240,12 @@ public final class RontoLispCli {
 		// (NoGcWasmCompiler), so it must NOT get the splice.
 		if (!(outputFile.endsWith(".wasm") && noGc)) {
 			program = VecLibrary.process(program);
+		}
+		// Drop spliced library definitions unreachable from the user program (the AST
+		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
+		// can resolve any name at runtime) and --no-prune (the explicit escape hatch).
+		if (!dynamic && !noPrune) {
+			program = LibraryDefunPruner.prune(program);
 		}
 		byte[] bytes;
 		if (outputFile.endsWith(".wasm")) {
@@ -338,6 +346,10 @@ public final class RontoLispCli {
 		this.out.println("                     behaves as without --simd. Interpreter/REPL: run the vec: kernels");
 		this.out.println("                     on the Vector API (baked into the native binary; on java -jar add");
 		this.out.println("                     --add-modules jdk.incubator.vector, else it falls back to scalar).");
+		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");
+		this.out.println("                     By default unreachable library definitions (linalg:/vec:/...)");
+		this.out.println("                     are dropped at compile time; names forged at runtime from");
+		this.out.println("                     computed strings need this flag (or --dynamic) to resolve.");
 		this.out.println("  --buffered-output  Block-buffer stdout (avoids interleaving when piped)");
 		this.out.println("                     Off by default so the REPL responds to each line");
 		this.out.println("  --system-path DIRS Directories searched for NAME.asd by asdf:load-system");

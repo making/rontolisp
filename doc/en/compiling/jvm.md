@@ -48,6 +48,15 @@ function directly), and the `java:` interop bridge's reflective entry point surv
 as an explicit root. The same flag also tree-shakes the
 [WASM output](wasm.md).
 
+Independently of `--optimize`, compilation always tree-shakes the bundled
+Lisp-source libraries (`linalg:`, `vec:`, JSON, URL, `equalp`/`string<`): a
+library function your program never mentions -- by name anywhere in the source,
+including quoted symbols and string literals -- is not compiled in. The one
+consequence: a library function whose name is only assembled at runtime from
+computed strings and called through `eval`/`apply` signals the usual
+"undefined function" error. Compile with `--no-prune` (or `--dynamic`) to keep
+every library definition in that case.
+
 The generated `.class` file targets Java 6 (class version 50), so its bytecode
 loads on any JRE 6+. Beyond `java.lang` and `java.io`, the emitted runtime
 helpers reference `java.math` (`BigInteger`/`BigDecimal`/`MathContext`, for the

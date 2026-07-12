@@ -68,6 +68,11 @@ public final class LispPreludeLibrary {
 	private LispPreludeLibrary() {
 	}
 
+	// Package-private: LibraryDefunPruner keys the prelude defuns as prunable too.
+	static java.util.Set<String> names() {
+		return SOURCES.keySet();
+	}
+
 	/**
 	 * Returns the parsed definition for a prelude function. Parsed once and cached.
 	 * @param name a prelude function name (bare)

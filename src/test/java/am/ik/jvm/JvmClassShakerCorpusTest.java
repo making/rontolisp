@@ -69,16 +69,28 @@ class JvmClassShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
-		// Mirror the CLI compile path: user macros (defmacro) are expanded and the
+		// Mirror the CLI compile path: user macros (defmacro) are expanded, the
 		// JSON, linalg, URL, prelude (equalp/string<) and usocket libraries are spliced
-		// by the pre-passes before the compiler ever sees the program.
-		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary
+		// by the pre-passes, and the LibraryDefunPruner drops the spliced defuns the
+		// corpus never reaches -- so the shaker decodes exactly the class the real CLI
+		// emits (the per-backend unit tests keep full-library codegen coverage).
+		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UsocketLibrary
 			.process(am.ik.rontolisp.eval.VecLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 				.process(am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
 					.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
-						.expand(LispReader.readAllFromString(corpusSource()))))))));
+						.expand(LispReader.readAllFromString(corpusSource())))))))));
 
 		byte[] plain = new JvmLispCompiler("Test", false, false).compile(program);
+		// The corpus class is the one that once crossed the JVM 65535 constant-pool
+		// ceiling (todo-118). The LibraryDefunPruner keeps the pool small by dropping
+		// unreachable spliced library defuns; guard the headroom so a growing corpus
+		// or library fails loudly here, not with a corrupt class in CI.
+		int constantPoolEntries = (((plain[8] & 0xff) << 8) | (plain[9] & 0xff)) - 1;
+		System.out.println("corpus class constant-pool entries: " + constantPoolEntries + " / 65534");
+		assertThat(constantPoolEntries)
+			.as("constant-pool headroom (todo-118: was 65520/65534 before the "
+					+ "LibraryDefunPruner and ConstantPool deduplication)")
+			.isLessThanOrEqualTo(52000);
 		// A decoder gap (unrecognized opcode / constant tag) throws here, by design.
 		byte[] optimized = new JvmLispCompiler("Test", false, true).compile(program);
 

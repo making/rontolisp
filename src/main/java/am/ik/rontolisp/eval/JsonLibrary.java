@@ -92,7 +92,8 @@ public final class JsonLibrary {
 		return cached;
 	}
 
-	private static List<LispVal> wrapperForms() {
+	// Package-private: LibraryDefunPruner keys the wrapper defuns as prunable too.
+	static List<LispVal> wrapperForms() {
 		List<LispVal> cached = wrapperForms;
 		if (cached == null) {
 			synchronized (JsonLibrary.class) {

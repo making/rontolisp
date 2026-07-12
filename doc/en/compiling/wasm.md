@@ -900,6 +900,16 @@ layout, so the component is emitted unchanged); under
 — the core module is shaken before the wrap. The same flag also
 dead-code-eliminates the [JVM output](jvm.md).
 
+Independently of `--optimize` (and on every output mode, `--component`
+included), compilation always tree-shakes the bundled Lisp-source libraries
+(`linalg:`, `vec:`, JSON, URL, `equalp`/`string<`): a library function your
+program never mentions -- by name anywhere in the source, including quoted
+symbols and string literals -- is not compiled into the module. The one
+consequence: a library function whose name is only assembled at runtime from
+computed strings and called through `eval`/`apply` signals the usual
+"undefined function" error. Compile with `--no-prune` (or `--dynamic`) to keep
+every library definition in that case.
+
 ### SIMD Acceleration (`--simd`)
 
 `--simd` is the one acceleration switch shared by every backend: it lowers the

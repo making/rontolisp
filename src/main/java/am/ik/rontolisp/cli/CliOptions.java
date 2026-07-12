@@ -14,7 +14,7 @@ public class CliOptions {
 
 	private static final Set<String> noValueKeys = Set.of("-h", "--help", //
 			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--optimize", "--no-gc",
-			"--simd");
+			"--simd", "--no-prune");
 
 	private final Map<String, String> options;
 

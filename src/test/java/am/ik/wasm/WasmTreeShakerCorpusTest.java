@@ -65,14 +65,16 @@ class WasmTreeShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndStaysValid() throws Exception {
-		// Mirror the CLI compile path: user macros (defmacro) are expanded and the
+		// Mirror the CLI compile path: user macros (defmacro) are expanded, the
 		// JSON, linalg, URL, prelude (equalp/string<) and usocket libraries are spliced
-		// by the pre-passes before the compiler ever sees the program.
-		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary
+		// by the pre-passes, and the LibraryDefunPruner drops the spliced defuns the
+		// corpus never reaches -- so the shaker decodes exactly the module the real CLI
+		// emits (the per-backend unit tests keep full-library codegen coverage).
+		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UsocketLibrary
 			.process(am.ik.rontolisp.eval.VecLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 				.process(am.ik.rontolisp.eval.UrlLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
 					.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
-						.expand(LispReader.readAllFromString(corpusSource()))))))));
+						.expand(LispReader.readAllFromString(corpusSource())))))))));
 
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.

@@ -23,6 +23,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
 - [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import` (host functions callable from Lisp) + export `:as` aliases
 - [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- `--optimize` tree-shaking (WASM + JVM)
+- [library-defun-pruning.md](library-defun-pruning.md) -- default-on AST pruning of spliced library defuns (`LibraryDefunPruner`, `--no-prune` escape) + `am.ik.jvm` constant-pool deduplication
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- WASM GC-backend strings as `$str_bytes` arrays (HEAP_PTR as a stack pointer, `_str_fresh` counter ids, `_str_to_mem`/`_write_str_gc` bridges) -- retires the linear string heap leak
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
