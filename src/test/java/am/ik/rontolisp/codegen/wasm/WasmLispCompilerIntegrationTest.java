@@ -1984,9 +1984,15 @@ class WasmLispCompilerIntegrationTest {
 		byte[] proxyBytes = new WasmLispCompiler(false, true, false, false, true).compile(proxy);
 		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/serve-backend.wasm");
 		wasmtime.copyFileToContainer(Transferable.of(proxyBytes), "/tmp/serve-proxy.wasm");
+		// Wait for the BACKEND before querying the proxy: if the proxy answers first,
+		// its fetch fails and it serves the non-empty body "proxied nil nil", which
+		// would end the poll loop with the wrong output (a startup race, not a bug).
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
 						+ " wasmtime serve -W gc=y -S http=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
+						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8083/up >/dev/null && break; sleep 0.25; done;"
+						+ " curl -sf http://127.0.0.1:8083/up >/dev/null"
+						+ " || { echo 'backend never came up' 1>&2; cat /tmp/serve-backend.log 1>&2; exit 1; };"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8084/) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done;"
 						+ " cat /tmp/serve-backend.log /tmp/serve-proxy.log 1>&2; exit 1");
