@@ -22,7 +22,7 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
 
 /**
  * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels (todo-107), the
- * sibling of {@link WasmVecSimdRuntimeBuilder}. Fifteen hand-assembled functions that
+ * sibling of {@link WasmVecSimdRuntimeBuilder}. Thirty-four hand-assembled functions that
  * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site.
  *
  * <h2>Why this exists: {@code --simd} used to make {@code linalg:} SLOWER here</h2>
@@ -47,9 +47,9 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
  * truth for every edge case, error messages included.
  *
  * <p>
- * That is safe because compiled nil is a null reference and none of the fifteen ever
- * returns nil ({@code linalg:array-equal}, which does, is deliberately not intercepted).
- * A {@code ref.test (ref $farray)} on nil is false, so a nil argument declines too.
+ * That is safe because compiled nil is a null reference and none of them ever returns nil
+ * ({@code linalg:array-equal}, which does, is deliberately not intercepted). A
+ * {@code ref.test (ref $farray)} on nil is false, so a nil argument declines too.
  *
  * <h2>What is vectorized, and what is merely de-boxed</h2>
  *
@@ -183,10 +183,18 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int MINIMUM = 31;
 
+	// The internal CNN window unfolding pair (todo 117): pure index arithmetic through
+	// _v_get / _v_set element loops -- no lanes, but no boxing and no generic numeric
+	// dispatch either, which is what dominated the accelerated convolution runs.
+
+	static final int IM2COL = 32;
+
+	static final int COL2IM = 33;
+
 	/**
 	 * The number of functions this builder contributes (shifts {@code FUNC_USER_BASE}).
 	 */
-	static final int FUNC_COUNT = 32;
+	static final int FUNC_COUNT = 34;
 
 	/** The type index of each function, in emission order (for the function section). */
 	static int typeIndexOf(int fn) {
@@ -195,6 +203,9 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case SUM, NORM, AMAX, AMIN, ARGMAX, ARGMIN, TRACE, TRANSPOSE, EXP, LOG, TANH, SIN, COS, TAN, ASIN, ACOS,
 					ATAN, SINH, COSH, SQRT, ABS, NEGATIVE, SIGN ->
 				WasmLispCompiler.TYPE_CALLABLE_BASE;
+			// Five / six eq params -> eq (the always-present callable_arity_N types).
+			case IM2COL -> WasmLispCompiler.TYPE_CALLABLE_BASE + 4;
+			case COL2IM -> WasmLispCompiler.TYPE_CALLABLE_BASE + 5;
 			// Two eq params -> eq.
 			default -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
 		};
@@ -242,6 +253,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 			case COSH -> buildUnary(-1, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, vecBase);
 			case MAXIMUM -> buildSelectElementwise(true, vecBase);
 			case MINIMUM -> buildSelectElementwise(false, vecBase);
+			case IM2COL -> buildIm2col(vecBase);
+			case COL2IM -> buildCol2im(vecBase);
 			default -> throw new IllegalArgumentException("no linalg: simd helper " + fn);
 		};
 	}
@@ -1646,6 +1659,353 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_SHL);
 		i32Const(w, 1);
 		w.write(Instruction.I32_SUB);
+	}
+
+	// --- %la-im2col / %la-col2im (todo 117) --------------------------------------------
+
+	// (linalg::%la-im2col x fh fw stride pad): unfolds a rank-4 packed NCHW array into
+	// the (n*oh*ow, c*fh*fw) window matrix, mirroring the linalg.lisp defun loop for
+	// loop -- an element loop through _v_get / _v_set (a pure copy, so bit-identity is
+	// free at both widths; _v_new zeroes the destination, so a window element in the
+	// padding stays 0.0). Declines on anything but a rank-4 packed operand with i31
+	// window parameters (positive filter/stride, non-negative pad) whose padded extents
+	// are non-negative -- so the defun's floor is a plain truncating division here.
+	//
+	// params: 0 = x, 1 = fh, 2 = fw, 3 = stride, 4 = pad.
+	// i32: fh 5, fw 6, stride 7, pad 8, n 9, c 10, h 11, w 12, eh 13, ew 14, oh 15,
+	// ow 16, rows 17, cols 18, count 19, kind 20, ni 21, yo 22, xo 23, ci 24, fy 25,
+	// fx 26, iy 27, ix0 28, ix 29, base 30, cursor 31, t 32.
+	// eq: res 33, vbX 34, vbD 35, nd 36.
+	private static byte[] buildIm2col(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int x = 0, fhA = 1, fwA = 2, strideA = 3, padA = 4;
+		int fh = 5, fw = 6, stride = 7, pad = 8, n = 9, c = 10, h = 11, wl = 12, eh = 13, ew = 14, oh = 15, ow = 16,
+				rows = 17, cols = 18, count = 19, kind = 20, ni = 21, yo = 22, xo = 23, ci = 24, fy = 25, fx = 26,
+				iy = 27, ix0 = 28, ix = 29, base = 30, cursor = 31, t = 32;
+		int res = 33, vbX = 34, vbD = 35, nd = 36;
+
+		block(w); // B0: the declined exit -- res stays null
+		isFarray(w, x);
+		brIfFalse(w, 0);
+		farrayRank(w, x);
+		i32Const(w, 4);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		dimAt(w, x, 0, n);
+		dimAt(w, x, 1, c);
+		dimAt(w, x, 2, h);
+		dimAt(w, x, 3, wl);
+		emitWindowParams(w, fhA, fwA, strideA, padA, fh, fw, stride, pad, h, wl, eh, ew, oh, ow);
+		// rows = n*oh*ow; cols = c*fh*fw; count = rows*cols
+		get(w, n);
+		get(w, oh);
+		w.write(Instruction.I32_MUL);
+		get(w, ow);
+		w.write(Instruction.I32_MUL);
+		set(w, rows);
+		get(w, c);
+		get(w, fh);
+		w.write(Instruction.I32_MUL);
+		get(w, fw);
+		w.write(Instruction.I32_MUL);
+		set(w, cols);
+		get(w, rows);
+		get(w, cols);
+		w.write(Instruction.I32_MUL);
+		set(w, count);
+		farrayKind(w, x);
+		set(w, kind);
+		newVblock(w, count, kind, vbD, vecBase);
+		farrayField(w, x, 1);
+		set(w, vbX);
+		emitUnfoldLoops(w, true, vbX, vbD, n, c, h, wl, fh, fw, stride, pad, oh, ow, ni, yo, xo, ci, fy, fx, iy, ix0,
+				ix, base, cursor, t, vecBase);
+		newBuckets2(w, rows, cols, nd);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 28, 0, 0, 0, 4, 0);
+	}
+
+	// (linalg::%la-col2im col dims fh fw stride pad): the im2col adjoint -- scatter-ADDS
+	// the window matrix back into a fresh zero rank-4 array of the given dims
+	// (overlapping windows accumulate; padding elements are dropped). The accumulate
+	// reads both sides promoted to f64, adds, and lets _v_set narrow -- exactly the
+	// defun's widen-add-narrow round trip, so bit-identity holds at both widths (the
+	// exact f64 sum of two f32s narrows to the correctly rounded f32). dims must be a
+	// proper list of exactly four non-negative i31s and col must hold exactly the
+	// unfolded element count; anything else declines (the defun signals the shortfall).
+	//
+	// params: 0 = col, 1 = dims, 2 = fh, 3 = fw, 4 = stride, 5 = pad.
+	// i32: fh 6, fw 7, stride 8, pad 9, n 10, c 11, h 12, w 13, eh 14, ew 15, oh 16,
+	// ow 17, rows 18, cols 19, rank 20, prod 21, d 22, i 23, kind 24, ni 25, yo 26,
+	// xo 27, ci 28, fy 29, fx 30, iy 31, ix0 32, ix 33, base 34, cursor 35, t 36.
+	// eq: res 37, vbC 38, vbD 39, nd 40, cur 41.
+	private static byte[] buildCol2im(int vecBase) {
+		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(b);
+		int col = 0, dimsA = 1, fhA = 2, fwA = 3, strideA = 4, padA = 5;
+		int fh = 6, fw = 7, stride = 8, pad = 9, n = 10, c = 11, h = 12, wl = 13, eh = 14, ew = 15, oh = 16, ow = 17,
+				rows = 18, cols = 19, rank = 20, prod = 21, d = 22, i = 23, kind = 24, ni = 25, yo = 26, xo = 27,
+				ci = 28, fy = 29, fx = 30, iy = 31, ix0 = 32, ix = 33, base = 34, cursor = 35, t = 36;
+		int res = 37, vbC = 38, vbD = 39, nd = 40, cur = 41;
+
+		block(w); // B0: the declined exit -- res stays null
+		isFarray(w, col);
+		brIfFalse(w, 0);
+		// dims: a proper list of exactly four non-negative i31s, read into a fresh
+		// bucket array (which then becomes the result's dims, like %la-make's).
+		emitShapeDims(w, dimsA, rank, prod, d, i, nd, cur);
+		get(w, rank);
+		i32Const(w, 4);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		bucketConstAt(w, nd, 0, n);
+		bucketConstAt(w, nd, 1, c);
+		bucketConstAt(w, nd, 2, h);
+		bucketConstAt(w, nd, 3, wl);
+		emitWindowParams(w, fhA, fwA, strideA, padA, fh, fw, stride, pad, h, wl, eh, ew, oh, ow);
+		// col must hold exactly rows*cols elements (the defun signals a shortfall).
+		get(w, n);
+		get(w, oh);
+		w.write(Instruction.I32_MUL);
+		get(w, ow);
+		w.write(Instruction.I32_MUL);
+		set(w, rows);
+		get(w, c);
+		get(w, fh);
+		w.write(Instruction.I32_MUL);
+		get(w, fw);
+		w.write(Instruction.I32_MUL);
+		set(w, cols);
+		farrayCount(w, col);
+		get(w, rows);
+		get(w, cols);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		farrayKind(w, col);
+		set(w, kind);
+		newVblock(w, prod, kind, vbD, vecBase);
+		farrayField(w, col, 1);
+		set(w, vbC);
+		emitUnfoldLoops(w, false, vbC, vbD, n, c, h, wl, fh, fw, stride, pad, oh, ow, ni, yo, xo, ci, fy, fx, iy, ix0,
+				ix, base, cursor, t, vecBase);
+		makeFarrayWithDims(w, nd, vbD);
+		set(w, res);
+		w.write(Instruction.END); // B0
+		get(w, res);
+		w.write(Instruction.END);
+		return withLocals(b.toByteArray(), 31, 0, 0, 0, 5, 0);
+	}
+
+	/**
+	 * Unboxes and validates the four window parameters against the spatial extent held in
+	 * the {@code h} / {@code w} locals: each argument must be an i31, filter and stride
+	 * positive, pad non-negative, and both padded extents ({@code ehLocal} /
+	 * {@code ewLocal}) non-negative. Computes {@code oh} / {@code ow}. Every failed check
+	 * branches to depth 0 (the enclosing declined-exit block, which every check here sits
+	 * directly inside -- callers must not nest this deeper).
+	 */
+	private static void emitWindowParams(WasmWriter w, int fhA, int fwA, int strideA, int padA, int fh, int fw,
+			int stride, int pad, int h, int wl, int eh, int ew, int oh, int ow) {
+		unboxI31OrDecline(w, fhA, fh);
+		unboxI31OrDecline(w, fwA, fw);
+		unboxI31OrDecline(w, strideA, stride);
+		unboxI31OrDecline(w, padA, pad);
+		// fh < 1 || fw < 1 || stride < 1 || pad < 0 -> decline
+		get(w, fh);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, fw);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, stride);
+		i32Const(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, pad);
+		i32Const(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		// eh = h + 2*pad - fh; ew = w + 2*pad - fw; either negative -> decline
+		get(w, h);
+		get(w, pad);
+		i32Const(w, 2);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		get(w, fh);
+		w.write(Instruction.I32_SUB);
+		set(w, eh);
+		get(w, eh);
+		i32Const(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, wl);
+		get(w, pad);
+		i32Const(w, 2);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+		get(w, fw);
+		w.write(Instruction.I32_SUB);
+		set(w, ew);
+		get(w, ew);
+		i32Const(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		// oh = eh / stride + 1; ow = ew / stride + 1 (both operands non-negative)
+		get(w, eh);
+		get(w, stride);
+		w.write(Instruction.I32_DIV_S);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, oh);
+		get(w, ew);
+		get(w, stride);
+		w.write(Instruction.I32_DIV_S);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, ow);
+	}
+
+	/**
+	 * The shared six-deep index walk of {@code %la-im2col} / {@code %la-col2im},
+	 * mirroring the defun loop for loop. With {@code gather} the destination cursor walks
+	 * the window matrix and each in-bounds element is copied out of {@code vbSrc}
+	 * ({@code out[cursor] = x[base+ix]}); without it the SOURCE cursor walks the window
+	 * matrix and each in-bounds element is accumulated into the image
+	 * ({@code img[base+ix] += col[cursor]} over {@code vbDst}, both sides promoted to f64
+	 * and narrowed once by {@code _v_set}). An out-of-bounds filter row skips {@code fw}
+	 * cursor positions at once, an out-of-bounds column just advances it.
+	 */
+	private static void emitUnfoldLoops(WasmWriter w, boolean gather, int vbSrc, int vbDst, int n, int c, int h, int wl,
+			int fh, int fw, int stride, int pad, int oh, int ow, int ni, int yo, int xo, int ci, int fy, int fx, int iy,
+			int ix0, int ix, int base, int cursor, int t, int vecBase) {
+		i32Const(w, 0);
+		set(w, cursor);
+		openCountLoop(w, ni, n);
+		openCountLoop(w, yo, oh);
+		openCountLoop(w, xo, ow);
+		openCountLoop(w, ci, c);
+		openCountLoop(w, fy, fh);
+		// iy = yo*stride + fy - pad
+		get(w, yo);
+		get(w, stride);
+		w.write(Instruction.I32_MUL);
+		get(w, fy);
+		w.write(Instruction.I32_ADD);
+		get(w, pad);
+		w.write(Instruction.I32_SUB);
+		set(w, iy);
+		get(w, iy);
+		i32Const(w, 0);
+		w.write(Instruction.I32_GE_S);
+		get(w, iy);
+		get(w, h);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		// base = ((ni*c + ci)*h + iy)*w; ix0 = xo*stride - pad
+		get(w, ni);
+		get(w, c);
+		w.write(Instruction.I32_MUL);
+		get(w, ci);
+		w.write(Instruction.I32_ADD);
+		get(w, h);
+		w.write(Instruction.I32_MUL);
+		get(w, iy);
+		w.write(Instruction.I32_ADD);
+		get(w, wl);
+		w.write(Instruction.I32_MUL);
+		set(w, base);
+		get(w, xo);
+		get(w, stride);
+		w.write(Instruction.I32_MUL);
+		get(w, pad);
+		w.write(Instruction.I32_SUB);
+		set(w, ix0);
+		openCountLoop(w, fx, fw);
+		get(w, ix0);
+		get(w, fx);
+		w.write(Instruction.I32_ADD);
+		set(w, ix);
+		get(w, ix);
+		i32Const(w, 0);
+		w.write(Instruction.I32_GE_S);
+		get(w, ix);
+		get(w, wl);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		get(w, base);
+		get(w, ix);
+		w.write(Instruction.I32_ADD);
+		set(w, t);
+		if (gather) {
+			// out[cursor] = x[t]
+			get(w, vbDst);
+			get(w, cursor);
+			vget(w, vbSrc, t, vecBase);
+		}
+		else {
+			// img[t] = img[t] + col[cursor]
+			get(w, vbDst);
+			get(w, t);
+			vget(w, vbDst, t, vecBase);
+			vget(w, vbSrc, cursor, vecBase);
+			w.write(Instruction.F64_ADD);
+		}
+		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END); // if in-bounds column
+		get(w, cursor);
+		i32Const(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, cursor);
+		closeCountLoop(w, fx);
+		w.write(Instruction.ELSE);
+		// The whole filter row fell in the padding: skip its fw cursor positions.
+		get(w, cursor);
+		get(w, fw);
+		w.write(Instruction.I32_ADD);
+		set(w, cursor);
+		w.write(Instruction.END); // if in-bounds row
+		closeCountLoop(w, fy);
+		closeCountLoop(w, ci);
+		closeCountLoop(w, xo);
+		closeCountLoop(w, yo);
+		closeCountLoop(w, ni);
+	}
+
+	/** Unboxes an i31 argument into an i32 local, or declines (depth 0) on a non-i31. */
+	private static void unboxI31OrDecline(WasmWriter w, int argLocal, int outLocal) {
+		get(w, argLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		brIfFalse(w, 0);
+		get(w, argLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		set(w, outLocal);
+	}
+
+	/** {@code outLocal = i31.get_s(buckets[index])} for a constant index. */
+	private static void bucketConstAt(WasmWriter w, int bucketsLocal, int index, int outLocal) {
+		get(w, bucketsLocal);
+		castBuckets(w);
+		i32Const(w, index);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		set(w, outLocal);
 	}
 
 	// --- shared emit helpers --------------------------------------------------------

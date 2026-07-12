@@ -1561,7 +1561,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		for (String member : JvmLinalgSimdCompiler.members()) {
-			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.LINALG_PKG, member))) {
+			if (programUsesSymbol(program, JvmLinalgSimdCompiler.qualifiedName(member))) {
 				return true;
 			}
 		}

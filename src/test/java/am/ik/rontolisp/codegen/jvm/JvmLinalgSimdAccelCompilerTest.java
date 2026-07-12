@@ -21,9 +21,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The {@code --simd} JVM acceleration of the {@code linalg:} kernels, the sibling of
- * {@link JvmSimdAccelCompilerTest}. Fifteen {@code linalg:} call sites are routed to the
- * embedded {@link JvmSimdVectorTemplate} bridge instead of the scalar {@code linalg.lisp}
- * defun, and must produce byte-identical output at both widths, at rank 1 AND rank 2.
+ * {@link JvmSimdAccelCompilerTest}. Thirty-four {@code linalg:} call sites are routed to
+ * the embedded {@link JvmSimdVectorTemplate} bridge instead of the scalar
+ * {@code linalg.lisp} defun, and must produce byte-identical output at both widths, at
+ * rank 1 AND rank 2.
  *
  * <p>
  * The distinguishing feature of this path is the FALLBACK: a bridge kernel returns
@@ -476,6 +477,50 @@ class JvmLinalgSimdAccelCompilerTest {
 				(setf (aref *m* 0 0) 99.0)
 				(print *m*)
 				""");
+	}
+
+	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) ----------------------
+
+	@Test
+	void im2colAndCol2imMatchTheScalarReferenceAtBothWidths() throws Exception {
+		// Batch > 1, channels > 1, stride > 1 and pad > 0, so the skipped padding rows
+		// and clipped filter columns are all exercised. im2col only copies elements;
+		// col2im's overlapping windows (stride < filter) accumulate exactly as the
+		// defun's widen-add-narrow round trip does, at both widths.
+		String x = "(linalg:reshape (linalg:arange 96) '(2 3 4 4))";
+		String xf = "(linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4))";
+		assertMatchesScalarReference("(print (linalg::%la-im2col " + x + " 2 2 1 0))");
+		assertMatchesScalarReference("(print (linalg::%la-im2col " + x + " 3 3 2 1))");
+		assertMatchesScalarReference("(print (linalg::%la-im2col " + xf + " 3 3 2 1))");
+		assertMatchesScalarReference(
+				"(print (linalg::%la-col2im (linalg::%la-im2col " + x + " 3 3 1 1) '(2 3 4 4) 3 3 1 1))");
+		assertMatchesScalarReference(
+				"(print (linalg::%la-col2im (linalg::%la-im2col " + xf + " 3 3 1 1) '(2 3 4 4) 3 3 1 1))");
+		assertThat(accel("(print (linalg::%la-im2col (linalg:reshape (linalg:arange 4) '(1 1 2 2)) 2 2 1 0))"))
+			.isEqualTo("#d((0.0 1.0 2.0 3.0))");
+	}
+
+	@Test
+	void im2colDeclinedInputsRunTheScalarDefunExactlyOnce() throws Exception {
+		// A general boxed rank-4 array declines to the defun (which answers a packed
+		// double result on both paths)...
+		assertMatchesScalarReference("(print (linalg::%la-im2col (make-array '(1 1 2 2) :initial-element 1) 2 2 1 0))");
+		// ... and the fallback reloads the temps of the FIVE-argument call rather than
+		// recompiling the argument forms (the widest intercepted call shape).
+		String declined = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) (make-array '(1 1 2 2) :initial-element 1))
+				(linalg::%la-im2col (bump) 2 2 1 0)
+				(print *n*)
+				""";
+		assertThat(accel(declined)).isEqualTo("1");
+		String accepted = """
+				(defparameter *n* 0)
+				(defun bump () (setq *n* (+ *n* 1)) 0)
+				(linalg::%la-im2col (linalg:reshape (linalg:arange 4) '(1 1 2 2)) 2 2 1 (bump))
+				(print *n*)
+				""";
+		assertThat(accel(accepted)).isEqualTo("1");
 	}
 
 }

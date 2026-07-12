@@ -7588,6 +7588,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void wasmGcSimdLinalgIm2colAndCol2imAreByteIdenticalToTheScalarPath() throws Exception {
+		// The internal CNN window unfolding pair (todo 117). Batch > 1, channels > 1,
+		// stride > 1 and pad > 0 exercise the skipped padding rows and the clipped
+		// filter columns; col2im's overlapping windows (stride < filter) accumulate
+		// through the promoting _v_get / _v_set round trip, exactly the defun's
+		// widen-add-narrow, so both widths stay byte-identical.
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 2 2 1 0))");
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 2 1))");
+		assertLinalgMatchesTheScalarPath("(print (linalg::%la-im2col"
+				+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 2 1))");
+		assertLinalgMatchesTheScalarPath("(print (linalg::%la-col2im (linalg::%la-im2col"
+				+ " (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))");
+		assertLinalgMatchesTheScalarPath("(print (linalg::%la-col2im (linalg::%la-im2col"
+				+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))");
+		// A general boxed rank-4 operand declines to the defun on both paths.
+		assertLinalgMatchesTheScalarPath(
+				"(print (linalg::%la-im2col (make-array '(1 1 2 2) :initial-element 1) 2 2 1 0))");
+	}
+
+	@Test
 	void wasmGcSimdLinalgSingleFloatReductionsAccumulateInSinglePrecision() throws Exception {
 		// The linalg leg of the todo-106 precision contract, and the only test here that
 		// proves the KERNEL ran rather than the defun -- a dead interception would print

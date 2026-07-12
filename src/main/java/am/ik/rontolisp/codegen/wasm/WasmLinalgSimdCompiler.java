@@ -96,7 +96,11 @@ final class WasmLinalgSimdCompiler {
 			// linalg:minimum, so they are accelerated transitively, like
 			// square/reciprocal.
 			Map.entry(LispNames.LINALG_MAXIMUM, WasmLinalgSimdRuntimeBuilder.MAXIMUM),
-			Map.entry(LispNames.LINALG_MINIMUM, WasmLinalgSimdRuntimeBuilder.MINIMUM));
+			Map.entry(LispNames.LINALG_MINIMUM, WasmLinalgSimdRuntimeBuilder.MINIMUM),
+			// The internal CNN window unfolding pair (todo 117): %-prefixed members are
+			// internal symbols, qualified with the double colon (see qualifiedName).
+			Map.entry(LispNames.LINALG_IM2COL, WasmLinalgSimdRuntimeBuilder.IM2COL),
+			Map.entry(LispNames.LINALG_COL2IM, WasmLinalgSimdRuntimeBuilder.COL2IM));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
@@ -127,7 +131,21 @@ final class WasmLinalgSimdCompiler {
 	}
 
 	private static int arity(String member) {
-		return UNARY.contains(member) ? 1 : 2;
+		return switch (member) {
+			case LispNames.LINALG_IM2COL -> 5;
+			case LispNames.LINALG_COL2IM -> 6;
+			default -> UNARY.contains(member) ? 1 : 2;
+		};
+	}
+
+	/**
+	 * The member's canonical qualified spelling: a {@code %}-prefixed member is an
+	 * internal symbol and carries the double colon ({@code linalg::%la-im2col}), which is
+	 * how the spliced defun is keyed in {@code ctx.functions}.
+	 */
+	private static String qualifiedName(String member) {
+		return member.startsWith("%") ? PackageRegistry.qualifyInternal(LispNames.LINALG_PKG, member)
+				: PackageRegistry.qualify(LispNames.LINALG_PKG, member);
 	}
 
 	static void compile(String qualifiedName, LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -135,7 +153,7 @@ final class WasmLinalgSimdCompiler {
 		int offset = Objects.requireNonNull(KERNELS.get(member));
 		int arity = arity(member);
 		List<LispVal> args = cons.toList();
-		String qualified = PackageRegistry.qualify(LispNames.LINALG_PKG, member);
+		String qualified = qualifiedName(member);
 		WasmLispCompiler.WasmFunctionInfo defun = ctx.functions.get(qualified);
 		if (defun == null || args.size() != arity + 1
 				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity) {

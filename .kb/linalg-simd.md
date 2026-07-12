@@ -104,7 +104,7 @@ Two consequences worth remembering:
   (JVM), `wasmGcSimdLinalgAxisArgumentsRouteToTheVariadicScalarDefun` (wasm) and
   `axisArgumentsFallBackToTheScalarDefun` (interpreter).
 
-## The intercepted set (32 members)
+## The intercepted set (34 members)
 
 `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin` `trace` `transpose`
 `reshape` `dot` `outer`, plus the todo-109 unary ufuncs `exp` `log` `tanh` `sin` `cos`
@@ -116,7 +116,24 @@ scalar builtins), plus the todo-109 Phase 3 comparison selects `maximum` `minimu
 (strict `(if (> x y) x y)` / `(if (< x y) x y)` selects, never Math.max or a lane
 min/max -- the SECOND operand wins any false comparison, ties and NaN included, and
 unlike the transcendentals the values are CROSS-BACKEND-identical; see the Phase 3
-section of `.kb/vec.md`).
+section of `.kb/vec.md`), plus the todo-117 INTERNAL pair `%la-im2col` (arity 5) /
+`%la-col2im` (arity 6) -- the CNN window unfolding behind the Deep Learning from
+Scratch convolution examples. Those two are the first intercepted internal members: a
+`%`-prefixed member's canonical qualified spelling carries the DOUBLE colon
+(`linalg::%la-im2col`), which is how the interpreter's function binding, the compilers'
+`ctx.functions` keys and the emit-gate symbol scan must compose it --
+`Jvm/WasmLinalgSimdCompiler.qualifiedName` and the interpreter `LinalgSimd.define` all
+branch on the `%` prefix. Their kernels are pure index-arithmetic loops (no lanes;
+im2col is a copy, col2im accumulates two same-width elements per store, which at f32 IS
+the defun's widen-add-narrow round trip -- the exact f64 sum of two f32s narrows to the
+correctly rounded f32), so both are bit-identical at both widths. They decline anything
+but a rank-4 packed operand (col2im: any-rank packed col + a literal 4-list of dims
+whose product the col size must match exactly) with i31/integer window parameters --
+positive filter/stride, non-negative pad, and both padded extents `h + 2*pad - fh` /
+`w + 2*pad - fw` non-negative, so the defun's `floor` is a plain truncating division in
+the kernel. The JVM bridge descriptors are built per arity now (5/6 `Object` params),
+and the wasm kernels use the always-present `TYPE_CALLABLE_BASE + 4` / `+ 5` function
+types, so no new type entries were needed.
 
 Accelerated **transitively**, so they are not intercepted directly: `mean` (calls `sum`),
 `matmul` (calls `dot`), `flatten` (calls `reshape`), `solve` (calls `inv` then `dot`),
@@ -292,8 +309,10 @@ the same incubator module.
 **One bridge class** (`JvmSimdVectorTemplate`), so one `_simdInit` and one
 `resource-config.json` entry -- adding a second template class would need its own entry, and
 the failure would be at RUN time, not build time. `JvmSimdRuntimeBuilder` registers the
-twenty `la*` method refs under **package-prefixed keys** (`"linalg:add"`), because
-`vec:add` and `linalg:add` share a member name.
+`la*` method refs (one per intercepted member) under **package-prefixed keys**
+(`"linalg:add"`; the internal pair under its double-colon spelling
+`"linalg::%la-im2col"`), because `vec:add` and `linalg:add` share a member name. The
+descriptors are composed per member arity (1/2/5/6 `Object` params).
 
 The compiled packed array carries an **in-array header** `[rank, dim..., data...]`,
 `off = 1 + rank`. So an element-wise linalg kernel is the `vec:` one at a different offset,
@@ -314,9 +333,9 @@ call sites) -- exactly as any `vec:` program does. `(print (+ 1 2))` does not.
 
 ### wasm-GC
 
-Thirty standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
-+ 47` (the vec: block grew to 47 with the todo-109 unary kernels), emitted only under
-`--simd`; `userFuncBase()` now shifts by 77. `WasmLispCompilerTest.simd
+Thirty-four standalone functions at `WasmLispCompiler.linalgFuncBase()` = `FUNC_VEC_BASE
++ 55` (the vec: block is 55 with the todo-109 kernels and `-into` siblings), emitted only
+under `--simd`; `userFuncBase()` now shifts by 89. `WasmLispCompilerTest.simd
 AppendsExactlyTheVecTypeBlockAndTheVecAndLinalgFunctionBlocks` pins the delta -- it is the
 only structural guard that a build WITHOUT `--simd` stays byte-identical to one that never
 knew the flag. **Update it, never weaken it.**

@@ -2317,6 +2317,22 @@ public final class LispNames {
 	public static final String LINALG_RELU = "relu";
 
 	/**
+	 * {@code linalg::%la-im2col} (INTERNAL, note the double colon): unfolds a rank-4 NCHW
+	 * array into the {@code (N*out-h*out-w, C*fh*fw)} window matrix behind the CNN
+	 * examples (Deep Learning from Scratch {@code common/util.py}). Pure index
+	 * arithmetic, intercepted under {@code --simd} because it dominates the accelerated
+	 * convolution runs.
+	 */
+	public static final String LINALG_IM2COL = "%la-im2col";
+
+	/**
+	 * {@code linalg::%la-col2im} (INTERNAL): the {@code %la-im2col} adjoint --
+	 * scatter-adds the window matrix back into a fresh zero rank-4 NCHW array
+	 * (overlapping windows accumulate; the convolution backward pass).
+	 */
+	public static final String LINALG_COL2IM = "%la-col2im";
+
+	/**
 	 * The {@code vec} package name: portable packed-{@code f64} vector kernels over the
 	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself
 	 * ({@code vec.lisp}, see {@code VecLibrary}) as the scalar reference / cross-backend

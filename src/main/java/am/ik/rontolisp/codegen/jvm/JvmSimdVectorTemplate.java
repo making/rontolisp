@@ -1884,6 +1884,227 @@ final class JvmSimdVectorTemplate {
 		return m;
 	}
 
+	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) -------------------
+	// Pure index arithmetic mirroring the linalg.lisp defuns loop for loop -- no lanes,
+	// just compiled loops in place of the boxed defun (im2col dominated the accelerated
+	// convolution runs). im2col only copies elements; col2im accumulates two same-width
+	// elements per store, which at f32 width IS the defun's widen-add-narrow round trip
+	// (the exact double sum of two floats narrows to the correctly rounded float), so
+	// both are bit-identical at both widths. The window guard requires both padded
+	// extents non-negative, so the defun's floor is a plain truncating division.
+
+	static @Nullable Object laIm2col(@Nullable Object a, @Nullable Object fhv, @Nullable Object fwv,
+			@Nullable Object stridev, @Nullable Object padv) {
+		if (!laPacked(a) || laRank(a) != 4) {
+			return null;
+		}
+		int h = laDim(a, 2);
+		int w = laDim(a, 3);
+		long[] p = laWindow(h, w, fhv, fwv, stridev, padv);
+		if (p == null) {
+			return null;
+		}
+		int n = laDim(a, 0);
+		int c = laDim(a, 1);
+		int fh = (int) p[0], fw = (int) p[1], stride = (int) p[2], pad = (int) p[3], oh = (int) p[4], ow = (int) p[5];
+		long rows = (long) n * oh * ow;
+		long cols = (long) c * fh * fw;
+		if (!laSizeFits(rows) || !laSizeFits(cols) || !laSizeFits(rows * cols)) {
+			return null;
+		}
+		if (a instanceof float[] x) {
+			float[] out = laNewMatF((int) rows, (int) cols);
+			int dst = 3;
+			for (int ni = 0; ni < n; ni++) {
+				for (int yo = 0; yo < oh; yo++) {
+					for (int xo = 0; xo < ow; xo++) {
+						for (int ci = 0; ci < c; ci++) {
+							for (int fy = 0; fy < fh; fy++) {
+								int iy = yo * stride + fy - pad;
+								if (iy >= 0 && iy < h) {
+									int base = 5 + ((ni * c + ci) * h + iy) * w;
+									int ix0 = xo * stride - pad;
+									for (int fx = 0; fx < fw; fx++) {
+										int ix = ix0 + fx;
+										if (ix >= 0 && ix < w) {
+											out[dst] = x[base + ix];
+										}
+										dst++;
+									}
+								}
+								else {
+									// The whole filter row fell in the padding.
+									dst += fw;
+								}
+							}
+						}
+					}
+				}
+			}
+			return out;
+		}
+		double[] x = laDoubles(a);
+		double[] out = laNewMat((int) rows, (int) cols);
+		int dst = 3;
+		for (int ni = 0; ni < n; ni++) {
+			for (int yo = 0; yo < oh; yo++) {
+				for (int xo = 0; xo < ow; xo++) {
+					for (int ci = 0; ci < c; ci++) {
+						for (int fy = 0; fy < fh; fy++) {
+							int iy = yo * stride + fy - pad;
+							if (iy >= 0 && iy < h) {
+								int base = 5 + ((ni * c + ci) * h + iy) * w;
+								int ix0 = xo * stride - pad;
+								for (int fx = 0; fx < fw; fx++) {
+									int ix = ix0 + fx;
+									if (ix >= 0 && ix < w) {
+										out[dst] = x[base + ix];
+									}
+									dst++;
+								}
+							}
+							else {
+								dst += fw;
+							}
+						}
+					}
+				}
+			}
+		}
+		return out;
+	}
+
+	static @Nullable Object laCol2im(@Nullable Object col, @Nullable Object dims, @Nullable Object fhv,
+			@Nullable Object fwv, @Nullable Object stridev, @Nullable Object padv) {
+		if (!laPacked(col)) {
+			return null;
+		}
+		long[] d = laShape(dims);
+		if (d == null || d.length != 4 || d[0] > Integer.MAX_VALUE || d[1] > Integer.MAX_VALUE
+				|| d[2] > Integer.MAX_VALUE || d[3] > Integer.MAX_VALUE) {
+			return null;
+		}
+		int n = (int) d[0];
+		int c = (int) d[1];
+		int h = (int) d[2];
+		int w = (int) d[3];
+		long[] p = laWindow(h, w, fhv, fwv, stridev, padv);
+		if (p == null) {
+			return null;
+		}
+		int fh = (int) p[0], fw = (int) p[1], stride = (int) p[2], pad = (int) p[3], oh = (int) p[4], ow = (int) p[5];
+		long rows = (long) n * oh * ow;
+		long cols = (long) c * fh * fw;
+		long total = (long) n * c * ((long) h * w);
+		if (!laSizeFits(rows) || !laSizeFits(cols) || !laSizeFits(rows * cols) || !laSizeFits(total)
+				|| laTotal(col) != rows * cols) {
+			return null;
+		}
+		int off = 1 + laRank(col);
+		if (col instanceof float[] x) {
+			float[] img = new float[5 + (int) total];
+			img[0] = 4.0f;
+			img[1] = n;
+			img[2] = c;
+			img[3] = h;
+			img[4] = w;
+			int src = off;
+			for (int ni = 0; ni < n; ni++) {
+				for (int yo = 0; yo < oh; yo++) {
+					for (int xo = 0; xo < ow; xo++) {
+						for (int ci = 0; ci < c; ci++) {
+							for (int fy = 0; fy < fh; fy++) {
+								int iy = yo * stride + fy - pad;
+								if (iy >= 0 && iy < h) {
+									int base = 5 + ((ni * c + ci) * h + iy) * w;
+									int ix0 = xo * stride - pad;
+									for (int fx = 0; fx < fw; fx++) {
+										int ix = ix0 + fx;
+										if (ix >= 0 && ix < w) {
+											img[base + ix] += x[src];
+										}
+										src++;
+									}
+								}
+								else {
+									src += fw;
+								}
+							}
+						}
+					}
+				}
+			}
+			return img;
+		}
+		double[] x = laDoubles(col);
+		double[] img = new double[5 + (int) total];
+		img[0] = 4.0;
+		img[1] = n;
+		img[2] = c;
+		img[3] = h;
+		img[4] = w;
+		int src = off;
+		for (int ni = 0; ni < n; ni++) {
+			for (int yo = 0; yo < oh; yo++) {
+				for (int xo = 0; xo < ow; xo++) {
+					for (int ci = 0; ci < c; ci++) {
+						for (int fy = 0; fy < fh; fy++) {
+							int iy = yo * stride + fy - pad;
+							if (iy >= 0 && iy < h) {
+								int base = 5 + ((ni * c + ci) * h + iy) * w;
+								int ix0 = xo * stride - pad;
+								for (int fx = 0; fx < fw; fx++) {
+									int ix = ix0 + fx;
+									if (ix >= 0 && ix < w) {
+										img[base + ix] += x[src];
+									}
+									src++;
+								}
+							}
+							else {
+								src += fw;
+							}
+						}
+					}
+				}
+			}
+		}
+		return img;
+	}
+
+	/**
+	 * Validates the four window parameters against the spatial extent {@code (h, w)}:
+	 * Lisp integers, positive filter/stride, non-negative pad, and both padded extents
+	 * non-negative. Returns {@code [fh, fw, stride, pad, oh, ow]}, or {@code null} to
+	 * decline to the defun.
+	 */
+	private static long @Nullable [] laWindow(int h, int w, @Nullable Object fhv, @Nullable Object fwv,
+			@Nullable Object stridev, @Nullable Object padv) {
+		if (!(fhv instanceof Long fh) || !(fwv instanceof Long fw) || !(stridev instanceof Long stride)
+				|| !(padv instanceof Long pad)) {
+			return null;
+		}
+		if (fh < 1 || fw < 1 || stride < 1 || pad < 0 || fh > Integer.MAX_VALUE || fw > Integer.MAX_VALUE
+				|| stride > Integer.MAX_VALUE || pad > Integer.MAX_VALUE) {
+			return null;
+		}
+		long eh = h + 2L * pad - fh;
+		long ew = w + 2L * pad - fw;
+		if (eh < 0 || ew < 0) {
+			return null;
+		}
+		long oh = eh / stride + 1;
+		long ow = ew / stride + 1;
+		if (oh > Integer.MAX_VALUE || ow > Integer.MAX_VALUE) {
+			return null;
+		}
+		return new long[] { fh, fw, stride, pad, oh, ow };
+	}
+
+	private static boolean laSizeFits(long total) {
+		return total >= 0 && total <= Integer.MAX_VALUE - 8;
+	}
+
 	/** Rejects a single-float operand paired with a double-float destination. */
 	private static void requireDouble(@Nullable Object a, @Nullable Object b) {
 		if (a instanceof float[] || b instanceof float[]) {

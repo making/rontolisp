@@ -166,9 +166,9 @@ Single-float reductions carry one more caveat. Under `--simd`, an `#f` reduction
 
 ## Accelerating linalg
 
-The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes thirty-two of its functions to the same kernels:
+The [`linalg` package](linear-algebra.md) is written over the same packed float arrays, and `--simd` routes thirty-four of its functions to the same kernels:
 
-- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`, the unary ufuncs `exp`, `log`, `tanh`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `sqrt`, `abs`, `negative`, `sign`, and the comparison selects `maximum`, `minimum`
+- **accelerated directly**: `add`, `sub`, `mul`, `div`, `sum`, `norm`, `amax`, `amin`, `argmax`, `argmin`, `trace`, `transpose`, `reshape`, `dot`, `outer`, the unary ufuncs `exp`, `log`, `tanh`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `sqrt`, `abs`, `negative`, `sign`, the comparison selects `maximum`, `minimum`, and the two internal convolution helpers behind the Deep Learning from Scratch examples (`linalg::%la-im2col` and `linalg::%la-col2im`, the im2col window unfolding and its adjoint -- index-arithmetic loops rather than lane kernels, bit-identical at both widths)
 - **accelerated with them**: `mean`, `matmul`, `flatten`, `solve`, `square`, `reciprocal`, `clip` and `relu`, each of which is written in terms of the functions above
 - **never accelerated**: `emap` (it applies an arbitrary function to each element), `det`, `inv`, `array-equal` and the constructors
 

@@ -79,7 +79,12 @@ final class JvmLinalgSimdCompiler {
 			// The comparison-select ufuncs (todo 109 Phase 3). linalg:clip / linalg:relu
 			// are not here: their spliced defuns compose linalg:maximum / linalg:minimum,
 			// so they are accelerated transitively, like square/reciprocal.
-			Map.entry(LispNames.LINALG_MAXIMUM, "laMaximum"), Map.entry(LispNames.LINALG_MINIMUM, "laMinimum"));
+			Map.entry(LispNames.LINALG_MAXIMUM, "laMaximum"), Map.entry(LispNames.LINALG_MINIMUM, "laMinimum"),
+			// The internal CNN window unfolding pair (todo 117): pure index arithmetic,
+			// intercepted because the boxed defun dominates the accelerated convolution
+			// runs. %-prefixed members are internal symbols, qualified with the double
+			// colon (see qualifiedName).
+			Map.entry(LispNames.LINALG_IM2COL, "laIm2col"), Map.entry(LispNames.LINALG_COL2IM, "laCol2im"));
 
 	/** The unary members; everything else takes two arguments. */
 	private static final List<String> UNARY = List.of(LispNames.LINALG_SUM, LispNames.LINALG_NORM,
@@ -111,7 +116,22 @@ final class JvmLinalgSimdCompiler {
 
 	/** The argument count of the member's Lisp call form. */
 	static int arity(String member) {
-		return UNARY.contains(member) ? 1 : 2;
+		return switch (member) {
+			case LispNames.LINALG_IM2COL -> 5;
+			case LispNames.LINALG_COL2IM -> 6;
+			default -> UNARY.contains(member) ? 1 : 2;
+		};
+	}
+
+	/**
+	 * The member's canonical qualified spelling: a {@code %}-prefixed member is an
+	 * internal symbol and carries the double colon ({@code linalg::%la-im2col}), which is
+	 * how the spliced defun is keyed in {@code ctx.functions} and how the program
+	 * references it.
+	 */
+	static String qualifiedName(String member) {
+		return member.startsWith("%") ? PackageRegistry.qualifyInternal(LispNames.LINALG_PKG, member)
+				: PackageRegistry.qualify(LispNames.LINALG_PKG, member);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -119,7 +139,7 @@ final class JvmLinalgSimdCompiler {
 		if (ops == null) {
 			throw new IllegalStateException("simd acceleration runtime was not emitted");
 		}
-		String qualified = PackageRegistry.qualify(LispNames.LINALG_PKG, member);
+		String qualified = qualifiedName(member);
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
 		List<LispVal> args = cons.toList();
 		int arity = arity(member);

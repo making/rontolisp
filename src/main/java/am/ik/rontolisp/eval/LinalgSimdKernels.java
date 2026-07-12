@@ -869,4 +869,149 @@ final class LinalgSimdKernels {
 		return a.clone();
 	}
 
+	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) --------------------
+	// Pure index arithmetic mirroring the linalg.lisp defuns loop for loop -- no lanes,
+	// just compiled loops in place of the interpreter's boxed do-loop tree walk (im2col
+	// dominated the accelerated CNN runs: ~97% of ch07 train time under --simd). im2col
+	// only copies elements, so it is trivially bit-identical; col2im accumulates two
+	// same-width elements per store, and at f32 width a float add IS the defun's
+	// widen-add-narrow round trip (the exact double sum of two floats narrows to the
+	// correctly rounded float), so both stay bit-identical at both widths. The caller
+	// guarantees fh/fw/stride positive, pad non-negative and both padded extents
+	// (h + 2*pad - fh, w + 2*pad - fw) non-negative, so the defun's floor is plain
+	// truncating division here.
+
+	static double[] im2col(double[] x, int n, int c, int h, int w, int fh, int fw, int stride, int pad) {
+		int oh = (h + 2 * pad - fh) / stride + 1;
+		int ow = (w + 2 * pad - fw) / stride + 1;
+		double[] out = new double[n * oh * ow * c * fh * fw];
+		int dst = 0;
+		for (int ni = 0; ni < n; ni++) {
+			for (int yo = 0; yo < oh; yo++) {
+				for (int xo = 0; xo < ow; xo++) {
+					for (int ci = 0; ci < c; ci++) {
+						for (int fy = 0; fy < fh; fy++) {
+							int iy = yo * stride + fy - pad;
+							if (iy >= 0 && iy < h) {
+								int base = ((ni * c + ci) * h + iy) * w;
+								int ix0 = xo * stride - pad;
+								for (int fx = 0; fx < fw; fx++) {
+									int ix = ix0 + fx;
+									if (ix >= 0 && ix < w) {
+										out[dst] = x[base + ix];
+									}
+									dst++;
+								}
+							}
+							else {
+								// The whole filter row fell in the padding: skip it.
+								dst += fw;
+							}
+						}
+					}
+				}
+			}
+		}
+		return out;
+	}
+
+	static float[] im2colF(float[] x, int n, int c, int h, int w, int fh, int fw, int stride, int pad) {
+		int oh = (h + 2 * pad - fh) / stride + 1;
+		int ow = (w + 2 * pad - fw) / stride + 1;
+		float[] out = new float[n * oh * ow * c * fh * fw];
+		int dst = 0;
+		for (int ni = 0; ni < n; ni++) {
+			for (int yo = 0; yo < oh; yo++) {
+				for (int xo = 0; xo < ow; xo++) {
+					for (int ci = 0; ci < c; ci++) {
+						for (int fy = 0; fy < fh; fy++) {
+							int iy = yo * stride + fy - pad;
+							if (iy >= 0 && iy < h) {
+								int base = ((ni * c + ci) * h + iy) * w;
+								int ix0 = xo * stride - pad;
+								for (int fx = 0; fx < fw; fx++) {
+									int ix = ix0 + fx;
+									if (ix >= 0 && ix < w) {
+										out[dst] = x[base + ix];
+									}
+									dst++;
+								}
+							}
+							else {
+								dst += fw;
+							}
+						}
+					}
+				}
+			}
+		}
+		return out;
+	}
+
+	static double[] col2im(double[] col, int n, int c, int h, int w, int fh, int fw, int stride, int pad) {
+		int oh = (h + 2 * pad - fh) / stride + 1;
+		int ow = (w + 2 * pad - fw) / stride + 1;
+		double[] img = new double[n * c * h * w];
+		int src = 0;
+		for (int ni = 0; ni < n; ni++) {
+			for (int yo = 0; yo < oh; yo++) {
+				for (int xo = 0; xo < ow; xo++) {
+					for (int ci = 0; ci < c; ci++) {
+						for (int fy = 0; fy < fh; fy++) {
+							int iy = yo * stride + fy - pad;
+							if (iy >= 0 && iy < h) {
+								int base = ((ni * c + ci) * h + iy) * w;
+								int ix0 = xo * stride - pad;
+								for (int fx = 0; fx < fw; fx++) {
+									int ix = ix0 + fx;
+									if (ix >= 0 && ix < w) {
+										img[base + ix] += col[src];
+									}
+									src++;
+								}
+							}
+							else {
+								src += fw;
+							}
+						}
+					}
+				}
+			}
+		}
+		return img;
+	}
+
+	static float[] col2imF(float[] col, int n, int c, int h, int w, int fh, int fw, int stride, int pad) {
+		int oh = (h + 2 * pad - fh) / stride + 1;
+		int ow = (w + 2 * pad - fw) / stride + 1;
+		float[] img = new float[n * c * h * w];
+		int src = 0;
+		for (int ni = 0; ni < n; ni++) {
+			for (int yo = 0; yo < oh; yo++) {
+				for (int xo = 0; xo < ow; xo++) {
+					for (int ci = 0; ci < c; ci++) {
+						for (int fy = 0; fy < fh; fy++) {
+							int iy = yo * stride + fy - pad;
+							if (iy >= 0 && iy < h) {
+								int base = ((ni * c + ci) * h + iy) * w;
+								int ix0 = xo * stride - pad;
+								for (int fx = 0; fx < fw; fx++) {
+									int ix = ix0 + fx;
+									if (ix >= 0 && ix < w) {
+										img[base + ix] += col[src];
+									}
+									src++;
+								}
+							}
+							else {
+								src += fw;
+							}
+						}
+					}
+				}
+			}
+		}
+		return img;
+	}
+
 }

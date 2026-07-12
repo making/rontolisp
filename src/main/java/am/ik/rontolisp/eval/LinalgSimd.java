@@ -18,11 +18,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of the {@code linalg:} kernels: it
- * replaces fifteen of the {@code linalg.lisp} defuns with native {@link LispFunction}s
- * driving the lane loops in {@link LinalgSimdKernels}. The {@code linalg:} sibling of
- * {@link VecSimd}, deliberately a separate class -- {@code vec.lisp} and
- * {@code linalg.lisp} never call each other, so their interceptors do not either. Only
- * the KERNELS are shared.
+ * replaces thirty-four of the {@code linalg.lisp} defuns with native
+ * {@link LispFunction}s driving the lane loops in {@link LinalgSimdKernels}. The
+ * {@code linalg:} sibling of {@link VecSimd}, deliberately a separate class --
+ * {@code vec.lisp} and {@code linalg.lisp} never call each other, so their interceptors
+ * do not either. Only the KERNELS are shared.
  *
  * <h2>The fallback protocol</h2>
  *
@@ -35,7 +35,7 @@ import org.jspecify.annotations.Nullable;
  * original {@code linalg.lisp} defun, captured before the override. The scalar library
  * therefore remains the single source of truth for every edge case, including the exact
  * error messages, and nothing is duplicated. (Java {@code null} is safe as the sentinel:
- * Lisp {@code nil} is {@link LispNil}, and none of the fifteen returns it.)
+ * Lisp {@code nil} is {@link LispNil}, and none of the intercepted members returns it.)
  *
  * <p>
  * This is opt-in per invocation ({@code rontolisp prog.lisp --simd}). The DEFAULT
@@ -157,6 +157,11 @@ public final class LinalgSimd {
 				args -> unary(args, LinalgSimdKernels::negative, LinalgSimdKernels::negativeF));
 		define(globalEnv, evaluator, LispNames.LINALG_SIGN, 1,
 				args -> unary(args, LinalgSimdKernels::sign, LinalgSimdKernels::signF));
+		// The internal CNN window unfolding pair (todo 117): pure index arithmetic, no
+		// lanes -- intercepted because the boxed do-loop dominates the accelerated
+		// convolution runs (~97% of ch07 train time under --simd was im2col/col2im).
+		define(globalEnv, evaluator, LispNames.LINALG_IM2COL, 5, LinalgSimd::im2col);
+		define(globalEnv, evaluator, LispNames.LINALG_COL2IM, 6, LinalgSimd::col2im);
 	}
 
 	/**
@@ -166,7 +171,10 @@ public final class LinalgSimd {
 	 */
 	private static void define(Environment globalEnv, LispEvaluator evaluator, String member, int arity,
 			Kernel kernel) {
-		String qualified = LispNames.LINALG_PKG + ":" + member;
+		// A %-prefixed member is an internal symbol, whose canonical qualified spelling
+		// carries the double colon (linalg::%la-im2col).
+		String qualified = member.startsWith("%") ? LispNames.LINALG_PKG + "::" + member
+				: LispNames.LINALG_PKG + ":" + member;
 		LispVal scalarDefun = globalEnv.lookupFunctionOrNull(qualified);
 		if (scalarDefun == null) {
 			throw new IllegalStateException("linalg.lisp must be loaded before " + qualified + " can be accelerated");
@@ -400,6 +408,119 @@ public final class LinalgSimd {
 		return u instanceof LispSingleFloatArray
 				? new LispSingleFloatArray(LinalgSimdKernels.outerF(floats(u), floats(v)), dims)
 				: new LispDoubleFloatArray(LinalgSimdKernels.outer(doubles(u), doubles(v)), dims);
+	}
+
+	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) ----------------------
+
+	/**
+	 * {@code (linalg::%la-im2col x fh fw stride pad)} over a rank-4 packed NCHW operand.
+	 * Anything else -- a general boxed array, a non-integer window parameter, a window
+	 * larger than the padded extent (whose floor is no longer a plain truncation) --
+	 * declines to the defun.
+	 */
+	private static @Nullable LispVal im2col(List<LispVal> args) {
+		LispFloatArray x = packed(args.get(0));
+		if (x == null || x.rank() != 4) {
+			return null;
+		}
+		int[] d = x.dims();
+		int[] p = windowParams(d[2], d[3], args.get(1), args.get(2), args.get(3), args.get(4));
+		if (p == null) {
+			return null;
+		}
+		int n = d[0];
+		int c = d[1];
+		int fh = p[0], fw = p[1], stride = p[2], pad = p[3], oh = p[4], ow = p[5];
+		long rows = (long) n * oh * ow;
+		long cols = (long) c * fh * fw;
+		if (!sizeFits(rows) || !sizeFits(cols) || !sizeFits(rows * cols)) {
+			return null;
+		}
+		int[] dims = { (int) rows, (int) cols };
+		return switch (x) {
+			case LispDoubleFloatArray a -> new LispDoubleFloatArray(
+					LinalgSimdKernels.im2col(a.data(), n, c, d[2], d[3], fh, fw, stride, pad), dims);
+			case LispSingleFloatArray a -> new LispSingleFloatArray(
+					LinalgSimdKernels.im2colF(a.data(), n, c, d[2], d[3], fh, fw, stride, pad), dims);
+		};
+	}
+
+	/**
+	 * {@code (linalg::%la-col2im col dims fh fw stride pad)}: the adjoint scatter-add
+	 * into a fresh zero rank-4 array of the given dims. The column matrix must hold
+	 * exactly the unfolded element count; any surplus or shortfall declines (the defun
+	 * signals on the shortfall).
+	 */
+	private static @Nullable LispVal col2im(List<LispVal> args) {
+		LispFloatArray col = packed(args.get(0));
+		if (col == null) {
+			return null;
+		}
+		int[] dims = shape(args.get(1));
+		if (dims == null || dims.length != 4) {
+			return null;
+		}
+		int[] p = windowParams(dims[2], dims[3], args.get(2), args.get(3), args.get(4), args.get(5));
+		if (p == null) {
+			return null;
+		}
+		int n = dims[0];
+		int c = dims[1];
+		int h = dims[2];
+		int w = dims[3];
+		int fh = p[0], fw = p[1], stride = p[2], pad = p[3], oh = p[4], ow = p[5];
+		long rows = (long) n * oh * ow;
+		long cols = (long) c * fh * fw;
+		if (!sizeFits((long) n * c * h * w) || !sizeFits(rows) || !sizeFits(cols) || !sizeFits(rows * cols)
+				|| col.totalSize() != rows * cols) {
+			return null;
+		}
+		return switch (col) {
+			case LispDoubleFloatArray a -> new LispDoubleFloatArray(
+					LinalgSimdKernels.col2im(a.data(), n, c, h, w, fh, fw, stride, pad), dims.clone());
+			case LispSingleFloatArray a -> new LispSingleFloatArray(
+					LinalgSimdKernels.col2imF(a.data(), n, c, h, w, fh, fw, stride, pad), dims.clone());
+		};
+	}
+
+	/**
+	 * Validates the four window parameters against the spatial extent {@code (h, w)}:
+	 * integers, positive filter/stride, non-negative pad, and both padded extents
+	 * non-negative so the defun's {@code floor} is a plain truncating division. Returns
+	 * {@code [fh, fw, stride, pad, oh, ow]}, or {@code null} to decline.
+	 */
+	private static int @Nullable [] windowParams(int h, int w, LispVal fhv, LispVal fwv, LispVal stridev,
+			LispVal padv) {
+		Integer fh = smallInt(fhv);
+		Integer fw = smallInt(fwv);
+		Integer stride = smallInt(stridev);
+		Integer pad = smallInt(padv);
+		if (fh == null || fw == null || stride == null || pad == null) {
+			return null;
+		}
+		if (fh < 1 || fw < 1 || stride < 1 || pad < 0) {
+			return null;
+		}
+		long eh = h + 2L * pad - fh;
+		long ew = w + 2L * pad - fw;
+		if (eh < 0 || ew < 0) {
+			return null;
+		}
+		long oh = eh / stride + 1;
+		long ow = ew / stride + 1;
+		if (oh > Integer.MAX_VALUE || ow > Integer.MAX_VALUE) {
+			return null;
+		}
+		return new int[] { fh, fw, stride, pad, (int) oh, (int) ow };
+	}
+
+	private static boolean sizeFits(long total) {
+		return total >= 0 && total <= Integer.MAX_VALUE - 8;
+	}
+
+	private static @Nullable Integer smallInt(LispVal value) {
+		return value instanceof LispInteger i && i.value() >= Integer.MIN_VALUE && i.value() <= Integer.MAX_VALUE
+				? (int) i.value() : null;
 	}
 
 	// --- marshalling ------------------------------------------------------------------

@@ -16,7 +16,6 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.PackageRegistry;
 
 /**
  * Builds the {@code vec:} acceleration runtime for the generated standalone
@@ -219,8 +218,9 @@ final class JvmSimdRuntimeBuilder {
 		// one resource-config entry). Their ops keys carry the package prefix because
 		// vec:add and linalg:add have the same member name.
 		for (String member : JvmLinalgSimdCompiler.members()) {
-			String desc = JvmLinalgSimdCompiler.arity(member) == 1 ? unaryDesc : binaryDesc;
-			ops.put(PackageRegistry.qualify(LispNames.LINALG_PKG, member), cp.addMethodref(bridgeClass,
+			String desc = "(" + "Ljava/lang/Object;".repeat(JvmLinalgSimdCompiler.arity(member))
+					+ ")Ljava/lang/Object;";
+			ops.put(JvmLinalgSimdCompiler.qualifiedName(member), cp.addMethodref(bridgeClass,
 					cp.addNameAndType(cp.addUtf8(JvmLinalgSimdCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
 		}
 

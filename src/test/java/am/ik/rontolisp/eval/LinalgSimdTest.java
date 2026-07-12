@@ -13,10 +13,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The interpreter's opt-in {@code --simd} acceleration of {@code linalg:}
- * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Fifteen {@code linalg.lisp}
- * defuns run on {@code jdk.incubator.vector} instead of their boxed element loops, while
- * the default interpreter keeps the scalar reference (the cross-backend byte-identity
- * oracle).
+ * ({@link LinalgSimd}), the sibling of {@link VecSimdTest}. Thirty-four
+ * {@code linalg.lisp} defuns run on {@code jdk.incubator.vector} instead of their boxed
+ * element loops, while the default interpreter keeps the scalar reference (the
+ * cross-backend byte-identity oracle).
  *
  * <p>
  * Two things are checked throughout. (1) The interception actually FIRES -- without the
@@ -546,6 +546,58 @@ class LinalgSimdTest {
 		assertThatThrownBy(() -> eval("(linalg:trace (linalg:reshape (linalg:arange 24) '(2 3 4)))", true))
 			.isInstanceOf(RuntimeException.class);
 		assertThatThrownBy(() -> eval("(linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 4)))", true))
+			.isInstanceOf(RuntimeException.class);
+	}
+
+	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) ------------------
+
+	@Test
+	void im2colAndCol2imAreInterceptedUnderSimd() {
+		// The internal pair is intercepted too (the dead-flag guard for todo 117): the
+		// installed kernel is a native LispFunction, the default a linalg.lisp lambda.
+		for (String member : new String[] { "%la-im2col", "%la-col2im" }) {
+			String form = "(linalg:zeros 1) #'linalg::" + member;
+			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg::" + member + ">");
+			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
+		}
+	}
+
+	@Test
+	void im2colMatchesTheScalarOracleAtBothWidths() {
+		// Batch > 1, channels > 1, stride > 1 and pad > 0, so every index-arithmetic
+		// branch (skipped padding rows, partially clipped filter columns) is exercised;
+		// im2col only copies elements, so this is exact by construction.
+		String x = "(linalg:reshape (linalg:arange 96) '(2 3 4 4))";
+		String xf = "(linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4))";
+		assertMatchesScalarOracle("(linalg::%la-im2col " + x + " 2 2 1 0)");
+		assertMatchesScalarOracle("(linalg::%la-im2col " + x + " 3 3 2 1)");
+		assertMatchesScalarOracle("(linalg::%la-im2col " + x + " 4 4 1 2)");
+		assertMatchesScalarOracle("(linalg::%la-im2col " + xf + " 3 3 2 1)");
+		assertThat(eval("(linalg::%la-im2col (linalg:reshape (linalg:arange 4) '(1 1 2 2)) 2 2 1 0)", true).print())
+			.isEqualTo("#d((0.0 1.0 2.0 3.0))");
+	}
+
+	@Test
+	void col2imMatchesTheScalarOracleAtBothWidths() {
+		// Overlapping windows (stride < filter) accumulate; the float path narrows each
+		// accumulation exactly as the defun's widen-add-narrow round trip does.
+		String col = "(linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 1 1)";
+		String colF = "(linalg::%la-im2col (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 1 1)";
+		assertMatchesScalarOracle("(linalg::%la-col2im " + col + " '(2 3 4 4) 3 3 1 1)");
+		assertMatchesScalarOracle("(linalg::%la-col2im " + colF + " '(2 3 4 4) 3 3 1 1)");
+		assertMatchesScalarOracle(
+				"(linalg::%la-col2im (linalg::%la-im2col (linalg:reshape (linalg:arange 32) '(2 1 4 4)) 2 2 2 0)"
+						+ " '(2 1 4 4) 2 2 2 0)");
+	}
+
+	@Test
+	void im2colDeclinedInputsRunTheScalarDefun() {
+		// A general boxed rank-4 array is not packed, so the kernel declines and the
+		// defun answers (as a packed double result) -- identically on both paths.
+		assertMatchesScalarOracle("(linalg::%la-im2col (make-array '(1 1 2 2) :initial-element 1) 2 2 1 0)");
+		// A column matrix whose size does not match the dims declines; the defun then
+		// signals its own subscript error on both paths.
+		assertThatThrownBy(() -> eval("(linalg::%la-col2im (linalg:zeros '(2 4)) '(1 1 4 4) 2 2 1 0)", true))
 			.isInstanceOf(RuntimeException.class);
 	}
 

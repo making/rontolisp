@@ -27,14 +27,37 @@ The core ch07/ch08 port landed 2026-07-12 (this todo's original scope):
 
 ## Remaining
 
-- **im2col `--simd` interception** (the measured bottleneck): im2col/
-  col2im run as scalar Lisp loops and dominate the accelerated runs --
-  ch07 train is 88s under interpreter `--simd` vs 2.2s on the JVM, so
-  ~97% of the accelerated interpreter time is the unfold, not the
-  matmul. An `eval.LinalgSimd`-style native for `%la-im2col`/`%la-col2im`
-  (and the JVM/wasm-GC call-site equivalents per `.todo/107`) would close
-  most of that gap. Kernels are pure index arithmetic -- no lanes needed,
-  just compiled loops.
+- **im2col `--simd` interception**: DONE 2026-07-13. `%la-im2col` (arity
+  5) / `%la-col2im` (arity 6) are intercepted on all three `--simd`
+  backends (`eval.LinalgSimd` + `LinalgSimdKernels`, `JvmLinalgSimdCompiler`
+  -> `JvmSimdVectorTemplate.laIm2col/laCol2im`, `WasmLinalgSimdCompiler`
+  -> `WasmLinalgSimdRuntimeBuilder` IM2COL/COL2IM; the intercepted set is
+  34 now, wasm `userFuncBase()` shifts by 89) -- the first INTERNAL
+  (double-colon) members intercepted, see `.kb/linalg-simd.md`. The
+  kernel itself is ~400x on the interpreter (20 im2col of a (10 1 28 28)
+  batch with a 5x5 filter: 3635 ms -> 9 ms), byte-identical everywhere
+  (gradient-check verified on interpreter/`--simd`/JVM/JVM `--simd`/WASM
+  P1 scalar+`--simd`/component `--simd`; train-convnet output identical).
+  BUT the original "~97% of the accelerated run is the unfold" estimate
+  was WRONG: ch07 train-convnet under the jar interpreter `--simd` went
+  88.5s -> 67.0s, so im2col was only ~24% of it. The rest is the item
+  below.
+- **The residual interpreter `--simd` bottleneck = declined shapes of
+  already-intercepted members** (measured 2026-07-13 at the SimpleConvNet
+  shapes, per call): `(linalg:transpose x '(0 3 1 2))` on (10 30 24 24)
+  = 375 ms (the 2-arg axes form declines every transpose kernel by the
+  arity guards), `(linalg:mul one-hot flat)` on (43200 4) x (43200 1)
+  = 515 ms (a broadcast pair, declined by dims-equal), `(linalg:argmax
+  col 1)` / `(linalg:amax col 1)` on (43200 4) = ~150 ms each (axis
+  calls route to the variadic defun). Every conv/pool forward AND
+  backward pays several of these, which is where the remaining ~65s
+  goes -- `linalg:one-hot` itself is cheap (17 ms). Closing the gap
+  means kernels for (a) the rank-n axes-permutation transpose, (b) the
+  matrix-row/column broadcast shapes of the elementwise ops (the decline
+  the `.kb/linalg-simd.md` broadcast note already flags as an
+  optimization opportunity), and (c) the axis-1 reductions -- each a
+  deliberate extension of the intercepted-call-shape surface across all
+  three backends, so it deserves its own todo/design pass.
 - **The pretrained-params scripts**: ch07 `apply_filter.py`/
   `visualize_filter.py`, ch08 `misclassified_mnist.py` +
   `half_float_network.py` need `params.pkl`/`deep_convnet_params.pkl`

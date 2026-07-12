@@ -166,9 +166,9 @@ GC 配列からレーングループを読むと、線形メモリからの `v12
 
 ## linalg のアクセラレーション
 
-[`linalg` パッケージ](linear-algebra.md)は同じパックド浮動小数点配列の上に書かれており、`--simd` はそのうち 32 個の関数を同じカーネルへ振り向けます。
+[`linalg` パッケージ](linear-algebra.md)は同じパックド浮動小数点配列の上に書かれており、`--simd` はそのうち 34 個の関数を同じカーネルへ振り向けます。
 
-- **直接加速される**: `add`・`sub`・`mul`・`div`・`sum`・`norm`・`amax`・`amin`・`argmax`・`argmin`・`trace`・`transpose`・`reshape`・`dot`・`outer`、単項 ufunc の `exp`・`log`・`tanh`・`sin`・`cos`・`tan`・`asin`・`acos`・`atan`・`sinh`・`cosh`・`sqrt`・`abs`・`negative`・`sign`、および比較セレクトの `maximum`・`minimum`
+- **直接加速される**: `add`・`sub`・`mul`・`div`・`sum`・`norm`・`amax`・`amin`・`argmax`・`argmin`・`trace`・`transpose`・`reshape`・`dot`・`outer`、単項 ufunc の `exp`・`log`・`tanh`・`sin`・`cos`・`tan`・`asin`・`acos`・`atan`・`sinh`・`cosh`・`sqrt`・`abs`・`negative`・`sign`、比較セレクトの `maximum`・`minimum`、および Deep Learning from Scratch の例を支える 2 つの内部畳み込みヘルパ(`linalg::%la-im2col` と `linalg::%la-col2im`。im2col のウィンドウ展開とその随伴で、レーンカーネルではなくインデックス演算のループですが、両方の幅でビット単位まで同一です)
 - **一緒に加速される**: `mean`・`matmul`・`flatten`・`solve`・`square`・`reciprocal`・`clip`・`relu`。いずれも上の関数を使って書かれています
 - **決して加速されない**: `emap`(要素ごとに任意の関数を適用するため)・`det`・`inv`・`array-equal`・各コンストラクタ
 
