@@ -56,6 +56,11 @@ examples:
         - "Contact Book (3 entries):"
         - "Alice -> alice@newdomain.com"
         - "Alice (alice@newdomain.com)"
+  - path: console/error-handling.lisp
+    backends: [interpreter, jvm]
+    note: handler-case/unwind-protect are a compile error on every WASM backend (uncatchable traps), so no wasm leg
+    expect:
+      file: .expected/error-handling.txt
   - path: console/hanoi.lisp
     backends: [interpreter, jvm, wasm]
     expect:

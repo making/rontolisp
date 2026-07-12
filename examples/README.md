@@ -39,6 +39,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`roman.lisp`](console/roman.lisp) | Roman numeral encoder/decoder: bidirectional conversion (1↔I, 4↔IV, …, 3999↔MMMCMXCIX) with association-list lookup tables, `concatenate`, and a full 3999-value round-trip correctness check |
 | [`word-frequency.lisp`](console/word-frequency.lisp) | Word frequency counter: hash-table accumulation, `string-downcase`, `alpha-char-p`-based tokenization, `sort` with a custom comparator, and `maphash` iteration |
 | [`contact-book.lisp`](console/contact-book.lisp) | Contact book using `defstruct`: tagged-list structs with `setf`-able accessors, `&key` lambda lists, hash-table storage, and `maphash`-based lookup |
+| [`error-handling.lisp`](console/error-handling.lisp) | Typed conditions on a tiny bank account: `define-condition` with slots/`:reader`s/`:report`, `handler-case` dispatch by class hierarchy (+ `:no-error`), `ignore-errors`, `unwind-protect` cleanup on the error path (the audit log records refused withdrawals too), non-fatal `signal`, and `typecase`/`with-slots` over condition objects. **Interpreter/JVM only** -- every WASM backend rejects `handler-case`/`unwind-protect` at compile time |
 | [`l-system.lisp`](console/l-system.lisp) | L-system (Lindenmayer system) fractal generator: string-rewriting via hash-table rule dispatch, `&rest` variadic arguments, and character-frequency analysis (Sierpinski triangle, Koch curve, Dragon curve) |
 
 ## Numerical & machine learning — `ml/`
