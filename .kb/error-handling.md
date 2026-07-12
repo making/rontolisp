@@ -156,7 +156,12 @@ message (the stopgap `Condition ... was signalled.` pin was updated).
 
 ## Out of scope (Phase 4+ / future)
 
-`handler-bind`, `restart-case`/`invoke-restart` (cl-postgres M3 tail —
-`.todo/116` Phase 4), `muffle-warning`, `cerror`, `break`, WASM catching
+`handler-bind`, `restart-case`/`invoke-restart` (`.todo/116` Phase 4 —
+DEFERRED 2026-07-12 after a source survey: verbatim cl-postgres degrades
+correctly under the lite primary-form-only `restart-case`, zero library-side
+`invoke-restart`s; the real gate is Postmodern proper, whose prepare.lisp /
+transaction.lisp invoke restarts for real — survey in `.todo/116`),
+`muffle-warning`, `cerror` (undefined; a lite `cerror` → `error` lowering is
+an M4/M5-sized item, see the survey), `break`, WASM catching
 (revisit when wasmtime enables the EH proposal by default), and the
 special-`let`-restore-on-return compile-path limit.

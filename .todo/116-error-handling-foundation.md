@@ -1,4 +1,4 @@
- > **Progress 2026-07-12: Phases 1-3 DONE (uncommitted, on develop).**
+ > **Progress 2026-07-12: Phases 1-3 DONE (committed `a8b957b` on develop).**
 > Suggested-order items 1-4 all landed: `ByteCodeWriter` exception tables
 > (+ v50-no-StackMapTable pin), `unwind-protect` (interpreter/JVM; WASM
 > compile error) with the with-* retrofit, condition objects
@@ -9,8 +9,16 @@
 > (`usocket:socket-error` catchable, `usocket::%usock-guard` re-signal).
 > Full mechanics: `.kb/error-handling.md`. Verified: `./mvnw test` 3320/0 +
 > native `CiSpecE2eTest` 788/0 (all four backends).
-> **Remaining**: Phase 4 below (`handler-bind` + `restart-case`/
-> `invoke-restart`, decide when cl-postgres M3 resumes) and the Phase 1
+> **Phase 4 DEFERRED 2026-07-12 after a Step-0 usage survey of the actual
+> cl-postgres/Postmodern sources** (see "Phase 4 usage survey" below): the
+> verbatim cl-postgres runs correctly WITHOUT restarts -- every
+> `restart-case` site there degrades exactly under the existing lite
+> primary-form-only lowering, and no vendored patch is needed. The real
+> implementation gate is **Postmodern proper** (prepare.lisp / 
+> transaction.lisp invoke restarts for real), which todo-115 already scopes
+> as a separate follow-up.
+> **Remaining**: Phase 4 (gated on Postmodern), a lite `cerror` -> `error`
+> lowering (M4/M5 sized, NOT Phase 4 -- see survey), and the Phase 1
 > "bonus" (compile-path special-`let` restore on `return`-across-boundary --
 > the unwind machinery now exists, `Jvm/WasmLetCompiler` still restore on
 > normal exit only). Lite deviations shipped: an uncaught raised `signal`
@@ -146,6 +154,72 @@ machinery (invoke-restart = a targeted non-local exit, the
 `LispReturnSignal` shape with a restart tag). Interpreter-first; JVM if the
 exception-table approach extends cleanly; defer if cl-postgres turns out to
 work with a vendored no-retry patch.
+
+### Phase 4 usage survey (Step 0, 2026-07-12) -- DEFERRED, no patch needed
+
+Surveyed the cached `~/.rontolisp/quicklisp/software/postmodern-20260101-git`
+sources (cl-postgres v2026-01, the todo-115 target) for every real use of
+`restart-case` / `handler-bind` / `invoke-restart` / `find-restart` /
+`signal` / `cerror`. Conclusion: **the verbatim cl-postgres needs NO restart
+system for M3-M5 -- not even a vendored no-retry patch** -- because the
+existing lite `expandRestartCase` (primary form only) is behavior-identical
+for it. Phase 4's real gate is Postmodern proper.
+
+**cl-postgres proper (the todo-115 M3-M5 target system):**
+
+- `restart-case`: 4 sites, ALL the shape `(restart-case (error X)
+  (clauses...))` -- public.lisp:224 (`initiate-connection`'s `add-restart`,
+  the `:reconnect` retry this todo names), public.lisp:311
+  (`database-connection-lost` `:reconnect`), public.lisp:373
+  (`with-reconnect-restart`'s retry flet, wrapped around `exec-query` &
+  friends), sql-string.lisp:29 (ratio-precision `continue` /
+  `disable-assertion`). In CL these restart clauses run ONLY when user code
+  invokes them via `handler-bind` + `invoke-restart`; **cl-postgres itself
+  never does** (zero library-side invokers). So the lite lowering to the
+  primary form signals the same error the same way a real CL does when no
+  handler invokes the restart -- `handler-case` over `database-error`
+  (Phase 3) covers the whole query-round-trip error surface.
+- `handler-bind`: exactly ONE real site -- public.lisp:386,
+  `wait-for-notification` (LISTEN/NOTIFY), catching
+  `postgresql-notification`, which protocol.lisp:130 raises via `warn` (a
+  `simple-warning` subclass). Not on the `exec-query` path. `handler-bind`
+  is an undefined symbol in rontolisp, so the file LOADS (defun bodies are
+  lazy on the interpreter); only a call to `wait-for-notification` fails.
+  Document LISTEN/NOTIFY as unsupported until Phase 4.
+- `invoke-restart` / `find-restart`: ZERO real sites -- the
+  errors.lisp:142-147 grep hits are inside the `database-connection-error`
+  docstring (a usage example), not code.
+- `cerror`: 4 sites (protocol.lisp:269/289 auth edge + SCRAM signature
+  validation, scram.lisp:216/267 input validation) -- all abnormal paths,
+  none reached by trust/password auth (the first M5 tiers). `cerror` is
+  entirely undefined in rontolisp today. The continue restart is never
+  programmatically invoked in cl-postgres, so a **lite `cerror` -> `error`
+  lowering (drop the continue-restart format string) is sufficient and is an
+  M4/M5-sized follow-up, NOT a Phase 4 dependency.**
+
+**Postmodern proper (explicitly out of todo-115 scope) -- the REAL Phase 4
+customer:**
+
+- prepare.lisp:54-66 (`generate-prepared`): every `defprepared` call runs
+  under nested `handler-bind`s that `(invoke-restart :reconnect)` on
+  `database-connection-error` / `admin-shutdown` and auto-reset on
+  `invalid-sql-statement-name` / `duplicate-prepared-statement` -- the hot
+  path of the prepared-statement API, plus prepare.lisp:289
+  (`reset-prepared-statement` invokes `'reset-prepared-statement`).
+- transaction.lisp:63-66 (`retry-transaction`): `find-restart` +
+  `invoke-restart` exposed as user API over the transaction.lisp:70
+  `restart-case`.
+- json-encoder.lisp:125/282-288 (`with-guessing-encoder`:
+  `restart-case` + `handler-bind` + `(invoke-restart 'try-as-alist)`),
+  connect.lisp:58, roles.lisp:276, execute-file.lisp:392.
+
+**Decision**: defer Phase 4 until Postmodern support starts (its own todo,
+per todo-115's closing note). When it does, the implementation sketch above
+stands, with one addition from the survey: the Postmodern shapes need
+restarts ESTABLISHED in one function and INVOKED from a handler running
+before unwinding (handler-bind), plus `find-restart` returning a
+first-class restart object -- i.e. handler-bind and the restart stack must
+land together; restart-case alone unblocks nothing real.
 
 ## Cross-cutting
 
