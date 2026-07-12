@@ -25,7 +25,7 @@ public final class PackageRegistry {
 			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
 			LispNames.DEFMACRO, LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD,
 			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN, LispNames.IN_PACKAGE,
-			LispNames.DEFPACKAGE, LispNames.PROGV);
+			LispNames.DEFPACKAGE, LispNames.PROGV, LispNames.UNWIND_PROTECT);
 
 	/**
 	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no
@@ -44,8 +44,9 @@ public final class PackageRegistry {
 			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE,
 			LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO, LispNames.DEFINE_SETF_EXPANDER,
 			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
-			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.RETURN_FROM,
-			LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE);
+			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL,
+			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
+			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

@@ -2341,6 +2341,14 @@ public final class Environment implements Scope {
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
 			throw new LispEvalException(message);
 		}));
+		// %error-cond: internal two-argument primitive that signals an error carrying a
+		// condition object (a CLOS-subset tagged-list instance) alongside the message.
+		// Produced by the typed / condition-object error designator expansions.
+		env.defineFunction(LispNames.ERROR_COND_INTERNAL, new LispFunction(LispNames.ERROR_COND_INTERNAL, args -> {
+			requireArgCount(LispNames.ERROR_COND_INTERNAL, args, 2);
+			String message = (args.get(1) instanceof LispString s) ? s.value() : args.get(1).display();
+			throw new LispEvalException(message, args.get(0));
+		}));
 		// %warn: internal single-argument primitive that writes a pre-built
 		// "WARNING: ..." message to standard error and returns nil. Produced by the warn
 		// macro expansion.

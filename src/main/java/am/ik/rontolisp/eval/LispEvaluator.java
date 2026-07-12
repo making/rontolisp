@@ -1078,6 +1078,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
 				case LispNames.SLOT_VALUE:
 					return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
+				case LispNames.WITH_SLOTS:
+					return eval(LispMacroExpander.expandWithSlots(cons), env);
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
@@ -1105,9 +1107,17 @@ public final class LispEvaluator {
 				case LispNames.CCASE:
 					return eval(LispMacroExpander.expandCcase(cons), env);
 				case LispNames.ERROR:
-					return eval(LispMacroExpander.expandError(cons), env);
+					return eval(LispMacroExpander.expandError(cons, this.closRegistry), env);
 				case LispNames.WARN:
-					return eval(LispMacroExpander.expandWarn(cons), env);
+					return eval(LispMacroExpander.expandWarn(cons, this.closRegistry), env);
+				case LispNames.SIGNAL:
+					return eval(LispMacroExpander.expandSignalMacro(cons, this.closRegistry), env);
+				case LispNames.SIGNAL_COND_INTERNAL:
+					return evalSignalCond(cons, env);
+				case LispNames.HANDLER_CASE:
+					return evalHandlerCase(cons, env);
+				case LispNames.IGNORE_ERRORS:
+					return eval(LispMacroExpander.expandIgnoreErrors(cons), env);
 				case LispNames.STABLE_SORT:
 					return eval(LispMacroExpander.expandStableSort(cons), env);
 				case LispNames.COPY_SEQ:
@@ -1128,6 +1138,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandLoop(cons), env);
 				case LispNames.BLOCK_INTERNAL:
 					return evalBlock(cons, env);
+				case LispNames.UNWIND_PROTECT:
+					return evalUnwindProtect(cons, env);
 				case LispNames.RETURN:
 					throw new LispReturnSignal(evalReturnValue(cons, env));
 				case LispNames.PROG1:
@@ -1195,6 +1207,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandUsocketWithConnectedSocket(cons), env);
 				case LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithSocketListener(cons), env);
+				case LispNames.USOCKET_GUARD_QUALIFIED:
+					return eval(LispMacroExpander.expandUsocketGuard(cons, true), env);
 				case LispNames.WITH_INPUT_FROM_STRING:
 					return eval(LispMacroExpander.expandWithInputFromString(cons), env);
 				case LispNames.PUSHNEW:
@@ -1202,7 +1216,10 @@ public final class LispEvaluator {
 				case LispNames.DEFTYPE:
 					return eval(LispMacroExpander.expandDeftype(cons), env);
 				case LispNames.DEFINE_CONDITION:
-					return eval(LispMacroExpander.expandDefineCondition(cons), env);
+					// A condition type is an ordinary CLOS-subset class; the :report form
+					// is registered for the error/signal/warn message building.
+					return evalDefclass((LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry),
+							env);
 				case LispNames.DEFINE_MODIFY_MACRO:
 					return eval(LispMacroExpander.expandDefineModifyMacro(cons), env);
 				case LispNames.DEFINE_SETF_EXPANDER:
@@ -1214,7 +1231,7 @@ public final class LispEvaluator {
 				case LispNames.MACROLET:
 					return evalMacrolet(cons, env);
 				case LispNames.MAKE_CONDITION:
-					return eval(LispMacroExpander.expandMakeCondition(cons), env);
+					return eval(LispMacroExpander.expandMakeCondition(cons, this.closRegistry), env);
 				case LispNames.DOCUMENTATION:
 					return eval(LispMacroExpander.expandDocumentation(cons), env);
 				case LispNames.COMPLEX:
@@ -1250,9 +1267,9 @@ public final class LispEvaluator {
 				case LispNames.PSETQ:
 					return eval(LispMacroExpander.expandPsetq(cons), env);
 				case LispNames.TYPECASE:
-					return eval(LispMacroExpander.expandTypecase(cons), env);
+					return eval(LispMacroExpander.expandTypecase(cons, this.closRegistry), env);
 				case LispNames.ETYPECASE:
-					return eval(LispMacroExpander.expandEtypecase(cons), env);
+					return eval(LispMacroExpander.expandEtypecase(cons, this.closRegistry), env);
 				case LispNames.CHECK_TYPE:
 					return eval(LispMacroExpander.expandCheckType(cons), env);
 				case LispNames.ASSERT:
@@ -2105,6 +2122,145 @@ public final class LispEvaluator {
 		}
 		catch (LispReturnSignal signal) {
 			return signal.value();
+		}
+	}
+
+	/**
+	 * The number of {@code handler-case} handlers established on the current thread of
+	 * control. {@code signal} raises its condition only when a handler exists and falls
+	 * through to nil otherwise (the CL fall-through, minus the handler-by-handler
+	 * decline). Thread-scoped for the same reason as {@link DynamicBindings}.
+	 */
+	private final ThreadLocal<Integer> handlerDepth = ThreadLocal.withInitial(() -> 0);
+
+	/**
+	 * Evaluates {@code (handler-case expr (type ([var]) body...)... [(:no-error ([var])
+	 * body...)])}: the expression runs with a handler established; an error signaled
+	 * during it ({@link LispEvalException}) is dispatched to the first clause whose
+	 * condition type matches the carried condition (a plain error synthesizes a
+	 * {@code simple-error} instance from the message) and rethrown when none does. The
+	 * {@code :no-error} clause (at most one variable -- the primary value, multiple
+	 * values being syntactic) runs on normal completion, outside the handler. A
+	 * {@code return}/{@code return-from} non-local exit ({@link LispReturnSignal}) passes
+	 * through uncaught.
+	 */
+	private LispVal evalHandlerCase(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.HANDLER_CASE + " expects an expression");
+		}
+		List<LispVal> errorClauses = new ArrayList<>();
+		LispCons noErrorClause = null;
+		for (int i = 2; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons clause) || !(clause.cdr() instanceof LispCons)) {
+				throw new LispEvalException(
+						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + parts.get(i).print());
+			}
+			if (clause.car() instanceof LispSymbol head && ":no-error".equals(head.name())) {
+				noErrorClause = clause;
+			}
+			else {
+				errorClauses.add(clause);
+			}
+		}
+		LispVal value;
+		try {
+			this.handlerDepth.set(this.handlerDepth.get() + 1);
+			try {
+				value = eval(parts.get(1), env);
+			}
+			finally {
+				this.handlerDepth.set(this.handlerDepth.get() - 1);
+			}
+		}
+		catch (LispEvalException e) {
+			LispVal condition = e.condition() != null ? e.condition() : synthesizeSimpleError(e.getMessage());
+			for (LispVal clauseVal : errorClauses) {
+				LispCons clause = (LispCons) clauseVal;
+				List<LispVal> clauseParts = clause.toList();
+				Environment clauseEnv = new Environment(env);
+				LispSymbol condTemp = new LispSymbol("__handler_case_cond");
+				clauseEnv.define(condTemp.name(), condition);
+				LispVal test = LispMacroExpander.makeHandlerTypeTest(condTemp, clauseParts.get(0), this.closRegistry);
+				if (eval(test, clauseEnv) == LispNil.INSTANCE) {
+					continue;
+				}
+				if (clauseParts.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
+					clauseEnv.define(var.name(), condition);
+				}
+				LispVal result = LispNil.INSTANCE;
+				for (int i = 2; i < clauseParts.size(); i++) {
+					result = eval(clauseParts.get(i), clauseEnv);
+				}
+				return result;
+			}
+			throw e;
+		}
+		if (noErrorClause != null) {
+			List<LispVal> clauseParts = noErrorClause.toList();
+			Environment clauseEnv = new Environment(env);
+			if (clauseParts.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
+				clauseEnv.define(var.name(), value);
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 2; i < clauseParts.size(); i++) {
+				result = eval(clauseParts.get(i), clauseEnv);
+			}
+			return result;
+		}
+		return value;
+	}
+
+	/**
+	 * Builds the {@code simple-error} instance a {@code handler-case} synthesizes for an
+	 * error that was signaled without a condition object (a plain {@code %error}, or a
+	 * runtime failure inside a built-in).
+	 */
+	private static LispVal synthesizeSimpleError(@Nullable String message) {
+		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
+		return new LispCons(new LispSymbol("%class-simple-error"),
+				new LispCons(messageVal, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
+	}
+
+	/**
+	 * Evaluates the internal {@code (%signal-cond condition message)} primitive behind
+	 * {@code signal}: raises the condition as a {@link LispEvalException} when a
+	 * {@code handler-case} handler is established, and returns nil otherwise.
+	 */
+	private LispVal evalSignalCond(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new LispEvalException(LispNames.SIGNAL_COND_INTERNAL + " expects a condition and a message");
+		}
+		LispVal condition = eval(parts.get(1), env);
+		LispVal message = eval(parts.get(2), env);
+		if (this.handlerDepth.get() > 0) {
+			throw new LispEvalException(message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(),
+					condition);
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Evaluates {@code (unwind-protect protected cleanup...)}: the cleanup forms run on
+	 * every exit from the protected form -- normal return, an error unwind
+	 * ({@link LispEvalException}) and a {@code return}/{@code return-from} non-local exit
+	 * ({@link LispReturnSignal}). A cleanup form that itself signals replaces the pending
+	 * unwind (CL semantics: the newer exit wins), which is exactly what a Java
+	 * {@code finally} does.
+	 */
+	private LispVal evalUnwindProtect(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.UNWIND_PROTECT + " expects a protected form");
+		}
+		try {
+			return eval(parts.get(1), env);
+		}
+		finally {
+			for (int i = 2; i < parts.size(); i++) {
+				eval(parts.get(i), env);
+			}
 		}
 	}
 

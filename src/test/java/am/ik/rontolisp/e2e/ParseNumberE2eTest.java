@@ -77,13 +77,14 @@ class ParseNumberE2eTest extends AsdfLibraryE2eSupport {
 		for (LispVal expr : LispReader.readAllFromString("(asdf:load-system :parse-number)")) {
 			evaluator.eval(expr);
 		}
-		// The (error 'invalid-number :value ... :reason ...) idiom signals with the
-		// type and the evaluated initargs in the message (lite condition system).
+		// The (error 'invalid-number :value ... :reason ...) idiom constructs a typed
+		// condition instance and signals with the message rendered by the
+		// define-condition :report lambda.
 		assertThatThrownBy(() -> {
 			for (LispVal expr : LispReader.readAllFromString("(parse-number:parse-number \"1.2.3\")")) {
 				evaluator.eval(expr);
 			}
-		}).hasMessageContaining("invalid-number").hasMessageContaining("Multiple .'s in number");
+		}).hasMessageContaining("Invalid number").hasMessageContaining("Multiple .'s in number");
 	}
 
 }

@@ -17,8 +17,9 @@ This page lists the most notable omissions. For what **is** available, see the
 | `&whole` | not available |
 | `values` / `multiple-value-bind` | available, including user-function values (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
 | `block` / `return-from` / `tagbody` / `go` | not available |
-| `catch` / `throw` / `unwind-protect` | not available |
-| conditions & restarts (`handler-case`, ...) | not available |
+| `catch` / `throw` | not available |
+| `unwind-protect` | available on the interpreter/JVM (see [`unwind-protect`](../reference/special-forms/unwind-protect.md)); compile error on WASM |
+| conditions (`define-condition`, `handler-case`, `ignore-errors`, `signal`) | available on the interpreter/JVM (see [`handler-case`](../reference/macros/handler-case.md)); catching is a compile error on WASM. Restarts (`handler-bind`/`restart-case`) are not available |
 | `flet` / `labels` | available (see [`flet`](../reference/macros/flet.md), [`labels`](../reference/macros/labels.md)) |
 | `macrolet` | not available |
 | `loop` (extended) | partial (simple-loop subset) |
@@ -98,24 +99,40 @@ Named blocks and arbitrary jumps are not available:
   `do` / `do*` / `dolist` / `dotimes`.
 - `tagbody` / `go` — no label-and-jump control flow.
 - `catch` / `throw` — no dynamically scoped exits.
-- `unwind-protect` — there is no cleanup-on-exit guarantee.
 
 ```console
 > (block done (return-from done 1) 2)
 The function block is undefined
 ```
 
+[`unwind-protect`](../reference/special-forms/unwind-protect.md) (cleanup on
+every exit — normal return, `error` unwind, `return`/`return-from`) **is**
+available on the interpreter and the JVM backend; the WASM compilers reject it
+(a WASM error is an uncatchable trap).
+
 ## Conditions and restarts
 
-There is no condition system. `error` signals and aborts the program, but the
-signal **cannot be caught from within the language**: `handler-case`,
-`handler-bind`, `ignore-errors`, `restart-case`, `define-condition`, `signal`, and
-`warn` are all absent.
+The condition-system core **is** available: condition types are CLOS-subset
+classes over the built-in hierarchy (`condition` > `serious-condition` >
+`error`, `warning`) defined by
+[`define-condition`](../reference/macros/define-condition.md) (with `:report`),
+constructed by [`make-condition`](../reference/macros/make-condition.md) or the
+typed [`error`](../reference/macros/error.md)/[`signal`](../reference/macros/signal.md)
+designators, and caught by type with
+[`handler-case`](../reference/macros/handler-case.md) /
+[`ignore-errors`](../reference/macros/ignore-errors.md) on the interpreter and
+the JVM backend (the WASM compilers reject catching: a WASM error is an
+uncatchable trap).
 
-```console
-> (ignore-errors (error "boom"))
-The function ignore-errors is undefined
+```lisp
+(handler-case (error "boom") (error (e) :caught)) ; => :caught
 ```
+
+The **restart system** is not available: `handler-bind`, `restart-case`
+(accepted as a no-op that keeps only the primary form), `restart-bind`,
+`invoke-restart`, `with-simple-restart`, `cerror`, `abort`, `continue` and
+`break` are absent, and `check-type`/`assert` signal without offering a
+re-store restart.
 
 ## Local macros (`macrolet`)
 

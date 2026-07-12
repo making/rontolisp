@@ -22,13 +22,17 @@ body and closes it afterwards. `with-client-socket` connects (passing
       (read-line server)))) ; => "ping"
 ```
 
-Lite semantics: rontolisp has no `unwind-protect`, so the socket is closed on
-**normal** exit only -- an error signaled inside the body leaks the handle
-(usocket proper closes it on any exit). Like `rontolisp:with-arena`, these are
-built-in macro expansions, so they cannot be passed to `funcall`/`apply`.
+On the interpreter and the JVM the expansion wraps the body in
+[`unwind-protect`](../special-forms/unwind-protect.md), so the socket is
+closed on **every** exit -- normal return, an error signaled inside the body,
+or a `return`/`return-from` (usocket proper's semantics). On the WASM
+component backend, where `unwind-protect` does not compile, the socket is
+closed on normal exit only. Like `rontolisp:with-arena`, these are built-in
+macro expansions, so they cannot be passed to `funcall`/`apply`.
 
 ## Backend support
 
 - **Interpreter**, **JVM** and **WASM component**: wherever the underlying
-  socket functions work (the expansion is shared by all backends).
+  socket functions work (the expansion is shared by all backends; the WASM
+  variant closes on normal exit only, see above).
 - **Browser playground**: not supported.

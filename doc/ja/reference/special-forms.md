@@ -13,6 +13,7 @@
 | `setq` | `(setq name value ...)` | 変数に値を代入します。複数の `name value` ペアを受け付け、左から右へ代入し、最後の値を返します |
 | `while` | `(while test body...)` | testが非nilの間、bodyを繰り返し評価します。nilを返します |
 | `return` | `(return value?)` | 最も内側を囲むループ(`do`/`dolist`/`dotimes`/`loop`)からの非局所脱出。そのループは `value`(またはnil)に評価されます |
+| `unwind-protect` | `(unwind-protect protected cleanup...)` | `protected` を評価し、そこからのあらゆる脱出時(通常復帰・`error` 巻き戻し・`return`/`return-from`)に `cleanup` フォームを実行(インタプリタ/JVM。WASM ではコンパイルエラー) |
 | `defun` | `(defun name (params...) body...)` | 関数名前空間に関数を定義します。関数名を返します |
 | `defmacro` | `(defmacro name (params...) body...)` | ユーザーマクロを定義します。呼び出しは展開され(本体は未評価の引数フォームを束縛して実行)、展開形が評価されます。`&rest`/`&body` をサポートします。名前を返します |
 | `defclass` | `(defclass name (super?) ((slot options...)...))` | クラスを定義します(静的 CLOS サブセット: 単一継承、`:initarg`/`:initform`/`:reader`/`:accessor` スロットオプション)。名前を返します |

@@ -195,6 +195,10 @@ final class JvmExprCompiler {
 						compileExpr(LispMacroExpander.expandUsocketWithSocketListener(cons), ctx, className);
 						return;
 					}
+					case LispNames.USOCKET_GUARD -> {
+						compileExpr(LispMacroExpander.expandUsocketGuard(cons, true), ctx, className);
+						return;
+					}
 					default -> {
 						// Other usocket: members (the usocket.lisp defuns) fall through
 						// to
@@ -278,15 +282,19 @@ final class JvmExprCompiler {
 				case LispNames.DEFTYPE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx, className);
 				case LispNames.DEFINE_CONDITION ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCondition(cons), ctx, className);
+					// Like defclass: top-level define-conditions are spliced into their
+					// generated defuns before Pass 1; one reaching this compiler is
+					// nested.
+					throw new UnsupportedOperationException(
+							LispNames.DEFINE_CONDITION + " is only supported as a top-level form");
 				case LispNames.DEFINE_SETF_EXPANDER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineSetfExpander(cons), ctx, className);
 				case LispNames.DEFINE_COMPILER_MACRO ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx, className);
 				case LispNames.RESTART_CASE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRestartCase(cons), ctx, className);
-				case LispNames.MAKE_CONDITION ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons), ctx, className);
+				case LispNames.MAKE_CONDITION -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx, className);
 				case LispNames.DOCUMENTATION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx, className);
 				case LispNames.WITH_OPEN_FILE ->
@@ -364,6 +372,8 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_VALUE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
+				case LispNames.WITH_SLOTS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx, className);
 				case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className, false);
 				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT ->
 					JvmDefvarCompiler.compile(cons, ctx, className, true);
@@ -388,6 +398,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx, className);
 				case LispNames.LOOP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx, className);
 				case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
+				case LispNames.UNWIND_PROTECT -> JvmUnwindProtectCompiler.compile(cons, ctx, className);
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
 				case LispNames.DECF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx, className);
@@ -624,10 +635,19 @@ final class JvmExprCompiler {
 				case LispNames.CCASE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx, className);
 				case LispNames.ERROR ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandError(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry), ctx, className);
 				case LispNames.ERROR_INTERNAL -> JvmErrorCompiler.compile(cons, ctx, className);
-				case LispNames.WARN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWarn(cons), ctx, className);
+				case LispNames.ERROR_COND_INTERNAL -> JvmErrorCondCompiler.compile(cons, ctx, className);
+				case LispNames.WARN ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWarn(cons, ctx.closRegistry), ctx, className);
 				case LispNames.WARN_INTERNAL -> JvmWarnCompiler.compile(cons, ctx, className);
+				case LispNames.SIGNAL -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SIGNAL_COND_INTERNAL -> JvmSignalCondCompiler.compile(cons, ctx, className);
+				case LispNames.HANDLER_CASE -> JvmHandlerCaseCompiler.compile(cons, ctx, className);
+				case LispNames.IGNORE_ERRORS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx, className);
+				case LispNames.HC_DEPTH_DEC_INTERNAL -> JvmHandlerCaseCompiler.compileDepthDec(ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
@@ -752,10 +772,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx, className);
 				case LispNames.PSETQ ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx, className);
-				case LispNames.TYPECASE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons), ctx, className);
-				case LispNames.ETYPECASE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons), ctx, className);
+				case LispNames.TYPECASE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
+				case LispNames.ETYPECASE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
 				case LispNames.CHECK_TYPE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx, className);
 				case LispNames.ASSERT ->

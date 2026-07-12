@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.function.Consumer;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -124,6 +125,38 @@ public class ByteCodeWriter {
 		new ByteCodeWriter(stream).write(code);
 		final byte[] bytes = stream.toByteArray();
 		return this.writeU4(bytes.length).write(bytes);
+	}
+
+	/**
+	 * Write a {@code Code} attribute exception table: the u2 entry count followed by one
+	 * {@code start_pc}/{@code end_pc}/{@code handler_pc}/{@code catch_type} u2 quadruple
+	 * per entry. Call this between the code array and the attributes count; an empty list
+	 * writes the count 0 (a method with no handlers).
+	 * @param entries the exception table entries in dispatch order
+	 * @return this instance for chaining
+	 */
+	public ByteCodeWriter writeExceptionTable(List<ExceptionTableEntry> entries) {
+		this.writeU2(entries.size());
+		for (ExceptionTableEntry entry : entries) {
+			this.writeU2(entry.startPc()).writeU2(entry.endPc()).writeU2(entry.handlerPc()).writeU2(entry.catchType());
+		}
+		return this;
+	}
+
+	/**
+	 * A {@code Code} attribute exception table entry. An exception thrown while the pc is
+	 * in {@code [startPc, endPc)} is dispatched to {@code handlerPc} when its class is (a
+	 * subclass of) the {@code catchType} class constant; a {@code catchType} of 0 catches
+	 * any throwable (the {@code finally} shape).
+	 *
+	 * @param startPc the inclusive start of the protected code range
+	 * @param endPc the exclusive end of the protected code range
+	 * @param handlerPc the handler entry point (the operand stack there holds only the
+	 * thrown exception)
+	 * @param catchType the {@code CONSTANT_Class} pool index of the caught type, or 0 for
+	 * any
+	 */
+	public record ExceptionTableEntry(int startPc, int endPc, int handlerPc, int catchType) {
 	}
 
 	/**

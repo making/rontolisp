@@ -7,6 +7,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -112,6 +113,79 @@ class ByteCodeWriterTest {
 				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("Hello, World!");
+		}
+	}
+
+	// Pins the exception-table emission AND the class-version-50 contract the Lisp JVM
+	// backend relies on: a Code attribute with a non-empty exception table verifies and
+	// runs WITHOUT a StackMapTable (the type-inference verifier computes handler frames
+	// itself; from version 51 stack maps would be mandatory).
+	@Test
+	void generateAndRunTypedCatchHandler() throws Exception {
+		assertThat(runCatchClass("TypedCatch", true)).isEqualTo("boom");
+	}
+
+	// catch_type 0 catches any throwable -- the finally/unwind shape.
+	@Test
+	void generateAndRunCatchAnyHandler() throws Exception {
+		assertThat(runCatchClass("CatchAny", false)).isEqualTo("boom");
+	}
+
+	/**
+	 * Assembles a version-50 class whose static {@code run()} throws
+	 * {@code RuntimeException("boom")} inside a protected range and returns
+	 * {@code getMessage()} of the caught exception from the handler, then loads and
+	 * invokes it.
+	 */
+	private String runCatchClass(String classNameStr, boolean typedCatch) throws Exception {
+		ConstantPool cp = new ConstantPool();
+		ConstantPool.ClassConstant thisClass = cp.addClass(cp.addUtf8(classNameStr));
+		ConstantPool.ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
+		ConstantPool.ClassConstant runtimeExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = cp.addMethodref(runtimeExClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		// getMessage is referenced via Throwable so the catch-any handler (whose inferred
+		// stack top is Throwable, not RuntimeException) passes the receiver check too.
+		ConstantPool.ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
+		ConstantPool.MethodrefConstant getMessage = cp.addMethodref(throwableClass,
+				cp.addNameAndType(cp.addUtf8("getMessage"), cp.addUtf8("()Ljava/lang/String;")));
+		ConstantPool.StringConstant boom = cp.addString("boom");
+		ConstantPool.Utf8Constant runName = cp.addUtf8("run");
+		ConstantPool.Utf8Constant runDesc = cp.addUtf8("()Ljava/lang/String;");
+		ConstantPool.Utf8Constant codeAttr = cp.addUtf8("Code");
+
+		// 0: NEW, 3: DUP, 4: LDC_W "boom", 7: INVOKESPECIAL <init>, 10: ATHROW,
+		// 11 (handler): INVOKEVIRTUAL getMessage, 14: ARETURN
+		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
+		new ByteCodeWriter(classOut).write(0xCA, 0xFE, 0xBA, 0xBE)
+			.writeVersion(0, 50)
+			.writeConstantPool(cp)
+			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass)
+			.writeInterfaces(i -> {
+			})
+			.writeFields(f -> {
+			})
+			.writeMethods(methods -> methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, runName, runDesc,
+					method -> method.writeAttributes(attrs -> attrs.add(codeAttr, attr -> {
+						attr.writeU2(3) // max_stack
+							.writeU2(0) // max_locals
+							.writeCode(Opcode.NEW, runtimeExClass.indexAsU2(), Opcode.DUP, Opcode.LDC_W,
+									boom.indexAsU2(), Opcode.INVOKESPECIAL, ctor.indexAsU2(), Opcode.ATHROW,
+									Opcode.INVOKEVIRTUAL, getMessage.indexAsU2(), Opcode.ARETURN)
+							.writeExceptionTable(List.of(new ByteCodeWriter.ExceptionTableEntry(0, 11, 11,
+									typedCatch ? runtimeExClass.index() : 0)))
+							.writeU2(0); // attributes_count
+					}))))
+			.writeAttributes(a -> {
+			});
+
+		Path classFile = tempDir.resolve(classNameStr + ".class");
+		Files.write(classFile, classOut.toByteArray());
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass(classNameStr);
+			Method run = clazz.getMethod("run");
+			return (String) run.invoke(null);
 		}
 	}
 

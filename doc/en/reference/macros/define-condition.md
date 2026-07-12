@@ -2,8 +2,15 @@
 
 `(define-condition name (parent...) (slot...) option...)`
 
-Accepted as a parsed no-op returning `nil`: there is no condition system, so the condition type is not registered anywhere. Pairs with the lite `make-condition` so the common `(error (make-condition 'type :format-control "..."))` idiom still signals with the intended message.
+Defines a condition type as a CLOS-subset class (see [`defclass`](../special-forms/defclass.md)) over the built-in condition hierarchy `condition` > `serious-condition` > `error` (> `simple-error` and the standard error subtypes) and `warning`. The parent defaults to `condition`; with several parents, the **first** provides the slot layout (single inheritance) and the rest join the type hierarchy for `typep`/`typecase`/`handler-case` matching only (their slots are not inherited). Slots use the `defclass` subset (`:initarg`/`:initform`/`:reader`/`:accessor`, plus `:documentation`, which is dropped). Of the class options, `(:report x)` — a literal string or a `(lambda (condition stream) ...)` — is used as the message when the condition is signaled by [`error`](error.md)/[`signal`](signal.md), and `(:documentation ...)` is dropped. Returns the type name. On the compile path it is a top-level-only form, like `defclass`.
 
 ```lisp
-(define-condition my-parse-error (error) ()) ; => nil
+(define-condition my-parse-error (error)
+  ((input :initarg :input :reader my-parse-error-input))
+  (:report "input did not parse")) ; => my-parse-error
+```
+
+```console
+> (error 'my-parse-error :input "x")
+Error: input did not parse
 ```

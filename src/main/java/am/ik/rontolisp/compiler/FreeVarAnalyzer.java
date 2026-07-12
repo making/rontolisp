@@ -159,6 +159,11 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.LET_STAR -> collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						// Expand before walking: with-slots binds its slot variables,
+						// which
+						// the default walk would misread as free references.
+						case LispNames.WITH_SLOTS -> collectFreeVars(LispMacroExpander.expandWithSlots(cons), boundVars,
+								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DOLIST -> collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DO -> collectFreeVars(LispMacroExpander.expandDo(cons), boundVars,
@@ -214,6 +219,35 @@ public final class FreeVarAnalyzer {
 						case LispNames.DESTRUCTURING_BIND ->
 							collectFreeVars(LispMacroExpander.expandDestructuringBind(cons), boundVars, knownFunctions,
 									globals, specialNames, freeVars);
+						// handler-case binds each clause's condition variable; the
+						// default
+						// walk would misread it as a free reference (and the clause type
+						// as
+						// a call form).
+						case LispNames.HANDLER_CASE -> {
+							List<LispVal> parts = cons.toList();
+							if (parts.size() > 1) {
+								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
+							}
+							for (int i = 2; i < parts.size(); i++) {
+								if (!(parts.get(i) instanceof LispCons clause)) {
+									continue;
+								}
+								List<LispVal> clauseParts = clause.toList();
+								Set<String> innerBound = new HashSet<>(boundVars);
+								if (clauseParts.size() > 1 && clauseParts.get(1) instanceof LispCons varList
+										&& varList.car() instanceof LispSymbol var) {
+									innerBound.add(var.name());
+								}
+								for (int j = 2; j < clauseParts.size(); j++) {
+									collectFreeVars(clauseParts.get(j), innerBound, knownFunctions, globals,
+											specialNames, freeVars);
+								}
+							}
+						}
+						case LispNames.IGNORE_ERRORS -> collectFreeVars(LispMacroExpander.expandIgnoreErrors(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda

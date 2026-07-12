@@ -1273,6 +1273,60 @@ public final class LispNames {
 	 */
 	public static final String WARN_INTERNAL = "%warn";
 
+	/**
+	 * Internal two-argument primitive {@code (%error-cond condition message)} that
+	 * signals a fatal error carrying a condition object (a CLOS-subset tagged-list
+	 * instance) alongside the pre-built message string. Produced by the {@code error}
+	 * macro expansion for the typed and condition-object designator forms; on the WASM
+	 * backends it traps like {@link #ERROR_INTERNAL}.
+	 */
+	public static final String ERROR_COND_INTERNAL = "%error-cond";
+
+	/**
+	 * The {@code signal} macro (signal a non-fatal condition). Same designator surface as
+	 * {@link #ERROR}; when no handler is established the signal returns nil (the CL
+	 * fall-through), which is the only behavior on the WASM backends.
+	 */
+	public static final String SIGNAL = "signal";
+
+	/**
+	 * Internal two-argument primitive {@code (%signal-cond condition message)} behind
+	 * {@link #SIGNAL}: raises the condition when a {@code handler-case} handler is
+	 * established on the current thread of control, and returns nil otherwise.
+	 */
+	public static final String SIGNAL_COND_INTERNAL = "%signal-cond";
+
+	/**
+	 * The {@code with-slots} macro: binds variables to the slot values of a CLOS-subset
+	 * instance for the body. Lite (read-only): the bindings are plain {@code let}
+	 * variables over {@code slot-value} reads, not symbol macros, so assigning one does
+	 * NOT write back to the slot.
+	 */
+	public static final String WITH_SLOTS = "with-slots";
+
+	/**
+	 * The {@code handler-case} operator: evaluates an expression, dispatching an error
+	 * signaled during it to the first clause whose condition type matches (rethrowing
+	 * when none does). Interpreter and JVM backends only; the WASM compilers reject it (a
+	 * WASM error is an uncatchable trap).
+	 */
+	public static final String HANDLER_CASE = "handler-case";
+
+	/**
+	 * The {@code ignore-errors} macro: sugar over {@code (handler-case (progn forms...)
+	 * (error (c) (values nil c)))}. Interpreter and JVM backends only, like
+	 * {@link #HANDLER_CASE}.
+	 */
+	public static final String IGNORE_ERRORS = "ignore-errors";
+
+	/**
+	 * Internal zero-argument form that decrements the per-thread {@code handler-case}
+	 * handler depth and yields nil. JVM backend only: emitted as the cleanup of the
+	 * handler-depth bookkeeping when a {@code return} exits a {@code handler-case}
+	 * protected region (the {@code UnwindScope} channel).
+	 */
+	public static final String HC_DEPTH_DEC_INTERNAL = "%hc-depth-dec";
+
 	/** The {@code and} macro. */
 	public static final String AND = "and";
 
@@ -1719,6 +1773,14 @@ public final class LispNames {
 
 	/** The {@code with-open-file} macro. */
 	public static final String WITH_OPEN_FILE = "with-open-file";
+
+	/**
+	 * The {@code unwind-protect} special form: runs cleanup forms on every exit from the
+	 * protected form (normal return, {@code error} unwind, {@code return}/
+	 * {@code return-from}). Interpreter and JVM backends only; a WASM error is an
+	 * uncatchable trap, so the WASM compilers reject it.
+	 */
+	public static final String UNWIND_PROTECT = "unwind-protect";
 
 	/** The {@code :direction} keyword recognized by {@code with-open-file}. */
 	public static final String DIRECTION_KEYWORD = ":direction";
@@ -2532,11 +2594,23 @@ public final class LispNames {
 	public static final String USOCKET_SOCKET_CONNECT = "socket-connect";
 
 	/**
+	 * The {@code usocket::%usock-guard} internal form: wraps a socket-operation body so
+	 * an underlying failure is re-signaled as a typed {@code usocket:socket-error}. A
+	 * {@code handler-case} wrap on the interpreter and the JVM; a plain pass-through on
+	 * WASM, where errors are uncatchable traps (the shim source is parsed once and shared
+	 * by every backend, so the branch lives in the expansion, not in reader features).
+	 */
+	public static final String USOCKET_GUARD = "%usock-guard";
+
+	/** The package-qualified spelling of {@code usocket::%usock-guard}. */
+	public static final String USOCKET_GUARD_QUALIFIED = USOCKET_PKG + "::" + USOCKET_GUARD;
+
+	/**
 	 * The {@code usocket:with-client-socket} macro:
 	 * {@code (with-client-socket (socket stream host port &rest connect-args) body...)}
 	 * connects, binds {@code socket} and its stream, runs the body and closes the socket
-	 * on normal exit (lite: no {@code unwind-protect}, so an error in the body leaks the
-	 * handle).
+	 * on every exit on the interpreter/JVM ({@code unwind-protect}), on normal exit only
+	 * on WASM.
 	 */
 	public static final String USOCKET_WITH_CLIENT_SOCKET = "with-client-socket";
 

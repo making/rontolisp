@@ -56,6 +56,10 @@ categories:
       - { slug: complement, name: complement }
       - { slug: complex, name: complex }
       - { slug: deftype, name: deftype }
+      - { slug: handler-case, name: handler-case }
+      - { slug: ignore-errors, name: ignore-errors }
+      - { slug: signal, name: signal }
+      - { slug: with-slots, name: with-slots }
       - { slug: define-condition, name: define-condition }
       - { slug: define-compiler-macro, name: define-compiler-macro }
       - { slug: define-modify-macro, name: define-modify-macro }

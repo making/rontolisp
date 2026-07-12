@@ -14,6 +14,7 @@ and a runnable example you can evaluate in your browser.
 | `setq` | `(setq name value ...)` | Assign values to variables; accepts multiple `name value` pairs, assigned left to right, and returns the last value |
 | `while` | `(while test body...)` | Evaluate body repeatedly while test is non-nil. Returns nil |
 | `return` | `(return value?)` | Non-local exit from the nearest enclosing loop (`do`/`dolist`/`dotimes`/`loop`), which evaluates to `value` (or nil) |
+| `unwind-protect` | `(unwind-protect protected cleanup...)` | Evaluate `protected` and run the `cleanup` forms on every exit from it -- normal return, `error` unwind, or `return`/`return-from` (interpreter/JVM; compile error on WASM) |
 | `defun` | `(defun name (params...) body...)` | Define a function in the function namespace. Returns the function name |
 | `defmacro` | `(defmacro name (params...) body...)` | Define a user macro; a call is expanded (the body runs with unevaluated argument forms bound) and the expansion is evaluated. Supports `&rest`/`&body`. Returns the name |
 | `defclass` | `(defclass name (super?) ((slot options...)...))` | Define a class (static CLOS subset: single inheritance; `:initarg`/`:initform`/`:reader`/`:accessor` slot options). Returns the name |

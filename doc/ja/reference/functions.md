@@ -436,4 +436,6 @@ UDP(`socket-send` / `socket-receive`)、`wait-for-input`、`socket-server`、
 `with-server-socket` / `with-socket-listener`)は
 [マクロページ](macros.md)に一覧があり、
 [リファレンスページ](macros/usocket-with-macros.md)で説明しています。
-ソケットを閉じるのは正常終了時のみです(`unwind-protect` はありません)。
+インタープリタと JVM ではあらゆる脱出時にソケットを閉じます
+([`unwind-protect`](special-forms/unwind-protect.md) に展開されます)。
+WASM コンポーネントバックエンドでは正常終了時のみ閉じます。

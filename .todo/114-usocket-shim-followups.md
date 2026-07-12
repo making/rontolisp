@@ -38,9 +38,9 @@ Skipped in v1 by scope decision.
 ## Non-goals here (tracked elsewhere)
 
 UDP (`socket-send`/`socket-receive`, blocked on `.todo/47-udp-sockets.md`)
-and `socket-shutdown` (needs a half-close primitive). The error-path gaps --
-`usocket:socket-error` under `handler-case` (today a data symbol only) and
-the with-* macros closing on normal exit only -- are the subject of
-`.todo/116-error-handling-foundation.md` (unwind-protect + typed conditions),
-which includes the usocket retrofit (typed SocketSupport signals +
-unwind-protect in the with-* expansions).
+and `socket-shutdown` (needs a half-close primitive). The error-path gaps
+were CLOSED by `.todo/116-error-handling-foundation.md` Phases 1-3
+(2026-07-12): the with-* macros close on every exit on interpreter/JVM
+(`unwind-protect`), and `usocket:socket-error` is a real condition type
+catchable under `handler-case` (`usocket::%usock-guard` re-signal; see
+`.kb/error-handling.md`).

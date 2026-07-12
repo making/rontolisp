@@ -231,9 +231,11 @@ splice). Key mechanics:
   `LispMacroExpander.expandUsocketWith*` expansions (the
   `rontolisp:with-arena` pattern: dispatched on the qualified name in
   `LispEvaluator.evalCons` + `Jvm/WasmExprCompiler`, registered only as
-  usocket package externals, no CL_MACROS entry). No `unwind-protect` exists,
-  so the expansion closes on normal exit only (`let` + result-var + close;
-  documented limitation).
+  usocket package externals, no CL_MACROS entry). Since todo-116 the
+  expansions are backend-parameterized: interpreter/JVM wrap the body in
+  `unwind-protect` (close on EVERY exit); the WASM call sites pass
+  `unwindProtect = false` and keep the close-after-body shape (`let` +
+  result-var + close; `unwind-protect` does not compile there).
 - **Built-in ASDF system**: `eval/BuiltinSystems` maps `"usocket"` →
   `UsocketLibrary::forms`. `LoadInliner.spliceSystem` splices the forms (NOT
   mark-only — an `:import-from :usocket` + bare-name consumer would evade the
@@ -246,10 +248,20 @@ splice). Key mechanics:
 - **Chain wiring**: `RontoLispCli` (outermost `UsocketLibrary.process`),
   `RontoPlayground` (both compile paths), corpus tests,
   `AsdfLibraryE2eSupport`, native-image `resource-config.json`.
+- **Typed conditions (todo-116)**: usocket.lisp defines the condition
+  hierarchy (`socket-condition` with a `message` slot + echo `:report`,
+  `socket-error`, `connection-refused-error`, ...) and wraps
+  `socket-connect`/`socket-listen`/`socket-accept` in the internal
+  `(usocket::%usock-guard form)` — expanded per backend
+  (`LispMacroExpander.expandUsocketGuard`): interpreter/JVM = `handler-case`
+  + `usocket::%usock-resignal` (re-signals as `usocket:socket-error`, message
+  preserved so uncaught output is unchanged), WASM = pass-through (the shim
+  source is parsed once and cached for all backends, so the branch cannot be
+  a reader feature). The re-signal always uses `socket-error` (the subtypes
+  are defined but not auto-selected). See `.kb/error-handling.md`.
 - **Not reproduced** (rontolisp has no substrate): UDP
   (`socket-send`/`socket-receive`), `socket-shutdown`, `wait-for-input`,
-  `socket-server`, and the condition hierarchy — `usocket:socket-error` &c
-  are registered as data symbols only (no condition system / `handler-case`).
+  `socket-server`, and restart-based retry (`handler-bind`/`restart-case`).
 
 ## Pinning tests
 

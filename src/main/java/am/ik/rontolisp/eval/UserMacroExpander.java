@@ -89,7 +89,7 @@ public final class UserMacroExpander {
 				macroEval.eval(expanded);
 			}
 			if (isOperator(expanded, LispNames.DEFCLASS) || isOperator(expanded, LispNames.DEFGENERIC)
-					|| isOperator(expanded, LispNames.DEFMETHOD)) {
+					|| isOperator(expanded, LispNames.DEFMETHOD) || isOperator(expanded, LispNames.DEFINE_CONDITION)) {
 				// Register the CLOS definitions too (constructor/accessor/method defuns
 				// plus the generic's dispatcher) so a macro body can call a generic
 				// function at expansion time -- cl-who's process-tag chain does. The

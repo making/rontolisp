@@ -469,5 +469,7 @@ a worked overview and the full limitation list.
 The `with-*` convenience macros (`usocket:with-client-socket` /
 `with-connected-socket` / `with-server-socket` / `with-socket-listener`) are
 listed on the [macros page](macros.md) and described on their
-[reference page](macros/usocket-with-macros.md); they close the socket on
-normal exit only (there is no `unwind-protect`).
+[reference page](macros/usocket-with-macros.md); on the interpreter and the
+JVM they close the socket on every exit (they expand over
+[`unwind-protect`](special-forms/unwind-protect.md)), on the WASM component
+backend on normal exit only.

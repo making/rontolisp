@@ -17,8 +17,9 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&whole` | 利用不可 |
 | `values` / `multiple-value-bind` | 利用可能。ユーザ関数の多値も含む（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
 | `block` / `return-from` / `tagbody` / `go` | 利用不可 |
-| `catch` / `throw` / `unwind-protect` | 利用不可 |
-| 条件とリスタート（`handler-case` など） | 利用不可 |
+| `catch` / `throw` | 利用不可 |
+| `unwind-protect` | インタープリタ/JVM で利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。WASM ではコンパイルエラー |
+| 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | インタープリタ/JVM で利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。捕捉は WASM ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
 | `flet` / `labels` | 利用可能（[`flet`](../reference/macros/flet.md)、[`labels`](../reference/macros/labels.md) 参照） |
 | `macrolet` | 利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
@@ -100,24 +101,37 @@ Common Lisp からの残る相違点は次のとおりです:
   **最も内側**の反復ブロックから抜けます。
 - `tagbody` / `go` — ラベルとジャンプによる制御フローはありません。
 - `catch` / `throw` — 動的スコープの脱出はありません。
-- `unwind-protect` — 脱出時のクリーンアップ保証はありません。
 
 ```console
 > (block done (return-from done 1) 2)
 The function block is undefined
 ```
 
+[`unwind-protect`](../reference/special-forms/unwind-protect.md)(あらゆる
+脱出時 — 通常復帰・`error` 巻き戻し・`return`/`return-from` — の
+クリーンアップ)はインタープリタと JVM バックエンドで**利用可能**です。
+WASM コンパイラは拒否します(WASM のエラーは捕捉不能なトラップのため)。
+
 ## 条件とリスタート
 
-条件システムはありません。`error` はシグナルを発しプログラムを中断しますが、
-そのシグナルは**言語内から捕捉できません**。`handler-case`、`handler-bind`、
-`ignore-errors`、`restart-case`、`define-condition`、`signal`、`warn` はすべて
-存在しません。
+条件システムのコアは**利用可能**です: コンディション型は組み込み階層
+（`condition` > `serious-condition` > `error`、`warning`）の上の CLOS
+サブセットクラスで、[`define-condition`](../reference/macros/define-condition.md)
+（`:report` 付き）で定義し、[`make-condition`](../reference/macros/make-condition.md)
+や型付きの [`error`](../reference/macros/error.md)/[`signal`](../reference/macros/signal.md)
+designator で構築し、インタープリタと JVM バックエンドでは
+[`handler-case`](../reference/macros/handler-case.md) /
+[`ignore-errors`](../reference/macros/ignore-errors.md) により型で捕捉できます
+（WASM コンパイラは捕捉を拒否します: WASM のエラーは捕捉不能なトラップです）。
 
-```console
-> (ignore-errors (error "boom"))
-The function ignore-errors is undefined
+```lisp
+(handler-case (error "boom") (error (e) :caught)) ; => :caught
 ```
+
+**リスタートシステム**は利用できません: `handler-bind`、`restart-case`
+（主フォームだけを残す no-op として受理）、`restart-bind`、`invoke-restart`、
+`with-simple-restart`、`cerror`、`abort`、`continue`、`break` は存在せず、
+`check-type`/`assert` は再格納リスタートを提供せずにエラーを通知します。
 
 ## 局所マクロ（`macrolet`）
 

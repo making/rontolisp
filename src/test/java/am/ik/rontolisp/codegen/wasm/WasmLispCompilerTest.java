@@ -23,6 +23,46 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void conditionFormsCompileOnWasm() {
+		// define-condition (top-level, spliced like defclass), make-condition,
+		// typecase-on-conditions, with-slots and signal (unhandled -> nil) all compile;
+		// a typed error traps like a plain %error.
+		assertThat(compile("""
+				(define-condition my-cond (error) ((v :initarg :v)))
+				(print (signal "quiet"))
+				(print (typecase (make-condition 'my-cond :v 1) (warning 'w) (error 'e) (t 'o)))
+				(print (with-slots (v) (make-condition 'my-cond :v 9) v))
+				""")).isNotEmpty();
+	}
+
+	@Test
+	void unwindProtectIsCompileError() {
+		// A WASM error is an uncatchable trap, so unwind-protect cannot run its cleanup
+		// on the error path; the compiler rejects it (interpreter/JVM only).
+		assertThatThrownBy(() -> compile("(unwind-protect 1 2)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("unwind-protect is not supported on the WASM backend");
+	}
+
+	@Test
+	void handlerCaseAndIgnoreErrorsAreCompileErrors() {
+		assertThatThrownBy(() -> compile("(handler-case 1 (error (e) 2))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("handler-case is not supported on the WASM backend");
+		assertThatThrownBy(() -> compile("(ignore-errors 1)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("ignore-errors is not supported on the WASM backend");
+	}
+
+	@Test
+	void withOpenFileStillCompilesWithoutUnwindProtect() {
+		// The with-* expansions keep the close-after-body shape on WASM (the backend
+		// switch passes unwindProtect = false), so they must not hit the unwind-protect
+		// compile error above.
+		assertThat(compile("(with-open-file (s \"f.txt\") (read-line s))")).isNotEmpty();
+		assertThat(compile("(print (with-output-to-string (s) (princ \"x\" s)))")).isNotEmpty();
+		assertThat(compile("(with-input-from-string (s \"a\") (read-line s))")).isNotEmpty();
+	}
+
+	@Test
 	void fetchInPreview1ModeIsCompileError() {
 		assertThatThrownBy(() -> compile("(rontolisp:fetch \"http://x/\")"))
 			.isInstanceOf(UnsupportedOperationException.class)

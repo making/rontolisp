@@ -1,8 +1,8 @@
 # warn
 
-`(warn control-string args...)`
+`(warn datum args...)`
 
-Prints a `WARNING:` message to the standard error stream and returns `nil`; execution continues. The first argument must be a literal control string using the same directives as `format` (`~a`, `~s`, `~%`, ...); the remaining arguments fill those directives to build the message. The `(warn 'condition-name initargs...)` idiom is also accepted and prints the condition designator into the message. There is no condition system, so no condition object is created and nothing can handle or muffle the warning. Like `error`, `warn` is a macro with no function value, so `#'warn` is unsupported. The message goes to standard error on every backend, including the WASM `--component` output (the WASI 0.3 adapter wires fd 2 to `wasi:cli/stderr`).
+Prints a `WARNING:` message to the standard error stream and returns `nil`; execution continues. The same condition designators as [`error`](error.md) are accepted: a literal control string (same directives as `format`), a quoted condition-type symbol with initargs (a `define-condition` `:report` becomes the message; the `Condition (type initargs...) was signalled.` shape otherwise), or a condition object. Lite: the warning cannot be handled or muffled (no `muffle-warning` restart; `handler-case` catches errors and `signal`, not `warn`). Like `error`, `warn` is a macro with no function value, so `#'warn` is unsupported. The message goes to standard error on every backend, including the WASM `--component` output (the WASI 0.3 adapter wires fd 2 to `wasi:cli/stderr`).
 
 Because the message goes to standard error (not standard output) it is shown here statically rather than as a runnable example:
 

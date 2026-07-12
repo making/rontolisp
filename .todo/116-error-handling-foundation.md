@@ -1,3 +1,24 @@
+ > **Progress 2026-07-12: Phases 1-3 DONE (uncommitted, on develop).**
+> Suggested-order items 1-4 all landed: `ByteCodeWriter` exception tables
+> (+ v50-no-StackMapTable pin), `unwind-protect` (interpreter/JVM; WASM
+> compile error) with the with-* retrofit, condition objects
+> (`define-condition` -> defclass expansion with `:report` + seeded built-in
+> hierarchy + `error`/`warn`/`signal` designators + `make-condition` +
+> `with-slots` + typecase-on-classes), and `handler-case`/`ignore-errors`
+> (interpreter + JVM) including the usocket acceptance
+> (`usocket:socket-error` catchable, `usocket::%usock-guard` re-signal).
+> Full mechanics: `.kb/error-handling.md`. Verified: `./mvnw test` 3320/0 +
+> native `CiSpecE2eTest` 788/0 (all four backends).
+> **Remaining**: Phase 4 below (`handler-bind` + `restart-case`/
+> `invoke-restart`, decide when cl-postgres M3 resumes) and the Phase 1
+> "bonus" (compile-path special-`let` restore on `return`-across-boundary --
+> the unwind machinery now exists, `Jvm/WasmLetCompiler` still restore on
+> normal exit only). Lite deviations shipped: an uncaught raised `signal`
+> aborts instead of returning nil; interpreter `handler-case` catches
+> `LispEvalException` only while the JVM catches any `RuntimeException`;
+> `(error obj)` ignores the object's class `:report` (type not statically
+> known).
+
 # Error-handling foundation: unwind-protect + typed conditions + handler-case
 
 The root cause behind every "lite" error-path compromise shipped so far:

@@ -24,8 +24,54 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ClosRegistry {
 
-	/** Creates an empty registry. */
+	/**
+	 * Creates a registry pre-seeded with the built-in condition hierarchy:
+	 * {@code condition} &gt; {@code serious-condition} &gt; {@code error} (&gt;
+	 * {@code simple-error} and the standard error subtypes) plus {@code warning}/
+	 * {@code simple-warning}. Conditions are ordinary CLOS-subset classes, so
+	 * {@code define-condition} extends the hierarchy through {@code defclass} and
+	 * {@code typep}/{@code typecase}/{@code handler-case} test instances by tag
+	 * membership.
+	 */
 	public ClosRegistry() {
+		seedConditionClass("condition", null);
+		seedConditionClass("serious-condition", "condition");
+		seedConditionClass("error", "serious-condition");
+		seedConditionClass("simple-error", "error", "format-control", "format-arguments");
+		seedConditionClass("simple-condition", "condition", "format-control", "format-arguments");
+		seedConditionClass("warning", "condition");
+		seedConditionClass("simple-warning", "warning", "format-control", "format-arguments");
+		seedConditionClass("style-warning", "warning");
+		seedConditionClass("parse-error", "error");
+		seedConditionClass("type-error", "error", "datum", "expected-type");
+		seedConditionClass("stream-error", "error");
+		seedConditionClass("end-of-file", "stream-error");
+		seedConditionClass("file-error", "error");
+		seedConditionClass("arithmetic-error", "error");
+		seedConditionClass("division-by-zero", "arithmetic-error");
+		seedConditionClass("control-error", "error");
+		seedConditionClass("program-error", "error");
+		seedConditionClass("package-error", "error");
+		seedConditionClass("cell-error", "error");
+		seedConditionClass("unbound-variable", "cell-error");
+		seedConditionClass("undefined-function", "cell-error");
+	}
+
+	private void seedConditionClass(String name, @Nullable String parent, String... slotNames) {
+		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
+		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
+		for (String slotName : slotNames) {
+			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, ":" + slotName, List.of(), List.of()));
+		}
+		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
+		if (parentInfo != null) {
+			ancestors.addAll(parentInfo.ancestors());
+		}
+		ancestors.add(name);
+		registerClass(new ClassInfo(name, parent, List.copyOf(slots), java.util.Set.copyOf(ancestors)));
+		for (int i = 0; i < slots.size(); i++) {
+			registerSlotPosition(slots.get(i).baseName(), i + 1);
+		}
 	}
 
 	/**
@@ -184,6 +230,24 @@ public final class ClosRegistry {
 	private final Map<String, Integer> slotPositions = new LinkedHashMap<>();
 
 	/**
+	 * Condition class name (normalized) to its {@code (:report x)} form -- a literal
+	 * string or a {@code (lambda (condition stream) ...)} expression AST -- registered by
+	 * {@code define-condition}. The {@code error}/{@code signal}/{@code warn} expansions
+	 * consult it to build the message of a typed signal.
+	 */
+	private final Map<String, LispVal> conditionReports = new LinkedHashMap<>();
+
+	/**
+	 * Class name (normalized) to the extra parent types beyond the first -- the lite
+	 * multiple-inheritance support of {@code define-condition}: the first parent provides
+	 * the slot layout (single inheritance), the remaining parents contribute to the
+	 * ancestor set only, so {@code typep}/{@code handler-case} match through them while
+	 * their slots are not inherited. Merged into the class's ancestors when the class is
+	 * registered.
+	 */
+	private final Map<String, Set<String>> pendingExtraAncestors = new LinkedHashMap<>();
+
+	/**
 	 * The classes by normalized name, in definition order.
 	 * @return the class registry
 	 */
@@ -210,8 +274,14 @@ public final class ClosRegistry {
 	 */
 	@Nullable public ClassInfo findClass(String name) {
 		ClassInfo exact = this.classes.get(normalize(name));
-		if (exact != null || PackageRegistry.splitQualified(name) != null) {
+		if (exact != null) {
 			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			// A qualified spelling also matches a class registered under the plain name:
+			// the built-in condition hierarchy is package-less, while the resolver
+			// qualifies non-CL-symbol names (e.g. pkg::program-error) inside a package.
+			return this.classes.get(qn.member());
 		}
 		ClassInfo found = null;
 		for (ClassInfo candidate : this.classes.values()) {
@@ -245,12 +315,61 @@ public final class ClosRegistry {
 		return this.slotPositions.get(baseName);
 	}
 
+	/**
+	 * Records the extra parent types (beyond the first) of a {@code define-condition}
+	 * with multiple parents; they join the class's ancestor set when it is registered.
+	 * @param className the condition class name as spelled
+	 * @param parents the extra parent type names as spelled
+	 */
+	public void registerExtraAncestors(String className, List<String> parents) {
+		Set<String> extras = this.pendingExtraAncestors.computeIfAbsent(normalize(className),
+				k -> new java.util.LinkedHashSet<>());
+		for (String parent : parents) {
+			extras.add(normalize(parent));
+		}
+	}
+
 	void registerClass(ClassInfo info) {
-		this.classes.put(normalize(info.name()), info);
+		String key = normalize(info.name());
+		Set<String> extras = this.pendingExtraAncestors.get(key);
+		if (extras != null) {
+			Set<String> merged = new java.util.LinkedHashSet<>(info.ancestors());
+			for (String extra : extras) {
+				ClassInfo parent = findClass(extra);
+				if (parent != null) {
+					merged.addAll(parent.ancestors());
+				}
+				else {
+					merged.add(extra);
+				}
+			}
+			info = new ClassInfo(info.name(), info.superclass(), info.slots(), Set.copyOf(merged));
+		}
+		this.classes.put(key, info);
 	}
 
 	void registerGeneric(GenericInfo info) {
 		this.generics.put(normalize(info.name()), info);
+	}
+
+	/**
+	 * Registers the {@code (:report x)} form of a condition class defined by
+	 * {@code define-condition}.
+	 * @param className the condition class name as spelled
+	 * @param report the report form (a literal string or a lambda expression AST)
+	 */
+	public void registerConditionReport(String className, LispVal report) {
+		this.conditionReports.put(normalize(className), report);
+	}
+
+	/**
+	 * Looks up the {@code :report} form of a condition class (single- and double-colon
+	 * spellings match).
+	 * @param className the condition class name as spelled
+	 * @return the report form, or null when the class has none
+	 */
+	@Nullable public LispVal findConditionReport(String className) {
+		return this.conditionReports.get(normalize(className));
 	}
 
 	void registerSlotPosition(String baseName, int position) {

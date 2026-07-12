@@ -198,14 +198,21 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
 
 - **TCP only.** `:protocol :datagram` (UDP) signals an error, and
   `socket-send` / `socket-receive` / `socket-shutdown` do not exist.
-- **No condition system.** `usocket:socket-error` and the other condition
-  types exist as data symbols only; a connection failure signals an error
-  (interpreter/JVM) or returns `nil` (WASM component), and `handler-case`
-  over usocket conditions is not supported.
+- **Typed conditions on the interpreter and the JVM.** A failure in
+  `socket-connect`/`socket-listen`/`socket-accept` signals a typed
+  `usocket:socket-error` (message preserved), so
+  `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
+  works there. The subtypes (`connection-refused-error` &c) are defined but
+  the re-signal always uses `socket-error` (catch that). On the WASM
+  component backend errors remain uncatchable traps (or `nil` handles), and
+  `wait-for-input`-style condition handling does not exist.
 - **`wait-for-input` and `socket-server` do not exist** (reads block; write
   your own accept loop).
-- **The `with-*` macros close on normal exit only** (there is no
-  `unwind-protect`), and the compatibility keyword arguments
+- **The `with-*` macros close the socket on every exit** on the interpreter
+  and the JVM (they expand over
+  [`unwind-protect`](../reference/special-forms/unwind-protect.md)); on the
+  WASM component backend they close on normal exit only (`unwind-protect`
+  does not compile there). The compatibility keyword arguments
   (`:element-type`, `:timeout`, `:nodelay`, `:reuse-address`, ...) are
   accepted and ignored.
 - **Backends**: interpreter and JVM are full; WASM is component-only like the

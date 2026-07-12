@@ -11,7 +11,9 @@ import am.ik.rontolisp.LispVal;
  * Compiles the internal {@code %error} primitive: it evaluates its single string argument
  * and throws a {@link RuntimeException} with that message, aborting execution. Runtime
  * strings carry surrounding quotes ({@code "msg"}), so the closing and opening quotes are
- * stripped via {@code msg.substring(1, msg.length() - 1)} before the throw.
+ * stripped via {@code msg.substring(1, msg.length() - 1)} before the throw. The
+ * message-stripping throw shape is shared with {@link JvmErrorCondCompiler} (the
+ * condition-carrying variant).
  */
 final class JvmErrorCompiler {
 
@@ -20,6 +22,14 @@ final class JvmErrorCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		compileThrowRuntimeException(args.get(1), ctx, className);
+	}
+
+	/**
+	 * Emits {@code throw new RuntimeException(strip(messageExpr))}: the message
+	 * expression is compiled, its quote framing stripped, and the exception thrown.
+	 */
+	static void compileThrowRuntimeException(LispVal messageExpr, JvmLispCompiler.Ctx ctx, String className) {
 		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
 		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
@@ -30,7 +40,7 @@ final class JvmErrorCompiler {
 		ctx.emitU2(runtimeEx.index());
 		ctx.emit(Opcode.DUP);
 		// message: arg.substring(1, arg.length() - 1)
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(messageExpr, ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.DUP);

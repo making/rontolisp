@@ -40,6 +40,16 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void unwindProtectIsCompileError() {
+		// Same gate as the wasm-GC backend (a WASM error is an uncatchable trap); the
+		// eligibility pre-pass rejects it before the expression compiler's own error.
+		assertThatThrownBy(() -> compile("""
+				(defun up-f (n) (unwind-protect (* n 2) n))
+				(rontolisp:wasm-export 'up-f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("unwind-protect");
+	}
+
+	@Test
 	void emitsPlainMvpModuleWithNoGcTypesImportsOrMemory() {
 		byte[] module = compile("""
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))

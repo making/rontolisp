@@ -10,6 +10,15 @@
 > support, WASM catching is gated out for v1). This file stays as the
 > API-surface catalog; the "Implementation approach" section below is
 > superseded.
+>
+> **Update 2026-07-12:** todo-116 Phases 1-3 SHIPPED: `unwind-protect`,
+> `define-condition`/`make-condition`/condition classes, `signal`, `warn`
+> designators, `handler-case`, `ignore-errors` and `with-slots` are real on
+> the interpreter/JVM (WASM rejects catching). See `.kb/error-handling.md`.
+> Still missing from the catalog below: `handler-bind`, `restart-case` (a
+> primary-form no-op) and the whole restart layer (`invoke-restart`,
+> `with-simple-restart`, `cerror`, `abort`, `continue`, `break`),
+> `muffle-warning`, `condition-format-*` accessors, `typep` as a function.
 
 # Condition system (`handler-case`, `handler-bind`, `restart-case`, `restart-bind`, `invoke-restart`, `invoke-restart-interactively`, `signal`, `error` (done), `warn`, `cerror`, `abort`, `continue`, `break`, `make-condition`, `condition-type`, `simple-condition`, `simple-error`, `simple-warning`, `style-warning`, `serious-condition`, `warning`, `condition`, `storage-condition`, `program`, `control`, `serious-condition`, `error` (condition class))
 

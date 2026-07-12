@@ -1,14 +1,14 @@
 # make-condition
 
-`(make-condition type &key format-control format-arguments ...)`
+`(make-condition type &key initargs...)`
 
-Lite: with no condition system there is no condition object to build, so the expansion yields the `:format-control` value when one is given (or a generic message naming the type otherwise) — which is exactly what `error` needs to signal with the intended message. `:format-arguments` and any other options are discarded.
+Constructs a condition object of the given type — a CLOS-subset instance whose slots are filled from the initargs (missing slots take their `:initform`). The type must be a literal quoted symbol; a type not defined by [`define-condition`](define-condition.md) (or seeded built-in like `simple-error`) yields a raw tagged instance carrying the arguments as given. The instance can be passed to [`error`](error.md)/[`signal`](signal.md) (the condition-object designator) and tested with `typecase`.
 
 ```lisp
-(make-condition 'my-error :format-control "something failed") ; => "something failed"
+(make-condition 'simple-error :format-control "something failed") ; => (%class-simple-error "something failed" nil)
 ```
 
 ```console
-> (error (make-condition 'my-error :format-control "something failed"))
+> (error (make-condition 'simple-error :format-control "something failed"))
 Error: something failed
 ```

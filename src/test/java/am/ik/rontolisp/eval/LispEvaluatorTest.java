@@ -3835,13 +3835,13 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots)");
 	}
 
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)");
 	}
 
 	@Test
@@ -4371,6 +4371,293 @@ class LispEvaluatorTest {
 				  (read-line kept))
 				""";
 		assertThatThrownBy(() -> eval(program)).isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void handlerCaseCatchesTypedErrorByClass() {
+		assertThat(evalMulti("""
+				(define-condition hc-err (error) ((v :initarg :v :reader hc-err-v)))
+				(handler-case (error 'hc-err :v 7)
+				  (hc-err (e) (list :caught (hc-err-v e))))
+				""").print()).isEqualTo("(:caught 7)");
+	}
+
+	@Test
+	void handlerCaseCatchesPlainErrorAsError() {
+		assertThat(eval("""
+				(handler-case (error "boom ~a" 1)
+				  (error (e) (list :caught (nth 1 e))))
+				""").print()).isEqualTo("(:caught \"boom 1\")");
+	}
+
+	@Test
+	void handlerCaseDispatchesByHierarchyAndClauseOrder() {
+		assertThat(evalMulti("""
+				(define-condition hc-sub (parse-error) ())
+				(handler-case (error 'hc-sub)
+				  (warning (w) :warning)
+				  (parse-error (e) :parse)
+				  (error (e) :error))
+				""").print()).isEqualTo(":parse");
+	}
+
+	@Test
+	void handlerCaseRethrowsUnmatchedToOuterHandler() {
+		assertThat(evalMulti("""
+				(define-condition hc-warn2 (warning) ())
+				(handler-case
+				    (handler-case (error 'hc-warn2)
+				      (error (e) :inner))
+				  (warning (w) :outer))
+				""").print()).isEqualTo(":outer");
+	}
+
+	@Test
+	void handlerCaseUnmatchedErrorAborts() {
+		assertThatThrownBy(() -> eval("(handler-case (error \"boom\") (warning (w) :w))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("boom");
+	}
+
+	@Test
+	void handlerCaseNoErrorClauseReceivesValue() {
+		assertThat(eval("(handler-case (+ 1 2) (error (e) :err) (:no-error (v) (list :ok v)))").print())
+			.isEqualTo("(:ok 3)");
+	}
+
+	@Test
+	void handlerCaseValueWithoutClauses() {
+		assertThat(eval("(handler-case (+ 1 2) (error (e) :err))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void handlerCaseCatchesSignalAndSignalFallsThroughOtherwise() {
+		assertThat(eval("(handler-case (progn (signal \"quiet\") :not-raised) (condition (c) :raised))").print())
+			.isEqualTo(":raised");
+		assertThat(eval("(signal \"quiet\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void handlerCaseRunsUnwindProtectCleanupBeforeHandler() {
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-case
+				      (unwind-protect (error "boom") (setq log (cons :cleaned log)))
+				    (error (e) (cons :caught log))))
+				""").print()).isEqualTo("(:caught :cleaned)");
+	}
+
+	@Test
+	void ignoreErrorsYieldsNilOnErrorAndValueOtherwise() {
+		assertThat(eval("(ignore-errors (error \"boom\"))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(ignore-errors (+ 1 2))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void handlerCaseCatchesUsocketSocketErrorOnConnectToClosedPort() {
+		// The .todo/116 Phase 3 acceptance shape: a connection failure is re-signaled
+		// as a typed usocket:socket-error, catchable by type.
+		assertThat(eval("""
+				(let* ((l (usocket:socket-listen "127.0.0.1" 0))
+				       (p (usocket:get-local-port l)))
+				  (usocket:socket-close l)
+				  (handler-case (usocket:socket-connect "127.0.0.1" p)
+				    (usocket:socket-error (e) :refused)))
+				""").print()).isEqualTo(":refused");
+	}
+
+	@Test
+	void usocketConnectFailureMessageIsPreservedWhenUncaught() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString(
+				"(setq up-port (let ((l (usocket:socket-listen \"127.0.0.1\" 0))) (let ((p (usocket:get-local-port l))) (usocket:socket-close l) p)))"));
+		assertThatThrownBy(
+				() -> evaluator.eval(LispReader.readFromString("(usocket:socket-connect \"127.0.0.1\" up-port)")))
+			.isInstanceOfSatisfying(LispEvalException.class, e -> {
+				assertThat(e.getMessage()).contains("tcp-connect");
+				assertThat(e.condition()).isNotNull();
+			});
+	}
+
+	@Test
+	void typedErrorCarriesConditionInstanceAndLegacyMessage() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(define-condition my-cond-err (error) ((v :initarg :v)))"));
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(error 'my-cond-err :v 42)")))
+			.isInstanceOfSatisfying(LispEvalException.class, e -> {
+				assertThat(e.getMessage()).isEqualTo("Condition (my-cond-err :v 42) was signalled.");
+				assertThat(e.condition()).isNotNull();
+				assertThat(java.util.Objects.requireNonNull(e.condition()).print())
+					.isEqualTo("(%class-my-cond-err 42)");
+			});
+	}
+
+	@Test
+	void defineConditionReportStringBecomesMessage() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(define-condition my-cond-rep (error) () (:report \"it broke\"))"));
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(error 'my-cond-rep)")))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("it broke");
+	}
+
+	@Test
+	void defineConditionReportLambdaRendersMessage() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("""
+				(define-condition my-cond-lam (error) ((v :initarg :v :reader my-cond-lam-v))
+				  (:report (lambda (c s) (format s "bad value ~a" (my-cond-lam-v c)))))
+				"""));
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(error 'my-cond-lam :v 42)")))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("bad value 42");
+	}
+
+	@Test
+	void makeConditionBuildsTypedInstance() {
+		assertThat(eval("(make-condition 'simple-error :format-control \"x\")").print())
+			.isEqualTo("(%class-simple-error \"x\" nil)");
+	}
+
+	@Test
+	void errorWithConditionObjectSignalsItsCarriedMessage() {
+		assertThatThrownBy(() -> eval("(error (make-condition 'simple-error :format-control \"boom obj\"))"))
+			.isInstanceOfSatisfying(LispEvalException.class, e -> {
+				assertThat(e.getMessage()).isEqualTo("boom obj");
+				assertThat(e.condition()).isNotNull();
+			});
+	}
+
+	@Test
+	void errorWithRuntimeStringSignalsItAsMessage() {
+		assertThatThrownBy(() -> eval("(let ((m \"runtime msg\")) (error m))")).isInstanceOf(LispEvalException.class)
+			.hasMessage("runtime msg");
+	}
+
+	@Test
+	void signalReturnsNilWhenUnhandled() {
+		assertThat(eval("(signal \"quiet\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("""
+				(define-condition my-cond-sig (condition) ())
+				(signal 'my-cond-sig)
+				""")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void typecaseMatchesConditionClassesByHierarchy() {
+		assertThat(evalMulti("""
+				(define-condition my-cond-tc (error) ())
+				(typecase (make-condition 'my-cond-tc) (warning 'w) (error 'e) (t 'o))
+				""").print()).isEqualTo("e");
+	}
+
+	@Test
+	void withSlotsReadsInstanceSlots() {
+		assertThat(evalMulti("""
+				(define-condition my-cond-ws (error) ((a :initarg :a) (b :initarg :b)))
+				(with-slots (a b) (make-condition 'my-cond-ws :a 1 :b 2) (list a b))
+				""").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void unwindProtectReturnsProtectedValueAfterCleanup() {
+		assertThat(eval("(let ((n 1)) (list (unwind-protect (+ n 1) (setq n 10)) n))").print()).isEqualTo("(2 10)");
+	}
+
+	@Test
+	void unwindProtectRunsCleanupOnErrorUnwind() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(setq up-cleaned nil)"));
+		assertThatThrownBy(() -> evaluator
+			.eval(LispReader.readFromString("(unwind-protect (error \"boom\") (setq up-cleaned t))")))
+			.isInstanceOf(LispEvalException.class);
+		assertThat(evaluator.eval(LispReader.readFromString("up-cleaned"))).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void unwindProtectRunsCleanupOnErrorFromCalledFunction() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(setq up-cleaned nil)"));
+		evaluator.eval(LispReader.readFromString("(defun up-thrower () (error \"deep\"))"));
+		assertThatThrownBy(
+				() -> evaluator.eval(LispReader.readFromString("(unwind-protect (up-thrower) (setq up-cleaned t))")))
+			.isInstanceOf(LispEvalException.class);
+		assertThat(evaluator.eval(LispReader.readFromString("up-cleaned"))).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void unwindProtectRunsCleanupOnReturnExit() {
+		assertThat(eval("""
+				(let ((log nil))
+				  (dolist (x '(1 2 3))
+				    (unwind-protect
+				        (when (= x 2) (return))
+				      (setq log (cons x log))))
+				  log)
+				""").print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void unwindProtectRunsCleanupOnReturnFromDefun() {
+		assertThat(evalMulti("""
+				(setq up-log nil)
+				(defun up-f ()
+				  (unwind-protect (return-from up-f :early) (setq up-log :cleaned)))
+				(list (up-f) up-log)
+				""").print()).isEqualTo("(:early :cleaned)");
+	}
+
+	@Test
+	void unwindProtectNestedCleanupsRunInnermostFirst() {
+		assertThat(eval("""
+				(let ((log nil))
+				  (dolist (x '(1))
+				    (unwind-protect
+				        (unwind-protect (return) (setq log (cons :inner log)))
+				      (setq log (cons :outer log))))
+				  log)
+				""").print()).isEqualTo("(:outer :inner)");
+	}
+
+	@Test
+	void unwindProtectCleanupErrorReplacesPendingUnwind() {
+		// CL semantics: a cleanup that itself signals replaces the pending unwind.
+		assertThatThrownBy(() -> eval("(unwind-protect (error \"first\") (error \"second\"))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("second");
+	}
+
+	@Test
+	void withOutputToStringClosesStreamOnErrorUnwind() {
+		// The stream handle is released by the unwind-protect cleanup: writing to it
+		// after the error signals instead of appending.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(setq up-kept nil)"));
+		assertThatThrownBy(() -> evaluator.eval(LispReader
+			.readFromString("(with-output-to-string (s) (setq up-kept s) (princ \"x\" s) (error \"boom\"))")))
+			.isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(princ \"y\" up-kept)")))
+			.isInstanceOf(LispEvalException.class);
+	}
+
+	@Test
+	void usocketWithConnectedSocketClosesOnErrorExit() {
+		// The error-path sibling of usocketWithConnectedSocketClosesOnNormalExit: the
+		// unwind-protect cleanup closes the socket even when the body signals.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(setq up-sock-listener (usocket:socket-listen \"127.0.0.1\" 0))"));
+		evaluator.eval(LispReader.readFromString(
+				"(setq up-sock-client (usocket:socket-connect \"127.0.0.1\" (usocket:get-local-port up-sock-listener)))"));
+		evaluator.eval(LispReader.readFromString("(setq up-sock-kept nil)"));
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("""
+				(usocket:with-connected-socket (server (usocket:socket-accept up-sock-listener))
+				  (setq up-sock-kept server)
+				  (error "boom"))
+				"""))).isInstanceOf(LispEvalException.class);
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(read-line up-sock-kept)")))
+			.isInstanceOf(LispEvalException.class);
+		evaluator.eval(LispReader.readFromString("(usocket:socket-close up-sock-client)"));
+		evaluator.eval(LispReader.readFromString("(usocket:socket-close up-sock-listener)"));
 	}
 
 	@Test

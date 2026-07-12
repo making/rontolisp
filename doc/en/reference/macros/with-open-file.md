@@ -2,7 +2,7 @@
 
 `(with-open-file (stream filename options...) body...)`
 
-Opens the file named by `filename`, binds the open stream to `stream`, evaluates the body forms with that binding, and closes the file afterwards (even if the body exits early), returning the value of the last body form. The supported options are `:direction` -- the literal keyword `:input` (the default) or `:output` -- and `:element-type` -- the literal `'character` (the default, a text stream) or `'(unsigned-byte 8)` (a binary stream for `read-byte`/`write-byte`). Both must be literal so the compilers can pick the file mode statically. It expands into a plain `open`/`close` pair, so no special stream type is involved.
+Opens the file named by `filename`, binds the open stream to `stream`, evaluates the body forms with that binding, and closes the file afterwards, returning the value of the last body form. On the interpreter and the JVM the expansion wraps the body in [`unwind-protect`](../special-forms/unwind-protect.md), so the file is closed on every exit (normal return, an error signaled in the body, or a `return`/`return-from`); on the WASM backends, where `unwind-protect` does not compile, it is closed on normal exit only. The supported options are `:direction` -- the literal keyword `:input` (the default) or `:output` -- and `:element-type` -- the literal `'character` (the default, a text stream) or `'(unsigned-byte 8)` (a binary stream for `read-byte`/`write-byte`). Both must be literal so the compilers can pick the file mode statically. It expands into a plain `open`/`close` pair, so no special stream type is involved.
 
 Because it touches the filesystem, `with-open-file` is shown here statically rather than as a runnable example:
 

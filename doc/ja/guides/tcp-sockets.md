@@ -203,16 +203,22 @@ rontolisp のソケットはストリームハンドルそのものなので、�
 
 - **TCP のみ。** `:protocol :datagram`(UDP)はエラーを通知し、
   `socket-send` / `socket-receive` / `socket-shutdown` は存在しません。
-- **コンディションシステムなし。** `usocket:socket-error` などの
-  コンディション型はデータシンボルとしてのみ存在します。接続失敗はエラーを
-  通知し(インタープリタ/JVM)、または `nil` を返します(WASM
-  コンポーネント)。usocket コンディションに対する `handler-case` は
-  非対応です。
+- **インタープリタと JVM では型付きコンディション。**
+  `socket-connect`/`socket-listen`/`socket-accept` の失敗は型付きの
+  `usocket:socket-error` を通知します(メッセージは保持)。そのため
+  `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
+  が動作します。サブタイプ(`connection-refused-error` など)も定義されますが、
+  再通知は常に `socket-error` を使います(そちらを捕捉してください)。WASM
+  コンポーネントバックエンドではエラーは引き続き捕捉不能なトラップ(または
+  `nil` ハンドル)で、`wait-for-input` 的なコンディション処理は存在しません。
 - **`wait-for-input` と `socket-server` は存在しません**(読み込みは
   ブロックします。accept ループは自分で書いてください)。
-- **`with-*` マクロが閉じるのは正常終了時のみ**(`unwind-protect` は
-  ありません)。互換性のためのキーワード引数(`:element-type`、
-  `:timeout`、`:nodelay`、`:reuse-address` など)は受理して無視します。
+- **`with-*` マクロはインタープリタと JVM ではあらゆる脱出時にソケットを
+  閉じます**([`unwind-protect`](../reference/special-forms/unwind-protect.md)
+  に展開されます)。WASM コンポーネントバックエンドでは正常終了時のみ
+  閉じます(そこでは `unwind-protect` がコンパイルできないため)。互換性の
+  ためのキーワード引数(`:element-type`、`:timeout`、`:nodelay`、
+  `:reuse-address` など)は受理して無視します。
 - **バックエンド**: インタープリタと JVM はフル対応。WASM は tcp 組み込みと
   同じくコンポーネント専用で、アドレス系・peer 系アクセサは `nil` を
   返します。

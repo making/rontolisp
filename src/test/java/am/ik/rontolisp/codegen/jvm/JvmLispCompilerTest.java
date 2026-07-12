@@ -78,6 +78,237 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunHandlerCaseCatchesTypedErrorByClass() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition hc-err (error) ((v :initarg :v :reader hc-err-v)))
+				(print (handler-case (error 'hc-err :v 7)
+				         (hc-err (e) (list :caught (hc-err-v e)))))
+				""")).isEqualTo("(:caught 7)");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseCatchesPlainErrorAsError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (error "boom ~a" 1)
+				         (error (e) (list :caught (nth 1 e)))))
+				""")).isEqualTo("(:caught \"boom 1\")");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseCatchesErrorFromCalledFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-thrower () (error "deep"))
+				(print (handler-case (hc-thrower) (error (e) :caught)))
+				""")).isEqualTo(":caught");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseDispatchesByHierarchyAndClauseOrder() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition hc-sub (parse-error) ())
+				(print (handler-case (error 'hc-sub)
+				         (warning (w) :warning)
+				         (parse-error (e) :parse)
+				         (error (e) :error)))
+				""")).isEqualTo(":parse");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseRethrowsUnmatchedToOuterHandler() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition hc-warn2 (warning) ())
+				(print (handler-case
+				           (handler-case (error 'hc-warn2)
+				             (error (e) :inner))
+				         (warning (w) :outer)))
+				""")).isEqualTo(":outer");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseUnmatchedErrorAborts() {
+		assertThatThrownBy(() -> compileAndRun("(handler-case (error \"boom\") (warning (w) :w))"))
+			.hasRootCauseMessage("boom");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseNoErrorClauseReceivesValue() throws Exception {
+		assertThat(compileAndRun("(print (handler-case (+ 1 2) (error (e) :err) (:no-error (v) (list :ok v))))"))
+			.isEqualTo("(:ok 3)");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseCatchesSignal() throws Exception {
+		assertThat(compileAndRun(
+				"(print (handler-case (progn (signal \"quiet\") :not-raised) (condition (c) :raised))) (print (signal \"quiet\"))"))
+			.isEqualTo(":raised\nnil");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseRunsUnwindProtectCleanupBeforeHandler() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((log nil))
+				  (print (handler-case
+				             (unwind-protect (error "boom") (setq log (cons :cleaned log)))
+				           (error (e) (cons :caught log)))))
+				""")).isEqualTo("(:caught :cleaned)");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseReturnExitsProtectedRegion() throws Exception {
+		// A return inside the protected form exits the loop, not the handler; the
+		// handler depth is restored through the UnwindScope cleanup channel, so a
+		// later unhandled signal still falls through to nil.
+		assertThat(compileAndRun("""
+				(print (dolist (x '(1 2 3))
+				         (handler-case (when (= x 2) (return :done)) (error (e) :err))))
+				(print (signal "after"))
+				""")).isEqualTo(":done\nnil");
+	}
+
+	@Test
+	void compileAndRunIgnoreErrors() throws Exception {
+		assertThat(compileAndRun("(print (ignore-errors (error \"boom\"))) (print (ignore-errors (+ 1 2)))"))
+			.isEqualTo("nil\n3");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseCatchesUsocketSocketError() throws Exception {
+		// The .todo/116 Phase 3 acceptance shape on the JVM backend.
+		assertThat(compileAndRunUsocket("""
+				(let* ((l (usocket:socket-listen "127.0.0.1" 0))
+				       (p (usocket:get-local-port l)))
+				  (usocket:socket-close l)
+				  (print (handler-case (usocket:socket-connect "127.0.0.1" p)
+				           (usocket:socket-error (e) :refused))))
+				""")).isEqualTo(":refused");
+	}
+
+	@Test
+	void compileAndRunTypedErrorKeepsLegacyUncaughtMessage() {
+		assertThatThrownBy(() -> compileAndRun(
+				"(define-condition my-cond-err (error) ((v :initarg :v))) (error 'my-cond-err :v 42)"))
+			.hasRootCauseMessage("Condition (my-cond-err :v 42) was signalled.");
+	}
+
+	@Test
+	void compileAndRunTypedErrorReportStringMessage() {
+		assertThatThrownBy(() -> compileAndRun(
+				"(define-condition my-cond-rep (error) () (:report \"it broke\")) (error 'my-cond-rep)"))
+			.hasRootCauseMessage("it broke");
+	}
+
+	@Test
+	void compileAndRunTypedErrorReportLambdaMessage() {
+		assertThatThrownBy(() -> compileAndRun("""
+				(define-condition my-cond-lam (error) ((v :initarg :v :reader my-cond-lam-v))
+				  (:report (lambda (c s) (format s "bad value ~a" (my-cond-lam-v c)))))
+				(error 'my-cond-lam :v 42)
+				""")).hasRootCauseMessage("bad value 42");
+	}
+
+	@Test
+	void compileAndRunSignalYieldsNilWhenUnhandled() throws Exception {
+		assertThat(compileAndRun("(print (signal \"quiet\"))")).isEqualTo("nil");
+	}
+
+	@Test
+	void compileAndRunTypecaseOnConditionInstances() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition my-cond-tc (error) ())
+				(print (typecase (make-condition 'my-cond-tc) (warning 'w) (error 'e) (t 'o)))
+				""")).isEqualTo("e");
+	}
+
+	@Test
+	void compileAndRunWithSlotsReadsInstanceSlots() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition my-cond-ws (error) ((a :initarg :a) (b :initarg :b)))
+				(print (with-slots (a b) (make-condition 'my-cond-ws :a 1 :b 2) (list a b)))
+				""")).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void compileAndRunUnwindProtectValueAndNormalCleanup() throws Exception {
+		assertThat(compileAndRun("(let ((n 1)) (print (unwind-protect (+ n 1) (setq n 10))) (print n))"))
+			.isEqualTo("2\n10");
+	}
+
+	@Test
+	void compileAndRunUnwindProtectCleanupOnErrorUnwind() throws Exception {
+		// The error propagates out of main after the cleanup ran, so the output is
+		// captured before asserting the throw (compileAndRun would lose it).
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString(
+				"(defun up-thrower () (error \"boom\")) (unwind-protect (up-thrower) (print :cleaned))"));
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				assertThatThrownBy(() -> main.invoke(null, (Object) new String[0])).hasRootCauseMessage("boom");
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo(":cleaned");
+		}
+	}
+
+	@Test
+	void compileAndRunUnwindProtectCleanupOnReturnExit() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((log nil))
+				  (dolist (x '(1 2 3))
+				    (unwind-protect
+				        (when (= x 2) (return))
+				      (setq log (cons x log))))
+				  (print log))
+				""")).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void compileAndRunUnwindProtectCleanupOnReturnFromDefun() throws Exception {
+		assertThat(compileAndRun("""
+				(setq up-log nil)
+				(defun up-f ()
+				  (unwind-protect (return-from up-f :early) (setq up-log :cleaned)))
+				(print (up-f))
+				(print up-log)
+				""")).isEqualTo(":early\n:cleaned");
+	}
+
+	@Test
+	void compileAndRunUnwindProtectNestedCleanupsInnermostFirst() throws Exception {
+		// The return escapes both scopes; the inlined cleanups run innermost first.
+		assertThat(compileAndRun("""
+				(setq log nil)
+				(dolist (x '(1))
+				  (unwind-protect
+				      (unwind-protect (return) (setq log (cons :inner log)))
+				    (setq log (cons :outer log))))
+				(print log)
+				""")).isEqualTo("(:outer :inner)");
+	}
+
+	@Test
+	void compileAndRunUnwindProtectReturnStaysInsideInnerLoopBlock() throws Exception {
+		// The return targets the dotimes INSIDE the protected form, so it does not
+		// escape the unwind-protect and the cleanup runs exactly once (normal exit).
+		assertThat(compileAndRun("""
+				(setq log nil)
+				(unwind-protect
+				    (dotimes (i 3) (when (= i 1) (return)))
+				  (setq log (cons :cleaned log)))
+				(print log)
+				""")).isEqualTo("(:cleaned)");
+	}
+
+	@Test
 	void compileAndRunWasmExportIsNoOp() throws Exception {
 		// rontolisp:wasm-export is a directive for the WASM backend; on the JVM it is a
 		// no-op and
@@ -3886,13 +4117,13 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string)");
+				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots)");
 	}
 
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)");
 	}
 
 	@Test

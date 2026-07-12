@@ -11,6 +11,7 @@ categories:
       - { slug: setq, name: setq }
       - { slug: while, name: while }
       - { slug: return, name: return }
+      - { slug: unwind-protect, name: unwind-protect }
       - { slug: defun, name: defun }
       - { slug: defmacro, name: defmacro }
       - { slug: defstruct, name: defstruct }

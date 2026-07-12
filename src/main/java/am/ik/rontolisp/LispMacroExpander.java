@@ -57,6 +57,7 @@ public final class LispMacroExpander {
 			case LispNames.PROG2 -> expandProg2(cons);
 			case LispNames.PSETQ -> expandPsetq(cons);
 			case LispNames.ERROR -> expandError(cons);
+			case LispNames.SIGNAL -> expandSignalMacro(cons);
 			case LispNames.TIME -> expandTime(cons);
 			case LispNames.LOOP -> expandLoop(cons);
 			case LispNames.CHECK_TYPE -> expandCheckType(cons);
@@ -84,6 +85,8 @@ public final class LispMacroExpander {
 			case LispNames.DEFINE_COMPILER_MACRO -> expandDefineCompilerMacro(cons);
 			case LispNames.RESTART_CASE -> expandRestartCase(cons);
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
+			case LispNames.WITH_SLOTS -> expandWithSlots(cons);
+			case LispNames.IGNORE_ERRORS -> expandIgnoreErrors(cons);
 			case LispNames.DOCUMENTATION -> expandDocumentation(cons);
 			case LispNames.COMPLEMENT -> expandComplement(cons);
 			default -> null;
@@ -4287,12 +4290,32 @@ public final class LispMacroExpander {
 	private static final String DOLIST_CURSOR_VAR = "__dolist";
 
 	/**
-	 * Expands (with-open-file (var filename options...) body...) into open/close calls.
-	 * The only supported option is {@code :direction} with a literal {@code :input}
-	 * (default) or {@code :output} value, so the direction is known at expansion time and
-	 * the compilers can pick the file mode statically.
+	 * Expands (with-open-file (var filename options...) body...) into open/close calls,
+	 * closing on every exit via {@code unwind-protect}. The only supported option is
+	 * {@code :direction} with a literal {@code :input} (default) or {@code :output}
+	 * value, so the direction is known at expansion time and the compilers can pick the
+	 * file mode statically.
 	 *
 	 * <pre>
+	 * (with-open-file (s "f.txt" :direction :output) body...) ->
+	 *   (let ((s (open "f.txt" :output)))
+	 *     (unwind-protect (progn body...) (close s)))
+	 * </pre>
+	 * @param cons the with-open-file expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithOpenFile(LispCons cons) {
+		return expandWithOpenFile(cons, true);
+	}
+
+	/**
+	 * Expands (with-open-file ...) with a backend switch: the WASM compilers pass
+	 * {@code unwindProtect = false} to keep the close-after-body shape (close on normal
+	 * exit only), because {@code unwind-protect} does not compile there -- a WASM error
+	 * is an uncatchable trap, so there is nothing to clean up after anyway.
+	 *
+	 * <pre>
+	 * unwindProtect = false:
 	 * (with-open-file (s "f.txt" :direction :output) body...) ->
 	 *   (let ((s (open "f.txt" :output)))
 	 *     (let ((__wof_result (progn body...)))
@@ -4300,9 +4323,10 @@ public final class LispMacroExpander {
 	 *       __wof_result))
 	 * </pre>
 	 * @param cons the with-open-file expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
 	 * @return the expanded expression
 	 */
-	public static LispVal expandWithOpenFile(LispCons cons) {
+	public static LispVal expandWithOpenFile(LispCons cons, boolean unwindProtect) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
 			throw new IllegalArgumentException(
@@ -4346,16 +4370,13 @@ public final class LispMacroExpander {
 			openParts.add(unsignedByte8Literal());
 		}
 		LispVal openCall = listToCons(openParts);
-		// (progn body...) -- nil for an empty body (a body-less progn does not compile)
-		LispVal bodyExpr;
-		if (body.isEmpty()) {
-			bodyExpr = LispNil.INSTANCE;
-		}
-		else {
-			List<LispVal> prognParts = new java.util.ArrayList<>();
-			prognParts.add(new LispSymbol(LispNames.PROGN));
-			prognParts.addAll(body);
-			bodyExpr = listToCons(prognParts);
+		LispVal bodyExpr = prognOrNil(body);
+		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		if (unwindProtect) {
+			// (let ((var (open filename direction)))
+			// (unwind-protect body-expr (close var)))
+			return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings,
+					unwindProtectAround(bodyExpr, callOf(LispNames.CLOSE, var))));
 		}
 		LispSymbol result = new LispSymbol(WOF_RESULT_VAR);
 		// (let ((__wof_result body-expr)) (close var) __wof_result)
@@ -4363,8 +4384,16 @@ public final class LispMacroExpander {
 		LispVal innerLet = listToCons(
 				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
 		// (let ((var (open filename direction))) inner-let)
-		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
+	}
+
+	/**
+	 * Wraps a form in {@code (unwind-protect form cleanup)} so the cleanup runs on every
+	 * exit -- normal return, an error unwind and a {@code return}/{@code return-from}
+	 * non-local exit.
+	 */
+	private static LispVal unwindProtectAround(LispVal protectedForm, LispVal cleanup) {
+		return listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), protectedForm, cleanup));
 	}
 
 	private static final String WOF_RESULT_VAR = "__wof_result";
@@ -4377,15 +4406,34 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (with-output-to-string (s) body...) ->
 	 *   (let ((s (%make-string-output-stream)))
+	 *     (unwind-protect (progn body... (%string-stream-contents s)) (close s)))
+	 * </pre>
+	 * @param cons the with-output-to-string expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithOutputToString(LispCons cons) {
+		return expandWithOutputToString(cons, true);
+	}
+
+	/**
+	 * Expands (with-output-to-string ...) with a backend switch: the WASM compilers pass
+	 * {@code unwindProtect = false} to keep the close-after-body shape (close on normal
+	 * exit only), because {@code unwind-protect} does not compile there.
+	 *
+	 * <pre>
+	 * unwindProtect = false:
+	 * (with-output-to-string (s) body...) ->
+	 *   (let ((s (%make-string-output-stream)))
 	 *     (progn body...)
 	 *     (let ((__wots_result (%string-stream-contents s)))
 	 *       (close s)
 	 *       __wots_result))
 	 * </pre>
 	 * @param cons the with-output-to-string expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
 	 * @return the expanded expression
 	 */
-	public static LispVal expandWithOutputToString(LispCons cons) {
+	public static LispVal expandWithOutputToString(LispCons cons, boolean unwindProtect) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !(spec.car() instanceof LispSymbol var)) {
 			throw new IllegalArgumentException(
@@ -4401,6 +4449,19 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException(
 					LispNames.WITH_OUTPUT_TO_STRING + " supports only a nil string-form (fresh-string) spec");
 		}
+		LispVal bindings = new LispCons(
+				listToCons(List.of(var, listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM))))),
+				LispNil.INSTANCE);
+		if (unwindProtect) {
+			// (let ((var (%make-string-output-stream)))
+			// (unwind-protect (progn body... (%string-stream-contents var)) (close var)))
+			List<LispVal> protectedParts = new java.util.ArrayList<>();
+			protectedParts.add(new LispSymbol(LispNames.PROGN));
+			protectedParts.addAll(parts.subList(2, parts.size()));
+			protectedParts.add(callOf(LispNames.STRING_STREAM_CONTENTS, var));
+			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
+					unwindProtectAround(listToCons(protectedParts), callOf(LispNames.CLOSE, var))));
+		}
 		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
 		LispSymbol result = new LispSymbol(WOTS_RESULT_VAR);
 		// (let ((__wots_result (%string-stream-contents var))) (close var) __wots_result)
@@ -4408,9 +4469,6 @@ public final class LispMacroExpander {
 				LispNil.INSTANCE);
 		LispVal innerLet = listToCons(
 				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
-		LispVal bindings = new LispCons(
-				listToCons(List.of(var, listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM))))),
-				LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, bodyExpr, innerLet));
 	}
 
@@ -4424,14 +4482,33 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (with-input-from-string (s "text") body...) ->
 	 *   (let ((s (%make-string-input-stream "text")))
-	 *     (let ((__wifs_result (progn body...)))
-	 *       (close s)
-	 *       __wifs_result))
+	 *     (unwind-protect (progn body...) (close s)))
 	 * </pre>
 	 * @param cons the with-input-from-string expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWithInputFromString(LispCons cons) {
+		return expandWithInputFromString(cons, true);
+	}
+
+	/**
+	 * Expands (with-input-from-string ...) with a backend switch: the WASM compilers pass
+	 * {@code unwindProtect = false} to keep the close-after-body shape (close on normal
+	 * exit only), because {@code unwind-protect} does not compile there.
+	 *
+	 * <pre>
+	 * unwindProtect = false:
+	 * (with-input-from-string (s "text") body...) ->
+	 *   (let ((s (%make-string-input-stream "text")))
+	 *     (let ((__wifs_result (progn body...)))
+	 *       (close s)
+	 *       __wifs_result))
+	 * </pre>
+	 * @param cons the with-input-from-string expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithInputFromString(LispCons cons, boolean unwindProtect) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
 			throw new IllegalArgumentException(
@@ -4444,14 +4521,19 @@ public final class LispMacroExpander {
 		}
 		LispVal string = specParts.get(1);
 		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_INPUT_STREAM), string));
+		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		if (unwindProtect) {
+			// (let ((var (%make-string-input-stream string)))
+			// (unwind-protect body-expr (close var)))
+			return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings,
+					unwindProtectAround(bodyExpr, callOf(LispNames.CLOSE, var))));
+		}
 		LispSymbol result = new LispSymbol(WIFS_RESULT_VAR);
 		// (let ((__wifs_result body-expr)) (close var) __wifs_result)
 		LispVal innerBindings = new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE);
 		LispVal innerLet = listToCons(
 				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
-		// (let ((var (%make-string-input-stream string))) inner-let)
-		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_INPUT_STREAM), string));
-		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
 	}
 
@@ -4493,13 +4575,23 @@ public final class LispMacroExpander {
 	 * Expands {@code (usocket:with-client-socket (socket stream host port
 	 * connect-args...) body...)} into a {@code let*} that connects, binds {@code socket}
 	 * and (when the {@code stream} variable is not {@code nil}) its stream, runs the body
-	 * and closes the socket on normal exit. Lite semantics shared by all the usocket
-	 * {@code with-*} macros: rontolisp has no {@code unwind-protect}, so an error in the
-	 * body leaks the handle (usocket proper closes it on any exit).
+	 * and closes the socket on every exit via {@code unwind-protect} (usocket proper's
+	 * semantics). On the WASM backends ({@code unwindProtect = false}, no
+	 * {@code unwind-protect} there) the socket is closed on normal exit only.
 	 * @param cons the with-client-socket expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUsocketWithClientSocket(LispCons cons) {
+		return expandUsocketWithClientSocket(cons, true);
+	}
+
+	/**
+	 * Expands (usocket:with-client-socket ...) with the backend switch described above.
+	 * @param cons the with-client-socket expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketWithClientSocket(LispCons cons, boolean unwindProtect) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
 			throw new UnsupportedOperationException(LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED
@@ -4524,17 +4616,29 @@ public final class LispMacroExpander {
 					+ " expects a stream variable (or nil), got: " + streamSpec.print());
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings),
-				closeAfterBody(socketVar, parts.subList(2, parts.size()))));
+				usocketCloseBody(socketVar, parts.subList(2, parts.size()), unwindProtect)));
 	}
 
 	/**
 	 * Expands {@code (usocket:with-connected-socket (var socket-form) body...)} (and its
 	 * alias {@code usocket:with-server-socket}) into a {@code let} that binds {@code var}
-	 * to the socket, runs the body and closes it on normal exit.
+	 * to the socket, runs the body and closes it on every exit (normal exit only on the
+	 * WASM backends).
 	 * @param cons the with-connected-socket / with-server-socket expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUsocketWithConnectedSocket(LispCons cons) {
+		return expandUsocketWithConnectedSocket(cons, true);
+	}
+
+	/**
+	 * Expands (usocket:with-connected-socket ...) with the backend switch described
+	 * above.
+	 * @param cons the with-connected-socket / with-server-socket expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketWithConnectedSocket(LispCons cons, boolean unwindProtect) {
 		List<LispVal> parts = cons.toList();
 		String name = parts.get(0).print();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
@@ -4545,18 +4649,28 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException(name + " expects (var socket-form)");
 		}
 		LispVal bindings = new LispCons(listToCons(List.of(var, specParts.get(1))), LispNil.INSTANCE);
-		return listToCons(
-				List.of(new LispSymbol(LispNames.LET), bindings, closeAfterBody(var, parts.subList(2, parts.size()))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
+				usocketCloseBody(var, parts.subList(2, parts.size()), unwindProtect)));
 	}
 
 	/**
 	 * Expands {@code (usocket:with-socket-listener (var host port listen-args...)
 	 * body...)} into a {@code let} that listens, binds {@code var}, runs the body and
-	 * closes the listener on normal exit.
+	 * closes the listener on every exit (normal exit only on the WASM backends).
 	 * @param cons the with-socket-listener expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUsocketWithSocketListener(LispCons cons) {
+		return expandUsocketWithSocketListener(cons, true);
+	}
+
+	/**
+	 * Expands (usocket:with-socket-listener ...) with the backend switch described above.
+	 * @param cons the with-socket-listener expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketWithSocketListener(LispCons cons, boolean unwindProtect) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
 			throw new UnsupportedOperationException(
@@ -4571,20 +4685,53 @@ public final class LispMacroExpander {
 		listenCall.add(new LispSymbol(USOCKET_SOCKET_LISTEN_QUALIFIED));
 		listenCall.addAll(specParts.subList(1, specParts.size()));
 		LispVal bindings = new LispCons(listToCons(List.of(var, listToCons(listenCall))), LispNil.INSTANCE);
-		return listToCons(
-				List.of(new LispSymbol(LispNames.LET), bindings, closeAfterBody(var, parts.subList(2, parts.size()))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
+				usocketCloseBody(var, parts.subList(2, parts.size()), unwindProtect)));
 	}
 
 	/**
 	 * Builds the shared tail of the usocket {@code with-*} expansions:
+	 * {@code (unwind-protect (progn body...) (usocket:socket-close var))}, or -- when
+	 * {@code unwind-protect} is unavailable ({@code unwindProtect = false}, the WASM
+	 * backends) -- the close-after-body shape
 	 * {@code (let ((__usocket_result (progn body...))) (usocket:socket-close var)
 	 * __usocket_result)}.
 	 */
-	private static LispVal closeAfterBody(LispSymbol var, List<LispVal> body) {
+	private static LispVal usocketCloseBody(LispSymbol var, List<LispVal> body, boolean unwindProtect) {
+		if (unwindProtect) {
+			return unwindProtectAround(prognOrNil(body), callOf(USOCKET_SOCKET_CLOSE_QUALIFIED, var));
+		}
 		LispSymbol result = new LispSymbol(USOCKET_RESULT_VAR);
 		LispVal innerBindings = new LispCons(listToCons(List.of(result, prognOrNil(body))), LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings,
 				callOf(USOCKET_SOCKET_CLOSE_QUALIFIED, var), result));
+	}
+
+	/**
+	 * Expands the {@code (usocket::%usock-guard form)} internal wrapper of the usocket
+	 * shim's socket operations. With {@code handlerCase} (interpreter/JVM) the form runs
+	 * under {@code (handler-case form (error (c) (usocket::%usock-resignal c)))}, so an
+	 * underlying failure is re-signaled as a typed {@code usocket:socket-error}
+	 * (catchable, message preserved by the condition's {@code :report}); on WASM
+	 * ({@code handlerCase = false}, errors are uncatchable traps) the form passes through
+	 * unchanged.
+	 * @param cons the %usock-guard expression
+	 * @param handlerCase whether the expansion may use {@code handler-case}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUsocketGuard(LispCons cons, boolean handlerCase) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(
+					LispNames.USOCKET_GUARD_QUALIFIED + " expects exactly one form: " + cons.print());
+		}
+		if (!handlerCase) {
+			return parts.get(1);
+		}
+		LispSymbol condVar = new LispSymbol("__usock_cond");
+		LispVal resignal = callOf(LispNames.USOCKET_PKG + "::%usock-resignal", condVar);
+		LispVal clause = listToCons(List.of(new LispSymbol("error"), listToCons(List.<LispVal>of(condVar)), resignal));
+		return listToCons(List.of(new LispSymbol(LispNames.HANDLER_CASE), parts.get(1), clause));
 	}
 
 	/**
@@ -5286,6 +5433,9 @@ public final class LispMacroExpander {
 					case ":initform" -> initform = optValue;
 					case ":reader" -> readers.add(requireSlotFunctionName(optValue, spec));
 					case ":accessor" -> accessors.add(requireSlotFunctionName(optValue, spec));
+					case ":documentation" -> {
+						// Accepted and dropped (docstrings are not stored anywhere).
+					}
 					default -> throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option "
 							+ keySym.name() + " is not supported: " + spec.print());
 				}
@@ -5372,6 +5522,72 @@ public final class LispMacroExpander {
 					+ " has different positions in unrelated classes; use the accessor");
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(position), parts.get(1)));
+	}
+
+	private static final String WITH_SLOTS_OBJ_VAR = "__with_slots_obj";
+
+	/**
+	 * Expands {@code (with-slots (slot... | (var slot)...) instance body...)} into a
+	 * {@code let} of {@code slot-value} reads over a once-evaluated instance temp:
+	 *
+	 * <pre>
+	 * (with-slots (a (bee b)) obj body...) ->
+	 *   (let ((__with_slots_obj obj))
+	 *     (let ((a (slot-value __with_slots_obj 'a)) (bee (slot-value __with_slots_obj 'b)))
+	 *       body...))
+	 * </pre>
+	 *
+	 * Lite (read-only): CL's {@code with-slots} binds symbol macros so assignment writes
+	 * back to the slot; here the bindings are plain variables, so {@code setq}/
+	 * {@code setf} of one assigns the local only. Covers the dominant read-side use
+	 * (condition {@code :report} lambdas and the like).
+	 * @param cons the with-slots expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithSlots(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_SLOTS + " expects (with-slots (slots...) instance body...): " + cons.print());
+		}
+		LispSymbol obj = new LispSymbol(WITH_SLOTS_OBJ_VAR);
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		if (parts.get(1) instanceof LispCons slotList) {
+			for (LispVal entry : slotList.toList()) {
+				LispSymbol var;
+				LispSymbol slot;
+				if (entry instanceof LispSymbol s) {
+					var = s;
+					slot = s;
+				}
+				else if (entry instanceof LispCons pair && pair.toList().size() == 2
+						&& pair.toList().get(0) instanceof LispSymbol v
+						&& pair.toList().get(1) instanceof LispSymbol n) {
+					var = v;
+					slot = n;
+				}
+				else {
+					throw new IllegalArgumentException(
+							LispNames.WITH_SLOTS + " expects slot names or (var slot) pairs: " + cons.print());
+				}
+				LispVal read = listToCons(List.of(new LispSymbol(LispNames.SLOT_VALUE), obj,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), slot))));
+				bindings.add(listToCons(List.of(var, read)));
+			}
+		}
+		else if (!(parts.get(1) instanceof LispNil)) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_SLOTS + " expects a slot list as the first argument: " + cons.print());
+		}
+		List<LispVal> innerParts = new java.util.ArrayList<>();
+		innerParts.add(new LispSymbol(LispNames.LET));
+		innerParts.add(listToCons(bindings));
+		innerParts.addAll(parts.subList(3, parts.size()));
+		if (parts.size() == 3) {
+			innerParts.add(LispNil.INSTANCE);
+		}
+		LispVal inner = bindings.isEmpty() ? prognOrNil(parts.subList(3, parts.size())) : listToCons(innerParts);
+		return makeLet(WITH_SLOTS_OBJ_VAR, parts.get(2), inner);
 	}
 
 	/** The symbol inside a literal {@code (quote sym)} form, or null. */
@@ -5931,21 +6147,13 @@ public final class LispMacroExpander {
 	private static LispVal specializerTest(ClosRegistry.MethodInfo method, LispVal arg, ClosRegistry closRegistry) {
 		return switch (method.kind()) {
 			case EQL -> makeEqlSpecializerTest(arg, java.util.Objects.requireNonNull(method.eqlValue()));
-			case CLASS -> {
+			case CLASS ->
 				// (if (consp arg) (or (equal (car arg) '%class-X) ...) nil): the tag
 				// set of the class and its (statically known) descendants; equal is
 				// content-safe on WASM, like the defstruct predicate.
-				List<LispVal> tests = new java.util.ArrayList<>();
-				LispVal carArg = callOf(LispNames.CAR, arg);
-				String className = java.util.Objects.requireNonNull(method.specializerName());
-				for (String tag : closRegistry.descendantTags(className)) {
-					tests.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), carArg,
-							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(tag))))));
-				}
-				LispVal tagTest = tests.size() == 1 ? tests.get(0) : orOf(tests);
-				yield makeIf(callOf(LispNames.CONSP, arg), tagTest, LispNil.INSTANCE);
-			}
-			case TYPE -> makeTypeTest(arg, new LispSymbol(java.util.Objects.requireNonNull(method.specializerName())));
+				makeClassInstanceTest(arg, java.util.Objects.requireNonNull(method.specializerName()), closRegistry);
+			case TYPE -> makeTypeTest(arg, new LispSymbol(java.util.Objects.requireNonNull(method.specializerName())),
+					closRegistry);
 			case DEFAULT -> LispTrue.INSTANCE;
 		};
 	}
@@ -6038,6 +6246,13 @@ public final class LispMacroExpander {
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
 				out.addAll(expandDefclass((LispCons) form, closRegistry, structAccessors));
 			}
+			else if (isNamedForm(form, LispNames.DEFINE_CONDITION)) {
+				// A condition type is an ordinary CLOS-subset class over the built-in
+				// condition hierarchy; the :report form is registered for the
+				// error/signal/warn message building.
+				out.addAll(expandDefclass((LispCons) defineConditionToDefclass((LispCons) form, closRegistry),
+						closRegistry, structAccessors));
+			}
 			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
 				String generic = registerDefgeneric((LispCons) form, closRegistry);
 				if (placedDispatchers.add(generic)) {
@@ -6079,7 +6294,7 @@ public final class LispMacroExpander {
 
 	private static boolean isClosDefinitionForm(LispVal form) {
 		return isNamedForm(form, LispNames.DEFCLASS) || isNamedForm(form, LispNames.DEFGENERIC)
-				|| isNamedForm(form, LispNames.DEFMETHOD);
+				|| isNamedForm(form, LispNames.DEFMETHOD) || isNamedForm(form, LispNames.DEFINE_CONDITION);
 	}
 
 	private static boolean isNamedForm(LispVal form, String name) {
@@ -7534,66 +7749,130 @@ public final class LispMacroExpander {
 
 	private static final String ERROR_ARG_VAR = "__error_arg";
 
+	private static final String SIGNAL_COND_VAR = "__signal_cond";
+
+	private static final String SIGNAL_STREAM_VAR = "__signal_stream";
+
+	/** The simple-* condition tags whose slot 1 is the message (format-control). */
+	private static final List<String> SIMPLE_CONDITION_TAGS = List.of("%class-simple-error", "%class-simple-condition",
+			"%class-simple-warning");
+
 	/**
-	 * Expands {@code (error control args...)} into {@code (%error message)}, where
-	 * {@code message} is built with the same control-string machinery as
-	 * {@code (format nil control args...)} (so {@code ~a}/{@code ~s}/{@code ~%}
-	 * directives are supported). The control string must be a literal, mirroring
-	 * {@code format}; passing a condition object is not supported.
+	 * Expands {@code (error datum args...)} through the CL condition designators:
+	 * {@code (error "control" args...)} builds the message with the {@code format}
+	 * machinery (literal control string, {@code ~a}/{@code ~s}/{@code ~%} supported) and
+	 * delegates to {@code (%error message)}; {@code (error 'type :initarg v ...)}
+	 * constructs a condition instance of the named class and signals through
+	 * {@code (%error-cond condition message)}, where the message is the class's
+	 * {@code :report} rendering when one was registered by {@code define-condition} and
+	 * the {@code Condition ... was signalled.} shape otherwise; {@code (error obj)}
+	 * signals a pre-built condition object (or, when the value turns out to be a string
+	 * at runtime, signals it as a plain message).
 	 * @param cons the error expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandError(LispCons cons) {
-		return expandSignal(cons, LispNames.ERROR, LispNames.ERROR_INTERNAL);
+		return expandError(cons, EMPTY_CLOS_REGISTRY);
 	}
 
 	/**
-	 * Expands {@code (warn control args...)} the same way {@link #expandError} expands
-	 * {@code error}, delegating to {@code (%warn message)} which writes
-	 * {@code WARNING: message} to standard error and returns nil. Lite: there is no
-	 * condition system, so no condition object is created and nothing can handle or
-	 * muffle the warning.
+	 * Expands {@code (error ...)} with the class registry that resolves condition types
+	 * and their {@code :report} forms; see {@link #expandError(LispCons)}.
+	 * @param cons the error expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandError(LispCons cons, ClosRegistry closRegistry) {
+		return expandSignalDesignator(cons, LispNames.ERROR, LispNames.ERROR_INTERNAL, closRegistry);
+	}
+
+	/**
+	 * Expands {@code (warn datum args...)} with the same designator surface as
+	 * {@link #expandError}, delegating to {@code (%warn message)} which writes
+	 * {@code WARNING: message} to standard error and returns nil. Nothing can handle or
+	 * muffle the warning (no {@code muffle-warning} restart).
 	 * @param cons the warn expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWarn(LispCons cons) {
-		return expandSignal(cons, LispNames.WARN, LispNames.WARN_INTERNAL);
+		return expandWarn(cons, EMPTY_CLOS_REGISTRY);
 	}
 
-	// The shared error/warn expansion: format-machinery message building over a literal
-	// control string (or the condition-type / make-condition idioms), delegating to the
-	// given internal one-argument primitive (%error throws/traps, %warn prints).
-	private static LispVal expandSignal(LispCons cons, String opName, String internalName) {
+	/**
+	 * Expands {@code (warn ...)} with the class registry; see
+	 * {@link #expandWarn(LispCons)}.
+	 * @param cons the warn expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWarn(LispCons cons, ClosRegistry closRegistry) {
+		return expandSignalDesignator(cons, LispNames.WARN, LispNames.WARN_INTERNAL, closRegistry);
+	}
+
+	/**
+	 * Expands {@code (signal datum args...)} -- the non-fatal signaling operator, with
+	 * the same designator surface as {@link #expandError} -- into
+	 * {@code (%signal-cond condition message)}: the condition is raised when a
+	 * {@code handler-case} handler is established on the current thread of control and
+	 * falls through to nil otherwise (always nil on the WASM backends, which have no
+	 * handlers).
+	 * @param cons the signal expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSignalMacro(LispCons cons) {
+		return expandSignalMacro(cons, EMPTY_CLOS_REGISTRY);
+	}
+
+	/**
+	 * Expands {@code (signal ...)} with the class registry; see
+	 * {@link #expandSignalMacro(LispCons)}.
+	 * @param cons the signal expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSignalMacro(LispCons cons, ClosRegistry closRegistry) {
+		return expandSignalDesignator(cons, LispNames.SIGNAL, LispNames.SIGNAL_COND_INTERNAL, closRegistry);
+	}
+
+	// The shared error/warn/signal expansion over the CL condition designators: a
+	// literal control string (format-machinery message, no condition object on the
+	// %error fast path), a quoted condition-type symbol (typed instance construction),
+	// a literal (make-condition ...) argument (rewritten to the typed path), or any
+	// other expression (a runtime condition object).
+	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
+			ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
-			throw new IllegalArgumentException(opName + " expects a control string");
+			throw new IllegalArgumentException(opName + " expects a condition designator");
 		}
-		if (parts.get(1) instanceof LispCons datum && datum.car() instanceof LispSymbol op
-				&& LispNames.MAKE_CONDITION.equals(op.name())) {
-			// (error (make-condition 'type :format-control "...")) -- the lite
-			// make-condition expands to its format-control string, so the idiom
-			// signals with the intended message.
-			parts = new java.util.ArrayList<>(parts);
-			parts.set(1, expandMakeCondition(datum));
+		LispVal datum = parts.get(1);
+		if (datum instanceof LispCons mc && mc.car() instanceof LispSymbol mcOp
+				&& LispNames.MAKE_CONDITION.equals(mcOp.name()) && mc.cdr() instanceof LispCons mcArgs
+				&& quotedSymbol(mcArgs.car()) != null) {
+			// (error (make-condition 'type args...)): the type is statically known, so
+			// route through the typed path (construction + :report-aware message).
+			return expandTypedSignal(opName, internalName, java.util.Objects.requireNonNull(quotedSymbol(mcArgs.car())),
+					mc.toList().subList(2, mc.toList().size()), closRegistry);
 		}
-		if (parts.get(1) instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
-				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
-				&& datumCell.car() instanceof LispSymbol) {
-			// (error 'type initarg value ...) -- the condition-type idiom (e.g.
-			// parse-number's (error 'invalid-number :value v :reason r)). Lite: no
-			// condition object exists, so signal with the type and the evaluated
-			// initargs printed into the message.
-			List<LispVal> listParts = new java.util.ArrayList<>();
-			listParts.add(new LispSymbol(LispNames.LIST));
-			listParts.addAll(parts.subList(1, parts.size()));
-			return expandSignal((LispCons) listToCons(List.of(new LispSymbol(opName),
-					new LispString("Condition ~s was signalled."), listToCons(listParts))), opName, internalName);
+		LispSymbol typeSym = quotedSymbol(datum);
+		if (typeSym != null) {
+			return expandTypedSignal(opName, internalName, typeSym, parts.subList(2, parts.size()), closRegistry);
 		}
-		if (!(parts.get(1) instanceof LispString control)) {
-			throw new UnsupportedOperationException(
-					opName + " requires a literal control string, got: " + parts.get(1).print());
+		if (datum instanceof LispString control) {
+			return expandStringSignal(opName, internalName, control, parts.subList(2, parts.size()));
 		}
-		List<LispVal> args = parts.subList(2, parts.size());
+		return expandObjectSignal(internalName, datum);
+	}
+
+	/**
+	 * The literal-control-string designator: builds the message with the format machinery
+	 * and delegates to the internal primitive. {@code error} keeps the plain one-argument
+	 * {@code (%error message)} shape (a {@code handler-case} synthesizes the
+	 * {@code simple-error} instance from the message when needed); {@code signal} wraps
+	 * the message in a {@code simple-condition} instance.
+	 */
+	private static LispVal expandStringSignal(String opName, String internalName, LispString control,
+			List<LispVal> args) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispSymbol> argSyms = new java.util.ArrayList<>();
 		for (int i = 0; i < args.size(); i++) {
@@ -7604,14 +7883,21 @@ public final class LispMacroExpander {
 		// warn prefixes the rendered message so %warn stays a plain write primitive.
 		String controlText = LispNames.WARN_INTERNAL.equals(internalName) ? "WARNING: " + control.value()
 				: control.value();
-		List<LispVal> pieces = opsToPieces(new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms)));
-		// Fold the pieces into nested %string-concat calls (left-associative), as the
-		// format nil destination does.
-		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
-		for (int i = 1; i < pieces.size(); i++) {
-			message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), message, pieces.get(i)));
+		LispVal message = formatMessagePieces(controlText, argSyms);
+		LispVal signalCall;
+		if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
+			// (let ((__signal_cond message)) (%signal-cond (list '%class-simple-condition
+			// __signal_cond nil) __signal_cond))
+			LispSymbol msgVar = new LispSymbol(SIGNAL_COND_VAR);
+			LispVal instance = listToCons(List.of(new LispSymbol(LispNames.LIST),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-simple-condition"))),
+					msgVar, LispNil.INSTANCE));
+			signalCall = makeLet(SIGNAL_COND_VAR, message,
+					listToCons(List.of(new LispSymbol(internalName), instance, msgVar)));
 		}
-		LispVal signalCall = listToCons(List.of(new LispSymbol(internalName), message));
+		else {
+			signalCall = listToCons(List.of(new LispSymbol(internalName), message));
+		}
 		if (bindings.isEmpty()) {
 			return signalCall;
 		}
@@ -7620,6 +7906,256 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.add(signalCall);
 		return listToCons(letParts);
+	}
+
+	/**
+	 * The quoted-condition-type designator {@code (error 'type :initarg v ...)}: binds
+	 * the argument expressions to temps (evaluated once, left to right), constructs the
+	 * condition instance -- through the registry's slot layout when the class is known
+	 * and the arguments are keyword pairs, as a raw tagged list otherwise -- and signals
+	 * it with a message from the class's {@code :report} (a literal string, or a
+	 * {@code (lambda (condition stream) ...)} rendered into a string stream) or the
+	 * legacy {@code Condition ~s was signalled.} shape when no report is registered.
+	 * {@code warn} skips the construction unless a lambda report needs the instance.
+	 */
+	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
+			ClosRegistry closRegistry) {
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> items = new java.util.ArrayList<>();
+		ClosRegistry.ClassInfo cls = closRegistry.findClass(typeSym.name());
+		LispVal construct = buildTypedConstruct(typeSym, args, cls, bindings, items);
+		LispVal report = cls == null ? null : closRegistry.findConditionReport(cls.name());
+		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
+		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
+		boolean needsInstance = !warn || (report != null && !(report instanceof LispString));
+		if (needsInstance) {
+			bindings.add(listToCons(List.of(condVar, construct)));
+		}
+		LispVal message;
+		if (report instanceof LispString reportString) {
+			message = warn ? new LispString("WARNING: " + reportString.value()) : reportString;
+		}
+		else if (report != null) {
+			LispSymbol streamVar = new LispSymbol(SIGNAL_STREAM_VAR);
+			LispVal rendered = listToCons(
+					List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.<LispVal>of(streamVar)),
+							listToCons(List.of(new LispSymbol(LispNames.FUNCALL), report, condVar, streamVar))));
+			message = warn
+					? listToCons(
+							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
+					: rendered;
+		}
+		else if (suppliedFormatControl(cls, items) instanceof LispVal formatControl) {
+			// A simple-* style class with a supplied :format-control: the message is
+			// its value (lite: :format-arguments are carried in the instance but not
+			// rendered into the message), preserving the (error (make-condition
+			// 'simple-error :format-control "...")) idiom's output.
+			message = warn ? listToCons(
+					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), formatControl))
+					: formatControl;
+		}
+		else {
+			// Legacy fallback, byte-identical to the pre-condition-system stopgap:
+			// "Condition ~s was signalled." formatted over (list 'type args...).
+			List<LispVal> msgListParts = new java.util.ArrayList<>();
+			msgListParts.add(new LispSymbol(LispNames.LIST));
+			msgListParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym)));
+			msgListParts.addAll(items);
+			LispSymbol msgVar = new LispSymbol(ERROR_ARG_VAR + "m");
+			bindings.add(listToCons(List.of(msgVar, listToCons(msgListParts))));
+			String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
+			message = formatMessagePieces(control, List.of(msgVar));
+		}
+		// The two-argument condition-carrying internal: %error maps to %error-cond
+		// (signal already is %signal-cond; warn stays the one-argument %warn).
+		String condInternal = LispNames.ERROR_INTERNAL.equals(internalName) ? LispNames.ERROR_COND_INTERNAL
+				: internalName;
+		LispVal signalCall = warn ? listToCons(List.of(new LispSymbol(internalName), message))
+				: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
+		if (bindings.isEmpty()) {
+			return signalCall;
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET_STAR));
+		letParts.add(listToCons(bindings));
+		letParts.add(signalCall);
+		return listToCons(letParts);
+	}
+
+	private static final String IGNORE_ERRORS_COND_VAR = "__ignore_errors_cond";
+
+	/**
+	 * Expands {@code (ignore-errors form...)} into {@code (handler-case (progn form...)
+	 * (error (c) (values nil c)))}: an error signaled during the forms yields nil (with
+	 * the condition as the syntactic-tier secondary value). Interpreter/JVM only, like
+	 * {@code handler-case}.
+	 * @param cons the ignore-errors expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandIgnoreErrors(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol condVar = new LispSymbol(IGNORE_ERRORS_COND_VAR);
+		LispVal valuesForm = listToCons(List.of(new LispSymbol("values"), LispNil.INSTANCE, condVar));
+		LispVal clause = listToCons(
+				List.of(new LispSymbol("error"), listToCons(List.<LispVal>of(condVar)), valuesForm));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.HANDLER_CASE), prognOrNil(parts.subList(1, parts.size())), clause));
+	}
+
+	/**
+	 * Builds the condition-type test of a {@code handler-case} clause: the ordinary
+	 * {@code makeTypeTest} (built-in type specifiers plus registered classes), falling
+	 * back to an exact instance-tag equality test for a type name the registry does not
+	 * know (e.g. a condition type defined later or in an unloaded library) instead of
+	 * rejecting the clause.
+	 * @param value the (temp-bound) condition value form
+	 * @param typeSpec the clause's type specifier
+	 * @param closRegistry the class registry
+	 * @return a truthy test form
+	 */
+	public static LispVal makeHandlerTypeTest(LispVal value, LispVal typeSpec, ClosRegistry closRegistry) {
+		try {
+			return makeTypeTest(value, typeSpec, closRegistry);
+		}
+		catch (IllegalArgumentException unknownType) {
+			if (typeSpec instanceof LispSymbol sym) {
+				LispVal tagTest = listToCons(List.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.CAR, value),
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + sym.name())))));
+				return makeIf(callOf(LispNames.CONSP, value), tagTest, LispNil.INSTANCE);
+			}
+			throw unknownType;
+		}
+	}
+
+	/**
+	 * The supplied {@code :format-control} expression (a temp) of a typed signal whose
+	 * class carries a {@code format-control} slot, or null. Only keyword-paired arguments
+	 * qualify (in the non-pair fallback the items are all temps, so no keyword literal
+	 * matches).
+	 */
+	private static @Nullable LispVal suppliedFormatControl(ClosRegistry.@Nullable ClassInfo cls, List<LispVal> items) {
+		if (cls == null || cls.slots().stream().noneMatch(s -> "format-control".equals(s.baseName()))) {
+			return null;
+		}
+		for (int i = 0; i + 1 < items.size(); i += 2) {
+			if (items.get(i) instanceof LispSymbol k && k.isKeyword() && ":format-control".equals(k.name())) {
+				return items.get(i + 1);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The condition-object designator {@code (error obj)}: binds the value, signals it as
+	 * a plain message when it is a string at runtime, and otherwise signals the instance
+	 * with its carried message -- slot 1 for the simple-* classes, the
+	 * {@code Condition of type ... was signalled.} shape derived from the instance tag
+	 * otherwise. Lite: a {@code :report} registered for the object's class is not
+	 * consulted here (the type is not statically known); construct through
+	 * {@code (error 'type ...)} or a literal {@code (make-condition ...)} argument for
+	 * report-aware messages.
+	 */
+	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr) {
+		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
+		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
+		LispVal tag = callOf(LispNames.CAR, condVar);
+		List<LispVal> tagTests = new java.util.ArrayList<>();
+		for (String simpleTag : SIMPLE_CONDITION_TAGS) {
+			tagTests.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), tag,
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(simpleTag))))));
+		}
+		LispVal slotMsg = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(1), condVar));
+		LispVal isSimpleWithMessage = listToCons(
+				List.of(new LispSymbol(LispNames.AND), orOf(tagTests), callOf(LispNames.STRINGP, slotMsg)));
+		LispVal fallback = listToCons(List.of(
+				new LispSymbol(LispNames.STRING_CONCAT), listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
+						new LispString("Condition of type "), listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
+								callOf(LispNames.PRIN1_TO_STRING, tag), new LispInteger(7))))),
+				new LispString(" was signalled.")));
+		LispVal message = makeIf(isSimpleWithMessage, slotMsg, fallback);
+		LispVal stringCase;
+		LispVal conditionCase;
+		if (warn) {
+			LispVal prefixed = listToCons(
+					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), condVar));
+			stringCase = listToCons(List.of(new LispSymbol(internalName), prefixed));
+			conditionCase = listToCons(List.of(new LispSymbol(internalName), listToCons(
+					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), message))));
+		}
+		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
+			LispVal instance = listToCons(List.of(new LispSymbol(LispNames.LIST),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-simple-condition"))),
+					condVar, LispNil.INSTANCE));
+			stringCase = listToCons(List.of(new LispSymbol(internalName), instance, condVar));
+			conditionCase = listToCons(List.of(new LispSymbol(internalName), condVar, message));
+		}
+		else {
+			stringCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), condVar));
+			conditionCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, message));
+		}
+		return makeLet(SIGNAL_COND_VAR, datumExpr,
+				makeIf(callOf(LispNames.STRINGP, condVar), stringCase, conditionCase));
+	}
+
+	/**
+	 * Builds the condition-instance construction expression of the typed
+	 * {@code error}/{@code signal}/{@code make-condition} paths: the argument expressions
+	 * are bound to temps appended to {@code bindings} (evaluated once, left to right;
+	 * literal keywords stay in place) and mirrored into {@code items}. When the class is
+	 * known and the arguments are keyword pairs, the initargs are mapped onto the
+	 * registry's slot layout (missing slots take their {@code :initform}); otherwise the
+	 * instance is the raw tagged list {@code (list '%class-<name>
+	 * items...)}.
+	 */
+	private static LispVal buildTypedConstruct(LispSymbol typeSym, List<LispVal> args,
+			ClosRegistry.@Nullable ClassInfo cls, List<LispVal> bindings, List<LispVal> items) {
+		boolean pairs = args.size() % 2 == 0;
+		for (int i = 0; pairs && i < args.size(); i += 2) {
+			pairs = args.get(i) instanceof LispSymbol k && k.isKeyword();
+		}
+		for (int i = 0; i < args.size(); i++) {
+			if (pairs && i % 2 == 0) {
+				items.add(args.get(i));
+				continue;
+			}
+			LispSymbol g = new LispSymbol(ERROR_ARG_VAR + i);
+			bindings.add(listToCons(List.of(g, args.get(i))));
+			items.add(g);
+		}
+		List<LispVal> ctorParts = new java.util.ArrayList<>();
+		ctorParts.add(new LispSymbol(LispNames.LIST));
+		if (cls != null && pairs) {
+			java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
+			for (int i = 0; i + 1 < items.size(); i += 2) {
+				byInitarg.put(((LispSymbol) items.get(i)).name(), items.get(i + 1));
+			}
+			ctorParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + cls.name()))));
+			for (ClosRegistry.SlotSpec slot : cls.slots()) {
+				LispVal supplied = byInitarg.get(slot.initargKeyword());
+				ctorParts.add(supplied != null ? supplied : slot.initform());
+			}
+		}
+		else {
+			ctorParts
+				.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + typeSym.name()))));
+			ctorParts.addAll(items);
+		}
+		return listToCons(ctorParts);
+	}
+
+	/**
+	 * Builds the message expression of a signal expansion: the format-machinery pieces of
+	 * the (literal) control text over already-bound argument temps, folded into nested
+	 * {@code %string-concat} calls (left-associative), as the {@code format nil}
+	 * destination does.
+	 */
+	private static LispVal formatMessagePieces(String controlText, List<LispSymbol> argSyms) {
+		List<LispVal> pieces = opsToPieces(new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms)));
+		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
+		for (int i = 1; i < pieces.size(); i++) {
+			message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), message, pieces.get(i)));
+		}
+		return message;
 	}
 
 	/**
@@ -8735,6 +9271,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandTypecase(LispCons cons) {
+		return expandTypecase(cons, EMPTY_CLOS_REGISTRY);
+	}
+
+	/**
+	 * Expands (typecase ...) with a class registry, so a clause head may also name a
+	 * {@code defclass}/{@code define-condition} class (tested by instance-tag membership)
+	 * in addition to the built-in type specifiers.
+	 * @param cons the typecase expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandTypecase(LispCons cons, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException("typecase expects a keyform");
@@ -8750,7 +9298,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> clauseParts = clause.toList();
 			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
-			LispVal test = makeTypecaseTest(var, clauseParts.get(0));
+			LispVal test = makeTypeTest(var, clauseParts.get(0), closRegistry);
 			List<LispVal> condClause = new java.util.ArrayList<>();
 			condClause.add(test);
 			if (body.isEmpty()) {
@@ -8774,6 +9322,17 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandEtypecase(LispCons cons) {
+		return expandEtypecase(cons, EMPTY_CLOS_REGISTRY);
+	}
+
+	/**
+	 * Expands (etypecase ...) with a class registry; see
+	 * {@link #expandTypecase(LispCons, ClosRegistry)}.
+	 * @param cons the etypecase expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandEtypecase(LispCons cons, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException("etypecase expects a keyform");
@@ -8789,7 +9348,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> clauseParts = clause.toList();
 			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
-			LispVal test = makeTypecaseTest(var, clauseParts.get(0));
+			LispVal test = makeTypeTest(var, clauseParts.get(0), closRegistry);
 			List<LispVal> condClause = new java.util.ArrayList<>();
 			condClause.add(test);
 			if (body.isEmpty()) {
@@ -8804,10 +9363,6 @@ public final class LispMacroExpander {
 		return makeLet(ETYPECASE_VAR, keyform, listToCons(condParts));
 	}
 
-	private static LispVal makeTypecaseTest(LispSymbol var, LispVal typeSpec) {
-		return makeTypeTest(var, typeSpec);
-	}
-
 	/**
 	 * Builds a truthy test form checking that {@code value} is of the given type
 	 * specifier. Shared by {@code typecase}/{@code etypecase} clause heads and
@@ -8819,6 +9374,10 @@ public final class LispMacroExpander {
 	 * temporary first.
 	 */
 	private static LispVal makeTypeTest(LispVal value, LispVal typeSpec) {
+		return makeTypeTest(value, typeSpec, EMPTY_CLOS_REGISTRY);
+	}
+
+	private static LispVal makeTypeTest(LispVal value, LispVal typeSpec, ClosRegistry closRegistry) {
 		if (typeSpec instanceof LispTrue
 				|| (typeSpec instanceof LispSymbol s && LispNames.OTHERWISE.equals(s.name()))) {
 			return LispTrue.INSTANCE;
@@ -8828,7 +9387,7 @@ public final class LispMacroExpander {
 			return LispNil.INSTANCE;
 		}
 		if (typeSpec instanceof LispCons compound) {
-			return makeCompoundTypeTest(value, compound);
+			return makeCompoundTypeTest(value, compound, closRegistry);
 		}
 		if (!(typeSpec instanceof LispSymbol sym)) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + typeSpec.print());
@@ -8856,9 +9415,31 @@ public final class LispMacroExpander {
 		}
 		String pred = atomicTypePredicate(name);
 		if (pred == null) {
+			// A defclass/define-condition class (incl. the built-in condition
+			// hierarchy): instance-of by tag membership, like a class specializer.
+			if (closRegistry.findClass(sym.name()) != null) {
+				return makeClassInstanceTest(value, sym.name(), closRegistry);
+			}
 			throw new IllegalArgumentException("Unsupported type specifier: " + sym.name());
 		}
 		return callOf(pred, value);
+	}
+
+	/**
+	 * Builds the instance-of test of a {@code defclass}/{@code define-condition} class:
+	 * {@code (if (consp v) (or (equal (car v) '%class-X) ...) nil)} over the class's
+	 * statically-known descendant tags -- the same shape a class specializer compiles to
+	 * ({@code equal} is content-safe on WASM).
+	 */
+	private static LispVal makeClassInstanceTest(LispVal value, String className, ClosRegistry closRegistry) {
+		List<LispVal> tests = new java.util.ArrayList<>();
+		LispVal carArg = callOf(LispNames.CAR, value);
+		for (String tag : closRegistry.descendantTags(className)) {
+			tests.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), carArg,
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(tag))))));
+		}
+		LispVal tagTest = tests.size() == 1 ? tests.get(0) : orOf(tests);
+		return makeIf(callOf(LispNames.CONSP, value), tagTest, LispNil.INSTANCE);
 	}
 
 	/**
@@ -8898,7 +9479,7 @@ public final class LispMacroExpander {
 	}
 
 	/** Builds the test for a compound (list) type specifier; see makeTypeTest. */
-	private static LispVal makeCompoundTypeTest(LispVal value, LispCons spec) {
+	private static LispVal makeCompoundTypeTest(LispVal value, LispCons spec, ClosRegistry closRegistry) {
 		List<LispVal> parts = spec.toList();
 		if (!(parts.get(0) instanceof LispSymbol head)) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
@@ -8908,7 +9489,7 @@ public final class LispMacroExpander {
 				List<LispVal> tests = new java.util.ArrayList<>();
 				tests.add(new LispSymbol(plainTypeName(head)));
 				for (int i = 1; i < parts.size(); i++) {
-					tests.add(makeTypeTest(value, parts.get(i)));
+					tests.add(makeTypeTest(value, parts.get(i), closRegistry));
 				}
 				return listToCons(tests);
 			}
@@ -8916,7 +9497,7 @@ public final class LispMacroExpander {
 				if (parts.size() != 2) {
 					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
 				}
-				return makeNot(makeTypeTest(value, parts.get(1)));
+				return makeNot(makeTypeTest(value, parts.get(1), closRegistry));
 			}
 			case LispNames.MEMBER: {
 				// (member value '(items...)) -- member compares with eql and returns a
@@ -9087,14 +9668,86 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (define-condition name parents slots options...)} to {@code nil}:
-	 * there is no condition system, so the definition is a parsed no-op. Pairs with the
-	 * lite {@link #expandMakeCondition}.
+	 * Expands {@code (define-condition name parents slots options...)} to {@code nil} --
+	 * the registry-less fallback kept for {@code macroexpand-1} and the {@code --no-gc}
+	 * backend (no condition objects there). The real definition path is
+	 * {@link #defineConditionToDefclass}: the evaluator and the wasm-GC/JVM compilers
+	 * route a top-level {@code define-condition} through the CLOS-subset {@code defclass}
+	 * machinery instead.
 	 * @param cons the define-condition expression
 	 * @return nil
 	 */
 	public static LispVal expandDefineCondition(LispCons cons) {
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Rewrites {@code (define-condition name (parent?) (slots...) options...)} into the
+	 * equivalent {@code (defclass name (parent) (slots...))} form -- a condition type is
+	 * an ordinary CLOS-subset class over the built-in hierarchy seeded in
+	 * {@link ClosRegistry} (the parent defaults to {@code condition}). Slot
+	 * specifications use the {@code defclass} subset ({@code :initarg}/{@code :initform}/
+	 * {@code :reader}/{@code :accessor}). Of the class options, {@code (:report x)} is
+	 * registered in the registry -- a literal string, or a
+	 * {@code (lambda (condition stream) ...)} rendered by the typed {@code error} /
+	 * {@code signal} expansions -- and {@code (:documentation ...)} is dropped; anything
+	 * else is rejected. Lite: at most one parent type (single inheritance).
+	 * @param cons the define-condition expression
+	 * @param closRegistry mutated: the :report form is registered
+	 * @return the equivalent defclass form
+	 */
+	public static LispVal defineConditionToDefclass(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new IllegalArgumentException(
+					LispNames.DEFINE_CONDITION + " expects a condition type name: " + cons.print());
+		}
+		LispVal parentList;
+		if (parts.size() > 2 && parts.get(2) instanceof LispCons parentCons) {
+			List<LispVal> parents = parentCons.toList();
+			// Lite multiple parents: the FIRST parent provides the slot layout (single
+			// inheritance); the remaining parents join the ancestor set only, so
+			// typep/handler-case match through them while their slots are not inherited.
+			parentList = listToCons(List.<LispVal>of(parents.get(0)));
+			if (parents.size() > 1) {
+				List<String> extraParents = new java.util.ArrayList<>();
+				for (int i = 1; i < parents.size(); i++) {
+					if (!(parents.get(i) instanceof LispSymbol parentSym)) {
+						throw new IllegalArgumentException(
+								LispNames.DEFINE_CONDITION + " expects parent type names: " + cons.print());
+					}
+					extraParents.add(parentSym.name());
+				}
+				closRegistry.registerExtraAncestors(nameSym.name(), extraParents);
+			}
+		}
+		else {
+			parentList = listToCons(List.of(new LispSymbol("condition")));
+		}
+		LispVal slots = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		for (int i = 4; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons opt && opt.car() instanceof LispSymbol optSym) {
+				switch (optSym.name()) {
+					case ":report" -> {
+						if (!(opt.cdr() instanceof LispCons reportCell)) {
+							throw new IllegalArgumentException(
+									LispNames.DEFINE_CONDITION + " :report expects a value: " + cons.print());
+						}
+						closRegistry.registerConditionReport(nameSym.name(), reportCell.car());
+					}
+					case ":documentation" -> {
+						// Accepted and dropped, like the defclass class option.
+					}
+					default -> throw new UnsupportedOperationException(LispNames.DEFINE_CONDITION + " option "
+							+ optSym.name() + " is not supported: " + cons.print());
+				}
+			}
+			else {
+				throw new IllegalArgumentException(
+						LispNames.DEFINE_CONDITION + " expects (option value...) options: " + cons.print());
+			}
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.DEFCLASS), nameSym, parentList, slots));
 	}
 
 	/**
@@ -9247,12 +9900,43 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (make-condition 'type initargs...)} into the construction of a
+	 * condition instance -- a CLOS-subset tagged list built through the registry's slot
+	 * layout (see {@link #buildTypedConstruct}). A non-literal type falls back to the
+	 * registry-less string collapse below.
+	 * @param cons the make-condition expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeCondition(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException("make-condition expects a condition type: " + cons.print());
+		}
+		LispSymbol typeSym = quotedSymbol(parts.get(1));
+		if (typeSym == null) {
+			return expandMakeCondition(cons);
+		}
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> items = new java.util.ArrayList<>();
+		LispVal construct = buildTypedConstruct(typeSym, parts.subList(2, parts.size()),
+				closRegistry.findClass(typeSym.name()), bindings, items);
+		if (bindings.isEmpty()) {
+			return construct;
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET_STAR));
+		letParts.add(listToCons(bindings));
+		letParts.add(construct);
+		return listToCons(letParts);
+	}
+
+	/**
 	 * Expands {@code (make-condition type args...)} to its {@code :format-control} value
-	 * when one is given, or to the condition type name as a string otherwise. Lite: with
-	 * no condition system there is no condition object to build, but this keeps the
-	 * common {@code (error (make-condition 'type :format-control "..."))} idiom signaling
-	 * with the intended message ({@code :format-arguments} and any other options are
-	 * discarded).
+	 * when one is given, or to the condition type name as a string otherwise -- the
+	 * registry-less fallback kept for {@code macroexpand-1}, the {@code --no-gc} backend
+	 * (no condition objects there) and non-literal condition types. With a registry, the
+	 * overload above builds a real condition instance instead.
 	 * @param cons the make-condition expression
 	 * @return the expanded expression
 	 */

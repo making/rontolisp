@@ -1121,6 +1121,18 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(readPosDesc)
 						.writeU2(0));
 				}
+				if (mainCtx.conditionChannel.used) {
+					// The per-thread condition carrier from a %error-cond throw site to a
+					// handler-case catch handler; initialized in <clinit>.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldName))
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
+						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.depthFieldName))
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
+						.writeU2(0));
+				}
 			})
 			.writeMethods(methods -> {
 				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
@@ -1128,7 +1140,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							attr.writeU2(mainCtx.maxStack)
 								.writeU2(mainCtx.maxLocals)
 								.writeCode((Object[]) mainCtx.code.toArray(new Integer[0]))
-								.writeU2(0)
+								.writeExceptionTable(mainCtx.exceptionTable)
 								.writeU2(0);
 						})));
 				// The top-level body, split into one or more void chunk methods main()
@@ -1140,7 +1152,7 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(chunk.maxStack)
 									.writeU2(chunk.maxLocals)
 									.writeCode((Object[]) chunk.code.toArray(new Integer[0]))
-									.writeU2(0)
+									.writeExceptionTable(chunk.exceptionTable)
 									.writeU2(0);
 							})));
 				}
@@ -1152,7 +1164,7 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(funcCtx.maxStack)
 									.writeU2(funcCtx.maxLocals)
 									.writeCode((Object[]) funcCtx.code.toArray(new Integer[0]))
-									.writeU2(0)
+									.writeExceptionTable(funcCtx.exceptionTable)
 									.writeU2(0);
 							})));
 				}
@@ -1164,7 +1176,7 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(lambdaCtx.maxStack)
 									.writeU2(lambdaCtx.maxLocals)
 									.writeCode((Object[]) lambdaCtx.code.toArray(new Integer[0]))
-									.writeU2(0)
+									.writeExceptionTable(lambdaCtx.exceptionTable)
 									.writeU2(0);
 							})));
 				}
@@ -1174,6 +1186,32 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(64)
 									.writeU2(dm.maxLocals)
 									.writeCode((Object[]) dm.code.toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (mainCtx.conditionChannel.used) {
+					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
+					// on a thread with no pending condition returns null).
+					ConditionChannel channel = mainCtx.conditionChannel;
+					methods.add(AccessFlag.ACC_STATIC, java.util.Objects.requireNonNull(channel.clinitName),
+							java.util.Objects.requireNonNull(channel.clinitDesc),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(2)
+									.writeU2(0)
+									.writeCode(Opcode.NEW,
+											java.util.Objects.requireNonNull(channel.threadLocalClass).indexAsU2(),
+											Opcode.DUP, Opcode.INVOKESPECIAL,
+											java.util.Objects.requireNonNull(channel.tlCtor).indexAsU2(),
+											Opcode.PUTSTATIC,
+											java.util.Objects.requireNonNull(channel.condTlField).indexAsU2(),
+											Opcode.NEW,
+											java.util.Objects.requireNonNull(channel.threadLocalClass).indexAsU2(),
+											Opcode.DUP, Opcode.INVOKESPECIAL,
+											java.util.Objects.requireNonNull(channel.tlCtor).indexAsU2(),
+											Opcode.PUTSTATIC,
+											java.util.Objects.requireNonNull(channel.depthTlField).indexAsU2(),
+											Opcode.RETURN)
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -1820,6 +1858,103 @@ public final class JvmLispCompiler implements LispCompiler {
 	record BlockTarget(int rvSlot, List<Integer> exitPatches) {
 	}
 
+	/**
+	 * The shared condition-channel state of one compilation: the constants of the
+	 * {@code private static ThreadLocal _condTl} field that carries a condition object (a
+	 * tagged-list instance) from a {@code %error-cond} throw site to a
+	 * {@code handler-case} catch handler on the same thread of control (thread-scoped so
+	 * concurrent {@code rontolisp:http-handler} requests do not clobber each other). One
+	 * instance is shared by every {@link Ctx} of a compilation (the {@code nextFuncId}
+	 * pattern); the field and its {@code <clinit>} initializer are emitted only when a
+	 * compiler marked it {@link #used}.
+	 */
+	static final class ConditionChannel {
+
+		boolean used = false;
+
+		@Nullable FieldrefConstant condTlField;
+
+		@Nullable Utf8Constant fieldName;
+
+		@Nullable Utf8Constant fieldDesc;
+
+		@Nullable ClassConstant threadLocalClass;
+
+		@Nullable MethodrefConstant tlCtor;
+
+		@Nullable MethodrefConstant tlSet;
+
+		@Nullable MethodrefConstant tlGet;
+
+		@Nullable Utf8Constant clinitName;
+
+		@Nullable Utf8Constant clinitDesc;
+
+		/**
+		 * The per-thread {@code handler-case} handler-depth counter (a
+		 * {@code ThreadLocal} of {@code Integer}, null = 0), consulted by
+		 * {@code %signal-cond} -- {@code signal} raises only when a handler is
+		 * established.
+		 */
+		@Nullable FieldrefConstant depthTlField;
+
+		@Nullable Utf8Constant depthFieldName;
+
+		/**
+		 * Lazily creates the constant-pool entries (idempotent adds) and marks the
+		 * channel used, so the class writer emits the two ThreadLocal fields and their
+		 * {@code <clinit>}.
+		 */
+		void ensure(ConstantPool cp, String className) {
+			if (this.used) {
+				return;
+			}
+			this.used = true;
+			this.fieldName = cp.addUtf8("_condTl");
+			this.fieldDesc = cp.addUtf8("Ljava/lang/ThreadLocal;");
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			this.condTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.fieldName, this.fieldDesc));
+			this.depthFieldName = cp.addUtf8("_hcDepthTl");
+			this.depthTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.depthFieldName, this.fieldDesc));
+			this.threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
+			this.tlCtor = cp.addMethodref(this.threadLocalClass,
+					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			this.tlSet = cp.addMethodref(this.threadLocalClass,
+					cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
+			this.tlGet = cp.addMethodref(this.threadLocalClass,
+					cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
+			this.clinitName = cp.addUtf8("<clinit>");
+			this.clinitDesc = cp.addUtf8("()V");
+		}
+
+	}
+
+	/**
+	 * An active {@code unwind-protect} protected region during compilation.
+	 * {@code cleanupForms} are re-compiled inline at every {@code return} escape site (a
+	 * cleanup runs once per exit path); {@code blockDepth} is the {@code %block} stack
+	 * depth at entry, so {@code JvmReturnCompiler} can tell whether a {@code return}
+	 * escapes this scope (its target block encloses the scope) or stays inside it;
+	 * {@code holes} collects the {@code [start, end)} code ranges of those inlined
+	 * cleanups, which the scope's exception-table entries must exclude (a throw from an
+	 * inlined cleanup must not re-enter this scope's own handler and run the cleanup
+	 * twice).
+	 */
+	static final class UnwindScope {
+
+		final List<LispVal> cleanupForms;
+
+		final int blockDepth;
+
+		final List<int[]> holes = new ArrayList<>();
+
+		UnwindScope(List<LispVal> cleanupForms, int blockDepth) {
+			this.cleanupForms = cleanupForms;
+			this.blockDepth = blockDepth;
+		}
+
+	}
+
 	static final class Ctx {
 
 		final ConstantPool cp;
@@ -2047,7 +2182,29 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final Deque<BlockTarget> blockTargets = new ArrayDeque<>();
 
+		/**
+		 * Stack of active {@code unwind-protect} protected regions. The innermost scope
+		 * is on top; a {@code return} that escapes a scope compiles its cleanup forms
+		 * inline before jumping (see {@link JvmReturnCompiler}).
+		 */
+		final Deque<UnwindScope> unwindScopes = new ArrayDeque<>();
+
+		/**
+		 * This method's {@code Code} attribute exception table, in dispatch order.
+		 * {@code unwind-protect} appends catch-any entries covering its protected region
+		 * (class version 50 verifies handlers without a StackMapTable).
+		 */
+		final List<ByteCodeWriter.ExceptionTableEntry> exceptionTable = new ArrayList<>();
+
+		/**
+		 * The compilation-wide condition-channel state (the {@code _condTl} ThreadLocal
+		 * field constants); one instance shared across every context of a compilation
+		 * through the single builder, like {@link #nextFuncId}.
+		 */
+		final ConditionChannel conditionChannel;
+
 		private Ctx(Builder builder) {
+			this.conditionChannel = builder.conditionChannel;
 			this.dynamic = builder.dynamic;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.className = builder.className;
@@ -2119,6 +2276,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		static final class Builder {
+
+			/**
+			 * One condition channel per builder (= per compilation): every context built
+			 * from the same builder shares it.
+			 */
+			private final ConditionChannel conditionChannel = new ConditionChannel();
 
 			private @Nullable ConstantPool cp;
 

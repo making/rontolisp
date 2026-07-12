@@ -1,11 +1,18 @@
 # error
 
-`(error control-string args...)`
+`(error datum args...)`
 
-エラーをシグナルし、現在の評価を中断します。第1引数は `format` と同じディレクティブ（`~a`、`~s`、`~%` など）を用いるリテラルの制御文字列でなければなりません。残りの引数がそれらのディレクティブを埋めてメッセージを組み立てます。インタプリタおよび JVM バックエンドは整形済みメッセージを保持した例外をスローし、WASM バックエンドはトラップします。`format` と同様に `error` は関数値を持たないマクロであるため、`#'error` はサポートされません。
+エラーを通知し、外側の [`handler-case`](handler-case.md) に捕捉されなければ実行を中止します。Common Lisp のコンディション designator をサポートします:
 
-`error` は実行を中断するため、実行可能な例ではなく静的な形で示します。
+- `(error "control" args...)` — 制御文字列は `format` と同じディレクティブ(`~a`、`~s`、`~%` など)を使うリテラルでなければならず、残りの引数を埋めてメッセージを構築します。
+- `(error 'type :initarg value ...)` — 指定したクラス(組み込み、または [`define-condition`](define-condition.md) で定義)のコンディションインスタンスを構築して通知します。メッセージはクラスに `:report` が定義されていればその描画結果、なければ `Condition (type initargs...) was signalled.` 形です。`simple-*` クラスでは指定された `:format-control` がメッセージになります。
+- `(error obj)` — 構築済みのコンディションオブジェクト(例: [`make-condition`](make-condition.md) の結果)を通知します。実行時に文字列だった場合はそのままメッセージとして通知します。
+
+インタプリタと JVM バックエンドはメッセージとコンディションオブジェクトを保持する例外をスローするため、`handler-case` が型でディスパッチできます。WASM バックエンドはトラップします(捕捉不能)。`format` と同様に `error` は関数値を持たないマクロなので、`#'error` はサポートされません。
+
+捕捉されない `error` は実行を中止するため、ここでは実行可能な例ではなく静的に示します:
 
 ```console
 (error "bad value: ~a" x)
+(error 'type-error :datum x :expected-type 'integer)
 ```
