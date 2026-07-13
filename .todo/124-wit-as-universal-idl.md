@@ -1,0 +1,160 @@
+# WIT as rontolisp's universal IDL (roadmap anchor)
+
+**Status:** open, unstarted. Raised 2026-07-13, immediately after `--wit` closed
+todos 92+93. Anchor todo: the design and the type mapping live here; the four
+executable steps are `.todo/125`..`.todo/128`.
+
+## The idea
+
+`--wit` made rontolisp *emit* WIT. The interesting direction is the reverse:
+**consume an existing `.wit` as the single description of a foreign boundary**,
+and let every backend bind that same description to whatever it can reach.
+
+Today the "call something outside the program" vocabulary is split three ways and
+none of the three know about each other:
+
+- `java:` interop — reflection, interpreter + JVM only (`.kb/java-interop.md`).
+- `rontolisp:wasm-import` — Preview 1 core modules only; `--component` rejects it
+  outright with an `UnsupportedOperationException` (`.kb/wasm-import.md`).
+- Hand-written per-feature surfaces: `rontolisp:http-handler`'s request/response
+  plists, `rontolisp:fetch`, `rontolisp:tcp-*`, `examples/browser/webgl-common/gl.lisp`'s
+  34 hand-declared imports.
+
+A component compiled today therefore **cannot import anything but the fixed WASI
+blob surface** (`src/wasm-component/uni.wit`), which is the single biggest hole in
+the component story — it is why `.todo/52` (wasi:keyvalue) and `.todo/53`
+(wasmCloud) are both blocked on plumbing rather than on ideas.
+
+## Why this is not a new concept — the seams already exist
+
+1. **`compiler/WasmImportDirective.java` is already a backend-shared directive**
+   whose JVM lowering is *a synthesized defun stub that signals an error*. The
+   whole proposal is: keep the shape, make the stub resolve to an implementation.
+2. **An import is already a defun.** `.kb/wasm-import.md`: because a
+   `wasm-import` registers a synthetic defun in Pass 1, `#'name` / `funcall` /
+   `mapcar` / dispatch / `eval` work with zero extra wiring. Anything WIT-derived
+   inherits that for free.
+3. **`LoadInliner` / `UserMacroExpander` already read files at compile time** and
+   splice AST. A WIT-reading macro is the same motion as `(require :gl "gl.lisp")`.
+4. **Every WIT type already has a house representation** (below). We are naming
+   seven existing conventions, not inventing them.
+
+## The type mapping (the load-bearing table — settle it in `.todo/125`)
+
+| WIT | rontolisp | Precedent already in the tree |
+|---|---|---|
+| `s32`/`u32` | int | `wasm-export` `:int` |
+| `s64`/`u64` | int (bignum-safe) | `:long`, today valid only on `--no-gc --component` |
+| `f32`/`f64` | float | `wasm-export` `:float` (VT_F64) |
+| `bool` | `t`/`nil` | `wasm-export` `:bool` |
+| `string` | string | `wasm-export` `:string`, canonical UTF-8 ABI (todo 92 Tier 2) |
+| `char` | character | reader's character type |
+| `list<u8>` | string OR byte list | the fetch/socket string<->linear-memory marshalling |
+| `list<T>` | proper list | `java:` interop's `marshalSequence` |
+| `record` | keyword plist | **`rontolisp:http-handler`'s request/response plists** |
+| `enum` | keyword | `:async`-style keyword args throughout |
+| `variant` | `(tag . payload)` tagged list | the defstruct/CLOS tagged-list value model |
+| `option<T>` | value or `nil` | Lisp itself |
+| `tuple<A,B>` | list | — |
+| `result<T,E>` | value, or signal a condition | todo-116 conditions — **see the trap below** |
+| `resource` | opaque integer handle | streams/sockets share one handle space (`.kb/read-load-streams.md`) |
+| `flags` | list of keywords | — |
+
+**The one genuinely unresolved cell is `result<T,E>`.** Mapping the error arm to
+a condition is the obvious Lisp answer and works on the interpreter and JVM — but
+**every WASM backend rejects `handler-case`/`ignore-errors` at compile time**
+(traps are uncatchable; `.kb/error-handling.md`), which is exactly the backend
+where `result` is most pervasive (every `wasi:keyvalue` function returns one).
+So the mapping must be decided as an explicit design question, not assumed:
+
+- (a) `result` -> multiple values `(values ok err)`, consumer checks — works
+  everywhere, un-Lispy, and easy to ignore an error by accident.
+- (b) `result` -> condition on interpreter/JVM, and on WASM the error arm traps
+  with the message (uncatchable). Consistent surface, divergent recoverability.
+- (c) `result` -> condition everywhere, and make catching them the forcing
+  function to finally give the WASM backend a catch mechanism.
+
+Recommendation: start with **(b)** and note the divergence loudly (it matches how
+WASM already behaves for `error`), keep (c) as the honest long-term answer. Decide
+in `.todo/125` before any of it is generated — every later step depends on it.
+
+## The Lisp-facing surface (sketch)
+
+```lisp
+;;; one file, four backends
+(rontolisp:wit-import "wit/keyvalue.wit"
+                      :interface "wasi:keyvalue/store@0.2.0"
+                      :package kv)
+
+(defun cache-get (bucket key)
+  (handler-case (kv:get bucket key)
+    (kv:error (e) (format t "miss: ~a~%" (kv:error-message e)) nil)))
+```
+
+and, symmetrically, WIT as a contract to *implement*:
+
+```lisp
+(rontolisp:wit-export "wit/analyzer.wit" :world analyzer)
+
+(defun analyze (text)          ; WIT says: analyze: func(text: string) -> result<stats, string>
+  (list :words 42 :chars 100)) ; arity/type mismatch => compile error
+```
+
+This subsumes `wasm-export`'s hand-written `:params '(:string) :returns :int` —
+the types stop being maintained in two places.
+
+## Package layout
+
+```
+am/ik/wit/                     # NEW, language-independent — same tier as am.ik.jvm / am.ik.wasm
+  WitParser.java               # .wit text -> model
+  WitPrinter.java              # model -> .wit text (WitEmitter migrates onto this)
+  WitType.java                 # sealed: Prim | List | Record | Variant | Enum | Option | Result | Tuple | Flags | Resource
+  WitFunc / WitInterface / WitWorld / WitPackage   # records
+
+am/ik/rontolisp/compiler/
+  WitDirective.java            # backend-shared parse result — sits next to WasmImportDirective
+  WitTypeMapper.java           # the table above; the ONE source of truth for marshal/unmarshal
+
+codegen/wasm/WasmWitImportCompiler.java   # canon lower -- the only heavy new codegen (.todo/128)
+codegen/jvm/JvmWitImportCompiler.java     # bind to a provider object via the JavaBridge marshaller
+eval/WitProviders.java                    # same, interpreted
+```
+
+`am.ik.wit` must obey the same rule as its siblings: **no rontolisp imports**,
+no external dependencies.
+
+## Roadmap
+
+| Step | Todo | Weight | Unlocks |
+|---|---|---|---|
+| 1 | `.todo/125` — `am.ik.wit` parser/printer + settle the type mapping; `WitEmitter` migrates onto `WitPrinter` | medium | self-validating via `WitOracleE2eTest` |
+| 2 | `.todo/126` — `wit-export`: implement-this-world contract checking + scaffolding | small | kills the `:params`/`:returns` double-maintenance |
+| 3 | `.todo/127` — `wit-import` on interpreter + JVM (provider binding) | medium | one Lisp source, host impl per backend |
+| 4 | `.todo/128` — component imports (canon lower) | **large** | wasi:keyvalue, component composition, wasmCloud |
+
+Steps 1-3 are re-arrangements of existing machinery. Step 4 is the only one that
+needs genuinely new encoder work, and it is the payoff. `.todo/52` (wasi:keyvalue)
+is the designated first proof of step 4 — do it *through* this pipeline, not
+around it.
+
+## What gets absorbed afterwards (the follow-on prize, not a step)
+
+- `rontolisp:http-handler` becomes "a program implementing the
+  `wasi:http/incoming-handler` world", with the request plist **derived** from the
+  WIT `record` instead of hand-shaped differently per backend.
+- `gl.lisp`'s 34 `wasm-import` directives become a `local:webgl/gl.wit`, from which
+  the demos' **JS import object can also be generated** — today the handle-table
+  bindings in each `index.html` are hand-written against a Lisp-side declaration
+  with nothing checking the two agree.
+- `wasm-import`/`wasm-export` stay as the low-level, WIT-free escape hatch (a JS
+  import object is not a component and never has a `.wit`), exactly as
+  `LoadInliner` coexists with ASDF.
+
+## References
+
+`.kb/wasm-import.md`, `.kb/wasi-component.md` (the `--wit` section — `WitEmitter`,
+`WitOracleE2eTest`), `.kb/java-interop.md`, `.kb/error-handling.md` (the WASM
+catch prohibition that shapes `result<T,E>`), `.kb/fetch-http.md`,
+`.todo/52` (wasi:keyvalue), `.todo/53` (wasmCloud gaps), `.todo/02`
+(the `wasi:http@0.2` island — a precedent for a temporary mixed-version import).

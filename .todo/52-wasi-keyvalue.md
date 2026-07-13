@@ -3,6 +3,16 @@
 Status: PLANNED (do AFTER `.todo/51-wasi-http-incoming-handler-spin.md`).
 Created 2026-07-04.
 
+**RETARGETED 2026-07-13:** do this **through** the WIT-as-IDL pipeline
+(`.todo/124` roadmap, landing in `.todo/128`), not as the hand-rolled
+`rontolisp:kv-*` built-ins + bespoke blob variant proposed below. `wasi:keyvalue`
+is the designated first proof that a new host interface costs a `.wit` file rather
+than a blob: the surface becomes a plain `wit-import` of the published `.wit`, the
+`bucket` resource maps to a handle in the existing stream/socket handle space, and
+the interpreter/JVM parity ("Backend strategy" below) comes from a provider object
+instead of a parallel hand-written implementation. The shape notes below stay
+valid — read them as the requirements the pipeline must satisfy.
+
 ## Goal
 
 Expose a persistent key-value store to rontolisp over **`wasi:keyvalue`** on the
