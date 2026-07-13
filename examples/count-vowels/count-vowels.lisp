@@ -15,20 +15,18 @@
 ;;;;
 ;;;; A bump allocator never frees, so the real question is who reclaims that
 ;;;; memory in a host that keeps one instance alive and calls it in a loop. The
-;;;; same source answers it three ways, depending on how it is compiled --
-;;;; README.md drives each one from Node:
+;;;; same source answers it two ways, depending on how it is compiled --
+;;;; README.md drives both from Node:
 ;;;;
 ;;;;   --no-gc --optimize              the host pops the bump heap itself, with
 ;;;;                                   the arena API __ronto_alloc_mark/_reset
-;;;;   --no-wasi --optimize            wasm-GC: the engine collects the Lisp side;
-;;;;                                   the host reuses one input buffer
 ;;;;   --no-gc --component --optimize  a component: the canonical ABI passes the
 ;;;;                                   string and post-return frees everything --
 ;;;;                                   the host writes no memory code at all
 ;;;;
 ;;;; The export keeps its Lisp name (a component-model export name must be
 ;;;; lower-kebab-case, so no :as "count_vowels" rename here), which lets one
-;;;; directive serve all three builds.
+;;;; directive serve both builds.
 
 ;;; A character is its code point everywhere (in --no-gc a character simply IS
 ;;; its i64 code, so char= is an ordinary numeric comparison). Test both cases so

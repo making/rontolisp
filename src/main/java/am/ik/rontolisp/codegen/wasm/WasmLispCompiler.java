@@ -791,6 +791,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int CABI_MARK_INTERN_ADDR = 168;
 
+	// High-water mark of the interned-symbol byte pool: the HEAP_PTR value just after
+	// _intern's last PERMANENT advance. Only written when the host arena API is emitted
+	// (a memory-exporting non-component module), so every other module's _intern body is
+	// byte-identical to before. Zero-initialized memory means "nothing
+	// permanent above heapBase yet", which is exactly what __ronto_alloc_reset's
+	// max(mark, high-water) pop wants.
+	static final int RT_INTERN_HEAP_ADDR = 172;
+
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
@@ -1330,6 +1338,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem;
 		int allocFuncIndex = memoryHelpers ? exportHelperBase : -1;
 		int strFromMemFuncIndex = memoryHelpers ? exportHelperBase + 1 : -1;
+		// Host arena API: __ronto_alloc_mark / __ronto_alloc_reset, appended right after
+		// the two memory helpers. Emitted only when the module EXPORTS its memory -- i.e.
+		// never under --component, where the memory is imported and the host reaches the
+		// heap through the canonical cabi_realloc / cabi_post_* pair instead (which does
+		// the same intern-guarded pop for itself). So every component module stays
+		// byte-identical.
+		boolean hostArena = memoryHelpers && !this.component;
+		int helperFuncCount = memoryHelpers ? (hostArena ? 4 : 2) : 0;
+		int allocMarkFuncIndex = hostArena ? exportHelperBase + 2 : -1;
+		int allocResetFuncIndex = hostArena ? exportHelperBase + 3 : -1;
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a).
 		{
@@ -1340,7 +1358,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		if (!exportDecls.isEmpty()) {
-			int wrapperFuncIndex = exportHelperBase + (memoryHelpers ? 2 : 0);
+			int wrapperFuncIndex = exportHelperBase + helperFuncCount;
 			int wrapperTypeIndex = fixedTypeCount();
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
@@ -1433,8 +1451,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 		}
+		// The type entries appended after the fixed types, the export wrappers and the
+		// import signatures: the component string-ABI block, or (mutually exclusive,
+		// since
+		// the host arena is non-component only) the two arena signatures.
 		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size();
-		int abiFuncBase = exportHelperBase + (memoryHelpers ? 2 : 0) + exportPlans.size();
+		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
 		int retptrShimFuncBase = cabiPostFuncBase + componentPostKinds.size();
@@ -1573,7 +1595,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			java.util.Collection<StringTable.StringEntry> internEntries = stringTable.entries();
 			int internCount = internEntries.size();
 			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
-			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount);
+			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount, hostArena);
 			if (usesRead) {
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset,
 						functionOffset);
@@ -1926,6 +1948,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()), new Type[] { Type.I32 });
 					}
 				}
+				// Host arena signatures, from abiTypeBase (the component string-ABI block
+				// above is mutually exclusive with them, so the base is shared):
+				// __ronto_alloc_mark () -> i32, __ronto_alloc_reset (i32) -> ().
+				if (hostArena) {
+					types.addFunc(new Type[0], new Type[] { Type.I32 });
+					types.addFunc(new Type[] { Type.I32 }, new Type[0]);
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -2165,6 +2194,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (memoryHelpers) {
 					fnDef.addFunction(TYPE_LOOKUP);
 					fnDef.addFunction(TYPE_RAT_NEW);
+					// Host arena API: __ronto_alloc_mark / __ronto_alloc_reset, with the
+					// two signatures appended at abiTypeBase.
+					if (hostArena) {
+						fnDef.addFunction(abiTypeBase);
+						fnDef.addFunction(abiTypeBase + 1);
+					}
 				}
 				// Export wrapper functions (host-callable), one per
 				// (rontolisp:wasm-export ...).
@@ -2286,6 +2321,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					// write into linear memory.
 					if (memoryHelpers) {
 						exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, allocFuncIndex);
+						// The host arena API: snapshot the bump-heap top before the host
+						// allocates its input buffer, pop back to it after the call. The
+						// engine reclaims the Lisp side; this reclaims the linear-memory
+						// buffer at the boundary, which it cannot see.
+						exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, allocMarkFuncIndex);
+						exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, allocResetFuncIndex);
 					}
 					// Host-callable Lisp functions requested via (rontolisp:wasm-export
 					// ...), each under its :as alias (default: the Lisp name).
@@ -2439,6 +2480,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (memoryHelpers) {
 					code.addFunction(WasmExportRuntimeBuilder.buildAllocBody());
 					code.addFunction(WasmExportRuntimeBuilder.buildStrFromMemBody());
+					if (hostArena) {
+						code.addFunction(WasmExportRuntimeBuilder.buildAllocMarkBody());
+						code.addFunction(WasmExportRuntimeBuilder.buildAllocResetBody());
+					}
 				}
 				// Export wrapper bodies (host-callable), one per (rontolisp:wasm-export
 				// ...).

@@ -102,7 +102,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](#eligible-subset) | [非 GC サブセット](#eligible-subset) |
 | エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` ではトラップ) | 同期エクスポートではトラップ。[`:async t`](#component-model-function-exports-wasm-export) を宣言する | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.2 stdio ブリッジ) |
 | プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` + ディレクティブのみ | `defun` + ディレクティブのみ |
-| 呼び出しごとの文字列メモリ | ホスト管理(`__ronto_alloc`) | 正準 post-return が解放 | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-memory-the-arena-api)。スカラー戻り値では自動) | 正準 post-return が解放 |
+| 呼び出しごとの文字列メモリ | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-the-hosts-buffer-the-arena-api)。Lisp 側はエンジンが回収) | 正準 post-return が解放 | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-memory-the-arena-api)。スカラー戻り値では自動) | 正準 post-return が解放 |
 | 典型的なサイズ | 約 100 KB([`--optimize`](#optimize-tree-shaking) で約 2 KB) | 約 110 KB | 数十バイト〜数 KB | 数百バイト〜数 KB |
 
 このページの残りは各形状の詳細です: エクスポートの呼び出し方、その中で動くもの、そして各ホストが提供すべきものです。
@@ -120,6 +120,40 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 
 - **パラメータ数の上限。** 関数(`defun` または `lambda`)は最大 **7 つのパラメータ**しか取れません(インタプリタと JVM バックエンドにこの制限はありません)。上限を超えた固定アリティの `defun` は自動的にバンドルされます: コンパイラは最初の 6 パラメータを残し、残りをリストに詰め、すべての直接呼び出しサイトを一致するように書き換えます — そのため幅広いライブラリシグネチャもそのままコンパイルされます。そのような関数の値を `#'name`/`symbol-function` で取るのはコンパイルエラーです(バンドルされた形を知っているのは直接呼び出しだけです)。また、上限を超えた `lambda` や可変長関数は依然としてエラーになります — その場合は自分で引数をリストにまとめてください。可変長関数の rest リストは 1 パラメータと数えられるため、`&rest` 関数は最大 6 つの必須パラメータを宣言でき、直接呼び出しサイトでは任意個の引数を受け取れます。
 - **浮動小数点数の印字の形。** WASM ではあらゆる大きさの浮動小数点数が印字できます: 整数部は 2⁶³ まで正確で、それを超える値は近似的な指数形式(`1.0E19`)にフォールバックし、`Infinity`、`-Infinity`、`NaN` は他のバックエンドと同様にその語で印字されます。形の違いが 1 つ残っています: 10⁷ から 2⁶³ までは、インタプリタと JVM が指数表記(`1.5E12`)を使うのに対し、WASM はすべての桁を印字します(`1500000000000.0`)。`rontolisp:json-stringify` もこの形の違いを引き継ぎます。
+
+### ホストのバッファの回収(アリーナ API)
+
+Lisp 側が確保するもの — コンスセル、クロージャ、文字列 — はすべてエンジンが回収するため、wasm-GC モジュールの*内側*にメモリ規律は不要です。エンジンから見えない唯一のものが、**ホスト**が引数のバイト列を書き込んだバッファです: それはリニアメモリであり、エンジンが決してトレースしない不透明なバイト配列で、決して解放しないバンプアロケータ `__ronto_alloc` から配られます。したがって、呼び出しごとに新しい入力バッファを確保する常駐ホストは、リニアメモリを際限なく成長させます。
+
+そこで、`memory` をエクスポートするモジュールは、同じヒープポインタ上の対の関数もエクスポートします:
+
+| export | signature | meaning |
+| --- | --- | --- |
+| `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
+| `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+入力を確保する**前**にスナップショットを取り、結果を読み出した**後**に復元すれば、何回呼び出しても、各入力がどれだけ長くても、常駐インスタンスは平坦なままです:
+
+```js
+const countVowels = (s) => {
+  const b = enc.encode(s);
+  const mark = ex.__ronto_alloc_mark();          // snapshot BEFORE allocating
+  const ptr = ex.__ronto_alloc(b.length);        // a fresh buffer, any length
+  new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+  const n = ex['count-vowels'](ptr, b.length);   // scalar result, read out here
+  ex.__ronto_alloc_reset(mark);                  // pop the input buffer
+  return n;
+};
+```
+
+アリーナ一般と同じく、ルールは 2 つです:
+
+- まだ生きているすべてのものより**前**に取ったマークにだけリセットしてください。
+- `:string` を**返す**エクスポートは結果のバイト列をメモリに残します: **リセットする前にデコードしてください**。さもないと次の確保がそれを上書きします。
+
+バックエンド固有のガードが 1 つあります: GC バックエンドでは同じヒープポインタがインターン済みシンボルのバイトプールも保持している(シンボルの同一性がそこでのオフセット*そのもの*)ため、`__ronto_alloc_reset` はそのプールの高水位より下へはポップしません。したがって新しいシンボルをインターンする呼び出し(`read`、`intern`、`gensym`)は入力バッファを保持し、それ以外の呼び出しは最後までポップします。ホスト側ですることはありません。
+
+このブラケットは、[`count-vowels` の例](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)が `--no-gc` について Node と [Endive](https://endive.run)(Java)で示しているものと同一です — 境界のプロトコルはバックエンドで変わらず、変わるのは関数の中に何を書けるかだけです。[`--component`](#wasi-03-component---component) ではアリーナ API はなく、囲むものもありません: 正準 ABI の `post-return` が引数の文字列を解放してくれます。
 
 ### ホスト関数のインポート
 
@@ -437,6 +471,8 @@ node -e '(async () => {
 - `:string` を**返す**エクスポートは自動リセットしません(その結果は生きたヒープポインタです)。**`__ronto_alloc_reset` を呼ぶ前に、返されたバイト列をメモリから読み出してください** — 先にリセットすると文字列が解放され、次の確保がそれを上書きします。
 
 [`count-vowels` の例](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)は、Node と [Endive](https://endive.run)(Java)の両ホストでこのレシピを一通り示します。
+
+wasm-GC バックエンドも同じ `__ronto_alloc_mark`/`__ronto_alloc_reset` の対を、同じホスト側レシピでエクスポートします([上記](#reclaiming-the-hosts-buffer-the-arena-api))。ただしそちらで回収が必要なのは*ホストの*バッファだけです — Lisp 側が確保したものはエンジンが面倒を見ます。スカラー戻り値の自動リセットは `--no-gc` 専用です: 非 GC サブセットには cons もクロージャもハッシュテーブルもグローバル `setq` もなく、呼び出しが確保したものが呼び出しより長生きし得ないからこそ健全なのです。
 
 ### Lisp からの回収(`rontolisp:with-arena`)
 

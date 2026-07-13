@@ -156,6 +156,39 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void memoryExportEmitsTheHostArenaApi() {
+		// A memory-exporting module also exports the arena pair, so a resident
+		// host can pop the input buffer it bump-allocated: the engine collects the Lisp
+		// side, but linear memory at the boundary is invisible to it.
+		byte[] bytes = compile("(defun shout (s) (string-upcase s))"
+				+ "(rontolisp:wasm-export 'shout :params '(:string) :returns :string)");
+		assertThat(containsAscii(bytes, "__ronto_alloc_mark")).isTrue();
+		assertThat(containsAscii(bytes, "__ronto_alloc_reset")).isTrue();
+	}
+
+	@Test
+	void scalarExportOmitsTheHostArenaApi() {
+		// No memory-typed export: no linear-memory boundary, so no arena API (and the
+		// module stays byte-identical to the shape it had before the arena API).
+		byte[] bytes = compile("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
+		assertThat(containsAscii(bytes, "__ronto_alloc_mark")).isFalse();
+	}
+
+	@Test
+	void componentModeOmitsTheHostArenaApi() {
+		// Under --component the memory is imported, not exported, and the host reaches
+		// the heap through the canonical cabi_realloc / cabi_post_* pair -- which does
+		// the same intern-guarded pop for itself. So no arena API here.
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
+					+ " :returns :string) (print \"hi\")");
+		byte[] component = new WasmLispCompiler(false, true).compile(program);
+		assertThat(containsAscii(component, "__ronto_alloc_mark")).isFalse();
+		assertThat(containsAscii(component, "cabi_post_i32")).isTrue();
+	}
+
+	@Test
 	void rejectsLongDesignatorOnTheGcBackend() {
 		// :long maps to i64, which the GC backend cannot represent (its integers are
 		// i31ref); it is a --no-gc-only designator, rejected with a pointer to --no-gc.
@@ -300,6 +333,23 @@ class WasmExportCompilerTest {
 		byte[] explicitNil = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(defun
 				+ " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int :async nil) (print \"hi\")"));
 		assertThat(explicitNil).isEqualTo(omitted);
+	}
+
+	@Test
+	void arenaResetIsGuardedByTheInternPoolHighWater() {
+		// The pop is HEAP_PTR = max(mark, RT_INTERN_HEAP) -- HEAP_PTR is a stack pointer
+		// over a PERMANENT low region here (the interned-symbol byte pool _intern copies
+		// into), so popping to a bare mark would dangle the intern registry's records.
+		// Pin both halves: the guarded reset body is in the module, and _intern records
+		// the pool's top only for the modules that export the arena.
+		byte[] bytes = compile("(defun shout (s) (string-upcase s))"
+				+ "(rontolisp:wasm-export 'shout :params '(:string) :returns :string)");
+		assertThat(indexOf(bytes, WasmExportRuntimeBuilder.buildAllocResetBody()))
+			.as("the guarded reset body is emitted")
+			.isNotNegative();
+		byte[] guardStore = hexBytes("41AC01"); // i32.const 172 (RT_INTERN_HEAP_ADDR)
+		assertThat(indexOf(WasmReadRuntimeBuilder.buildInternBody(0, 0, true), guardStore)).isNotNegative();
+		assertThat(indexOf(WasmReadRuntimeBuilder.buildInternBody(0, 0, false), guardStore)).isNegative();
 	}
 
 	private static byte[] hexBytes(String hex) {

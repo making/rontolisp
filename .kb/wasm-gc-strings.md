@@ -91,6 +91,20 @@ are not reclaimed -- a string stream is short-lived and comparatively rare, unli
 reclaimable runtime strings this representation targets. Details:
 [[read-load-streams]].
 
+## The host arena API pops to the intern high-water (todo 124)
+
+A memory-exporting module exports `__ronto_alloc_mark`/`__ronto_alloc_reset` so a resident
+host can reclaim the input buffer it `__ronto_alloc`'d (the engine never traces linear
+memory). Because of the two disciplines above, the reset is NOT a bare
+`HEAP_PTR = mark`: it is `HEAP_PTR = max(mark, RT_INTERN_HEAP_ADDR)` (cell 172, the intern
+pool's high-water, stored by `_intern` right after its permanent advance). Popping below it
+would free bytes the intern registry (`RT_INTERN_COUNT_ADDR`) still points at, dangling
+every symbol interned during the call. So a call that interns a NEW symbol keeps the host's
+buffer (the permanent bytes are stacked above it) and every other call pops all the way
+back. String-stream buffers (below) are permanent too but are NOT guarded -- same trade the
+component `cabi_post_*` already makes: a stream that escapes its call is the caller's
+problem. Details: [[wasm-export-no-wasi]].
+
 ## Grow guards kept
 
 The `emitGrowHeapTo` guards at string builders are KEPT: a single string can exceed

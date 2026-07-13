@@ -1,5 +1,19 @@
 # 104 — a way to FREE linear memory: `with-arena`, and `__ronto_alloc_mark`/`_reset` on wasm-GC
 
+> **CLOSED 2026-07-13. Both halves are done; keep this file only as the design record.**
+> The wasm-GC half (steps 3+4, split out as `.todo/124`) landed: a memory-exporting
+> wasm-GC module now exports `__ronto_alloc_mark`/`__ronto_alloc_reset`, and the pop is
+> `HEAP_PTR = max(mark, RT_INTERN_HEAP_ADDR)` — a stateless high-water guard over the
+> interned-symbol byte pool, instead of the intern-COUNT guard this file proposed (no
+> active flag, so it nests and a stale mark cannot corrupt anything; nothing to warn
+> about, since an interning call simply keeps its buffer). todo-88's automatic
+> scalar-return reset was deliberately NOT ported (cons/closures/hash/global `setq`
+> break its "nothing outlives the call" premise), and **`rontolisp:with-arena` stays a
+> plain `progn` on wasm-GC**: the engine already collects the Lisp values, transient
+> string builds no longer advance `HEAP_PTR` (todo-90), so a Lisp-side arena would have
+> nothing to reclaim. See `.kb/wasm-export-no-wasi.md` + `.kb/wasm-gc-strings.md`, and
+> `examples/count-vowels/` for the acceptance test.
+
 > **2026-07-10 (later): the `--no-gc` half is DONE**, executed by
 > `.todo/110-nogc-print-io-and-with-arena.md`: `rontolisp:with-arena` is a
 > `LispMacroExpander.expandWithArena` lowering to `progn` on the interpreter /

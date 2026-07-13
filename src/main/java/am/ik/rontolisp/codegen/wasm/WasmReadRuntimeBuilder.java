@@ -218,8 +218,14 @@ final class WasmReadRuntimeBuilder {
 	 * scans a growable runtime table so that symbols absent at compile time (e.g. lambda
 	 * parameters in loaded files) get a stable offset across occurrences. A first-seen
 	 * token is appended to the runtime table with its own offset as the canonical one.
+	 * @param internBase the compile-time intern table's base address
+	 * @param internCount the compile-time intern table's entry count
+	 * @param recordHighWater when true, also record the pool's new top in
+	 * {@code RT_INTERN_HEAP_ADDR}, which is what {@code __ronto_alloc_reset} refuses to
+	 * pop below. Only the host-arena modules need it, so every other module's body stays
+	 * byte-identical.
 	 */
-	static byte[] buildInternBody(int internBase, int internCount) {
+	static byte[] buildInternBody(int internBase, int internCount, boolean recordHighWater) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: off=0, len=1 ; locals: IDX=2, EOFF=3, ELEN=4, K=5, COUNT=6, POOL=7,
@@ -287,6 +293,15 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, LEN);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		if (recordHighWater) {
+			// RT_INTERN_HEAP = pool + len: the floor a host arena reset may not pop
+			// below.
+			i32(w, WasmLispCompiler.RT_INTERN_HEAP_ADDR);
+			getLocal(w, POOL);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
 		// mem[rtBase + count*8] = pool
 		emitRtBase.run();
 		getLocal(w, COUNT);

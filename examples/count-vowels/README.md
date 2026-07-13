@@ -20,26 +20,32 @@ call flow of the tutorial.
 
 `__ronto_alloc` is a bump allocator and there is no `dealloc`, so the interesting
 question is **who reclaims that memory** in a host that keeps one instance alive
-and calls it in a loop. The same Lisp source answers it three ways, depending on
-how it is compiled -- each one is driven from Node below:
+and calls it in a loop. The same Lisp source answers it two ways, depending on how
+it is compiled -- both are driven from Node below:
 
 | Build | Who frees | Host work |
 |---|---|---|
 | [`--no-gc`](#1---no-gc-the-host-pops-the-heap) | the host, with the arena API `__ronto_alloc_mark`/`_reset` | alloc, write, call, reset |
-| [`--no-wasi` (wasm-GC)](#2-wasm-gc-the-engine-collects-the-lisp-side) | the engine collects the Lisp side; the input buffer is still linear memory | alloc **once**, write, call |
-| [`--no-gc --component`](#3-component-model-the-canonical-abi-does-everything) | the canonical ABI + `post-return`, on every call | none -- pass a JS string |
+| [`--no-gc --component`](#2-component-model-the-canonical-abi-does-everything) | the canonical ABI + `post-return`, on every call | none -- pass a JS string |
 
 The export keeps its Lisp name `count-vowels` (a component-model export name must
 be lower-kebab-case, so it is not renamed to `count_vowels` with `:as`), which
-lets one directive serve all three builds.
+lets one directive serve both builds.
 
-## Build the three modules
+`count-vowels` is a pure loop over the characters of a string, so it fits the
+[non-GC subset](../../doc/en/compiling/wasm.md#eligible-subset) and both builds
+here are `--no-gc`: the module is 667 bytes and runs on **any** engine. A function
+that needs the full language (cons, hash tables, `string-upcase`, ...) compiles to
+a wasm-GC core module instead (`--no-wasi`); the memory boundary is exactly the
+one in case 1 -- the same `__ronto_alloc` + `__ronto_alloc_mark`/`_reset` bracket,
+since the engine's GC collects the Lisp values but never the host's input buffer.
+
+## Build the two modules
 
 ```bash
 JAR=../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar   # ./mvnw clean package first
 
 java -jar $JAR count-vowels.lisp -o count_vowels.wasm           --no-gc --optimize
-java -jar $JAR count-vowels.lisp -o count_vowels_gc.wasm        --no-wasi --optimize
 java -jar $JAR count-vowels.lisp -o count_vowels_component.wasm --no-gc --component --optimize
 ```
 
@@ -127,67 +133,7 @@ mvn -q exec:java -Dexec.args=Programming
 # "Programming" has 3 vowels
 ```
 
-## 2. wasm-GC: the engine collects the Lisp side
-
-Compiled with `--no-wasi` (and no `--no-gc`) the module is a wasm-GC reactor: Lisp
-values live on the GC heap, the engine reclaims them, and there is nothing to free
-on the Lisp side. It still imports nothing, so it instantiates with `{}` -- but it
-is a *reactor*, so the host calls the exported `_initialize` once after
-instantiating.
-
-The one thing the GC does **not** cover is the host's own input buffer: it lives
-in linear memory, `__ronto_alloc` is still a bump allocator, and this backend has
-no `__ronto_alloc_mark`/`_reset`. So allocate **one** buffer up front and reuse it
-across calls; the instance then stays flat:
-
-```bash
-node -e '(async () => {
-  const ex = (await WebAssembly.instantiate(
-    require("fs").readFileSync("count_vowels_gc.wasm"), {})).instance.exports;
-  ex._initialize();                                // reactor module: init once
-  const enc = new TextEncoder();
-  const buf = ex.__ronto_alloc(256);              // ONE input buffer, reused
-  const countVowels = (s) => {
-    const b = enc.encode(s);                       // must fit in 256 bytes
-    new Uint8Array(ex.memory.buffer, buf, b.length).set(b);
-    return ex["count-vowels"](buf, b.length);
-  };
-  console.log("\"Hello, World!\" has", countVowels("Hello, World!"), "vowels");
-  const before = ex.memory.buffer.byteLength;
-  for (let i = 0; i < 100000; i++) countVowels("Hello, World! " + i);
-  console.log("resident 100000 calls: memory", before, "->", ex.memory.buffer.byteLength);
-})()'
-# "Hello, World!" has 3 vowels
-# resident 100000 calls: memory 262144 -> 262144
-```
-
-Call `__ronto_alloc` per call instead of reusing the buffer and linear memory
-grows to ~2.4 MB over the same loop -- a GC in the engine does not free what the
-*host* bump-allocated. This is the trade: the Lisp side needs no discipline at
-all, the boundary still does.
-
-Why is there a buffer to manage at all, if the module has a GC? Because the two
-memories are separate. The GC heap holds the engine-managed objects, and the
-module does copy the incoming bytes into a GC string that the engine reclaims --
-but the *host* cannot write into a GC object, so the bytes have to be handed over
-through linear memory, which the engine treats as an opaque byte array and never
-traces. The buffer is a mailbox at the boundary; reusing it is how you avoid
-littering. (Giving this backend the `--no-gc` arena API instead is
-[`.todo/124`](../../.todo/124-wasm-gc-host-arena-api.md).)
-
-### The same thing from Java (Endive)
-
-Endive runs wasm-GC modules as of 1.0.1, so the same host shape works there --
-[`CountVowelsGc.java`](src/main/java/CountVowelsGc.java) allocates one buffer,
-reuses it, and watches the pages stay put:
-
-```bash
-mvn -q compile exec:java -Dexec.mainClass=CountVowelsGc
-# "Hello, World!" has 3 vowels
-# resident 100000 calls: memory 4 -> 4 pages
-```
-
-## 3. Component model: the canonical ABI does everything
+## 2. Component model: the canonical ABI does everything
 
 Compiled with `--no-gc --component` the output is a WebAssembly component whose
 export is typed `func(s: string) -> s32`. The canonical string ABI lowers the

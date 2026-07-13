@@ -142,7 +142,7 @@ The same directive compiles into four different host contracts depending on the
 | Function body may use | the full language | the full language | the [non-GC subset](#eligible-subset) | the [non-GC subset](#eligible-subset) |
 | I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | traps in a sync export; declare [`:async t`](#component-model-function-exports-wasm-export) | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.2 stdio bridge) |
 | Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
-| Per-call string memory | host-managed (`__ronto_alloc`) | freed by the canonical post-return | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-memory-the-arena-api); automatic for scalar returns) | freed by the canonical post-return |
+| Per-call string memory | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-the-hosts-buffer-the-arena-api); the Lisp side is the engine's) | freed by the canonical post-return | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-memory-the-arena-api); automatic for scalar returns) | freed by the canonical post-return |
 | Typical size | ~100 KB (~2 KB with [`--optimize`](#optimize-tree-shaking)) | ~110 KB | tens of bytes to a few KB | hundreds of bytes to a few KB |
 
 The rest of this page details each shape: how its exports are called, what runs
@@ -197,6 +197,60 @@ Two behavioral notes on this value model:
   up to 2⁶³ WASM prints all the digits (`1500000000000.0`) where the
   interpreter and the JVM use exponent notation (`1.5E12`);
   `rontolisp:json-stringify` inherits that shape difference.
+
+### Reclaiming the Host's Buffer (the Arena API)
+
+The engine collects everything the Lisp side allocates — cons cells, closures,
+strings — so a wasm-GC module needs no memory discipline *inside*. The one thing
+the engine cannot see is the buffer the **host** wrote the argument bytes into:
+that is linear memory, an opaque byte array it never traces, handed out by the
+`__ronto_alloc` bump allocator, which never frees. A resident host that
+allocates a fresh input buffer per call therefore grows linear memory without
+bound.
+
+So a module that exports its `memory` also exports a matched pair over the same
+heap pointer:
+
+| export | signature | meaning |
+| --- | --- | --- |
+| `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
+| `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+Snapshot **before** allocating the input, restore **after** reading the result,
+and a resident instance stays flat no matter how many times it is called or how
+long each input is:
+
+```js
+const countVowels = (s) => {
+  const b = enc.encode(s);
+  const mark = ex.__ronto_alloc_mark();          // snapshot BEFORE allocating
+  const ptr = ex.__ronto_alloc(b.length);        // a fresh buffer, any length
+  new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+  const n = ex['count-vowels'](ptr, b.length);   // scalar result, read out here
+  ex.__ronto_alloc_reset(mark);                  // pop the input buffer
+  return n;
+};
+```
+
+Two rules, as for any arena:
+
+- Only reset to a mark taken **before** everything still live.
+- A `:string`-**returning** export leaves its result bytes in memory: **decode
+  them before resetting**, or the next allocation overwrites them.
+
+One backend-specific guard: on the GC backend the same heap pointer also holds
+the interned-symbol byte pool (a symbol's identity *is* its offset there), so
+`__ronto_alloc_reset` never pops below that pool's high-water mark. A call that
+interns a new symbol (`read`, `intern`, `gensym`) therefore keeps its input
+buffer; every other call pops all the way back. Nothing to do host-side.
+
+The bracket is the same one the
+[`count-vowels` example](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)
+walks through on `--no-gc` (from Node and from [Endive](https://endive.run)) —
+the boundary protocol does not change with the backend, only what you may write
+inside the function does. Under [`--component`](#wasi-03-component---component)
+there is no arena API and nothing to bracket: the canonical ABI's `post-return`
+frees the argument strings for you.
 
 ### Importing Host Functions
 
@@ -760,6 +814,13 @@ The arena is a manual stack, not a garbage collector, so two rules apply:
 The [`count-vowels` example](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)
 walks through this recipe with both a Node and an [Endive](https://endive.run)
 (Java) host.
+
+The wasm-GC backend exports the same `__ronto_alloc_mark`/`__ronto_alloc_reset`
+pair with the same host recipe (see [above](#reclaiming-the-hosts-buffer-the-arena-api)),
+but only there does the *host's* buffer need reclaiming — the engine handles
+everything the Lisp side allocates. The automatic scalar-return reset is
+`--no-gc`-only: it is sound because nothing a `--no-gc` call allocates can
+outlive it (no cons, closures, hash tables or global `setq` in the subset).
 
 ### Reclaiming from Lisp (`rontolisp:with-arena`)
 

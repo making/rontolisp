@@ -245,6 +245,69 @@ final class WasmExportRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code __ronto_alloc_mark() -> i32}: the host arena API, the wasm-GC
+	 * counterpart of the {@code --no-gc} pair. Returns the current bump-heap top
+	 * ({@code HEAP_PTR_ADDR}); a resident host snapshots it BEFORE allocating its input
+	 * buffer with {@code __ronto_alloc} and pops back to it with
+	 * {@code __ronto_alloc_reset} after the call, so a per-call input buffer no longer
+	 * grows linear memory. (Everything else the call allocates is a GC object the engine
+	 * reclaims -- this API exists for the one thing the engine cannot see, the linear
+	 * memory at the host boundary.)
+	 * @return the function body bytes (signature {@code () -> i32})
+	 */
+	static byte[] buildAllocMarkBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code __ronto_alloc_reset(mark i32) -> ()}: the host arena API. Restores
+	 * the bump-heap top to a value previously returned by {@code __ronto_alloc_mark} --
+	 * but never below the interned-symbol byte pool's high-water mark
+	 * ({@code RT_INTERN_HEAP_ADDR}), because on this backend {@code HEAP_PTR} is a stack
+	 * pointer over a permanent low region: {@code _intern} copies first-seen tokens into
+	 * it and the intern registry keeps pointing at those bytes forever. So the pop is
+	 * {@code HEAP_PTR = max(mark, intern-high-water)} -- always safe, needs no active
+	 * flag (hence it nests), and reclaims everything above the permanent region. A call
+	 * that interned a symbol above the mark therefore keeps the host's buffer alive (the
+	 * permanent bytes sit on top of it); that is the price of a stable symbol identity,
+	 * and interning inside a reactor export is rare.
+	 * @return the function body bytes (signature {@code (i32) -> ()})
+	 */
+	static byte[] buildAllocResetBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int mark = 0;
+		final int water = 1;
+		w.write(1);
+		w.write(1);
+		w.write(Type.I32);
+		loadCell(w, WasmLispCompiler.RT_INTERN_HEAP_ADDR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(water);
+		// HEAP_PTR = mark > water ? mark : water
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(water);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(water);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds {@code _export_str_from_mem(ptr i32, len i32) -> (ref null eq)}: copies
 	 * {@code len} raw UTF-8 bytes from linear memory into a fresh quoted region on the
 	 * heap and returns a {@code TYPE_STRING} struct over it (the internal string
