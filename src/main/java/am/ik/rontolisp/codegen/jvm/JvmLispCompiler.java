@@ -1797,7 +1797,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * Mangles a Lisp function name into a valid JVM method name. The JVM spec forbids
 	 * {@code /}, {@code <}, {@code >}, {@code .}, {@code ;}, {@code [} in unqualified
-	 * names.
+	 * names; {@code %} is legal but is mapped too, to work around a JVMCI bug (see
+	 * below).
 	 */
 	static String mangleMethodName(String name) {
 		String mangled = switch (name) {
@@ -1831,6 +1832,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mangled.indexOf('/') >= 0) {
 			mangled = mangled.replace("/", "$div");
+		}
+		// '%' is legal in a JVM method name, but JVMCI (HotSpotSpeculationLog:201)
+		// passes a message containing the method name as the FORMAT string of
+		// BailoutException, where a '%' starts a format conversion: under a JVMCI
+		// compiler, a hot method named e.g. linalg::%la-matmul aborts its JIT
+		// compilation with UnknownFormatConversionException ('%l'). Internal names use
+		// the '%' prefix by convention, so map it away.
+		if (mangled.indexOf('%') >= 0) {
+			mangled = mangled.replace("%", "$pct");
 		}
 		return mangled;
 	}

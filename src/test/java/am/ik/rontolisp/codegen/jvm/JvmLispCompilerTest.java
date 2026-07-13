@@ -5864,4 +5864,30 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (max -0.0 0.0))")).isEqualTo("0.0");
 	}
 
+	// ---- Method name mangling (.todo/120) ----
+
+	@Test
+	void percentInAFunctionNameIsMangledAway() throws Exception {
+		// '%' is legal in a JVM method name, but JVMCI passes a message containing the
+		// name as the format string of BailoutException: under a JVMCI compiler, a hot
+		// method whose name contains e.g. '%l' kills its own JIT compilation
+		// (UnknownFormatConversionException) and prints a systemic-compilation-failure
+		// warning into the program's stdout.
+		assertThat(JvmLispCompiler.mangleMethodName("linalg::%la-matmul")).isEqualTo("linalg$colon$colon$pctla-matmul");
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun %la-double (x) (* 2 x)) (print (%la-double 21))"));
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).doesNotContain("%la-double")
+			.contains("$pctla-double");
+		assertThat(compileAndRun("(defun %la-double (x) (* 2 x)) (print (%la-double 21))")).isEqualTo("42");
+	}
+
+	@Test
+	void percentGlobalVariableNameIsMangledAway() throws Exception {
+		// Static field names go through the same mangler ("_g$" + mangleMethodName).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defvar *%p* 7) (print *%p*)"));
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).doesNotContain("_g$*%p*");
+		assertThat(compileAndRun("(defvar *%p* 7) (print *%p*)")).isEqualTo("7");
+	}
+
 }
