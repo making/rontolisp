@@ -32,7 +32,12 @@ public enum Section implements Codable {
 	/** Data section (11). */
 	DATA(11), //
 	/** Data count section (12). */
-	DATA_COUNT(12) //
+	DATA_COUNT(12), //
+	/**
+	 * Tag section (13), from the exception-handling proposal. Placed between the memory
+	 * section (5) and the global section (6) in the binary encoding.
+	 */
+	TAG(13) //
 	;
 
 	private final int code;

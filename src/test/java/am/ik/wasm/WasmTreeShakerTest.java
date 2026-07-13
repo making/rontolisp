@@ -63,6 +63,26 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void shakesEhModeModules() {
+		// EH mode (todo 129): the shaker must walk try_table/throw/throw_ref
+		// immediates correctly and keep the tag section verbatim, so P1 EH +
+		// --optimize compose.
+		String source = """
+				(defun protected-div (a b)
+				  (handler-case (/ a b) (error (e) -1)))
+				(print (unwind-protect (protected-div 10 2) (print :cleaned)))
+				""";
+		byte[] plain = compile(source, false, false);
+		byte[] optimized = compile(source, false, true);
+		assertThat(optimized.length).isLessThan(plain.length);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		assertThat(m.exportedFunctionNames()).contains("_start");
+		// Idempotence over the EH opcodes too.
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	@Test
 	void isIdempotent() {
 		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, false));
 		byte[] twice = WasmTreeShaker.shake(once);

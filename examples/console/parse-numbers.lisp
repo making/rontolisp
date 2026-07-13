@@ -5,13 +5,14 @@
 ;;;; Uses with-open-file, read-line, parse-integer, char, alpha-char-p,
 ;;;; digit-char-p -> runs on all three backends (interpreter / JVM / WASM).
 ;;;;
-;;;; NOTE: the WASM backend needs a preopened directory for file access:
-;;;;   wasmtime run -W gc --dir . parse-numbers.wasm
+;;;; NOTE: the WASM backend needs a preopened directory for file access, and
+;;;; with-open-file rides the exception-handling proposal (wasmtime 37+):
+;;;;   wasmtime run -W gc -W exceptions=y --dir . parse-numbers.wasm
 ;;;;
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/console/parse-numbers.lisp
 ;;;;   java -jar ...-exec.jar examples/console/parse-numbers.lisp -o ParseNumbers.class && java ParseNumbers
-;;;;   java -jar ...-exec.jar examples/console/parse-numbers.lisp -o pn.wasm && wasmtime run -W gc --dir . pn.wasm
+;;;;   java -jar ...-exec.jar examples/console/parse-numbers.lisp -o pn.wasm && wasmtime run -W gc -W exceptions=y --dir . pn.wasm
 
 (defparameter *data* "numbers.txt")
 

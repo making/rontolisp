@@ -55,6 +55,42 @@ final class WasmEmitHelper {
 		w.write(Instruction.END);
 	}
 
+	/**
+	 * Opens the EH-mode catch_all wrapper of an entry function ({@code _start}/
+	 * {@code run}/an export wrapper): {@code block} + {@code try_table (catch_all 0)},
+	 * the catch label being that block. The body compiled next runs inside the try_table;
+	 * {@link #emitCatchAllEpilogue} closes the structure. The normal path exits with a
+	 * {@code return} from inside the try_table (see the epilogue), so no result blocktype
+	 * is needed whatever the function's signature; the catch_all landing pad falls out of
+	 * the block into an {@code unreachable}, preserving the trap shape of an uncaught
+	 * condition.
+	 * @param ctx the compilation context (its wasmCtrlDepth is raised by the two opened
+	 * control structures)
+	 */
+	static void emitCatchAllPrologue(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.writer.write(Instruction.TRY_TABLE, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.CATCH_ALL);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.wasmCtrlDepth += 2;
+	}
+
+	/**
+	 * Closes the structure opened by {@link #emitCatchAllPrologue}: {@code return} (the
+	 * normal exit, carrying whatever the function's result values are on the stack), the
+	 * try_table's and the block's {@code end}, then the {@code unreachable} landing pad.
+	 * The caller still writes the function's own final {@code end}.
+	 * @param ctx the compilation context
+	 */
+	static void emitCatchAllEpilogue(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.RETURN);
+		ctx.writer.write(Instruction.END); // try_table
+		ctx.writer.write(Instruction.END); // block
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.wasmCtrlDepth -= 2;
+	}
+
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(Type.I31.code());

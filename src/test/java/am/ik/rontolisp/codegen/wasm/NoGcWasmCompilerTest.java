@@ -41,8 +41,9 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void unwindProtectIsCompileError() {
-		// Same gate as the wasm-GC backend (a WASM error is an uncatchable trap); the
-		// eligibility pre-pass rejects it before the expression compiler's own error.
+		// The wasm-GC backends now catch via the exception-handling proposal (todo
+		// 129), but --no-gc keeps the clear rejection: no condition objects in its
+		// unboxed value model, and its contract is a zero-flag plain MVP module.
 		assertThatThrownBy(() -> compile("""
 				(defun up-f (n) (unwind-protect (* n 2) n))
 				(rontolisp:wasm-export 'up-f :params '(:int) :returns :int)

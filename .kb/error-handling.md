@@ -1,13 +1,19 @@
-# Error handling: unwind-protect + condition objects + handler-case (todo-116)
+# Error handling: unwind-protect + condition objects + handler-case (todo-116, WASM catching todo-129)
 
 The error-path foundation (Phases 1-3 of `.todo/116`; Phase 4 —
 `handler-bind`/`restart-case` — is not implemented). Backend contract:
-**interpreter and JVM are full; every WASM backend rejects `unwind-protect` /
-`handler-case` / `ignore-errors` at compile time** (a WASM error is an
-uncatchable trap; wasmtime gates the exception-handling proposal behind an
-off-by-default flag), while the condition-OBJECT layer (`define-condition`,
-`make-condition`, typed `error`/`warn`, `signal`-returns-nil, `with-slots`,
-`typecase` on condition classes) compiles everywhere except `--no-gc`.
+**interpreter, JVM and the wasm-GC backends (Preview 1 + `--component`, incl.
+serve) are full; only `--no-gc` rejects `unwind-protect` / `handler-case` /
+`ignore-errors` at compile time** (its value model has no condition objects and
+its contract is a zero-flag MVP module). The wasm-GC implementation (todo-129)
+uses the WebAssembly exception-handling proposal and is gated: only a program
+containing one of the three catching forms is compiled in "EH mode" (one
+`$lisp-cond` tag, `try_table`/`throw`), and only such a program needs
+`wasmtime -W exceptions=y` (37+) — anything else is byte-identical to a build
+that never knew about EH. See "WASM (todo-129)" below. The condition-OBJECT
+layer (`define-condition`, `make-condition`, typed `error`/`warn`,
+`signal`-returns-nil, `with-slots`, `typecase` on condition classes) compiles
+everywhere except `--no-gc`.
 
 ## Phase 1 — unwind-protect
 
@@ -124,6 +130,76 @@ off-by-default flag), while the condition-OBJECT layer (`define-condition`,
 - `FreeVarAnalyzer` learned `handler-case` (clause var is BOUND in the clause
   body), `ignore-errors` and `with-slots` — without this a lambda enclosing
   them mis-captures the bound variables.
+
+## WASM (todo-129): wasm-GC catching via the exception-handling proposal
+
+- **EH-mode gate** (`WasmLispCompiler.compile`): the program (post pre-passes,
+  libraries already spliced) is scanned for
+  `handler-case`/`ignore-errors`/`unwind-protect` head symbols. Only then: the
+  tag section (id 13, between memory and global) with ONE tag `$lisp-cond`
+  whose type reuses `TYPE_PRINT_VAL` (`((ref null eq)) -> ()`), the handler-
+  depth global (a `(mut i32)` appended AFTER the user globals, index in
+  `Ctx.ehDepthGlobalIndex`), the throw path and the entry wrappers. A program
+  without the forms is byte-identical (stash-dance proven across P1 /
+  component base / http-client / sockets / serve / --optimize / --dynamic /
+  --no-wasi exports / --no-gc).
+- **Throw path** (`WasmErrorCompiler`): in EH mode `%error` / `%error-cond`
+  evaluate their arguments, build the payload cons
+  `(condition-instance . message-string)` (instance = nil for plain `%error`)
+  and `throw $lisp-cond`; outside EH mode they stay a bare `unreachable`
+  without evaluating anything. `throw` is stack-polymorphic like
+  `unreachable`, so call sites are unchanged.
+- **Top-level trap shape** (`WasmEmitHelper.emitCatchAllPrologue/Epilogue`):
+  in EH mode `_start`/`run` and every export wrapper body (incl. serve's
+  `%http-dispatch`) run inside `block` + `try_table (catch_all)` whose landing
+  is `unreachable`; the normal path `return`s from INSIDE the try_table (so no
+  result blocktype is needed whatever the signature). An uncaught condition
+  therefore still exits with the same `unreachable` trap as before.
+- **handler-case** (`WasmHandlerCaseCompiler`, mirrors the JVM layout):
+  `block $done (result ref null eq)` [+ optional return trampoline] +
+  `block $h` + `try_table (catch $lisp-cond $h)`; landing splits the payload,
+  synthesizes the `simple-error` when the instance is nil (the message is
+  already a quote-framed Lisp string — no re-framing, unlike the JVM's
+  `getMessage()` path), dispatches `makeHandlerTypeTest` tests and clause
+  bodies as ordinary Lisp over the `__hc_cond$<slot>` pseudo-local, rethrows
+  the ORIGINAL payload when no clause matches. `:no-error` runs on the normal
+  path outside the region. The depth global is inc/dec'd around the region;
+  `WasmSignalCondCompiler` throws only when it is positive (nil fall-through
+  otherwise; outside EH mode it keeps the old evaluate-and-nil emission).
+- **unwind-protect** (`WasmUnwindProtectCompiler`): `block $u (result
+  exnref)` + `try_table (catch_all_ref $u)`; landing = cleanups over the
+  exnref, `throw_ref` (a throw FROM a cleanup propagates outward — newer exit
+  wins). Normal exit stashes the value, runs cleanups, `br $done`.
+- **The return channel — exit trampolines** (`Ctx.unwindScopes` +
+  `WasmReturnCompiler`): each protected region (unwind-protect AND
+  handler-case, whose "cleanup" is the internal `%hc-depth-dec`) pushes a
+  `WasmLispCompiler.UnwindScope{cleanupForms, blockDepth, trampolineDepth}`.
+  A `return` whose target `%block` lies outside the innermost scope
+  (`scope.blockDepth >= blockMarkers.size()`, the JVM test) branches to that
+  scope's trampoline block — emitted lexically OUTSIDE the try_table, only
+  when an enclosing `%block` exists — which runs the cleanups and cascades to
+  the next escaped scope's trampoline or the target block (innermost first,
+  the CL order). Because the trampoline is outside the try_table, a throw
+  from a cleanup cannot re-enter its own handler: the structural equivalent
+  of the JVM `holes` mechanism, with no bookkeeping.
+- **Divergence** (documented on the doc pages): wasm-GC catches SIGNALED
+  conditions only — runtime traps (`(car 5)`-style ref.cast failures, integer
+  division by zero, `unreachable`) stay uncatchable and skip unwind-protect
+  cleanups. The three-point spectrum: interpreter catches `LispEvalException`
+  only, JVM catches any `RuntimeException`, wasm-GC catches `$lisp-cond`
+  throws only.
+- **Walkers**: `WasmTreeShaker.scanInstr` (shared by `WasmImportInjector`)
+  knows `throw` (0x08, tag immediate), `throw_ref` (0x0A), `try_table` (0x1F,
+  blocktype + catch-clause vector) and the `exnref` valtype (0x69); tags are
+  their own index space so function renumbering is unaffected. P1 EH +
+  `--optimize` compose (pinned in `WasmTreeShakerTest.shakesEhModeModules`).
+- **Component path**: core-module-internal only — no component-level section
+  changes, blobs untouched, `--wit` output unchanged; the stackful async lift
+  needs no modification (spike-proven, run flags gain only `-W exceptions=y`).
+- **V8 hosts** (playground / jco): wasm-EH with exnref is default-on in
+  current V8 (Chrome 137+ / Node 24+); Node 22 needs
+  `--experimental-wasm-exnref`. Gated emission keeps existing programs
+  unaffected.
 - **usocket typed conditions**: `usocket.lisp` defines the condition hierarchy
   (`socket-condition` with a `message` slot + echo `:report`, `socket-error`,
   `connection-refused-error`, ...) and wraps
@@ -147,10 +223,13 @@ lists are pinned in ci-spec (`rontolisp-package-introspection`), the three
 per-backend unit suites AND the doc detail pages, all updated together. ci-spec
 gained the cross-backend `condition-objects` case (define-condition /
 make-condition / typecase / with-slots / signal → nil, valid on all four
-backends); `handler-case`/`unwind-protect` behavior is pinned in
-`LispEvaluatorTest` / `JvmLispCompilerTest` (WASM compile errors in
-`WasmLispCompilerTest`/`NoGcWasmCompilerTest`) because the ci-spec driver
-concatenates one program per backend and WASM would fail to compile them.
+backends) and, with todo-129, three catching cases
+(`handler-case-catches-typed-and-plain-errors` &c) — their presence puts the
+whole concatenated program in EH mode, so `CiSpecE2eTest.runBackend` passes
+`-W exceptions=y` to both wasmtime invocations. Behavior is pinned in
+`LispEvaluatorTest` / `JvmLispCompilerTest` / the `eh*` tests of
+`WasmLispCompilerIntegrationTest` (`--no-gc` compile-error pins stay in
+`NoGcWasmCompilerTest`).
 `ParseNumberE2eTest` now expects the `:report`-rendered `Invalid number: ...`
 message (the stopgap `Condition ... was signalled.` pin was updated).
 
@@ -162,6 +241,6 @@ correctly under the lite primary-form-only `restart-case`, zero library-side
 `invoke-restart`s; the real gate is Postmodern proper, whose prepare.lisp /
 transaction.lisp invoke restarts for real — survey in `.todo/116`),
 `muffle-warning`, `cerror` (undefined; a lite `cerror` → `error` lowering is
-an M4/M5-sized item, see the survey), `break`, WASM catching
-(revisit when wasmtime enables the EH proposal by default), and the
-special-`let`-restore-on-return compile-path limit.
+an M4/M5-sized item, see the survey), `break`, `--no-gc` catching (a scalar
+error-code data path would be the shape if ever needed — see `.todo/129`'s
+decision record), and the special-`let`-restore-on-return compile-path limit.

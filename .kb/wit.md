@@ -114,11 +114,12 @@ Chosen 2026-07-13 (user decision after weighing all three `.todo/124` options):
 - The ok arm is the return value; a payload-less ok arm (`result` / `result<_, E>`)
   returns `nil`. The error arm **signals a condition** carrying the mapped `E`
   payload, catchable with `handler-case` — on every backend, as the contract.
-- On the WASM backends `handler-case` is today a compile-time error (traps are
-  uncatchable, `.kb/error-handling.md`), so signaling means trapping with the
-  message **as a temporary limitation, not a contract**. Consequence: a WASM catch
-  mechanism is a PREREQUISITE of `.todo/128`'s result-returning component imports
-  (noted there) — `result` is pervasive exactly there (all of wasi:keyvalue).
+- The WASM catch mechanism this presupposed landed with `.todo/129`
+  (2026-07-14): the wasm-GC backends compile `handler-case` through the
+  exception-handling proposal (`.kb/error-handling.md`, "WASM (todo-129)"), so
+  the error arm is catchable on every backend except `--no-gc` and the
+  `.todo/128` prerequisite is SATISFIED. Programs that catch need
+  `wasmtime -W exceptions=y` (37+).
 - Why not (a) multiple values `(values ok err)`: it is implementable today with zero
   new machinery (a `(values ...)` tail in the synthesized stub rides the `%mv-spill`
   channel, `.kb/multiple-values.md`) and would even give wasm-GC recoverability now —

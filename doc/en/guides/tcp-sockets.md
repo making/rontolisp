@@ -204,15 +204,18 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
   `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
   works there. The subtypes (`connection-refused-error` &c) are defined but
   the re-signal always uses `socket-error` (catch that). On the WASM
-  component backend errors remain uncatchable traps (or `nil` handles), and
-  `wait-for-input`-style condition handling does not exist.
+  component backend a failed connect/accept yields a `nil` handle instead of
+  signaling, so the `handler-case` pattern has nothing to catch there (test
+  the handle for `nil` instead); `wait-for-input`-style condition handling
+  does not exist.
 - **`wait-for-input` and `socket-server` do not exist** (reads block; write
   your own accept loop).
 - **The `with-*` macros close the socket on every exit** on the interpreter
   and the JVM (they expand over
-  [`unwind-protect`](../reference/special-forms/unwind-protect.md)); on the
-  WASM component backend they close on normal exit only (`unwind-protect`
-  does not compile there). The compatibility keyword arguments
+  [`unwind-protect`](../reference/special-forms/unwind-protect.md)); this
+  includes the WASM component backend since the exception-handling support
+  landed (such a program then needs `wasmtime serve`/`run` with
+  `-W exceptions=y`). The compatibility keyword arguments
   (`:element-type`, `:timeout`, `:nodelay`, `:reuse-address`, ...) are
   accepted and ignored.
 - **Backends**: interpreter and JVM are full; WASM is component-only like the

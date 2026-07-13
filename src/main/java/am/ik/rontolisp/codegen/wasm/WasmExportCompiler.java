@@ -253,6 +253,13 @@ final class WasmExportCompiler {
 	 * (or {@code -1} if no {@code :string} parameter is present)
 	 */
 	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex) {
+		// EH mode: an uncaught $lisp-cond throw escaping a host-callable entry must
+		// keep the trap shape (the host sees a trap, not a wasm exception), so the
+		// whole wrapper runs inside a catch_all -> unreachable, the same wrap as
+		// _start. Covers the serve-mode %http-dispatch wrapper too.
+		if (ctx.ehMode) {
+			WasmEmitHelper.emitCatchAllPrologue(ctx);
+		}
 		// env (defuns ignore it)
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
@@ -265,6 +272,9 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(targetFuncIndex);
 		emitUnboxResult(ctx, decl.returnType());
+		if (ctx.ehMode) {
+			WasmEmitHelper.emitCatchAllEpilogue(ctx);
+		}
 		ctx.writer.write(Instruction.END);
 	}
 

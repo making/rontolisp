@@ -184,7 +184,9 @@ class ExamplesE2eTest {
 				Result compile = exec(work,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--optimize"), flags)), null);
 				assertCompiled(compile, example, "wasm (compile)");
-				Result run = exec(work, concat(List.of("wasmtime", "run", "-W", "gc", "--dir", ".", "prog.wasm"), args),
+				Result run = exec(work,
+						concat(List.of("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--dir", ".", "prog.wasm"),
+								args),
 						stdin);
 				assertRan(run, example, "wasm (run)");
 			}

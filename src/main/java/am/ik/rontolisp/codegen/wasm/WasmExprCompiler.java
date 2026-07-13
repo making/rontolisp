@@ -211,25 +211,25 @@ final class WasmExprCompiler {
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
 				switch (qn.member()) {
-					// unwindProtect = false: unwind-protect does not compile on WASM, so
-					// the expansions keep the close-after-body shape (close on normal
-					// exit only; a WASM error is a trap that kills the instance anyway).
+					// unwindProtect = ctx.ehMode (todo-129 step 7): a literal usocket
+					// with-*/guard flips the module into EH mode via the gate, so these
+					// sites ride unwind-protect / the typed handler-case re-signal like
+					// the interpreter and the JVM; the flag is only false for
+					// internally-generated occurrences in a non-EH module.
 					case LispNames.USOCKET_WITH_CLIENT_SOCKET -> {
-						compileExpr(LispMacroExpander.expandUsocketWithClientSocket(cons, false), ctx);
+						compileExpr(LispMacroExpander.expandUsocketWithClientSocket(cons, ctx.ehMode), ctx);
 						return;
 					}
 					case LispNames.USOCKET_WITH_CONNECTED_SOCKET, LispNames.USOCKET_WITH_SERVER_SOCKET -> {
-						compileExpr(LispMacroExpander.expandUsocketWithConnectedSocket(cons, false), ctx);
+						compileExpr(LispMacroExpander.expandUsocketWithConnectedSocket(cons, ctx.ehMode), ctx);
 						return;
 					}
 					case LispNames.USOCKET_WITH_SOCKET_LISTENER -> {
-						compileExpr(LispMacroExpander.expandUsocketWithSocketListener(cons, false), ctx);
+						compileExpr(LispMacroExpander.expandUsocketWithSocketListener(cons, ctx.ehMode), ctx);
 						return;
 					}
 					case LispNames.USOCKET_GUARD -> {
-						// Pass-through: a WASM error is an uncatchable trap, so the typed
-						// re-signal wrap does not apply.
-						compileExpr(LispMacroExpander.expandUsocketGuard(cons, false), ctx);
+						compileExpr(LispMacroExpander.expandUsocketGuard(cons, ctx.ehMode), ctx);
 						return;
 					}
 					default -> {
@@ -283,13 +283,17 @@ final class WasmExprCompiler {
 				case LispNames.MAKE_STRING_OUTPUT_STREAM -> WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
 				case LispNames.MAKE_STRING_INPUT_STREAM -> WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
 				case LispNames.STRING_STREAM_CONTENTS -> WasmWriteStringCompiler.compileContents(cons, ctx);
-				// unwindProtect = false: unwind-protect does not compile on WASM, so the
-				// with-* expansions keep the close-after-body shape (close on normal exit
-				// only).
+				// unwindProtect = ctx.ehMode (todo-129 step 7): a literal with-* flips
+				// the
+				// module into EH mode via the gate, so these expansions ride
+				// unwind-protect like the interpreter/JVM (close on EVERY exit); the flag
+				// is only false for internally-generated occurrences (a :report lambda's
+				// with-output-to-string) inside a non-EH module, which keep the
+				// close-after-body shape so they still compile without the tag section.
 				case LispNames.WITH_OUTPUT_TO_STRING ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons, false), ctx);
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons, ctx.ehMode), ctx);
 				case LispNames.WITH_INPUT_FROM_STRING ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons, false), ctx);
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons, ctx.ehMode), ctx);
 				case LispNames.PUSHNEW -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPushnew(cons), ctx);
 				case LispNames.DEFTYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx);
 				case LispNames.DEFINE_CONDITION ->
@@ -309,7 +313,7 @@ final class WasmExprCompiler {
 				case LispNames.DOCUMENTATION ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx);
 				case LispNames.WITH_OPEN_FILE ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons, false), ctx);
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons, ctx.ehMode), ctx);
 				case LispNames.READ_BYTE -> WasmReadByteCompiler.compile(cons, ctx);
 				case LispNames.WRITE_BYTE -> WasmWriteByteCompiler.compile(cons, ctx);
 				case LispNames.READ_SEQUENCE ->
@@ -372,20 +376,10 @@ final class WasmExprCompiler {
 					// name the wasm globals to save/restore. Interpreter only for now.
 					throw new UnsupportedOperationException(
 							LispNames.PROGV + " is not supported on the WASM backend (interpreter only)");
-				case LispNames.UNWIND_PROTECT ->
-					// A WASM error is an uncatchable trap that kills the instance, so
-					// there
-					// is no unwind path to attach cleanups to (wasmtime gates the
-					// exception-handling proposal behind an off-by-default flag).
-					throw new UnsupportedOperationException(LispNames.UNWIND_PROTECT
-							+ " is not supported on the WASM backend (a WASM error is an uncatchable trap); use the interpreter or the JVM backend");
-				case LispNames.HANDLER_CASE ->
-					// Same gate: a WASM error is an uncatchable trap, so there is nothing
-					// a handler could catch.
-					throw new UnsupportedOperationException(LispNames.HANDLER_CASE
-							+ " is not supported on the WASM backend (a WASM error is an uncatchable trap); use the interpreter or the JVM backend");
-				case LispNames.IGNORE_ERRORS -> throw new UnsupportedOperationException(LispNames.IGNORE_ERRORS
-						+ " is not supported on the WASM backend (a WASM error is an uncatchable trap); use the interpreter or the JVM backend");
+				case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
+				case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
+				case LispNames.IGNORE_ERRORS ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx);
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
@@ -613,24 +607,17 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry), ctx);
 				case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
 				case LispNames.ERROR_COND_INTERNAL ->
-					// The condition-carrying variant traps like %error (a WASM trap is
-					// uncatchable and carries no payload); the message is not evaluated.
-					WasmErrorCompiler.compile(cons, ctx);
+					// Outside EH mode the condition-carrying variant traps like %error (a
+					// WASM trap is uncatchable and carries no payload; the arguments are
+					// not evaluated); in EH mode it throws the typed instance.
+					WasmErrorCompiler.compileCond(cons, ctx);
 				case LispNames.WARN ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWarn(cons, ctx.closRegistry), ctx);
 				case LispNames.WARN_INTERNAL -> WasmWarnCompiler.compile(cons, ctx);
 				case LispNames.SIGNAL ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry), ctx);
-				case LispNames.SIGNAL_COND_INTERNAL -> {
-					// No handlers exist on WASM, so an unhandled signal falls through to
-					// nil (the CL semantics); the arguments are evaluated for effect.
-					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
-					ctx.writer.write(Instruction.DROP);
-					WasmExprCompiler.compileExpr(cons.toList().get(2), ctx);
-					ctx.writer.write(Instruction.DROP);
-					ctx.writer.write(Instruction.REF_NULL);
-					ctx.writer.writeHeapType(Type.EQ.code());
-				}
+				case LispNames.SIGNAL_COND_INTERNAL -> WasmSignalCondCompiler.compile(cons, ctx);
+				case LispNames.HC_DEPTH_DEC_INTERNAL -> WasmHandlerCaseCompiler.compileDepthDec(ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
 				case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
 				case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);

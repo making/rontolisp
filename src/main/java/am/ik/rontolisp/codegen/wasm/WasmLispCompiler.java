@@ -705,6 +705,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
 
+	// The exception tag index of the one Lisp condition tag ($lisp-cond), emitted only
+	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
+	// payload is a cons (condition-instance . message-string) over TYPE_CONS, and its
+	// function type reuses TYPE_PRINT_VAL (((ref null eq)) -> ()), so no type-section
+	// entry is added. Tags have their own index space; this is always the only tag.
+	static final int TAG_LISP_COND = 0;
+
+	// The empty block type (0x40) for block/try_table instructions without a result.
+	static final int BLOCKTYPE_EMPTY = 0x40;
+
 	// Global (wasm global section) index holding the runtime eval top-level environment
 	// (an association list of cons(name, value) bindings; ref.null eq when empty).
 	static final int GLOBAL_ENV = 0;
@@ -939,6 +949,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// generic promise operations that compile in every mode (a root promise simply
 		// cannot exist without fetch, so _promise_await's fetch-await call stays
 		// unreachable).
+		// EH mode: the program uses a catching/cleanup form, so the module carries the
+		// $lisp-cond exception tag, %error/%error-cond throw it (instead of a bare
+		// unreachable) and every entry function converts an uncaught throw back into a
+		// trap with a catch_all wrapper. A program without these forms is byte-identical
+		// to a build that never knew about EH (the usesStringOp gating precedent). The
+		// with-* macros and the usocket guard/with-* family count as triggers too (the
+		// todo-129 step-7 retrofit): their expansions ride unwind-protect /
+		// handler-case on WASM now, so a program using them needs the EH machinery --
+		// and the `wasmtime -W exceptions=y` run flag.
+		boolean ehMode = programUsesEhForm(program);
 		boolean usesFetch = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
 		boolean emitHttpImport = this.component && usesFetch;
@@ -1097,6 +1117,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			globalIndices.put(g, nextGlobalIndex++);
 		}
 		int globalCount = globals.size();
+		// EH mode: the handler-depth counter global goes AFTER the user-variable
+		// globals, so their indices are unchanged whether or not EH mode is on.
+		int ehDepthGlobalIndex = ehMode ? GLOBAL_FENV + 1 + globalCount : -1;
 
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
@@ -1143,6 +1166,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
+			.ehMode(ehMode)
+			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.functions(functions)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
@@ -1230,6 +1255,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// instantiation (see writeDataSection below), not here: its value depends on
 		// the final static-data size, which is unknown while this body is built.
 
+		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep
+		// today's trap shape (host-visible exit class), so the whole body runs inside
+		// a catch_all whose landing pad is an unreachable. The normal path returns
+		// from inside the try_table, which sidesteps needing a result blocktype.
+		if (ehMode) {
+			WasmEmitHelper.emitCatchAllPrologue(ctx);
+		}
 		for (LispVal expr : topLevelExprs) {
 			WasmExprCompiler.compileExpr(expr, ctx);
 			startWriter.write(Instruction.DROP);
@@ -1238,6 +1270,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			// _start returns i32 (0 = ok) so it can be lifted as wasi:cli/run `run`
 			startWriter.write(Instruction.I32_CONST);
 			startWriter.writeSignedLeb128(0);
+		}
+		if (ehMode) {
+			WasmEmitHelper.emitCatchAllEpilogue(ctx);
 		}
 		startWriter.write(Instruction.END);
 
@@ -2242,7 +2277,15 @@ public final class WasmLispCompiler implements LispCompiler {
 					// ~3.7 pages of heap headroom the fixed 16384 base used to leave.
 					memories.addMemory(Math.max(4, (heapBase + 65535) / 65536 + 3));
 				}
-			})
+			});
+		// Tag section (EH mode only): the one $lisp-cond exception tag, whose payload
+		// type reuses TYPE_PRINT_VAL (((ref null eq)) -> ()). Belongs between the memory
+		// and global sections. Emitting it at all requires the host to enable the
+		// exception-handling proposal, which is why it is gated.
+		if (ehMode) {
+			mainWriter.writeTagSection(tags -> tags.addTag(TYPE_PRINT_VAL));
+		}
+		mainWriter
 			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
 			// the Lisp-2 function namespace (GLOBAL_FENV), both (mut (ref null eq)) =
 			// null
@@ -2271,6 +2314,17 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.REF_NULL);
 						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
+				// EH mode: the handler-depth counter, a (mut i32) = 0 at
+				// ehDepthGlobalIndex (after every user global).
+				if (ehMode) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
 						g.write(Instruction.END);
 					});
 				}
@@ -2637,6 +2691,49 @@ public final class WasmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// True when the program contains a form that flips the module into EH mode: a
+	// catching/cleanup form, one of the with-* macros whose expansion rides
+	// unwind-protect on WASM (todo-129 step 7), or the usocket guard/with-* family
+	// (the guard sits in the spliced usocket.lisp defun bodies, so any
+	// usocket-using program qualifies).
+	private static boolean programUsesEhForm(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (usesEhForm(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesEhForm(LispVal val) {
+		if (!(val instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym) {
+			switch (sym.name()) {
+				case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
+						LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING -> {
+					return true;
+				}
+				default -> {
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
+						switch (qn.member()) {
+							case LispNames.USOCKET_WITH_CLIENT_SOCKET, LispNames.USOCKET_WITH_CONNECTED_SOCKET,
+									LispNames.USOCKET_WITH_SERVER_SOCKET, LispNames.USOCKET_WITH_SOCKET_LISTENER,
+									LispNames.USOCKET_GUARD -> {
+								return true;
+							}
+							default -> {
+							}
+						}
+					}
+				}
+			}
+		}
+		return usesEhForm(cons.car()) || usesEhForm(cons.cdr());
+	}
+
 	// True when the program references any hash-table operator (including (setf (gethash
 	// ...)) which contains gethash). Gates the first-class hash wrappers.
 	private static boolean programUsesAnyHashOp(List<LispVal> program) {
@@ -2775,6 +2872,25 @@ public final class WasmLispCompiler implements LispCompiler {
 			List<String> freeVarNames, int funcIndex) {
 	}
 
+	/**
+	 * An active unwind scope (EH mode): the protected region of an {@code unwind-protect}
+	 * (cleanup forms) or a {@code handler-case} (the {@code %hc-depth-dec} form).
+	 * {@code blockDepth} is the {@code %block}-stack size when the scope was entered -- a
+	 * {@code return} escapes the scope when {@code blockDepth >= blockMarkers.size()} at
+	 * the return site (the scope was entered inside the return's target block).
+	 * {@code trampolineDepth} is the {@code wasmCtrlDepth} marker of the scope's
+	 * exit-trampoline block, lexically outside its try_table (so a throw from a cleanup
+	 * cannot re-enter the scope's own handler); -1 when the scope has no trampoline (no
+	 * enclosing {@code %block}, so no {@code return} can escape it).
+	 *
+	 * @param cleanupForms the cleanup forms to run when a {@code return} exits the scope
+	 * @param blockDepth the {@code %block}-stack size at scope entry
+	 * @param trampolineDepth the {@code wasmCtrlDepth} marker of the exit trampoline, or
+	 * -1
+	 */
+	record UnwindScope(List<LispVal> cleanupForms, int blockDepth, int trampolineDepth) {
+	}
+
 	static final class Ctx {
 
 		final WasmWriter writer;
@@ -2804,6 +2920,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		boolean component = false;
+
+		/**
+		 * True when the program uses {@code handler-case}/{@code ignore-errors}/
+		 * {@code unwind-protect}: the module carries the {@code $lisp-cond} exception tag
+		 * and {@code %error}/{@code %error-cond} throw it instead of trapping. Requires
+		 * the host to enable the exception-handling proposal ({@code -W exceptions=y},
+		 * wasmtime 37+).
+		 */
+		boolean ehMode = false;
+
+		/**
+		 * The wasm global index of the handler-depth counter (a {@code (mut i32)} = 0
+		 * appended after the user-variable globals), or -1 outside EH mode. The
+		 * {@code handler-case} region increments/decrements it (the JVM
+		 * {@code _hcDepthTl} parity) so {@code %signal-cond} raises only under an
+		 * established handler.
+		 */
+		int ehDepthGlobalIndex = -1;
 
 		/**
 		 * True under {@code --simd}: the vectorizable {@code vec:} kernels are routed to
@@ -2889,6 +3023,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		final Deque<Integer> blockMarkers = new ArrayDeque<>();
 
+		/**
+		 * Stack of active unwind scopes (EH mode): one per {@code unwind-protect}
+		 * protected region (cleanup forms) and per {@code handler-case} protected region
+		 * (the {@code %hc-depth-dec} form), innermost on top. A {@code return} whose
+		 * target {@code %block} lies outside the innermost scope branches to that scope's
+		 * exit trampoline instead of the block (see {@code WasmReturnCompiler}); the
+		 * trampolines cascade outward, running each escaped scope's cleanups in unwinding
+		 * order.
+		 */
+		final Deque<UnwindScope> unwindScopes = new ArrayDeque<>();
+
 		private Ctx(Builder builder) {
 			this.writer = Objects.requireNonNull(builder.writer);
 			this.bodyStream = Objects.requireNonNull(builder.bodyStream);
@@ -2899,6 +3044,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
 			this.component = builder.component;
+			this.ehMode = builder.ehMode;
+			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
 			this.userDefunNames = builder.userDefunNames;
@@ -2932,6 +3079,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean dynamic = false;
 
 			private boolean component = false;
+
+			private boolean ehMode = false;
+
+			private int ehDepthGlobalIndex = -1;
 
 			private boolean simd = false;
 
@@ -2991,6 +3142,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder component(boolean component) {
 				this.component = component;
+				return this;
+			}
+
+			Builder ehMode(boolean ehMode) {
+				this.ehMode = ehMode;
+				return this;
+			}
+
+			Builder ehDepthGlobalIndex(int ehDepthGlobalIndex) {
+				this.ehDepthGlobalIndex = ehDepthGlobalIndex;
 				return this;
 			}
 

@@ -18,8 +18,8 @@ This page lists the most notable omissions. For what **is** available, see the
 | `values` / `multiple-value-bind` | available, including user-function values (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
 | `block` / `return-from` / `tagbody` / `go` | not available |
 | `catch` / `throw` | not available |
-| `unwind-protect` | available on the interpreter/JVM (see [`unwind-protect`](../reference/special-forms/unwind-protect.md)); compile error on WASM |
-| conditions (`define-condition`, `handler-case`, `ignore-errors`, `signal`) | available on the interpreter/JVM (see [`handler-case`](../reference/macros/handler-case.md)); catching is a compile error on WASM. Restarts (`handler-bind`/`restart-case`) are not available |
+| `unwind-protect` | available (see [`unwind-protect`](../reference/special-forms/unwind-protect.md)); on wasm-GC via the exception-handling proposal (`wasmtime -W exceptions=y`); compile error under `--no-gc` |
+| conditions (`define-condition`, `handler-case`, `ignore-errors`, `signal`) | available (see [`handler-case`](../reference/macros/handler-case.md)); on wasm-GC catching needs `wasmtime -W exceptions=y`, and runtime traps stay uncatchable there; compile error under `--no-gc`. Restarts (`handler-bind`/`restart-case`) are not available |
 | `flet` / `labels` | available (see [`flet`](../reference/macros/flet.md), [`labels`](../reference/macros/labels.md)) |
 | `macrolet` | not available |
 | `loop` (extended) | partial (simple-loop subset) |
@@ -107,8 +107,10 @@ The function block is undefined
 
 [`unwind-protect`](../reference/special-forms/unwind-protect.md) (cleanup on
 every exit — normal return, `error` unwind, `return`/`return-from`) **is**
-available on the interpreter and the JVM backend; the WASM compilers reject it
-(a WASM error is an uncatchable trap).
+available on every backend except `--no-gc`; on the wasm-GC backends it uses
+the WebAssembly exception-handling proposal, so the emitted module needs
+`wasmtime -W exceptions=y` (37+) and a runtime trap still skips the cleanups
+there.
 
 ## Conditions and restarts
 
@@ -120,9 +122,10 @@ constructed by [`make-condition`](../reference/macros/make-condition.md) or the
 typed [`error`](../reference/macros/error.md)/[`signal`](../reference/macros/signal.md)
 designators, and caught by type with
 [`handler-case`](../reference/macros/handler-case.md) /
-[`ignore-errors`](../reference/macros/ignore-errors.md) on the interpreter and
-the JVM backend (the WASM compilers reject catching: a WASM error is an
-uncatchable trap).
+[`ignore-errors`](../reference/macros/ignore-errors.md) on every backend except
+`--no-gc` (a compile error there). On the wasm-GC backends catching uses the
+WebAssembly exception-handling proposal (`wasmtime -W exceptions=y`, 37+), and
+only **signaled** conditions are catchable — a runtime trap still aborts.
 
 ```lisp
 (handler-case (error "boom") (error (e) :caught)) ; => :caught

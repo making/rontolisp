@@ -2346,10 +2346,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.BLOCK_INTERNAL -> compileBlock(cons, args, fn);
 			case LispNames.RETURN -> compileReturn(args, fn);
 			case LispNames.UNWIND_PROTECT ->
-				// Same gate as the wasm-GC backend: a WASM error is an uncatchable trap,
-				// so there is no unwind path to attach cleanups to.
+				// The wasm-GC backends catch via the exception-handling proposal (todo
+				// 129), but --no-gc stays a rejection by design: condition objects are
+				// cons/CLOS-subset values its unboxed value model rejects, and its
+				// contract is a zero-flag plain MVP module.
 				throw new UnsupportedOperationException(LispNames.UNWIND_PROTECT
-						+ " is not supported on the WASM backend (a WASM error is an uncatchable trap); use the interpreter or the JVM backend");
+						+ " is not supported under --no-gc (its contract is a zero-flag MVP module without condition"
+						+ " objects); use the default wasm-GC backend, the interpreter or the JVM backend");
 			case LispNames.ADD -> compileVariadic(cons, args, fn, 0, Instruction.I64_ADD, Instruction.F64_ADD);
 			case LispNames.MUL -> compileVariadic(cons, args, fn, 1, Instruction.I64_MUL, Instruction.F64_MUL);
 			case LispNames.SUB -> compileSub(cons, args, fn);

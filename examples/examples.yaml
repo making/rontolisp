@@ -57,8 +57,8 @@ examples:
         - "Alice -> alice@newdomain.com"
         - "Alice (alice@newdomain.com)"
   - path: console/error-handling.lisp
-    backends: [interpreter, jvm]
-    note: handler-case/unwind-protect are a compile error on every WASM backend (uncatchable traps), so no wasm leg
+    backends: [interpreter, jvm, wasm]
+    note: catching compiles via the wasm exception-handling proposal (todo 129); the driver passes -W exceptions=y
     expect:
       file: .expected/error-handling.txt
   - path: console/hanoi.lisp

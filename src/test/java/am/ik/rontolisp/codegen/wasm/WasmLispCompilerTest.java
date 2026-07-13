@@ -36,30 +36,86 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void unwindProtectIsCompileError() {
-		// A WASM error is an uncatchable trap, so unwind-protect cannot run its cleanup
-		// on the error path; the compiler rejects it (interpreter/JVM only).
-		assertThatThrownBy(() -> compile("(unwind-protect 1 2)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("unwind-protect is not supported on the WASM backend");
+	void unwindProtectCompilesInEhMode() {
+		// The wasm exception-handling proposal (todo 129): unwind-protect compiles into
+		// a try_table (catch_all_ref) whose landing runs the cleanups and rethrows.
+		// Running the output needs `wasmtime -W exceptions=y` (37+).
+		assertThat(compile("(unwind-protect 1 2)")).isNotEmpty();
+		assertThat(compileComponent("(unwind-protect 1 2)")).isNotEmpty();
 	}
 
 	@Test
-	void handlerCaseAndIgnoreErrorsAreCompileErrors() {
-		assertThatThrownBy(() -> compile("(handler-case 1 (error (e) 2))"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("handler-case is not supported on the WASM backend");
-		assertThatThrownBy(() -> compile("(ignore-errors 1)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("ignore-errors is not supported on the WASM backend");
+	void handlerCaseAndIgnoreErrorsCompileInEhMode() {
+		assertThat(compile("(handler-case 1 (error (e) 2))")).isNotEmpty();
+		assertThat(compile("(ignore-errors 1)")).isNotEmpty();
+		assertThat(compileComponent("(handler-case 1 (error (e) 2))")).isNotEmpty();
 	}
 
 	@Test
-	void withOpenFileStillCompilesWithoutUnwindProtect() {
-		// The with-* expansions keep the close-after-body shape on WASM (the backend
-		// switch passes unwindProtect = false), so they must not hit the unwind-protect
-		// compile error above.
-		assertThat(compile("(with-open-file (s \"f.txt\") (read-line s))")).isNotEmpty();
-		assertThat(compile("(print (with-output-to-string (s) (princ \"x\" s)))")).isNotEmpty();
+	void ehModeEmitsTagSectionAndPlainModuleDoesNot() {
+		// The EH machinery (tag section id 13) is emitted ONLY when the program uses a
+		// catching/cleanup form; a program without them stays byte-identical to a
+		// build that never knew about EH (proven by the todo-129 stash-dance) and in
+		// particular carries no tag section.
+		byte[] plain = compile("(print 1)");
+		byte[] eh = compile("(print (ignore-errors 1))");
+		assertThat(containsSection(plain, 13)).isFalse();
+		assertThat(containsSection(eh, 13)).isTrue();
+	}
+
+	@Test
+	void withStarFormsRideUnwindProtectAndFlipEhMode() {
+		// The todo-129 step-7 retrofit: the with-* expansions ride unwind-protect on
+		// WASM too (close on EVERY exit, interpreter/JVM parity), so a with-* program
+		// flips into EH mode (tag section present) and needs `wasmtime -W
+		// exceptions=y` to run.
+		byte[] wof = compile("(with-open-file (s \"f.txt\") (read-line s))");
+		assertThat(wof).isNotEmpty();
+		assertThat(containsSection(wof, 13)).isTrue();
+		byte[] wots = compile("(print (with-output-to-string (s) (princ \"x\" s)))");
+		assertThat(containsSection(wots, 13)).isTrue();
 		assertThat(compile("(with-input-from-string (s \"a\") (read-line s))")).isNotEmpty();
+	}
+
+	@Test
+	void typedErrorWithLambdaReportCompilesOutsideEhMode() {
+		// A :report lambda's rendering rides an internally-generated
+		// with-output-to-string; in a module without any literal catching/with-*
+		// form it must keep the close-after-body shape and compile WITHOUT the tag
+		// section (the gate scans the pre-expansion program).
+		byte[] module = compile("""
+				(define-condition rep-err (error) ((v :initarg :v :reader rep-err-v))
+				  (:report (lambda (c s) (format s "bad ~a" (rep-err-v c)))))
+				(error 'rep-err :v 1)
+				""");
+		assertThat(module).isNotEmpty();
+		assertThat(containsSection(module, 13)).isFalse();
+	}
+
+	/**
+	 * Returns whether the core module contains a top-level section with the given id
+	 * (skipping section payloads, so an id byte inside a payload cannot false-match).
+	 */
+	private static boolean containsSection(byte[] module, int sectionId) {
+		int p = 8;
+		while (p < module.length) {
+			int id = module[p++] & 0xff;
+			int size = 0;
+			int shift = 0;
+			while (true) {
+				int b = module[p++] & 0xff;
+				size |= (b & 0x7f) << shift;
+				if ((b & 0x80) == 0) {
+					break;
+				}
+				shift += 7;
+			}
+			if (id == sectionId) {
+				return true;
+			}
+			p += size;
+		}
+		return false;
 	}
 
 	@Test

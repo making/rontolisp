@@ -406,11 +406,34 @@ public final class WasmTreeShaker {
 			return; // numeric / comparison / conversion / sign-extension: no immediate
 		}
 		switch (op) {
-			// No immediate.
-			case 0x00, 0x01, 0x05, 0x0B, 0x0F, 0x1A, 0x1B, 0xD1, 0xD3 -> {
+			// No immediate (0x0A = throw_ref, exception-handling proposal).
+			case 0x00, 0x01, 0x05, 0x0A, 0x0B, 0x0F, 0x1A, 0x1B, 0xD1, 0xD3 -> {
 			}
 			// Block types.
 			case 0x02, 0x03, 0x04 -> skipBlockType(buf, p);
+			// throw (exception-handling proposal): one tag-index immediate. Tags have
+			// their own index space, so function remapping does not touch it.
+			case 0x08 -> skipLeb(buf, p);
+			// try_table (exception-handling proposal): a blocktype, then a vector of
+			// catch clauses -- catch/catch_ref carry a tag index and a label,
+			// catch_all/catch_all_ref a label only. Labels and tag indices are both
+			// remap-free here (only function indices are renumbered).
+			case 0x1F -> {
+				skipBlockType(buf, p);
+				int clauses = readU(buf, p);
+				for (int i = 0; i < clauses; i++) {
+					int kind = buf[p[0]++] & 0xff;
+					switch (kind) {
+						case 0x00, 0x01 -> { // catch / catch_ref: tag + label
+							skipLeb(buf, p);
+							skipLeb(buf, p);
+						}
+						case 0x02, 0x03 -> skipLeb(buf, p); // catch_all / catch_all_ref
+						default -> throw new IllegalStateException(
+								String.format("WasmTreeShaker: unhandled catch clause kind 0x%02X", kind));
+					}
+				}
+			}
 			// One label/index immediate.
 			case 0x0C, 0x0D, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x41, 0x42, 0xD0 -> skipLeb(buf, p);
 			case 0x0E -> { // br_table
@@ -522,7 +545,8 @@ public final class WasmTreeShaker {
 	}
 
 	private static boolean isValTypeStart(int b) {
-		return (b >= 0x7B && b <= 0x7F) || b == 0x70 || b == 0x6F || b == 0x63 || b == 0x64;
+		// 0x69 = exnref (exception-handling proposal).
+		return (b >= 0x7B && b <= 0x7F) || b == 0x70 || b == 0x6F || b == 0x69 || b == 0x63 || b == 0x64;
 	}
 
 	// limits := 0x00 min | 0x01 min max (also tolerates the shared/64 flag bits)

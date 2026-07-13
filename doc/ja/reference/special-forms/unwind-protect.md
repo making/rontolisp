@@ -4,7 +4,7 @@
 
 `protected` フォームを評価してその値を返し、そこからの**あらゆる**脱出時に `cleanup` フォームを実行します: 通常の復帰、`error` による巻き戻し、`return`/`return-from` による非局所脱出のいずれでも実行されます。cleanup の値は捨てられます。cleanup フォーム自身がエラーを通知した場合は、進行中の脱出を置き換えます(Common Lisp と同じく、新しいエラーが勝ちます)。
 
-`unwind-protect` は**インタプリタと JVM バックエンド**でサポートされます。WASM コンパイラは拒否します(WASM のエラーは捕捉不能なトラップであり、cleanup を実行する巻き戻し経路が存在しないため)。`with-*` マクロ(`with-open-file`、`with-output-to-string`、`with-input-from-string`、および `usocket:with-*` ファミリ)はインタプリタと JVM では `unwind-protect` に展開されるため、そこではあらゆる脱出時にハンドルを解放します。WASM では従来どおり正常終了時のみクローズする形を保ちます。
+`unwind-protect` は `--no-gc`(コンパイルエラー)を除く**すべてのバックエンド**でサポートされます。wasm-GC バックエンド(Preview 1 と `--component`)では WebAssembly の exception-handling プロポーザルを通じてコンパイルされるため、これを使うプログラムの実行には wasmtime 37+ で `-W exceptions=y` が必要です。捕捉/cleanup フォームを使わないプログラムは従来とバイト単位で同一であり、コマンドラインも変わりません。相違点: cleanup は**シグナルされた**エラーの巻き戻し(`error`/`signal`)では実行されますが、ランタイムトラップ(`(car 5)` のような型エラー、整数のゼロ除算)は依然として cleanup を実行せずインスタンスを終了させます — インタプリタと JVM はこれらでも cleanup を実行します。`with-*` マクロ(`with-open-file`、`with-output-to-string`、`with-input-from-string`、および `usocket:with-*` ファミリ)はすべてのバックエンドで `unwind-protect` に展開されるため、あらゆる脱出時にハンドルを解放します。したがって wasm-GC では `with-*` を使うプログラムも EH モードでコンパイルされ、`-W exceptions=y` が必要です。
 
 ```lisp
 (let ((n 1))

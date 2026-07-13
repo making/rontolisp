@@ -243,6 +243,16 @@ public final class WasmWriter {
 	}
 
 	/**
+	 * Write the tag section (exception-handling proposal). In the binary encoding it
+	 * belongs between the memory section and the global section.
+	 * @param consumer a consumer that populates the tag definitions
+	 * @return this instance for chaining
+	 */
+	public WasmWriter writeTagSection(Consumer<TagDef> consumer) {
+		return this.writeSection(Section.TAG, consumer, TagDef::new);
+	}
+
+	/**
 	 * Write the global section.
 	 * @param consumer a consumer that populates the global definitions
 	 * @return this instance for chaining

@@ -25,9 +25,9 @@ body and closes it afterwards. `with-client-socket` connects (passing
 On the interpreter and the JVM the expansion wraps the body in
 [`unwind-protect`](../special-forms/unwind-protect.md), so the socket is
 closed on **every** exit -- normal return, an error signaled inside the body,
-or a `return`/`return-from` (usocket proper's semantics). On the WASM
-component backend, where `unwind-protect` does not compile, the socket is
-closed on normal exit only. Like `rontolisp:with-arena`, these are built-in
+or a `return`/`return-from` (usocket proper's semantics). This holds on the WASM
+component backend too since the exception-handling support landed (such a
+program compiles in EH mode and needs `wasmtime -W exceptions=y`, 37+). Like `rontolisp:with-arena`, these are built-in
 macro expansions, so they cannot be passed to `funcall`/`apply`.
 
 ## Backend support

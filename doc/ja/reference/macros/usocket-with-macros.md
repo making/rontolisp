@@ -26,8 +26,9 @@ usocket の便利マクロ群です: それぞれ本体の間だけソケット�
 [`unwind-protect`](../special-forms/unwind-protect.md) で包むため、ソケットは
 **あらゆる**脱出時に閉じられます -- 通常復帰、本体内で通知されたエラー、
 `return`/`return-from` のいずれでも(本家 usocket のセマンティクス)。
-`unwind-protect` がコンパイルできない WASM コンポーネントバックエンドでは
-正常終了時のみ閉じられます。`rontolisp:with-arena` と同じく組み込みマクロ
+exception-handling サポートの導入以降、これは WASM コンポーネント
+バックエンドでも成り立ちます(そのようなプログラムは EH モードでコンパイル
+され、`wasmtime -W exceptions=y`(37+)が必要です)。`rontolisp:with-arena` と同じく組み込みマクロ
 展開なので、`funcall`/`apply` に渡すことはできません。
 
 ## バックエンドごとの対応

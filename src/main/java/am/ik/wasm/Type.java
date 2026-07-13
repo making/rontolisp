@@ -21,6 +21,8 @@ public enum Type implements Codable {
 	FUNCREF(0x70), //
 	/** External reference type. */
 	EXTERNREF(0x6F), //
+	/** Exception reference type (exception-handling proposal). */
+	EXNREF(0x69), //
 	// wasm-GC heap types
 	/** Any heap type (wasm-GC). */
 	ANY(0x6E), //

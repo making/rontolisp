@@ -26,8 +26,45 @@ public interface Instruction {
 	/** {@code ELSE} (0x05). */
 	int ELSE = 0X05;
 
+	/**
+	 * {@code THROW} (0x08), from the exception-handling proposal: throws the exception of
+	 * the immediate tag index, taking the tag's parameters from the operand stack.
+	 */
+	int THROW = 0x08;
+
+	/**
+	 * {@code THROW_REF} (0x0A), from the exception-handling proposal: rethrows the
+	 * {@code exnref} on the operand stack (as caught by {@code catch_ref} /
+	 * {@code catch_all_ref}).
+	 */
+	int THROW_REF = 0x0A;
+
 	/** {@code END} (0x0B). */
 	int END = 0X0B;
+
+	/**
+	 * {@code TRY_TABLE} (0x1F), from the exception-handling proposal: a structured block
+	 * with an immediate blocktype followed by a vector of catch clauses (each a
+	 * {@link #CATCH}/{@link #CATCH_REF}/{@link #CATCH_ALL}/{@link #CATCH_ALL_REF} byte
+	 * with its tag/label immediates); a matching exception thrown inside the block
+	 * branches to the clause's label.
+	 */
+	int TRY_TABLE = 0x1F;
+
+	// try_table catch-clause kinds (the first byte of each clause in the vector). CATCH
+	// and CATCH_REF take a tag index then a label; CATCH_ALL and CATCH_ALL_REF a label
+	// only. The _REF forms additionally push the caught exception as an exnref.
+	/** {@code catch} clause kind (0x00): tag index + label. */
+	int CATCH = 0x00;
+
+	/** {@code catch_ref} clause kind (0x01): tag index + label, pushes an exnref. */
+	int CATCH_REF = 0x01;
+
+	/** {@code catch_all} clause kind (0x02): label only. */
+	int CATCH_ALL = 0x02;
+
+	/** {@code catch_all_ref} clause kind (0x03): label only, pushes an exnref. */
+	int CATCH_ALL_REF = 0x03;
 
 	/** {@code BR} (0x0C). */
 	int BR = 0X0C;

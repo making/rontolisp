@@ -3838,3 +3838,70 @@ cases:
       3
       "abcd"
       nil
+  # Condition catching (todo 129): handler-case / ignore-errors / unwind-protect
+  # now compile on the wasm-GC backends via the exception-handling proposal (one
+  # $lisp-cond tag; try_table/throw). NOTE: once any case below is present, the
+  # whole concatenated program is EH mode, so the driver runs wasmtime with
+  # `-W exceptions=y` (wasmtime 37+; see CiSpecE2eTest.runBackend).
+  - name: handler-case-catches-typed-and-plain-errors
+    source: |
+      (define-condition ci-hc-err (error) ((v :initarg :v :reader ci-hc-err-v)))
+      (print (handler-case (error 'ci-hc-err :v 7)
+               (ci-hc-err (e) (list :caught (ci-hc-err-v e)))))
+      (print (handler-case (error "boom ~a" 1)
+               (error (e) (list :caught (nth 1 e)))))
+      (defun ci-hc-thrower () (error "deep"))
+      (print (handler-case (ci-hc-thrower) (error (e) :caught)))
+    expected: |
+      (:caught 7)
+      (:caught "boom 1")
+      :caught
+  - name: handler-case-dispatch-rethrow-no-error-and-signal
+    source: |
+      (define-condition ci-hc-sub (parse-error) ())
+      (print (handler-case (error 'ci-hc-sub)
+               (warning (w) :warning)
+               (parse-error (e) :parse)
+               (error (e) :error)))
+      (define-condition ci-hc-warn (warning) ())
+      (print (handler-case
+                 (handler-case (error 'ci-hc-warn)
+                   (error (e) :inner))
+               (warning (w) :outer)))
+      (print (handler-case (+ 1 2) (error (e) :err) (:no-error (v) (list :ok v))))
+      (print (handler-case (progn (signal "quiet") :not-raised) (condition (c) :raised)))
+      (print (signal "quiet"))
+    expected: |
+      :parse
+      :outer
+      (:ok 3)
+      :raised
+      nil
+  - name: unwind-protect-cleanups-and-return-channel
+    source: |
+      (print (unwind-protect (+ 1 2) (print :cleanup)))
+      (let ((ci-up-log nil))
+        (print (handler-case
+                   (unwind-protect (error "boom") (setq ci-up-log (cons :cleaned ci-up-log)))
+                 (error (e) (cons :caught ci-up-log)))))
+      (print (dolist (x (list 1 2 3))
+               (handler-case (when (= x 2) (return :done)) (error (e) :err))))
+      (print (signal "after"))
+      (let ((ci-up-log2 nil))
+        (dolist (x (list 1))
+          (unwind-protect
+              (unwind-protect (return :nested)
+                (setq ci-up-log2 (cons :inner ci-up-log2)))
+            (setq ci-up-log2 (cons :outer ci-up-log2))))
+        (print ci-up-log2))
+      (print (ignore-errors (error "x")))
+      (print (ignore-errors (+ 40 2)))
+    expected: |
+      :cleanup
+      3
+      (:caught :cleaned)
+      :done
+      nil
+      (:outer :inner)
+      nil
+      42

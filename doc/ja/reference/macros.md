@@ -22,10 +22,10 @@
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | 並列代入。いずれかの変数に代入する前にすべての右辺が評価されます。nilを返します |
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | `x` の型によるディスパッチ。サポートされる型名: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean`(および `t`/`otherwise`)と、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` および `(integer 0 9)` のような範囲付き数値型。何もマッチしなければnilを返します |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | 網羅的な `typecase`。デフォルト節はなく、どの節にも型がマッチしないオブジェクトは `error` を通知します |
-| `error` | `(error "bad value: ~a" x)`, `(error 'my-error :v x)`, `(error obj)` | エラーを通知し、[`handler-case`](macros/handler-case.md) に捕捉されなければ実行を中止します。designator: リテラルの制御文字列(`format` と同じディレクティブ)、initarg 付きのクォートされたコンディション型シンボル(型付きコンディションを構築。`define-condition` の `:report` がメッセージになります)、またはコンディションオブジェクト。インタプリタとJVMはメッセージとコンディションを保持する例外をスローし、WASMはトラップします。`format` と同様に関数値を持たないマクロです(`#'error` はサポートされません) |
-| `signal` | `(signal 'my-condition :v x)` | **非致命的**なコンディションを通知します(designator は `error` と同じ): 確立済みの `handler-case` に送出され、なければ nil を返して継続します(WASM では常に nil) |
-| `handler-case` | `(handler-case expr (type (var) body...)... (:no-error (v) body...))` | `expr` を評価し、通知されたエラーをコンディション型がマッチする最初の節にディスパッチします(マッチしなければ再送出)。`:no-error` は正常終了時に実行。インタプリタ/JVM。WASM ではコンパイルエラー |
-| `ignore-errors` | `(ignore-errors form...)` | フォームの値、エラー通知時は nil。`handler-case` の糖衣。インタプリタ/JVM。WASM ではコンパイルエラー |
+| `error` | `(error "bad value: ~a" x)`, `(error 'my-error :v x)`, `(error obj)` | エラーを通知し、[`handler-case`](macros/handler-case.md) に捕捉されなければ実行を中止します。designator: リテラルの制御文字列(`format` と同じディレクティブ)、initarg 付きのクォートされたコンディション型シンボル(型付きコンディションを構築。`define-condition` の `:report` がメッセージになります)、またはコンディションオブジェクト。インタプリタとJVMはメッセージとコンディションを保持する例外をスローし、wasm-GC は捕捉フォームを含むプログラムでは WebAssembly 例外をスローし、含まなければトラップします。`format` と同様に関数値を持たないマクロです(`#'error` はサポートされません) |
+| `signal` | `(signal 'my-condition :v x)` | **非致命的**なコンディションを通知します(designator は `error` と同じ): 確立済みの `handler-case` に送出され、なければ nil を返して継続します(`--no-gc` では常に nil) |
+| `handler-case` | `(handler-case expr (type (var) body...)... (:no-error (v) body...))` | `expr` を評価し、通知されたエラーをコンディション型がマッチする最初の節にディスパッチします(マッチしなければ再送出)。`:no-error` は正常終了時に実行。wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー |
+| `ignore-errors` | `(ignore-errors form...)` | フォームの値、エラー通知時は nil。`handler-case` の糖衣。wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー |
 | `setf` | `(setf place value)` | 一般化代入。placeとして `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` をサポートします |
 | `push` | `(push item place)` | placeにあるリストの先頭にitemを追加します。新しいリストを返します |
 | `pop` | `(pop place)` | placeにあるリストの先頭要素を取り除いて返します |

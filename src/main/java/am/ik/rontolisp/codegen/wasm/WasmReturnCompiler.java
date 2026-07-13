@@ -14,6 +14,14 @@ import am.ik.wasm.Type;
  * {@code (ref null eq)} result type. The branch depth is the number of control structures
  * between this point and the target block, derived from
  * {@link WasmLispCompiler.Ctx#wasmCtrlDepth}.
+ *
+ * <p>
+ * EH mode: when the branch would escape an {@code unwind-protect} / {@code handler-case}
+ * protected region (the innermost unwind scope was entered inside the target block), it
+ * branches to that scope's exit trampoline instead, which runs the scope's cleanups and
+ * cascades outward toward the block (see {@code WasmUnwindProtectCompiler}). {@code
+ * return} is only legal at empty operand stack, so the value-carrying {@code br} is
+ * always safe.
  */
 final class WasmReturnCompiler {
 
@@ -32,6 +40,13 @@ final class WasmReturnCompiler {
 		else {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
+		}
+		WasmLispCompiler.UnwindScope escaped = ctx.unwindScopes.peek();
+		if (escaped != null && escaped.blockDepth() >= ctx.blockMarkers.size()) {
+			// The exit crosses the innermost protected region: run its cleanups through
+			// the trampoline; the trampolines cascade to the block, innermost first.
+			ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - escaped.trampolineDepth());
+			return;
 		}
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - marker);
 	}

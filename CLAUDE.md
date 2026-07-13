@@ -71,7 +71,7 @@ eval, reader -> rontolisp (AST types only)
 - **`flet`/`labels`**: expansions to let-bound lambdas plus a Lisp-2 body rewrite. `macrolet`/`symbol-macrolet` unsupported. `.kb/flet-labels.md`
 - **Dynamic (special) variables**: `defvar`/`declaim special` + `let` = a **shallow binding** (save/set/restore over the global cell), thread-scoped on the interpreter. Compile-path lite limits: `progv` = compile error, unwinding via `return` does not restore, `--no-gc` rejects specials. `.kb/dynamic-special-variables.md`
 - **Multiple values (syntactic tier)**: `values`/`multiple-value-bind`/... are lowerings with NO runtime representation -- the consumer must recognize the producer syntactically (a literal `(values ...)`, the floor-family, `gethash`); any other producer yields its primary value only. `.kb/multiple-values.md`
-- **Error handling** (`unwind-protect`, condition objects, `handler-case`): conditions are CLOS-subset instances; interpreter + JVM catch by type, **every WASM backend rejects `unwind-protect`/`handler-case`/`ignore-errors` at compile time** (traps are uncatchable). No restarts. `.kb/error-handling.md`
+- **Error handling** (`unwind-protect`, condition objects, `handler-case`): conditions are CLOS-subset instances; interpreter + JVM + wasm-GC catch by type (**only `--no-gc` rejects `unwind-protect`/`handler-case`/`ignore-errors` at compile time**). The wasm-GC path is EH-MODE GATED: only a program containing a catching form gets the `$lisp-cond` tag/`try_table` machinery and needs `wasmtime -W exceptions=y` (37+); anything else stays byte-identical. wasm-GC catches signaled conditions only — runtime traps stay uncatchable there. No restarts. `.kb/error-handling.md`
 - **Declarations / `eval-when` / `check-type`**: `declare`/`declaim`/`the` are no-ops, `eval-when` -> `progn` (+ top-level flattening so nested defuns are collected); `check-type`/`assert` are lite error-signaling expansions. `.kb/declarations-type-checks.md`
 - **Packages**: `cl`/`cl-user`/`rontolisp` resolved by one `PackageResolver` pass with CL colon semantics; nicknames + `:import-from`; `:shadow` rejected. `.kb/packages.md`
 - **Reader features** (`#+`/`#-`, `*features*`, `#|...|#`, `#.`): resolved entirely in the frontend against `reader.Features`, so a compiled program's feature set is fixed at compile time; the emitted runtime reader knows none of it. `.kb/reader-features.md`
@@ -99,7 +99,7 @@ eval, reader -> rontolisp (AST types only)
 - **`--dynamic`**: unresolvable calls/variables fall back to the embedded `eval` instead of a compile error. `.kb/dynamic-late-binding.md`
 - **`--optimize`**: tree-shaking post-pass for WASM + JVM; skipped under `--component`. `.kb/optimize-dead-code-elimination.md`
 - **`--component` (WASI 0.3)**: the core module stays Preview-1-identical and an adapter implements WASI; `rontolisp:wasm-export` additionally becomes a typed component export (`:async t` for I/O inside an export), and `--wit` writes the component's WIT world next to the `.wasm` (an `am.ik.wit` document model per blob variant — `base`/`http-client`/`sockets`/`http-server`/`http-server-client`/`nogc`/`nogc-print` — printed canonically; fixtures + generator regen via `src/wasm-component/regen-wit.sh`). `.kb/wasi-component.md`
-- **WIT type mapping is settled** (`compiler/WitTypeMapper`, for `wit-import`/`wit-export` todos 126-128): `result<T,E>` = ok value / error arm signals a condition on EVERY backend (todo 124 option (c); WASM traps only as a temporary limitation — a WASM catch mechanism is a prerequisite of todo 128), `list<u8>` = byte string. Do not re-litigate a cell; it is a user-facing breaking change. `.kb/wit.md`
+- **WIT type mapping is settled** (`compiler/WitTypeMapper`, for `wit-import`/`wit-export` todos 126-128): `result<T,E>` = ok value / error arm signals a condition on EVERY backend (todo 124 option (c); the WASM catch mechanism landed with todo 129, so the todo-128 prerequisite is satisfied), `list<u8>` = byte string. Do not re-litigate a cell; it is a user-facing breaking change. `.kb/wit.md`
 - **`rontolisp:wasm-export` / `wasm-import` / `--no-wasi`**: export a defun as host-callable WASM, declare host functions (Preview 1 only), emit an import-free reactor module. A memory-EXPORTING module (never `--component`, where the canonical ABI does it) also exports the host arena API `__ronto_alloc_mark`/`_reset` on BOTH wasm backends -- but the GC one's reset never pops below the interned-symbol pool's high-water, and has no `--no-gc`-style automatic reset. `.kb/wasm-export-no-wasi.md`, `.kb/wasm-import.md`
 - **WASM GC strings**: `TYPE_STRING` lives on the GC heap (`$str_bytes` array); `HEAP_PTR` is a stack pointer, so transient string building no longer grows the linear heap. A string's field 0 is an identity id, **not** a linear offset. `.kb/wasm-gc-strings.md`
 - **`--no-gc`**: a separate backend (`NoGcWasmCompiler`) whose value model is unboxed `i64`/`f64`/linear-memory pointers ("non-GC" != "no SIMD"); emits a plain MVP module. Packed arrays are bump-allocated with no free (hence `-into` and `with-arena`). Rejects specials/CLOS/defstruct/arrays/`linalg:`. `.kb/no-gc-scalar-wasm.md`
@@ -178,6 +178,11 @@ java -jar $JAR test.lisp -o test.wasm && wasmtime run -W gc test.wasm
 java -jar $JAR test.lisp -o test-comp.wasm --component && \
   wasmtime run -W gc=y -W component-model-more-async-builtins=y test-comp.wasm
 ```
+
+A program using `handler-case`/`ignore-errors`/`unwind-protect` compiles in EH
+mode: add `-W exceptions=y` to BOTH wasm run commands (wasmtime 37+; without it
+the module fails to parse). Programs without those forms are byte-identical to
+pre-EH output and keep the flags above.
 
 ### Verifying the Native Image End-to-End (run locally before every push)
 

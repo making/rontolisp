@@ -209,14 +209,17 @@ rontolisp のソケットはストリームハンドルそのものなので、�
   `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
   が動作します。サブタイプ(`connection-refused-error` など)も定義されますが、
   再通知は常に `socket-error` を使います(そちらを捕捉してください)。WASM
-  コンポーネントバックエンドではエラーは引き続き捕捉不能なトラップ(または
-  `nil` ハンドル)で、`wait-for-input` 的なコンディション処理は存在しません。
+  コンポーネントバックエンドでは connect/accept の失敗はシグナルせず `nil`
+  ハンドルを返すため、そこでは `handler-case` パターンには捕捉対象がありません
+  (代わりにハンドルの `nil` を判定してください)。`wait-for-input` 的な
+  コンディション処理は存在しません。
 - **`wait-for-input` と `socket-server` は存在しません**(読み込みは
   ブロックします。accept ループは自分で書いてください)。
 - **`with-*` マクロはインタープリタと JVM ではあらゆる脱出時にソケットを
   閉じます**([`unwind-protect`](../reference/special-forms/unwind-protect.md)
-  に展開されます)。WASM コンポーネントバックエンドでは正常終了時のみ
-  閉じます(そこでは `unwind-protect` がコンパイルできないため)。互換性の
+  に展開されます)。exception-handling サポートの導入以降、これは WASM コンポーネント
+  バックエンドでも成り立ちます(そのようなプログラムは `wasmtime` に
+  `-W exceptions=y` が必要になります)。互換性の
   ためのキーワード引数(`:element-type`、`:timeout`、`:nodelay`、
   `:reuse-address` など)は受理して無視します。
 - **バックエンド**: インタープリタと JVM はフル対応。WASM は tcp 組み込みと

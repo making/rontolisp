@@ -18,8 +18,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `values` / `multiple-value-bind` | 利用可能。ユーザ関数の多値も含む（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
 | `block` / `return-from` / `tagbody` / `go` | 利用不可 |
 | `catch` / `throw` | 利用不可 |
-| `unwind-protect` | インタープリタ/JVM で利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。WASM ではコンパイルエラー |
-| 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | インタープリタ/JVM で利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。捕捉は WASM ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
+| `unwind-protect` | 利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。wasm-GC では exception-handling プロポーザル経由（`wasmtime -W exceptions=y`）。`--no-gc` ではコンパイルエラー |
+| 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | 利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。wasm-GC では捕捉に `wasmtime -W exceptions=y` が必要で、ランタイムトラップはそこでは捕捉不能のまま。`--no-gc` ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
 | `flet` / `labels` | 利用可能（[`flet`](../reference/macros/flet.md)、[`labels`](../reference/macros/labels.md) 参照） |
 | `macrolet` | 利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
@@ -109,8 +109,10 @@ The function block is undefined
 
 [`unwind-protect`](../reference/special-forms/unwind-protect.md)(あらゆる
 脱出時 — 通常復帰・`error` 巻き戻し・`return`/`return-from` — の
-クリーンアップ)はインタープリタと JVM バックエンドで**利用可能**です。
-WASM コンパイラは拒否します(WASM のエラーは捕捉不能なトラップのため)。
+クリーンアップ)は `--no-gc` を除くすべてのバックエンドで**利用可能**です。
+wasm-GC バックエンドでは WebAssembly の exception-handling プロポーザルを
+使うため、出力モジュールの実行には `wasmtime -W exceptions=y`(37+)が必要で、
+ランタイムトラップは依然として cleanup をスキップします。
 
 ## 条件とリスタート
 
@@ -119,10 +121,12 @@ WASM コンパイラは拒否します(WASM のエラーは捕捉不能なトラ
 サブセットクラスで、[`define-condition`](../reference/macros/define-condition.md)
 （`:report` 付き）で定義し、[`make-condition`](../reference/macros/make-condition.md)
 や型付きの [`error`](../reference/macros/error.md)/[`signal`](../reference/macros/signal.md)
-designator で構築し、インタープリタと JVM バックエンドでは
+designator で構築し、`--no-gc`(コンパイルエラー)を除くすべてのバックエンドで
 [`handler-case`](../reference/macros/handler-case.md) /
-[`ignore-errors`](../reference/macros/ignore-errors.md) により型で捕捉できます
-（WASM コンパイラは捕捉を拒否します: WASM のエラーは捕捉不能なトラップです）。
+[`ignore-errors`](../reference/macros/ignore-errors.md) により型で捕捉できます。
+wasm-GC バックエンドでの捕捉は WebAssembly の exception-handling プロポーザルを
+使い(`wasmtime -W exceptions=y`、37+)、捕捉できるのは**シグナルされた**
+コンディションのみです — ランタイムトラップは依然として中断させます。
 
 ```lisp
 (handler-case (error "boom") (error (e) :caught)) ; => :caught

@@ -4,13 +4,15 @@
 with genuinely new encoder work.** Depends on `.todo/125` (DONE 2026-07-13, `.kb/wit.md`)
 + `.todo/127`.
 
-**New prerequisite from the `.todo/125` decision:** `result<T,E>` was settled as
-option (c) — the error arm signals a condition catchable with `handler-case` on
-EVERY backend, and the WASM trap is documented as a temporary limitation, not a
-contract. Therefore a **WASM catch mechanism is a prerequisite of the
-result-returning imports in this step** (wasi:keyvalue returns `result`
-everywhere). Budget it as part of this todo or as its own predecessor todo; the
-"landmines" section below already anticipated this.
+**Prerequisite SATISFIED (2026-07-14):** `result<T,E>` was settled as option (c)
+— the error arm signals a condition catchable with `handler-case` on EVERY
+backend — and the WASM catch mechanism it required landed with `.todo/129`:
+the wasm-GC backends (Preview 1 + `--component`, incl. serve) compile
+`handler-case`/`ignore-errors`/`unwind-protect` through the wasm
+exception-handling proposal (`.kb/error-handling.md`, "WASM (todo-129)"). A
+result-returning import stub can therefore signal with `%error-cond` and be
+caught; programs that catch need `wasmtime -W exceptions=y` (37+). Only
+`--no-gc` still rejects catching (by design).
 
 ## The hole this fills
 
