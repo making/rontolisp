@@ -372,6 +372,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `linalg:less` | `(linalg:less #(1 5 3) #(2 5 1))` | `#d(1.0 0.0 0.0)`(要素ごとの `a < b` マスク) |
 | `linalg:less-equal` | `(linalg:less-equal #(1 5 3) #(2 5 1))` | `#d(1.0 1.0 0.0)`(要素ごとの `a <= b` マスク) |
 | `linalg:take-rows` | `(linalg:take-rows #2A((10 11 12) (20 21 22) (30 31 32)) #(2 0))` | `#d((30.0 31.0 32.0) (10.0 11.0 12.0))`(インデックスベクタで選んだ axis-0 スライス) |
+| `linalg:row` | `(linalg:row #2A((10 11 12) (20 21 22) (30 31 32)) 1)` | `#d(20.0 21.0 22.0)`(axis-0 スライス 1 つ。axis が落ちる。numpy の `x[i]`) |
 | `linalg:gather` | `(linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))` | `#d(12.0 20.0)`(行ごとの `a[i, idx[i]]`) |
 | `linalg:one-hot` | `(linalg:one-hot #(1 0 2) 3)` | `#d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0))`(one-hot 行列) |
 | `linalg:seed` | `(linalg:seed 42)` | `42`(共有乱数生成器を決定的に初期化。シード済み列は全バックエンドで bit-identical) |

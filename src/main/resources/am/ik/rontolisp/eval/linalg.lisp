@@ -1145,6 +1145,21 @@
           (setf (row-major-aref out (+ dst k))
                 (row-major-aref a (+ src k))))))))
 
+(defun linalg:row (a i)
+  ;; The axis-0 slice i of a with axis 0 DROPPED (numpy's x[i] integer
+  ;; indexing), as a fresh array of a's width: a matrix yields the row vector,
+  ;; a rank-4 batch yields the rank-3 sample. This is the one-slice sibling of
+  ;; take-rows, which keeps axis 0 (numpy's x[[i]]); use aref for an element.
+  (let ((d (array-dimensions a)))
+    (unless (cdr d)
+      (error "linalg: row expects rank >= 2 (use aref on a vector)"))
+    (let* ((slab (linalg::%la-tail-size d 0))
+           (src (* (truncate i) slab))
+           (out (linalg::%la-make (cdr d) 0.0 (linalg::%la-etype a))))
+      (do ((k 0 (+ k 1)))
+          ((>= k slab) out)
+        (setf (row-major-aref out k) (row-major-aref a (+ src k)))))))
+
 (defun linalg:gather (a idx)
   ;; The per-row elements a[i, idx[i]] of a matrix (numpy's
   ;; y[np.arange(n), t] fancy-indexing idiom) as a vector of a's width;

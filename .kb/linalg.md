@@ -62,7 +62,8 @@ Stay in `cl-user` and call qualified names (the package does not use `cl`).
 | `(linalg:det a)` / `(linalg:inv a)` / `(linalg:solve a b)` | Gaussian elimination with partial pivoting in floating point (double); a singular matrix's `det` may be a small epsilon rather than exactly 0; `inv` errors on a singular matrix; `solve` solves a.x = b for a vector or matrix b |
 | `(linalg:array-equal a b)` | same shape + numerically equal elements (1 = 1.0); needed because arrays themselves are `eq`-compared only |
 | `(linalg:equal a b)` / `greater` / `greater-equal` / `less` / `less-equal` | elementwise comparison as a 0.0/1.0 MASK of the first array operand's width (numpy `==`/`>`/`>=`/`<`/`<=`); scalars and broadcasting via `%la-bcast`; multiply by the mask where numpy would boolean-index (relu grad, dropout) |
-| `(linalg:take-rows a idx)` | axis-0 slices selected by an index vector (numpy `x[mask]` / `np.take(a, idx, axis=0)`); ANY rank >= 1 (whole-slab copies, so rank-4 batches work); indices truncate, may repeat |
+| `(linalg:take-rows a idx)` | axis-0 slices selected by an index vector (numpy `x[mask]` / `np.take(a, idx, axis=0)`); ANY rank >= 1 (whole-slab copies, so rank-4 batches work); indices truncate, may repeat; axis 0 is KEPT (one index -> a `(1 n)` matrix, numpy `x[[i]]`) |
+| `(linalg:row a i)` | ONE axis-0 slice with axis 0 DROPPED (numpy `x[i]`): a matrix -> the row vector, a rank-4 batch -> the rank-3 sample. Rank >= 2 only (a vector errors -- `aref` already returns the element). The reason a per-sample forward pass reads `(linalg:row x i)` and not `(linalg:flatten (linalg:take-rows x (linalg:from-list (list i))))` |
 | `(linalg:gather a idx)` | per-row elements `a[i, idx[i]]` of a matrix (numpy `y[np.arange(n), t]`) as a vector |
 | `(linalg:one-hot idx n &optional element-type)` | `(length idx) x n` matrix, row i = 1.0 at column `idx[i]` |
 | `(linalg:seed n)` | reset the shared RNG deterministically; returns n |

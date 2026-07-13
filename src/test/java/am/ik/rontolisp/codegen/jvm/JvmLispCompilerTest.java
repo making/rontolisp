@@ -5270,6 +5270,7 @@ class JvmLispCompilerTest {
 				(linalg:seed 7)
 				(print (linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:randn 4)))
 				(print (linalg:take-rows *m* #(1 0)))
+				(print (linalg:row *m* 1))
 				(print (linalg:gather *m* #(2 0)))
 				(print (linalg:one-hot #(1 0 2) 3))
 				(print (linalg:greater *m* 3))
@@ -5279,7 +5280,7 @@ class JvmLispCompilerTest {
 				+ "#d(2.0 2.0)\n#d(0.0 0.0 0.0)\n#d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0))\n(3 4)\n"
 				+ "#d(26833.0 11120.0 29256.0 22347.0)\n#d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)\n"
 				+ "#d((317.0 637.0) (949.0 376.0))\n#d(284.0 -21.0 221.0 -1653.0)\n"
-				+ "#d((4.0 5.0 6.0) (1.0 2.0 3.0))\n#d(3.0 4.0)\n"
+				+ "#d((4.0 5.0 6.0) (1.0 2.0 3.0))\n#d(4.0 5.0 6.0)\n#d(3.0 4.0)\n"
 				+ "#d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0))\n#d((0.0 0.0 0.0) (1.0 1.0 1.0))\n"
 				+ "#d(1.0 1.0)\n#f(0.0 0.0)");
 	}

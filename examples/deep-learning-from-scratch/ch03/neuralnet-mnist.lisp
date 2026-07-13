@@ -32,7 +32,7 @@
       (network (load-sample-weight "ch03/sample-weight.bin"))
       (accuracy-cnt 0))
   (dotimes (i (car (linalg:shape x)))
-    (let* ((y (predict network (linalg:flatten (linalg:take-rows x (linalg:from-list (list i))))))
+    (let* ((y (predict network (linalg:row x i)))   ; numpy x[i]: the axis-0 slice, axis dropped
            (p (linalg:argmax y)))
       (when (= p (aref target i))
         (setq accuracy-cnt (+ accuracy-cnt 1)))))

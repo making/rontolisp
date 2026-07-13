@@ -5502,21 +5502,26 @@ class LispEvaluatorTest {
 
 	@Test
 	void linalgIndexingSelection() {
-		// take-rows = numpy x[batch-mask] (any rank, whole axis-0 slabs), gather =
-		// y[np.arange(n), t], one-hot builds the (len idx) x n label matrix.
+		// take-rows = numpy x[batch-mask] (any rank, whole axis-0 slabs), row = the
+		// axis-dropping numpy x[i], gather = y[np.arange(n), t], one-hot builds the
+		// (len idx) x n label matrix.
 		LispVal result = evalMulti("""
 				(defparameter *m* (linalg:from-list '((10 11 12) (20 21 22) (30 31 32))))
 				(list (linalg:take-rows *m* #(2 0 2))
 				      (linalg:take-rows (linalg:arange 5) #(4 0))
 				      (linalg:shape (linalg:take-rows (linalg:reshape (linalg:arange 24) '(4 3 2)) #(1 3)))
+				      (linalg:row *m* 2)
+				      (linalg:shape (linalg:row (linalg:reshape (linalg:arange 24) '(4 3 2)) 1))
 				      (linalg:gather *m* #(2 0 1))
 				      (linalg:one-hot #(1 0 2) 3)
 				      (array-element-type (linalg:one-hot #(0) 2 'single-float))
-				      (array-element-type (linalg:take-rows (linalg:ones '(2 2) 'single-float) #(0))))
+				      (array-element-type (linalg:take-rows (linalg:ones '(2 2) 'single-float) #(0)))
+				      (array-element-type (linalg:row (linalg:ones '(2 2) 'single-float) 0)))
 				""");
-		assertThat(result.print()).isEqualTo(
-				"(#d((30.0 31.0 32.0) (10.0 11.0 12.0) (30.0 31.0 32.0))" + " #d(4.0 0.0) (2 3 2) #d(12.0 20.0 31.0)"
-						+ " #d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0)) single-float single-float)");
+		assertThat(result.print()).isEqualTo("(#d((30.0 31.0 32.0) (10.0 11.0 12.0) (30.0 31.0 32.0))"
+				+ " #d(4.0 0.0) (2 3 2) #d(30.0 31.0 32.0) (3 2) #d(12.0 20.0 31.0)"
+				+ " #d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0)) single-float single-float single-float)");
+		assertThatThrownBy(() -> eval("(linalg:row #(1 2 3) 1)")).hasMessageContaining("linalg: row expects rank >= 2");
 		assertThatThrownBy(() -> eval("(linalg:gather #(1 2 3) #(0))"))
 			.hasMessageContaining("linalg: gather expects a matrix");
 		assertThatThrownBy(() -> eval("(linalg:gather (linalg:zeros '(2 2)) #(0))"))

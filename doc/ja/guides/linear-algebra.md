@@ -56,10 +56,11 @@ linalg は速度を優先して浮動小数点で計算します。すべての�
 
 ## インデックス操作・選択・マスク
 
-[`linalg:take-rows`](../reference/functions/linalg-take-rows.md) は index ベクタで axis-0 スライスを選択し(numpy の `x[mask]`、任意 rank)、[`linalg:gather`](../reference/functions/linalg-gather.md) は行ごとに 1 要素を取り出し(`y[np.arange(n), t]`)、[`linalg:one-hot`](../reference/functions/linalg-one-hot.md) はラベル行列を作ります。要素ごとの比較 [`linalg:equal`](../reference/functions/linalg-equal.md)、[`linalg:greater`](../reference/functions/linalg-greater.md)、[`linalg:greater-equal`](../reference/functions/linalg-greater-equal.md)、[`linalg:less`](../reference/functions/linalg-less.md)、[`linalg:less-equal`](../reference/functions/linalg-less-equal.md) は 0.0/1.0 のマスクを返します(スカラー被演算子とブロードキャスト対応)。numpy が boolean index する場面では、マスクを掛け算してください。[`linalg:zeros-like`](../reference/functions/linalg-zeros-like.md) は同じ形状・同じ幅のゼロ配列を確保します。
+[`linalg:take-rows`](../reference/functions/linalg-take-rows.md) は index ベクタで axis-0 スライスを選択し(numpy の `x[mask]`、任意 rank)、axis 0 を残します。一方 [`linalg:row`](../reference/functions/linalg-row.md) は整数で 1 スライスだけ取り出し、axis 0 を落とします(numpy の `x[i]`。バッチから 1 枚の画像を取り出すと、そのままベクタとして順伝播に渡せます)。[`linalg:gather`](../reference/functions/linalg-gather.md) は行ごとに 1 要素を取り出し(`y[np.arange(n), t]`)、[`linalg:one-hot`](../reference/functions/linalg-one-hot.md) はラベル行列を作ります。要素ごとの比較 [`linalg:equal`](../reference/functions/linalg-equal.md)、[`linalg:greater`](../reference/functions/linalg-greater.md)、[`linalg:greater-equal`](../reference/functions/linalg-greater-equal.md)、[`linalg:less`](../reference/functions/linalg-less.md)、[`linalg:less-equal`](../reference/functions/linalg-less-equal.md) は 0.0/1.0 のマスクを返します(スカラー被演算子とブロードキャスト対応)。numpy が boolean index する場面では、マスクを掛け算してください。[`linalg:zeros-like`](../reference/functions/linalg-zeros-like.md) は同じ形状・同じ幅のゼロ配列を確保します。
 
 ```lisp
 (linalg:take-rows #2A((10 11) (20 21) (30 31)) #(2 0)) ; => #d((30.0 31.0) (10.0 11.0))
+(linalg:row #2A((10 11) (20 21) (30 31)) 2)            ; => #d(30.0 31.0)
 (linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))      ; => #d(12.0 20.0)
 (linalg:one-hot #(1 0) 3)   ; => #d((0.0 1.0 0.0) (1.0 0.0 0.0))
 (linalg:greater #(1 5 3) 2) ; => #d(0.0 1.0 1.0)

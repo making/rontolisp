@@ -158,7 +158,8 @@ public final class PackageRegistry {
 			"trace", "det", "inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos",
 			"atan", "sinh", "cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum",
 			"clip", "relu", "diff", "gradient", "zeros-like", "seed", "rand", "randn", "uniform", "choice",
-			"permutation", "take-rows", "gather", "one-hot", "equal", "greater", "greater-equal", "less", "less-equal");
+			"permutation", "take-rows", "row", "gather", "one-hot", "equal", "greater", "greater-equal", "less",
+			"less-equal");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 

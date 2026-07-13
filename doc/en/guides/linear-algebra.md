@@ -56,10 +56,11 @@ The reductions [`linalg:sum`](../reference/functions/linalg-sum.md), [`linalg:me
 
 ## Indexing, selection and masks
 
-[`linalg:take-rows`](../reference/functions/linalg-take-rows.md) selects axis-0 slices by an index vector (numpy's `x[mask]`, any rank), [`linalg:gather`](../reference/functions/linalg-gather.md) picks one element per row (`y[np.arange(n), t]`), and [`linalg:one-hot`](../reference/functions/linalg-one-hot.md) builds a label matrix. The elementwise comparisons [`linalg:equal`](../reference/functions/linalg-equal.md), [`linalg:greater`](../reference/functions/linalg-greater.md), [`linalg:greater-equal`](../reference/functions/linalg-greater-equal.md), [`linalg:less`](../reference/functions/linalg-less.md) and [`linalg:less-equal`](../reference/functions/linalg-less-equal.md) return 0.0/1.0 masks (with scalar operands and broadcasting): multiply by a mask where numpy would boolean-index. [`linalg:zeros-like`](../reference/functions/linalg-zeros-like.md) allocates a zero array of the same shape and width.
+[`linalg:take-rows`](../reference/functions/linalg-take-rows.md) selects axis-0 slices by an index vector (numpy's `x[mask]`, any rank) and keeps axis 0, while [`linalg:row`](../reference/functions/linalg-row.md) takes one slice by an integer and drops it (numpy's `x[i]`, so one image of a batch arrives at a forward pass as a plain vector). [`linalg:gather`](../reference/functions/linalg-gather.md) picks one element per row (`y[np.arange(n), t]`), and [`linalg:one-hot`](../reference/functions/linalg-one-hot.md) builds a label matrix. The elementwise comparisons [`linalg:equal`](../reference/functions/linalg-equal.md), [`linalg:greater`](../reference/functions/linalg-greater.md), [`linalg:greater-equal`](../reference/functions/linalg-greater-equal.md), [`linalg:less`](../reference/functions/linalg-less.md) and [`linalg:less-equal`](../reference/functions/linalg-less-equal.md) return 0.0/1.0 masks (with scalar operands and broadcasting): multiply by a mask where numpy would boolean-index. [`linalg:zeros-like`](../reference/functions/linalg-zeros-like.md) allocates a zero array of the same shape and width.
 
 ```lisp
 (linalg:take-rows #2A((10 11) (20 21) (30 31)) #(2 0)) ; => #d((30.0 31.0) (10.0 11.0))
+(linalg:row #2A((10 11) (20 21) (30 31)) 2)            ; => #d(30.0 31.0)
 (linalg:gather #2A((10 11 12) (20 21 22)) #(2 0))      ; => #d(12.0 20.0)
 (linalg:one-hot #(1 0) 3)   ; => #d((0.0 1.0 0.0) (1.0 0.0 0.0))
 (linalg:greater #(1 5 3) 2) ; => #d(0.0 1.0 1.0)

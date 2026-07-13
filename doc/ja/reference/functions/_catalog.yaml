@@ -379,6 +379,7 @@ categories:
       - { slug: linalg-less, name: "linalg:less" }
       - { slug: linalg-less-equal, name: "linalg:less-equal" }
       - { slug: linalg-take-rows, name: "linalg:take-rows" }
+      - { slug: linalg-row, name: "linalg:row" }
       - { slug: linalg-gather, name: "linalg:gather" }
       - { slug: linalg-one-hot, name: "linalg:one-hot" }
       - { slug: linalg-seed, name: "linalg:seed" }
