@@ -1,5 +1,5 @@
 ;; Stub core whose only purpose is to make `wasm-tools component new` emit the imports for
-;; import-block-http.bin. Imports every lowered function the http-variant adapter binds:
+;; import-block-http-client.bin. Imports every lowered function the http-variant adapter binds:
 ;; the WASI 0.3 base functions (same as core.wat) plus the WASI 0.2 HTTP / io machinery for
 ;; rontolisp:fetch. Exports a memory (16 pages, for the fetch header/body scratch) +
 ;; cabi_realloc + run.

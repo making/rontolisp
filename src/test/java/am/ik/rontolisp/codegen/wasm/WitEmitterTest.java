@@ -85,7 +85,7 @@ class WitEmitterTest {
 
 	@Test
 	void serveVariantsCarryTheFixedHandlerExportAndTheUseClause() {
-		for (String variant : new String[] { WitEmitter.VARIANT_SERVE, WitEmitter.VARIANT_SERVE_HTTP }) {
+		for (String variant : new String[] { WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT }) {
 			String wit = WitEmitter.emit(variant, List.of());
 			assertThat(wit).as(variant).contains("  export wasi:http/incoming-handler@0.2.0;");
 			// wasm-tools component wit omits this use clause and prints an unparseable
@@ -98,9 +98,9 @@ class WitEmitterTest {
 
 	@Test
 	void everyVariantTemplateLoadsAndOpensTheRootWorld() {
-		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_HTTP, WitEmitter.VARIANT_SOCK,
-				WitEmitter.VARIANT_SERVE, WitEmitter.VARIANT_SERVE_HTTP, WitEmitter.VARIANT_NOGC,
-				WitEmitter.VARIANT_NOGC_PRINT }) {
+		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_HTTP_CLIENT,
+				WitEmitter.VARIANT_SOCKETS, WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT,
+				WitEmitter.VARIANT_NOGC, WitEmitter.VARIANT_NOGC_PRINT }) {
 			String wit = WitEmitter.emit(variant, List.of());
 			assertThat(wit).as(variant).startsWith("package root:component;\n\nworld root {\n");
 		}
@@ -110,16 +110,17 @@ class WitEmitterTest {
 	void variantImportSurfacesMatchTheirBlobSets() {
 		assertThat(WitEmitter.emit(WitEmitter.VARIANT_BASE, List.of())).doesNotContain("wasi:http")
 			.doesNotContain("wasi:sockets");
-		assertThat(WitEmitter.emit(WitEmitter.VARIANT_HTTP, List.of()))
+		assertThat(WitEmitter.emit(WitEmitter.VARIANT_HTTP_CLIENT, List.of()))
 			.contains("  import wasi:http/outgoing-handler@0.2.0;");
-		assertThat(WitEmitter.emit(WitEmitter.VARIANT_SOCK, List.of())).contains("  import wasi:sockets/types@0.3.0;");
+		assertThat(WitEmitter.emit(WitEmitter.VARIANT_SOCKETS, List.of()))
+			.contains("  import wasi:sockets/types@0.3.0;");
 		assertThat(WitEmitter.emit(WitEmitter.VARIANT_NOGC, List.of())).doesNotContain("import");
 	}
 
 	@Test
 	void unknownVariantIsAClearError() {
 		assertThatThrownBy(() -> WitEmitter.emit("nope", List.of())).isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("Missing WIT template resource");
+			.hasMessageContaining("Missing WIT definition for variant");
 	}
 
 }

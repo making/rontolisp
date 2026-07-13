@@ -21,7 +21,7 @@ the bottom). Created 2026-07-04.
   `%http-dispatch` wasm-export wrapper; `WasmLispCompiler` serve mode
   (`serve` flag, implies component) un-gates wasm-export + stubs WASI like
   --no-wasi while importing memory; `WasmServeComponentBuilder.buildServe` wires
-  mem-http + core + `adapter-serve.wasm` and exports
+  mem-http-client + core + `adapter-http-server.wasm` and exports
   `wasi:http/incoming-handler@0.2.0`. Runs under
   `wasmtime serve -W gc=y -W component-model-async=y
   -W component-model-async-stackful=y -W component-model-more-async-builtins=y`.
@@ -29,7 +29,7 @@ the bottom). Created 2026-07-04.
   (200/404), 20+ requests; CI test
   `WasmLispCompilerIntegrationTest.httpHandlerServesUnderWasmtimeServe`.
 - `ComponentWriter.funcTypeParamsNoResult` (the handle func type).
-- Constants derived from `wasm-tools dump` of the `uni-serve` reference: import
+- Constants derived from `wasm-tools dump` of the `uni-http-server` reference: import
   instances 0=io/error,1=io/streams,2=http/types; component types 0-5 (3=input-
   stream,4=output-stream), next free 6; canonical options per wasi func recorded
   in `WasmServeComponentBuilder`.
@@ -55,19 +55,19 @@ the bottom). Created 2026-07-04.
 - **Headers (WASM)**: the WASM serve component marshals only method/path/body
   (request) and status/body (response); headers are dropped. Extend the
   `%http-dispatch` encoding (e.g. a length-prefixed header block) and the
-  adapter-serve.wat request read / response write (the fetch adapter's
+  adapter-http-server.wat request read / response write (the fetch adapter's
   `fields.entries` / `fields.append` loops are the template).
   JVM headers DONE 2026-07-04: `JvmHttpHandlerRuntimeBuilder.handle()` walks
   `Request.headers()` into the `:headers` alist and the response `:headers`
   alist back into `Response` headers (interpreter-lenient: malformed entries
   skipped). Tests: `HttpHandlerJvmTest.compiledDirectiveMarshalsRequestHeaders`
   / `MarshalsResponseHeaders`.
-- **Allocator reset** -- DONE 2026-07-04. The mem-http `cabi_realloc` and core
+- **Allocator reset** -- DONE 2026-07-04. The mem-http-client `cabi_realloc` and core
   `__ronto_alloc` bump pointers never rewound, so an instance-reusing host (jco
   serve, wasmCloud -- verified: jco reuses one instance across requests, unlike
   `wasmtime serve` which instantiates per request) grew linear memory by
   roughly the response size per request (`__ronto_alloc` memory.grows).
-  `adapter-serve.wat` now snapshots the core heap ptr (@84), the runtime intern
+  `adapter-http-server.wat` now snapshots the core heap ptr (@84), the runtime intern
   count (@100) and the mem `$hp` global (newly exported as `"hp"`) after init,
   and restores both allocators at each `serve` entry; the core heap restore is
   guarded by the intern count (runtime interning ratchets the snapshot up
@@ -82,9 +82,9 @@ the bottom). Created 2026-07-04.
   jco (1,2,3,... across requests) and 10 x 256 KiB requests on one instance.
 - **Response chunking + outparam ordering** -- DONE 2026-07-04.
   `blocking-write-and-flush` accepts at most 4096 bytes per call, and
-  adapter-serve.wat wrote the whole body in one call, so any response > 4096
+  adapter-http-server.wat wrote the whole body in one call, so any response > 4096
   bytes failed on EVERY host ("Buffer too large... expected at most 4096" ->
-  500). Now chunked at 4096 like adapter-http.wat's request-body loop, AND
+  500). Now chunked at 4096 like adapter-http-client.wat's request-body loop, AND
   `response-outparam.set` moved BEFORE the body writes: the host only starts
   consuming the body stream after the outparam is set, so set-after-write
   deadlocks as soon as the body exceeds one host buffer (the old order only
@@ -167,7 +167,7 @@ WASM component pipeline PROVEN end-to-end; Java integration remaining.
     i32)`**: self, then the `result<own<outgoing-response>, error-code>`
     flattened into 8 slots. OK case = (self, 0 disc, resp-handle, 0, 0i64,
     0,0,0,0). This was the one non-obvious signature.
-  The proof core-serve.wat / uni-serve.wit are in /tmp/serveprobe (ephemeral —
+  The proof core-http-server.wat / uni-http-server.wit are in /tmp/serveprobe (ephemeral —
   the derived signatures above are the durable record).
 
 ## Architecture decision (2026-07-04, after a deep memory-model review)
@@ -184,7 +184,7 @@ Use the **component-mode core sharing the buildHttp memory model**, NOT a
   `memory` + a 4-arg `cabi_realloc`; the rontolisp core IMPORTS that memory. Core
   linear usage (static data / interns / string content) grows up from
   `rtInternBase` (~0x2000); the adapter uses fixed scratch at 0x50000-0x90000
-  (like `adapter-http.wat`). Collision-free for reasonable response sizes.
+  (like `adapter-http-client.wat`). Collision-free for reasonable response sizes.
 - To make the component-mode core EXPORT `%http-dispatch`, wasm-export must be
   UN-GATED for this "serve" mode. Today it is gated `!this.component` in
   `WasmLispCompiler` (the `exportDecls` loop ~L998, `exportUsesMemory` ~L981, the
@@ -198,24 +198,24 @@ Use the **component-mode core sharing the buildHttp memory model**, NOT a
 
 This is delicate index/layout surgery in `WasmLispCompiler` plus a `buildServe`
 that mirrors `buildHttp` (~185 lines, constants from a `wasm-tools dump`), an
-`adapter-serve.wat` (the proven marshalling calling `%http-dispatch`), and the
+`adapter-http-server.wat` (the proven marshalling calling `%http-dispatch`), and the
 compiler integration. Best done as a focused session; iterate against
 `wasmtime serve` + curl at each step.
 
 ## Remaining WASM work (multi-module, programmatic — native image cannot run wasm-tools)
 
-1. `src/wasm-component/uni-serve.wit` (world `uni-serve`: import wasi:http/types@0.2
+1. `src/wasm-component/uni-http-server.wit` (world `uni-http-server`: import wasi:http/types@0.2
    + wasi:io/streams@0.2 + wasi:io/error@0.2; NO export in the wit — the
-   incoming-handler export is emitted programmatically like `run`). `core-serve.wat`
-   stub (imports the lowered funcs) for `regen.sh` to produce `import-block-serve.bin`.
-2. `adapter-serve.wat`: shares `mem` with the rontolisp core; imports the lowered
+   incoming-handler export is emitted programmatically like `run`). `core-http-server.wat`
+   stub (imports the lowered funcs) for `regen.sh` to produce `import-block-http-server.bin`.
+2. `adapter-http-server.wat`: shares `mem` with the rontolisp core; imports the lowered
    wasi:http/io funcs (under "w") AND the core's `%http-dispatch` (under "core");
    exports `serve(request i32, response_out i32)` doing the proof's marshalling but
    calling `%http-dispatch` for the body. Encoding: `%http-dispatch` returns
    `"<content-type>\n<body>"` (status hardcoded 200 in v1, OR add status line;
    check whether the WASM backend can format an integer -> string cheaply, else
    hardcode 200 and note it).
-3. `WasmComponentBuilder.buildServe(core)`: mem + core + adapter-serve; derive
+3. `WasmComponentBuilder.buildServe(core)`: mem + core + adapter-http-server; derive
    wiring constants from `wasm-tools dump` of a `regen.sh` reference (mirror
    buildHttp). Lift adapter's `serve` as a SYNC export (not the async `run` lift)
    and export instance `wasi:http/incoming-handler@0.2.0`. Instantiation order:

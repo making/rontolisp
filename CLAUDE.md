@@ -32,15 +32,15 @@ Source string
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm) # compile to WASM
 ```
 
-`am.ik.jvm` and `am.ik.wasm` are **language-independent** bytecode generation libraries ported from [bfc](https://github.com/making/bfc).
+`am.ik.jvm` and `am.ik.wasm` are **language-independent** bytecode generation libraries ported from [bfc](https://github.com/making/bfc); `am.ik.wit` is their WIT-text sibling (lossless parser + wasm-tools-style printer, `.kb/wit.md`). None of the three may import rontolisp packages or external dependencies.
 
 Package dependency direction (no cycles allowed):
 
 ```
 cli -> eval, codegen.*
 codegen.jvm -> compiler, am.ik.jvm
-codegen.wasm -> compiler, am.ik.wasm
-compiler -> rontolisp (AST types only)
+codegen.wasm -> compiler, am.ik.wasm, am.ik.wit
+compiler -> rontolisp (AST types only), am.ik.wit
 eval, reader -> rontolisp (AST types only)
 ```
 
@@ -98,7 +98,8 @@ eval, reader -> rontolisp (AST types only)
 
 - **`--dynamic`**: unresolvable calls/variables fall back to the embedded `eval` instead of a compile error. `.kb/dynamic-late-binding.md`
 - **`--optimize`**: tree-shaking post-pass for WASM + JVM; skipped under `--component`. `.kb/optimize-dead-code-elimination.md`
-- **`--component` (WASI 0.3)**: the core module stays Preview-1-identical and an adapter implements WASI; `rontolisp:wasm-export` additionally becomes a typed component export (`:async t` for I/O inside an export), and `--wit` writes the component's WIT world next to the `.wasm` (per-blob-variant templates + spliced export lines; regen via `src/wasm-component/regen-wit.sh`). `.kb/wasi-component.md`
+- **`--component` (WASI 0.3)**: the core module stays Preview-1-identical and an adapter implements WASI; `rontolisp:wasm-export` additionally becomes a typed component export (`:async t` for I/O inside an export), and `--wit` writes the component's WIT world next to the `.wasm` (an `am.ik.wit` document model per blob variant — `base`/`http-client`/`sockets`/`http-server`/`http-server-client`/`nogc`/`nogc-print` — printed canonically; fixtures + generator regen via `src/wasm-component/regen-wit.sh`). `.kb/wasi-component.md`
+- **WIT type mapping is settled** (`compiler/WitTypeMapper`, for `wit-import`/`wit-export` todos 126-128): `result<T,E>` = ok value / error arm signals a condition on EVERY backend (todo 124 option (c); WASM traps only as a temporary limitation — a WASM catch mechanism is a prerequisite of todo 128), `list<u8>` = byte string. Do not re-litigate a cell; it is a user-facing breaking change. `.kb/wit.md`
 - **`rontolisp:wasm-export` / `wasm-import` / `--no-wasi`**: export a defun as host-callable WASM, declare host functions (Preview 1 only), emit an import-free reactor module. A memory-EXPORTING module (never `--component`, where the canonical ABI does it) also exports the host arena API `__ronto_alloc_mark`/`_reset` on BOTH wasm backends -- but the GC one's reset never pops below the interned-symbol pool's high-water, and has no `--no-gc`-style automatic reset. `.kb/wasm-export-no-wasi.md`, `.kb/wasm-import.md`
 - **WASM GC strings**: `TYPE_STRING` lives on the GC heap (`$str_bytes` array); `HEAP_PTR` is a stack pointer, so transient string building no longer grows the linear heap. A string's field 0 is an identity id, **not** a linear offset. `.kb/wasm-gc-strings.md`
 - **`--no-gc`**: a separate backend (`NoGcWasmCompiler`) whose value model is unboxed `i64`/`f64`/linear-memory pointers ("non-GC" != "no SIMD"); emits a plain MVP module. Packed arrays are bump-allocated with no free (hence `-into` and `with-arena`). Rejects specials/CLOS/defstruct/arrays/`linalg:`. `.kb/no-gc-scalar-wasm.md`
@@ -204,7 +205,7 @@ does not need rebuilding unless Java sources changed).
 ## Development Requirements
 
 - Java 25+
-- No external dependencies for core libraries (reader, eval, codegen, am.ik.jvm, am.ik.wasm). The `docs-tool/` generator is a separate Maven project (not in the reactor) and may use flexmark/snakeyaml.
+- No external dependencies for core libraries (reader, eval, codegen, am.ik.jvm, am.ik.wasm, am.ik.wit). The `docs-tool/` generator is a separate Maven project (not in the reactor) and may use flexmark/snakeyaml.
 - Spring Java Format enforced via Maven plugin
 - Use modern Java features (Records, Pattern Matching, Sealed Types, Text Blocks, etc.)
 - Avoid circular references between classes and packages

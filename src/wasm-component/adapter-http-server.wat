@@ -6,9 +6,9 @@
 ;; scratch, calls the rontolisp core's `%http-dispatch` (a wasm-export :string*3 -> :string
 ;; wrapper that runs the Lisp handler and returns "<status>\n<body>"), parses the status and
 ;; body, and writes an outgoing-response back through response-outparam.set. This is the
-;; incoming mirror of adapter-http.wat's fetch-start/fetch-await.
+;; incoming mirror of adapter-http-client.wat's fetch-start/fetch-await.
 ;;
-;; Memory model (same as adapter-http.wat): the shared 16-page `mem` module holds the
+;; Memory model (same as adapter-http-client.wat): the shared 16-page `mem` module holds the
 ;; canonical scratch; the rontolisp core's linear usage (interns / string content, from
 ;; ~0x2000) stays below the 0x50000+ scratch used here. Scratch layout:
 ;;   0x50000  general lowering out-params (path option, consume/stream results, io results)
@@ -211,7 +211,7 @@
     (call $body_write (local.get $obody) (i32.const 0x50050))
     (local.set $ostream (i32.load (i32.const 0x50054)))
     ;; blocking-write-and-flush accepts at most 4096 bytes per call, so chunk the body
-    ;; (mirrors adapter-http.wat's request-body write loop); bail out on a stream error.
+    ;; (mirrors adapter-http-client.wat's request-body write loop); bail out on a stream error.
     (block $bwd (loop $bwl
       (br_if $bwd (i32.ge_u (local.get $i) (local.get $ret_len)))
       (local.set $n (i32.sub (local.get $ret_len) (local.get $i)))

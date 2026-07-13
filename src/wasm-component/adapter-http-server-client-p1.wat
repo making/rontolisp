@@ -1,61 +1,40 @@
-;; preview1-to-WASI-0.3 adapter core module, HTTP variant (rontolisp:fetch).
+;; Preview-1 bridge core module for serve components WHOSE PROGRAM ALSO USES
+;; rontolisp:fetch (a proxy-style handler making outgoing requests). It is
+;; adapter-http-server-p1.wat (the eight preview1 functions over the wasi:http proxy world --
+;; see that file's header for the mapping) PLUS the `fetch-start` / `fetch-await` exports
+;; of adapter-http-client.wat driving an outgoing request over wasi:http@0.2, and the
+;; errno-returning tcp stubs satisfying the core's reserved "sock" import slots.
 ;;
-;; Identical to adapter.wat for the eight wasi_snapshot_preview1 functions (base I/O over
-;; WASI 0.3 stream<u8> / future<T>), PLUS `fetch-start` / `fetch-await` exports
-;; implementing asynchronous outgoing HTTP (the rontolisp:fetch promise API). fetch stays
-;; on WASI 0.2 (wasi:http@0.2 + wasi:io@0.2) because an async stream/future wasi:http@0.3
-;; does not exist upstream yet (see ../../TODO.md). fetch-start parses the URL, builds an
-;; outgoing-request, sends it via outgoing-handler.handle (streaming the request body if
-;; any) and returns the future-incoming-response handle IMMEDIATELY -- that handle is the
-;; promise the rontolisp core hands out, and several can be in flight at once. fetch-await
-;; then blocks on the response pollable and serializes the response status, headers and
-;; body back for the rontolisp core. So the base byte I/O uses the 0.3 async canonical
-;; built-ins while the http body streaming uses the 0.2 wasi:io input-stream /
-;; output-stream blocking ops (imported here under distinct names io-read / io-write /
-;; drop-in / drop-out).
+;; The bridge (not the serve adapter) hosts the fetch machinery because the rontolisp
+;; core's "http" imports must be satisfied by a module instantiated BEFORE the core, and
+;; the serve adapter comes after (it imports the core's %http-dispatch).
 ;;
-;; Straight-line synchronous code is fine: `run` is lifted as a STACKFUL async export, so
-;; both the 0.3 stream/future built-ins and the synchronous 0.2 pollable.block block
-;; cooperatively.
-;;
-;; The shared memory module is 16 pages (mem-http.wat). Page-5 (0x50000+) base scratch is
-;; the same as adapter.wat (fd table at 0x50100, 64 slots x 16 ends at 0x50500); the fetch
-;; scratch lives above it from 0x50800, the serialized response-header buffer uses page 6
-;; (0x60000) and the response body uses pages 7+ (0x70000, capped at ~0x90000).
+;; Scratch (all TRANSIENT: written and read back within a single export call, so the
+;; core's bump-heap sweep across the 0x50000 page can never interleave with a live value):
+;;   0x50380-0x5039F  preview1 bridge cells (same as adapter-http-server-p1.wat)
+;;   0x50800-0x508DF  fetch-start / fetch-await result-lowering cells (same as
+;;                    adapter-http-client.wat)
+;;   0x60000          serialized response-header buffer (fetch-await)
+;;   0x70000-0x8FFFF  response body buffer (fetch-await)
+;; The 0x60000/0x70000 buffers are shared scratch: the rontolisp core copies them into GC
+;; values right after fetch-await returns. 0x70000 also holds the serve adapter's
+;; REQUEST-body scratch, which is safe: %http-dispatch marshals the request body into a
+;; GC string before the Lisp handler (and therefore any fetch) runs.
 (module
   (import "mem" "memory" (memory (;0;) 16))
-  ;; --- base I/O: lowered WASI 0.3 functions + async canonical built-ins (as adapter.wat) ---
-  (import "w" "stdout-write" (func $stdout_write (param i32) (result i32)))
-  (import "w" "stderr-write" (func $stderr_write (param i32) (result i32)))
-  (import "w" "stdin-read" (func $stdin_read (param i32)))
-  (import "w" "get-environment" (func $getenviron (param i32)))
-  (import "w" "sys-now" (func $sys_now (param i32)))
+  ;; Lowered wasi 0.2 functions (grouped under "w" by buildServeHttp).
+  (import "w" "rand-u64" (func $rand_u64 (result i64)))
+  (import "w" "wall-now" (func $wall_now (param i32)))
   (import "w" "mono-now" (func $mono_now (result i64)))
-  (import "w" "file-read" (func $file_read (param i32 i64 i32)))
-  (import "w" "file-append" (func $file_append (param i32 i32) (result i32)))
-  (import "w" "open-at" (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
-  (import "w" "get-directories" (func $get_directories (param i32)))
-  (import "w" "get-random-u64" (func $rand_u64 (result i64)))
-  (import "w" "drop-desc" (func $drop_desc (param i32)))
-  (import "w" "stream-new" (func $stream_new (result i64)))
-  (import "w" "stream-read" (func $stream_read (param i32 i32 i32) (result i32)))
-  (import "w" "stream-write" (func $stream_write (param i32 i32 i32) (result i32)))
-  (import "w" "stream-drop-r" (func $stream_drop_r (param i32)))
-  (import "w" "stream-drop-w" (func $stream_drop_w (param i32)))
-  (import "w" "future-read-cli" (func $future_read_cli (param i32 i32) (result i32)))
-  (import "w" "future-drop-cli" (func $future_drop_cli (param i32)))
-  (import "w" "future-read-fs" (func $future_read_fs (param i32 i32) (result i32)))
-  (import "w" "future-drop-fs" (func $future_drop_fs (param i32)))
-  ;; --- outgoing HTTP (rontolisp:fetch): lowered WASI 0.2 functions ---
-  ;; wasi:io/streams 0.2 blocking ops (request/response body streaming over wasi:http)
-  (import "w" "io-write" (func $write (param i32 i32 i32 i32)))
+  (import "w" "get-stdout" (func $get_stdout (result i32)))
+  (import "w" "get-stderr" (func $get_stderr (result i32)))
+  (import "w" "io-write" (func $io_write (param i32 i32 i32 i32)))
+  ;; --- outgoing HTTP (rontolisp:fetch): as adapter-http-client.wat ---
   (import "w" "io-read" (func $read (param i32 i64 i32)))
   (import "w" "drop-out" (func $drop_out (param i32)))
   (import "w" "drop-in" (func $drop_in (param i32)))
-  ;; wasi:io/poll 0.2
   (import "w" "poll-block" (func $poll_block (param i32)))
   (import "w" "drop-pollable" (func $drop_pollable (param i32)))
-  ;; wasi:http/types 0.2
   (import "w" "fields-new" (func $fields_new (result i32)))
   (import "w" "fields-append" (func $fields_append (param i32 i32 i32 i32 i32 i32)))
   (import "w" "fields-entries" (func $fields_entries (param i32 i32)))
@@ -81,126 +60,75 @@
   (import "w" "drop-resp" (func $drop_resp (param i32)))
   (import "w" "drop-body" (func $drop_body (param i32)))
 
-  ;; Return the first preopened directory descriptor (cached).
-  (func $ensure_preopen (result i32)
-    (if (i32.eqz (i32.load (i32.const 0x50040)))
-      (then
-        (call $get_directories (i32.const 0x50030))
-        (i32.store (i32.const 0x50044) (i32.load (i32.load (i32.const 0x50030))))
-        (i32.store (i32.const 0x50040) (i32.const 1))))
-    (i32.load (i32.const 0x50044)))
+  ;; Cached wasi:cli stdout/stderr output-stream handles (-1 = not fetched yet). Globals,
+  ;; not linear memory, for the same clobbering reason as adapter-http-server.wat's snapshots.
+  (global $stdout (mut i32) (i32.const -1))
+  (global $stderr (mut i32) (i32.const -1))
 
-  ;; fd table slot address for a preview1 file fd.
-  (func $slot (param $fd i32) (result i32)
-    (i32.add (i32.const 0x50100)
-      (i32.mul (i32.sub (local.get $fd) (i32.const 100)) (i32.const 16))))
-
-  ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout, fd==2 is stderr (both over
-  ;; the wasi:cli error-code, so the -cli future built-ins); otherwise a file fd (-fs).
-  (func $fd_write (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
-    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32)
-    (local $i i32) (local $base i32) (local $ptr i32) (local $len i32) (local $total i32) (local $sl i32)
-    (local.set $r64 (call $stream_new))
-    (local.set $rx (i32.wrap_i64 (local.get $r64)))
-    (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r64) (i64.const 32))))
+  ;; The output-stream for preview1 fd 1/2, fetched on first use.
+  (func $out_stream (param $fd i32) (result i32)
     (if (i32.eq (local.get $fd) (i32.const 1))
       (then
-        (local.set $fut (call $stdout_write (local.get $rx))))
-      (else
-        (if (i32.eq (local.get $fd) (i32.const 2))
-          (then
-            (local.set $fut (call $stderr_write (local.get $rx))))
-          (else
-            (local.set $sl (call $slot (local.get $fd)))
-            (local.set $fut (call $file_append (i32.load (local.get $sl)) (local.get $rx)))))))
+        (if (i32.eq (global.get $stdout) (i32.const -1))
+          (then (global.set $stdout (call $get_stdout))))
+        (return (global.get $stdout))))
+    (if (i32.eq (global.get $stderr) (i32.const -1))
+      (then (global.set $stderr (call $get_stderr))))
+    (global.get $stderr))
+
+  ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd 1/2 only; each iovec is pushed through
+  ;; blocking-write-and-flush in <=4096-byte chunks. A stream error stops early with
+  ;; errno 29 (EIO) and the bytes written so far.
+  (func $fd_write (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
+    (local $s i32) (local $i i32) (local $base i32) (local $ptr i32) (local $len i32)
+    (local $n i32) (local $total i32)
+    (if (i32.eqz (i32.or (i32.eq (local.get $fd) (i32.const 1)) (i32.eq (local.get $fd) (i32.const 2))))
+      (then (return (i32.const 8))))
+    (local.set $s (call $out_stream (local.get $fd)))
     (block $done
-      (loop $l
+      (loop $iv
         (br_if $done (i32.ge_u (local.get $i) (local.get $cnt)))
         (local.set $base (i32.add (local.get $iov) (i32.mul (local.get $i) (i32.const 8))))
         (local.set $ptr (i32.load (local.get $base)))
         (local.set $len (i32.load offset=4 (local.get $base)))
-        (if (local.get $len)
-          (then (drop (call $stream_write (local.get $tx) (local.get $ptr) (local.get $len)))))
-        (local.set $total (i32.add (local.get $total) (local.get $len)))
+        (block $wd
+          (loop $wl
+            (br_if $wd (i32.eqz (local.get $len)))
+            (local.set $n (select (i32.const 4096) (local.get $len)
+              (i32.gt_u (local.get $len) (i32.const 4096))))
+            (call $io_write (local.get $s) (local.get $ptr) (local.get $n) (i32.const 0x50380))
+            (if (i32.load8_u (i32.const 0x50380))
+              (then
+                (i32.store (local.get $nw) (local.get $total))
+                (return (i32.const 29))))
+            (local.set $ptr (i32.add (local.get $ptr) (local.get $n)))
+            (local.set $len (i32.sub (local.get $len) (local.get $n)))
+            (local.set $total (i32.add (local.get $total) (local.get $n)))
+            (br $wl)))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $l)))
-    (call $stream_drop_w (local.get $tx))
-    (if (i32.or (i32.eq (local.get $fd) (i32.const 1)) (i32.eq (local.get $fd) (i32.const 2)))
-      (then
-        (drop (call $future_read_cli (local.get $fut) (i32.const 0x50000)))
-        (call $future_drop_cli (local.get $fut)))
-      (else
-        (drop (call $future_read_fs (local.get $fut) (i32.const 0x50000)))
-        (call $future_drop_fs (local.get $fut))))
+        (br $iv)))
     (i32.store (local.get $nw) (local.get $total))
     (i32.const 0))
 
-  ;; fd_read(fd, iov, cnt, nread) -> errno. fd==0 is stdin; otherwise a file fd.
+  ;; fd_read(fd, iov, cnt, nread) -> errno. Always EOF: a served handler has no stdin,
+  ;; and the core reads a file fd only after a successful path_open (which fails here).
   (func $fd_read (param $fd i32) (param $iov i32) (param $cnt i32) (param $nread i32) (result i32)
-    (local $ins i32) (local $sl i32) (local $ptr i32) (local $len i32) (local $ret i32) (local $n i32)
-    (if (i32.eqz (local.get $fd))
-      (then
-        (if (i32.eqz (i32.load (i32.const 0x50080)))
-          (then
-            (call $stdin_read (i32.const 0x50070))
-            (i32.store (i32.const 0x50084) (i32.load (i32.const 0x50070)))
-            (call $future_drop_cli (i32.load (i32.const 0x50074)))
-            (i32.store (i32.const 0x50080) (i32.const 1))))
-        (local.set $ins (i32.load (i32.const 0x50084))))
-      (else
-        (local.set $sl (call $slot (local.get $fd)))
-        (local.set $ins (i32.load offset=4 (local.get $sl)))
-        (if (i32.eq (local.get $ins) (i32.const -1))
-          (then
-            (call $file_read (i32.load (local.get $sl)) (i64.const 0) (i32.const 0x50060))
-            (local.set $ins (i32.load (i32.const 0x50060)))
-            (i32.store offset=4 (local.get $sl) (local.get $ins))
-            (call $future_drop_fs (i32.load (i32.const 0x50064)))))))
-    (local.set $ptr (i32.load (local.get $iov)))
-    (local.set $len (i32.load offset=4 (local.get $iov)))
-    (local.set $ret (call $stream_read (local.get $ins) (local.get $ptr) (local.get $len)))
-    (local.set $n (i32.shr_u (local.get $ret) (i32.const 4)))
-    (i32.store (local.get $nread) (local.get $n))
+    (i32.store (local.get $nread) (i32.const 0))
     (i32.const 0))
 
-  ;; path_open(...) -> errno. oflags 0 = read, 9 = write (create|truncate).
+  ;; path_open(...) -> errno 76: no filesystem in the proxy world. The core traps on the
+  ;; nonzero errno, so file streams fail loudly instead of returning a garbage handle.
   (func $path_open
     (param $dirfd i32) (param $dirflags i32) (param $pptr i32) (param $plen i32)
     (param $oflags i32) (param $rb i64) (param $ri i64) (param $fdflags i32) (param $fdout i32) (result i32)
-    (local $pre i32) (local $df i32) (local $idx i32) (local $sl i32)
-    (local.set $pre (call $ensure_preopen))
-    (local.set $df (if (result i32) (i32.eqz (local.get $oflags))
-      (then (i32.const 1)) (else (i32.const 2))))
-    (call $open_at (local.get $pre) (i32.const 0) (local.get $pptr) (local.get $plen)
-      (local.get $oflags) (local.get $df) (i32.const 0x50050))
-    (if (i32.load8_u (i32.const 0x50050)) (then (return (i32.const 76))))
-    (block $found
-      (loop $fl
-        (local.set $sl (i32.add (i32.const 0x50100) (i32.mul (local.get $idx) (i32.const 16))))
-        (br_if $found (i32.eqz (i32.load offset=12 (local.get $sl))))
-        (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
-        (br_if $fl (i32.lt_u (local.get $idx) (i32.const 64)))))
-    (if (i32.eq (local.get $idx) (i32.const 64)) (then (return (i32.const 76))))
-    (i32.store offset=12 (local.get $sl) (i32.const 1))
-    (i32.store (local.get $sl) (i32.load offset=4 (i32.const 0x50050)))
-    (i32.store offset=4 (local.get $sl) (i32.const -1))
-    (i32.store offset=8 (local.get $sl) (i32.const -1))
-    (i32.store (local.get $fdout) (i32.add (i32.const 100) (local.get $idx)))
-    (i32.const 0))
+    (i32.const 76))
 
-  ;; fd_close(fd) -> errno.
+  ;; fd_close(fd) -> errno 0 (nothing to close; sockets/files never open here).
   (func $fd_close (param $fd i32) (result i32)
-    (local $sl i32) (local $h i32)
-    (if (i32.lt_u (local.get $fd) (i32.const 100)) (then (return (i32.const 0))))
-    (local.set $sl (call $slot (local.get $fd)))
-    (local.set $h (i32.load offset=4 (local.get $sl)))
-    (if (i32.ne (local.get $h) (i32.const -1))
-      (then (call $stream_drop_r (local.get $h))))
-    (call $drop_desc (i32.load (local.get $sl)))
-    (i32.store offset=12 (local.get $sl) (i32.const 0))
     (i32.const 0))
 
-  ;; random_get(buf, len) -> errno.
+  ;; random_get(buf, len) -> errno. Fills buf with wasi:random bytes (8 at a time, like
+  ;; adapter.wat).
   (func $random_get (param $buf i32) (param $len i32) (result i32)
     (local $i i32)
     (block $done
@@ -211,76 +139,27 @@
         (br $l)))
     (i32.const 0))
 
-  ;; clock_time_get(clock_id, precision, resptr) -> errno.
+  ;; clock_time_get(clock_id, precision, resptr) -> errno. 0 = realtime (wall-clock),
+  ;; else monotonic. Writes nanoseconds as i64 (mirrors adapter.wat).
   (func $clock_time_get (param $clkid i32) (param $prec i64) (param $resptr i32) (result i32)
     (if (i32.eqz (local.get $clkid))
       (then
-        (call $sys_now (i32.const 0x50010))
+        (call $wall_now (i32.const 0x50390))
         (i64.store (local.get $resptr)
-          (i64.add (i64.mul (i64.load (i32.const 0x50010)) (i64.const 1000000000))
-            (i64.extend_i32_u (i32.load (i32.const 0x50018))))))
+          (i64.add (i64.mul (i64.load (i32.const 0x50390)) (i64.const 1000000000))
+            (i64.extend_i32_u (i32.load (i32.const 0x50398))))))
       (else
         (i64.store (local.get $resptr) (call $mono_now))))
     (i32.const 0))
 
-  ;; environ_sizes_get(count_ptr, bufsize_ptr) -> errno.
+  ;; environ_sizes_get(count_ptr, bufsize_ptr) -> errno. Zero environment.
   (func $environ_sizes_get (param $cp i32) (param $bp i32) (result i32)
-    (local $base i32) (local $count i32) (local $i i32) (local $sz i32) (local $e i32)
-    (call $getenviron (i32.const 0x50020))
-    (local.set $base (i32.load (i32.const 0x50020)))
-    (local.set $count (i32.load (i32.const 0x50024)))
-    (block $d
-      (loop $l
-        (br_if $d (i32.ge_u (local.get $i) (local.get $count)))
-        (local.set $e (i32.add (local.get $base) (i32.mul (local.get $i) (i32.const 16))))
-        (local.set $sz (i32.add (local.get $sz)
-          (i32.add (i32.add (i32.load offset=4 (local.get $e)) (i32.load offset=12 (local.get $e)))
-            (i32.const 2))))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $l)))
-    (i32.store (local.get $cp) (local.get $count))
-    (i32.store (local.get $bp) (local.get $sz))
+    (i32.store (local.get $cp) (i32.const 0))
+    (i32.store (local.get $bp) (i32.const 0))
     (i32.const 0))
 
-  ;; environ_get(ptrs, buf) -> errno.
-  (func $environ_get (param $pp i32) (param $bufp i32) (result i32)
-    (local $base i32) (local $count i32) (local $i i32) (local $out i32) (local $e i32)
-    (local $kp i32) (local $kl i32) (local $vp i32) (local $vl i32) (local $j i32)
-    (call $getenviron (i32.const 0x50020))
-    (local.set $base (i32.load (i32.const 0x50020)))
-    (local.set $count (i32.load (i32.const 0x50024)))
-    (local.set $out (local.get $bufp))
-    (block $d
-      (loop $l
-        (br_if $d (i32.ge_u (local.get $i) (local.get $count)))
-        (local.set $e (i32.add (local.get $base) (i32.mul (local.get $i) (i32.const 16))))
-        (local.set $kp (i32.load (local.get $e)))
-        (local.set $kl (i32.load offset=4 (local.get $e)))
-        (local.set $vp (i32.load offset=8 (local.get $e)))
-        (local.set $vl (i32.load offset=12 (local.get $e)))
-        (i32.store (i32.add (local.get $pp) (i32.mul (local.get $i) (i32.const 4))) (local.get $out))
-        (local.set $j (i32.const 0))
-        (block $kd
-          (loop $k
-            (br_if $kd (i32.ge_u (local.get $j) (local.get $kl)))
-            (i32.store8 (local.get $out) (i32.load8_u (i32.add (local.get $kp) (local.get $j))))
-            (local.set $out (i32.add (local.get $out) (i32.const 1)))
-            (local.set $j (i32.add (local.get $j) (i32.const 1)))
-            (br $k)))
-        (i32.store8 (local.get $out) (i32.const 61))
-        (local.set $out (i32.add (local.get $out) (i32.const 1)))
-        (local.set $j (i32.const 0))
-        (block $vd
-          (loop $v
-            (br_if $vd (i32.ge_u (local.get $j) (local.get $vl)))
-            (i32.store8 (local.get $out) (i32.load8_u (i32.add (local.get $vp) (local.get $j))))
-            (local.set $out (i32.add (local.get $out) (i32.const 1)))
-            (local.set $j (i32.add (local.get $j) (i32.const 1)))
-            (br $v)))
-        (i32.store8 (local.get $out) (i32.const 0))
-        (local.set $out (i32.add (local.get $out) (i32.const 1)))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $l)))
+  ;; environ_get(env_ptrs, env_buf) -> errno. Nothing to write (count is 0).
+  (func $environ_get (param $ep i32) (param $eb i32) (result i32)
     (i32.const 0))
 
   ;; fetch-start(method, url_ptr, url_len, req_body_ptr, req_body_len, rhdr_ptr, rhdr_len,
@@ -291,6 +170,7 @@
   ;; discriminant (0=get,1=head,2=post,3=put,4=delete,6=options,8=patch). The
   ;; request-header buffer is count-prefixed:
   ;;   count:u32, then per header { name_len:u32, name bytes, value_len:u32, value bytes }.
+  ;; (Identical to adapter-http-client.wat's fetch-start.)
   (func $fetch_start
     (param $method i32) (param $url_ptr i32) (param $url_len i32)
     (param $req_body_ptr i32) (param $req_body_len i32)
@@ -384,7 +264,7 @@
           (br_if $wd (i32.ge_u (local.get $bi) (local.get $req_body_len)))
           (local.set $chunk (i32.sub (local.get $req_body_len) (local.get $bi)))
           (if (i32.gt_u (local.get $chunk) (i32.const 4096)) (then (local.set $chunk (i32.const 4096))))
-          (call $write (local.get $bstream)
+          (call $io_write (local.get $bstream)
             (i32.add (local.get $req_body_ptr) (local.get $bi)) (local.get $chunk) (i32.const 0x508C0))
           (if (i32.load8_u (i32.const 0x508C0)) (then (return (i32.const 10))))
           (local.set $bi (i32.add (local.get $bi) (local.get $chunk)))
@@ -403,6 +283,7 @@
   ;; response-header buffer (at 0x60000) and the response body bytes (at 0x70000) back
   ;; through the out pointers. The 0x60000/0x70000 buffers are shared scratch: the
   ;; rontolisp core copies them into GC values before the next fetch-await runs.
+  ;; (Identical to adapter-http-client.wat's fetch-await.)
   (func $fetch_await
     (param $future i32) (param $st_ptr i32) (param $rhdr_out i32) (param $rhdr_len_out i32)
     (param $body_out i32) (param $body_len_out i32) (result i32)
@@ -516,7 +397,7 @@
   ;; errno-returning stubs satisfying the rontolisp core's "sock" imports in a fetch
   ;; component: imports precede defined functions, so the sock slots (core function
   ;; indices 8-11) must be imports whenever the http slots (12-13) are. rontolisp:tcp-*
-  ;; in a fetch component is a compile error, so these are never called -- they only
+  ;; in a serve component is a compile error, so these are never called -- they only
   ;; have to exist and link. 52 = ENOSYS.
   (func $tcp_stub4 (param i32 i32 i32 i32) (result i32) (i32.const 52))
   (func $tcp_stub2 (param i32 i32) (result i32) (i32.const 52))

@@ -144,7 +144,7 @@ preserve that foundation and leave 93 easier, not harder:
   `wasi_snapshot_preview1.fd_write` import the adapter-free wrap cannot satisfy.
   Release 1 of 93 should make `print` under `--no-gc --component` a clear compile
   error; a later phase can add a micro-adapter (a minuscule core module implementing
-  fd_write over `wasi:cli/stdout`, the adapter-serve-p1 pattern in miniature). The
+  fd_write over `wasi:cli/stdout`, the adapter-http-server-p1 pattern in miniature). The
   `__write_stdout` seam above is what makes that swap local. `--component` is
   rejected under `--no-gc` today anyway, so 110 itself only needs the seam — record
   the decision, no component work.

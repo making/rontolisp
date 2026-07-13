@@ -1,13 +1,13 @@
 ;; Stub core whose only purpose is to make `wasm-tools component new` emit the imports for
-;; import-block-serve-http.bin (the serve + fetch variant: rontolisp:http-handler AND
+;; import-block-http-server-client.bin (the serve + fetch variant: rontolisp:http-handler AND
 ;; rontolisp:fetch in one program). Imports every lowered function the serve-variant
-;; adapters bind -- the full core-serve.wat set (incoming-request machinery for
-;; adapter-serve.wat, proxy-world entropy / clock / stdio for the preview1 bridge) PLUS
-;; the outgoing-request machinery of core-http.wat's WASI 0.2 http portion, which the
-;; extended bridge (adapter-serve-p1-http.wat) drives for fetch-start / fetch-await.
+;; adapters bind -- the full core-http-server.wat set (incoming-request machinery for
+;; adapter-http-server.wat, proxy-world entropy / clock / stdio for the preview1 bridge) PLUS
+;; the outgoing-request machinery of core-http-client.wat's WASI 0.2 http portion, which the
+;; extended bridge (adapter-http-server-client-p1.wat) drives for fetch-start / fetch-await.
 ;; Exports a memory (16 pages, shared canonical scratch) + cabi_realloc + run.
 (module
-  ;; wasi:http/types 0.2: incoming request + outgoing response machinery (adapter-serve)
+  ;; wasi:http/types 0.2: incoming request + outgoing response machinery (adapter-http-server)
   (import "wasi:http/types@0.2.0" "[method]incoming-request.method" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-request.path-with-query" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-request.consume" (func (param i32 i32)))
@@ -51,7 +51,7 @@
   ;; wasi:http/outgoing-handler 0.2: sends the outgoing request
   (import "wasi:http/outgoing-handler@0.2.0" "handle" (func (param i32 i32 i32 i32)))
   ;; wasi:random / wasi:clocks / wasi:cli 0.2 (proxy world): entropy, clocks and
-  ;; stdout/stderr for the preview1 bridge (adapter-serve-p1-http.wat)
+  ;; stdout/stderr for the preview1 bridge (adapter-http-server-client-p1.wat)
   (import "wasi:random/random@0.2.0" "get-random-u64" (func (result i64)))
   (import "wasi:clocks/wall-clock@0.2.0" "now" (func (param i32)))
   (import "wasi:clocks/monotonic-clock@0.2.0" "now" (func (result i64)))

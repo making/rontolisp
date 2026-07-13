@@ -4,7 +4,7 @@ package local:uni;
 // rontolisp:tcp-* built-in.
 //
 // It is the base WASI 0.3 surface (uni.wit) PLUS wasi:sockets/types@0.3.0 -- unlike
-// fetch (which is a 0.2 hybrid, see uni-http.wit), sockets exist natively in WASI 0.3
+// fetch (which is a 0.2 hybrid, see uni-http-client.wit), sockets exist natively in WASI 0.3
 // and wasmtime 46 hosts them (-S tcp=y -S inherit-network=y), so the sockets variant
 // stays pure 0.3: the tcp-socket send/receive plumbing flows through the same built-in
 // stream<u8> machinery as the base I/O.
@@ -13,7 +13,7 @@ package local:uni;
 // WasmComponentBuilder.buildSock assumes: the base instances 0-8 keep the uni.wit
 // order, wasi:sockets/types is appended LAST (instance 9). After editing, run regen.sh
 // and re-derive the buildSock constants from a fresh `wasm-tools dump`.
-world uni-sock {
+world uni-sockets {
   // --- base I/O: WASI 0.3 (same set as uni.wit) ---
   import wasi:cli/stdout@0.3.0;
   import wasi:cli/stdin@0.3.0;

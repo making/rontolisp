@@ -92,23 +92,25 @@ public final class WasmComponentBuilder {
 	 * {@code wasi:http@0.2} because an async {@code wasi:http@0.3} does not exist
 	 * upstream yet (see {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}). It declares
 	 * component import instances 0-14, so the next free component type index is 27.
-	 * Source: {@code src/wasm-component/uni-http.wit} + {@code core-http.wat}.
+	 * Source: {@code src/wasm-component/uni-http-client.wit} +
+	 * {@code core-http-client.wat}.
 	 */
-	private static final byte[] IMPORT_BLOCK_HTTP = resource("import-block-http.bin");
+	private static final byte[] IMPORT_BLOCK_HTTP_CLIENT = resource("import-block-http-client.bin");
 
 	/**
 	 * The shared memory module for the HTTP variant (16 pages, for the fetch
-	 * response-header / body scratch). Source: {@code src/wasm-component/mem-http.wat}.
+	 * response-header / body scratch). Source:
+	 * {@code src/wasm-component/mem-http-client.wat}.
 	 */
-	private static final byte[] MEM_MODULE_HTTP = resource("mem-http.wasm");
+	private static final byte[] MEM_MODULE_HTTP_CLIENT = resource("mem-http-client.wasm");
 
 	/**
 	 * The HTTP variant of the adapter: like {@link #ADAPTER_MODULE} but with extra
 	 * {@code fetch-start} / {@code fetch-await} exports driving an asynchronous outgoing
 	 * request (the {@code rontolisp:fetch} promise API) over {@code wasi:http@0.2} +
-	 * {@code wasi:io@0.2}. Source: {@code src/wasm-component/adapter-http.wat}.
+	 * {@code wasi:io@0.2}. Source: {@code src/wasm-component/adapter-http-client.wat}.
 	 */
-	private static final byte[] ADAPTER_MODULE_HTTP = resource("adapter-http.wasm");
+	private static final byte[] ADAPTER_MODULE_HTTP_CLIENT = resource("adapter-http-client.wasm");
 
 	/**
 	 * The sockets variant of the import block: the base WASI 0.3 interfaces PLUS
@@ -117,9 +119,9 @@ public final class WasmComponentBuilder {
 	 * {@code warn} on fd&nbsp;2). Unlike fetch, sockets exist natively in WASI 0.3 so the
 	 * variant stays pure 0.3. It declares component import instances 0-10 and component
 	 * types 0-14, so the next free component type index is 15. Source:
-	 * {@code src/wasm-component/uni-sock.wit} + {@code core-sock.wat}.
+	 * {@code src/wasm-component/uni-sockets.wit} + {@code core-sockets.wat}.
 	 */
-	private static final byte[] IMPORT_BLOCK_SOCK = resource("import-block-sock.bin");
+	private static final byte[] IMPORT_BLOCK_SOCKETS = resource("import-block-sockets.bin");
 
 	/**
 	 * The sockets variant of the adapter: like {@link #ADAPTER_MODULE} but with extra
@@ -127,9 +129,9 @@ public final class WasmComponentBuilder {
 	 * {@code tcp-local-port} exports and fd&nbsp;&gt;=&nbsp;200 socket branches in
 	 * {@code fd_write}/{@code fd_read}/{@code fd_close}, over {@code wasi:sockets@0.3.0}.
 	 * It shares {@link #MEM_MODULE} (the socket table and scratch fit in page 5). Source:
-	 * {@code src/wasm-component/adapter-sock.wat}.
+	 * {@code src/wasm-component/adapter-sockets.wat}.
 	 */
-	private static final byte[] ADAPTER_MODULE_SOCK = resource("adapter-sock.wasm");
+	private static final byte[] ADAPTER_MODULE_SOCKETS = resource("adapter-sockets.wasm");
 
 	// Component import-instance indices (from import-block.bin; see IMPORT_BLOCK).
 	private static final int INST_CLI_TYPES = 0;
@@ -357,9 +359,9 @@ public final class WasmComponentBuilder {
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
 	 * wrap the rontolisp core (which exports {@code %http-dispatch},
 	 * {@code __ronto_alloc} and {@code run}) with the preview1 bridge
-	 * ({@code adapter-serve-p1.wasm}: random / clocks / stdout-stderr for the core's
-	 * {@code wasi_snapshot_preview1} imports) and the serve adapter
-	 * ({@code adapter-serve.wasm}) so the component exports
+	 * ({@code adapter-http-server-p1.wasm}: random / clocks / stdout-stderr for the
+	 * core's {@code wasi_snapshot_preview1} imports) and the serve adapter
+	 * ({@code adapter-http-server.wasm}) so the component exports
 	 * {@code wasi:http/incoming-handler@0.2.0} and runs under {@code wasmtime serve} (or
 	 * any {@code wasi:http} 0.2 host with wasm-GC enabled, e.g. jco or wasmCloud).
 	 * @param coreModule the rontolisp core module compiled in serve mode
@@ -373,7 +375,7 @@ public final class WasmComponentBuilder {
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program.
 	 * When the program also uses {@code rontolisp:fetch}, the serve+fetch variant is
 	 * assembled instead: the preview1 bridge is the extended
-	 * {@code adapter-serve-p1-http.wasm}, which additionally satisfies the core's
+	 * {@code adapter-http-server-client-p1.wasm}, which additionally satisfies the core's
 	 * {@code http} (fetch-start / fetch-await) imports so a served handler can make
 	 * outgoing requests (run with {@code wasmtime serve -S http=y}).
 	 * @param coreModule the rontolisp core module compiled in serve mode
@@ -510,7 +512,8 @@ public final class WasmComponentBuilder {
 		return c.toByteArray();
 	}
 
-	// HTTP-variant component import-instance indices (from import-block-http.bin). The
+	// HTTP-variant component import-instance indices (from import-block-http-client.bin).
+	// The
 	// base
 	// WASI 0.3 instances 0-8 keep the same order as buildBase; the WASI 0.2 HTTP
 	// instances
@@ -544,8 +547,10 @@ public final class WasmComponentBuilder {
 
 	private static final int H_INST_STDERR = 14;
 
-	// First free component type index after import-block-http.bin. The stderr interface
-	// appended last to uni-http.wit adds two component types (an aliased cli error-code +
+	// First free component type index after import-block-http-client.bin. The stderr
+	// interface
+	// appended last to uni-http-client.wit adds two component types (an aliased cli
+	// error-code +
 	// the stderr instance type), so the next free index moves from 25 to 27.
 	// Aliased resource/enum types (component types 27-38).
 	private static final int H_T_CLI_ERRCODE = 27;
@@ -592,15 +597,15 @@ public final class WasmComponentBuilder {
 	 * the base WASI 0.3 component plus the WASI 0.2 HTTP / io machinery: the base I/O
 	 * still flows through the 0.3 {@code stream}/{@code future} built-ins, while fetch
 	 * drives an outgoing request over {@code wasi:http@0.2} + {@code wasi:io@0.2}
-	 * (synchronous {@code pollable.block}) in {@code adapter-http.wat}. async
+	 * (synchronous {@code pollable.block}) in {@code adapter-http-client.wat}. async
 	 * {@code wasi:http@0.3} does not exist upstream yet; see
 	 * {@code .todo/02-upgrade-fetch-to-wasi-http-0.3.md}.
 	 *
 	 * <p>
 	 * All wiring constants (instance indices, the next-free type index 27, the 32 lowered
 	 * functions and their canonical options) were derived from {@code wasm-tools dump} of
-	 * a reference generated by {@code regen.sh} from {@code uni-http.wit} +
-	 * {@code core-http.wat}.
+	 * a reference generated by {@code regen.sh} from {@code uni-http-client.wit} +
+	 * {@code core-http-client.wat}.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @return the WASI 0.3 (+ 0.2 http) component binary
@@ -608,10 +613,10 @@ public final class WasmComponentBuilder {
 	private static byte[] buildHttp(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + WASI 0.2 http import instances 0-13, component types 0-24.
-		c.writeRaw(IMPORT_BLOCK_HTTP);
+		c.writeRaw(IMPORT_BLOCK_HTTP_CLIENT);
 		// Core modules: 0 = shared 16-page memory, 1 = http adapter, 2 = rontolisp.
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE_HTTP);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE_HTTP);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE_HTTP_CLIENT);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE_HTTP_CLIENT);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
@@ -755,7 +760,7 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonLower(31)))); // 51 stderr write-via-stream
 		// Group the 51 lowered/built-in core funcs (1-51) for the adapter's "w" import
 		// (core
-		// instance 1). Names match adapter-http.wat's imports.
+		// instance 1). Names match adapter-http-client.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
 					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
@@ -801,14 +806,15 @@ public final class WasmComponentBuilder {
 		return c.toByteArray();
 	}
 
-	// Sockets-variant component import-instance indices (from import-block-sock.bin).
+	// Sockets-variant component import-instance indices (from import-block-sockets.bin).
 	// The base WASI 0.3 instances 0-8 keep the same order as buildBase;
 	// wasi:sockets/types is appended at 9 and wasi:cli/stderr (for warn) last at 10.
 	private static final int S_INST_SOCKETS = 9;
 
 	private static final int S_INST_STDERR = 10;
 
-	// First free component type index after import-block-sock.bin (types 0-14 used; the
+	// First free component type index after import-block-sockets.bin (types 0-14 used;
+	// the
 	// appended stderr interface adds two: an aliased cli error-code + the stderr instance
 	// type). Aliased resource/enum types (component types 15-19).
 	private static final int S_T_CLI_ERRCODE = 15;
@@ -856,8 +862,8 @@ public final class WasmComponentBuilder {
 	 * <p>
 	 * All wiring constants (instance indices 9/10, the next-free type index 15, the 18
 	 * lowered functions and their canonical options) were derived from {@code wasm-tools
-	 * dump} of a reference generated by {@code regen.sh} from {@code uni-sock.wit} +
-	 * {@code core-sock.wat}.
+	 * dump} of a reference generated by {@code regen.sh} from {@code uni-sockets.wit} +
+	 * {@code core-sockets.wat}.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @return the WASI 0.3 component binary
@@ -865,11 +871,11 @@ public final class WasmComponentBuilder {
 	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + wasi:sockets import instances 0-9, component types 0-12.
-		c.writeRaw(IMPORT_BLOCK_SOCK);
+		c.writeRaw(IMPORT_BLOCK_SOCKETS);
 		// Core modules: 0 = shared memory (base 6-page module), 1 = sockets adapter,
 		// 2 = rontolisp.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE_SOCK);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE_SOCKETS);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
@@ -967,7 +973,7 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonFutureDropReadable(S_T_SOCK_FUTURE), // 31
 				ComponentWriter.canonLower(17)))); // 32 stderr write-via-stream
 		// Group the 32 lowered/built-in core funcs (1-32) for the adapter's "w" import
-		// (core instance 1). Names match adapter-sock.wat's imports.
+		// (core instance 1). Names match adapter-sockets.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
 					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",

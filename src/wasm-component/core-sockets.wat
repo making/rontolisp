@@ -1,5 +1,5 @@
 ;; Stub core whose only purpose is to make `wasm-tools component new` emit the imports for
-;; import-block-sock.bin. Imports every lowered function the sockets-variant adapter binds:
+;; import-block-sockets.bin. Imports every lowered function the sockets-variant adapter binds:
 ;; the WASI 0.3 base functions (same as core.wat) plus the wasi:sockets@0.3.0 tcp-socket
 ;; functions for the rontolisp:tcp-* built-ins. Exports a memory + cabi_realloc + run.
 (module

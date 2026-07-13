@@ -11,7 +11,7 @@ Postmodern:
 
 `rontolisp:tcp-local-address` / `tcp-peer-address` / `tcp-peer-port` return
 nil in component mode (WasmTcpCompiler drops the handle and pushes nil).
-Wiring them for real means extending `adapter-sock.wat` with
+Wiring them for real means extending `adapter-sockets.wat` with
 `wasi:sockets` `local-address`/`remote-address` calls and new fixed import
 indices (renumbering the core seam -- see `.kb/tcp-sockets.md` "The WASM core
 seam"). Deliberately deferred: an unconditional compile error was NOT an

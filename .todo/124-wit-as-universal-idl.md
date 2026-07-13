@@ -1,8 +1,10 @@
 # WIT as rontolisp's universal IDL (roadmap anchor)
 
-**Status:** open, unstarted. Raised 2026-07-13, immediately after `--wit` closed
-todos 92+93. Anchor todo: the design and the type mapping live here; the four
-executable steps are `.todo/125`..`.todo/128`.
+**Status:** open; **step 1 (`.todo/125`) DONE 2026-07-13** — `am.ik.wit` shipped,
+`WitEmitter` migrated onto it, the type mapping settled in `compiler/WitTypeMapper`
+and recorded in `.kb/wit.md` (todo file deleted on completion). Raised 2026-07-13,
+immediately after `--wit` closed todos 92+93. Anchor todo: the design and the type
+mapping live here; the remaining executable steps are `.todo/126`..`.todo/128`.
 
 ## The idea
 
@@ -56,27 +58,18 @@ the component story — it is why `.todo/52` (wasi:keyvalue) and `.todo/53`
 | `variant` | `(tag . payload)` tagged list | the defstruct/CLOS tagged-list value model |
 | `option<T>` | value or `nil` | Lisp itself |
 | `tuple<A,B>` | list | — |
-| `result<T,E>` | value, or signal a condition | todo-116 conditions — **see the trap below** |
+| `result<T,E>` | ok value; error arm signals a condition on EVERY backend | **SETTLED 2026-07-13: option (c)** — decision record in `.kb/wit.md`; WASM catch = prerequisite of `.todo/128` |
 | `resource` | opaque integer handle | streams/sockets share one handle space (`.kb/read-load-streams.md`) |
 | `flags` | list of keywords | — |
 
-**The one genuinely unresolved cell is `result<T,E>`.** Mapping the error arm to
-a condition is the obvious Lisp answer and works on the interpreter and JVM — but
-**every WASM backend rejects `handler-case`/`ignore-errors` at compile time**
-(traps are uncatchable; `.kb/error-handling.md`), which is exactly the backend
-where `result` is most pervasive (every `wasi:keyvalue` function returns one).
-So the mapping must be decided as an explicit design question, not assumed:
-
-- (a) `result` -> multiple values `(values ok err)`, consumer checks — works
-  everywhere, un-Lispy, and easy to ignore an error by accident.
-- (b) `result` -> condition on interpreter/JVM, and on WASM the error arm traps
-  with the message (uncatchable). Consistent surface, divergent recoverability.
-- (c) `result` -> condition everywhere, and make catching them the forcing
-  function to finally give the WASM backend a catch mechanism.
-
-Recommendation: start with **(b)** and note the divergence loudly (it matches how
-WASM already behaves for `error`), keep (c) as the honest long-term answer. Decide
-in `.todo/125` before any of it is generated — every later step depends on it.
+**`result<T,E>` is SETTLED (2026-07-13, user decision in `.todo/125`): option (c)**
+— condition on every backend, catchable with `handler-case`; on WASM, where
+`handler-case` is still a compile-time error, signaling traps with the message as a
+*temporary limitation, not a contract*, and a WASM catch mechanism became a
+prerequisite of `.todo/128`'s result-returning imports. `list<u8>` = byte string
+(fetch/socket convention). Full rationale incl. why (a) multiple-values was rejected
+despite being implementable today over `%mv-spill`: `.kb/wit.md`; the machine-checked
+table: `compiler/WitTypeMapper` + `WitTypeMapperTest`.
 
 ## The Lisp-facing surface (sketch)
 
@@ -128,7 +121,7 @@ no external dependencies.
 
 | Step | Todo | Weight | Unlocks |
 |---|---|---|---|
-| 1 | `.todo/125` — `am.ik.wit` parser/printer + settle the type mapping; `WitEmitter` migrates onto `WitPrinter` | medium | self-validating via `WitOracleE2eTest` |
+| 1 | ~~`.todo/125`~~ **DONE 2026-07-13** — `am.ik.wit` parser/printer + settled mapping; `WitEmitter` on `WitPrinter`; variants renamed (`http-client`/`http-server`/`http-server-client`/`sockets`); `.kb/wit.md` | medium | self-validated via `WitOracleE2eTest` |
 | 2 | `.todo/126` — `wit-export`: implement-this-world contract checking + scaffolding | small | kills the `:params`/`:returns` double-maintenance |
 | 3 | `.todo/127` — `wit-import` on interpreter + JVM (provider binding) | medium | one Lisp source, host impl per backend |
 | 4 | `.todo/128` — component imports (canon lower) | **large** | wasi:keyvalue, component composition, wasmCloud |

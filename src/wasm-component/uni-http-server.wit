@@ -5,18 +5,18 @@ package local:uni;
 // `wasmtime serve` and Spin).
 //
 // Unlike the base/fetch/sockets variants, a serve component keeps its base I/O on WASI
-// 0.2: alongside the http/io machinery the serve adapter (adapter-serve.wat) drives to
+// 0.2: alongside the http/io machinery the serve adapter (adapter-http-server.wat) drives to
 // read the incoming request and write the outgoing response, it imports the entropy /
 // clock / stdio interfaces of the wasi:http proxy world, which the preview1 bridge
-// (adapter-serve-p1.wat) maps to the rontolisp core's wasi_snapshot_preview1 imports so
+// (adapter-http-server-p1.wat) maps to the rontolisp core's wasi_snapshot_preview1 imports so
 // random / time / print work inside a served handler. The wasi:http/incoming-handler
 // EXPORT is emitted programmatically by WasmComponentBuilder.buildServe (like the `run`
 // export of the other variants), so it is not declared here; this world is imports-only.
 //
 // The interface order fixes the component import-instance indices buildServe assumes;
 // append new interfaces LAST. Re-derive the buildServe constants from a fresh
-// `wasm-tools dump` after changing this file or core-serve.wat.
-world uni-serve {
+// `wasm-tools dump` after changing this file or core-http-server.wat.
+world uni-http-server {
   import wasi:http/types@0.2.0;
   import wasi:io/streams@0.2.0;
   import wasi:random/random@0.2.0;

@@ -1,6 +1,6 @@
 ;; Print micro-adapter for --no-gc --component (todo 93 remaining task 1): a minuscule
 ;; core module implementing the rontolisp core's single wasi_snapshot_preview1.fd_write
-;; import over WASI 0.2 stdio (the adapter-serve-p1.wat pattern in miniature), so
+;; import over WASI 0.2 stdio (the adapter-http-server-p1.wat pattern in miniature), so
 ;; print/princ/terpri work inside the compact reactor component's sync-lifted exports --
 ;; output-stream.blocking-write-and-flush is a plain synchronous host function,
 ;; default-provided by wasmtime with ZERO extra flags.

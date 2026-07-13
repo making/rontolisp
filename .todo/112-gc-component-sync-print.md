@@ -129,5 +129,5 @@ existing output):
 - `.todo/93` (the `--no-gc` print micro-adapter -- the 0.2 half, DONE)
 - `.todo/02` (the fetch 0.2 island; temporary, unlike this one)
 - `.kb/wasi-component.md`, `.kb/no-gc-scalar-wasm.md`
-- `src/wasm-component/adapter-serve-p1.wat` (the 0.2 sync-write precedent that
+- `src/wasm-component/adapter-http-server-p1.wat` (the 0.2 sync-write precedent that
   made this look easy -- it is easy; it is just not right)

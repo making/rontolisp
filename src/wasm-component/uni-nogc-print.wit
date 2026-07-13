@@ -6,7 +6,7 @@ package local:uni;
 // WASI 0.2 stdio interfaces below so a tiny bridge core module can implement the core's
 // single wasi_snapshot_preview1.fd_write import over
 // output-stream.blocking-write-and-flush -- a plain synchronous host function, legal
-// inside a sync-lifted export (the adapter-serve-p1.wat precedent), and default-provided
+// inside a sync-lifted export (the adapter-http-server-p1.wat precedent), and default-provided
 // by wasmtime with ZERO flags. WASI 0.3 streams were rejected for this seam: they are
 // async-task-only and would force async lifts + -W component-model-more-async-builtins=y
 // on every printing component.

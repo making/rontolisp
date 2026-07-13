@@ -1,7 +1,7 @@
 ;; Stub core whose only purpose is to make `wasm-tools component new` emit the imports for
-;; import-block-serve.bin. Imports every lowered function the serve-variant adapters bind:
-;; the WASI 0.2 http/io incoming-handler machinery (adapter-serve.wat) plus the proxy-world
-;; entropy / clock / stdio interfaces the preview1 bridge (adapter-serve-p1.wat) maps to
+;; import-block-http-server.bin. Imports every lowered function the serve-variant adapters bind:
+;; the WASI 0.2 http/io incoming-handler machinery (adapter-http-server.wat) plus the proxy-world
+;; entropy / clock / stdio interfaces the preview1 bridge (adapter-http-server-p1.wat) maps to
 ;; the rontolisp core's wasi_snapshot_preview1 imports. Exports a memory (16 pages, shared
 ;; canonical scratch) + cabi_realloc + run.
 (module
@@ -25,7 +25,7 @@
   (import "wasi:io/streams@0.2.0" "[resource-drop]input-stream" (func (param i32)))
   (import "wasi:io/streams@0.2.0" "[resource-drop]output-stream" (func (param i32)))
   ;; wasi:random / wasi:clocks / wasi:cli 0.2 (proxy world): entropy, clocks and
-  ;; stdout/stderr for the preview1 bridge (adapter-serve-p1.wat)
+  ;; stdout/stderr for the preview1 bridge (adapter-http-server-p1.wat)
   (import "wasi:random/random@0.2.0" "get-random-u64" (func (result i64)))
   (import "wasi:clocks/wall-clock@0.2.0" "now" (func (param i32)))
   (import "wasi:clocks/monotonic-clock@0.2.0" "now" (func (result i64)))

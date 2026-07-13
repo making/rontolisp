@@ -11,79 +11,79 @@ import am.ik.wasm.ComponentWriter;
  * Assembles the serve-variant WASI component for {@code rontolisp:http-handler}: it wraps
  * a rontolisp core module (compiled in serve mode, so it exports {@code %http-dispatch} +
  * {@code __ronto_alloc} + {@code run} and imports its memory) with the shared 16-page
- * memory module, the preview1 bridge ({@code adapter-serve-p1.wasm}, instantiated before
- * the core so its exports satisfy the core's {@code wasi_snapshot_preview1} imports:
- * random / clock / stdout-stderr over the wasi:http proxy world) and the serve adapter
- * ({@code adapter-serve.wasm}, instantiated after the core because it imports
- * {@code %http-dispatch}), and exports {@code wasi:http/incoming-handler@0.2.0} so the
- * component runs under {@code wasmtime serve} (or any {@code wasi:http} 0.2 host with
- * wasm-GC enabled, e.g. jco or wasmCloud; not Spin, whose wasmtime cannot enable
+ * memory module, the preview1 bridge ({@code adapter-http-server-p1.wasm}, instantiated
+ * before the core so its exports satisfy the core's {@code wasi_snapshot_preview1}
+ * imports: random / clock / stdout-stderr over the wasi:http proxy world) and the serve
+ * adapter ({@code adapter-http-server.wasm}, instantiated after the core because it
+ * imports {@code %http-dispatch}), and exports {@code wasi:http/incoming-handler@0.2.0}
+ * so the component runs under {@code wasmtime serve} (or any {@code wasi:http} 0.2 host
+ * with wasm-GC enabled, e.g. jco or wasmCloud; not Spin, whose wasmtime cannot enable
  * wasm-GC).
  *
  * <p>
  * The wiring mirrors {@link WasmComponentBuilder}'s base/http/sock variants but exports a
  * <em>synchronous</em> {@code handle(request, response-out)} (not the async {@code run}
- * lift). The import block ({@code import-block-serve.bin}) declares import instances
- * 0&nbsp;=&nbsp;{@code wasi:clocks/monotonic-clock} (hoisted first as a dependency of
- * http/types), 1&nbsp;=&nbsp;{@code wasi:io/error},
+ * lift). The import block ({@code import-block-http-server.bin}) declares import
+ * instances 0&nbsp;=&nbsp;{@code wasi:clocks/monotonic-clock} (hoisted first as a
+ * dependency of http/types), 1&nbsp;=&nbsp;{@code wasi:io/error},
  * 2&nbsp;=&nbsp;{@code wasi:io/streams}, 3&nbsp;=&nbsp;{@code wasi:http/types},
  * 4&nbsp;=&nbsp;{@code wasi:random/random}, 5&nbsp;=&nbsp;{@code wasi:clocks/wall-clock},
  * 6&nbsp;=&nbsp;{@code wasi:cli/stdout}, 7&nbsp;=&nbsp;{@code wasi:cli/stderr} and
  * component types 0-12 (type 4&nbsp;=&nbsp; {@code input-stream}, type
  * 5&nbsp;=&nbsp;{@code output-stream}); the next free component type index is 13. The
  * per-function canonical options were derived from a {@code wasm-tools dump} of the
- * {@code uni-serve} reference (see {@code src/wasm-component/README.md} and
+ * {@code uni-http-server} reference (see {@code src/wasm-component/README.md} and
  * {@code .todo/51-...}).
  *
  * <p>
  * {@link #buildHttp} assembles the serve+fetch variant for a handler program that also
  * uses {@code rontolisp:fetch}: same shape, but the preview1 bridge is the extended
- * {@code adapter-serve-p1-http.wasm} (which additionally exports {@code fetch-start} /
- * {@code fetch-await} and the reserved-slot tcp stubs, satisfying the core's {@code http}
- * and {@code sock} imports), over the wider import block
- * {@code import-block-serve-http.bin} ({@code uni-serve-http}: the serve surface plus
- * {@code wasi:io/poll} and {@code wasi:http/outgoing-handler}, still inside the wasi:http
- * proxy world -- run with {@code wasmtime serve -S http=y}).
+ * {@code adapter-http-server-client-p1.wasm} (which additionally exports
+ * {@code fetch-start} / {@code fetch-await} and the reserved-slot tcp stubs, satisfying
+ * the core's {@code http} and {@code sock} imports), over the wider import block
+ * {@code import-block-http-server-client.bin} ({@code uni-http-server-client}: the serve
+ * surface plus {@code wasi:io/poll} and {@code wasi:http/outgoing-handler}, still inside
+ * the wasi:http proxy world -- run with {@code wasmtime serve -S http=y}).
  */
 final class WasmServeComponentBuilder {
 
 	private static final String RES = "component/";
 
-	private static final byte[] IMPORT_BLOCK_SERVE = resource("import-block-serve.bin");
+	private static final byte[] IMPORT_BLOCK_HTTP_SERVER = resource("import-block-http-server.bin");
 
 	/** The shared 16-page memory module (the adapter scratch reaches page 8). */
-	private static final byte[] MEM_MODULE = resource("mem-http.wasm");
+	private static final byte[] MEM_MODULE = resource("mem-http-client.wasm");
 
 	/**
 	 * The preview1 bridge: implements the core's {@code wasi_snapshot_preview1} imports
 	 * (random_get / clock_time_get / fd_write to stdout-stderr; graceful stubs for the
 	 * rest) over the wasi:http proxy world's wasi:random / wasi:clocks / wasi:cli.
 	 */
-	private static final byte[] ADAPTER_SERVE_P1 = resource("adapter-serve-p1.wasm");
+	private static final byte[] ADAPTER_HTTP_SERVER_P1 = resource("adapter-http-server-p1.wasm");
 
 	/**
 	 * The serve adapter: reads the request, calls {@code %http-dispatch}, writes the
 	 * response.
 	 */
-	private static final byte[] ADAPTER_SERVE = resource("adapter-serve.wasm");
+	private static final byte[] ADAPTER_HTTP_SERVER = resource("adapter-http-server.wasm");
 
 	/**
-	 * The serve+fetch variant of the import block ({@code uni-serve-http}): the serve
-	 * surface plus {@code wasi:io/poll} and {@code wasi:http/outgoing-handler}. It
+	 * The serve+fetch variant of the import block ({@code uni-http-server-client}): the
+	 * serve surface plus {@code wasi:io/poll} and {@code wasi:http/outgoing-handler}. It
 	 * declares component import instances 0-9 and component types 0-19, so the next free
 	 * component type index is 20.
 	 */
-	private static final byte[] IMPORT_BLOCK_SERVE_HTTP = resource("import-block-serve-http.bin");
+	private static final byte[] IMPORT_BLOCK_HTTP_SERVER_CLIENT = resource("import-block-http-server-client.bin");
 
 	/**
-	 * The extended preview1 bridge for serve+fetch: {@link #ADAPTER_SERVE_P1} plus the
-	 * {@code fetch-start} / {@code fetch-await} exports of {@code adapter-http.wasm}
-	 * (satisfying the core's {@code http} imports) and the errno-returning tcp stubs for
-	 * the reserved {@code sock} slots.
+	 * The extended preview1 bridge for serve+fetch: {@link #ADAPTER_HTTP_SERVER_P1} plus
+	 * the {@code fetch-start} / {@code fetch-await} exports of
+	 * {@code adapter-http-client.wasm} (satisfying the core's {@code http} imports) and
+	 * the errno-returning tcp stubs for the reserved {@code sock} slots.
 	 */
-	private static final byte[] ADAPTER_SERVE_P1_HTTP = resource("adapter-serve-p1-http.wasm");
+	private static final byte[] ADAPTER_HTTP_SERVER_CLIENT_P1 = resource("adapter-http-server-client-p1.wasm");
 
-	// Import-instance indices (from import-block-serve.bin).
+	// Import-instance indices (from import-block-http-server.bin).
 	private static final int INST_IO_STREAMS = 2;
 
 	private static final int INST_HTTP_TYPES = 3;
@@ -124,13 +124,13 @@ final class WasmServeComponentBuilder {
 	static byte[] build(byte[] coreModule) {
 		final ComponentWriter c = new ComponentWriter();
 		// Import instances 0-7, component types 0-12.
-		c.writeRaw(IMPORT_BLOCK_SERVE);
+		c.writeRaw(IMPORT_BLOCK_HTTP_SERVER);
 		// Core modules: 0 = shared memory, 1 = preview1 bridge, 2 = rontolisp core (serve
 		// mode), 3 = serve adapter.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_SERVE_P1);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_HTTP_SERVER_P1);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_SERVE);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_HTTP_SERVER);
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
@@ -227,7 +227,7 @@ final class WasmServeComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2)))));
 		// Group the 17 lowered/drop core funcs for the serve adapter's "w" import (core
-		// instance 4). Names match adapter-serve.wat's imports.
+		// instance 4). Names match adapter-http-server.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
 						List.of("req-method", "req-path", "req-consume", "body-stream", "io-read", "fields-new",
@@ -254,7 +254,8 @@ final class WasmServeComponentBuilder {
 		return c.toByteArray();
 	}
 
-	// Serve+fetch variant import-instance indices (from import-block-serve-http.bin).
+	// Serve+fetch variant import-instance indices (from
+	// import-block-http-server-client.bin).
 	// wasi:io/poll is hoisted first (a dependency of http/types' pollable-returning
 	// members, now used), shifting every instance after it by one relative to the plain
 	// serve block; wasi:http/outgoing-handler is appended last.
@@ -313,24 +314,24 @@ final class WasmServeComponentBuilder {
 	/**
 	 * Assemble the serve+fetch variant: a {@code rontolisp:http-handler} program that
 	 * also uses {@code rontolisp:fetch}. Identical to {@link #build} except that the
-	 * extended bridge {@code adapter-serve-p1-http.wasm} also satisfies the core's
-	 * {@code http} (fetch-start / fetch-await) and {@code sock} (stub) imports, wired
-	 * over the wider {@code uni-serve-http} import block. All wiring constants were
-	 * derived from a {@code wasm-tools dump} of the {@code uni-serve-http} reference
-	 * generated by {@code regen.sh}.
+	 * extended bridge {@code adapter-http-server-client-p1.wasm} also satisfies the
+	 * core's {@code http} (fetch-start / fetch-await) and {@code sock} (stub) imports,
+	 * wired over the wider {@code uni-http-server-client} import block. All wiring
+	 * constants were derived from a {@code wasm-tools dump} of the
+	 * {@code uni-http-server-client} reference generated by {@code regen.sh}.
 	 * @param coreModule the rontolisp core module compiled in serve mode with fetch
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
 	static byte[] buildHttp(byte[] coreModule) {
 		final ComponentWriter c = new ComponentWriter();
 		// Import instances 0-9, component types 0-19.
-		c.writeRaw(IMPORT_BLOCK_SERVE_HTTP);
+		c.writeRaw(IMPORT_BLOCK_HTTP_SERVER_CLIENT);
 		// Core modules: 0 = shared memory, 1 = extended preview1 bridge (+fetch),
 		// 2 = rontolisp core (serve mode with fetch), 3 = serve adapter.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_SERVE_P1_HTTP);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_HTTP_SERVER_CLIENT_P1);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_SERVE);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_HTTP_SERVER);
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
@@ -463,7 +464,8 @@ final class WasmServeComponentBuilder {
 																			// incoming-response
 		// Group the 35 core funcs of the extended bridge's "w" import (core instance 1):
 		// the six preview1-bridge funcs, then the fetch machinery (names match
-		// adapter-serve-p1-http.wat's imports; "drop-req" here is the OUTGOING-request
+		// adapter-http-server-client-p1.wat's imports; "drop-req" here is the
+		// OUTGOING-request
 		// drop -- the serve adapter's same-named import below is the incoming one).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
@@ -489,7 +491,7 @@ final class WasmServeComponentBuilder {
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(2,
 						List.of("mem", "wasi_snapshot_preview1", "sock", "http"), List.of(0, 2, 2, 2)))));
 		// Group the 17 lowered/drop core funcs for the serve adapter's "w" import (core
-		// instance 4). Names match adapter-serve.wat's imports.
+		// instance 4). Names match adapter-http-server.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
 						List.of("req-method", "req-path", "req-consume", "body-stream", "io-read", "fields-new",

@@ -21,11 +21,13 @@ src/wasm-component/                 (this directory: editable sources, dev-only)
   mem.wat  adapter.wat              core-module sources
   uni.wit  deps/  core.wat          inputs for the unified import block
   regen.sh                          regenerates the blobs below, fully offline
-  regen-wit.sh                      regenerates the --wit templates below (needs the jar)
+  regen-wit.sh                      regenerates the --wit fixtures (needs the jar)
 
 src/main/resources/am/ik/rontolisp/codegen/wasm/component/   (generated, packaged)
   mem.wasm  adapter.wasm  import-block.bin
-  wit/*.wit                         --wit templates, one per blob variant
+
+src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit/   (generated, test-only)
+  *.wit                             --wit fixtures, one per blob variant
 ```
 
 The generated `.bin` / `.wasm` are loaded at runtime via the classpath and registered for
@@ -36,31 +38,42 @@ GraalVM native image (wildcard patterns) in
 src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-tools + python3)
 ```
 
-## The `--wit` templates (`wit/*.wit`)
+## The `--wit` fixtures and `WasiWitDefinitions`
 
 The CLI's `--wit` option writes the component's WIT world next to the `.wasm`. The fixed
 part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/incoming-handler`
-export, the referenced package definitions) is one template per blob variant —
-`base`/`http`/`sock`/`serve`/`serve-http` (GC) and `nogc`/`nogc-print` — captured verbatim
-from `wasm-tools component wit` on a minimal reference component; `WitEmitter` only splices
-in the per-program `rontolisp:wasm-export` lines. Two deliberate template edits over the raw
-tool output, both encoded in `regen-wit.sh`: the reference program's own export lines are
-stripped, and the serve variants restore incoming-handler's
+export, the referenced package definitions) is the per-variant document model in
+`WasiWitDefinitions.java` — `base`/`http-client`/`sockets`/`http-server`/
+`http-server-client` (GC) and `nogc`/`nogc-print` — **generated** by
+`WasiWitDefinitionsGenerator` (test sources) from the fixtures under
+`src/test/resources/.../component/wit/`, which are captured verbatim from
+`wasm-tools component wit` on a minimal reference component per variant. `WitEmitter`
+appends the per-program `rontolisp:wasm-export` items to the world and prints the model
+with `am.ik.wit.WitPrinter`; `WasiWitDefinitionsTest` pins each variant byte-for-byte
+against its fixture, always-on. Two deliberate fixture edits over the raw tool output,
+both encoded in `regen-wit.sh`: the reference program's own export lines are stripped,
+and the http-server variants restore incoming-handler's
 `use types.{incoming-request, response-outparam};` clause that `wasm-tools component wit`
 omits (its output does not parse without it; the upstream `deps/http/handler.wit` has it).
 
-Regeneration is two-phase because the fixed exports are wired by `WasmComponentBuilder`
+Regeneration is three-phase because the fixed exports are wired by `WasmComponentBuilder`
 (they are not in the `uni*.wit` reference worlds), so the reference components must be
 built by the full pipeline:
 
 ```bash
 ./regen.sh                                # 1. blobs (after editing the sources)
 (cd ../.. && ./mvnw package -DskipTests)  # 2. rebuild the exec jar on the new blobs
-./regen-wit.sh                            # 3. templates (uses the jar + wasm-tools)
+./regen-wit.sh                            # 3. fixtures (uses the jar + wasm-tools)
+# 4. Java definitions from the fixtures:
+(cd ../.. && ./mvnw test-compile -DskipTests && \
+  java -cp target/classes:target/test-classes \
+    am.ik.rontolisp.codegen.wasm.WasiWitDefinitionsGenerator && \
+  ./mvnw spring-javaformat:apply)
 ```
 
-Then re-run `WitEmitterTest` (always-on line pins) and `WitOracleE2eTest` (live
-`wasm-tools` diff; skipped when the binary is not on `PATH`).
+Then re-run `WasiWitDefinitionsTest` (always-on byte pins), `WitEmitterTest` (line pins)
+and `WitOracleE2eTest` (live `wasm-tools` diff; skipped when the binary is not on
+`PATH`).
 
 Run a generated component with:
 
@@ -159,19 +172,19 @@ same built-in `stream<u8>` machinery as the base I/O). The parallel blob set is:
 
 ```
 src/wasm-component/
-  uni-sock.wit  core-sock.wat  adapter-sock.wat   (sockets sources; mem.wat is shared)
+  uni-sockets.wit  core-sockets.wat  adapter-sockets.wat   (sockets sources; mem.wat is shared)
 
 src/main/resources/.../component/
-  import-block-sock.bin  adapter-sock.wasm
+  import-block-sockets.bin  adapter-sockets.wasm
 ```
 
-`uni-sock.wit` (world `uni-sock`) is the base 0.3 surface plus
+`uni-sockets.wit` (world `uni-sockets`) is the base 0.3 surface plus
 `import wasi:sockets/types@0.3.0;` appended last (import instance 9; next free
 component type 13). `WasmComponentBuilder.buildSock` wires the variant:
 alongside the shared `stream<u8>`/future built-ins it defines `own<tcp-socket>`
 and the element-typed `stream<own tcp-socket>` accept stream (its own
 `stream.read`/`drop-readable` built-ins) plus a drop-only sockets-error-code
-future. `adapter-sock.wat` is `adapter.wat` plus a 32-slot socket table (fd =
+future. `adapter-sockets.wat` is `adapter.wat` plus a 32-slot socket table (fd =
 200 + slot; `fd_write`/`fd_read`/`fd_close` dispatch on fd >= 200, so the
 rontolisp core's stream built-ins work on sockets unchanged) and the
 `tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` exports (the
@@ -179,41 +192,41 @@ core's `"sock"` import seam). Run a socket component with
 `-S tcp=y -S inherit-network=y` in addition to the async flags; IPv4 literals
 only (`wasi:sockets/ip-name-lookup` is not wired yet). Because imports precede
 defined functions and the sock slots (core function indices 8-11) sit before
-the http slots (12-13), `adapter-http.wat` exports four errno-returning tcp
+the http slots (12-13), `adapter-http-client.wat` exports four errno-returning tcp
 stubs that satisfy the sock imports of a fetch component; combining fetch and
 tcp in one component is a compile error (see
 `../../.todo/49-combine-fetch-and-sockets-component.md`). Details:
 `../../.kb/tcp-sockets.md`.
 
-## HTTP variant (`rontolisp:fetch`) — hybrid
+## HTTP client variant (`rontolisp:fetch`) — hybrid
 
-A `fetch` program compiles to a **hybrid** component: the base I/O stays WASI 0.3, but
+A `fetch` program compiles to the http-client variant, a **hybrid** component: the base I/O stays WASI 0.3, but
 fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream
 yet — the wasi-http repo's `v0.3.0-rc` tags and `main` are still `wasi:http@0.2.x`, and
 wasmtime 46 hosts only `wasi:http@0.2`; see `../../.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). The parallel blob set is:
 
 ```
 src/wasm-component/
-  uni-http.wit  core-http.wat  mem-http.wat  adapter-http.wat   (http sources)
+  uni-http-client.wit  core-http-client.wat  mem-http-client.wat  adapter-http-client.wat   (http sources)
   deps/clocks-0.2  deps/io-0.2  deps/http   (0.2 deps; http's proxy world is trimmed)
 
 src/main/resources/.../component/
-  import-block-http.bin  mem-http.wasm  adapter-http.wasm
+  import-block-http-client.bin  mem-http-client.wasm  adapter-http-client.wasm
 ```
 
-`uni-http.wit` (world `uni-http`) is the base 0.3 surface plus the 0.2 http interfaces; the
+`uni-http-client.wit` (world `uni-http-client`) is the base 0.3 surface plus the 0.2 http interfaces; the
 0.2 deps live alongside the 0.3 ones in `deps/` under version-suffixed directories.
-`regen.sh` regenerates both variants. `WasmComponentBuilder.buildHttp` wires the http
-variant (next free component type index 25; 31 lowered WASI funcs + 10 resource drops + the
-0.3 stream/future built-ins; `run` lifted async as in the base). `adapter-http.wat` is
+`regen.sh` regenerates both variants. `WasmComponentBuilder.buildHttp` wires the
+http-client variant (next free component type index 25; 31 lowered WASI funcs + 10 resource drops + the
+0.3 stream/future built-ins; `run` lifted async as in the base). `adapter-http-client.wat` is
 `adapter.wat` plus `fetch-start` / `fetch-await` exports driving the asynchronous outgoing
 request (the `rontolisp:fetch` promise API) over `wasi:http@0.2`: `fetch-start` sends the
 request and returns the `future-incoming-response` handle immediately, `fetch-await`
 blocks on its pollable and reads the response. Run a fetch component with `-S http=y` in
 addition to the async flags.
 
-When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-http.wat`
-over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http.wit`, regenerate, and
+When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-http-client.wat`
+over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http-client.wit`, regenerate, and
 re-derive the `buildHttp` constants — the rontolisp core's `http.fetch` seam stays unchanged.
 
 ## `--no-gc --component` print micro-adapter — pure WASI 0.2
@@ -237,7 +250,7 @@ src/main/resources/.../component/
 `uni-nogc-print.wit` (world `uni-nogc-print`) imports only `wasi:cli/stdout@0.2.0` and
 `wasi:io/streams@0.2.0` (`wasi:io/error` is dependency-hoisted first, so the block
 declares import instances 0-2 and component types 0-4). `bridge-nogc-print.wat` is the
-adapter-serve-p1 `fd_write` pattern in miniature: fd 1 only (`--no-gc` rejects every
+adapter-http-server-p1 `fd_write` pattern in miniature: fd 1 only (`--no-gc` rejects every
 other I/O at compile time, so fd 2 / `wasi:cli/stderr` would be dead weight), chunked
 through the *synchronous* `blocking-write-and-flush` — so the component's exports stay
 sync lifts and the zero-flag property is preserved (0.2 stdio is default-provided by
@@ -249,9 +262,9 @@ that cycle — the same shim/fixup shape wit-component generates for the analogo
 lowering cycle — keeping the printing core module byte-identical to the plain
 `--no-gc` output. `NoGcWasmComponentBuilder` wires everything programmatically.
 
-## Serve variant (`rontolisp:http-handler`) — pure WASI 0.2
+## HTTP server variant (`rontolisp:http-handler`) — pure WASI 0.2
 
-A program using `rontolisp:http-handler` compiles to the serve variant: a
+A program using `rontolisp:http-handler` compiles to the http-server variant: a
 `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve` (or any
 `wasi:http` 0.2 host with wasm-GC). It is pure WASI 0.2 — no async canon
 built-ins, so none of the `component-model-async` flags. The parallel blob set
@@ -259,21 +272,21 @@ is:
 
 ```
 src/wasm-component/
-  uni-serve.wit  core-serve.wat  adapter-serve.wat  adapter-serve-p1.wat
+  uni-http-server.wit  core-http-server.wat  adapter-http-server.wat  adapter-http-server-p1.wat
   deps/random-0.2  deps/cli-0.2   (0.2 deps; io-0.2 / clocks-0.2 / http shared)
 
 src/main/resources/.../component/
-  import-block-serve.bin  adapter-serve.wasm  adapter-serve-p1.wasm
+  import-block-http-server.bin  adapter-http-server.wasm  adapter-http-server-p1.wasm
 ```
 
-`uni-serve.wit` (world `uni-serve`) imports the 0.2 http/io incoming-handler
+`uni-http-server.wit` (world `uni-http-server`) imports the 0.2 http/io incoming-handler
 machinery plus the proxy world's `wasi:random/random`, `wasi:clocks/{wall,
 monotonic-}clock` and `wasi:cli/{stdout,stderr}`. Two adapters sandwich the
-rontolisp core because instantiation order forces it: `adapter-serve.wat`
+rontolisp core because instantiation order forces it: `adapter-http-server.wat`
 (reads the incoming request, calls the core's exported `%http-dispatch`,
 writes the outgoing response) imports the core, so it comes AFTER — which
 means it cannot also provide the core's `wasi_snapshot_preview1` imports the
-way `adapter.wat` does for `wasmtime run` components. `adapter-serve-p1.wat`
+way `adapter.wat` does for `wasmtime run` components. `adapter-http-server-p1.wat`
 is that missing preview1 bridge, instantiated BEFORE the core: `random_get`
 over `get-random-u64`, `clock_time_get` over the 0.2 clocks, `fd_write` (fd
 1/2) over the cli stdout/stderr streams, a zero environment for `environ_*`
@@ -284,25 +297,25 @@ synchronously as `handle`. Note `wasi:clocks/monotonic-clock` lands as import
 instance 0 (wasm-tools hoists it first as a dependency of `wasi:http/types`),
 before `wasi:io/error`. Details: `../../.kb/fetch-http.md`.
 
-### Serve+fetch variant (`rontolisp:http-handler` + `rontolisp:fetch`)
+### HTTP server+client variant (`rontolisp:http-handler` + `rontolisp:fetch`)
 
 A handler program that also uses `rontolisp:fetch` (a proxy-style server making
-outgoing requests) compiles to a third parallel serve blob set:
+outgoing requests) compiles to a third parallel http-server blob set (the http-server-client variant):
 
 ```
 src/wasm-component/
-  uni-serve-http.wit  core-serve-http.wat  adapter-serve-p1-http.wat
+  uni-http-server-client.wit  core-http-server-client.wat  adapter-http-server-client-p1.wat
 
 src/main/resources/.../component/
-  import-block-serve-http.bin  adapter-serve-p1-http.wasm
+  import-block-http-server-client.bin  adapter-http-server-client-p1.wasm
 ```
 
-`uni-serve-http.wit` (world `uni-serve-http`) is the serve surface plus
+`uni-http-server-client.wit` (world `uni-http-server-client`) is the serve surface plus
 `wasi:io/poll` and `wasi:http/outgoing-handler` appended last — still entirely
 inside the wasi:http proxy world, so any host that serves the plain variant can
 serve this one (grant outbound HTTP: `wasmtime serve -W gc=y -S http=y`).
-`adapter-serve-p1-http.wat` is `adapter-serve-p1.wat` plus the
-`fetch-start`/`fetch-await` bodies of `adapter-http.wat` and the
+`adapter-http-server-client-p1.wat` is `adapter-http-server-p1.wat` plus the
+`fetch-start`/`fetch-await` bodies of `adapter-http-client.wat` and the
 errno-returning tcp stubs: the bridge (instantiated BEFORE the core, unlike the
 serve adapter) is what satisfies the rontolisp core's `http` and `sock`
 imports when the program uses fetch. `WasmServeComponentBuilder.buildHttp`

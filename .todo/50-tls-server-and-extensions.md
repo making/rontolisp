@@ -35,7 +35,7 @@ Correction to the earlier note (which said "wasmtime hosts no TLS for WASI
 async interface over `stream<u8>`), enabled with `-S tls=y` alongside the
 existing `-S tcp=y -S inherit-network=y`. Its `connector.send`/`receive`
 transform `stream<u8>` <-> `stream<u8>`, the same currency as the existing
-`adapter-sock.wat` plumbing, so a component-mode `tls-connect` is technically
+`adapter-sockets.wat` plumbing, so a component-mode `tls-connect` is technically
 feasible without any 0.2 hybrid machinery.
 
 Why it is deferred anyway:

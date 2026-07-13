@@ -1,0 +1,322 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import am.ik.wit.WitDocument;
+import am.ik.wit.WitFunc;
+import am.ik.wit.WitItem;
+import am.ik.wit.WitPackageName;
+import am.ik.wit.WitParser;
+import am.ik.wit.WitPrinter;
+import am.ik.wit.WitRef;
+import am.ik.wit.WitType;
+
+/**
+ * Generates {@code WasiWitDefinitions.java} from the per-variant WIT fixtures under
+ * {@code src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit/} (captured from
+ * {@code wasm-tools component wit} by {@code src/wasm-component/regen-wit.sh}).
+ * Byte-identical package blocks shared by several variants are emitted once; blocks with
+ * the same package name but variant-specific content (the reachability-pruned
+ * {@code wasi:http@0.2.0} / {@code wasi:io@0.2.0} projections) get a per-variant method.
+ *
+ * <p>
+ * Run after {@code regen-wit.sh} refreshed the fixtures:
+ * {@code java -cp target/classes:target/test-classes am.ik.rontolisp.codegen.wasm.WasiWitDefinitionsGenerator}
+ * then {@code ./mvnw spring-javaformat:apply} and re-run {@code WasiWitDefinitionsTest}.
+ */
+public final class WasiWitDefinitionsGenerator {
+
+	private static final Path FIXTURES = Path.of("src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit");
+
+	private static final Path TARGET = Path.of("src/main/java/am/ik/rontolisp/codegen/wasm/WasiWitDefinitions.java");
+
+	// variant name -> constant name in WitEmitter, in emission order
+	private static final Map<String, String> VARIANTS = orderedVariants();
+
+	private static Map<String, String> orderedVariants() {
+		Map<String, String> variants = new LinkedHashMap<>();
+		variants.put("base", "VARIANT_BASE");
+		variants.put("http-client", "VARIANT_HTTP_CLIENT");
+		variants.put("sockets", "VARIANT_SOCKETS");
+		variants.put("http-server", "VARIANT_HTTP_SERVER");
+		variants.put("http-server-client", "VARIANT_HTTP_SERVER_CLIENT");
+		variants.put("nogc", "VARIANT_NOGC");
+		variants.put("nogc-print", "VARIANT_NOGC_PRINT");
+		return variants;
+	}
+
+	private WasiWitDefinitionsGenerator() {
+	}
+
+	/**
+	 * Regenerates {@code WasiWitDefinitions.java} from the fixtures.
+	 * @param args unused
+	 * @throws IOException when a fixture cannot be read or the target cannot be written
+	 */
+	public static void main(String[] args) throws IOException {
+		// Shared-block registry: canonical text -> method name (dedup across variants).
+		Map<String, String> blockMethods = new LinkedHashMap<>();
+		Map<String, WitItem.PackageBlock> blockByMethod = new LinkedHashMap<>();
+		StringBuilder variantMethods = new StringBuilder();
+		StringBuilder switchCases = new StringBuilder();
+		for (Map.Entry<String, String> variant : VARIANTS.entrySet()) {
+			String name = variant.getKey();
+			WitDocument doc = WitParser.parse(Files.readString(FIXTURES.resolve(name + ".wit")));
+			String methodName = camel(name);
+			switchCases.append("\t\t\tcase WitEmitter.")
+				.append(variant.getValue())
+				.append(" -> ")
+				.append(methodName)
+				.append("();\n");
+			variantMethods.append("\tprivate static WitDocument ").append(methodName).append("() {\n");
+			// The class's own document(String) hides the static import, so qualify.
+			variantMethods.append("\t\treturn Wit.document(");
+			List<String> args2 = new ArrayList<>();
+			for (WitItem item : doc.items()) {
+				if (item instanceof WitItem.PackageBlock block) {
+					args2.add(blockMethod(block, name, blockMethods, blockByMethod) + "()");
+				}
+				else {
+					args2.add(expr(item, 3));
+				}
+			}
+			variantMethods.append(String.join(", ", args2));
+			variantMethods.append(");\n\t}\n\n");
+		}
+		StringBuilder blockMethodsSrc = new StringBuilder();
+		for (Map.Entry<String, WitItem.PackageBlock> entry : blockByMethod.entrySet()) {
+			blockMethodsSrc.append("\tprivate static WitItem ").append(entry.getKey()).append("() {\n");
+			blockMethodsSrc.append("\t\treturn ").append(expr(entry.getValue(), 2)).append(";\n\t}\n\n");
+		}
+		String source = """
+				package am.ik.rontolisp.codegen.wasm;
+
+				import am.ik.wit.Wit;
+				import am.ik.wit.WitDocument;
+				import am.ik.wit.WitItem;
+
+				import static am.ik.wit.Wit.*;
+
+				/**
+				 * The fixed WIT worlds of the {@code --component} blob variants -- the world's WASI
+				 * imports, the fixed {@code wasi:cli/run} / {@code wasi:http/incoming-handler} export
+				 * and the referenced (reachability-pruned) package definitions -- as document models
+				 * for {@link WitEmitter}. Byte-equality of the canonical print with
+				 * {@code wasm-tools component wit} is pinned per variant by
+				 * {@code WasiWitDefinitionsTest} against the fixtures under
+				 * {@code src/test/resources/.../component/wit/}.
+				 *
+				 * <p>
+				 * GENERATED by {@code WasiWitDefinitionsGenerator} from those fixtures -- after
+				 * changing a blob's import surface, re-run {@code src/wasm-component/regen-wit.sh}
+				 * and the generator instead of editing this file (see
+				 * {@code src/wasm-component/README.md}).
+				 */
+				final class WasiWitDefinitions {
+
+					private WasiWitDefinitions() {
+					}
+
+					/**
+					 * The fixed WIT document of a blob variant.
+					 * @param variant one of the {@code WitEmitter.VARIANT_*} names
+					 * @return the document (package header, world, package definitions)
+					 */
+					static WitDocument document(String variant) {
+						return switch (variant) {
+				%s			default -> throw new IllegalStateException("Missing WIT definition for variant: " + variant);
+						};
+					}
+
+				%s%s}
+				"""
+			.formatted(switchCases, variantMethods, blockMethodsSrc);
+		Files.writeString(TARGET, source, StandardCharsets.UTF_8);
+		System.out.println("Wrote " + TARGET);
+	}
+
+	private static String blockMethod(WitItem.PackageBlock block, String variant, Map<String, String> blockMethods,
+			Map<String, WitItem.PackageBlock> blockByMethod) {
+		String canonical = WitPrinter.print(new WitDocument(List.of(block)));
+		String existing = blockMethods.get(canonical);
+		if (existing != null) {
+			return existing;
+		}
+		String version = block.name().version();
+		String base = camel(block.name().namespace() + "-" + block.name().name()) + "V"
+				+ (version == null ? "" : version.replace(".", ""));
+		String method = base;
+		if (blockByMethod.containsKey(method)) {
+			method = base + upperCamel(variant);
+		}
+		if (blockByMethod.containsKey(method)) {
+			throw new IllegalStateException("method name collision: " + method);
+		}
+		blockMethods.put(canonical, method);
+		blockByMethod.put(method, block);
+		return method;
+	}
+
+	// ---------------------------------------------------------------- expressions
+
+	private static String expr(WitItem item, int depth) {
+		if (!item.meta().isEmpty()) {
+			throw new IllegalStateException("fixtures are wasm-tools output and carry no docs/gates: " + item);
+		}
+		String ind = "\t".repeat(depth);
+		return switch (item) {
+			case WitItem.PackageHeader header -> "packageHeader(" + packageNameArgs(header.name()) + ")";
+			case WitItem.PackageBlock block -> "packageBlock(" + packageNameArgs(block.name())
+					+ joinNested(block.items().stream().map(i -> expr(i, depth + 1)).toList(), ind) + ")";
+			case WitItem.World world -> "world(" + quote(world.name())
+					+ joinNested(world.items().stream().map(i -> expr(i, depth + 1)).toList(), ind) + ")";
+			case WitItem.InterfaceDef iface -> "iface(" + quote(iface.name())
+					+ joinNested(iface.items().stream().map(i -> expr(i, depth + 1)).toList(), ind) + ")";
+			case WitItem.ImportRef importRef -> "importRef(" + refExpr(importRef.target()) + ")";
+			case WitItem.ExportRef exportRef -> "exportRef(" + refExpr(exportRef.target()) + ")";
+			case WitItem.Include include -> "include(" + refExpr(include.target()) + ")";
+			case WitItem.Use use -> "use(" + refExpr(use.path()) + ", "
+					+ String.join(", ", use.names().stream().map(WasiWitDefinitionsGenerator::useNameExpr).toList())
+					+ ")";
+			case WitItem.TypeAlias alias -> "typeAlias(" + quote(alias.name()) + ", " + typeExpr(alias.target()) + ")";
+			case WitItem.RecordDef record -> "record(" + quote(record.name())
+					+ joinNested(record.fields()
+						.stream()
+						.map(f -> "field(" + quote(f.name()) + ", " + typeExpr(f.type()) + ")")
+						.toList(), ind)
+					+ ")";
+			case WitItem.VariantDef variant -> "variant(" + quote(variant.name())
+					+ joinNested(variant.cases().stream().map(WasiWitDefinitionsGenerator::caseExpr).toList(), ind)
+					+ ")";
+			case WitItem.EnumDef enumDef -> "enumDef(" + quote(enumDef.name())
+					+ joinNested(enumDef.cases().stream().map(c -> quote(c.name())).toList(), ind) + ")";
+			case WitItem.FlagsDef flagsDef -> "flags(" + quote(flagsDef.name())
+					+ joinNested(flagsDef.cases().stream().map(c -> quote(c.name())).toList(), ind) + ")";
+			case WitItem.ResourceDef resource -> resource.body() == null ? "resource(" + quote(resource.name()) + ")"
+					: "resource(" + quote(resource.name())
+							+ joinNested(resource.body().stream().map(i -> expr(i, depth + 1)).toList(), ind) + ")";
+			case WitItem.FuncDef funcDef -> switch (funcDef.kind()) {
+				case PLAIN -> "func(" + quote(funcDef.name()) + ", " + funcTypeExpr(funcDef.func()) + ")";
+				case STATIC -> "staticFunc(" + quote(funcDef.name()) + ", " + funcTypeExpr(funcDef.func()) + ")";
+				case CONSTRUCTOR -> "constructor(" + paramsExpr(funcDef.func().params()) + ")";
+			};
+			case WitItem.ExportNamed exportNamed -> switch (exportNamed.extern()) {
+				case WitItem.Extern.ExternFunc externFunc ->
+					"exportFunc(" + quote(exportNamed.name()) + ", " + funcTypeExpr(externFunc.func()) + ")";
+				case WitItem.Extern.ExternInterface ignored ->
+					throw new IllegalStateException("inline interface exports are not expected in fixtures");
+			};
+			case WitItem.ImportNamed ignored ->
+				throw new IllegalStateException("inline imports are not expected in fixtures");
+		};
+	}
+
+	private static String caseExpr(WitItem.Case c) {
+		return c.payload() == null ? "vcase(" + quote(c.name()) + ")"
+				: "vcase(" + quote(c.name()) + ", " + typeExpr(c.payload()) + ")";
+	}
+
+	private static String useNameExpr(WitItem.UseName name) {
+		return name.alias() == null ? "useName(" + quote(name.name()) + ")"
+				: "useNameAs(" + quote(name.name()) + ", " + quote(name.alias()) + ")";
+	}
+
+	private static String funcTypeExpr(WitFunc func) {
+		String factory = func.async() ? "asyncFuncType" : "funcType";
+		List<String> args = new ArrayList<>();
+		if (func.result() != null) {
+			args.add(typeExpr(func.result()));
+		}
+		if (!func.params().isEmpty()) {
+			args.add(paramsExpr(func.params()));
+		}
+		return factory + "(" + String.join(", ", args) + ")";
+	}
+
+	private static String paramsExpr(List<WitFunc.Param> params) {
+		return String.join(", ",
+				params.stream().map(p -> "param(" + quote(p.name()) + ", " + typeExpr(p.type()) + ")").toList());
+	}
+
+	private static String typeExpr(WitType type) {
+		return switch (type) {
+			case WitType.Prim prim -> switch (prim.name()) {
+				case "char" -> "charType()";
+				default -> prim.name() + "()";
+			};
+			case WitType.Named named -> "named(" + quote(named.name()) + ")";
+			case WitType.ListOf list -> "list(" + typeExpr(list.element()) + ")";
+			case WitType.OptionOf option -> "option(" + typeExpr(option.element()) + ")";
+			case WitType.ResultOf result -> {
+				WitType ok = result.ok();
+				WitType err = result.err();
+				if (err != null) {
+					yield "result(" + (ok == null ? "null" : typeExpr(ok)) + ", " + typeExpr(err) + ")";
+				}
+				yield ok == null ? "result()" : "result(" + typeExpr(ok) + ")";
+			}
+			case WitType.TupleOf tuple -> "tuple("
+					+ String.join(", ", tuple.elements().stream().map(WasiWitDefinitionsGenerator::typeExpr).toList())
+					+ ")";
+			case WitType.StreamOf stream ->
+				stream.element() == null ? "stream()" : "stream(" + typeExpr(stream.element()) + ")";
+			case WitType.FutureOf future ->
+				future.element() == null ? "future()" : "future(" + typeExpr(future.element()) + ")";
+			case WitType.BorrowOf borrow -> "borrow(" + quote(borrow.resource()) + ")";
+			case WitType.OwnOf own -> "own(" + quote(own.resource()) + ")";
+		};
+	}
+
+	private static String refExpr(WitRef ref) {
+		WitPackageName pkg = ref.pkg();
+		if (pkg == null) {
+			return "localRef(" + quote(ref.name()) + ")";
+		}
+		return "ref(" + quote(pkg.namespace()) + ", " + quote(pkg.name()) + ", " + quote(ref.name()) + ", "
+				+ (pkg.version() == null ? "null" : quote(pkg.version())) + ")";
+	}
+
+	private static String packageNameArgs(WitPackageName name) {
+		return quote(name.namespace()) + ", " + quote(name.name()) + ", "
+				+ (name.version() == null ? "null" : quote(name.version()));
+	}
+
+	private static String joinNested(List<String> args, String ind) {
+		if (args.isEmpty()) {
+			return "";
+		}
+		return ",\n" + ind + String.join(",\n" + ind, args);
+	}
+
+	private static String quote(String text) {
+		return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+	}
+
+	private static String camel(String kebab) {
+		StringBuilder sb = new StringBuilder();
+		boolean upper = false;
+		for (char c : kebab.toCharArray()) {
+			if (c == '-') {
+				upper = true;
+			}
+			else {
+				sb.append(upper ? Character.toUpperCase(c) : c);
+				upper = false;
+			}
+		}
+		return sb.toString();
+	}
+
+	private static String upperCamel(String kebab) {
+		String camel = camel(kebab);
+		return Character.toUpperCase(camel.charAt(0)) + camel.substring(1);
+	}
+
+}

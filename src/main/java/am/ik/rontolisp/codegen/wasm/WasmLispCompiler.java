@@ -253,7 +253,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// that mode too. The combinations (fetch + sockets together is a compile error):
 	// - sockets component: sock.* imported at 8-11, fetch trap stubs defined at 12-13.
 	// - fetch component: sock.* imported at 8-11 FROM THE HTTP ADAPTER (four tiny
-	// errno-returning stub exports in adapter-http.wat), http.* imported at 12-13.
+	// errno-returning stub exports in adapter-http-client.wat), http.* imported at 12-13.
 	// - plain component / Preview 1 / no-wasi: all six are defined trap stubs.
 	// This keeps FUNC_START at 14 uniformly, so all the static FUNC_* constants below
 	// are stable. The tcp/fetch built-ins raise a compile error in Preview 1 mode, so
@@ -1978,7 +1978,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// every
 				// FUNC_* constant valid.
 				// Serve mode keeps the imports: the preview1 bridge
-				// (adapter-serve-p1.wasm, instantiated before this core by
+				// (adapter-http-server-p1.wasm, instantiated before this core by
 				// WasmServeComponentBuilder) provides them over the wasi:http proxy
 				// world (random / clocks / stdout-stderr; graceful stubs for the rest).
 				if (!this.noWasi) {
@@ -2554,8 +2554,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// a wasi:http/incoming-handler component (wasmtime serve). When the
 				// program also uses fetch, the serve+fetch variant wires the outgoing
 				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
-				this.componentWit = WitEmitter
-					.emit(emitHttpImport ? WitEmitter.VARIANT_SERVE_HTTP : WitEmitter.VARIANT_SERVE, List.of());
+				this.componentWit = WitEmitter.emit(
+						emitHttpImport ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER,
+						List.of());
 				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport);
 			}
 			// Lift each wasm-export into a host-callable component-model export
@@ -2566,8 +2567,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (ExportPlan p : exportPlans) {
 				componentExportDecls.add(p.decl());
 			}
-			this.componentWit = WitEmitter.emit(emitHttpImport ? WitEmitter.VARIANT_HTTP
-					: emitSockImport ? WitEmitter.VARIANT_SOCK : WitEmitter.VARIANT_BASE, componentExportDecls);
+			this.componentWit = WitEmitter.emit(
+					emitHttpImport ? WitEmitter.VARIANT_HTTP_CLIENT
+							: emitSockImport ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE,
+					componentExportDecls);
 			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExportDecls);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;

@@ -7,14 +7,14 @@ package local:uni;
 // upstream yet (the wasi-http repo's v0.3.0-rc tags and main are still wasi:http@0.2.x).
 // See ../../TODO.md. The base I/O is unchanged WASI 0.3; only the http body streaming and
 // the outgoing-request machinery are WASI 0.2 (driven synchronously by pollable.block in
-// adapter-http.wat).
+// adapter-http-client.wat).
 //
 // The interface order here, together with wasm-tools' dependency ordering, fixes the
 // component import-instance indices that WasmComponentBuilder.buildHttp assumes. Appending
 // the 0.2 http interfaces pulls in wasi:io@0.2 / wasi:cli@0.2 / wasi:clocks@0.2 /
 // wasi:random@0.2 instances, so the buildHttp indices are independent of build() and must
 // be re-derived from a fresh `wasm-tools dump`.
-world uni-http {
+world uni-http-client {
   // --- base I/O: WASI 0.3 (same set as uni.wit) ---
   import wasi:cli/stdout@0.3.0;
   import wasi:cli/stdin@0.3.0;

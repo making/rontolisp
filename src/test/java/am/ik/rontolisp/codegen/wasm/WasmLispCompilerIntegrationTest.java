@@ -1908,8 +1908,9 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void httpHandlerServesResponseLargerThanIoChunkUnderWasmtimeServe() throws Exception {
 		// wasi:io's blocking-write-and-flush accepts at most 4096 bytes per call, so the
-		// serve adapter must chunk the response body (adapter-serve.wat, like
-		// adapter-http.wat's request-body loop). 64 chars doubled 7 times = 8192 bytes.
+		// serve adapter must chunk the response body (adapter-http-server.wat, like
+		// adapter-http-client.wat's request-body loop). 64 chars doubled 7 times = 8192
+		// bytes.
 		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
 				(defun handle (request)
 				  (let ((s "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
@@ -1935,7 +1936,7 @@ class WasmLispCompilerIntegrationTest {
 		// Inside a served handler random / time / print must work: the serve component
 		// bridges the preview1 random_get / clock_time_get / fd_write imports to the
 		// wasi:random / wasi:clocks / wasi:cli interfaces of the wasi:http proxy world
-		// (adapter-serve-p1.wat) instead of trapping.
+		// (adapter-http-server-p1.wat) instead of trapping.
 		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
 				(defun handle (request)
 				  (print "handling")
@@ -1963,7 +1964,8 @@ class WasmLispCompilerIntegrationTest {
 		// A proxy-style handler: rontolisp:fetch inside a served handler works because
 		// the serve+fetch component variant (WasmServeComponentBuilder.buildHttp) wires
 		// the wasi:http outgoing machinery into the preview1 bridge
-		// (adapter-serve-p1-http.wat); run the proxy with `wasmtime serve -S http=y`.
+		// (adapter-http-server-client-p1.wat); run the proxy with `wasmtime serve -S
+		// http=y`.
 		// The backend is itself a plain rontolisp serve component, so the test stays
 		// offline.
 		List<LispVal> backend = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""

@@ -14,8 +14,8 @@ import am.ik.rontolisp.reader.LispReader;
  * Compile-path rewrite for {@code rontolisp:http-handler} when targeting a WASI component
  * ({@code --component}). The interpreter runs a blocking embedded HTTP server; a
  * component instead exports {@code wasi:http/incoming-handler}, driven by the serve
- * adapter ({@code adapter-serve.wat}) which calls a core {@code %http-dispatch} entry per
- * request.
+ * adapter ({@code adapter-http-server.wat}) which calls a core {@code %http-dispatch}
+ * entry per request.
  *
  * <p>
  * This pass turns {@code (rontolisp:http-handler 'handle [port])} into that

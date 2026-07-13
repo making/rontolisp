@@ -53,14 +53,14 @@ machinery (`wasi:http@0.2` + `wasi:io@0.2`), because async `wasi:http@0.3` does 
 upstream yet (see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md` for the upgrade path). So a
 fetch component needs `-S http=y` in addition to the async flags; non-fetch components
 don't import `wasi:http`. To avoid forcing `-S http=y` on every component, the http
-machinery lives in a parallel blob set (`import-block-http.bin`/`mem-http.wasm`/
-`adapter-http.wasm`, sources `uni-http.wit`/`core-http.wat`/`mem-http.wat`/
-`adapter-http.wat`, `deps/*-0.2` + `deps/http`); `WasmComponentBuilder.build(core,
+machinery lives in a parallel blob set (`import-block-http-client.bin`/`mem-http-client.wasm`/
+`adapter-http-client.wasm`, sources `uni-http-client.wit`/`core-http-client.wat`/`mem-http-client.wat`/
+`adapter-http-client.wat`, `deps/*-0.2` + `deps/http`); `WasmComponentBuilder.build(core,
 usesHttp)` -> `buildHttp`, emitted only when the program uses fetch. The rontolisp
 core imports a version-agnostic two-function seam (module "http": `fetch-start` (8 x i32,
 last = handle out-pointer) and `fetch-await` (6 x i32), function indices
 `FUNC_FETCH_START`=8 / `FUNC_FETCH_AWAIT`=9, trap stubs when unused so `FUNC_START` stays
-10 in every mode); only `adapter-http.wat` + `import-block-http.bin` + `buildHttp` bind to
+10 in every mode); only `adapter-http-client.wat` + `import-block-http-client.bin` + `buildHttp` bind to
 a WASI http version (so the future 0.3 upgrade is isolated). The adapter's `fetch-start`
 parses the URL, builds/sends the outgoing-request (streaming the request body) and hands
 back the `future-incoming-response` handle without waiting; `fetch-await` does
@@ -162,9 +162,9 @@ here.
   path-with-query at the first `?` into `:path`/`:query` before building the
   request plist), `WasmLispCompiler` serve mode un-gates
   wasm-export in component mode, and `WasmServeComponentBuilder.buildServe`
-  wires mem + `adapter-serve-p1.wasm` + core + `adapter-serve.wasm` into a
+  wires mem + `adapter-http-server-p1.wasm` + core + `adapter-http-server.wasm` into a
   `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve -W gc=y`.
-  `adapter-serve-p1.wat` is the preview1 bridge: instantiated BEFORE the core
+  `adapter-http-server-p1.wat` is the preview1 bridge: instantiated BEFORE the core
   (the serve adapter imports the core's `%http-dispatch`, so unlike the
   `wasmtime run` adapter it cannot also provide the core's
   `wasi_snapshot_preview1` imports), it implements `random_get` over
@@ -193,7 +193,7 @@ here.
   wasm-GC in Spin's wasmtime and no flag to enable it -- exactly the gap
   wasmCloud's proposal switch fills); Preview-1 WASM output is a compile error
   ("requires --component").
-- **Serve adapter hardening (2026-07-04)** -- three fixes in `adapter-serve.wat`:
+- **Serve adapter hardening (2026-07-04)** -- three fixes in `adapter-http-server.wat`:
   (1) response bodies are written in 4096-byte chunks (`blocking-write-and-flush`
   rejects larger buffers, so any response > 4 KiB used to 500 on every host);
   (2) `response-outparam.set` runs BEFORE the body writes -- the host only
@@ -213,12 +213,12 @@ here.
 - **fetch inside a served handler (serve+fetch variant, 2026-07-04)** -- a
   program using BOTH `rontolisp:http-handler` and `rontolisp:fetch` compiles to
   a parallel serve blob set (proxy/aggregator shapes): the preview1
-  bridge is swapped for `adapter-serve-p1-http.wat` (= adapter-serve-p1 + the
-  fetch-start/fetch-await bodies of adapter-http.wat + the errno-returning tcp
+  bridge is swapped for `adapter-http-server-client-p1.wat` (= adapter-http-server-p1 + the
+  fetch-start/fetch-await bodies of adapter-http-client.wat + the errno-returning tcp
   stubs), instantiated BEFORE the core so it can satisfy the core's
   `http`/`sock` imports (the serve adapter, which comes after the core, cannot).
   `WasmServeComponentBuilder.buildHttp` wires it over
-  `import-block-serve-http.bin` (world `uni-serve-http` = the serve surface +
+  `import-block-http-server-client.bin` (world `uni-http-server-client` = the serve surface +
   `wasi:io/poll` + `wasi:http/outgoing-handler`; io/poll is dependency-hoisted
   to instance 0, shifting every serve instance index by one -- constants are
   independent of `build()` and re-derived from `wasm-tools dump`).

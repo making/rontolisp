@@ -1,7 +1,16 @@
 # Component imports (`canon lower`): the component stops being import-locked
 
 **Status:** open, unstarted. Step 4 and the payoff of `.todo/124`. **The only step
-with genuinely new encoder work.** Depends on `.todo/125` + `.todo/127`.
+with genuinely new encoder work.** Depends on `.todo/125` (DONE 2026-07-13, `.kb/wit.md`)
++ `.todo/127`.
+
+**New prerequisite from the `.todo/125` decision:** `result<T,E>` was settled as
+option (c) — the error arm signals a condition catchable with `handler-case` on
+EVERY backend, and the WASM trap is documented as a temporary limitation, not a
+contract. Therefore a **WASM catch mechanism is a prerequisite of the
+result-returning imports in this step** (wasi:keyvalue returns `result`
+everywhere). Budget it as part of this todo or as its own predecessor todo; the
+"landmines" section below already anticipated this.
 
 ## The hole this fills
 
@@ -10,7 +19,7 @@ surface (`src/wasm-component/uni.wit`): `rontolisp:wasm-import` throws
 `UnsupportedOperationException` under `--component` (`.kb/wasm-import.md`), and
 every new host interface so far (fetch, sockets, http) was added by **hand-building
 another blob variant** under `src/wasm-component/` — which is why there are seven
-of them (`core`, `core-http`, `core-sock`, `core-serve`, ...) and why each new
+of them (`core`, `core-http-client`, `core-sockets`, `core-http-server`, ...) and why each new
 interface costs a `regen.sh` round plus re-derived wiring constants.
 
 That does not scale, and it is what blocks `.todo/52` (wasi:keyvalue), `.todo/53`
@@ -70,10 +79,10 @@ to people who do not write Lisp.
 ## Landmines
 
 - **`result<T,E>`** is unavoidable here (every `wasi:keyvalue` function returns
-  one) and WASM cannot catch conditions (`.kb/error-handling.md`). Whatever
-  `.todo/125` decided, this is where it gets stress-tested. If the answer turns
-  out to be untenable, this is the todo that forces a real catch mechanism on the
-  WASM backend — budget for that possibility.
+  one) and WASM cannot catch conditions (`.kb/error-handling.md`). `.todo/125`
+  decided option (c) — condition on every backend — so this todo is what forces
+  the real catch mechanism on the WASM backend (see the prerequisite note at the
+  top). The decision record: `.kb/wit.md`.
 - **Resources** need a lifetime story (`resource.drop`). Handles in the stream
   space give us `close`; make sure a dropped handle cannot be reused.
 - **0.2 vs 0.3 mixing.** `wasi:keyvalue` is a 0.2 interface; the component's own

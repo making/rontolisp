@@ -1,5 +1,5 @@
 ;; Preview-1 bridge core module for serve components (rontolisp:http-handler +
-;; --component). The serve adapter (adapter-serve.wat) imports the rontolisp core's
+;; --component). The serve adapter (adapter-http-server.wat) imports the rontolisp core's
 ;; %http-dispatch, so it is instantiated AFTER the core and cannot also provide the core's
 ;; wasi_snapshot_preview1 imports the way adapter.wat does for `wasmtime run` components.
 ;; This module fills that gap: instantiated between the shared memory and the core, it
@@ -22,7 +22,7 @@
 ;;
 ;; Scratch: 0x50380-0x5039F, TRANSIENT only -- each cell is written and read back within
 ;; a single export call, so the core's bump-heap sweep across the 0x50000 page (see
-;; adapter-serve.wat's header) can never interleave with a live value.
+;; adapter-http-server.wat's header) can never interleave with a live value.
 ;;   0x50380  blocking-write-and-flush result<_, stream-error> lowering
 ;;   0x50390  wall-clock now datetime (seconds u64 @0x50390, nanoseconds u32 @0x50398)
 (module
@@ -36,7 +36,7 @@
   (import "w" "io-write" (func $io_write (param i32 i32 i32 i32)))
 
   ;; Cached wasi:cli stdout/stderr output-stream handles (-1 = not fetched yet). Globals,
-  ;; not linear memory, for the same clobbering reason as adapter-serve.wat's snapshots.
+  ;; not linear memory, for the same clobbering reason as adapter-http-server.wat's snapshots.
   (global $stdout (mut i32) (i32.const -1))
   (global $stderr (mut i32) (i32.const -1))
 

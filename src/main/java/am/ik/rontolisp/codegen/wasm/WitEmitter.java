@@ -1,13 +1,15 @@
 package am.ik.rontolisp.codegen.wasm;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.wasm.ComponentWriter;
+import am.ik.wit.WitDocument;
+import am.ik.wit.WitFunc;
+import am.ik.wit.WitItem;
+import am.ik.wit.WitMeta;
+import am.ik.wit.WitPrinter;
+import am.ik.wit.WitType;
 
 /**
  * Renders the WIT text ({@code package root:component; world root { ... }}) describing a
@@ -16,35 +18,36 @@ import am.ik.wasm.ComponentWriter;
  * introspecting it via {@code wasm-tools component wit}.
  *
  * <p>
- * The emitted text is semantically identical to what {@code wasm-tools component wit}
- * prints for the same component: the fixed part (the world's WASI imports, the fixed
- * {@code wasi:cli/run} / {@code wasi:http/incoming-handler} export, and the referenced
- * package definitions) is a per-variant classpath template under {@code component/wit/}
- * captured from that tool's output, and only the {@code rontolisp:wasm-export} export
- * lines are rendered dynamically. The templates are regenerated together with the
- * component blobs; see {@code src/wasm-component/README.md}.
+ * The fixed part (the world's WASI imports, the fixed {@code wasi:cli/run} /
+ * {@code wasi:http/incoming-handler} export, and the referenced package definitions) is
+ * the per-variant {@link WasiWitDefinitions} document model; the
+ * {@code rontolisp:wasm-export} directives are appended to the world as typed export
+ * items, and the whole document is printed by {@link WitPrinter} in the canonical
+ * {@code wasm-tools component wit} style — byte-identical to that tool's output on the
+ * same component bytes (the http-server variants deliberately restore incoming-handler's
+ * {@code use} clause that tool drops; see {@code src/wasm-component/README.md}).
  */
 final class WitEmitter {
 
-	/** The GC component's base variant (no fetch, no sockets): {@code wit/base.wit}. */
+	/** The GC component's base variant (no fetch, no sockets). */
 	static final String VARIANT_BASE = "base";
 
-	/** The GC component's {@code rontolisp:fetch} variant: {@code wit/http.wit}. */
-	static final String VARIANT_HTTP = "http";
+	/** The GC component's {@code rontolisp:fetch} (outgoing HTTP) variant. */
+	static final String VARIANT_HTTP_CLIENT = "http-client";
 
-	/** The GC component's {@code rontolisp:tcp-*} variant: {@code wit/sock.wit}. */
-	static final String VARIANT_SOCK = "sock";
+	/** The GC component's {@code rontolisp:tcp-*} variant. */
+	static final String VARIANT_SOCKETS = "sockets";
 
-	/** The GC {@code rontolisp:http-handler} variant: {@code wit/serve.wit}. */
-	static final String VARIANT_SERVE = "serve";
+	/** The GC {@code rontolisp:http-handler} (incoming HTTP) variant. */
+	static final String VARIANT_HTTP_SERVER = "http-server";
 
-	/** The serve+fetch variant: {@code wit/serve-http.wit}. */
-	static final String VARIANT_SERVE_HTTP = "serve-http";
+	/** The http-server variant of a handler program that also uses fetch. */
+	static final String VARIANT_HTTP_SERVER_CLIENT = "http-server-client";
 
-	/** The adapter-free {@code --no-gc} reactor variant: {@code wit/nogc.wit}. */
+	/** The adapter-free {@code --no-gc} reactor variant. */
 	static final String VARIANT_NOGC = "nogc";
 
-	/** The {@code --no-gc} print-micro-adapter variant: {@code wit/nogc-print.wit}. */
+	/** The {@code --no-gc} print-micro-adapter variant. */
 	static final String VARIANT_NOGC_PRINT = "nogc-print";
 
 	private WitEmitter() {
@@ -53,73 +56,51 @@ final class WitEmitter {
 	/**
 	 * Renders the WIT text for a component of the given variant with the given export
 	 * directives.
-	 * @param variant one of the {@code VARIANT_*} template names
+	 * @param variant one of the {@code VARIANT_*} names
 	 * @param exportDecls the {@code rontolisp:wasm-export} directives lifted as
-	 * component-model exports, in export order (empty on the serve variants, whose only
-	 * export is the fixed {@code wasi:http/incoming-handler})
+	 * component-model exports, in export order (empty on the http-server variants, whose
+	 * only export is the fixed {@code wasi:http/incoming-handler})
 	 * @return the WIT text (ends with a newline)
 	 */
 	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls) {
-		List<String> lines = new ArrayList<>(List.of(template(variant).split("\n", -1)));
-		int insertAt = worldClosingBrace(lines);
-		// wasm-tools separates the world's import block from its export block with one
-		// blank line; re-add it when the template world ends on an import (the no-gc
-		// print variant -- the GC templates already end on their fixed export).
-		if (lines.get(insertAt - 1).startsWith("  import ")) {
-			lines.add(insertAt++, "");
-		}
-		for (WasmExportCompiler.Decl decl : exportDecls) {
-			lines.add(insertAt++, exportLine(decl));
-		}
-		return String.join("\n", lines);
-	}
-
-	// The world is the template's first block, so its closing brace is the first
-	// column-zero "}" (the package definitions after it close with their own).
-	private static int worldClosingBrace(List<String> lines) {
-		for (int i = 0; i < lines.size(); i++) {
-			if ("}".equals(lines.get(i))) {
-				return i;
+		WitDocument document = WasiWitDefinitions.document(variant);
+		if (!exportDecls.isEmpty()) {
+			WitItem.World world = document.world();
+			List<WitItem> items = new ArrayList<>(world.items());
+			for (WasmExportCompiler.Decl decl : exportDecls) {
+				items.add(exportItem(decl));
 			}
+			document = document.withWorld(new WitItem.World(world.meta(), world.name(), List.copyOf(items)));
 		}
-		throw new IllegalStateException("WIT template has no world closing brace");
+		return WitPrinter.print(document);
 	}
 
-	// Renders one export line the way wasm-tools prints it, e.g.
+	// Builds one typed world export the way wasm-tools prints it, e.g.
 	// " export noisy-mul: async func(p0: s32, p1: s32) -> s32;". Parameter names are
 	// p0, p1, ... -- the names WasmComponentBuilder/NoGcWasmComponentBuilder encode into
 	// the component's function types.
-	private static String exportLine(WasmExportCompiler.Decl decl) {
-		StringBuilder sb = new StringBuilder("  export ").append(decl.exportName())
-			.append(": ")
-			.append(decl.async() ? "async " : "")
-			.append("func(");
+	private static WitItem exportItem(WasmExportCompiler.Decl decl) {
+		List<WitFunc.Param> params = new ArrayList<>();
 		List<String> paramTypes = decl.paramTypes();
 		for (int i = 0; i < paramTypes.size(); i++) {
-			if (i > 0) {
-				sb.append(", ");
-			}
-			sb.append("p").append(i).append(": ").append(witType(paramTypes.get(i)));
+			params.add(new WitFunc.Param("p" + i, witType(paramTypes.get(i))));
 		}
-		sb.append(")");
 		Integer result = WasmExportCompiler.componentValType(decl.returnType());
-		if (result != null) {
-			sb.append(" -> ").append(witTypeName(result));
-		}
-		return sb.append(";").toString();
+		WitFunc func = new WitFunc(decl.async(), List.copyOf(params), result == null ? null : witTypeOf(result));
+		return new WitItem.ExportNamed(WitMeta.none(), decl.exportName(), new WitItem.Extern.ExternFunc(func));
 	}
 
-	private static String witType(String designator) {
+	private static WitType witType(String designator) {
 		Integer valType = WasmExportCompiler.componentValType(designator);
 		if (valType == null) {
 			throw new UnsupportedOperationException(
 					"rontolisp:wasm-export type " + designator + " is not a WIT parameter type");
 		}
-		return witTypeName(valType);
+		return witTypeOf(valType);
 	}
 
-	private static String witTypeName(int valType) {
-		return switch (valType) {
+	private static WitType witTypeOf(int valType) {
+		return new WitType.Prim(switch (valType) {
 			case ComponentWriter.VT_S32 -> "s32";
 			case ComponentWriter.VT_S64 -> "s64";
 			case ComponentWriter.VT_F64 -> "f64";
@@ -127,20 +108,7 @@ final class WitEmitter {
 			case ComponentWriter.VT_STRING -> "string";
 			default -> throw new UnsupportedOperationException(
 					"component value type 0x" + Integer.toHexString(valType) + " has no WIT rendering");
-		};
-	}
-
-	private static String template(String variant) {
-		String path = "component/wit/" + variant + ".wit";
-		try (InputStream in = WitEmitter.class.getResourceAsStream(path)) {
-			if (in == null) {
-				throw new IllegalStateException("Missing WIT template resource: " + path);
-			}
-			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-		}
-		catch (IOException ex) {
-			throw new UncheckedIOException(ex);
-		}
+		});
 	}
 
 }
