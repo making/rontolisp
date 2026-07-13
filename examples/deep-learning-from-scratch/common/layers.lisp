@@ -303,3 +303,19 @@
     (setf (bn-dgamma layer) dgamma)
     (setf (bn-dbeta layer) dbeta)
     (linalg:reshape dx (bn-input-shape layer))))
+
+;; --- parameter re-pointing (ch07/ch08 net-load-params) --------------------------
+
+;; The book's load_params reassigns layer.W/layer.b after replacing the
+;; params dict; conv and affine name those slots differently, so one
+;; generic folds both (the layer-dw/layer-db pattern of ch08).
+
+(defgeneric layer-set-params (layer w b))
+
+(defmethod layer-set-params ((layer convolution) w b)
+  (setf (conv-w layer) w)
+  (setf (conv-b layer) b))
+
+(defmethod layer-set-params ((layer affine) w b)
+  (setf (affine-w layer) w)
+  (setf (affine-b layer) b))

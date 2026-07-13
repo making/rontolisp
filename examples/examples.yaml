@@ -312,9 +312,18 @@ examples:
   - path: deep-learning-from-scratch/ch07/train-convnet.lisp
     backends: [jvm-compile, wasm-component]
     note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch07/visualize-filter.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads ch07/params.bin (committed); output byte-identical across backends when run manually
   - path: deep-learning-from-scratch/ch08/train-deepnet.lisp
     backends: [jvm-compile, wasm-component]
     note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch08/misclassified-mnist.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/t10k-*-ubyte + ch08/deep-convnet-params.bin
+  - path: deep-learning-from-scratch/ch08/half-float-network.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/t10k-*-ubyte + ch08/deep-convnet-params.bin
 
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp

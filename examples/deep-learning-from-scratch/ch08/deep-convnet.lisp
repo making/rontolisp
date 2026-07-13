@@ -12,6 +12,7 @@
 ;; generics fold their cached gradients back per key.
 
 (load "../common/layers.lisp")
+(require "rlw1" "../dataset/rlw1.lisp")
 
 (defclass deep-convnet ()
   ((params :initarg :params :accessor dcn-params)
@@ -154,3 +155,24 @@
         ((null layers) grads)
       (setf (gethash (format nil "W~a" idx) grads) (layer-dw (car layers)))
       (setf (gethash (format nil "b~a" idx) grads) (layer-db (car layers))))))
+
+(defgeneric net-load-params (net path element-type))
+
+(defmethod net-load-params ((net deep-convnet) path element-type)
+  ;; The book's load_params over an RLW1 export of deep_convnet_params.pkl
+  ;; (W1 b1 .. W8 b8): replace the hash entries, then re-point the eight
+  ;; parameter layers' shared arrays. element-type nil = double,
+  ;; 'single-float = packed #f (linalg is width-polymorphic, so the whole
+  ;; net then runs single -- the half-float chapter's cast).
+  (let ((params (dcn-params net)))
+    (do ((keys *dcn-keys* (cdr keys))
+         (arrays (load-rlw1 path element-type) (cdr arrays)))
+        ((null keys))
+      (setf (gethash (car keys) params) (car arrays)))
+    (do ((idx 1 (+ idx 1))
+         (layers (dcn-grad-layers net) (cdr layers)))
+        ((null layers))
+      (layer-set-params (car layers)
+                        (gethash (format nil "W~a" idx) params)
+                        (gethash (format nil "b~a" idx) params)))
+    net))

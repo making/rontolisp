@@ -14,8 +14,10 @@ The port maps numpy to the `linalg:` package (axis reductions, broadcasting,
 indexing), Python classes to the CLOS subset (`defclass` layers with
 `forward`/`backward` generics), and `params`/`grads` dicts to string-keyed
 hash tables. matplotlib plots become printed tables, trajectories and text
-histograms. All arrays are double-float (`#d`), so adding `--simd` speeds a
-script up **without changing a byte of its output**.
+histograms. Arrays are double-float (`#d`) except where a script is about
+reduced precision (ch08's half-float port casts to packed single-float
+`#f`), and adding `--simd` speeds a script up **without changing a byte
+of its output**.
 
 ## Setup
 
@@ -23,8 +25,11 @@ script up **without changing a byte of its output**.
 ./download-mnist.sh    # fetches + decompresses the 4 MNIST idx files (~55 MB) into dataset/
 ```
 
-`ch03/sample-weight.bin` (the book's pretrained `sample_weight.pkl`,
-re-exported by `tools/export-sample-weight.py`) is already committed.
+The pretrained weights are already committed: `ch03/sample-weight.bin`
+(the book's `sample_weight.pkl`), `ch07/params.bin` (`params.pkl`) and
+`ch08/deep-convnet-params.bin` (`deep_convnet_params.pkl`), each
+re-exported from the book repo's pickle by
+`tools/export-sample-weight.py`.
 
 ## Running
 
@@ -85,8 +90,11 @@ prints) can differ in their last digits on WASM.
 | ch07 `simple_convnet.py` | `ch07/simple-convnet.lisp` | Conv-Relu-Pool-Affine-Relu-Affine over im2col |
 | ch07 `gradient_check.py` | `ch07/gradient-check.lisp` | Convolution/Pooling backprop, verified (< 1e-6) |
 | ch07 `train_convnet.py` | `ch07/train-convnet.lisp` | Training the SimpleConvNet with Adam |
+| ch07 `visualize_filter.py` | `ch07/visualize-filter.lisp` | W1's 5x5 filters before/after learning, as ASCII grids |
 | ch08 `deep_convnet.py` | `ch08/deep-convnet.lisp` | The 16-16/32-32/64-64 pyramid, He init, Dropout |
 | ch08 `train_deepnet.py` | `ch08/train-deepnet.lisp` | Training the deep CNN (smoke-scale defaults) |
+| ch08 `misclassified_mnist.py` | `ch08/misclassified-mnist.lisp` | The pretrained net's mistakes, drawn as ASCII digits |
+| ch08 `half_float_network.py` | `ch08/half-float-network.lisp` | Accuracy unchanged at reduced precision (float16 becomes packed `#f`) |
 
 Shared library files mirror the book's `common/`: `functions.lisp`
 (softmax, cross-entropy, ...), `gradient.lisp` (numerical gradients),
@@ -97,8 +105,9 @@ and Dropout), `util.lisp` (im2col/col2im), `optimizer.lisp`
 (the idx / binary-weight loaders).
 
 The CNN scripts are the heavy ones: a convolution forward is ~100x an
-MLP's arithmetic, and while im2col turns it into `linalg:matmul` (which
-`--simd` accelerates), the im2col unfold itself runs as scalar Lisp
-loops. `ch07/train-convnet.lisp` at its scaled-down defaults is ~5
-minutes interpreted, ~90 seconds under `--simd`, and ~2 seconds compiled
-to the JVM.
+MLP's arithmetic. im2col turns it into `linalg:matmul`, and `--simd`
+also intercepts the unfold itself plus the CNN-shaped call forms
+(axes-permutation transpose, broadcasting, axis reductions), so
+`ch07/train-convnet.lisp` at its scaled-down defaults is ~5 minutes
+interpreted, ~20 seconds under `--simd`, and ~2 seconds compiled to the
+JVM.

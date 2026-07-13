@@ -10,6 +10,7 @@
 
 (load "../common/layers.lisp")
 (load "../common/gradient.lisp")
+(require "rlw1" "../dataset/rlw1.lisp")
 
 (defclass simple-convnet ()
   ((params :initarg :params :accessor scn-params)
@@ -122,3 +123,20 @@
       (setf (gethash key grads)
             (numerical-gradient loss-w (gethash key (scn-params net)))))
     grads))
+
+(defgeneric net-load-params (net path element-type))
+
+(defmethod net-load-params ((net simple-convnet) path element-type)
+  ;; The book's load_params over an RLW1 export of params.pkl (W1 b1 W2 b2
+  ;; W3 b3): replace the hash entries, then re-point the parameter layers'
+  ;; shared arrays. element-type nil = double, 'single-float = packed #f
+  ;; (linalg is width-polymorphic, so the whole net then runs single).
+  (let ((params (scn-params net)))
+    (do ((keys *scn-keys* (cdr keys))
+         (arrays (load-rlw1 path element-type) (cdr arrays)))
+        ((null keys))
+      (setf (gethash (car keys) params) (car arrays)))
+    (layer-set-params (scn-conv1 net) (gethash "W1" params) (gethash "b1" params))
+    (layer-set-params (scn-affine1 net) (gethash "W2" params) (gethash "b2" params))
+    (layer-set-params (scn-affine2 net) (gethash "W3" params) (gethash "b3" params))
+    net))
