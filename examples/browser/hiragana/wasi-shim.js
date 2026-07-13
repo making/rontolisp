@@ -11,13 +11,20 @@
 // This shim implements them over plain JavaScript:
 //   - stdout/stderr (fd 1/2) are captured into strings instead of a real tty
 //   - stdin (fd 0) is fed from a string you provide
-//   - files (path_open) are not supported and report "no entry"
+//   - files (path_open) are served from an in-memory `files` map: a read-only
+//     virtual filesystem, so a program that reads a data file (the hiragana
+//     demo opens its weights.bin) works in the browser with the bytes fetched
+//     over HTTP. rontolisp resolves every path against the first preopened
+//     directory (fd 3), so the map is keyed by the plain relative path.
 //   - randomness uses crypto.getRandomValues, the clock uses Date.now()
 //   - environment variables come from the `env` option
 //
 // It is intentionally minimal and easy to read; it is NOT a complete WASI
-// implementation. For a fuller one, use a package such as
-// `@bjorn3/browser_wasi_shim`.
+// implementation (no directories, no writing, no seek). For a fuller one, use a
+// package such as `@bjorn3/browser_wasi_shim`.
+//
+// This copy has diverged from examples/browser/wasm-browser/wasi-shim.js, which
+// keeps the "files are not supported" stub, by exactly that virtual filesystem.
 
 const WASI_ESUCCESS = 0;
 const WASI_EBADF = 8; // bad file descriptor
@@ -30,10 +37,12 @@ const WASI_ENOSYS = 52; // function not supported
  * @param {Object}  [opts]
  * @param {string}  [opts.stdin]  text delivered to the program's stdin (fd 0)
  * @param {Object}  [opts.env]    environment variables, e.g. { NAME: "Ada" }
+ * @param {Object}  [opts.files]  virtual read-only files, path -> Uint8Array
+ *                                (e.g. { "weights.bin": bytes })
  * @returns {{ imports: object, setMemory: (m: WebAssembly.Memory) => void,
  *             getStdout: () => string, getStderr: () => string }}
  */
-export function createWasi({ stdin = "", env = {} } = {}) {
+export function createWasi({ stdin = "", env = {}, files = {} } = {}) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -43,6 +52,12 @@ export function createWasi({ stdin = "", env = {} } = {}) {
 
   const stdinBytes = encoder.encode(stdin);
   let stdinPos = 0;
+
+  // Open virtual files, keyed by the fd we hand back from path_open. fds 0-2 are
+  // the standard streams and 3 is the (notional) preopened directory, so real
+  // files start above them.
+  const openFiles = new Map();
+  let nextFd = 4;
 
   // environ entries are "KEY=VALUE\0" byte arrays (WASI layout).
   const envEntries = Object.entries(env).map(([k, v]) =>
@@ -72,9 +87,19 @@ export function createWasi({ stdin = "", env = {} } = {}) {
     },
 
     // fd_read(fd, iovs, iovs_len, nread) -> errno
-    // Serve bytes from the provided stdin string; EOF reads zero bytes.
+    // fd 0 reads the provided stdin string; any other fd is an open virtual
+    // file, served sequentially from its cursor. EOF reads zero bytes.
     fd_read(fd, iovs, iovsLen, nread) {
-      if (fd !== 0) return WASI_EBADF;
+      let src, pos;
+      if (fd === 0) {
+        src = stdinBytes;
+        pos = stdinPos;
+      } else {
+        const f = openFiles.get(fd);
+        if (!f) return WASI_EBADF;
+        src = f.bytes;
+        pos = f.pos;
+      }
       let total = 0;
       const mem = bytes();
       for (let i = 0; i < iovsLen; i++) {
@@ -82,21 +107,34 @@ export function createWasi({ stdin = "", env = {} } = {}) {
         const ptr = view().getUint32(base, true);
         const len = view().getUint32(base + 4, true);
         let j = 0;
-        for (; j < len && stdinPos < stdinBytes.length; j++) {
-          mem[ptr + j] = stdinBytes[stdinPos++];
+        for (; j < len && pos < src.length; j++) {
+          mem[ptr + j] = src[pos++];
         }
         total += j;
         if (j < len) break; // ran out of input
       }
+      if (fd === 0) stdinPos = pos;
+      else openFiles.get(fd).pos = pos;
       view().setUint32(nread, total, true);
       return WASI_ESUCCESS;
     },
 
-    // Files are not backed by anything in the browser.
-    path_open() {
-      return WASI_ENOENT;
+    // path_open(dirfd, dirflags, path_ptr, path_len, oflags, rights_base,
+    //           rights_inheriting, fdflags, fd_out) -> errno
+    // Only reading is supported: look the path up in `files` and hand back a
+    // cursor. (The rights arguments are i64 and arrive as BigInt; unused.)
+    path_open(_dirfd, _dirflags, pathPtr, pathLen, _oflags, _rights, _inherit, _fdflags, fdOut) {
+      const path = decoder.decode(new Uint8Array(memory.buffer, pathPtr, pathLen));
+      const data = files[path] ?? files[path.replace(/^\.\//, "")];
+      if (!data) return WASI_ENOENT;
+      const fd = nextFd++;
+      openFiles.set(fd, { bytes: new Uint8Array(data), pos: 0 });
+      view().setUint32(fdOut, fd, true);
+      return WASI_ESUCCESS;
     },
-    fd_close() {
+
+    fd_close(fd) {
+      openFiles.delete(fd);
       return WASI_ESUCCESS;
     },
 
@@ -187,6 +225,33 @@ export async function runWasmModule(wasmBytes, opts = {}) {
     stdout: wasi.getStdout(),
     stderr: wasi.getStderr(),
     exitCode,
+  };
+}
+
+/**
+ * Instantiate a module and run its top level ONCE, keeping the instance alive so
+ * the host can go on calling its `rontolisp:wasm-export`ed functions against the
+ * state that top level built. The hiragana demo needs this: `_start` reads
+ * ~150k weights out of the virtual `weights.bin`, and every later stroke is just
+ * a `recognize(...)` call on the same instance.
+ *
+ * @param {BufferSource} wasmBytes  the module bytes
+ * @param {Object} [opts]           same options as createWasi()
+ * @returns {Promise<{ exports: object, getStdout: () => string,
+ *                     getStderr: () => string }>}
+ */
+export async function instantiateWasm(wasmBytes, opts = {}) {
+  const wasi = createWasi(opts);
+  const { instance } = await WebAssembly.instantiate(wasmBytes, wasi.imports);
+  wasi.setMemory(instance.exports.memory);
+  // A WASI command runs its top level in _start (a --no-wasi reactor exports
+  // _initialize instead); either way it runs once, here.
+  if (instance.exports._start) instance.exports._start();
+  else if (instance.exports._initialize) instance.exports._initialize();
+  return {
+    exports: instance.exports,
+    getStdout: wasi.getStdout,
+    getStderr: wasi.getStderr,
   };
 }
 

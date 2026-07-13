@@ -54,15 +54,6 @@ public class GlyphGen {
 			{ "め", "me" }, { "も", "mo" }, { "や", "ya" }, { "ゆ", "yu" }, { "よ", "yo" }, { "ら", "ra" }, { "り", "ri" },
 			{ "る", "ru" }, { "れ", "re" }, { "ろ", "ro" }, { "わ", "wa" }, { "を", "wo" }, { "ん", "n" } };
 
-	// Display-only romaji -> kana entries added to the glyphs.js KANA map but NOT
-	// to the trained class set (no GLYPHS thumbnail, no prototype, no sample).
-	// They cover the three classes that the real-data Kuzushiji-49 build has
-	// beyond the 46 synthetic gojuon -- ゐ (wi), ゑ (we) and the iteration mark ゝ
-	// (label "iter") -- so a 49-class infer.wasm (gen.sh --weights-from) can map
-	// every predicted romaji back to a kana in the browser. The default 46-class
-	// model never emits these labels, so the extra entries are harmless to it.
-	static final String[][] KANA_DISPLAY_EXTRA = { { "ゐ", "wi" }, { "ゑ", "we" }, { "ゝ", "iter" } };
-
 	public static void main(String[] args) throws IOException {
 		Path out = Path.of(args.length > 0 ? args[0] : ".");
 		Path samples = out.resolve("samples");
@@ -239,10 +230,6 @@ public class GlyphGen {
 		b.append("export const KANA = {");
 		for (int c = 0; c < KANA.length; c++) {
 			b.append(" ").append(KANA[c][1]).append(": \"").append(KANA[c][0]).append("\",");
-		}
-		// Display-only extras for the 49-class real-data model (no thumbnail).
-		for (String[] e : KANA_DISPLAY_EXTRA) {
-			b.append(" ").append(e[1]).append(": \"").append(e[0]).append("\",");
 		}
 		b.append(" };\n\n");
 

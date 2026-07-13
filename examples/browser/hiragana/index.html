@@ -133,11 +133,12 @@
   <body>
     <h1>手書きひらがな認識 — Lisp で学習し、WASM で推論</h1>
     <p class="lead">
-      全 46 文字（五十音 あ〜ん）の小さな多層パーセプトロンを rontolisp で書き、
-      <em>オフラインで学習</em>した重みを焼き込んで WebAssembly
-      (<code>infer.wasm</code>) にコンパイルしました。下のマスに字を書くと、ブラウザが
-      描画を 24×24 に縮小して WASM に渡し、<em>書くそばからリアルタイムで</em>予測します。
-      下段の参考字形に近い形で書くとよく当たります（似た字形は混同しやすいです）。
+      全 46 文字（五十音 あ〜ん）の畳み込みニューラルネット (CNN) を rontolisp で書き、
+      <em>実際の手書きかな (Kuzushiji-49) と複数フォントの合成字形で、オフラインで学習</em>
+      しました。推論だけを WebAssembly (<code>infer.wasm</code>) にコンパイルし、学習済みの
+      重みは <code>weights.bin</code> から読み込みます。下のマスに字を書くと、ブラウザが
+      描画を 24×24 に縮小して WASM の <code>recognize</code> 関数に渡し、
+      <em>書くそばからリアルタイムで</em>予測します。
     </p>
 
     <div class="pane">
@@ -157,11 +158,11 @@
 
     <pre class="err" id="err"></pre>
 
-    <h2 style="font-size: 1.1rem">参考字形（この形に寄せて書いてください）</h2>
+    <h2 style="font-size: 1.1rem">認識できる 46 文字</h2>
     <div class="refs" id="refs"></div>
 
     <script type="module">
-      import { runWasmModule } from "./wasi-shim.js";
+      import { instantiateWasm } from "./wasi-shim.js";
       // The reference glyphs (and GRID) come from the same generator that produced
       // the trained templates -- see glyphgen/GlyphGen.java -- so the page and the
       // network never drift apart.
@@ -293,19 +294,47 @@
         return cells;
       }
 
-      // ----- run inference ---------------------------------------------------
-      let wasmBytes = null;
-      async function loadWasm() {
-        if (wasmBytes) return wasmBytes;
-        const r = await fetch("./infer.wasm");
-        if (!r.ok) throw new Error(`failed to fetch infer.wasm: ${r.status}`);
-        wasmBytes = await r.arrayBuffer();
-        return wasmBytes;
+      // ----- the WASM module -------------------------------------------------
+      // The module is instantiated ONCE and kept alive. Its _start reads the
+      // ~150k trained parameters out of weights.bin -- served to WASI from the
+      // fetched bytes by the shim's virtual filesystem -- and every stroke then
+      // calls the exported recognize(), which is just the forward pass.
+      let ex = null; // the module's exports
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+
+      async function boot() {
+        if (ex) return ex;
+        const [wasm, weights] = await Promise.all([
+          fetch("./infer.wasm").then((r) => {
+            if (!r.ok) throw new Error(`failed to fetch infer.wasm: ${r.status}`);
+            return r.arrayBuffer();
+          }),
+          fetch("./weights.bin").then((r) => {
+            if (!r.ok) throw new Error(`failed to fetch weights.bin: ${r.status}`);
+            return r.arrayBuffer();
+          }),
+        ]);
+        const mod = await instantiateWasm(wasm, {
+          files: { "weights.bin": new Uint8Array(weights) },
+        });
+        ex = mod.exports;
+        return ex;
       }
 
-      function renderResult(stdout) {
-        // stdout lines: "pred <i> <romaji>" then "score <romaji> <value>"
-        const lines = stdout.trim().split("\n");
+      // The :s-expr / :string ABI: arguments and results cross as (ptr, len)
+      // into the module's linear memory, allocated with its __ronto_alloc.
+      function callRecognize(sexpr) {
+        const b = enc.encode(sexpr);
+        const p = ex.__ronto_alloc(b.length);
+        new Uint8Array(ex.memory.buffer, p, b.length).set(b);
+        const [rp, rl] = ex.recognize(p, b.length);
+        return dec.decode(new Uint8Array(ex.memory.buffer, rp, rl));
+      }
+
+      function renderResult(text) {
+        // lines: "pred <i> <romaji>" then one "score <romaji> <value>" per class
+        const lines = text.trim().split("\n");
         let pred = null;
         const scores = {};
         for (const line of lines) {
@@ -356,11 +385,9 @@
             document.getElementById("scores").textContent = "";
             return;
           }
-          const stdin = "(" + Array.from(cells, (v) => v.toFixed(1)).join(" ") + ")\n";
-          const bytes = await loadWasm();
-          const { stdout, stderr } = await runWasmModule(bytes, { stdin });
-          if (stderr) console.warn("stderr:", stderr);
-          renderResult(stdout);
+          await boot();
+          const image = "(" + Array.from(cells, (v) => v.toFixed(1)).join(" ") + ")";
+          renderResult(callRecognize(image));
           err.textContent = "";
         } catch (e) {
           err.textContent =

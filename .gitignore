@@ -38,8 +38,10 @@ build/
 ### Web Image playground (generated artifacts) ###
 web/dist/
 web/playground-screenshot.png
-# Generated real-data (Kuzushiji-49) weights for the hiragana demo (B) path.
-examples/browser/hiragana/weights-k49.lisp
+### Hiragana demo: the real-handwriting dataset (downloaded + preprocessed) ###
+# The trained weights.bin and infer.wasm ARE committed; the dataset is not.
+examples/browser/hiragana/tools/k49/data/
+examples/browser/hiragana/data/
 
 ### Test scratch files (ci-spec file-stream cases run in-process by the corpus tests) ###
 /bin.dat

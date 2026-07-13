@@ -92,9 +92,12 @@ dims fh fw stride pad` (its scatter-add adjoint) back the
 deep-learning-from-scratch CNN examples (`examples/deep-learning-from-scratch/
 common/util.lisp` wraps them as the book's `im2col`/`col2im`). numpy has no
 im2col either, so they stay `%la-` internal; both are direct index arithmetic
-(no pad copy / 6-D scratch / transpose materialized) and rank-4 only. They are
-NOT `--simd`-intercepted (scalar loops; the convolution matrix product they
-feed IS, via `matmul`).
+(no pad copy / 6-D scratch / transpose materialized) and rank-4 only. Both ARE
+`--simd`-intercepted (todo-117 follow-up `8987590`) -- not with lanes (there is
+no arithmetic to vectorize, only index math) but as native kernels, because the
+boxed element-at-a-time loop dominated everything else once the matrix product
+they feed was accelerated (~97% of a ch07 train run under `--simd` was
+im2col/col2im).
 
 Gotchas when writing programs:
 `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace` and 1-arg `transpose` are

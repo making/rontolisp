@@ -1,10 +1,18 @@
 # Break the JVM "baked constants" ceiling (blocks larger baked models)
 
-**Status:** open. Discovered while extending `examples/hiragana/` to 46 classes
-(see `.todo/16`). It is the reason the demo's hidden layer is pinned at 20: a
-larger net runs on the interpreter and WASM but won't load on the JVM backend,
-so to keep all four backends we capped capacity. We want to lift this cap with a
-different codegen approach rather than shrinking the model.
+**Status:** open as a CODEGEN issue -- but nothing in the repo is blocked on it
+any more. It was discovered while extending `examples/browser/hiragana/` to 46
+classes, and it used to be what pinned that demo's hidden layer at 20 (a larger
+net ran on the interpreter and WASM but would not load on the JVM backend).
+
+**The hiragana demo no longer bakes its weights** (2026-07-13): it writes them to
+`weights.bin` (RLW1 binary, `save-rlw1`) and READS them at startup on every
+backend -- approach 4 below, made viable in the browser by teaching
+`wasi-shim.js` a read-only virtual filesystem. Its model grew from 12.5k to 150k
+parameters with no codegen change. So the remaining question is only the general
+one: should a program that bakes tens of thousands of float constants compile on
+the JVM backend at all? If yes, approach 1 or 2 below is still the fix; if we are
+content telling such programs to load their data instead, this can be closed.
 
 ## The constraint, precisely (measured on JDK 25, `claude-opus` session 2026-06)
 
@@ -75,23 +83,30 @@ old-verifier failover, so large/complex v50 classes get pushed onto the split
    stays under the ceiling. Needs the backend to emit more than one class and wire
    classloading. Medium effort; doesn't help the general case, only big data.
 
-4. **Load weights at runtime from an external file (NOT for the browser).**
-   `(read)` weights from a sidecar file instead of baking. The runtime reader
-   already supports it. But it breaks self-containment and the browser WASM has no
-   filesystem (the original reason weights are baked), so this only helps
-   non-browser/native runs. Keep as a fallback, not the primary fix.
+4. **Load the data at runtime from an external file (TAKEN by the hiragana
+   demo, 2026-07-13).** Read the weights from a sidecar file instead of baking
+   them. This was written off here as "not for the browser" because a browser WASM
+   module has no filesystem -- which turned out to be a property of the SHIM, not
+   of WASM: `examples/browser/hiragana/wasi-shim.js` now answers `path_open`/
+   `fd_read` out of an in-memory file map fed by `fetch`, so the module just opens
+   `weights.bin` like it does under `wasmtime --dir .`. Cost: one more artifact to
+   serve (and, for a big model, a per-instantiation load -- the demo pays it once
+   by keeping the instance alive and calling a `wasm-export`ed entry point per
+   recognition). It does not help a program that genuinely wants to be one
+   self-contained class/module, which is what 1-3 are for.
 
 ## Recommended next step
-Prototype approach 1 (packed string/blob, optionally int8-quantized) on the
-hiragana `infer.lisp` path: change `train.lisp` serialization + add the JVM
-data-decode, confirm `infer.lisp` loads on the JVM at hidden=48/64 (and ideally a
-higher resolution), then re-verify all four backends. If we later want the
-limit gone program-wide (not just baked data), do approach 2.
+Decide whether we care. There is no in-repo program left that wants to bake this
+much data, so the honest options are (a) close this as "load your data instead",
+or (b) do approach 2 (StackMapTable + class version 51+), which is the only one
+that also removes the class-wide ceiling for programs with no baked data at all
+(deeply nested/large generated code would hit the same verifier). Approach 1 is
+the cheap middle if a self-contained big-constant class is ever really needed.
 
 ## References
-- `examples/hiragana/train.lisp` (`*hidden*` cap comment + serializer),
-  `infer.lisp` (rebuilds the net from `*weights*`).
+- `examples/browser/hiragana/` (the demo that found this; it now READS its
+  weights -- `net.lisp` `save-rlw1` / `dataset/rlw1.lisp` `load-rlw1`).
 - `JvmLispCompiler` / `codegen.jvm` (constant emission, class version 50),
   `am.ik.jvm` (bytecode writer — where StackMapTable would go).
-- CLAUDE.md: "JVM Class Version 50", "JVM method name mangling", weight chunking.
+- CLAUDE.md: "JVM Class Version 50", "JVM method name mangling".
 - `.todo/16-extend-hiragana-to-full-set.md` (where the cap currently bites).

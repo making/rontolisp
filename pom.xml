@@ -455,17 +455,20 @@ public final class Version {
 											<fileset dir="${project.basedir}/examples/browser/wasm-browser"/>
 										</copy>
 										<!-- Stage the handwritten-hiragana recognition demo as another
-											 subpath (/hiragana/). Only the four runtime files the browser
-											 loads are copied; the offline training artifacts (train.lisp,
-											 weights.lisp, prototypes.lisp, infer.lisp, glyphgen/, samples/)
-											 are excluded to keep the Pages payload small. The demo's
-											 index.html uses relative URLs and works under any subpath. -->
+											 subpath (/hiragana/). Only the five runtime files the browser
+											 loads are copied (infer.wasm reads the trained weights.bin at
+											 startup, through the shim's virtual filesystem); the offline
+											 training artifacts (train.lisp, dataset.lisp, net.lisp,
+											 prototypes.lisp, glyphgen/, samples/, tools/) are excluded to
+											 keep the Pages payload small. The demo's index.html uses
+											 relative URLs and works under any subpath. -->
 										<copy todir="${web.dist}/hiragana">
 											<fileset dir="${project.basedir}/examples/browser/hiragana">
 												<include name="index.html"/>
 												<include name="wasi-shim.js"/>
 												<include name="glyphs.js"/>
 												<include name="infer.wasm"/>
+												<include name="weights.bin"/>
 											</fileset>
 										</copy>
 										<!-- Stage the WebGL galaxy demo as another subpath (/webgl-galaxy/).

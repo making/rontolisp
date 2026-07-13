@@ -174,9 +174,10 @@ site (no compilation needed — their `.wasm` files are committed and their
 - `/wasm-browser/` — prebuilt WASM run in plain HTML/JS
   (from [`examples/browser/wasm-browser/`](../examples/browser/wasm-browser)).
 - `/hiragana/` — handwritten-hiragana recognition demo
-  (from [`examples/browser/hiragana/`](../examples/browser/hiragana); only the four runtime files
-  the browser loads — `index.html`, `wasi-shim.js`, `glyphs.js`, `infer.wasm` —
-  are staged; the offline training artifacts are excluded).
+  (from [`examples/browser/hiragana/`](../examples/browser/hiragana); only the five runtime files
+  the browser loads — `index.html`, `wasi-shim.js`, `glyphs.js`, `infer.wasm` and the trained
+  `weights.bin` the module reads at startup — are staged; the offline training
+  artifacts are excluded).
 
 One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
 "GitHub Actions"**.
