@@ -10,7 +10,12 @@
 > `wasmtime -W max-memory-size` cap where the bare loop traps
 > (`noGcWithArenaKeepsALoopFlatWhereTheBareLoopGrows`). Details:
 > `.kb/no-gc-scalar-wasm.md`. **What remains of this todo is ONLY the wasm-GC
-> string/intern-heap half** (steps 3+4; still unsequenced, reassess value).
+> string/intern-heap half** (steps 3+4), and on **2026-07-13 that half was split
+> out into `.todo/124-wasm-gc-host-arena-api.md`** — with a concrete motivation
+> (a wasm-GC reactor host that allocates a fresh input buffer per call grows
+> linear memory to ~2.4 MB over 100000 calls, measured in
+> `examples/count-vowels/`) and the intern-count guard spelled out. Pick up 124,
+> not this file; this one stays as the design record.
 
 **Goal:** give the WASM backends a real reclamation mechanism for the bump-allocated linear heap,
 usable from Lisp (not only from the host across an export boundary).

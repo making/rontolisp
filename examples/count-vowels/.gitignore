@@ -1,2 +1,6 @@
 /target/
 /count_vowels.wasm
+/count_vowels_gc.wasm
+/count_vowels_component.wasm
+/dist/
+/node_modules/

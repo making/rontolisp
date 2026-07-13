@@ -11,23 +11,28 @@
 
 	<name>rontolisp count-vowels host (Endive)</name>
 	<description>
-		A pure-Java Endive host that shares a string with a rontolisp --no-gc Wasm module
-		through linear memory (the counterpart of Endive/Chicory's "share data" tutorial).
+		Pure-Java Endive hosts that share a string with a rontolisp Wasm module through
+		linear memory (the counterpart of Endive/Chicory's "share data" tutorial):
+		CountVowels drives the --no-gc module with the host arena API, CountVowelsGc the
+		wasm-GC one.
 	</description>
 
 	<properties>
 		<maven.compiler.release>17</maven.compiler.release>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<endive.version>1.0.0</endive.version>
-		<!-- The rontolisp compiler jar used to build count_vowels.wasm. Build it once from
-			 the repository root with `./mvnw -q clean package -DskipTests`, or override with
+		<endive.version>1.0.1</endive.version>
+		<!-- `mvn exec:java` runs this host; override with -Dexec.mainClass=CountVowelsGc. -->
+		<exec.mainClass>CountVowels</exec.mainClass>
+		<!-- The rontolisp compiler jar used to build the modules. Build it once from the
+			 repository root with `./mvnw -q clean package -DskipTests`, or override with
 			 `-Drontolisp.jar=/path/to/rontolisp-*-exec.jar`. -->
 		<rontolisp.jar>${project.basedir}/../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar</rontolisp.jar>
 	</properties>
 
 	<dependencies>
-		<!-- Endive: a native-JVM WebAssembly runtime (the successor to Chicory). A no-gc
-			 module imports nothing, so no import object is needed to instantiate it. -->
+		<!-- Endive: a native-JVM WebAssembly runtime (the successor to Chicory). Both
+			 modules here import nothing, so neither needs an import object; the wasm-GC
+			 one additionally needs Endive's GC support (1.0.1). -->
 		<dependency>
 			<groupId>run.endive</groupId>
 			<artifactId>runtime</artifactId>
@@ -42,10 +47,10 @@
 				<artifactId>exec-maven-plugin</artifactId>
 				<version>3.5.0</version>
 				<executions>
-					<!-- Compile count-vowels.lisp to count_vowels.wasm before the Java
-						 sources compile, so `mvn compile exec:java` is a single command. -->
+					<!-- Compile count-vowels.lisp to both modules before the Java sources
+						 compile, so `mvn compile exec:java` is a single command. -->
 					<execution>
-						<id>compile-wasm</id>
+						<id>compile-wasm-nogc</id>
 						<phase>generate-resources</phase>
 						<goals>
 							<goal>exec</goal>
@@ -63,11 +68,30 @@
 							</arguments>
 						</configuration>
 					</execution>
+					<execution>
+						<id>compile-wasm-gc</id>
+						<phase>generate-resources</phase>
+						<goals>
+							<goal>exec</goal>
+						</goals>
+						<configuration>
+							<executable>java</executable>
+							<arguments>
+								<argument>-jar</argument>
+								<argument>${rontolisp.jar}</argument>
+								<argument>${project.basedir}/count-vowels.lisp</argument>
+								<argument>-o</argument>
+								<argument>${project.basedir}/count_vowels_gc.wasm</argument>
+								<argument>--no-wasi</argument>
+								<argument>--optimize</argument>
+							</arguments>
+						</configuration>
+					</execution>
 				</executions>
-				<!-- `mvn exec:java` runs the host in Maven's JVM; it reads count_vowels.wasm
-					 from this directory. Pass the input with -Dexec.args="...". -->
+				<!-- `mvn exec:java` runs the host in Maven's JVM; it reads the .wasm from
+					 this directory. Pass the input with -Dexec.args="...". -->
 				<configuration>
-					<mainClass>CountVowels</mainClass>
+					<mainClass>${exec.mainClass}</mainClass>
 				</configuration>
 			</plugin>
 		</plugins>
