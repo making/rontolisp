@@ -1,0 +1,148 @@
+package root:component;
+
+world root {
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  import wasi:cli/stdin@0.3.0;
+  import wasi:cli/environment@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:filesystem/types@0.3.0;
+  import wasi:filesystem/preopens@0.3.0;
+  import wasi:random/random@0.3.0;
+  import wasi:cli/stderr@0.3.0;
+
+  export wasi:cli/run@0.3.0;
+}
+package wasi:cli@0.3.0 {
+  interface types {
+    enum error-code {
+      io,
+      illegal-byte-sequence,
+      pipe,
+    }
+  }
+  interface stdout {
+    use types.{error-code};
+
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+  }
+  interface stdin {
+    use types.{error-code};
+
+    read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
+  }
+  interface environment {
+    get-environment: func() -> list<tuple<string, string>>;
+  }
+  interface stderr {
+    use types.{error-code};
+
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+  }
+  interface run {
+    run: async func() -> result;
+  }
+}
+
+
+package wasi:clocks@0.3.0 {
+  interface system-clock {
+    record instant {
+      seconds: s64,
+      nanoseconds: u32,
+    }
+
+    now: func() -> instant;
+  }
+  interface monotonic-clock {
+    type mark = u64;
+
+    now: func() -> mark;
+  }
+}
+
+
+package wasi:filesystem@0.3.0 {
+  interface types {
+    resource descriptor {
+      read-via-stream: func(offset: filesize) -> tuple<stream<u8>, future<result<_, error-code>>>;
+      append-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+      open-at: async func(path-flags: path-flags, path: string, open-flags: open-flags, %flags: descriptor-flags) -> result<descriptor, error-code>;
+    }
+
+    type filesize = u64;
+
+    variant error-code {
+      access,
+      already,
+      bad-descriptor,
+      busy,
+      deadlock,
+      quota,
+      exist,
+      file-too-large,
+      illegal-byte-sequence,
+      in-progress,
+      interrupted,
+      invalid,
+      io,
+      is-directory,
+      loop,
+      too-many-links,
+      message-size,
+      name-too-long,
+      no-device,
+      no-entry,
+      no-lock,
+      insufficient-memory,
+      insufficient-space,
+      not-directory,
+      not-empty,
+      not-recoverable,
+      unsupported,
+      no-tty,
+      no-such-device,
+      overflow,
+      not-permitted,
+      pipe,
+      read-only,
+      invalid-seek,
+      text-file-busy,
+      cross-device,
+      other(option<string>),
+    }
+
+    flags path-flags {
+      symlink-follow,
+    }
+
+    flags open-flags {
+      create,
+      directory,
+      exclusive,
+      truncate,
+    }
+
+    flags descriptor-flags {
+      read,
+      write,
+      file-integrity-sync,
+      data-integrity-sync,
+      requested-write-sync,
+      mutate-directory,
+    }
+  }
+  interface preopens {
+    use types.{descriptor};
+
+    get-directories: func() -> list<tuple<descriptor, string>>;
+  }
+}
+
+
+package wasi:random@0.3.0 {
+  interface random {
+    get-random-u64: func() -> u64;
+  }
+}

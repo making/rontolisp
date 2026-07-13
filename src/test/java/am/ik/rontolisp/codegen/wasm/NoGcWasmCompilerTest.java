@@ -1907,4 +1907,55 @@ class NoGcWasmCompilerTest {
 		assertThat(component[6]).isEqualTo((byte) 0x01);
 	}
 
+	@Test
+	void componentCompileRecordsTheWitText() {
+		// The CLI's --wit output for the adapter-free reactor: an import-free world of
+		// just the typed exports (:long lifts as s64 here only).
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
+		assertThat(compiler.componentWit()).isNull();
+		compiler.compile(LispReader.readAllFromString("""
+				(defun big-add (a b) (+ a b))
+				(defun evenp2 (n) (= 0 (mod n 2)))
+				(rontolisp:wasm-export 'big-add :params '(:long :long) :returns :long)
+				(rontolisp:wasm-export 'evenp2 :params '(:int) :returns :bool)
+				"""));
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  export big-add: func(p0: s64, p1: s64) -> s64;
+				  export evenp2: func(p0: s32) -> bool;
+				}
+				""");
+	}
+
+	@Test
+	void componentWitOfAPrintingProgramCarriesTheStdioImports() {
+		// The print micro-adapter's WASI 0.2 stdio surface shows up as world imports
+		// (plus their package definitions), separated from the exports by one blank
+		// line the way wasm-tools prints it.
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
+		compiler.compile(LispReader.readAllFromString("""
+				(defun hello () (print "hi"))
+				(rontolisp:wasm-export 'hello)
+				"""));
+		assertThat(compiler.componentWit()).contains("""
+				world root {
+				  import wasi:io/error@0.2.0;
+				  import wasi:io/streams@0.2.0;
+				  import wasi:cli/stdout@0.2.0;
+
+				  export hello: func();
+				}
+				""").contains("package wasi:io@0.2.0 {");
+	}
+
+	@Test
+	void nonComponentCompileRecordsNoWitText() {
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler();
+		compiler.compile(LispReader
+			.readAllFromString("(defun f (a) a) (rontolisp:wasm-export 'f :params '(:long) :returns :long)"));
+		assertThat(compiler.componentWit()).isNull();
+	}
+
 }

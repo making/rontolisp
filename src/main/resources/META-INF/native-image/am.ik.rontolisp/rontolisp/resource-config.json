@@ -27,6 +27,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.WitEmitter"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/wit/.*\\.wit"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmJavaRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate\\.class"

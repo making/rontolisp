@@ -95,7 +95,8 @@ public final class RontoLispCli {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
-					options.contains("--no-gc"), options.contains("--simd"), options.contains("--no-prune"));
+					options.contains("--no-gc"), options.contains("--simd"), options.contains("--no-prune"),
+					options.contains("--wit"));
 		}
 		else {
 			interpret(source, baseDir, systemPath, options.contains("--simd"));
@@ -210,7 +211,13 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
-			boolean noPrune) {
+			boolean noPrune, boolean wit) {
+		// --wit describes a component's typed world, so it is meaningless for any other
+		// output; fail fast instead of silently ignoring the request.
+		if (wit && !(component && outputFile.endsWith(".wasm"))) {
+			throw new UnsupportedOperationException(
+					"--wit requires --component and a .wasm output (e.g. -o out.wasm --component --wit)");
+		}
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -248,6 +255,7 @@ public final class RontoLispCli {
 			program = LibraryDefunPruner.prune(program);
 		}
 		byte[] bytes;
+		String witText = null;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {
 				// --no-gc selects the separate scalar (non-GC) lowering: a plain MVP
@@ -261,7 +269,9 @@ public final class RontoLispCli {
 				// lower to native v128 (f64x2/f32x4); without it to plain scalar loops
 				// that
 				// run on a runtime lacking the SIMD proposal.
-				bytes = new NoGcWasmCompiler(optimize, simd, component).compile(program);
+				NoGcWasmCompiler compiler = new NoGcWasmCompiler(optimize, simd, component);
+				bytes = compiler.compile(program);
+				witText = compiler.componentWit();
 			}
 			else {
 				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
@@ -276,7 +286,9 @@ public final class RontoLispCli {
 				// groups -- still a GC object the engine collects, so memory behaves as
 				// it
 				// does without the flag.
-				bytes = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd).compile(wasmProgram);
+				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd);
+				bytes = compiler.compile(wasmProgram);
+				witText = compiler.componentWit();
 			}
 		}
 		else {
@@ -289,6 +301,10 @@ public final class RontoLispCli {
 		}
 		try {
 			Files.write(Path.of(outputFile), bytes);
+			if (wit) {
+				String witFile = outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".wit";
+				Files.writeString(Path.of(witFile), Objects.requireNonNull(witText));
+			}
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
@@ -322,6 +338,9 @@ public final class RontoLispCli {
 		this.out.println("                     With --no-gc: a compact reactor component (typed exports");
 		this.out.println("                     incl. :long and :string; print works via a tiny WASI 0.2");
 		this.out.println("                     stdio bridge; no wasm-GC, no flags)");
+		this.out.println("  --wit              With --component: also write the component's WIT world");
+		this.out.println("                     (imports + typed exports) next to the .wasm output, so hosts");
+		this.out.println("                     and binding generators (e.g. jco) need no wasm-tools introspection");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");

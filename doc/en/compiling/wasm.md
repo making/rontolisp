@@ -555,6 +555,51 @@ For a pure-compute export kit, the compact
 emits the same typed exports (plus `:long` → `s64`, minus `:s-expr`) in a
 component of a few hundred bytes that needs no wasmtime flags at all.
 
+### Emitting the WIT World (`--wit`)
+
+Add `--wit` to any `--component` build to also write the component's WIT
+description next to the `.wasm` output — `-o sumsq.wasm --wit` writes
+`sumsq.wit`:
+
+```bash
+rontolisp sumsq.lisp --component -o sumsq.wasm --wit
+```
+
+```text
+// sumsq.wit (the world; the file also carries the referenced package
+// definitions, so it is self-contained and parseable on its own)
+package root:component;
+
+world root {
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  // ... the WASI imports of the build's blob variant ...
+
+  export wasi:cli/run@0.3.0;
+  export sumsquared: func(p0: s32, p1: s32) -> s32;
+}
+```
+
+The text matches what `wasm-tools component wit sumsq.wasm` prints for the same
+bytes, so it is exactly the component's real surface — but nothing needs to
+introspect the binary anymore: hand the `.wit` straight to a binding generator.
+For example, jco generates TypeScript typings from it without touching the
+`.wasm`:
+
+```bash
+npx @bytecodealliance/jco types sumsq.wit -o types/
+# types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
+```
+
+The world's imports follow the build variant (plain, `rontolisp:fetch`,
+`rontolisp:tcp-*`, or `rontolisp:http-handler`; with
+[`--no-gc --component`](#compact-component-output---no-gc---component) the
+world is import-free, or carries the 0.2 stdio imports when the program
+prints), an `:async t` export is rendered as `async func`, and a
+`rontolisp:http-handler` build exports `wasi:http/incoming-handler` instead of
+`run`. `--wit` without `--component` is a compile error — a core module has no
+WIT-level surface to describe.
+
 ## Non-GC Output (`--no-gc`)
 
 Every GC-value-model output above — even an optimized reactor — still needs a
@@ -933,6 +978,9 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - The export name must be a lower-kebab-case component-model name; for a Lisp
   name outside that grammar the compiler asks you to rename it with `:as`.
 - `--optimize` composes: the core module is tree-shaken before the wrap.
+- [`--wit`](#emitting-the-wit-world---wit) composes too, and writes a tiny
+  import-free world of just the typed exports (plus the 0.2 stdio imports when
+  the program prints).
 
 ## Cross-Cutting Flags
 

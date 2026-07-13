@@ -58,7 +58,9 @@ it exposes the full width with no `wrap`/`extend` conversion.
   `:async t` when the export prints or fetches. Under `--no-gc --component`,
   `:async` is rejected but printing works in the sync export itself, through a
   built-in WASI 0.2 stdio micro-adapter wired in only when the program prints.
-  The export name must be lower-kebab-case (rename with `:as` otherwise). See
+  The export name must be lower-kebab-case (rename with `:as` otherwise), and
+  adding `--wit` writes the component's WIT world (with every export's typed
+  signature) next to the `.wasm`. See
   [Component-model function exports](../../compiling/wasm.md#component-model-function-exports-wasm-export)
   and [Compact component output](../../compiling/wasm.md#compact-component-output---no-gc---component).
   On the interpreter and JVM the directive just returns the named symbol.

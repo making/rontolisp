@@ -173,6 +173,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The WIT text describing the component compiled by the last {@link #compile} call
+	 * (the CLI's {@code --wit} output), or {@code null} before a component compile.
+	 * Semantically identical to {@code wasm-tools component wit} on the emitted bytes;
+	 * see {@link WitEmitter}.
+	 * @return the WIT text, or {@code null} when not compiling a component
+	 */
+	public @Nullable String componentWit() {
+		return this.componentWit;
+	}
+
+	private @Nullable String componentWit;
+
+	/**
 	 * The index of the first user defun: the fixed runtime helpers, plus -- under
 	 * {@code --simd} only -- the {@link WasmVecSimdRuntimeBuilder} block and the
 	 * {@link WasmLinalgSimdRuntimeBuilder} one after it. Every fixed {@code FUNC_*}
@@ -2541,6 +2554,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// a wasi:http/incoming-handler component (wasmtime serve). When the
 				// program also uses fetch, the serve+fetch variant wires the outgoing
 				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
+				this.componentWit = WitEmitter
+					.emit(emitHttpImport ? WitEmitter.VARIANT_SERVE_HTTP : WitEmitter.VARIANT_SERVE, List.of());
 				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport);
 			}
 			// Lift each wasm-export into a host-callable component-model export
@@ -2551,6 +2566,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (ExportPlan p : exportPlans) {
 				componentExportDecls.add(p.decl());
 			}
+			this.componentWit = WitEmitter.emit(emitHttpImport ? WitEmitter.VARIANT_HTTP
+					: emitSockImport ? WitEmitter.VARIANT_SOCK : WitEmitter.VARIANT_BASE, componentExportDecls);
 			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExportDecls);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;

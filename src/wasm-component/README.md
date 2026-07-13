@@ -21,9 +21,11 @@ src/wasm-component/                 (this directory: editable sources, dev-only)
   mem.wat  adapter.wat              core-module sources
   uni.wit  deps/  core.wat          inputs for the unified import block
   regen.sh                          regenerates the blobs below, fully offline
+  regen-wit.sh                      regenerates the --wit templates below (needs the jar)
 
 src/main/resources/am/ik/rontolisp/codegen/wasm/component/   (generated, packaged)
   mem.wasm  adapter.wasm  import-block.bin
+  wit/*.wit                         --wit templates, one per blob variant
 ```
 
 The generated `.bin` / `.wasm` are loaded at runtime via the classpath and registered for
@@ -33,6 +35,32 @@ GraalVM native image (wildcard patterns) in
 ```bash
 src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-tools + python3)
 ```
+
+## The `--wit` templates (`wit/*.wit`)
+
+The CLI's `--wit` option writes the component's WIT world next to the `.wasm`. The fixed
+part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/incoming-handler`
+export, the referenced package definitions) is one template per blob variant —
+`base`/`http`/`sock`/`serve`/`serve-http` (GC) and `nogc`/`nogc-print` — captured verbatim
+from `wasm-tools component wit` on a minimal reference component; `WitEmitter` only splices
+in the per-program `rontolisp:wasm-export` lines. Two deliberate template edits over the raw
+tool output, both encoded in `regen-wit.sh`: the reference program's own export lines are
+stripped, and the serve variants restore incoming-handler's
+`use types.{incoming-request, response-outparam};` clause that `wasm-tools component wit`
+omits (its output does not parse without it; the upstream `deps/http/handler.wit` has it).
+
+Regeneration is two-phase because the fixed exports are wired by `WasmComponentBuilder`
+(they are not in the `uni*.wit` reference worlds), so the reference components must be
+built by the full pipeline:
+
+```bash
+./regen.sh                                # 1. blobs (after editing the sources)
+(cd ../.. && ./mvnw package -DskipTests)  # 2. rebuild the exec jar on the new blobs
+./regen-wit.sh                            # 3. templates (uses the jar + wasm-tools)
+```
+
+Then re-run `WitEmitterTest` (always-on line pins) and `WitOracleE2eTest` (live
+`wasm-tools` diff; skipped when the binary is not on `PATH`).
 
 Run a generated component with:
 

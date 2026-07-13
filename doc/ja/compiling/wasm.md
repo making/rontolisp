@@ -324,6 +324,38 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y \
 
 純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](#compact-component-output---no-gc---component) が同じ型付きエクスポート(加えて `:long` → `s64`、ただし `:s-expr` なし)を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。
 
+### WIT ワールドの出力(`--wit`)
+
+任意の `--component` ビルドに `--wit` を追加すると、コンポーネントの WIT 記述も `.wasm` 出力の隣に書き出されます — `-o sumsq.wasm --wit` は `sumsq.wit` を書きます:
+
+```bash
+rontolisp sumsq.lisp --component -o sumsq.wasm --wit
+```
+
+```text
+// sumsq.wit (the world; the file also carries the referenced package
+// definitions, so it is self-contained and parseable on its own)
+package root:component;
+
+world root {
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  // ... the WASI imports of the build's blob variant ...
+
+  export wasi:cli/run@0.3.0;
+  export sumsquared: func(p0: s32, p1: s32) -> s32;
+}
+```
+
+このテキストは同じバイト列に対して `wasm-tools component wit sumsq.wasm` が印字するものと一致するため、まさにコンポーネントの実際の表面です — しかしもうバイナリを内省する必要はありません: `.wit` をそのままバインディングジェネレータに渡せます。例えば jco は `.wasm` に触れることなく、この `.wit` から TypeScript の型定義を生成します:
+
+```bash
+npx @bytecodealliance/jco types sumsq.wit -o types/
+# types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
+```
+
+world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは 0.2 stdio のインポートを持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/incoming-handler` をエクスポートします。`--component` なしの `--wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+
 ## 非 GC 出力(`--no-gc`)
 
 上記の GC 値モデルの出力は — 最適化されたリアクターであっても — すべての値が GC ヒープ型(`i31ref`、float 構造体、`(ref eq)`)であるため、依然として **wasm-GC 対応**ランタイムを必要とします。`--no-gc` を追加すると、代わりに素の **MVP** モジュールが出力されます: rec グループなし、`struct`/`array`/`i31` 型なし、`eqref` なし、インポートなしです(素のリニアメモリはプログラムが文字列を使うときのみ追加され — [後述](#strings) — 単一の `fd_write` インポートは[印字](#printing-print--princ--terpri)するときのみ追加されます)。印字しないモジュールはインポートオブジェクトなしでインスタンス化でき、**`-W gc` なし**で任意の MVP クラスのランタイムで動作します:
@@ -541,6 +573,7 @@ wasmtime run --invoke 'show(4)' show.wasm
 - コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます(サスペンドするための非同期アダプタが存在しません)。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - `--optimize` は組み合わせられます: コアモジュールはラップの前にツリーシェイキングされます。
+- [`--wit`](#emitting-the-wit-world---wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは 0.2 stdio インポート付き)を書き出します。
 
 ## 横断的なフラグ
 

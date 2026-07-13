@@ -395,4 +395,61 @@ class WasmExportCompilerTest {
 			.hasMessageContaining("not a valid component-model export name");
 	}
 
+	@Test
+	void componentCompileRecordsTheWitText() {
+		// The CLI's --wit output: the compiled component's typed world, with the user
+		// exports after the fixed run export (WitEmitter renders; templates + export
+		// lines proven against wasm-tools component wit in WitOracleE2eTest).
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun pure-add (a b) (+ a b))
+				(rontolisp:wasm-export 'pure-add :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'pure-add :as "add-async" :params '(:int :int) :returns :int :async t)
+				""");
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		assertThat(compiler.componentWit()).isNull();
+		compiler.compile(program);
+		assertThat(compiler.componentWit()).contains("""
+				  export wasi:cli/run@0.3.0;
+				  export pure-add: func(p0: s32, p1: s32) -> s32;
+				  export add-async: async func(p0: s32, p1: s32) -> s32;
+				}
+				""");
+	}
+
+	@Test
+	void componentWitPicksTheImportVariantOfTheCompiledBlobSet() {
+		// The world's imports are fixed per blob variant, so the recorded WIT must
+		// track the same fetch/tcp selection as the component wiring.
+		WasmLispCompiler base = new WasmLispCompiler(false, true);
+		base.compile(LispReader.readAllFromString("(print 1)"));
+		assertThat(base.componentWit()).doesNotContain("wasi:http").doesNotContain("wasi:sockets");
+		WasmLispCompiler http = new WasmLispCompiler(false, true);
+		http.compile(LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"));
+		assertThat(http.componentWit()).contains("  import wasi:http/outgoing-handler@0.2.0;");
+		WasmLispCompiler sock = new WasmLispCompiler(false, true);
+		sock.compile(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"));
+		assertThat(sock.componentWit()).contains("  import wasi:sockets/types@0.3.0;");
+	}
+
+	@Test
+	void serveComponentWitExportsTheIncomingHandlerOnly() {
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun h (r) (list :status 200 :body "x"))
+				(rontolisp:http-handler 'h)
+				"""));
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
+		compiler.compile(program);
+		assertThat(compiler.componentWit()).contains("  export wasi:http/incoming-handler@0.2.0;")
+			.doesNotContain("http-dispatch");
+	}
+
+	@Test
+	void nonComponentCompileRecordsNoWitText() {
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun f (a) a) (rontolisp:wasm-export 'f :params '(:int) :returns :int)");
+		WasmLispCompiler compiler = new WasmLispCompiler();
+		compiler.compile(program);
+		assertThat(compiler.componentWit()).isNull();
+	}
+
 }

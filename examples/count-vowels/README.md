@@ -46,7 +46,7 @@ since the engine's GC collects the Lisp values but never the host's input buffer
 JAR=../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar   # ./mvnw clean package first
 
 java -jar $JAR count-vowels.lisp -o count_vowels.wasm           --no-gc --optimize
-java -jar $JAR count-vowels.lisp -o count_vowels_component.wasm --no-gc --component --optimize
+java -jar $JAR count-vowels.lisp -o count_vowels_component.wasm --no-gc --component --optimize --wit
 ```
 
 ## 1. `--no-gc`: the host pops the heap
@@ -165,6 +165,24 @@ plus the type/lift wiring.
 wasmtime run --invoke 'count-vowels("Hello, World!")' count_vowels_component.wasm
 # 3
 ```
+
+The `--wit` flag on the build wrote that typed contract next to the component,
+as `count_vowels_component.wit`:
+
+```
+package root:component;
+
+world root {
+  export count-vowels: func(p0: string) -> s32;
+}
+```
+
+`jco transpile` above read the types straight out of the `.wasm`, but this file
+is the same contract **without the binary**: hand it to anyone generating
+bindings from WIT — a wit-bindgen host embedding (Rust, Go, Python, ...), or
+`jco types count_vowels_component.wit -o types` for just the TypeScript
+signatures (`countVowels(p0: string): number`) — with no `wasm-tools`
+introspection step.
 
 Endive cannot run this one yet -- its roadmap has WASIp2 / the component model as
 ongoing work -- so the Java host above stays on the `--no-gc` core module.

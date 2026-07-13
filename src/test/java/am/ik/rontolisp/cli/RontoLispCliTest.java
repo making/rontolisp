@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RontoLispCliTest {
 
@@ -82,6 +83,35 @@ class RontoLispCliTest {
 		assertThat(bytes[1]).isEqualTo((byte) 'a');
 		assertThat(bytes[2]).isEqualTo((byte) 's');
 		assertThat(bytes[3]).isEqualTo((byte) 'm');
+	}
+
+	@Test
+	void compileToComponentWithWitWritesTheWitFileNextToTheWasm() throws Exception {
+		Path file = tempDir.resolve("test.lisp");
+		Files.writeString(file, """
+				(defun pure-add (a b) (+ a b))
+				(rontolisp:wasm-export 'pure-add :params '(:int :int) :returns :int)
+				""");
+		Path wasmFile = tempDir.resolve("test.wasm");
+		runCli("", file.toString(), "-o", wasmFile.toString(), "--component", "--wit");
+		assertThat(Files.exists(wasmFile)).isTrue();
+		String wit = Files.readString(tempDir.resolve("test.wit"));
+		assertThat(wit).startsWith("package root:component;\n")
+			.contains("  export pure-add: func(p0: s32, p1: s32) -> s32;");
+	}
+
+	@Test
+	void witWithoutComponentIsAClearError() throws Exception {
+		Path file = tempDir.resolve("test.lisp");
+		Files.writeString(file, "(print 1)");
+		Path wasmFile = tempDir.resolve("test.wasm");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", wasmFile.toString(), "--wit"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--wit requires --component");
+		Path classFile = tempDir.resolve("Test.class");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", classFile.toString(), "--component", "--wit"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--wit requires --component");
 	}
 
 	@Test

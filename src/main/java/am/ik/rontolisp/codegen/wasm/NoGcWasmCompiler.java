@@ -278,6 +278,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		this.component = component;
 	}
 
+	/**
+	 * The WIT text describing the component compiled by the last {@link #compile} call
+	 * (the CLI's {@code --wit} output), or {@code null} before a component compile.
+	 * Semantically identical to {@code wasm-tools component wit} on the emitted bytes;
+	 * see {@link WitEmitter}.
+	 * @return the WIT text, or {@code null} when not compiling a component
+	 */
+	public @Nullable String componentWit() {
+		return this.componentWit;
+	}
+
+	private @Nullable String componentWit;
+
 	@Override
 	public byte[] compile(List<LispVal> program) {
 		// Resolve packages first, like the other backends, so qualified names
@@ -408,6 +421,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// assemble() above (todo 93 Tier 2), and a printing program (todo 93 print
 			// micro-adapter) wires the fixed shim/bridge/fixup modules implementing the
 			// fd_write import over WASI 0.2 stdio.
+			this.componentWit = WitEmitter
+				.emit(mem.printUsed() ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, exportDecls);
 			return NoGcWasmComponentBuilder.build(module, exportDecls, mem.printUsed());
 		}
 		return module;

@@ -61,7 +61,8 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   印字するときだけ配線される、組み込みの WASI 0.2 stdio マイクロアダプタを
   通じて)。エクスポート名は
   lower-kebab-case である必要があります (そうでない場合は
-  `:as` で改名します)。
+  `:as` で改名します)。また `--wit` を追加すると、コンポーネントの WIT world
+  (すべてのエクスポートの型付きシグネチャ入り) が `.wasm` の隣に書き出されます。
   [コンポーネントモデル関数エクスポート](../../compiling/wasm.md#component-model-function-exports-wasm-export)
   と[コンパクトなコンポーネント出力](../../compiling/wasm.md#compact-component-output---no-gc---component)
   を参照してください。インタプリタおよび JVM では名前付きシンボルを返すだけです。
