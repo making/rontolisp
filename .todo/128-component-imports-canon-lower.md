@@ -4,6 +4,28 @@
 with genuinely new encoder work.** Depends on `.todo/125` (DONE 2026-07-13, `.kb/wit.md`)
 + `.todo/127`.
 
+## READ FIRST: you inherit unverified work from `.todo/127`
+
+`.todo/127` (`rontolisp:wit-import`) is implemented and **pushed** (`21a0d87`), but its
+verification was **deliberately deferred to the end of THIS todo** (user decision,
+2026-07-14) -- because this todo adds a fourth lowering target to the very same
+`WitImportInliner` and will likely move `ci-spec.yaml` again, so running the suite twice
+buys nothing. **Your final verification run covers both todos**, and `.todo/127` is deleted
+only when it is green:
+
+- [ ] `./mvnw spring-javaformat:apply test` -- the suite was green (**3607 / 0 failures**)
+      just before the `examples/wit/` directory move, and has NOT been run since. The move
+      touched only `examples/examples.yaml`, the docs and comments, so `ExamplesE2eTest` and
+      `DocExamplesTest` are the two that can break.
+- [ ] `./mvnw -Pweb compile` -- green before the move; re-confirm (`src/web/java` compiles
+      ONLY under this profile, so `./mvnw test` does not catch a break there).
+- [ ] **native `CiSpecE2eTest`** -- `ci-spec.yaml` CHANGED in `21a0d87` (the
+      `rontolisp:list-functions :rontolisp` expectation gained `wit-error-payload` and
+      `wit-provide`). A plain `./mvnw test` SKIPS that test, so only the CI native-image job
+      would catch a mistake. See CLAUDE.md, "Verifying the Native Image End-to-End".
+
+If CI is red on `develop` when you start, that is the likely cause -- fix it first.
+
 **Prerequisite SATISFIED (2026-07-14):** `result<T,E>` was settled as option (c)
 — the error arm signals a condition catchable with `handler-case` on EVERY
 backend — and the WASM catch mechanism it required landed with `.todo/129`:

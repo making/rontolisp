@@ -1,8 +1,13 @@
 # `rontolisp:wit-import` on the interpreter + JVM: one WIT, a provider per backend
 
-**Status:** IMPLEMENTED 2026-07-14; **not yet fully verified.** Step 3 of `.todo/124`.
-Full mechanics and every decision record: `.kb/wit.md`. Do not delete this file until
-the "Remaining" section below is empty.
+**Status:** IMPLEMENTED + PUSHED 2026-07-14 (`21a0d87`); **verification deliberately
+deferred.** Step 3 of `.todo/124`. Full mechanics and every decision record: `.kb/wit.md`.
+
+**Do not run the owed verification on its own** (user decision, 2026-07-14): `.todo/128`
+adds a fourth lowering target to the very same `WitImportInliner`, and will likely move
+`ci-spec.yaml` again, so the suite + the native E2E are run ONCE, at the end of `.todo/128`,
+covering both. The checklist is in "Remaining" below and is repeated at the top of
+`.todo/128`. Delete this file only when that run is green.
 
 ## What shipped
 
