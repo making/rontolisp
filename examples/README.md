@@ -13,7 +13,7 @@ The programs are grouped by theme, one directory per group:
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
 | [`rainbow/`](browser/rainbow), [`wasm-browser/`](browser/wasm-browser), [`webgl-*/`](browser/webgl-common), [`minesweeper/`](browser/minesweeper), [`hiragana/`](browser/hiragana) | Browser demos (compile to WASM, run in a page) |
-| [`count-vowels/`](count-vowels) | Embedding a rontolisp Wasm module in a host |
+| [`count-vowels/`](count-vowels), [`wit-world/`](wit-world) | Embedding a rontolisp Wasm module in a host; implementing a WIT world |
 | [`asdf/`](asdf), [`wasmcloud/`](wasmcloud) | Third-party libraries and platform templates |
 
 Assuming the executable JAR has been built
@@ -142,12 +142,13 @@ These are directories rather than single files: a Lisp program is compiled to
 
 ## Embedding a rontolisp Wasm module in a host
 
-Exporting a Lisp function to a host runtime and sharing data across the boundary
-through linear memory.
+Exporting a Lisp function to a host runtime: sharing data across the boundary
+through linear memory, and implementing a WIT world someone else wrote.
 
 | Directory | What it demonstrates |
 | --- | --- |
-| [`count-vowels/`](count-vowels) | The rontolisp counterpart of the classic *"share a string through Wasm memory"* host tutorial: `count-vowels` is exported with `(rontolisp:wasm-export 'count-vowels :as "count_vowels" :params '(:string) :returns :int)` and compiled with `--no-gc` to a plain MVP module (no wasm-GC, no WASI imports) that **any** engine runs. A string crosses the boundary as a `(pointer, length)` pair of raw UTF-8 bytes, so the module also exports its `memory` and a bump allocator `__ronto_alloc(size)` -- the host reserves space, writes the bytes, then calls `count_vowels(ptr, len)`, exactly the alloc / writeString / call flow of the tutorial. Driven from a pure-Java [Endive](https://endive.run) host (a Maven project, [`src/main/java/CountVowels.java`](count-vowels/src/main/java/CountVowels.java)) and, equivalently, a three-line Node script |
+| [`wit-world/`](wit-world) | *Someone handed me a `.wit`, now what.* The whole workflow, starting from a world nobody wrote for rontolisp ([`wit/analyzer.wit`](wit-world/wit/analyzer.wit): `package example:analyzer`, four exports over `s32` / `string` / `bool` plus an `async func` that prints, each with `///` docs). `rontolisp --scaffold-wit wit/analyzer.wit -o analyzer.lisp` turns it into a runnable skeleton -- one `defun` stub per export, the WIT's own parameter names, its doc comments carried over as `;;;` comments, and the `rontolisp:wit-export` directive -- which **already compiles** (the stubs signal at run time), so the world is filled in one export at a time. Then `--component` builds it and `wasmtime run --invoke 'longest-word("...")'` calls it by name with no memory code at all. Rename a `defun` and the build stops with `wit/analyzer.wit:16: export 'is-palindrome' has no matching (defun is-palindrome ...)`; `--emit-wit` prints the component's own world back out, showing the two ways it must differ from the input (normalized to `package root:component`, plus the WASI imports the build really links) |
+| [`count-vowels/`](count-vowels) | The rontolisp counterpart of the classic *"share a string through Wasm memory"* host tutorial, and the `rontolisp:wit-export` showcase: the export's type lives in a checked-in WIT world (`export count-vowels: func(s: string) -> s32;`), the Lisp only says `(rontolisp:wit-export "count_vowels_component.wit")`, and the compiler checks the `defun`s against it -- so a drifted signature is a compile error naming the WIT line. Because `--no-gc` imports nothing, `--emit-wit` prints the component's whole type back out byte-identical to the file it was handed (a wasm-GC build of the same source would add the ~10 `wasi:*` imports a hand-written world never states). Compiled with `--no-gc` to a plain MVP module (no wasm-GC, no WASI imports) that **any** engine runs. A string crosses that boundary as a `(pointer, length)` pair of raw UTF-8 bytes, so the module also exports its `memory` and a bump allocator `__ronto_alloc(size)` -- the host reserves space, writes the bytes, then calls `count-vowels(ptr, len)`, exactly the alloc / writeString / call flow of the tutorial; the `--no-gc --component` build of the same source lets the canonical ABI do all of it instead. Driven from a pure-Java [Endive](https://endive.run) host (a Maven project, [`src/main/java/CountVowels.java`](count-vowels/src/main/java/CountVowels.java)) and, equivalently, a three-line Node script |
 
 ## Running
 

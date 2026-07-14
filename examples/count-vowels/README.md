@@ -12,11 +12,35 @@ covers the linear-memory API used here.
 
 WebAssembly only understands integers and floats, so a string crosses the
 boundary as a `(pointer, length)` pair of raw UTF-8 bytes living in the module's
-linear memory. `(rontolisp:wasm-export 'count-vowels :params '(:string) :returns
-:int)` sets that up: the compiled module exports its `memory` plus a bump
-allocator `__ronto_alloc(size)`, so the host reserves space, writes the bytes,
-then calls `count-vowels(ptr, len)`. This is exactly the alloc / writeString /
-call flow of the tutorial.
+linear memory. The type of that boundary is not written in the Lisp: it is
+written in WIT, in [`count_vowels_component.wit`](count_vowels_component.wit),
+
+```wit
+package root:component;
+
+world root {
+  export count-vowels: func(s: string) -> s32;
+}
+```
+
+and the Lisp says only *I implement that world*:
+
+```lisp
+(rontolisp:wit-export "count_vowels_component.wit")
+```
+
+The compiler reads the world, checks every export it declares against the
+program's `defun`s -- name, arity, parameter and result types -- and lowers each
+one into the export it stands for. So the compiled module exports its `memory`
+plus a bump allocator `__ronto_alloc(size)`, and the host reserves space, writes
+the bytes, then calls `count-vowels(ptr, len)`: exactly the alloc / writeString /
+call flow of the tutorial. Nothing states the signature twice, so nothing can
+drift -- rename the parameter, change the arity, and the build stops with the WIT
+file and line that asked for it:
+
+```console
+count_vowels_component.wit:4: export 'count-vowels' declares 1 parameter(s), but (defun count-vowels ...) takes 2
+```
 
 `__ronto_alloc` is a bump allocator and there is no `dealloc`, so the interesting
 question is **who reclaims that memory** in a host that keeps one instance alive
@@ -28,9 +52,9 @@ it is compiled -- both are driven from Node below:
 | [`--no-gc`](#1---no-gc-the-host-pops-the-heap) | the host, with the arena API `__ronto_alloc_mark`/`_reset` | alloc, write, call, reset |
 | [`--no-gc --component`](#2-component-model-the-canonical-abi-does-everything) | the canonical ABI + `post-return`, on every call | none -- pass a JS string |
 
-The export keeps its Lisp name `count-vowels` (a component-model export name must
-be lower-kebab-case, so it is not renamed to `count_vowels` with `:as`), which
-lets one directive serve both builds.
+The world names the export `count-vowels`, in lower-kebab-case as a
+component-model export name must be, and that is a legal Lisp function name too --
+so one `defun`, and one directive, serve both builds.
 
 `count-vowels` is a pure loop over the characters of a string, so it fits the
 [non-GC subset](../../doc/en/compiling/wasm.md#eligible-subset) and both builds
@@ -46,7 +70,7 @@ since the engine's GC collects the Lisp values but never the host's input buffer
 JAR=../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar   # ./mvnw clean package first
 
 java -jar $JAR count-vowels.lisp -o count_vowels.wasm           --no-gc --optimize
-java -jar $JAR count-vowels.lisp -o count_vowels_component.wasm --no-gc --component --optimize --wit
+java -jar $JAR count-vowels.lisp -o count_vowels_component.wasm --no-gc --component --optimize --emit-wit
 ```
 
 ## 1. `--no-gc`: the host pops the heap
@@ -166,22 +190,35 @@ wasmtime run --invoke 'count-vowels("Hello, World!")' count_vowels_component.was
 # 3
 ```
 
-The `--wit` flag on the build wrote that typed contract next to the component,
-as `count_vowels_component.wit`:
+`--emit-wit` on that build prints the component's own type back out over
+`count_vowels_component.wit`, and here the file comes back byte-for-byte unchanged,
+parameter name `s` included:
 
-```
-package root:component;
-
-world root {
-  export count-vowels: func(p0: string) -> s32;
-}
+```bash
+git diff --exit-code count_vowels_component.wit && echo "the component IS the world"
 ```
 
-`jco transpile` above read the types straight out of the `.wasm`, but this file
-is the same contract **without the binary**: hand it to anyone generating
+Be precise about what that proves, though. The export line *cannot* come out
+disagreeing with the world: the world produced the export directive, which produced
+the component's function type, which is what gets printed back. So the diff is a
+regression check on rontolisp's type mapping, not a check on this program -- the
+thing that catches a drifted program is `wit-export`, above, and it already fired at
+compile time.
+
+What makes the round trip *byte*-exact here is `--no-gc`: an adapter-free reactor
+imports nothing, so the component's whole type is the one export. Drop `--no-gc` and
+the same source builds a wasm-GC component whose real type runs to ~150 lines -- ten
+`wasi:*` imports and `export wasi:cli/run` wrapped around the same `count-vowels`.
+Those imports are the half a hand-written world never states, and `--emit-wit` is the
+only thing that reports them. (For a program with no world at all -- one that
+hand-writes `rontolisp:wasm-export`, which is where this example started -- it stays
+what it always was: the only way to get a `.wit`.)
+
+`jco transpile` above read the types straight out of the `.wasm`, but the `.wit`
+is that same contract **without the binary**: hand it to anyone generating
 bindings from WIT — a wit-bindgen host embedding (Rust, Go, Python, ...), or
 `jco types count_vowels_component.wit -o types` for just the TypeScript
-signatures (`countVowels(p0: string): number`) — with no `wasm-tools`
+signatures (`countVowels(s: string): number`) — with no `wasm-tools`
 introspection step.
 
 Endive cannot run this one yet -- its roadmap has WASIp2 / the component model as
@@ -191,5 +228,8 @@ ongoing work -- so the Java host above stays on the `--no-gc` core module.
 
 `count-vowels` is an ordinary pure function, so the same source also runs on the
 interpreter, the JVM backend and the wasm-GC backend as a normal program (add a
-`(print (count-vowels "Hello, World!"))` and run it directly) -- the
-`rontolisp:wasm-export` directive is a no-op everywhere except a WASM build.
+`(print (count-vowels "Hello, World!"))` and run it directly). The
+`rontolisp:wit-export` directive exports nothing outside a WASM build, but it is
+never inert: every backend still checks the program against the world, so a plain
+`java -jar $JAR count-vowels.lisp` catches a drifted `.wit` without compiling
+anything.

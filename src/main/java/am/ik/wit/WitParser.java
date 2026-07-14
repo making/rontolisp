@@ -26,6 +26,12 @@ public final class WitParser {
 
 	private final List<WitToken> tokens;
 
+	// The start offset of every item parsed, by identity -- handed out as WitLocations so
+	// a consumer can report an error against the WIT line that caused it. Kept beside the
+	// model because the WitItem records are values (structural equality is pinned by the
+	// round-trip tests), so they cannot carry a position.
+	private final java.util.IdentityHashMap<WitItem, Integer> offsets = new java.util.IdentityHashMap<>();
+
 	private int pos;
 
 	private WitParser(String source) {
@@ -43,19 +49,40 @@ public final class WitParser {
 		return new WitParser(source).parseDocument();
 	}
 
+	/**
+	 * Parses a WIT source text into a document model together with the source position of
+	 * every item, for a consumer that reports errors against the originating WIT line
+	 * (e.g. {@code rontolisp:wit-export}'s contract check).
+	 * @param source the WIT text
+	 * @return the parsed document and its item positions
+	 * @throws WitParseException on a syntax error or an unsupported construct
+	 */
+	public static WitParseResult parseLocated(String source) {
+		WitParser parser = new WitParser(source);
+		WitDocument document = parser.parseDocument();
+		return new WitParseResult(document, new WitLocations(source, parser.offsets));
+	}
+
+	// Records where an item started, and returns it unchanged.
+	private <T extends WitItem> T locate(int offset, T item) {
+		this.offsets.put(item, offset);
+		return item;
+	}
+
 	private WitDocument parseDocument() {
 		List<WitItem> items = new ArrayList<>();
 		while (peek().kind() != WitToken.Kind.EOF) {
+			int start = peek().offset();
 			WitMeta meta = parseMeta();
 			WitToken keyword = peek();
 			if (keyword.isWord("package")) {
-				items.add(parsePackage(meta));
+				items.add(locate(start, parsePackage(meta)));
 			}
 			else if (keyword.isWord("world")) {
-				items.add(parseWorld(meta));
+				items.add(locate(start, parseWorld(meta)));
 			}
 			else if (keyword.isWord("interface")) {
-				items.add(parseInterface(meta));
+				items.add(locate(start, parseInterface(meta)));
 			}
 			else {
 				throw error("Expected 'package', 'world' or 'interface'", keyword);
@@ -74,13 +101,14 @@ public final class WitParser {
 		expectPunct("{");
 		List<WitItem> items = new ArrayList<>();
 		while (!peek().isPunct("}")) {
+			int start = peek().offset();
 			WitMeta itemMeta = parseMeta();
 			WitToken keyword = peek();
 			if (keyword.isWord("world")) {
-				items.add(parseWorld(itemMeta));
+				items.add(locate(start, parseWorld(itemMeta)));
 			}
 			else if (keyword.isWord("interface")) {
-				items.add(parseInterface(itemMeta));
+				items.add(locate(start, parseInterface(itemMeta)));
 			}
 			else {
 				throw error("Expected 'world' or 'interface' in package block", keyword);
@@ -115,6 +143,11 @@ public final class WitParser {
 	}
 
 	private WitItem parseWorldItem() {
+		int start = peek().offset();
+		return locate(start, parseWorldItemBody());
+	}
+
+	private WitItem parseWorldItemBody() {
 		WitMeta meta = parseMeta();
 		WitToken keyword = peek();
 		if (keyword.isWord("import") || keyword.isWord("export")) {
@@ -203,6 +236,11 @@ public final class WitParser {
 	}
 
 	private WitItem parseInterfaceItem() {
+		int start = peek().offset();
+		return locate(start, parseInterfaceItemBody());
+	}
+
+	private WitItem parseInterfaceItemBody() {
 		WitMeta meta = parseMeta();
 		WitToken keyword = peek();
 		if (keyword.isWord("use")) {
@@ -306,6 +344,11 @@ public final class WitParser {
 	}
 
 	private WitItem parseResourceItem() {
+		int start = peek().offset();
+		return locate(start, parseResourceItemBody());
+	}
+
+	private WitItem parseResourceItemBody() {
 		WitMeta meta = parseMeta();
 		if (peek().isWord("constructor")) {
 			next();
@@ -389,6 +432,11 @@ public final class WitParser {
 			throw error("Expected a type", token);
 		}
 		String word = token.text();
+		// An escaped word is an identifier by construction -- `%list` names a user type
+		// called `list`, it is never the built-in list type.
+		if (word.startsWith("%")) {
+			return new WitType.Named(WitIdentifiers.unescape(word));
+		}
 		if (PRIMITIVES.contains(word)) {
 			return new WitType.Prim(word);
 		}
@@ -554,12 +602,15 @@ public final class WitParser {
 		}
 	}
 
+	// Every identifier position. The %-escaping a keyword-colliding name needs in the
+	// source text is not part of the name (WitIdentifiers), so the model holds the bare
+	// word and WitPrinter re-escapes on the way out.
 	private String expectWordText() {
 		WitToken token = next();
 		if (token.kind() != WitToken.Kind.WORD) {
 			throw error("Expected an identifier", token);
 		}
-		return token.text();
+		return WitIdentifiers.unescape(token.text());
 	}
 
 	private String expectVersionText() {

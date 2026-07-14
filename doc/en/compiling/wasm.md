@@ -555,14 +555,14 @@ For a pure-compute export kit, the compact
 emits the same typed exports (plus `:long` → `s64`, minus `:s-expr`) in a
 component of a few hundred bytes that needs no wasmtime flags at all.
 
-### Emitting the WIT World (`--wit`)
+### Emitting the WIT World (`--emit-wit`)
 
-Add `--wit` to any `--component` build to also write the component's WIT
-description next to the `.wasm` output — `-o sumsq.wasm --wit` writes
+Add `--emit-wit` to any `--component` build to also write the component's WIT
+description next to the `.wasm` output — `-o sumsq.wasm --emit-wit` writes
 `sumsq.wit`:
 
 ```bash
-rontolisp sumsq.lisp --component -o sumsq.wasm --wit
+rontolisp sumsq.lisp --component -o sumsq.wasm --emit-wit
 ```
 
 ```text
@@ -597,8 +597,171 @@ The world's imports follow the build variant (plain, `rontolisp:fetch`,
 world is import-free, or carries the 0.2 stdio imports when the program
 prints), an `:async t` export is rendered as `async func`, and a
 `rontolisp:http-handler` build exports `wasi:http/incoming-handler` instead of
-`run`. `--wit` without `--component` is a compile error — a core module has no
+`run`. `--emit-wit` without `--component` is a compile error — a core module has no
 WIT-level surface to describe.
+
+### What `--emit-wit` Is For
+
+It answers different questions depending on where the export list came from.
+
+**A program without a world** — exports written by hand with
+`rontolisp:wasm-export`, or an `:s-expr` export, which has no WIT spelling at
+all — has no `.wit` anywhere. `--emit-wit` is the only way to get one, exactly
+as above.
+
+**A program with a world** ([`wit-export`](#implementing-a-wit-world-wit-export))
+has already written its exports down. What it has not written down is the
+component's **imports**, and that is the larger half: `wit-export` reads only the
+world's `export` items, because a component's WASI surface comes from the fixed
+adapter blob the build links, not from the world. The 6-line `wit/greeter.wit` of
+the [next section](#implementing-a-wit-world-wit-export) compiles to a component
+whose real type is **149 lines** — ten `wasi:*` imports and
+`export wasi:cli/run@0.3.0` wrapped around the one `greet` you declared. Let that
+same `greet` call `rontolisp:fetch` and the build silently adds five more imports
+(`wasi:io/poll`, `wasi:io/error`, `wasi:io/streams`, `wasi:http/types`,
+`wasi:http/outgoing-handler`), for **325 lines**; `rontolisp:tcp-*` pulls in
+`wasi:sockets` the same way. Short of installing `wasm-tools` and introspecting
+the binary, `--emit-wit` is the only way to see what you actually built — and it
+is precisely what a host, or `jco`, needs in order to *supply* those imports.
+
+What `--emit-wit` is **not** — for a program that has a world — is a drift check
+on that program. The export lines are a fixpoint by construction: the world
+produces the `rontolisp:wasm-export` directives, those produce the component's
+function types, and those are what is printed back out, over a boundary type set
+(`s32`, `s64`, `f64`, `bool`, `string`) that maps one-to-one in both directions.
+They cannot come out disagreeing with the world you handed in. Re-emitting the
+`.wit` and diffing it in CI is therefore a regression check on *rontolisp's* type
+mapping — cheap, and worth keeping — not a check on your source. The thing that
+catches a drifted program is `wit-export` itself, and it already runs on every
+backend, including a plain interpreter run. This is transitional: once a world
+can also declare the imports a program binds, the emitted WIT becomes a genuinely
+two-sided contract.
+
+### Implementing a WIT World (`wit-export`)
+
+Everything above starts from Lisp and *emits* a `.wit`.
+**`rontolisp:wit-export`** turns that around: hand the compiler a world someone
+else wrote, and the program **implements** it.
+
+```console
+// wit/greeter.wit
+package example:greeter;
+
+world greeter {
+  /// Greet someone by name.
+  export greet: func(who: string) -> string;
+}
+```
+
+```console
+;;; greet.lisp -- the directive comes last: on the interpreter it sees only the
+;;; functions defined so far.
+(defun greet (who)
+  (concatenate 'string "Hello, " who "!"))
+
+(rontolisp:wit-export "wit/greeter.wit" :world greeter)
+```
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("world")' greet.wasm
+# "Hello, world!"
+```
+
+There is no `:params '(:string) :returns :string` anywhere — the types come from
+the world. That is the whole point: hand-written boundary types sit next to a
+`.wit` that is generated separately, and the two drift until
+`wasmtime --invoke` fails at run time. With `wit-export` **the WIT is the single
+source of truth**:
+
+- The world is the program's export list, so a hand-written
+  `rontolisp:wasm-export` in the same program is a compile error.
+- Every export must have a matching `defun` of the right arity, every WIT type
+  must be one the boundary carries (`s32`, `s64`, `f64`, `bool`, `string`), and
+  an `async func` in the world lifts that export with `:async t` (so an export
+  that does I/O is declared async by the WIT instead of being guessed at). Each
+  mismatch is a compile error naming the WIT file and line:
+  `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`.
+- The contract is checked on **every** backend: a plain `rontolisp greet.lisp`
+  run (or a `-o Greet.class` build) verifies the world and exports nothing, so a
+  drift is caught long before a WASM build.
+
+The directive is a front-end for the machinery of the previous sections, not a
+second export path: it lowers into exactly the `rontolisp:wasm-export`
+directives a hand-written implementation would carry, so **the emitted component
+is byte-identical** to that one — on the GC path and under
+[`--no-gc --component`](#compact-component-output---no-gc---component) alike
+(the latter is the backend to pick when the world uses `s64`, which the wasm-GC
+`i31ref` integers cannot hold).
+
+Adding [`--emit-wit`](#emitting-the-wit-world---emit-wit) to the build writes out
+the component's real type, and its export lines come back the way you wrote them,
+parameter names included — the WIT's names ride through into the component's
+function type. (A hand-written export names its parameters `p0`, `p1`, ... unless
+it declares them itself with `:param-names '(who)`.)
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm --emit-wit   # writes greet.wit
+```
+
+```text
+export greet: func(who: string) -> string;
+```
+
+That line is a fixpoint, though, not a verdict: it is derived *from* the world, so
+it cannot contradict it. The reason to emit anyway is the rest of the file — the
+`wasi:*` imports and the `wasi:cli/run` export that the world says nothing about,
+and that a host has to supply. `greet.wit` is 149 lines around that one export.
+Two differences from the input are deliberate: the `///` doc comments are gone,
+because a component's type does not store them (`wasm-tools` cannot recover them
+either), and the emitted world is always `package root:component; world root`.
+That is what a component's type *is*.
+
+Current limitations:
+
+- Only the world's **export** side is bound. `import` items are ignored (a
+  component's WASI imports come from the fixed adapter surface it is built on —
+  [`--emit-wit`](#emitting-the-wit-world---emit-wit) is how you see them), and an
+  inline `import name: func(...)` is rejected rather than silently dropped; host
+  functions are still declared with `rontolisp:wasm-import`.
+- Only plain function exports are implemented; a world exporting an interface is
+  an error, and a `rontolisp:http-handler` program cannot use a world at all
+  (a serve-mode component's only export is `wasi:http/incoming-handler`).
+- `:s-expr` has no WIT spelling, so an export passing an arbitrary s-expression
+  across the boundary still needs a hand-written `rontolisp:wasm-export`.
+- On the interpreter the directive is evaluated in order and sees only the
+  functions defined so far, so put it at the end of the file.
+
+### Scaffolding an Implementation (`--scaffold-wit`)
+
+`--scaffold-wit` is the answer to "someone handed me a `.wit`, now what": it
+generates the skeleton of an implementation instead of compiling one.
+
+```bash
+rontolisp --scaffold-wit wit/greeter.wit -o greet.lisp   # no -o: print to stdout
+```
+
+```console
+;;;; Implementation of the WIT world 'greeter' (wit/greeter.wit).
+;;;;
+;;;; The world is the contract: the compiler checks every defun below against
+;;;; it, so a renamed export, a changed arity or a changed type is a compile
+;;;; error rather than a runtime surprise. Fill in the bodies; each one signals
+;;;; until you do.
+
+;;; Greet someone by name.
+;;; WIT: greet: func(who: string) -> string
+(defun greet (who)
+  (error "greet is not implemented yet"))
+
+(rontolisp:wit-export "wit/greeter.wit" :world greeter)
+```
+
+The parameters are named as the WIT names them, each export's WIT signature is
+carried above its stub as the contract it must satisfy, and the `///` doc
+comments become `;;;` comments. The stubs signal at **run** time, not compile
+time, so the generated file compiles unchanged and the exports can be filled in
+one at a time. Add `--world NAME` when the `.wit` declares several worlds.
 
 ## Non-GC Output (`--no-gc`)
 
@@ -978,7 +1141,7 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - The export name must be a lower-kebab-case component-model name; for a Lisp
   name outside that grammar the compiler asks you to rename it with `:as`.
 - `--optimize` composes: the core module is tree-shaken before the wrap.
-- [`--wit`](#emitting-the-wit-world---wit) composes too, and writes a tiny
+- [`--emit-wit`](#emitting-the-wit-world---emit-wit) composes too, and writes a tiny
   import-free world of just the typed exports (plus the 0.2 stdio imports when
   the program prints).
 

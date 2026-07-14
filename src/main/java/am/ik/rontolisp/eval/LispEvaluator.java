@@ -31,6 +31,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SpecialVarCollector;
+import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -1200,6 +1201,8 @@ public final class LispEvaluator {
 					// A reclamation boundary for --no-gc; a real GC already reclaims, so
 					// the interpreter runs the body as a plain progn.
 					return eval(LispMacroExpander.expandWithArena(cons), env);
+				case LispNames.WIT_EXPORT_QUALIFIED:
+					return evalWitExport(cons);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
@@ -1442,6 +1445,54 @@ public final class LispEvaluator {
 		LispVal function = eval(head, env);
 		List<LispVal> args = evalArgs(cons, env);
 		return apply(function, args, env);
+	}
+
+	/**
+	 * {@code (rontolisp:wit-export "world.wit" :world name)}: the interpreter cannot
+	 * export anything, but it can still hold the program to the world's contract, so the
+	 * same mismatch a {@code --component} build would reject is caught by a plain
+	 * {@code rontolisp prog.lisp} run. The check therefore runs against the functions
+	 * defined <em>so far</em> -- put the directive at the end of the file (where the
+	 * scaffold puts it), after any {@code load} that defines the implementation.
+	 */
+	private LispVal evalWitExport(LispCons cons) {
+		WitExportDirective.Directive directive = WitExportDirective.parse(cons);
+		String resolved = SourceLoader.resolve(this.loadDirStack.peekLast(), directive.path());
+		String source;
+		try {
+			source = this.sourceLoader.load(resolved);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(
+					LispNames.WIT_EXPORT_QUALIFIED + ": cannot read file " + resolved + ": " + ex.getMessage());
+		}
+		try {
+			WitExportDirective.lower(directive, source, resolved, this::exportedLambdaList,
+					WitExportDirective.Backend.OTHER);
+		}
+		catch (UnsupportedOperationException ex) {
+			throw new LispEvalException(LispNames.WIT_EXPORT_QUALIFIED + ": " + ex.getMessage());
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// The lambda list of a global defun, in the shape WitExportDirective checks: the
+	// required parameters, plus a "&rest" marker when the function is variadic (an
+	// exported function must take required parameters only). A built-in (a LispFunction,
+	// not a LispLambda) is not a program-defined function, so it reads as undefined.
+	private @Nullable List<String> exportedLambdaList(String name) {
+		LispVal function = this.globalEnv.lookupFunctionOrNull(name);
+		if (!(function instanceof LispLambda lambda)) {
+			return null;
+		}
+		List<String> lambdaList = new ArrayList<>(lambda.params().size() + 1);
+		for (LispSymbol param : lambda.params()) {
+			lambdaList.add(param.name());
+		}
+		if (lambda.rest() != null) {
+			lambdaList.add("&rest");
+		}
+		return lambdaList;
 	}
 
 	private LispVal evalDefun(LispCons cons, Environment env) {

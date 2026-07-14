@@ -266,6 +266,7 @@
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | PEMの証明書／鍵ファイルから暗号化リスニングソケットをバインドします |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | WASMコアモジュールへのコンパイル時に、ホスト関数をLispから呼び出し可能として宣言します |
+| `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | プログラムがWIT worldを実装していることを宣言します。worldのエクスポートはプログラムの `defun` と照合され、型はWITから得られます |
 
 イントロスペクション関数(`list-functions` / `list-macros` /
 `list-special-forms`)については
@@ -288,10 +289,11 @@
 [tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-パッケージの関数)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
 [tls-connect](functions/rontolisp-tls-connect.md)、
 [tls-listen](functions/rontolisp-tls-listen.md)、
-[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export` と `rontolisp:wasm-import`
-はWASMバックエンド向けのコンパイル時ディレクティブです。
-[wasm-export](functions/rontolisp-wasm-export.md) と
-[wasm-import](functions/rontolisp-wasm-import.md) のリファレンスページ、および
+[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`
+はWASMバックエンド向けのコンパイル時ディレクティブです。最後のものはプログラムがWIT worldを実装していることを宣言し、各エクスポートの境界型を手書きせず `.wit` ファイルから得ます（`--scaffold-wit` はそこから実装のスケルトンを生成します）。
+[wasm-export](functions/rontolisp-wasm-export.md)、
+[wasm-import](functions/rontolisp-wasm-import.md)、
+[wit-export](functions/rontolisp-wit-export.md) のリファレンスページ、および
 [WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。
 
 ## linalg パッケージの関数

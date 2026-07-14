@@ -57,6 +57,25 @@ class WitEmitterTest {
 	}
 
 	@Test
+	void rendersTheDeclaredParameterNames() {
+		// :param-names (what rontolisp:wit-export fills in from the world it implements)
+		// are the labels of the lifted function type, so the emitted world shows them --
+		// which is what lets an implemented .wit round-trip through --emit-wit unchanged,
+		// rather than coming back with p0/p1.
+		String wit = WitEmitter.emit(WitEmitter.VARIANT_BASE, List.of(
+				parse("(rontolisp:wasm-export 'count-vowels :params '(:string) :param-names '(s)" + " :returns :int)"),
+				parse("(rontolisp:wasm-export 'shout :params '(:string :bool)"
+						+ " :param-names '(text loud) :returns :string :async t)"),
+				parse("(rontolisp:wasm-export 'measure :params '(:string) :returns :int)")));
+		assertThat(wit).contains("""
+				  export count-vowels: func(s: string) -> s32;
+				  export shout: async func(text: string, loud: bool) -> string;
+				  export measure: func(p0: string) -> s32;
+				}
+				""");
+	}
+
+	@Test
 	void rendersLongAsS64OnTheNoGcVariant() {
 		String wit = WitEmitter.emit(WitEmitter.VARIANT_NOGC,
 				List.of(parse("(rontolisp:wasm-export 'big-add :params '(:long :long) :returns :long)")));

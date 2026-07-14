@@ -194,7 +194,7 @@ everywhere except `--no-gc`.
   their own index space so function renumbering is unaffected. P1 EH +
   `--optimize` compose (pinned in `WasmTreeShakerTest.shakesEhModeModules`).
 - **Component path**: core-module-internal only — no component-level section
-  changes, blobs untouched, `--wit` output unchanged; the stackful async lift
+  changes, blobs untouched, `--emit-wit` output unchanged; the stackful async lift
   needs no modification (spike-proven, run flags gain only `-W exceptions=y`).
 - **V8 hosts** (playground / jco): wasm-EH with exnref is default-on in
   current V8 (Chrome 137+ / Node 24+); Node 22 needs

@@ -1,0 +1,4 @@
+/analyzer.wasm
+/Analyzer.class
+# --emit-wit writes the component's own world here; wit/analyzer.wit is the input.
+/analyzer.wit

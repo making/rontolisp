@@ -1,0 +1,5 @@
+package root:component;
+
+world root {
+  export count-vowels: func(s: string) -> s32;
+}

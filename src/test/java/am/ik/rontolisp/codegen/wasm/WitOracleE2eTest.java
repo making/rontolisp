@@ -14,10 +14,10 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Proves the {@code --wit} contract against the real tool: the WIT text recorded by a
- * component compile is byte-identical to what {@code wasm-tools component wit} prints for
- * the same bytes (the serve variants differ by exactly the {@code use} clause that tool
- * omits and the template restores -- see {@link WitEmitter}). Runs only where a
+ * Proves the {@code --emit-wit} contract against the real tool: the WIT text recorded by
+ * a component compile is byte-identical to what {@code wasm-tools component wit} prints
+ * for the same bytes (the serve variants differ by exactly the {@code use} clause that
+ * tool omits and the template restores -- see {@link WitEmitter}). Runs only where a
  * {@code wasm-tools} binary is on {@code PATH} (locally; the Docker integration image has
  * only wasmtime), so the always-on line-level pins live in {@link WitEmitterTest}.
  */

@@ -324,12 +324,12 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y \
 
 純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](#compact-component-output---no-gc---component) が同じ型付きエクスポート(加えて `:long` → `s64`、ただし `:s-expr` なし)を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。
 
-### WIT ワールドの出力(`--wit`)
+### WIT ワールドの出力(`--emit-wit`)
 
-任意の `--component` ビルドに `--wit` を追加すると、コンポーネントの WIT 記述も `.wasm` 出力の隣に書き出されます — `-o sumsq.wasm --wit` は `sumsq.wit` を書きます:
+任意の `--component` ビルドに `--emit-wit` を追加すると、コンポーネントの WIT 記述も `.wasm` 出力の隣に書き出されます — `-o sumsq.wasm --emit-wit` は `sumsq.wit` を書きます:
 
 ```bash
-rontolisp sumsq.lisp --component -o sumsq.wasm --wit
+rontolisp sumsq.lisp --component -o sumsq.wasm --emit-wit
 ```
 
 ```text
@@ -354,7 +354,100 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 # types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
 ```
 
-world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは 0.2 stdio のインポートを持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/incoming-handler` をエクスポートします。`--component` なしの `--wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは 0.2 stdio のインポートを持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/incoming-handler` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+
+### `--emit-wit` は何のためにあるか
+
+エクスポート一覧がどこから来たかによって、答える問いが変わります。
+
+**world を持たないプログラム** — `rontolisp:wasm-export` で手書きしたエクスポート、あるいは WIT の綴り自体が存在しない `:s-expr` エクスポート — には `.wit` がどこにもありません。上のとおり、`--emit-wit` がそれを得る唯一の手段です。
+
+**world を持つプログラム**([`wit-export`](#implementing-a-wit-world-wit-export))は、エクスポートについてはすでに書き下しています。書き下していないのはコンポーネントの**インポート**であり、そしてそちらの方が大きな半分です: `wit-export` が読むのは world の `export` 項目だけです。コンポーネントの WASI 表面は world からではなく、ビルドがリンクする固定のアダプタ blob から来るからです。[次節](#implementing-a-wit-world-wit-export)の 6 行の `wit/greeter.wit` は、実際の型が **149 行**あるコンポーネントにコンパイルされます — 宣言したただ 1 つの `greet` のまわりに、10 個の `wasi:*` インポートと `export wasi:cli/run@0.3.0` が付きます。その `greet` から `rontolisp:fetch` を呼べば、ビルドはさらに 5 つのインポート(`wasi:io/poll`、`wasi:io/error`、`wasi:io/streams`、`wasi:http/types`、`wasi:http/outgoing-handler`)を黙って追加し、**325 行**になります。`rontolisp:tcp-*` も同様に `wasi:sockets` を引き込みます。`wasm-tools` を入れてバイナリを内省するのでない限り、自分が実際に何をビルドしたのかを見る手段は `--emit-wit` だけです — そしてそれこそが、ホストや `jco` がそれらのインポートを*供給する*ために必要とするものです。
+
+一方、world を持つプログラムにとって `--emit-wit` が**そうではない**もの、それはそのプログラムの乖離チェックです。エクスポート行は構成上の不動点です: world が `rontolisp:wasm-export` ディレクティブを生み、それがコンポーネントの関数型を生み、それがそのまま印字されて戻ってくる — 双方向に 1 対 1 で対応する境界型の集合(`s32`、`s64`、`f64`、`bool`、`string`)の上での話です。渡した world と食い違って出てくることはありえません。したがって `.wit` を再出力して CI で差分を取るのは、*rontolisp 側の*型マッピングに対するリグレッションテストであって(安価であり、続ける価値もあります)、あなたのソースに対するチェックではありません。乖離したプログラムを捕まえるのは `wit-export` 自身であり、それはすでにすべてのバックエンド(素のインタプリタ実行を含む)で走っています。これは過渡的な状態です: world がプログラムの束縛するインポートも宣言できるようになれば、出力される WIT は真に双方向の契約になります。
+
+### WIT world の実装(wit-export)
+
+ここまではすべて Lisp から出発して `.wit` を*出力*するものでした。**`rontolisp:wit-export`** はこれを逆転させます: 誰かが書いた world をコンパイラに渡し、プログラムがそれを**実装**します。
+
+```console
+// wit/greeter.wit
+package example:greeter;
+
+world greeter {
+  /// Greet someone by name.
+  export greet: func(who: string) -> string;
+}
+```
+
+```console
+;;; greet.lisp -- the directive comes last: on the interpreter it sees only the
+;;; functions defined so far.
+(defun greet (who)
+  (concatenate 'string "Hello, " who "!"))
+
+(rontolisp:wit-export "wit/greeter.wit" :world greeter)
+```
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm
+wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("world")' greet.wasm
+# "Hello, world!"
+```
+
+どこにも `:params '(:string) :returns :string` はありません — 型は world から来ます。これこそが要点です: 手書きの境界型は、別途生成される `.wit` の隣に置かれ、両者は乖離していき、最終的に `wasmtime --invoke` が実行時に失敗して初めて気づきます。`wit-export` では **WIT が唯一の真実の源**です:
+
+- world がプログラムのエクスポート一覧であるため、同じプログラム内の手書きの `rontolisp:wasm-export` はコンパイルエラーです。
+- すべてのエクスポートには正しいアリティの `defun` が必要で、すべての WIT 型は境界が運べるもの(`s32`、`s64`、`f64`、`bool`、`string`)でなければならず、world 中の `async func` はそのエクスポートを `:async t` としてリフトします(I/O を行うエクスポートは推測されるのではなく WIT によって非同期と宣言されます)。各不一致は WIT ファイル名と行番号を示すコンパイルエラーになります:
+  `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`。
+- 契約は**すべての**バックエンドで検査されます: 素の `rontolisp greet.lisp` 実行(や `-o Greet.class` ビルド)は world を検証するだけでエクスポートは行いません。したがって乖離は WASM ビルドよりずっと手前で捕まります。
+
+このディレクティブは前節までの機構のフロントエンドであって、第 2 のエクスポート経路ではありません: 手書きの実装が持つのとまったく同じ `rontolisp:wasm-export` ディレクティブへローワリングされるため、**生成されるコンポーネントはそれとバイト単位で同一**です — GC パスでも [`--no-gc --component`](#compact-component-output---no-gc---component) でも同様です(world が `s64` を使う場合は後者を選びます。wasm-GC の `i31ref` 整数は `s64` を保持できません)。
+
+ビルドに [`--emit-wit`](#emitting-the-wit-world---emit-wit) を追加するとコンポーネントの実際の型が書き出され、そのエクスポート行は書いたとおりに戻ってきます。引数名も含めてです — WIT の名前はコンポーネントの関数型まで運ばれます(手書きのエクスポートは、自分で `:param-names '(who)` と宣言しない限り引数を `p0`、`p1`、... と名づけます)。
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm --emit-wit   # writes greet.wit
+```
+
+```text
+export greet: func(who: string) -> string;
+```
+
+ただしこの行は不動点であって、判定ではありません: world *から*導出されたものである以上、world と矛盾しえないのです。それでも出力する理由はファイルの残りにあります — world が何も語らない `wasi:*` インポートと `wasi:cli/run` エクスポート、すなわちホストが供給しなければならないものです。`greet.wit` は、あの 1 つのエクスポートのまわりに 149 行あります。入力との意図的な違いが 2 つあります: `///` ドキュメントコメントは失われます。コンポーネントの型がそれを保持しないためです(`wasm-tools` も復元できません)。そして出力される world は常に `package root:component; world root` です。それがコンポーネントの型*そのもの*だからです。
+
+現在の制限:
+
+- 束縛されるのは world の**エクスポート**側だけです。`import` 項目は無視され(コンポーネントの WASI インポートは、それが構築される固定のアダプタ表面から来ます — それを見る手段が [`--emit-wit`](#emitting-the-wit-world---emit-wit) です)、インラインの `import name: func(...)` は黙って捨てるのではなく拒否されます。ホスト関数は引き続き `rontolisp:wasm-import` で宣言します。
+- 実装できるのは素の関数エクスポートだけです。インターフェースをエクスポートする world はエラーであり、`rontolisp:http-handler` のプログラムは world をまったく使えません(serve モードのコンポーネントの唯一のエクスポートは `wasi:http/incoming-handler` です)。
+- `:s-expr` に対応する WIT の綴りはないため、任意の S 式を境界で受け渡すエクスポートには引き続き手書きの `rontolisp:wasm-export` が必要です。
+- インタプリタではディレクティブは順に評価され、それまでに定義された関数しか見えません。ファイルの末尾に置いてください。
+
+### 実装のスケルトン生成(`--scaffold-wit`)
+
+`--scaffold-wit` は「`.wit` を渡された、さてどうする」への答えです: コンパイルする代わりに、実装のスケルトンを生成します。
+
+```bash
+rontolisp --scaffold-wit wit/greeter.wit -o greet.lisp   # no -o: print to stdout
+```
+
+```console
+;;;; Implementation of the WIT world 'greeter' (wit/greeter.wit).
+;;;;
+;;;; The world is the contract: the compiler checks every defun below against
+;;;; it, so a renamed export, a changed arity or a changed type is a compile
+;;;; error rather than a runtime surprise. Fill in the bodies; each one signals
+;;;; until you do.
+
+;;; Greet someone by name.
+;;; WIT: greet: func(who: string) -> string
+(defun greet (who)
+  (error "greet is not implemented yet"))
+
+(rontolisp:wit-export "wit/greeter.wit" :world greeter)
+```
+
+引数は WIT の名前のまま命名され、各エクスポートの WIT シグネチャは満たすべき契約としてスタブの上に書き出され、`///` ドキュメントコメントは `;;;` コメントになります。スタブはコンパイル時ではなく**実行**時にシグナルするため、生成されたファイルはそのままコンパイルでき、エクスポートを 1 つずつ埋めていけます。`.wit` が複数の world を宣言している場合は `--world NAME` を追加してください。
 
 ## 非 GC 出力(`--no-gc`)
 
@@ -573,7 +666,7 @@ wasmtime run --invoke 'show(4)' show.wasm
 - コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます(サスペンドするための非同期アダプタが存在しません)。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - `--optimize` は組み合わせられます: コアモジュールはラップの前にツリーシェイキングされます。
-- [`--wit`](#emitting-the-wit-world---wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは 0.2 stdio インポート付き)を書き出します。
+- [`--emit-wit`](#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは 0.2 stdio インポート付き)を書き出します。
 
 ## 横断的なフラグ
 

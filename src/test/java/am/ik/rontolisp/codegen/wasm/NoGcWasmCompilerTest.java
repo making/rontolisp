@@ -1910,7 +1910,8 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void componentCompileRecordsTheWitText() {
-		// The CLI's --wit output for the adapter-free reactor: an import-free world of
+		// The CLI's --emit-wit output for the adapter-free reactor: an import-free world
+		// of
 		// just the typed exports (:long lifts as s64 here only).
 		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
 		assertThat(compiler.componentWit()).isNull();

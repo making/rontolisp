@@ -1,0 +1,23 @@
+package example:analyzer;
+
+/// A small text-analysis component. This file is the contract: it names the
+/// functions a component must export, their parameter and result types, and
+/// which of them are async. Any language with a WIT toolchain can implement it.
+world analyzer {
+  /// Count the words in the text. A word is a run of characters separated by
+  /// spaces; leading, trailing and repeated spaces do not count.
+  export word-count: func(text: string) -> s32;
+
+  /// Return the longest word in the text, or the empty string when it has none.
+  export longest-word: func(text: string) -> string;
+
+  /// Report whether the text reads the same backwards, ignoring letter case and
+  /// every character that is not a letter or a digit.
+  export is-palindrome: func(text: string) -> bool;
+
+  /// Print a human-readable report about the text to standard output. It is
+  /// declared async because it performs I/O: a synchronous export may not block,
+  /// so this is the one property the world has to state rather than let an
+  /// implementer guess.
+  export print-report: async func(text: string);
+}

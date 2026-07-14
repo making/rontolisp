@@ -2676,6 +2676,18 @@ public final class LispNames {
 	public static final String WASM_EXPORT = "wasm-export";
 
 	/**
+	 * The {@code wit-export} directive provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:wit-export "world.wit" :world name)} to declare that the program
+	 * implements a WIT world: the compiler checks every {@code defun} against the world's
+	 * exports and lowers them into the equivalent {@link #WASM_EXPORT} directives. A
+	 * contract check (but no export) on the interpreter and the JVM backend.
+	 */
+	public static final String WIT_EXPORT = "wit-export";
+
+	/** The fully qualified {@code rontolisp:wit-export} directive name. */
+	public static final String WIT_EXPORT_QUALIFIED = RONTOLISP_PKG + ":" + WIT_EXPORT;
+
+	/**
 	 * The {@code http-handler} directive provided by the {@code rontolisp} package. Used
 	 * as {@code (rontolisp:http-handler 'name [port])} to serve HTTP requests with a
 	 * handler function that receives a request property list ({@code :method} /

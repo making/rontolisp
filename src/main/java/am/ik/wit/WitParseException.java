@@ -13,25 +13,8 @@ public class WitParseException extends RuntimeException {
 	 * @param offset the character offset of the error in {@code source}
 	 */
 	public WitParseException(String message, String source, int offset) {
-		super(message + " at line " + lineOf(source, offset) + ", column " + columnOf(source, offset));
-	}
-
-	private static int lineOf(String source, int offset) {
-		int line = 1;
-		for (int i = 0; i < offset && i < source.length(); i++) {
-			if (source.charAt(i) == '\n') {
-				line++;
-			}
-		}
-		return line;
-	}
-
-	private static int columnOf(String source, int offset) {
-		int column = 1;
-		for (int i = 0; i < offset && i < source.length(); i++) {
-			column = (source.charAt(i) == '\n') ? 1 : column + 1;
-		}
-		return column;
+		super(message + " at line " + WitLocations.lineOf(source, offset) + ", column "
+				+ WitLocations.columnOf(source, offset));
 	}
 
 }

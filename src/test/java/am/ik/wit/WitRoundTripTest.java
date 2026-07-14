@@ -19,8 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ul>
  * <li><strong>verbatim</strong> — lexing any corpus file and reassembling the tokens
  * reproduces it byte-for-byte, and the file parses;</li>
- * <li><strong>canonical</strong> — the {@code --wit} templates are captured verbatim from
- * {@code wasm-tools component wit}, so canonical-printing their parsed models must
+ * <li><strong>canonical</strong> — the {@code --emit-wit} templates are captured verbatim
+ * from {@code wasm-tools component wit}, so canonical-printing their parsed models must
  * reproduce them byte-for-byte (this pins the canonical style to the real tool);</li>
  * <li><strong>stability</strong> — for the hand-written {@code deps/**} corpus (whose
  * formatting is not canonical), the canonical print must re-parse to the identical model

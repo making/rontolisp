@@ -296,6 +296,84 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void defaultsParamNamesToPositionalLabels() {
+		// A WASM parameter has no name; p0, p1, ... are the labels the --component lift
+		// encodes into the export's function type, and therefore what --emit-wit shows.
+		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int :string) :returns :int)").paramNames())
+			.containsExactly("p0", "p1");
+		assertThat(parse("(rontolisp:wasm-export 'now :params '() :returns :int)").paramNames()).isEmpty();
+		assertThat(parse("(rontolisp:wasm-export 'now :returns :int)").paramNames()).isEmpty();
+	}
+
+	@Test
+	void parsesExplicitParamNames() {
+		// rontolisp:wit-export fills these in from the WIT world, which is why an
+		// implemented world round-trips through --emit-wit with its own parameter names.
+		assertThat(parse("(rontolisp:wasm-export 'f :params '(:string :int) :param-names '(text repeat-count)"
+				+ " :returns :string)")
+			.paramNames()).containsExactly("text", "repeat-count");
+		// Leniently, strings name parameters too.
+		assertThat(parse("(rontolisp:wasm-export 'f :params '(:string) :param-names '(\"text\") :returns :string)")
+			.paramNames()).containsExactly("text");
+		assertThat(parse("(rontolisp:wasm-export 'f :params '() :param-names nil :returns :int)").paramNames())
+			.isEmpty();
+	}
+
+	@Test
+	void rejectsParamNamesThatDoNotMatchTheParamCount() {
+		assertThatThrownBy(
+				() -> parse("(rontolisp:wasm-export 'f :params '(:int :int) :param-names '(a) :returns :int)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":param-names has 1 name(s) but :params has 2 type(s)");
+	}
+
+	@Test
+	void rejectsAParamNameThatIsNotAComponentModelLabel() {
+		// The lifted function type's parameter labels obey the same lower-kebab-case
+		// grammar as an export name.
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names '(Foo) :returns :int)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("is not a valid component-model parameter name");
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names '(x_y) :returns :int)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("'x_y' is not a valid component-model parameter name");
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names '(:x) :returns :int)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":param-names expects symbols or strings");
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names (a) :returns :int)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":param-names expects a quoted list");
+	}
+
+	@Test
+	void componentLiftsTheExportWithItsOwnParamNames() {
+		// The labels ride into the component's function type, so --emit-wit prints them
+		// (this
+		// is what makes an implemented WIT world round-trip with its parameter names).
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun shout (s) (string-upcase s)) (rontolisp:wasm-export 'shout :params '(:string)"
+					+ " :param-names '(text) :returns :string)");
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		byte[] component = compiler.compile(program);
+		assertThat(containsAscii(component, "text")).isTrue();
+		assertThat(compiler.componentWit()).contains("export shout: func(text: string) -> string;");
+	}
+
+	@Test
+	void defaultParamNamesAreByteIdenticalToTheExplicitPositionalOnes() {
+		// The default is exactly p0, p1, ... : spelling them out changes nothing, so
+		// every
+		// artifact predating :param-names is unaffected by it.
+		String defun = "(defun sumsq (a b) (* (+ a b) (+ a b)))";
+		byte[] omitted = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
+				defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :returns :int) (print \"hi\")"));
+		byte[] explicit = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
+				defun + " (rontolisp:wasm-export 'sumsq :params '(:int :int) :param-names '(p0 p1) :returns :int)"
+						+ " (print \"hi\")"));
+		assertThat(explicit).isEqualTo(omitted);
+	}
+
+	@Test
 	void rejectsNonBooleanAsyncValue() {
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int :async :yes)"))
 			.hasMessageContaining(":async expects t or nil");
@@ -397,7 +475,8 @@ class WasmExportCompilerTest {
 
 	@Test
 	void componentCompileRecordsTheWitText() {
-		// The CLI's --wit output: the compiled component's typed world, with the user
+		// The CLI's --emit-wit output: the compiled component's typed world, with the
+		// user
 		// exports after the fixed run export (WitEmitter renders; templates + export
 		// lines proven against wasm-tools component wit in WitOracleE2eTest).
 		List<LispVal> program = LispReader.readAllFromString("""

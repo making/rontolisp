@@ -91,6 +91,13 @@ final class WasmExportCompiler {
 	 * @param name the Lisp function name (an existing top-level defun)
 	 * @param exportName the WASM export name ({@code :as} alias, default the Lisp name)
 	 * @param paramTypes the declared parameter type designators, in order
+	 * @param paramNames the component-model parameter names, in order
+	 * ({@code :param-names}, default {@code p0}, {@code p1}, ...): the labels the
+	 * {@code --component} lift encodes into the export's function type, and therefore the
+	 * names {@code --emit-wit} and any binding generator show. Ignored on the core-export
+	 * (Preview 1 / {@code --no-wasi}) path, where a WASM parameter has no name.
+	 * {@code rontolisp:wit-export} fills these in from the WIT world, which is why an
+	 * implemented world round-trips with its own parameter names intact
 	 * @param returnType the declared return type designator
 	 * @param async whether the {@code --component} lift uses an <strong>async</strong>
 	 * function type ({@code :async t}, todo 92 Tier 3): the export runs as a stackful
@@ -100,7 +107,20 @@ final class WasmExportCompiler {
 	 * directly) and rejected under {@code --no-gc --component} (the adapter-free reactor
 	 * has no async machinery)
 	 */
-	record Decl(String name, String exportName, List<String> paramTypes, String returnType, boolean async) {
+	record Decl(String name, String exportName, List<String> paramTypes, List<String> paramNames, String returnType,
+			boolean async) {
+	}
+
+	/**
+	 * The default component-model parameter names of an export: {@code p0}, {@code p1},
+	 * ...
+	 */
+	static List<String> defaultParamNames(int count) {
+		List<String> names = new ArrayList<>(count);
+		for (int i = 0; i < count; i++) {
+			names.add("p" + i);
+		}
+		return List.copyOf(names);
 	}
 
 	/**
@@ -134,6 +154,7 @@ final class WasmExportCompiler {
 		String name = quotedSymbolName(items.get(1));
 		String exportName = null;
 		List<String> params = null;
+		List<String> paramNames = null;
 		String returns = null;
 		boolean async = false;
 		int i = 2;
@@ -146,6 +167,7 @@ final class WasmExportCompiler {
 			switch (keyword) {
 				case ":as" -> exportName = exportAlias(value, form);
 				case ":params" -> params = quotedTypeList(value, form);
+				case ":param-names" -> paramNames = quotedNameList(value, form);
 				case ":returns" -> returns = returnDesignator(value, form);
 				case ":async" -> async = booleanOption(value, form);
 				default -> throw new UnsupportedOperationException(
@@ -153,9 +175,55 @@ final class WasmExportCompiler {
 			}
 			i += 2;
 		}
+		List<String> types = params == null ? List.of() : params;
+		if (paramNames != null && paramNames.size() != types.size()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-export :param-names has " + paramNames.size()
+					+ " name(s) but :params has " + types.size() + " type(s) in " + form.print());
+		}
 		// Omitted :returns (like nil / '() / :void) means a void result.
-		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName,
-				params == null ? List.of() : params, returns == null ? T_VOID : returns, async);
+		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName, types,
+				paramNames == null ? defaultParamNames(types.size()) : paramNames, returns == null ? T_VOID : returns,
+				async);
+	}
+
+	// A :param-names value is a quoted list of names (symbols or strings), each a valid
+	// component-model label -- they become the parameter labels of the lifted component
+	// function type.
+	private static List<String> quotedNameList(LispVal value, LispCons form) {
+		if (value instanceof am.ik.rontolisp.LispNil) {
+			return List.of();
+		}
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest) {
+			List<String> result = new ArrayList<>();
+			if (rest.car() instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					result.add(paramName(element, form));
+				}
+			}
+			else if (!(rest.car() instanceof am.ik.rontolisp.LispNil)) {
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-export :param-names expects a list in " + form.print());
+			}
+			return List.copyOf(result);
+		}
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export :param-names expects a quoted list in " + form.print());
+	}
+
+	private static String paramName(LispVal value, LispCons form) {
+		String name = switch (value) {
+			case am.ik.rontolisp.LispString str -> str.value();
+			case LispSymbol sym when !sym.isKeyword() -> unqualifiedMember(sym.name());
+			default -> throw new UnsupportedOperationException(
+					"rontolisp:wasm-export :param-names expects symbols or strings in " + form.print() + ", got: "
+							+ value.print());
+		};
+		if (!COMPONENT_EXPORT_NAME.matcher(name).matches()) {
+			throw new UnsupportedOperationException("rontolisp:wasm-export :param-names entry '" + name
+					+ "' is not a valid component-model parameter name (lower-kebab-case words) in " + form.print());
+		}
+		return name;
 	}
 
 	// The host-facing default export name is the symbol's bare member name; a package
@@ -485,8 +553,8 @@ final class WasmExportCompiler {
 		for (String t : decl.paramTypes()) {
 			params.add(componentValType(t));
 		}
-		return new WasmComponentBuilder.FuncExport(decl.exportName(), params, componentValType(decl.returnType()),
-				decl.async());
+		return new WasmComponentBuilder.FuncExport(decl.exportName(), decl.paramNames(), params,
+				componentValType(decl.returnType()), decl.async());
 	}
 
 	static void appendWasmTypes(List<Type> types, String type) {

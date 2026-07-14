@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate the --wit fixtures (src/test/resources/.../component/wit/*.wit) that pin
+# Regenerate the --emit-wit fixtures (src/test/resources/.../component/wit/*.wit) that pin
 # WasiWitDefinitions byte-for-byte, then regenerate WasiWitDefinitions.java from them.
 # Requires wasm-tools AND a built rontolisp exec jar: the fixed run / incoming-handler
 # export (and its interface definition in the trailing package text) is wired by
@@ -20,7 +20,7 @@
 # blob variant, with the reference program's own export lines stripped (the dynamic part
 # WitEmitter re-inserts) and, on the http-server variants only, the incoming-handler
 # `use` clause restored: wasm-tools omits it and prints a WIT that does not parse (the
-# upstream deps/http/handler.wit has the clause), and the whole point of --wit is a
+# upstream deps/http/handler.wit has the clause), and the whole point of --emit-wit is a
 # consumable file. WitOracleE2eTest pins both facts against the live tool.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -58,7 +58,7 @@ PY
   echo "$OUT/$1.wit (use clause restored)"
 }
 
-echo "== --wit fixtures =="
+echo "== --emit-wit fixtures =="
 echo '(print "x")' > "$WORK/base.lisp"
 capture base
 echo '(print (rontolisp:fetch "http://127.0.0.1:9/"))' > "$WORK/http-client.lisp"

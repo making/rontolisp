@@ -13,8 +13,8 @@ import am.ik.wit.WitType;
 
 /**
  * Renders the WIT text ({@code package root:component; world root { ... }}) describing a
- * {@code --component} output, for the CLI's {@code --wit} option, so hosts and binding
- * generators (e.g. {@code jco}) can consume the component's typed surface without
+ * {@code --component} output, for the CLI's {@code --emit-wit} option, so hosts and
+ * binding generators (e.g. {@code jco}) can consume the component's typed surface without
  * introspecting it via {@code wasm-tools component wit}.
  *
  * <p>
@@ -76,14 +76,16 @@ final class WitEmitter {
 	}
 
 	// Builds one typed world export the way wasm-tools prints it, e.g.
-	// " export noisy-mul: async func(p0: s32, p1: s32) -> s32;". Parameter names are
-	// p0, p1, ... -- the names WasmComponentBuilder/NoGcWasmComponentBuilder encode into
-	// the component's function types.
+	// " export noisy-mul: async func(p0: s32, p1: s32) -> s32;". The parameter names are
+	// the declaration's own (p0, p1, ... by default; the WIT world's names when the
+	// program was compiled against one with rontolisp:wit-export) -- the very labels
+	// WasmComponentBuilder/NoGcWasmComponentBuilder encode into the component's function
+	// types, which is what makes an implemented world round-trip unchanged.
 	private static WitItem exportItem(WasmExportCompiler.Decl decl) {
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<String> paramTypes = decl.paramTypes();
 		for (int i = 0; i < paramTypes.size(); i++) {
-			params.add(new WitFunc.Param("p" + i, witType(paramTypes.get(i))));
+			params.add(new WitFunc.Param(decl.paramNames().get(i), witType(paramTypes.get(i))));
 		}
 		Integer result = WasmExportCompiler.componentValType(decl.returnType());
 		WitFunc func = new WitFunc(decl.async(), List.copyOf(params), result == null ? null : witTypeOf(result));

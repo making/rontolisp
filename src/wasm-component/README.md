@@ -21,13 +21,13 @@ src/wasm-component/                 (this directory: editable sources, dev-only)
   mem.wat  adapter.wat              core-module sources
   uni.wit  deps/  core.wat          inputs for the unified import block
   regen.sh                          regenerates the blobs below, fully offline
-  regen-wit.sh                      regenerates the --wit fixtures (needs the jar)
+  regen-wit.sh                      regenerates the --emit-wit fixtures (needs the jar)
 
 src/main/resources/am/ik/rontolisp/codegen/wasm/component/   (generated, packaged)
   mem.wasm  adapter.wasm  import-block.bin
 
 src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit/   (generated, test-only)
-  *.wit                             --wit fixtures, one per blob variant
+  *.wit                             --emit-wit fixtures, one per blob variant
 ```
 
 The generated `.bin` / `.wasm` are loaded at runtime via the classpath and registered for
@@ -38,9 +38,9 @@ GraalVM native image (wildcard patterns) in
 src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-tools + python3)
 ```
 
-## The `--wit` fixtures and `WasiWitDefinitions`
+## The `--emit-wit` fixtures and `WasiWitDefinitions`
 
-The CLI's `--wit` option writes the component's WIT world next to the `.wasm`. The fixed
+The CLI's `--emit-wit` option writes the component's WIT world next to the `.wasm`. The fixed
 part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/incoming-handler`
 export, the referenced package definitions) is the per-variant document model in
 `WasiWitDefinitions.java` — `base`/`http-client`/`sockets`/`http-server`/

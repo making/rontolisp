@@ -2,9 +2,12 @@
 
 **Status:** open; **step 1 (`.todo/125`) DONE 2026-07-13** — `am.ik.wit` shipped,
 `WitEmitter` migrated onto it, the type mapping settled in `compiler/WitTypeMapper`
-and recorded in `.kb/wit.md` (todo file deleted on completion). Raised 2026-07-13,
-immediately after `--wit` closed todos 92+93. Anchor todo: the design and the type
-mapping live here; the remaining executable steps are `.todo/126`..`.todo/128`.
+and recorded in `.kb/wit.md` (todo file deleted on completion). **Step 2
+(`.todo/126`) DONE 2026-07-14** — `rontolisp:wit-export` (contract check + lowering
+into `wasm-export`, byte-identical components) and `--scaffold-wit`, recorded in
+`.kb/wit.md` (todo file deleted on completion). Raised 2026-07-13, immediately after
+`--wit` closed todos 92+93. Anchor todo: the design and the type mapping live here;
+the remaining executable steps are `.todo/127` and `.todo/128` (the import side).
 
 ## The idea
 
@@ -122,7 +125,7 @@ no external dependencies.
 | Step | Todo | Weight | Unlocks |
 |---|---|---|---|
 | 1 | ~~`.todo/125`~~ **DONE 2026-07-13** — `am.ik.wit` parser/printer + settled mapping; `WitEmitter` on `WitPrinter`; variants renamed (`http-client`/`http-server`/`http-server-client`/`sockets`); `.kb/wit.md` | medium | self-validated via `WitOracleE2eTest` |
-| 2 | `.todo/126` — `wit-export`: implement-this-world contract checking + scaffolding | small | kills the `:params`/`:returns` double-maintenance |
+| 2 | ~~`.todo/126`~~ **DONE 2026-07-14** — `wit-export`: implement-this-world contract checking (compile path + interpreter) lowered into `wasm-export` (byte-identical components), `wasm-export :param-names`, `--scaffold-wit`; `.kb/wit.md` | small | killed the `:params`/`:returns` double-maintenance |
 | 3 | `.todo/127` — `wit-import` on interpreter + JVM (provider binding) | medium | one Lisp source, host impl per backend |
 | 4 | `.todo/128` — component imports (canon lower) | **large** | wasi:keyvalue, component composition, wasmCloud |
 

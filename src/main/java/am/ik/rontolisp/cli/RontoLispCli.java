@@ -23,6 +23,7 @@ import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
@@ -73,6 +74,13 @@ public final class RontoLispCli {
 			return;
 		}
 
+		// --scaffold-wit generates a program instead of running one, so it takes no .lisp
+		// input and must short-circuit before the no-positional-argument REPL fallback.
+		if (options.contains("--scaffold-wit")) {
+			scaffold(Objects.requireNonNull(options.get("--scaffold-wit")), options.get("-o"), options.get("--world"));
+			return;
+		}
+
 		// The .asd search path for asdf:load-system: the --system-path option first,
 		// then the RONTOLISP_SOURCE_REGISTRY environment variable, both accepting
 		// several directories joined with the platform path separator (like PATH). The
@@ -96,7 +104,7 @@ public final class RontoLispCli {
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
 					options.contains("--no-gc"), options.contains("--simd"), options.contains("--no-prune"),
-					options.contains("--wit"));
+					options.contains("--emit-wit"));
 		}
 		else {
 			interpret(source, baseDir, systemPath, options.contains("--simd"));
@@ -212,11 +220,12 @@ public final class RontoLispCli {
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
 			boolean noPrune, boolean wit) {
-		// --wit describes a component's typed world, so it is meaningless for any other
+		// --emit-wit describes a component's typed world, so it is meaningless for any
+		// other
 		// output; fail fast instead of silently ignoring the request.
 		if (wit && !(component && outputFile.endsWith(".wasm"))) {
 			throw new UnsupportedOperationException(
-					"--wit requires --component and a .wasm output (e.g. -o out.wasm --component --wit)");
+					"--emit-wit requires --component and a .wasm output (e.g. -o out.wasm --component --emit-wit)");
 		}
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
@@ -248,6 +257,14 @@ public final class RontoLispCli {
 		if (!(outputFile.endsWith(".wasm") && noGc)) {
 			program = VecLibrary.process(program);
 		}
+		// (rontolisp:wit-export "world.wit"): check the program against the WIT world it
+		// claims to implement and expand the directive into the rontolisp:wasm-export
+		// directives the world declares -- the backends see nothing new. It runs here
+		// because every defun (including a load-spliced or macro-produced one) is now a
+		// literal top-level form, and because the synthesized directives must still count
+		// as pruning roots below.
+		boolean witWorld = WitExportInliner.usesWitExport(program);
+		program = WitExportInliner.inline(program, baseDir, witBackend(outputFile, noGc));
 		// Drop spliced library definitions unreachable from the user program (the AST
 		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
 		// can resolve any name at runtime) and --no-prune (the explicit escape hatch).
@@ -279,6 +296,14 @@ public final class RontoLispCli {
 				// (--component only). The HttpHandlerInliner splices in a %http-dispatch
 				// wasm-export wrapper that the serve adapter calls per request.
 				boolean serve = component && HttpHandlerInliner.usesHttpHandler(program);
+				// A serve-mode component's only export is wasi:http/incoming-handler (the
+				// component builder lifts no user exports there), so a world of function
+				// exports could not be honored -- say so instead of dropping it.
+				if (serve && witWorld) {
+					throw new UnsupportedOperationException(
+							"rontolisp:wit-export cannot be combined with rontolisp:http-handler: a serve-mode "
+									+ "component exports only wasi:http/incoming-handler");
+				}
 				List<LispVal> wasmProgram = serve ? HttpHandlerInliner.inline(program) : program;
 				// --simd routes the vectorizable vec: kernels to emitted v128 helpers and
 				// switches a packed float array's storage to an (array (mut v128)) of
@@ -311,6 +336,59 @@ public final class RontoLispCli {
 		}
 	}
 
+	/**
+	 * {@code --scaffold-wit world.wit [-o impl.lisp] [--world name]}: writes a runnable
+	 * skeleton implementing the world (a {@code rontolisp:wit-export} directive plus one
+	 * {@code defun} stub per export), or prints it to stdout when no {@code -o} is given.
+	 */
+	private void scaffold(String witFile, @Nullable String outputFile, @Nullable String world) {
+		String witSource = readFile(witFile);
+		// The path the generated source names must resolve against the generated file's
+		// own directory, the way wit-export (like load) resolves it.
+		String directivePath = outputFile == null ? witFile
+				: relativeToOutput(SourceLoader.parentDir(outputFile), witFile);
+		String lisp = WitScaffolder.scaffold(witSource, directivePath, world);
+		if (outputFile == null) {
+			this.out.print(lisp);
+			return;
+		}
+		try {
+			Files.writeString(Path.of(outputFile), lisp);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	private static String relativeToOutput(@Nullable String outputDir, String witFile) {
+		if (outputDir == null || outputDir.isEmpty()) {
+			return witFile;
+		}
+		try {
+			return Path.of(outputDir)
+				.toAbsolutePath()
+				.normalize()
+				.relativize(Path.of(witFile).toAbsolutePath().normalize())
+				.toString();
+		}
+		catch (IllegalArgumentException _) {
+			// No relative path exists (e.g. different roots on Windows): keep it as
+			// given.
+			return witFile;
+		}
+	}
+
+	// The backend a rontolisp:wit-export world is checked against: only the WASM backends
+	// impose the export boundary's backend-specific rules (s64 needs --no-gc, an async
+	// func cannot be lifted by the --no-gc reactor). Compiling to a .class checks the
+	// contract but exports nothing, like the interpreter.
+	private static WitExportDirective.Backend witBackend(String outputFile, boolean noGc) {
+		if (!outputFile.endsWith(".wasm")) {
+			return WitExportDirective.Backend.OTHER;
+		}
+		return noGc ? WitExportDirective.Backend.WASM_NO_GC : WitExportDirective.Backend.WASM_GC;
+	}
+
 	// Emits a one-line warning to stderr. Kept off stdout (this.out) so it never corrupts
 	// a
 	// compiled program's piped output or the REPL transcript.
@@ -338,9 +416,17 @@ public final class RontoLispCli {
 		this.out.println("                     With --no-gc: a compact reactor component (typed exports");
 		this.out.println("                     incl. :long and :string; print works via a tiny WASI 0.2");
 		this.out.println("                     stdio bridge; no wasm-GC, no flags)");
-		this.out.println("  --wit              With --component: also write the component's WIT world");
+		this.out.println("  --emit-wit         With --component: also write the component's WIT world");
 		this.out.println("                     (imports + typed exports) next to the .wasm output, so hosts");
 		this.out.println("                     and binding generators (e.g. jco) need no wasm-tools introspection");
+		this.out.println("                     It is the only thing that reports what the component actually");
+		this.out.println("                     IMPORTS -- a hand-written world states only the export side");
+		this.out.println("  --scaffold-wit W   Generate a skeleton implementing the WIT world W instead of");
+		this.out.println("                     compiling: a rontolisp:wit-export directive plus one defun stub");
+		this.out.println("                     per export (with -o FILE; prints to stdout otherwise). Pick the");
+		this.out.println("                     world with --world NAME when the file declares several.");
+		this.out.println("                     The program then IMPLEMENTS the .wit: the compiler checks every");
+		this.out.println("                     defun against it, so no :params/:returns list is written by hand");
 		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
 		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");

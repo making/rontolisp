@@ -93,7 +93,7 @@ class RontoLispCliTest {
 				(rontolisp:wasm-export 'pure-add :params '(:int :int) :returns :int)
 				""");
 		Path wasmFile = tempDir.resolve("test.wasm");
-		runCli("", file.toString(), "-o", wasmFile.toString(), "--component", "--wit");
+		runCli("", file.toString(), "-o", wasmFile.toString(), "--component", "--emit-wit");
 		assertThat(Files.exists(wasmFile)).isTrue();
 		String wit = Files.readString(tempDir.resolve("test.wit"));
 		assertThat(wit).startsWith("package root:component;\n")
@@ -105,13 +105,13 @@ class RontoLispCliTest {
 		Path file = tempDir.resolve("test.lisp");
 		Files.writeString(file, "(print 1)");
 		Path wasmFile = tempDir.resolve("test.wasm");
-		assertThatThrownBy(() -> runCli("", file.toString(), "-o", wasmFile.toString(), "--wit"))
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", wasmFile.toString(), "--emit-wit"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--wit requires --component");
+			.hasMessageContaining("--emit-wit requires --component");
 		Path classFile = tempDir.resolve("Test.class");
-		assertThatThrownBy(() -> runCli("", file.toString(), "-o", classFile.toString(), "--component", "--wit"))
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", classFile.toString(), "--component", "--emit-wit"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--wit requires --component");
+			.hasMessageContaining("--emit-wit requires --component");
 	}
 
 	@Test

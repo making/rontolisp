@@ -1,6 +1,6 @@
 # rontolisp:wasm-export
 
-`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type :async t)`
+`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :param-names '(name...) :returns type :async t)`
 
 Marks a top-level `defun` as host-callable when compiling to a WebAssembly core
 module, declaring the WASM-boundary types of its parameters and result. It is a
@@ -23,6 +23,15 @@ source runs on every backend. See
   (`fact`, without any package qualifier).
 - `:params` — a list of boundary type designators, one per parameter. Omitted,
   `nil` or `'()` means no arguments.
+- `:param-names` — the parameter names of the **component-model** signature, one
+  per `:params` entry, as symbols or strings. Each must be a component-model
+  label (lower-kebab-case words). Defaults to `p0`, `p1`, ... — the names a host
+  or a binding generator sees in the component's type, and therefore the names
+  [`--emit-wit`](../../compiling/wasm.md#emitting-the-wit-world---emit-wit) prints. It is
+  ignored outside `--component` (a core WASM parameter has no name), and a
+  program that implements a WIT world with
+  [`rontolisp:wit-export`](rontolisp-wit-export.md) gets these from the world
+  instead of declaring them.
 - `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or
   `:void` declares a void result (the Lisp return value is discarded).
 - `:async` — `t` lifts the export as an **async** component-model function under
@@ -59,7 +68,7 @@ it exposes the full width with no `wrap`/`extend` conversion.
   `:async` is rejected but printing works in the sync export itself, through a
   built-in WASI 0.2 stdio micro-adapter wired in only when the program prints.
   The export name must be lower-kebab-case (rename with `:as` otherwise), and
-  adding `--wit` writes the component's WIT world (with every export's typed
+  adding `--emit-wit` writes the component's WIT world (with every export's typed
   signature) next to the `.wasm`. See
   [Component-model function exports](../../compiling/wasm.md#component-model-function-exports-wasm-export)
   and [Compact component output](../../compiling/wasm.md#compact-component-output---no-gc---component).

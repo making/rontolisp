@@ -193,12 +193,16 @@ public final class WasmComponentBuilder {
 	 * so I/O inside it blocks cooperatively instead of trapping.
 	 *
 	 * @param name the export name (a valid component-model label; honors {@code :as})
+	 * @param paramNames the parameter labels the function type carries ({@code p0},
+	 * {@code p1}, ... by default; the WIT world's own names under
+	 * {@code rontolisp:wit-export}, or an explicit {@code :param-names})
 	 * @param paramValTypes the {@code ComponentWriter.VT_*} code of each parameter
 	 * @param resultValType the {@code ComponentWriter.VT_*} result code, or {@code null}
 	 * for no result
 	 * @param async whether to lift against an async function type ({@code :async t})
 	 */
-	public record FuncExport(String name, List<Integer> paramValTypes, @Nullable Integer resultValType, boolean async) {
+	public record FuncExport(String name, List<String> paramNames, List<Integer> paramValTypes,
+			@Nullable Integer resultValType, boolean async) {
 	}
 
 	/**
@@ -265,15 +269,12 @@ public final class WasmComponentBuilder {
 			// :string/:s-expr-returning export's core export is its retptr shim.
 			aliases.add(ComponentWriter.aliasCoreFunc(3, e.name()));
 			int func = coreFunc++;
-			// One function type per export (params p0, p1, ...): synchronous by
-			// default; an :async t export (todo 92 Tier 3) gets the async counterpart
-			// (tag 0x43), which turns the lift below into a stackful async export (the
-			// run shape) with the same flat core signature -- the ONLY byte difference
-			// an :async export introduces.
-			final List<String> paramNames = new java.util.ArrayList<>();
-			for (int p = 0; p < e.paramValTypes().size(); p++) {
-				paramNames.add("p" + p);
-			}
+			// One function type per export (params p0, p1, ... unless the directive names
+			// them): synchronous by default; an :async t export (todo 92 Tier 3) gets the
+			// async counterpart (tag 0x43), which turns the lift below into a stackful
+			// async export (the run shape) with the same flat core signature -- the ONLY
+			// byte difference an :async export introduces.
+			final List<String> paramNames = e.paramNames();
 			types.add(e.async() ? ComponentWriter.asyncFuncTypeScalars(paramNames, e.paramValTypes(), e.resultValType())
 					: ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType()));
 			if (WasmExportCompiler.usesMemory(decl)) {

@@ -2,7 +2,6 @@
 /count_vowels.wasm
 /count_vowels_gc.wasm
 /count_vowels_component.wasm
-/count_vowels_component.wit
 /dist/
 /types/
 /node_modules/

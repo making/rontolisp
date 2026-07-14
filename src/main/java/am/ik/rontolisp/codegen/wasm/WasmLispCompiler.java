@@ -174,7 +174,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * The WIT text describing the component compiled by the last {@link #compile} call
-	 * (the CLI's {@code --wit} output), or {@code null} before a component compile.
+	 * (the CLI's {@code --emit-wit} output), or {@code null} before a component compile.
 	 * Semantically identical to {@code wasm-tools component wit} on the emitted bytes;
 	 * see {@link WitEmitter}.
 	 * @return the WIT text, or {@code null} when not compiling a component

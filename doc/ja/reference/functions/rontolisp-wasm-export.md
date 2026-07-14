@@ -1,6 +1,6 @@
 # rontolisp:wasm-export
 
-`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :returns type :async t)`
+`(rontolisp:wasm-export 'name :as "alias" :params '(type...) :param-names '(name...) :returns type :async t)`
 
 WebAssembly コアモジュールへコンパイルする際に、トップレベルの `defun` を
 ホストから呼び出し可能にし、その引数と戻り値の WASM 境界型を宣言します。これは
@@ -22,6 +22,16 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   camelCase 名など)。デフォルトは (パッケージ修飾子を除いた) 素の Lisp 名 (`fact`) です。
 - `:params` — 各引数に対応する境界型指定子のリスト。省略、`nil`、`'()` の場合は
   引数なしを意味します。
+- `:param-names` — **コンポーネントモデル**のシグネチャにおける引数名を、`:params`
+  の各要素に 1 つずつ、シンボルまたは文字列で指定します。それぞれコンポーネント
+  モデルのラベル (lower-kebab-case の語) でなければなりません。デフォルトは `p0`、
+  `p1`、... です。これはホストやバインディングジェネレータがコンポーネントの型で
+  目にする名前であり、したがって
+  [`--emit-wit`](../../compiling/wasm.md#emitting-the-wit-world---emit-wit)
+  が印字する名前でもあります。`--component` 以外では無視されます (コア WASM の引数に
+  名前はありません)。また
+  [`rontolisp:wit-export`](rontolisp-wit-export.md) で WIT world を実装している
+  プログラムでは、これを宣言せず world から得ます。
 - `:returns` — 戻り値の境界型指定子。省略、`nil`、`'()`、`:void` の場合は void の
   戻り値 (Lisp の戻り値は破棄される) を宣言します。
 - `:async` — `t` の場合、`--component` でエクスポートを**非同期**のコンポーネント
@@ -61,7 +71,7 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   印字するときだけ配線される、組み込みの WASI 0.2 stdio マイクロアダプタを
   通じて)。エクスポート名は
   lower-kebab-case である必要があります (そうでない場合は
-  `:as` で改名します)。また `--wit` を追加すると、コンポーネントの WIT world
+  `:as` で改名します)。また `--emit-wit` を追加すると、コンポーネントの WIT world
   (すべてのエクスポートの型付きシグネチャ入り) が `.wasm` の隣に書き出されます。
   [コンポーネントモデル関数エクスポート](../../compiling/wasm.md#component-model-function-exports-wasm-export)
   と[コンパクトなコンポーネント出力](../../compiling/wasm.md#compact-component-output---no-gc---component)

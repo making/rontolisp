@@ -87,7 +87,7 @@ public final class WitPrinter {
 		printMeta(sb, item.meta(), depth);
 		switch (item) {
 			case WitItem.World world -> {
-				sb.append(ind).append("world ").append(world.name()).append(" {\n");
+				sb.append(ind).append("world ").append(id(world.name())).append(" {\n");
 				WitItem previous = null;
 				for (WitItem member : world.items()) {
 					if (previous != null && worldGroup(previous) != worldGroup(member)) {
@@ -99,7 +99,7 @@ public final class WitPrinter {
 				sb.append(ind).append("}\n");
 			}
 			case WitItem.InterfaceDef iface -> {
-				sb.append(ind).append("interface ").append(iface.name()).append(" {\n");
+				sb.append(ind).append("interface ").append(id(iface.name())).append(" {\n");
 				printInterfaceMembers(sb, iface.items(), depth);
 				sb.append(ind).append("}\n");
 			}
@@ -110,25 +110,25 @@ public final class WitPrinter {
 					if (i > 0) {
 						sb.append(", ");
 					}
-					sb.append(name.name());
+					sb.append(id(name.name()));
 					if (name.alias() != null) {
-						sb.append(" as ").append(name.alias());
+						sb.append(" as ").append(id(name.alias()));
 					}
 				}
 				sb.append("};\n");
 			}
 			case WitItem.TypeAlias alias -> sb.append(ind)
 				.append("type ")
-				.append(alias.name())
+				.append(id(alias.name()))
 				.append(" = ")
 				.append(type(alias.target()))
 				.append(";\n");
 			case WitItem.RecordDef record -> {
-				sb.append(ind).append("record ").append(record.name()).append(" {\n");
+				sb.append(ind).append("record ").append(id(record.name())).append(" {\n");
 				for (WitItem.Field field : record.fields()) {
 					printMeta(sb, field.meta(), depth + 1);
 					sb.append(indent(depth + 1))
-						.append(field.name())
+						.append(id(field.name()))
 						.append(": ")
 						.append(type(field.type()))
 						.append(",\n");
@@ -139,7 +139,7 @@ public final class WitPrinter {
 			case WitItem.EnumDef enumDef -> printCases(sb, "enum", enumDef.name(), enumDef.cases(), depth);
 			case WitItem.FlagsDef flags -> printCases(sb, "flags", flags.name(), flags.cases(), depth);
 			case WitItem.ResourceDef resource -> {
-				sb.append(ind).append("resource ").append(resource.name());
+				sb.append(ind).append("resource ").append(id(resource.name()));
 				List<WitItem> body = resource.body();
 				if (body == null) {
 					sb.append(";\n");
@@ -160,7 +160,7 @@ public final class WitPrinter {
 					sb.append(");\n");
 				}
 				else {
-					sb.append(func.name()).append(": ");
+					sb.append(id(func.name())).append(": ");
 					if (func.kind() == WitItem.FuncKind.STATIC) {
 						sb.append("static ");
 					}
@@ -186,7 +186,7 @@ public final class WitPrinter {
 	private static void printNamedExtern(StringBuilder sb, String keyword, String name, WitItem.Extern extern,
 			int depth) {
 		String ind = indent(depth);
-		sb.append(ind).append(keyword).append(' ').append(name).append(": ");
+		sb.append(ind).append(keyword).append(' ').append(id(name)).append(": ");
 		switch (extern) {
 			case WitItem.Extern.ExternFunc externFunc -> {
 				printFuncType(sb, externFunc.func());
@@ -215,10 +215,10 @@ public final class WitPrinter {
 
 	private static void printCases(StringBuilder sb, String keyword, String name, List<WitItem.Case> cases, int depth) {
 		String ind = indent(depth);
-		sb.append(ind).append(keyword).append(' ').append(name).append(" {\n");
+		sb.append(ind).append(keyword).append(' ').append(id(name)).append(" {\n");
 		for (WitItem.Case c : cases) {
 			printMeta(sb, c.meta(), depth + 1);
-			sb.append(indent(depth + 1)).append(c.name());
+			sb.append(indent(depth + 1)).append(id(c.name()));
 			if (c.payload() != null) {
 				sb.append('(').append(type(c.payload())).append(')');
 			}
@@ -244,7 +244,7 @@ public final class WitPrinter {
 			if (i > 0) {
 				sb.append(", ");
 			}
-			sb.append(params.get(i).name()).append(": ").append(type(params.get(i).type()));
+			sb.append(id(params.get(i).name())).append(": ").append(type(params.get(i).type()));
 		}
 	}
 
@@ -273,7 +273,7 @@ public final class WitPrinter {
 	public static String type(WitType type) {
 		return switch (type) {
 			case WitType.Prim prim -> prim.name();
-			case WitType.Named named -> named.name();
+			case WitType.Named named -> id(named.name());
 			case WitType.ListOf list -> "list<" + type(list.element()) + ">";
 			case WitType.OptionOf option -> "option<" + type(option.element()) + ">";
 			case WitType.ResultOf result -> {
@@ -298,8 +298,8 @@ public final class WitPrinter {
 				stream.element() == null ? "stream" : "stream<" + type(stream.element()) + ">";
 			case WitType.FutureOf future ->
 				future.element() == null ? "future" : "future<" + type(future.element()) + ">";
-			case WitType.BorrowOf borrow -> "borrow<" + borrow.resource() + ">";
-			case WitType.OwnOf own -> "own<" + own.resource() + ">";
+			case WitType.BorrowOf borrow -> "borrow<" + id(borrow.resource()) + ">";
+			case WitType.OwnOf own -> "own<" + id(own.resource()) + ">";
 		};
 	}
 
@@ -315,6 +315,12 @@ public final class WitPrinter {
 			case WitItem.Use ignored -> 4;
 			default -> 5;
 		};
+	}
+
+	// The source spelling of an identifier: %-escaped iff it collides with a WIT keyword
+	// (the model holds the bare name; see WitIdentifiers).
+	private static String id(String identifier) {
+		return WitIdentifiers.escape(identifier);
 	}
 
 	private static String indent(int depth) {

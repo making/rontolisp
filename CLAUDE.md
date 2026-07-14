@@ -37,12 +37,20 @@ Source string
 Package dependency direction (no cycles allowed):
 
 ```
-cli -> eval, codegen.*
+cli -> eval, compiler, codegen.*, am.ik.wit
 codegen.jvm -> compiler, am.ik.jvm
 codegen.wasm -> compiler, am.ik.wasm, am.ik.wit
 compiler -> rontolisp (AST types only), am.ik.wit
-eval, reader -> rontolisp (AST types only)
+eval -> rontolisp (AST types only), compiler
+reader -> rontolisp (AST types only)
 ```
+
+`compiler` holds the backend-shared, backend-FREE directive front-ends, so anything that
+must behave identically on every backend may depend on it: `cli` does (`WitExportInliner`
+-> `WitExportDirective`, and `WitScaffolder` -> `am.ik.wit` directly) and so does `eval`
+(`LispEvaluator.evalWitExport` runs the same `wit-export` contract check the compile path
+runs). The direction stays one-way -- `compiler` imports neither, and depends on no
+backend.
 
 ## Key Design Constraints
 
@@ -98,8 +106,9 @@ eval, reader -> rontolisp (AST types only)
 
 - **`--dynamic`**: unresolvable calls/variables fall back to the embedded `eval` instead of a compile error. `.kb/dynamic-late-binding.md`
 - **`--optimize`**: tree-shaking post-pass for WASM + JVM; skipped under `--component`. `.kb/optimize-dead-code-elimination.md`
-- **`--component` (WASI 0.3)**: the core module stays Preview-1-identical and an adapter implements WASI; `rontolisp:wasm-export` additionally becomes a typed component export (`:async t` for I/O inside an export), and `--wit` writes the component's WIT world next to the `.wasm` (an `am.ik.wit` document model per blob variant — `base`/`http-client`/`sockets`/`http-server`/`http-server-client`/`nogc`/`nogc-print` — printed canonically; fixtures + generator regen via `src/wasm-component/regen-wit.sh`). `.kb/wasi-component.md`
+- **`--component` (WASI 0.3)**: the core module stays Preview-1-identical and an adapter implements WASI; `rontolisp:wasm-export` additionally becomes a typed component export (`:async t` for I/O inside an export), and `--emit-wit` writes the component's WIT world next to the `.wasm` (an `am.ik.wit` document model per blob variant — `base`/`http-client`/`sockets`/`http-server`/`http-server-client`/`nogc`/`nogc-print` — printed canonically; fixtures + generator regen via `src/wasm-component/regen-wit.sh`). `.kb/wasi-component.md`
 - **WIT type mapping is settled** (`compiler/WitTypeMapper`, for `wit-import`/`wit-export` todos 126-128): `result<T,E>` = ok value / error arm signals a condition on EVERY backend (todo 124 option (c); the WASM catch mechanism landed with todo 129, so the todo-128 prerequisite is satisfied), `list<u8>` = byte string. Do not re-litigate a cell; it is a user-facing breaking change. `.kb/wit.md`
+- **`rontolisp:wit-export` / `--scaffold-wit`** (todo 126): a program declares the WIT world it implements; the world is then the AUTHORITATIVE export list (a hand-written `wasm-export` or a `rontolisp:http-handler` beside it is a compile error), every `defun` is checked against it (name/arity/type/`async`, errors naming the WIT line), and it LOWERS into the equivalent `wasm-export` directives -- so the component is byte-identical and there is no new export path. Only the export side; a world's imports are `.todo/127`/`.todo/128`. `.kb/wit.md`
 - **`rontolisp:wasm-export` / `wasm-import` / `--no-wasi`**: export a defun as host-callable WASM, declare host functions (Preview 1 only), emit an import-free reactor module. A memory-EXPORTING module (never `--component`, where the canonical ABI does it) also exports the host arena API `__ronto_alloc_mark`/`_reset` on BOTH wasm backends -- but the GC one's reset never pops below the interned-symbol pool's high-water, and has no `--no-gc`-style automatic reset. `.kb/wasm-export-no-wasi.md`, `.kb/wasm-import.md`
 - **WASM GC strings**: `TYPE_STRING` lives on the GC heap (`$str_bytes` array); `HEAP_PTR` is a stack pointer, so transient string building no longer grows the linear heap. A string's field 0 is an identity id, **not** a linear offset. `.kb/wasm-gc-strings.md`
 - **`--no-gc`**: a separate backend (`NoGcWasmCompiler`) whose value model is unboxed `i64`/`f64`/linear-memory pointers ("non-GC" != "no SIMD"); emits a plain MVP module. Packed arrays are bump-allocated with no free (hence `-into` and `with-arena`). Rejects specials/CLOS/defstruct/arrays/`linalg:`. `.kb/no-gc-scalar-wasm.md`

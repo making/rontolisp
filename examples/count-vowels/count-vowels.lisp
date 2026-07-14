@@ -4,7 +4,8 @@
 ;;;; memory" host tutorial (see Endive's memory guide,
 ;;;; https://endive.run/docs/core/memory), where a count_vowels.wasm receives a
 ;;;; string by pointer and returns the vowel count. Here the module is written in
-;;;; Lisp instead: `count-vowels` takes a :string and returns an :int.
+;;;; Lisp instead, against a WIT world that types the export
+;;;; `count-vowels: func(s: string) -> s32`.
 ;;;;
 ;;;; Wasm only speaks integers and floats, so a string crosses the boundary as a
 ;;;; (pointer, length) pair of raw UTF-8 bytes in the module's linear memory. The
@@ -24,9 +25,16 @@
 ;;;;                                   string and post-return frees everything --
 ;;;;                                   the host writes no memory code at all
 ;;;;
-;;;; The export keeps its Lisp name (a component-model export name must be
-;;;; lower-kebab-case, so no :as "count_vowels" rename here), which lets one
-;;;; directive serve both builds.
+;;;; The export is not described here at all: count_vowels_component.wit is, and
+;;;; `rontolisp:wit-export` at the bottom of this file says "this program
+;;;; implements that world". The compiler reads the .wit, checks every export it
+;;;; declares against the defuns below -- name, arity, parameter and result types
+;;;; -- and lowers each one into the export directive it stands for. A drifted
+;;;; contract is a compile error naming the WIT file and line instead of a
+;;;; wasmtime --invoke failure, and `--emit-wit` regenerates the very file it was
+;;;; handed. The world names the export count-vowels, in lower-kebab-case as a
+;;;; component-model export name must be, which lets one directive serve both
+;;;; builds.
 
 ;;; A character is its code point everywhere (in --no-gc a character simply IS
 ;;; its i64 code, so char= is an ordinary numeric comparison). Test both cases so
@@ -44,6 +52,7 @@
         (setq n (+ n 1))))
     n))
 
-;;; Export count-vowels to the host: one string in, one int out.
-(rontolisp:wasm-export 'count-vowels
-  :params '(:string) :returns :int)
+;;; Implement count_vowels_component.wit, whose world declares
+;;;   export count-vowels: func(s: string) -> s32;
+;;; -- the contract this program is checked against, and the exports it gets.
+(rontolisp:wit-export "count_vowels_component.wit")

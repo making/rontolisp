@@ -313,6 +313,13 @@ public final class PackageResolver {
 				if (LispNames.WASM_IMPORT.equals(qn.member()) || LispNames.WASM_EXPORT.equals(qn.member())) {
 					return resolveWasmDirective(op, cons);
 				}
+				if (LispNames.WIT_EXPORT.equals(qn.member())) {
+					// Every argument is data the directive reads itself (a WIT file path,
+					// the :world keyword and a bare world name in the WIT's own
+					// spelling),
+					// so nothing inside resolves as a Lisp variable or function.
+					return new LispCons(op, cons.cdr());
+				}
 			}
 		}
 		LispVal cdr = resolveForm(cons.cdr());

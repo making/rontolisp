@@ -269,6 +269,7 @@ package system. Each name below links to its own page.
 | `rontolisp:tls-listen-pem` | `(rontolisp:tls-listen-pem "cert.pem" "key.pem" 8443)` | bind an encrypted listening socket from PEM certificate/key files |
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | mark a `defun` as host-callable when compiling to a WASM core module |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | declare a host function callable from Lisp when compiling to a WASM core module |
+| `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | declare that the program implements a WIT world: its exports are checked against the program's `defun`s, and their types come from the WIT |
 
 The introspection functions (`list-functions` / `list-macros` /
 `list-special-forms`) are described in detail under
@@ -308,10 +309,15 @@ portability with existing Common Lisp code. The TLS variants (`rontolisp:tls-con
 [tls-connect](functions/rontolisp-tls-connect.md),
 [tls-listen](functions/rontolisp-tls-listen.md) and
 [tls-listen-pem](functions/rontolisp-tls-listen-pem.md) reference pages.
-`rontolisp:wasm-export` and
-`rontolisp:wasm-import` are compile-time directives for the WASM backend; see
-their [wasm-export](functions/rontolisp-wasm-export.md) and
-[wasm-import](functions/rontolisp-wasm-import.md) reference pages and the
+`rontolisp:wasm-export`,
+`rontolisp:wasm-import` and `rontolisp:wit-export` are compile-time directives
+for the WASM backend; the last one declares that the program implements a WIT
+world, so the boundary types of every export come from the `.wit` file instead
+of being hand-written (and `--scaffold-wit` generates the implementation's
+skeleton from it). See their
+[wasm-export](functions/rontolisp-wasm-export.md),
+[wasm-import](functions/rontolisp-wasm-import.md) and
+[wit-export](functions/rontolisp-wit-export.md) reference pages and the
 [Compiling to WebAssembly](../compiling/wasm.md) guide.
 
 ## linalg Package Functions

@@ -1,0 +1,286 @@
+package am.ik.rontolisp.cli;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.function.Function;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
+import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.LibraryDefunPruner;
+import am.ik.rontolisp.eval.UrlLibrary;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The acceptance test of {@code rontolisp:wit-export} (todo 126): a program that
+ * implements a WIT world must compile to the <strong>byte-identical</strong> artifact the
+ * equivalent hand-written {@code rontolisp:wasm-export} program produces. The directive
+ * is a compile-time front-end for machinery that already exists -- if a single byte
+ * moved, it would be a new export path instead.
+ *
+ * <p>
+ * Both halves of each A/B pair are compiled in the same JVM, from the same source apart
+ * from the directive, so nothing but the directive can explain a difference.
+ */
+class WitExportInlinerTest {
+
+	@TempDir
+	Path tempDir;
+
+	/**
+	 * The body every variant shares: one exported defun taking a string, returning an
+	 * int.
+	 */
+	private static final String BODY = """
+			(defun vowelp (c)
+			  (or (char= c #\\a) (char= c #\\e) (char= c #\\i) (char= c #\\o) (char= c #\\u)))
+			(defun count-vowels (s)
+			  (let ((n 0))
+			    (dotimes (i (length s))
+			      (when (vowelp (char s i))
+			        (setq n (+ n 1))))
+			    n))
+			""";
+
+	/** The hand-written export the world below stands for, parameter name included. */
+	private static final String HAND_WRITTEN = "(rontolisp:wasm-export 'count-vowels :params '(:string) "
+			+ ":param-names '(s) :returns :int)";
+
+	private static final String WORLD = """
+			package root:component;
+
+			world root {
+			  export count-vowels: func(s: string) -> s32;
+			}
+			""";
+
+	/**
+	 * Compiles the wit-export program and the hand-written one, and asserts the two
+	 * artifacts are byte-identical.
+	 * @param prelude extra top-level forms both programs carry (they select the component
+	 * blob variant)
+	 * @param compile the backend under test
+	 * @param backend the backend the world is checked against
+	 */
+	private void assertByteIdentical(String prelude, Function<List<LispVal>, byte[]> compile,
+			WitExportDirective.Backend backend) throws IOException {
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, WORLD);
+		List<LispVal> witProgram = WitExportInliner.inline(
+				LispReader.readAllFromString(prelude + BODY + "(rontolisp:wit-export \"world.wit\")"),
+				this.tempDir.toString(), backend);
+		List<LispVal> handWritten = LispReader.readAllFromString(prelude + BODY + HAND_WRITTEN);
+		assertThat(compile.apply(witProgram)).isEqualTo(compile.apply(handWritten));
+	}
+
+	@Test
+	void usesWitExportDetectsTheDirective() {
+		assertThat(WitExportInliner.usesWitExport(LispReader.readAllFromString("(rontolisp:wit-export \"w.wit\")")))
+			.isTrue();
+		assertThat(WitExportInliner
+			.usesWitExport(LispReader.readAllFromString("(rontolisp:wasm-export 'f :params '(:int))"))).isFalse();
+	}
+
+	@Test
+	void aProgramWithoutTheDirectiveIsUntouched() {
+		List<LispVal> program = LispReader.readAllFromString("(defun f (x) x)");
+		assertThat(WitExportInliner.inline(program, null, WitExportDirective.Backend.WASM_GC)).isSameAs(program);
+	}
+
+	@Test
+	void inliningReplacesTheDirectiveWithTheWorldsExports() throws IOException {
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, WORLD);
+		List<LispVal> out = WitExportInliner.inline(
+				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"), this.tempDir.toString(),
+				WitExportDirective.Backend.WASM_GC);
+		String printed = String.join("\n", out.stream().map(LispVal::print).toList());
+		assertThat(printed).doesNotContain("wit-export")
+			.contains("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
+					+ ":param-names (quote (s)) :returns :int)")
+			.contains("(defun count-vowels");
+	}
+
+	@Test
+	void gcComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		// The base component blob variant.
+		assertByteIdentical("",
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_GC);
+	}
+
+	@Test
+	void gcHttpClientComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		// rontolisp:fetch selects the http-client blob variant
+		// (wasi:http/outgoing-handler).
+		assertByteIdentical("(defun ping () (rontolisp:fetch \"http://127.0.0.1:9/\"))\n",
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_GC);
+	}
+
+	@Test
+	void gcSocketsComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		// rontolisp:tcp-* selects the sockets blob variant (wasi:sockets@0.3.0).
+		assertByteIdentical("(defun listen () (rontolisp:tcp-listen 7777))\n",
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_GC);
+	}
+
+	@Test
+	void preview1ModuleIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		// No component: the export is a plain core export, whose WASM parameters have no
+		// names at all -- so the world's parameter names must not leak into the bytes.
+		assertByteIdentical("",
+				program -> new WasmLispCompiler(false, false, false, false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_GC);
+	}
+
+	@Test
+	void noGcModuleIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_NO_GC);
+	}
+
+	@Test
+	void noGcComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, true).compile(program),
+				WitExportDirective.Backend.WASM_NO_GC);
+	}
+
+	@Test
+	void theEmittedWitReproducesTheWorldItWasHanded() throws IOException {
+		// --emit-wit becomes a consistency check rather than a generator: emitting the
+		// world
+		// we
+		// were handed must reproduce it (parameter names included -- that is what
+		// :param-names is for).
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, WORLD);
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, false, false);
+		compiler.compile(
+				WitExportInliner.inline(LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"),
+						this.tempDir.toString(), WitExportDirective.Backend.WASM_GC));
+		assertThat(compiler.componentWit()).contains("  export count-vowels: func(s: string) -> s32;");
+	}
+
+	@Test
+	void aHandWrittenWasmExportAlongsideAWorldIsACompileError() throws IOException {
+		// The world is the program's authoritative export list; a second, hand-maintained
+		// one is exactly the drift the directive exists to prevent.
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, WORLD);
+		List<LispVal> program = LispReader
+			.readAllFromString(BODY + HAND_WRITTEN + "\n(rontolisp:wit-export \"world.wit\")");
+		assertThatThrownBy(
+				() -> WitExportInliner.inline(program, this.tempDir.toString(), WitExportDirective.Backend.WASM_GC))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:wasm-export cannot be combined with rontolisp:wit-export")
+			.hasMessageContaining("count-vowels");
+	}
+
+	@Test
+	void aServeComponentCannotAlsoImplementAWorld() throws Exception {
+		// A serve-mode component's only export is wasi:http/incoming-handler (the builder
+		// lifts no user exports there), so a world of function exports could not be
+		// honored: say so instead of dropping it. The check lives in the CLI, where the
+		// serve mode is decided.
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, WORLD);
+		Path lisp = this.tempDir.resolve("serve.lisp");
+		Files.writeString(lisp, BODY + """
+				(defun handle (req) (list :status 200 :body "hi"))
+				(rontolisp:http-handler 'handle)
+				(rontolisp:wit-export "world.wit")
+				""");
+		RontoLispCli cli = new RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+				new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+		assertThatThrownBy(() -> cli
+			.run(new String[] { lisp.toString(), "-o", this.tempDir.resolve("serve.wasm").toString(), "--component" }))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:wit-export cannot be combined with rontolisp:http-handler");
+	}
+
+	@Test
+	void checksDefunsThatOnlyExistAfterMacroExpansion() throws IOException {
+		// The pass runs after LoadInliner and UserMacroExpander (which also flattens
+		// top-level progn/eval-when), so every defun the program has is a literal
+		// top-level form by the time the world is checked. A defun produced by a macro,
+		// or
+		// wrapped in eval-when, must satisfy the contract like any other -- were the
+		// order
+		// reversed, this program would fail with "no matching (defun ...)".
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, WORLD);
+		List<LispVal> expanded = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro define-counter (name) `(defun ,name (s) (length s)))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (define-counter count-vowels))
+				(rontolisp:wit-export "world.wit")
+				"""));
+		List<LispVal> out = WitExportInliner.inline(expanded, this.tempDir.toString(),
+				WitExportDirective.Backend.WASM_GC);
+		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
+			.contains("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
+					+ ":param-names (quote (s)) :returns :int)");
+	}
+
+	@Test
+	void anUnreadableWitFileIsAClearError() {
+		List<LispVal> program = LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"missing.wit\")");
+		assertThatThrownBy(
+				() -> WitExportInliner.inline(program, this.tempDir.toString(), WitExportDirective.Backend.WASM_GC))
+			.hasMessageContaining("cannot read WIT file")
+			.hasMessageContaining("missing.wit");
+	}
+
+	@Test
+	void theWitPathResolvesAgainstTheSourceFilesDirectory() throws IOException {
+		// Like load: a relative path is read relative to the program, not the working
+		// directory.
+		Path dir = Files.createDirectories(this.tempDir.resolve("wit"));
+		Files.writeString(dir.resolve("world.wit"), WORLD);
+		List<LispVal> out = WitExportInliner.inline(
+				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"wit/world.wit\")"),
+				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC);
+		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
+			.contains("(rontolisp:wasm-export (quote count-vowels)");
+	}
+
+	@Test
+	void theLoweredProgramStillPrunesCorrectly() throws IOException {
+		// The directive is inlined BEFORE LibraryDefunPruner runs, so the synthesized
+		// wasm-export directives and the defuns they name are pruning roots like any
+		// hand-written ones: the exported defun and the library functions it reaches
+		// survive, and an unreachable library defun still goes.
+		Path wit = this.tempDir.resolve("world.wit");
+		Files.writeString(wit, """
+				package root:component;
+
+				world root {
+				  export greet: func(name: string) -> string;
+				}
+				""");
+		List<LispVal> program = UrlLibrary.process(LispReader.readAllFromString(
+				"(defun greet (name) (rontolisp:url-encode name))\n" + "(rontolisp:wit-export \"world.wit\")"));
+		List<LispVal> lowered = WitExportInliner.inline(program, this.tempDir.toString(),
+				WitExportDirective.Backend.WASM_GC);
+		String printed = String.join("\n", LibraryDefunPruner.prune(lowered).stream().map(LispVal::print).toList());
+		assertThat(printed).contains("(defun greet")
+			.contains("(rontolisp:wasm-export (quote greet)")
+			.contains("(defun rontolisp:url-encode")
+			// url-decode is spliced with the library but unreachable from the export.
+			.doesNotContain("(defun rontolisp:url-decode");
+		// And the pruned program still compiles as a component.
+		assertThat(new WasmLispCompiler(false, true, false, false, false, false)
+			.compile(LibraryDefunPruner.prune(lowered))).isNotEmpty();
+	}
+
+}

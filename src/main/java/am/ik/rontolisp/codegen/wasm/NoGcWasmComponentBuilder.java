@@ -230,11 +230,9 @@ final class NoGcWasmComponentBuilder {
 			WasmComponentBuilder.FuncExport e = WasmExportCompiler.componentExport(decl);
 			aliases.add(ComponentWriter.aliasCoreFunc(coreInstance, e.name()));
 			int func = coreFunc++;
-			final List<String> paramNames = new ArrayList<>();
-			for (int p = 0; p < e.paramValTypes().size(); p++) {
-				paramNames.add("p" + p);
-			}
-			types.add(ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType()));
+			// p0, p1, ... unless the directive names the parameters (:param-names, or the
+			// WIT world's own names under rontolisp:wit-export).
+			types.add(ComponentWriter.funcTypeScalars(e.paramNames(), e.paramValTypes(), e.resultValType()));
 			if (WasmExportCompiler.usesMemory(decl)) {
 				// String-involving export: lift with the canonical string options.
 				int postFunc = java.util.Objects.requireNonNull(postFuncs.get(postReturnKind(decl)));

@@ -3465,6 +3465,71 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void witExportChecksTheProgramAgainstTheWorldAndIsOtherwiseInert(@TempDir Path tempDir) throws Exception {
+		// The interpreter cannot export anything, but it still holds the program to the
+		// world's contract, so a plain `rontolisp prog.lisp` run catches the same drift a
+		// --component build would reject. It is a special form: the check sees the
+		// functions defined so far, hence the directive goes last.
+		Path wit = tempDir.resolve("analyzer.wit");
+		Files.writeString(wit, """
+				package root:component;
+
+				world analyzer {
+				  export count-vowels: func(s: string) -> s32;
+				}
+				""");
+		String directive = "(rontolisp:wit-export \"" + wit.toString().replace("\\", "\\\\") + "\")";
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(defun count-vowels (s) (length s))"));
+		// A matching world is a no-op returning nil.
+		assertThat(evaluator.eval(LispReader.readFromString(directive))).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void witExportSignalsWhenTheWorldDoesNotMatchTheDefuns(@TempDir Path tempDir) throws Exception {
+		Path wit = tempDir.resolve("analyzer.wit");
+		Files.writeString(wit, """
+				package root:component;
+
+				world analyzer {
+				  export count-vowels: func(s: string) -> s32;
+				}
+				""");
+		String directive = "(rontolisp:wit-export \"" + wit.toString().replace("\\", "\\\\") + "\")";
+		// No such defun at all: the error names the WIT file and line.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator missing = new LispEvaluator(new PrintStream(baos));
+		assertThatThrownBy(() -> missing.eval(LispReader.readFromString(directive)))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("analyzer.wit:4")
+			.hasMessageContaining("export 'count-vowels' has no matching (defun count-vowels ...) in the program");
+		// Defined, but with the wrong arity.
+		LispEvaluator wrongArity = new LispEvaluator(new PrintStream(baos));
+		wrongArity.eval(LispReader.readFromString("(defun count-vowels (s from) (length s))"));
+		assertThatThrownBy(() -> wrongArity.eval(LispReader.readFromString(directive)))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("analyzer.wit:4")
+			.hasMessageContaining("declares 1 parameter(s), but (defun count-vowels ...) takes 2");
+		// Defined, but variadic: an exported function takes required parameters only.
+		LispEvaluator variadic = new LispEvaluator(new PrintStream(baos));
+		variadic.eval(LispReader.readFromString("(defun count-vowels (&rest args) 0)"));
+		assertThatThrownBy(() -> variadic.eval(LispReader.readFromString(directive)))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("an exported function takes required parameters only");
+	}
+
+	@Test
+	void witExportReportsAMissingWitFile() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(rontolisp:wit-export \"nope.wit\")")))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot read file")
+			.hasMessageContaining("nope.wit");
+	}
+
+	@Test
 	void loadEvaluatesFileAndReusesDefinitions(@TempDir Path tempDir) throws Exception {
 		Path file = tempDir.resolve("bar.lisp");
 		Files.writeString(file, "(defun square (x) (* x x))\n(setq base 10)\n");
