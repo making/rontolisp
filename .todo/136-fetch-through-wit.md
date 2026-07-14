@@ -163,10 +163,74 @@ traps `unreachable`).
 
 ### Left to do
 
-- **D — resource `drop`.** Still missing, and it is what stops a request BODY (see Blocker 1
-  above: `outgoing-body.finish` traps without dropping the child `output-stream`). The GET
-  probe gets away with leaking. Design is in `.todo/135`'s survey notes and the
-  `WasmServeComponentBuilder:210-217` precedent.
+## D — resource `drop`: the design, written out
+
+Steps A-C landed as commit `a74421f`. **D is next, and it is what a request BODY needs**
+(Blocker 1 above: `wasi:http` makes `outgoing-body.finish` TRAP unless the child
+`output-stream` is dropped first, `types.wit:518-521`; the WAT adapter duly calls `drop-out`
+immediately before `body_finish`, `adapter-http-client.wat:392-393`). The GET-only probe got
+away with leaking. Resources a fetch must drop: `pollable`, `output-stream`, `fields`,
+`input-stream`, `incoming-body`, `incoming-response`, `future-incoming-response`
+(`outgoing-request` and `outgoing-body` are consumed by `handle` / `finish` as `own`
+transfers).
+
+**Name it `<resource>-drop`** (`kv:bucket-drop`), symmetric with the existing `bucket-new`
+for a constructor — both are rontolisp spellings of something WIT does not name as a
+function. `WitResolver.functions` does NOT enumerate resources, so `WitImportDirective` has
+to walk `iface.items()` for `WitItem.ResourceDef` itself. Feed the synthetic name through
+the existing `allMembers` set so the current "binds 'x' twice" check catches an interface
+that really declares a method called `drop`.
+
+**Bind it ONLY when the program textually references the name — on every backend.** A drop
+is not a WIT function, so it is exempt from the "Preview 1 binds every function" convention,
+and this one rule is what keeps every existing artifact byte-identical (nothing references a
+`-drop` name today, so nothing is emitted). `WitImportInliner.referencedNames` already
+computes the set; today it is only passed as the component `memberFilter`, so pass it
+separately as a drop filter on all backends. `--no-prune` / `--dynamic` bind them all.
+
+Per backend:
+
+| | |
+|---|---|
+| interpreter / JVM | the existing `providerDefun` — `(defun kv:bucket-drop (self) (rontolisp::%wit-call "<iface>" "bucket-drop" self))`. Zero new machinery. Do NOT hardcode a no-op: the core knows the provider MECHANISM and no concrete interface, so what a drop MEANS is the provider's to decide (a Java store closes a connection; a Lisp store evicts a handle). Document that a provider with nothing to release just returns nil. |
+| Preview 1 WASM | a **no-op defun** `(defun kv:bucket-drop (self) self nil)`. Emit NO `wasm-import`: the WIT declares no drop function, so importing `[resource-drop]bucket` would invent a host function the interface never named — breaking both the byte-identity-with-a-hand-written-import-block property and the browser demos' hand-written JS import objects. A P1 handle is an opaque integer the host handed over; there is nothing on the guest side to release. |
+| `--component` | core side = an ORDINARY core import (`module` = the canonical iface id, `field` = `"[resource-drop]bucket"`, type `(func (param i32))`), so the existing `PLACEHOLDER_FUNC_BASE + ordinal` / `WasmImportInjector` machinery is reused unchanged and the wrapper body is the simplest there is (unbox the i31 handle to i32, call, return nil — no memory, no staging, no lift). Outer side = a SECOND emission kind in `appendUserImports`: `aliasInstanceType(ownerInstance, resource)` (consumes a component TYPE index) + `canonResourceDrop(thatType)` (consumes a CORE FUNC index, and NO component func — `canon resource.drop` produces a core function directly, with no alias and no lower). The two sides meet BY NAME through `coreInstanceFromFuncs`, so their orders are independent. `WasmServeComponentBuilder:210-217` is the working precedent, inside the same `SEC_CANON` vec as the lowers. |
+| `--no-gc` | unchanged — `wit-import` is already rejected there. |
+
+**THE ONE REAL TRAP — split `userImportFuncs` into three counters.** It is used today with
+two different meanings, and a drop breaks the tie:
+
+- `canonLift(22 + userFuncs, T_RUN_FUNC)` — a **core** func index → must count decls **+ drops**
+- `componentInstanceFromFunc("run", 11 + userFuncs)` — a **component** func index → decls **only**
+- `appendFuncExports(..., T_RUN_FUNC + 1 + userTypes, ...)` — the first free **TYPE** index →
+  already `userImportTypes` (interfaces + projected resources), and each dropped resource
+  that is not already projected adds one more
+
+So: `userImportCoreFuncs` (decls + drops) / `userImportFuncs` (decls, the component side) /
+`userImportTypes` (interfaces + projected + dropped). Sites: `WasmComponentBuilder` around
+560 / 673 / 677 / 683, 788 / 975 / 979 / 985, 1054 / 1193 / 1197 / 1203, and
+`WasmServeComponentBuilder` 134 / 266 / 270, 348 / 541 / 545. Get one wrong and you get
+either an invalid component or — worse — one that VALIDATES while lifting the wrong core
+function.
+
+**The encoder declares resources lazily** (only when a bound function's signature mentions
+one), so `WitComponentTypeEncoder.encode` must be told to force-declare a resource that is
+only DROPPED and never otherwise reached. The `provided` parameter added in step C is
+exactly that hook — reuse it. Placing the forced declarations after the function walk keeps
+the bytes unchanged when the resource was already reached (the keyvalue shape).
+
+**The keyvalue example leaks today, and fixing it is the point.** `page-hits-server.lisp`
+opens a bucket PER REQUEST; `wasmtime serve` rebuilds the instance per request so the handle
+table dies with it, but an instance-reusing host grows it without bound and pins the host's
+bucket resources. `examples/wit/keyvalue/memory-store.lisp` hangs its DATA off the handle in
+`*kv-buckets*`, so a naive `(remhash handle *kv-buckets*)` would delete the store's contents:
+re-key the data by store identifier and keep the handle table as a separate indirection. That
+change teaches the right thing — **dropping a handle is not deleting the store** — which is
+worth having in a readable example.
+
+**Nothing existing changes**: no program references a `-drop` name today, so every artifact
+stays byte-identical, the emitted `--emit-wit` world is unchanged (a drop is a canonical
+built-in, not a WIT function), and `WitOracleE2eTest` is untouched.
 - **F** — `fetch.lisp` + `FetchLibrary` (component-path-only splice, inline WIT on the
   classpath; the ordering trap is that `WitImportInliner` runs BEFORE the library splices).
 - **G** — delete the blobs, the `H_*` constants, `buildHttp`; regen the WIT fixtures; the
